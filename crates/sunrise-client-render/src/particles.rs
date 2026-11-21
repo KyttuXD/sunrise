@@ -3400,7 +3400,11 @@ impl ParticleEngine {
             return;
         }
         let twinkle = explosions.iter().any(|e| e.twinkle);
-        let lifetime = explosions.len() as i32 * 2 - 1 + if twinkle { 15 } else { 0 };
+        // FireworkParticles.Starter counts in Java ints, including for direct visual requests.
+        let lifetime = (explosions.len() as i32)
+            .wrapping_mul(2)
+            .wrapping_sub(1)
+            .wrapping_add(if twinkle { 15 } else { 0 });
         let far = (0..3).map(|i| (at[i] - camera[i]).powi(2)).sum::<f64>() >= 256.0;
         self.pending.push(PendingParticle::Starter(Starter {
             at,
@@ -3465,7 +3469,7 @@ impl ParticleEngine {
                 let flash = ParticleOptions::colored(ParticleType::Flash, rgba);
                 self.create(&flash, s.at, [0.0; 3]);
             }
-            s.life += 1;
+            s.life = s.life.wrapping_add(1);
             if s.life > s.lifetime {
                 if s.twinkle_delay && s.sound.is_some() {
                     let sound = if s.sound == Some(true) {

@@ -1,0 +1,3 @@
+version = 1
+doc = "ClientHost::create_fireworks forwards FireworksRequest::explosions to the client particle engine without applying the Fireworks item-component limit. The particle engine still governs admission and playback."
+tests = ["crates/sunrise-client/src/game/modding/native_client_particles.rs::direct_fireworks_draw_past_the_item_component_limit"]

@@ -3,10 +3,6 @@ use super::Game;
 use mod_api::{FireworksRequest, client::particles::PositionSource};
 use sunrise_client::particles::ParticleOptions;
 
-/// The most explosions one `create_fireworks` request draws (a crafted rocket holds at
-/// most 7 stars; a mod's show can be larger).
-const MAX_FIREWORK_EXPLOSIONS: usize = 256;
-
 fn finite_options(options: &ParticleOptions) -> bool {
     options.color.into_iter().all(f32::is_finite)
         && options.to_color.into_iter().all(f32::is_finite)
@@ -57,8 +53,8 @@ impl Game<'_> {
     /// `ClientLevel.createFireworks`: queue a firework's explosions in this client's loaded
     /// world through the starter a bursting rocket uses, its blast and twinkle sounds gated by
     /// `audible` as a rocket's by its silence. No entity, no damage, nothing on the server.
-    /// True means queued; false on a server, without a client player/level, for non-finite
-    /// input or for more than [`MAX_FIREWORK_EXPLOSIONS`] explosions. API @API:client_fireworks@.
+    /// True means queued; false on a server, without a client player/level, or for non-finite
+    /// input. The `Fireworks` item component's explosion limit does not apply. API @API:client_fireworks@.
     pub(super) fn create_fireworks(&mut self, request: &FireworksRequest) -> bool {
         use super::api_values::TryIntoEngine;
         if !self.native_window()
@@ -68,7 +64,6 @@ impl Game<'_> {
                 .into_iter()
                 .chain(request.velocity)
                 .all(f64::is_finite)
-            || request.explosions.len() > MAX_FIREWORK_EXPLOSIONS
         {
             return false;
         }
@@ -190,15 +185,6 @@ mod tests {
             let mut bad = request(true);
             bad.velocity[1] = f64::NAN;
             assert!(!host.create_fireworks(&bad), "non-finite input");
-            let mut most = request(false);
-            most.explosions = vec![most.explosions[0].clone(); 256];
-            assert!(
-                host.create_fireworks(&most),
-                "256 explosions, vanilla's most"
-            );
-            bad = request(false);
-            bad.explosions = vec![bad.explosions[0].clone(); 257];
-            assert!(!host.create_fireworks(&bad), "257 explosions");
             game.options.execution_role =
                 crate::game::execution_role::ExecutionRole::IntegratedServer;
             let host: &mut dyn ClientHost = game;
@@ -207,5 +193,60 @@ mod tests {
                 "servers draw nothing"
             );
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn direct_fireworks_draw_past_the_item_component_limit() {
+        use crate::game::native_entity_refs::tests::with_client_game;
+        crate::game::in_own_process(
+            "game::native_client_particles::tests::direct_fireworks_draw_past_the_item_component_limit",
+            || {
+                with_client_game(|game| {
+                    let eye = sunrise_core::geometry::Vec3::new(0.5, 200.0, 0.5);
+                    game.player =
+                        Some(sunrise_client::motion::PlayerMotion::new(game.motion, eye).unwrap());
+                    let mut explosions = vec![
+                        FireworkExplosion {
+                            shape: FireworkShape::Burst,
+                            colors: vec![0xFF0000],
+                            ..FireworkExplosion::default()
+                        };
+                        256
+                    ];
+                    explosions.push(FireworkExplosion {
+                        shape: FireworkShape::Burst,
+                        colors: vec![0x0000FF],
+                        ..FireworkExplosion::default()
+                    });
+                    let host: &mut dyn ClientHost = game;
+                    assert!(host.create_fireworks(&FireworksRequest {
+                        at: [0.5, 201.0, 0.5],
+                        explosions,
+                        ..FireworksRequest::default()
+                    }));
+                    let level = ParticleLevel {
+                        world: &game.world,
+                        facts: game.res.facts(),
+                        collision: game.collision,
+                        player: None,
+                        cached_chunk: std::cell::Cell::new(None),
+                    };
+                    let has_blue_flash = |particles: &sunrise_client::particles::ParticleEngine| {
+                        particles
+                            .live()
+                            .any(|p| p.ty == ParticleType::Flash && p.rgba[..3] == [0.0, 0.0, 1.0])
+                    };
+                    // FireworkParticles.Starter: one tick for admission, then one explosion
+                    // every other tick starting on its first tick alive.
+                    for _ in 0..513 {
+                        game.particles.tick(&level);
+                    }
+                    assert!(!has_blue_flash(&game.particles));
+                    game.particles.tick(&level);
+                    assert!(has_blue_flash(&game.particles), "the 257th explosion drew");
+                });
+            },
+        );
     }
 }

@@ -1,0 +1,1 @@
+sunrise-client game::native_client_particles::tests::direct_fireworks_draw_past_the_item_component_limit lib daily child-process

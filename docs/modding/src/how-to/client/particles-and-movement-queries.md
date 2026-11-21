@@ -89,8 +89,10 @@ colours, fade colours, trail, twinkle) and `audible`. It uses the starter a burs
 uses, so the explosions follow each other every other tick as a rocket's do. With `audible`
 false the sparks and flash draw but the blast and twinkle sounds don't play, as for a
 silent rocket. Nothing reaches the server or other players: a mod's server half tells each
-client half to draw it. The request is refused on a server, without a loaded client player
-and world, for non-finite numbers and for more than 256 explosions.
+client half to draw it. The particle engine handles admission and playback. The direct
+visual call has no explosion-count limit; the 256-explosion limit applies to the
+`Fireworks` item component. The request is refused on a server, without a loaded client
+player and world, or for non-finite numbers.
 
 ## Bot movement and block collisions
 
