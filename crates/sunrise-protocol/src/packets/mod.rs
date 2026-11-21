@@ -79,7 +79,7 @@ macro_rules! packet_enum {
                     $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::validate(p)?,)*
                     Self::Unknown(_, _) => {}
                 }
-                Ok(self.encode())
+                self.encode_body()
             }
             /// Validate registered custom payloads in this connection's codec context.
             pub fn try_encode_with_payload_codecs(&self, codecs: &$crate::packets::custom_payload::PayloadCodecs) -> $crate::Result<Vec<u8>> {
@@ -87,18 +87,21 @@ macro_rules! packet_enum {
                     $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::validate_with_payload_codecs(p, codecs)?,)*
                     Self::Unknown(_, _) => {}
                 }
-                Ok(self.encode())
+                self.encode_body()
             }
             /// The packet body: VarInt id then payload, for trusted values.
             /// Use `try_encode` for values supplied by mods or other untrusted producers.
             pub fn encode(&self) -> Vec<u8> {
+                self.encode_body().expect("trusted packet must be encodable")
+            }
+            fn encode_body(&self) -> $crate::Result<Vec<u8>> {
                 let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
                 w.varint(self.id());
                 match self {
                     $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::write(p, &mut w),)*
                     Self::Unknown(_, payload) => w.bytes(payload),
                 }
-                w.data
+                w.finish().map_err(|error| $crate::Error::new(error.to_string()))
             }
         }
     };

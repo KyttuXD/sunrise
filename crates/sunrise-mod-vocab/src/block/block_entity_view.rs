@@ -111,6 +111,7 @@ impl<'a> BlockEntityView<'a> {
 
     /// Queue one-shot fields for the next explicit block-entity sync to its current viewers.
     /// An empty compound clears the queued fields. Nothing saves or sends them from this call.
+    /// The send encodes the merged update as a trusted compound, with no partial-tag fallback.
     pub fn set_client_update_fields(&mut self, fields: Compound) {
         self.data.set_client_update_fields(fields);
     }

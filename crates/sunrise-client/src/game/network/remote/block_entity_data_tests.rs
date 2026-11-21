@@ -139,8 +139,8 @@ fn block_entity_data_received_after_merge() {
                 Some(&Tag::Int(3))
             );
             seen.lock().unwrap().clear();
-            game.remote_block_entity_data([1, 64, 1], 0, UpdatePacket, &Tag::End);
-            assert_eq!(seen.lock().unwrap().len(), 0, "packet absent");
+            game.remote_block_entity_data([1, 64, 1], 0, Chunk, &Tag::End);
+            assert_eq!(seen.lock().unwrap().len(), 0, "chunk tag absent");
             // Existing entity on an invalid holder must not receive or apply data.
             let dirt = game
                 .pack

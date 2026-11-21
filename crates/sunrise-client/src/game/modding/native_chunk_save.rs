@@ -75,14 +75,11 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    /// Chunks whose subscribed save was refused or failed become dirty again.
-    /// Without a `chunk_data_save` listener this does nothing.
+    /// Chunks whose save was refused or failed become dirty again.
     pub(in crate::game) fn requeue_failed_chunk_saves(&mut self) {
-        if mod_api::__private::listened(mod_api::HookId::ChunkDataSave) {
-            for key in self.save.take_failed_chunk_saves() {
-                self.world.modified.insert(key);
-            }
-        }
+        self.world
+            .modified
+            .extend(self.save.take_failed_chunk_saves());
     }
 
     /// With a `chunk_data_save` listener, saves wait while an action savepoint
@@ -90,13 +87,12 @@ impl Game<'_> {
     /// that causes them, are deferred until it closes (the design's "defer
     /// unload when the gate refuses"). Never defers without a listener.
     pub(super) fn defer_chunk_disk_save(&mut self) -> bool {
-        if self.options.execution_role.is_client()
-            || !mod_api::__private::listened(mod_api::HookId::ChunkDataSave)
-        {
+        if self.options.execution_role.is_client() {
             return false;
         }
         self.requeue_failed_chunk_saves();
-        Self::admit_entity_save().is_err()
+        mod_api::__private::listened(mod_api::HookId::ChunkDataSave)
+            && Self::admit_entity_save().is_err()
     }
 
     /// `ChunkMap.saveChunksEagerly`: snapshot only while the tick and writer

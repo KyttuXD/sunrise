@@ -7,6 +7,60 @@ use crate::{
 };
 
 #[test]
+fn block_entity_packet_codecs_use_optional_and_trusted_compound_policies() {
+    // A tag over NbtAccounter.defaultQuota is readable in the trusted update packet.
+    // The chunk's optional codec uses the default quota when reading, not when writing.
+    let tag = Tag::compound([("payload", Tag::ByteArray(vec![7; 2_097_152]))]);
+    let update = |tag| {
+        Clientbound::BlockEntityData(BlockEntityData {
+            pos: [3, 64, 5],
+            kind: 2,
+            tag,
+        })
+    };
+    let bytes = update(tag.clone()).try_encode().unwrap();
+    let mut reader = Reader::new(&bytes);
+    let id = reader.varint().unwrap();
+    assert_eq!(
+        Clientbound::decode(id, reader.rest()).unwrap(),
+        update(tag.clone())
+    );
+    assert!(update(Tag::End).try_encode().is_err());
+
+    let chunk = Clientbound::LevelChunkWithLight(LevelChunkWithLight {
+        x: 0,
+        z: 0,
+        chunk: ChunkData {
+            heightmaps: Vec::new(),
+            buffer: Vec::new(),
+            block_entities: vec![BlockEntityInfo {
+                packed_xz: 0x35,
+                y: 64,
+                kind: 2,
+                tag,
+            }],
+        },
+        light: LightData {
+            sky_mask: Vec::new(),
+            block_mask: Vec::new(),
+            empty_sky_mask: Vec::new(),
+            empty_block_mask: Vec::new(),
+            sky: Vec::new(),
+            block: Vec::new(),
+        },
+    });
+    let bytes = chunk.try_encode().unwrap();
+    let mut reader = Reader::new(&bytes);
+    let id = reader.varint().unwrap();
+    assert!(
+        Clientbound::decode(id, reader.rest())
+            .unwrap_err()
+            .to_string()
+            .contains("heap quota exceeded")
+    );
+}
+
+#[test]
 fn game_event_parameter_rounds_the_float_sum_before_flooring_and_casting() {
     for (param, expected) in [
         (-0.6, -1),

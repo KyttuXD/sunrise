@@ -125,9 +125,10 @@ chunk sent to a player nor a resend of the blocks under a single player takes it
 or unloading the block entity drops it. It is never saved, cloned or compared, and it does
 not change the entity's revision.
 
-If the merged tag exceeds the 2 MiB network-NBT limit, the game drops the fields,
-logs a warning, and sends the original update tag instead. A transaction that rolls
-the block entity back also drops any batch queued before it.
+The block update encodes the merged tag as vanilla's trusted compound. If the tag
+cannot be encoded, the server reports the packet error and disconnects its recipients;
+it does not send a partial update. A transaction that rolls the block entity back
+also drops any batch queued before it.
 
 A client merges the fields into its copy's `nbt` as any update field, and they stay there
 until sent again: put a counter in them to tell one effect from the next.
@@ -471,8 +472,8 @@ client after its synchronized tag has merged. It receives `event.subject: BlockE
 (`with_view` lends a read-only `BlockEntityReadView` that already sees the merged copy, and `host()`
 borrows `&dyn ClientHost`) together with the arriving compound `event.tag`. This
 listen notice carries `BlockEntityDataSource::Chunk` or `UpdatePacket`. A chunk
-with an empty compound sends no notice. An update packet with an empty compound
-sends one notice; a packet with no tag sends none. Repeated identical packets
+with an empty or absent tag sends no notice. A standalone update packet requires
+a compound and sends one notice even if that compound is empty. Repeated identical packets
 each notify, and `event.tag` contains only the arriving fields, while the scoped view
 sees the merged copy.
 It cannot change the arriving tag. Vanilla entities, missing tags, missing client

@@ -146,16 +146,16 @@ fn ready(world: &World, streaming: Option<&Streaming>, c: &Chunk) -> bool {
 pub(crate) fn batch_runs<T>(
     level: Level,
     taken: &[(usize, T)],
-    bodies: &[Vec<u8>],
-) -> (Vec<Vec<u8>>, Vec<usize>) {
+    bodies: &[sunrise_protocol::Result<Vec<u8>>],
+) -> sunrise_protocol::Result<(Vec<Vec<u8>>, Vec<usize>)> {
     let mut runs = Runs::new(level);
-    let sent = taken
-        .iter()
-        .zip(bodies)
-        .filter(|(_, body)| runs.push(body))
-        .map(|((idx, _), _)| *idx)
-        .collect();
-    (runs.finish(), sent)
+    let mut sent = Vec::new();
+    for ((idx, _), body) in taken.iter().zip(bodies) {
+        if runs.push(body.as_deref().map_err(Clone::clone)?) {
+            sent.push(*idx);
+        }
+    }
+    Ok((runs.finish(), sent))
 }
 
 impl Hub {
@@ -281,7 +281,8 @@ impl Hub {
     /// area's centre first, as many as the batch quota its own level left.
     fn send_view_batch(&mut self, i: usize, world: &World, streaming: Option<&Streaming>) {
         let g = &self.guests[i];
-        if self.ticks <= g.placed_at + 1
+        if g.disconnect_pending
+            || self.ticks <= g.placed_at + 1
             || g.unacknowledged >= g.max_unacknowledged
             || g.batch_quota < 1.0
         {
@@ -311,7 +312,13 @@ impl Hub {
         let bodies = self.encoder.bodies_with(&chunks, world, &|x, z| {
             streaming.and_then(|s| s.proto_sections(x, z))
         });
-        let (payloads, taken) = batch_runs(view.level, &taken, &bodies);
+        let (payloads, taken) = match batch_runs(view.level, &taken, &bodies) {
+            Ok(batch) => batch,
+            Err(error) => {
+                self.packet_encoding_failed(g.conn, "LevelChunkWithLight", &error);
+                return;
+            }
+        };
         if taken.is_empty() {
             return;
         }

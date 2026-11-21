@@ -2,8 +2,8 @@
 pub trait Hooks {
     /// The synchronized `tag` has been merged into this client's block entity.
     /// `source` distinguishes chunk data from a later update packet. Empty chunk
-    /// compounds send no notice; empty update-packet compounds do. Absent tags
-    /// send no notice. Called once for each accepted tag,
+    /// or absent tags send no notice; empty update-packet compounds do. A standalone
+    /// update packet must contain a compound. Called once for each accepted tag,
     /// only for a matching mod block entity that the client created.
     /// `event.subject` is a [`BlockEntityClientReadScope`](mod_api::BlockEntityClientReadScope):
     /// `with_view` lends a read-only view of the resident block entity with the merged

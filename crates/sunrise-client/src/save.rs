@@ -2079,12 +2079,14 @@ fn cached_region(
 /// then points to it; the region's other chunks are not touched. `None`
 /// clears a chunk. The chunks are encoded and compressed before their region
 /// is locked for the writes (`compress_records`), and each region is flushed
-/// to the disk once.
+/// to the disk once. Like IOWorker.runStore, an unencodable record fails only
+/// its own position; the other records in the write pass still reach disk.
 fn write_region_records(
     root: &Path,
     cache: &RegionCache,
     folder: &str,
     records: &[((i32, i32), &Record)],
+    mut encode_failed: impl FnMut((i32, i32), std::io::Error),
 ) -> Result<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2093,11 +2095,14 @@ fn write_region_records(
     type RegionWrite<'a> = (ChunkPos, &'a Record, Option<CompressedWrite>);
     let mut by_region: BTreeMap<(i32, i32), Vec<RegionWrite<'_>>> = BTreeMap::new();
     for (&((x, z), source), record) in records.iter().zip(compressed) {
-        let record = record?;
-        by_region
-            .entry((x >> 5, z >> 5))
-            .or_default()
-            .push((ChunkPos::new(x, z), source, record));
+        match record {
+            Ok(record) => by_region.entry((x >> 5, z >> 5)).or_default().push((
+                ChunkPos::new(x, z),
+                source,
+                record,
+            )),
+            Err(error) => encode_failed((x, z), error),
+        }
     }
     for ((rx, rz), list) in by_region {
         let path = region_path(root, folder, rx, rz);

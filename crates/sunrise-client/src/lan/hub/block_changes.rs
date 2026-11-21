@@ -23,6 +23,9 @@ impl Hub {
         (0..self.guests.len())
             .filter_map(|i| {
                 let g = &self.guests[i];
+                if g.disconnect_pending {
+                    return None;
+                }
                 if self.watches(g) {
                     g.sent_chunks
                         .contains(&key)
@@ -42,6 +45,9 @@ impl Hub {
     fn send_to_holders(&self, holders: &[(usize, Option<Level>)], body: &[u8]) {
         for &(i, level) in holders {
             let g = &self.guests[i];
+            if g.disconnect_pending {
+                continue;
+            }
             match level {
                 None => g.sender.send(body.to_vec()),
                 Some(level) => {
@@ -124,7 +130,18 @@ impl Hub {
                     continue;
                 }
                 let body = self.encoder.body_in(chunk, world);
-                self.send_to_holders(&holders, &body);
+                match body {
+                    Ok(body) => self.send_to_holders(&holders, &body),
+                    Err(error) => {
+                        for (i, _) in holders {
+                            self.packet_encoding_failed(
+                                self.guests[i].conn,
+                                "LevelChunkWithLight",
+                                &error,
+                            );
+                        }
+                    }
+                }
             }
         }
         let Some(log) = world.block_log.as_mut() else {
@@ -206,13 +223,25 @@ impl Hub {
                 let Some(kind) = self.encoder.entity_type(state) else {
                     continue;
                 };
-                let body = C::BlockEntityData(play::BlockEntityData {
+                let packet = C::BlockEntityData(play::BlockEntityData {
                     pos: [x, y, z],
                     kind,
                     tag,
-                })
-                .encode();
-                self.send_to_holders(&holders, &body);
+                });
+                match packet.try_encode() {
+                    Ok(body) => self.send_to_holders(&holders, &body),
+                    Err(error) => {
+                        for &(i, _) in &holders {
+                            if !self.guests[i].disconnect_pending {
+                                self.packet_encoding_failed(
+                                    self.guests[i].conn,
+                                    packet.name(),
+                                    format_args!("[{x}, {y}, {z}]: {error}"),
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }

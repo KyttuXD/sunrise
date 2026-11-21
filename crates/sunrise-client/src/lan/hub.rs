@@ -1181,6 +1181,24 @@ impl Hub {
         }
     }
 
+    /// PacketEncoder and Connection.exceptionCaught report a failed non-skippable
+    /// packet and disconnect its recipient, not the other connections.
+    pub(in crate::lan) fn packet_encoding_failed(
+        &mut self,
+        conn: u32,
+        packet: &str,
+        error: impl std::fmt::Display,
+    ) {
+        log::error!("[lan] {packet} for connection {conn}: {error}");
+        self.kick(
+            conn,
+            translatable(
+                "disconnect.genericReason",
+                &[&format!("Internal Exception: {error}")],
+            ),
+        );
+    }
+
     /// `TransferCommand.transfer`: the guest's client is handed to another
     /// server (`ClientboundTransferPacket`, the play state's `Transfer`); the
     /// client closes the connection and logs in there. Nothing disconnects the
@@ -2877,7 +2895,7 @@ impl Hub {
         let watching = self.chunk_watches.recording();
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
-            if self.watches(&self.guests[i]) {
+            if !self.guests[i].disconnect_pending && self.watches(&self.guests[i]) {
                 self.update_view(i);
                 if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
                     batches.push((i, batch));
@@ -2907,6 +2925,10 @@ impl Hub {
         let uses = &mut columns.uses;
         let chunks = &columns.chunks;
         for (i, taken, batch) in batches {
+            if let Some(error) = batch.iter().find_map(|&j| encoded[j].as_ref().err()) {
+                self.packet_encoding_failed(self.guests[i].conn, "LevelChunkWithLight", error);
+                continue;
+            }
             self.guests.update(i, |g| {
                 let size = batch.len();
                 // The single-player window shares the sections it is sent (handoff.rs).
@@ -2918,11 +2940,12 @@ impl Hub {
                         if memory {
                             super::handoff::offer(chunks[j]);
                         }
+                        let body = encoded[j].as_mut().expect("batch encoding succeeded");
                         uses[j] -= 1;
                         if uses[j] == 0 {
-                            std::mem::take(&mut encoded[j])
+                            std::mem::take(body)
                         } else {
-                            encoded[j].clone()
+                            body.clone()
                         }
                     }));
                     g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
@@ -4655,8 +4678,12 @@ impl Hub {
     /// than once every 200 ticks of the connection, so a client that stands on air for good is
     /// not sent four packets four times a second.
     fn force_send_player_support_blocks(&mut self, i: usize, ctx: &TickCtx) {
-        let tick = self.ticks.saturating_sub(self.guests[i].joined_tick);
-        if tick < self.guests[i].support_blocks_sent.saturating_add(200) {
+        let g = &self.guests[i];
+        let tick = self.ticks.saturating_sub(g.joined_tick);
+        if !g.participates_online()
+            || g.disconnect_pending
+            || tick < g.support_blocks_sent.saturating_add(200)
+        {
             return;
         }
         {
@@ -4702,10 +4729,18 @@ impl Hub {
             let Some(kind) = self.encoder.entity_type(state.0) else {
                 continue;
             };
-            self.send_to(
-                conn,
-                &C::BlockEntityData(play::BlockEntityData { pos, kind, tag }),
-            );
+            let packet = C::BlockEntityData(play::BlockEntityData { pos, kind, tag });
+            match packet.try_encode() {
+                Ok(body) => self.guests[i].sender.send(body),
+                Err(error) => {
+                    self.packet_encoding_failed(
+                        conn,
+                        packet.name(),
+                        format_args!("{pos:?}: {error}"),
+                    );
+                    break;
+                }
+            }
         }
     }
 
@@ -5244,6 +5279,7 @@ fn equipment_source(g: &Guest, index: usize) -> Option<&ItemStack> {
 
 #[cfg(test)]
 mod tests {
+    mod block_entity_encoding_tests;
     mod carried_check_tests;
     mod cave_air_tests;
     mod collision_exclusion_tests;

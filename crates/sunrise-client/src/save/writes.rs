@@ -41,6 +41,10 @@ pub(super) struct Outstanding {
     count: Mutex<usize>,
     chunks: AtomicUsize,
     pub(super) error: Mutex<Option<String>>,
+    /// The first per-record failure in the completed writes, consumed by a durability barrier.
+    record_error: Mutex<Option<String>>,
+    /// Changed chunk snapshots that did not reach disk.
+    pub(super) failed_saves: Mutex<Vec<(i32, i32)>>,
     done: Condvar,
     /// What the folder's writes make stale: the portal blocks a search read from saved chunks.
     portals: saved_portals::SavedPortals,
@@ -203,10 +207,30 @@ impl SaveDir {
                         let records: Vec<_> = resolved.iter().map(|(k, r)| (*k, r)).collect();
                         let result = (|| -> Result<()> {
                             chunk_disk::prepare_batch(&batch)?;
-                            write_region_records(&root, cache, folder, &records)
+                            write_region_records(&root, cache, folder, &records, |(x, z), error| {
+                                reports.report_save_failure(&root, x, z, &error);
+                                if kind == Folder::Region {
+                                    outstanding.failed_saves.lock().unwrap().push((x, z));
+                                }
+                                outstanding
+                                    .record_error
+                                    .lock()
+                                    .unwrap()
+                                    .get_or_insert_with(|| {
+                                        format!(
+                                            "failed to encode {folder} chunk ({x}, {z}): {error}"
+                                        )
+                                    });
+                            })
                         })();
                         if let Err(e) = &result {
-                            chunk_disk::note_failed(&batch);
+                            if kind == Folder::Region {
+                                outstanding
+                                    .failed_saves
+                                    .lock()
+                                    .unwrap()
+                                    .extend(batch.iter().map(|job| job.key));
+                            }
                             let message = format!("failed to write {folder} files: {e}");
                             log::warn!("Sunrise: {message}");
                             *outstanding.error.lock().unwrap() = Some(message);
@@ -253,7 +277,8 @@ impl SaveDir {
                 .wait(count)
                 .map_err(|_| "writer poisoned")?;
         }
-        self.write_result()
+        self.write_result()?;
+        self.record_write_result()
     }
     /// Wait until at most `low` chunk records are still queued, without waiting
     /// for all of them; a save pass resuming at half the cap keeps the writer fed
@@ -283,8 +308,8 @@ impl SaveDir {
     pub fn active_chunk_writes(&self) -> usize {
         self.outstanding.chunks.load(Ordering::Relaxed)
     }
-    /// Poll durability without holding up the event loop. Errors remain visible
-    /// to every waiter, including a later synchronous shutdown.
+    /// Poll durability without holding up the event loop. Report completed
+    /// record refusals once; a failed chunk does not poison later saves.
     pub fn writes_finished(&self) -> Result<bool> {
         let count = self
             .outstanding
@@ -292,7 +317,22 @@ impl SaveDir {
             .lock()
             .map_err(|_| "writer poisoned")?;
         self.write_result()?;
+        if *count == 0 {
+            self.record_write_result()?;
+        }
         Ok(*count == 0)
+    }
+    fn record_write_result(&self) -> Result<()> {
+        match self
+            .outstanding
+            .record_error
+            .lock()
+            .map_err(|_| "writer poisoned")?
+            .take()
+        {
+            Some(error) => Err(error.into()),
+            None => Ok(()),
+        }
     }
     fn write_result(&self) -> Result<()> {
         match &*self

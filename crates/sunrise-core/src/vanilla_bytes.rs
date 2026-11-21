@@ -6,6 +6,7 @@ use crate::nbt::{self, Tag};
 #[derive(Default)]
 pub struct Writer {
     pub data: Vec<u8>,
+    nbt_error: Option<nbt::Error>,
 }
 impl Writer {
     pub fn new() -> Self {
@@ -75,6 +76,32 @@ impl Writer {
             // Unencodable tags (too deep) are sent as "no tag".
             Err(_) => self.data.push(0),
         }
+    }
+    /// FriendlyByteBuf.writeNbt for the compound packet codecs. A failure belongs to
+    /// this body and is returned by `finish`; it is never encoded as a missing tag.
+    pub fn compound_nbt(&mut self, tag: &Tag, optional: bool) {
+        if self.nbt_error.is_some() {
+            return;
+        }
+        let bytes = match tag {
+            Tag::Compound(_) => tag.to_network_bytes(),
+            Tag::End if optional => {
+                self.u8(0);
+                return;
+            }
+            _ => Err(nbt::Error {
+                offset: self.data.len(),
+                reason: "expected a compound tag",
+            }),
+        };
+        match bytes {
+            Ok(bytes) => self.bytes(&bytes),
+            Err(error) => self.nbt_error = Some(error),
+        }
+    }
+    /// Complete the body or return its encoding failure.
+    pub fn finish(self) -> Result<Vec<u8>, nbt::Error> {
+        self.nbt_error.map_or(Ok(self.data), Err)
     }
     pub fn long_array(&mut self, v: &[i64]) {
         self.varint(v.len() as i32);

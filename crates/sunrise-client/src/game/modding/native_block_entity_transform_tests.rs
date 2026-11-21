@@ -1,10 +1,12 @@
 //! Placement exercises the real processor and the game-side registration bridge.
 use super::native_block_entity_transform::prepare;
 use std::sync::{Arc, Mutex};
-use sunrise_core::nbt::{Compound, Limits, NamedTag, Tag, write_network};
+use sunrise_core::{
+    nbt::{Compound, Limits, Tag},
+    position::ChunkPos,
+};
 use sunrise_world::{
-    compression::Compression,
-    region::ChunkRecord,
+    region::RegionFile,
     registry::{BlockRegistry, BlockStateId},
     worldgen::{
         anchor::WorldGenerationContext,
@@ -84,6 +86,14 @@ impl mod_api::Hooks for Registration {
                         tag = Tag::Compound([("child".into(), tag)].into());
                     }
                     data.insert("nested".into(), tag);
+                    Ok(())
+                },
+            )
+            .build();
+        r.block_entity_type("bad_save")
+            .transform(
+                |data: &mut mod_api::Compound, _: mod_api::StructureTransform| {
+                    data.insert("not-a-value".into(), Tag::End);
                     Ok(())
                 },
             )
@@ -604,7 +614,7 @@ fn structure_transform_reuses_the_unedited_template() {
 }
 
 #[test]
-fn structure_transform_leaves_nbt_limits_to_serialization() {
+fn structure_transform_keeps_the_working_data_until_the_write_boundary() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
         "test",
         Box::new(Registration(Calls::default())),
@@ -628,20 +638,100 @@ fn structure_transform_leaves_nbt_limits_to_serialization() {
             nested = nested.get("child").unwrap();
         }
         assert_eq!(nested, &Tag::Byte(1));
-        // Placement accepts the live data. The depth rules belong to the actual writer.
-        assert!(write_network(&tag, Limits::network()).is_err());
-        assert!(
-            ChunkRecord::from_nbt(
-                &NamedTag {
-                    name: "".into(),
-                    tag
-                },
-                Compression::None,
-                0,
-                Limits::default(),
-            )
-            .is_ok()
+    });
+}
+
+#[test]
+fn structure_transform_save_refuses_only_its_invalid_chunk() {
+    use sunrise_assets::resource_source::ResourceRoot;
+    use sunrise_client::{
+        biome::Biomes,
+        chunk::{Chunk, ChunkExtras, LevelShape},
+        containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
+        save::SaveDir,
+    };
+
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "test",
+        Box::new(Registration(Calls::default())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let biomes_path = dir.path().join("data/minecraft/worldgen/biome");
+        std::fs::create_dir_all(&biomes_path).unwrap();
+        std::fs::write(biomes_path.join("plains.json"), "{}").unwrap();
+        let biomes = Arc::new(
+            Biomes::load_for_server(&ResourceRoot::directory(dir.path().to_path_buf())).unwrap(),
         );
+        let resources = resources(dir.path());
+        prepare(resources.registry);
+        let (world, _) = place(
+            &resources,
+            "test:bad_save",
+            "north",
+            Rotation::None,
+            Mirror::None,
+        );
+        let mut bad = Chunk::empty(0, 0);
+        bad.set(3, 64, 5, world.state.0);
+        let mut save = SaveDir::new(
+            dir.path().to_owned(),
+            LevelShape::OVERWORLD,
+            Some(Default::default()),
+        );
+        save.chunk_reports = Arc::default();
+        save.save_later(&[Arc::new(bad.clone())], resources.registry, &biomes)
+            .unwrap();
+        save.flush().unwrap();
+        bad.block_entities.push((
+            (3, 64, 5),
+            BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                "test:bad_save".into(),
+                ModBlockEntityFields {
+                    nbt: world.stored.unwrap(),
+                    ..Default::default()
+                },
+            ))),
+        ));
+        let mut good = Chunk::empty(1, 0);
+        good.saved = Some(Arc::new(ChunkExtras {
+            last_update: 37,
+            ..Default::default()
+        }));
+        save.save_later(
+            &[Arc::new(bad), Arc::new(good)],
+            resources.registry,
+            &biomes,
+        )
+        .unwrap();
+        assert!(
+            save.flush()
+                .unwrap_err()
+                .to_string()
+                .contains("chunk (0, 0)")
+        );
+        assert_eq!(save.take_failed_chunk_saves(), [(0, 0)]);
+        assert_eq!(save.chunk_reports.take().save_failure, Some((0, 0)));
+        let mut region = RegionFile::open(dir.path().join("region/r.0.0.mca")).unwrap();
+        let old = region
+            .read(ChunkPos::new(0, 0))
+            .unwrap()
+            .unwrap()
+            .nbt(Limits::saved())
+            .unwrap();
+        assert!(matches!(old.tag.get("block_entities"), Some(Tag::List(list)) if list.is_empty()));
+        let saved = region
+            .read(ChunkPos::new(1, 0))
+            .unwrap()
+            .unwrap()
+            .nbt(Limits::saved())
+            .unwrap();
+        assert_eq!(saved.tag.get("LastUpdate"), Some(&Tag::Long(37)));
+        save.save_later(&[Arc::new(Chunk::empty(2, 0))], resources.registry, &biomes)
+            .unwrap();
+        save.flush().unwrap();
     });
 }
 

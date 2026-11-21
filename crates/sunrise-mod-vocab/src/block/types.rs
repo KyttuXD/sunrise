@@ -33,6 +33,7 @@ impl<'a> ModBlockEntityView<'a> {
     }
 
     /// Queue one-shot fields in the block entity's next update to its viewers.
+    /// The send encodes the merged update as a trusted compound, with no partial-tag fallback.
     pub fn set_client_update_fields(&mut self, fields: Compound) {
         self.entity.client_update_fields = Some(fields);
     }

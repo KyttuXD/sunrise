@@ -400,6 +400,30 @@ impl Codec<Tag> for Nbt {
         w.nbt(v)
     }
 }
+/// ByteBufCodecs.OPTIONAL_COMPOUND_TAG (bounded decode, End means absent)
+/// or TRUSTED_COMPOUND_TAG (unlimited heap, a compound is required).
+pub struct CompoundNbt<const OPTIONAL: bool>;
+impl<const OPTIONAL: bool> Codec<Tag> for CompoundNbt<OPTIONAL> {
+    fn read(r: &mut Reader) -> Result<Tag> {
+        let quota = if OPTIONAL {
+            None
+        } else {
+            Some(i64::MAX as u64)
+        };
+        let (tag, used) = Tag::from_network_bytes(&r.data[r.pos..], quota)
+            .map_err(|error| Error::new(error.to_string()))?;
+        match tag {
+            Tag::Compound(_) => {}
+            Tag::End if OPTIONAL => {}
+            _ => return Err(Error::new("expected a compound tag")),
+        }
+        r.pos += used;
+        Ok(tag)
+    }
+    fn write(v: &Tag, w: &mut Writer) {
+        w.compound_nbt(v, OPTIONAL);
+    }
+}
 /// ByteBufCodecs.LONG_ARRAY.
 pub struct Longs;
 impl Codec<Vec<i64>> for Longs {

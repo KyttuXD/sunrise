@@ -743,11 +743,23 @@ impl Game<'_> {
             return;
         };
         let record_cb = |pkt: sunrise_protocol::packets::play::Clientbound| {
-            let encoded = pkt.encode();
+            let encoded = match pkt.try_encode() {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    log::error!(
+                        "Studio Recorder: could not encode snapshot packet {}: {error}",
+                        pkt.name()
+                    );
+                    return false;
+                }
+            };
             let mut reader = sunrise_protocol::buf::Reader::new(&encoded);
             if let Ok(id) = reader.varint() {
                 let payload = reader.rest();
                 recorder.record_packet_at(0, id, payload);
+                true
+            } else {
+                false
             }
         };
 
@@ -844,10 +856,11 @@ impl Game<'_> {
         let mut count = 0;
         for chunk in self.world.chunks.values() {
             let level_chunk = encoder.encode(chunk, &self.world.block_entities);
-            record_cb(
+            if record_cb(
                 sunrise_protocol::packets::play::Clientbound::LevelChunkWithLight(level_chunk),
-            );
-            count += 1;
+            ) {
+                count += 1;
+            }
         }
         log::info!(
             "Studio Recorder: Dumped initial world snapshot ({count} chunks) at timestamp 0ms"

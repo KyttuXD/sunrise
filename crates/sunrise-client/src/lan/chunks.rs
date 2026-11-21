@@ -18,7 +18,7 @@ use std::{
 use sunrise_core::nbt::{Compound, Tag};
 use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{BitSet, Codec, List, check_network_nbt, set_bit},
+    buf::{BitSet, Codec, List, set_bit},
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
@@ -425,9 +425,8 @@ impl Prepared {
             + buffer
             + self.tags.len()
             + layers * (2048 + 3);
-        let mut w = Writer {
-            data: Vec::with_capacity(size),
-        };
+        let mut w = Writer::new();
+        w.data.reserve(size);
         w.varint(sunrise_protocol::ids::play::clientbound::LEVEL_CHUNK_WITH_LIGHT);
         w.i32(self.x);
         w.i32(self.z);
@@ -445,7 +444,7 @@ impl Prepared {
 /// Bodies to finish, each taken by whichever thread is free first. A body
 /// another thread is still writing is waited for (`OnceLock::get_or_init`).
 struct Bodies {
-    columns: Vec<Prepared>,
+    columns: Vec<sunrise_protocol::Result<Prepared>>,
     next: AtomicUsize,
     done: Vec<OnceLock<std::sync::Mutex<Vec<u8>>>>,
 }
@@ -457,7 +456,9 @@ impl Bodies {
             let Some(column) = self.columns.get(i) else {
                 return;
             };
-            self.done[i].get_or_init(|| std::sync::Mutex::new(column.write()));
+            if let Ok(column) = column {
+                self.done[i].get_or_init(|| std::sync::Mutex::new(column.write()));
+            }
         }
     }
 }
@@ -840,9 +841,8 @@ impl ChunkEncoder {
     /// The tag of a block change at `pos`: [`Self::update_tag`] with a mod's
     /// queued one-shot fields taken and put over it. It takes them, so build it
     /// once, with viewers, and send it to them all; a chunk or a single player's
-    /// resend uses `update_tag`, which leaves them for such a change. Fields that would take the
-    /// tag past what a client reads (`buf::check_network_nbt`) are dropped, and the plain
-    /// `update_tag` goes instead: no viewer is disconnected or misses the change.
+    /// resend uses `update_tag`, which leaves them for such a change. The update packet's
+    /// trusted compound codec encodes the finished tag.
     pub fn change_tag(
         &self,
         pos: (i32, i32, i32),
@@ -856,22 +856,12 @@ impl ChunkEncoder {
         let Some(fields) = m.take_client_update_fields() else {
             return tag;
         };
-        let mut merged = match &tag {
-            Some(Tag::Compound(tag)) => tag.clone(),
+        let mut merged = match tag {
+            Some(Tag::Compound(tag)) => tag,
             _ => Compound::new(),
         };
         merged.extend(fields);
-        let merged = Tag::Compound(merged);
-        match check_network_nbt(&merged) {
-            Ok(()) => Some(merged),
-            Err(e) => {
-                log::warn!(
-                    "[lan] {} at {pos:?}: one-shot client update fields dropped: {e}",
-                    m.id()
-                );
-                tag
-            }
-        }
+        Some(Tag::Compound(merged))
     }
     pub fn is_air(&self, state: u32) -> bool {
         self.coder
@@ -936,7 +926,11 @@ impl ChunkEncoder {
     /// exist. It is written once into a buffer of its final size: the cached
     /// sections and light layers go straight to it, with no packet built and
     /// copied again first.
-    pub fn body_in(&self, chunk: &Chunk, world: &crate::world::World) -> Vec<u8> {
+    pub fn body_in(
+        &self,
+        chunk: &Chunk,
+        world: &crate::world::World,
+    ) -> sunrise_protocol::Result<Vec<u8>> {
         self.body_with(chunk, world, &|_, _| None)
     }
     /// [`Self::body_in`], with `protos` giving the non-air sections of a
@@ -946,7 +940,7 @@ impl ChunkEncoder {
         chunk: &Chunk,
         world: &crate::world::World,
         protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
-    ) -> Vec<u8> {
+    ) -> sunrise_protocol::Result<Vec<u8>> {
         self.body(
             chunk,
             &world.block_entities,
@@ -1065,8 +1059,8 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
         around: SectionMask,
-    ) -> Vec<u8> {
-        self.prepare(chunk, block_entities, around).write()
+    ) -> sunrise_protocol::Result<Vec<u8>> {
+        Ok(self.prepare(chunk, block_entities, around)?.write())
     }
 
     /// What of a column's body reads the level or the caches.
@@ -1075,25 +1069,27 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
         around: SectionMask,
-    ) -> Prepared {
+    ) -> sunrise_protocol::Result<Prepared> {
         let (wires, entities) = self.blocks(chunk, block_entities);
-        let heightmaps = self.heightmaps_of(chunk);
         // Before the light: their tags' size is only known once written.
         let mut tags = Writer::new();
         List::<BlockEntityInfo>::write(&entities, &mut tags);
-        Prepared {
+        let tags = tags.finish().map_err(|error| {
+            sunrise_protocol::Error::new(format!("chunk ({}, {}): {error}", chunk.x, chunk.z))
+        })?;
+        Ok(Prepared {
             x: chunk.x,
             z: chunk.z,
-            heightmaps,
+            heightmaps: self.heightmaps_of(chunk),
             wires,
-            tags: tags.data,
+            tags,
             sections: chunk.sections[self.sections.clone()].to_vec(),
             outside: self.outside(chunk),
             stored: chunk.stored_light(),
             first_section: self.sections.start,
             around,
             sky: self.sky,
-        }
+        })
     }
 
     /// [`Self::body_with`] for each of `chunks`, in their order. What reads
@@ -1106,8 +1102,8 @@ impl ChunkEncoder {
         chunks: &[&Chunk],
         world: &crate::world::World,
         protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
-    ) -> Vec<Vec<u8>> {
-        let columns: Vec<Prepared> = chunks
+    ) -> Vec<sunrise_protocol::Result<Vec<u8>>> {
+        let columns: Vec<_> = chunks
             .iter()
             .map(|c| self.prepare(c, &world.block_entities, self.around(c, world, protos)))
             .collect();
@@ -1117,7 +1113,10 @@ impl ChunkEncoder {
             None
         };
         let Some(pool) = pool else {
-            return columns.iter().map(Prepared::write).collect();
+            return columns
+                .into_iter()
+                .map(|column| column.map(|column| column.write()))
+                .collect();
         };
         let job = Arc::new(Bodies {
             done: columns.iter().map(|_| OnceLock::new()).collect(),
@@ -1131,8 +1130,9 @@ impl ChunkEncoder {
             .iter()
             .zip(&job.done)
             .map(|(c, done)| {
+                let c = c.as_ref().map_err(Clone::clone)?;
                 let body = done.get_or_init(|| std::sync::Mutex::new(c.write()));
-                std::mem::take(&mut *body.lock().unwrap())
+                Ok(std::mem::take(&mut *body.lock().unwrap()))
             })
             .collect()
     }

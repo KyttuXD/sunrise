@@ -6,7 +6,7 @@ use sunrise_core::{
     random::{LegacyRandom, PositionalRandom, RandomSource, position_seed},
 };
 use {
-    super::{BlockInfo, Mirror, Rotation, StructureResources, StructureTemplate},
+    super::{Mirror, Rotation, StructureResources, StructureTemplate},
     sunrise_core::bounding_box::BoundingBox,
 };
 use {
@@ -245,25 +245,29 @@ impl Modifier {
 }
 impl Modifier {
     /// RuleBlockEntityModifier.apply: the block entity the output gets.
-    fn apply(&self, nbt: Option<&Compound>, random: &mut impl ProcessorRandom) -> Option<Compound> {
+    fn apply<'a>(
+        &self,
+        nbt: Option<Cow<'a, Compound>>,
+        random: &mut impl ProcessorRandom,
+    ) -> Option<Cow<'a, Compound>> {
         match self {
-            Self::Passthrough => nbt.cloned(),
-            Self::Clear => Some(Compound::new()),
+            Self::Passthrough => nbt,
+            Self::Clear => Some(Cow::Owned(Compound::new())),
             Self::AppendLoot(table) => {
-                let mut nbt = nbt.cloned().unwrap_or_default();
+                let mut nbt = nbt.map(Cow::into_owned).unwrap_or_default();
                 nbt.insert("LootTable".into(), Tag::String(table.as_str().into()));
                 nbt.insert("LootTableSeed".into(), Tag::Long(random.long()));
-                Some(nbt)
+                Some(Cow::Owned(nbt))
             }
-            Self::AppendStatic(data) => Some(edited(nbt, &[], data)),
-            Self::Edit { remove, data } => Some(edited(nbt, remove, data)),
+            Self::AppendStatic(data) => Some(Cow::Owned(edited(nbt, &[], data))),
+            Self::Edit { remove, data } => Some(Cow::Owned(edited(nbt, remove, data))),
         }
     }
 }
 /// A block entity with `remove`'s keys taken out and `data` merged in
 /// (append_static is the one with nothing to remove).
-fn edited(nbt: Option<&Compound>, remove: &[String], data: &Compound) -> Compound {
-    let mut nbt = nbt.cloned().unwrap_or_default();
+fn edited(nbt: Option<Cow<'_, Compound>>, remove: &[String], data: &Compound) -> Compound {
+    let mut nbt = nbt.map(Cow::into_owned).unwrap_or_default();
     for key in remove {
         nbt.remove(&JavaString::from(key.as_str()));
     }
@@ -1031,7 +1035,6 @@ fn blackstone(name: &str) -> Option<&'static str> {
     })
 }
 /// The placement-local block info; a delegate may borrow the working tag.
-#[derive(Clone, PartialEq)]
 struct WorkingBlock<'a> {
     pos: [i32; 3],
     state: BlockStateId,
@@ -1167,10 +1170,7 @@ fn process_block<'a, W: PlacementContext>(
                 return Ok(Some(WorkingBlock {
                     pos: info.pos,
                     state: rule.output,
-                    nbt: rule
-                        .modifier
-                        .apply(info.nbt.as_deref(), &mut random)
-                        .map(Cow::Owned),
+                    nbt: rule.modifier.apply(info.nbt, &mut random),
                 }));
             }
             Some(info)
@@ -1236,10 +1236,7 @@ fn process_block<'a, W: PlacementContext>(
                     .unwrap_or(state),
                 false => state,
             };
-            let nbt = set
-                .modifier
-                .apply(info.nbt.as_deref(), &mut random)
-                .map(Cow::Owned);
+            let nbt = set.modifier.apply(info.nbt, &mut random);
             Some(WorkingBlock { state, nbt, ..info })
         }
         Processor::Condition(c) => {
@@ -1281,11 +1278,12 @@ fn process_block<'a, W: PlacementContext>(
         }
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => {
-                let mut out = settings.with_random(info.pos, |r| pick.apply(info.clone(), r));
+                let original_state = info.state;
+                let mut out = settings.with_random(info.pos, |r| pick.apply(info, r));
                 if pick.keep_properties
                     && let Some(kept) = registry
                         .state(out.state)
-                        .and_then(|s| with_properties_of(registry, &s.name, info.state))
+                        .and_then(|s| with_properties_of(registry, &s.name, original_state))
                 {
                     out.state = kept;
                 }
@@ -1409,7 +1407,7 @@ fn process_infos<W: PlacementContext>(
     position: [i32; 3],
     reference: [i32; 3],
     settings: &mut PlaceSettings<'_>,
-) -> Result<Vec<BlockInfo>, PlacementQueryError> {
+) -> Result<Vec<WorkingBlock<'static>>, PlacementQueryError> {
     settings.counted = 0;
     let whole = settings
         .processors
@@ -1480,32 +1478,45 @@ fn process_infos<W: PlacementContext>(
                 break;
             }
             let before = &processed[index];
-            let altered = process_block(
+            let Some(WorkingBlock { pos, state, nbt }) = process_block(
                 delegate,
                 world,
                 resources,
                 position,
                 reference,
                 original_positions[index],
-                before.clone(),
+                WorkingBlock {
+                    pos: before.pos,
+                    state: before.state,
+                    nbt: before.nbt.as_deref().map(Cow::Borrowed),
+                },
                 settings,
-            )?;
-            if let Some(altered) = altered
-                && &altered != before
-            {
+            )?
+            else {
+                continue;
+            };
+            // A borrowed tag is still the input's tag. An independently produced tag
+            // counts toward the cap only if its contents (or the rest of the info) changed.
+            let replacement = match nbt {
+                Some(Cow::Borrowed(_)) => None,
+                Some(Cow::Owned(tag)) if before.nbt.as_deref() != Some(&tag) => {
+                    Some(Some(Cow::Owned(tag)))
+                }
+                None if before.nbt.is_some() => Some(None),
+                _ => None,
+            };
+            if pos != before.pos || state != before.state || replacement.is_some() {
+                let block = &mut processed[index];
+                block.pos = pos;
+                block.state = state;
+                if let Some(nbt) = replacement {
+                    block.nbt = nbt;
+                }
                 replaced += 1;
-                processed[index] = altered;
             }
         }
     }
-    Ok(processed
-        .into_iter()
-        .map(|info| BlockInfo {
-            pos: info.pos,
-            state: info.state,
-            nbt: info.nbt.map(|nbt| Box::new(nbt.into_owned())),
-        })
-        .collect())
+    Ok(processed)
 }
 
 /// StructureTemplate.placeInWorld. Returns false for a template with no
@@ -1575,7 +1586,8 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
             continue;
         }
         placed.push(info.pos);
-        if let Some(mut nbt) = info.nbt {
+        if let Some(nbt) = info.nbt {
+            let mut nbt = nbt.into_owned();
             if resources.transforms.loot_container(state) {
                 let seed = match loot_random.as_deref_mut() {
                     Some(random) => random.long(),
@@ -1586,7 +1598,7 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
             if let Some(transform) = resources.registry.structure_block_entity_transform.get() {
                 transform.transform(info.pos, &mut nbt, settings.rotation, settings.mirror);
             }
-            world.set_block_entity(info.pos, *nbt)?;
+            world.set_block_entity(info.pos, nbt)?;
         }
         if let Some(previous) = previous {
             if resources.source_fluid(state) {
@@ -2038,7 +2050,7 @@ mod tests {
         else {
             panic!("append_static")
         };
-        let merged = edited(Some(&vault), &[], &data);
+        let merged = edited(Some(Cow::Borrowed(&vault)), &[], &data);
         assert_eq!(
             merged,
             nbt(json!({"id": "minecraft:vault",
@@ -2052,7 +2064,7 @@ mod tests {
             panic!("sunrise:edit")
         };
         assert_eq!(
-            edited(Some(&vault), &remove, &data),
+            edited(Some(Cow::Borrowed(&vault)), &remove, &data),
             nbt(json!({"id": "minecraft:vault",
                 "config": {"loot_table": "x:new", "key_item": {"id": "minecraft:trial_key"}}}))
         );
