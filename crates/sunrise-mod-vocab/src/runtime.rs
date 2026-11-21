@@ -172,10 +172,10 @@ pub fn isolated_failures() -> u64 {
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     let (entered, trapped) = LISTENER_SERIAL.get();
     LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
-    disable_panicking_listener(hook, id);
+    disable_listener(hook, id);
 }
 
-fn disable_panicking_listener(hook: generated::HookId, id: &'static str) {
+fn disable_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -477,7 +477,7 @@ pub(crate) fn isolated_part_answer<T>(
             None
         }
         Err(message) => {
-            disable_panicking_listener(hook, id);
+            disable_listener(hook, id);
             crate::callback_owner::report_callback_panic(id, "part", name, message);
             None
         }

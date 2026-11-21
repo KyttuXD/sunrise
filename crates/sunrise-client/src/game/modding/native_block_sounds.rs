@@ -133,8 +133,11 @@ mod tests {
     use mod_api::BlockSoundCause::{Break, Dig, Fall, Place, Step};
     use std::sync::Arc;
     use sunrise_client::mobs::{Mob, MobEvent, equine};
-    use sunrise_core::{geometry::Vec3, position::BlockPos};
-    use sunrise_world::level::LevelAccess;
+    use sunrise_core::{
+        geometry::{Direction, Vec3},
+        position::BlockPos,
+    };
+    use sunrise_world::level::{LevelAccess, PlaceContext, PlaceOutcome};
 
     #[test]
     #[ignore = "daily"]
@@ -232,7 +235,7 @@ mod tests {
             assert_eq!(played.event, "mymod:missing");
             assert_eq!(played.position, [5.5, 64.5, 5.5]);
             assert_eq!(played.source, mod_api::SoundSource::Blocks.index());
-            assert_eq!((played.volume, played.pitch), (1.5, 1.5 * 0.8));
+            assert_eq!((played.volume, played.pitch), (1.5, 1.2));
             // The server's placement (`BlockItem.place`) asks with the acting player, and with
             // none when nothing places it (a dispenser).
             let glass = registry.default_state("minecraft:glass").unwrap();
@@ -272,13 +275,48 @@ mod tests {
                 placed,
                 [placement.clone(), placement.clone(), placement, None]
             );
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+            // The placement emits its chosen event and excludes the player who predicts it.
+            game.lan_acting_entity = Some(7);
+            game.audio.capture = Some(Vec::new());
+            let click = PlaceContext {
+                clicked_pos: BlockPos::new(8, 64, 8),
+                face: Direction::Up,
+                hit: Vec3::new(8.5, 64.5, 8.5),
+                inside: false,
+                yaw: 0.0,
+                pitch: 0.0,
+                sneaking: false,
+                item: "minecraft:white_wool".to_owned(),
+                can_use_game_master_blocks: false,
+            };
+            assert_eq!(
+                game.with_level(
+                    |behaviours, level, ticks| behaviours.place_block(level, ticks, &click)
+                ),
+                PlaceOutcome::Placed {
+                    pos: click.clicked_pos,
+                    state: white_wool
+                },
+            );
+            game.process_level_events().unwrap();
+            let capture = game.audio.capture.take().unwrap();
+            let [played] = capture.as_slice() else {
+                panic!("expected one selected placement event, got {capture:?}");
+            };
+            assert_eq!(played.event, "mymod:block.x.place");
+            assert_eq!(played.position, [8.5, 64.5, 8.5]);
+            assert_eq!(played.source, mod_api::SoundSource::Blocks.index());
+            assert_eq!((played.volume, played.pitch), (1.5, 1.2));
+            assert_eq!(played.except_entity, Some(7));
+            game.lan_acting_entity = None;
+
             // A horse stepping on stone under a snow layer plays the snow's answer, asked at the
             // stone's position (`AbstractHorse.playStepSound`): volume 2.0 × 0.15, pitch 1.5.
             let stone = registry.default_state("minecraft:stone").unwrap();
             let snow = registry.default_state("minecraft:snow").unwrap();
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
             game.world.set(5, 64, 5, stone).unwrap();
             game.world.set(5, 65, 5, snow).unwrap();
             let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
