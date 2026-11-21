@@ -65,6 +65,7 @@ impl PartRegistrar {
             dimensions,
             chunk_generators,
             biome_sources,
+            tooltip_appenders,
             refused
         )
     }

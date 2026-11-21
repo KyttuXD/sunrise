@@ -269,6 +269,36 @@ pub(super) fn register_components(root: &std::path::Path) -> sunrise_client::Res
     Ok(())
 }
 
+/// The graph is already ordered; now its mod nodes must name actual component types.
+/// Native types have only just been frozen, after Parts registration.
+pub(super) fn validate_tooltip_appender_types() -> sunrise_client::Result<()> {
+    let appenders = mod_api::__private::tooltip_appenders();
+    if appenders.is_empty() {
+        return Ok(());
+    }
+    let types = RegistrationContext::new().registry("minecraft:data_component_type")?;
+    let errors: Vec<_> = appenders
+        .iter()
+        .filter(|appender| {
+            let id = appender.component();
+            !types.iter().any(|known| known == id)
+                && sunrise_protocol::item::custom::id(id).is_none()
+        })
+        .map(|appender| {
+            format!(
+                "mod {}: tooltip appender uses unregistered data component {}",
+                appender.mod_id(),
+                appender.component(),
+            )
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n").into())
+    }
+}
+
 /// Finish every once-only content declaration on the registration thread.
 pub(super) fn freeze_declarations() {
     let _ = native_declared();

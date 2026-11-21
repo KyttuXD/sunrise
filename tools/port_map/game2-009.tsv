@@ -56,7 +56,7 @@ ChargedProjectiles.Mutable.addSlotWithItem	skip:other		no callers in the vanilla
 ChargedProjectiles.Mutable.toImmutable	skip:other		no callers in the vanilla source
 Consumable.Builder.build	port	crates/sunrise-items/src/items.rs::Items::load_with	reads consume_seconds (1.6 default), the animation, sound and particles from the item JSON; effects are added separately
 DyedItemColor.getOrDefault	port	crates/sunrise-assets/src/item_model.rs::Resolve::tint	the dyed_color component with the default tint (leather) when unset
-FireworkExplosion.getColorName	port	crates/sunrise-client/src/item_tooltip.rs::firework_lines	dye name from the firework colour; unknown colours read as custom colour
+FireworkExplosion.getColorName	port	crates/sunrise-client/src/item_tooltip.rs::firework_component_lines	dye name from the firework colour; unknown colours read as custom colour
 FireworkExplosion.withFadeColors	port	crates/sunrise-client/src/crafting.rs::Special::assemble	sets the fade colours of the star-fade recipe result
 ItemContainerContents.fromSlots	port	crates/sunrise-items/src/item_data.rs::decode_components	reads the container slot list from its NBT; only non-empty slots are kept as pairs
 ItemContainerContents.fromItems	port	crates/sunrise-client/src/block_entity_item.rs::collect	writes the non-empty slots of the container into the item's components

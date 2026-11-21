@@ -4,7 +4,7 @@ use mod_api::*;
 use std::sync::Arc;
 
 #[test]
-fn tooltip_appender_restores_owner_even_on_panic() {
+fn a_panicking_tooltip_appender_restores_owner_and_disables_only_itself() {
     mod_api::__private::initialize().unwrap();
     struct Check(bool);
     impl TooltipAppender for Check {
@@ -13,9 +13,10 @@ fn tooltip_appender_restores_owner_even_on_panic() {
             _: &dyn ClientHost,
             _: &ItemStack,
             _: &TooltipAppendContext,
-            _: &mut Vec<(Text, u32)>,
+            lines: &mut Vec<(Text, u32)>,
         ) {
             assert_eq!(mod_api::content::crash::current_native_mod(), Some("inner"));
+            lines.push((Text::literal("an appender line"), u32::MAX));
             assert!(!self.0, "test unwind");
         }
     }
@@ -23,13 +24,16 @@ fn tooltip_appender_restores_owner_even_on_panic() {
     #[mod_api::__subscriptions]
     impl Hooks for Inner {
         fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
-            for panic in [false, true] {
-                registrar.register_tooltip_appender(
-                    "test:item",
-                    TooltipPlacement::AfterAll,
-                    Arc::new(Check(panic)),
-                );
-            }
+            registrar.register_tooltip_appender(
+                "minecraft:repair_cost",
+                TooltipPlacement::AfterAll,
+                Arc::new(Check(true)),
+            );
+            registrar.register_tooltip_appender(
+                "minecraft:max_stack_size",
+                TooltipPlacement::AfterAll,
+                Arc::new(Check(false)),
+            );
         }
     }
     let mods = [ModEntry::new("inner", Box::new(Inner))];
@@ -51,16 +55,22 @@ fn tooltip_appender_restores_owner_even_on_panic() {
         hook: "outer",
         part: None,
     });
-    let appenders = mod_api::__private::tooltip_appenders();
-    assert_eq!(appenders.len(), 2);
-    for (part, panic) in appenders.iter().zip([false, true]) {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            part.appender()
-                .append(&host, &stack, &context, &mut Vec::new())
-        }));
-        assert_eq!(result.is_err(), panic);
-        assert_eq!(mod_api::content::crash::current_native_mod(), Some("outer"));
-    }
+    let [broken, healthy] = mod_api::__private::tooltip_appenders() else {
+        panic!("expected both registered appenders");
+    };
+    assert!(broken.append(&host, &stack, &context).is_none());
+    assert_eq!(mod_api::content::crash::current_native_mod(), Some("outer"));
+    assert!(!broken.enabled());
+    assert!(broken.append(&host, &stack, &context).is_none());
+    assert_eq!(
+        healthy.append(&host, &stack, &context),
+        Some(vec![(Text::literal("an appender line"), u32::MAX)]),
+    );
+    assert_eq!(mod_api::content::crash::current_native_mod(), Some("outer"));
+    let notices = mod_api::__private::game::take_callback_panic_notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].mod_id, "inner");
+    assert!(notices[0].message.contains("test unwind"));
     drop(outer);
     assert_eq!(mod_api::content::crash::current_native_mod(), None);
 }

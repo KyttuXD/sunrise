@@ -7,7 +7,6 @@ use crate::{
     hud::rgba,
     items::{ItemInfo, ItemStack, Items},
 };
-use mod_api::TooltipPlacement;
 pub use mod_api::item::item_tooltip::TooltipDisplay;
 use sunrise_core::nbt::Tag;
 use sunrise_items::creative_catalog::Holders;
@@ -833,8 +832,8 @@ pub fn unbreakable_line(
     .then(|| translate("item.unbreakable").unwrap_or_else(|| "item.unbreakable".into()))
 }
 
-/// `ItemStack.addDetailsToTooltip`'s adventure lines, `can_break` then
-/// `can_place_on`: each shown one adds an empty line, its gray header
+/// `ItemStack.addDetailsToTooltip`'s adventure lines for `can_break` or
+/// `can_place_on`: a visible predicate adds an empty line, its gray header
 /// (`AdventureModePredicate.CAN_BREAK_HEADER` / `CAN_PLACE_HEADER`) and
 /// `AdventureModePredicate.computeTooltip`: `item.canUse.unknown` in gray when
 /// some predicate names no blocks, else every distinct block of the
@@ -843,9 +842,17 @@ pub fn unbreakable_line(
 pub fn adventure_lines(
     stack: &ItemStack,
     display: &TooltipDisplay,
+    component: &str,
+    header: &str,
     tag_blocks: &dyn Fn(&str) -> Vec<String>,
     translate: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<(String, u32)> {
+    let Some(tag) = stack.data().and_then(|d| d.other(component)) else {
+        return Vec::new();
+    };
+    if !display.shows(component) {
+        return Vec::new();
+    }
     let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
     let namespaced = |id: &str| {
         if id.contains(':') {
@@ -855,58 +862,45 @@ pub fn adventure_lines(
         }
     };
     let (gray, dark_gray) = (rgba(170, 170, 170, 255), rgba(85, 85, 85, 255));
-    let mut lines = Vec::new();
-    for (component, header) in [
-        ("minecraft:can_break", "item.canBreak"),
-        ("minecraft:can_place_on", "item.canPlace"),
-    ] {
-        let Some(tag) = stack.data().and_then(|d| d.other(component)) else {
-            continue;
-        };
-        if !display.shows(component) {
-            continue;
-        }
-        lines.push((String::new(), u32::MAX));
-        lines.push((text(header), gray));
-        let predicates: Vec<&Tag> = match tag {
-            Tag::List(list) => list.iter().collect(),
-            single => vec![single],
-        };
-        if predicates.iter().any(|p| p.get("blocks").is_none()) {
-            lines.push((text("item.canUse.unknown"), gray));
-            continue;
-        }
-        let mut blocks: Vec<String> = Vec::new();
-        for p in predicates {
-            let ids = match p.get("blocks") {
-                Some(Tag::String(entry)) => {
-                    let entry = entry.to_string_lossy();
-                    match entry.strip_prefix('#') {
-                        Some(tag) => tag_blocks(&namespaced(tag)),
-                        None => vec![namespaced(&entry)],
-                    }
-                }
-                Some(Tag::List(entries)) => entries
-                    .iter()
-                    .filter_map(|e| match e {
-                        Tag::String(id) => Some(namespaced(&id.to_string_lossy())),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            for id in ids {
-                if !blocks.contains(&id) {
-                    blocks.push(id);
+    let mut lines = vec![(String::new(), u32::MAX), (text(header), gray)];
+    let predicates: Vec<&Tag> = match tag {
+        Tag::List(list) => list.iter().collect(),
+        single => vec![single],
+    };
+    if predicates.iter().any(|p| p.get("blocks").is_none()) {
+        lines.push((text("item.canUse.unknown"), gray));
+        return lines;
+    }
+    let mut blocks: Vec<String> = Vec::new();
+    for p in predicates {
+        let ids = match p.get("blocks") {
+            Some(Tag::String(entry)) => {
+                let entry = entry.to_string_lossy();
+                match entry.strip_prefix('#') {
+                    Some(tag) => tag_blocks(&namespaced(tag)),
+                    None => vec![namespaced(&entry)],
                 }
             }
+            Some(Tag::List(entries)) => entries
+                .iter()
+                .filter_map(|e| match e {
+                    Tag::String(id) => Some(namespaced(&id.to_string_lossy())),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for id in ids {
+            if !blocks.contains(&id) {
+                blocks.push(id);
+            }
         }
-        for id in blocks {
-            lines.push((
-                text(&format!("block.{}", id.replacen(':', ".", 1))),
-                dark_gray,
-            ));
-        }
+    }
+    for id in blocks {
+        lines.push((
+            text(&format!("block.{}", id.replacen(':', ".", 1))),
+            dark_gray,
+        ));
     }
     lines
 }
@@ -1068,96 +1062,6 @@ pub fn component_count(stack: &ItemStack, info: Option<&ItemInfo>) -> usize {
         }
     }
     keys.len()
-}
-
-/// Where each component detail of a tooltip starts, for the placements of the appenders a mod
-/// registered. Recorded only when some appender is registered: otherwise it is empty.
-pub struct DetailMarks {
-    /// Each detail's component and the line it starts at, in the order they are listed.
-    starts: Option<Vec<(&'static str, usize)>>,
-    /// The line the details end at, before the durability and advanced lines.
-    finish: usize,
-}
-
-impl DetailMarks {
-    /// Marks for one tooltip; `registered` is whether any appender is registered.
-    pub fn new(registered: bool) -> Self {
-        Self {
-            starts: registered.then(Vec::new),
-            finish: 0,
-        }
-    }
-    /// The detail of component `component` starts before line `at`.
-    pub fn start(&mut self, component: &'static str, at: usize) {
-        if let Some(starts) = &mut self.starts {
-            starts.push((component, at));
-        }
-    }
-    /// The details end before line `at`.
-    pub fn end(&mut self, at: usize) {
-        self.finish = at;
-    }
-}
-
-/// The line and logical component boundary for a placement, with a rank at the same boundary.
-fn anchor(
-    placement: &TooltipPlacement,
-    starts: &[(&str, usize)],
-    end: usize,
-) -> (usize, usize, u8) {
-    let start_of = |id: &str| starts.iter().position(|(component, _)| *component == id);
-    match placement {
-        TooltipPlacement::BeforeAll => (starts.first().map_or(end, |s| s.1), 0, 0),
-        TooltipPlacement::Before(id) => {
-            let i = start_of(id.as_str()).unwrap_or(starts.len());
-            (starts.get(i).map_or(end, |s| s.1), i, 1)
-        }
-        TooltipPlacement::After(id) => {
-            let i = start_of(id.as_str()).map_or(starts.len(), |i| i + 1);
-            (starts.get(i).map_or(end, |s| s.1), i, 0)
-        }
-        TooltipPlacement::AfterAll => (end, starts.len(), 2),
-    }
-}
-
-/// `RegisterTooltipAppendersEvent`: adds the lines of each registered appender where its
-/// placement puts them. `registered` yields (component, placement, its mod enabled, appender) in
-/// registration order; an appender is asked only for a stack that carries its component and
-/// whose tooltip `display` shows it.
-pub fn add_appender_lines<'a, A: ?Sized + 'a>(
-    lines: &mut Vec<(Text, u32)>,
-    marks: &DetailMarks,
-    stack: &ItemStack,
-    info: Option<&ItemInfo>,
-    append: impl Fn(&A, &ItemStack, &mut Vec<(Text, u32)>),
-    registered: impl Iterator<Item = (&'a str, &'a TooltipPlacement, bool, &'a A)>,
-) {
-    let starts = marks.starts.as_deref().unwrap_or(&[]);
-    let display = tooltip_display(stack);
-    let mut added = Vec::new();
-    for (seq, (component, placement, enabled, appender)) in registered.enumerate() {
-        if !enabled || !display.shows(component) || !stack.carries_component(info, component) {
-            continue;
-        }
-        let mut out = Vec::new();
-        append(appender, stack, &mut out);
-        let (at, boundary, rank) = anchor(placement, starts, marks.finish);
-        added.push((at, boundary, rank, seq, out));
-    }
-    if added.is_empty() {
-        return;
-    }
-    added.sort_by_key(|(at, boundary, rank, seq, _)| (*at, *boundary, *rank, *seq));
-    let mut added = added.into_iter().peekable();
-    let mut merged = Vec::with_capacity(lines.len());
-    for (index, line) in std::mem::take(lines).into_iter().enumerate() {
-        while let Some((_, _, _, _, out)) = added.next_if(|(at, ..)| *at <= index) {
-            merged.extend(out);
-        }
-        merged.push(line);
-    }
-    merged.extend(added.flat_map(|(.., out)| out));
-    *lines = merged;
 }
 
 /// `SmithingTemplateItem.appendHoverText`: the template's kind, what it applies to
@@ -1425,7 +1329,33 @@ pub fn firework_lines(
     stack: &ItemStack,
     translate: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<String> {
+    let display = tooltip_display(stack);
+    [FireworkTooltip::Rocket, FireworkTooltip::Explosion]
+        .into_iter()
+        .flat_map(|detail| firework_component_lines(stack, &display, detail, translate))
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+pub enum FireworkTooltip {
+    Rocket,
+    Explosion,
+}
+
+/// A single firework component's lines, so either registration is an independent anchor.
+pub fn firework_component_lines(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    detail: FireworkTooltip,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
     use crate::particles::FireworkExplosion;
+    if !display.shows(match detail {
+        FireworkTooltip::Rocket => "minecraft:fireworks",
+        FireworkTooltip::Explosion => "minecraft:firework_explosion",
+    }) {
+        return Vec::new();
+    }
     let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
     let shape = |e: &FireworkExplosion| {
         text(&format!(
@@ -1471,43 +1401,45 @@ pub fn firework_lines(
             ));
         }
     };
-    let display = tooltip_display(stack);
     let data = stack.data();
     let mut lines = Vec::new();
-    let fireworks = match data.and_then(|d| d.fireworks.as_ref()) {
-        Some((flight, explosions)) => Some((*flight, explosions.as_slice())),
-        None => (&*stack.item == "minecraft:firework_rocket").then_some((1, &[][..])),
-    };
-    if let Some((flight, explosions)) = fireworks
-        && display.shows("minecraft:fireworks")
-    {
-        if flight > 0 {
-            lines.push(
-                text("item.minecraft.firework_rocket.flight_duration").replacen(
-                    "%s",
-                    &flight.to_string(),
-                    1,
-                ),
-            );
+    match detail {
+        FireworkTooltip::Rocket => {
+            let fireworks = match data.and_then(|d| d.fireworks.as_ref()) {
+                Some((flight, explosions)) => Some((*flight, explosions.as_slice())),
+                None => (&*stack.item == "minecraft:firework_rocket").then_some((1, &[][..])),
+            };
+            let Some((flight, explosions)) = fireworks else {
+                return lines;
+            };
+            if flight > 0 {
+                lines.push(
+                    text("item.minecraft.firework_rocket.flight_duration").replacen(
+                        "%s",
+                        &flight.to_string(),
+                        1,
+                    ),
+                );
+            }
+            // Fireworks.addExplosionTooltip for each run of equal explosions.
+            for run in explosions.chunk_by(|a, b| a == b) {
+                let e = &run[0];
+                lines.push(if run.len() == 1 {
+                    text("item.minecraft.firework_rocket.single_star").replacen("%s", &shape(e), 1)
+                } else {
+                    text("item.minecraft.firework_rocket.multiple_stars")
+                        .replacen("%s", &run.len().to_string(), 1)
+                        .replacen("%s", &shape(e), 1)
+                });
+                details(e, "  ", &mut lines);
+            }
         }
-        // Fireworks.addExplosionTooltip for each run of equal explosions.
-        for run in explosions.chunk_by(|a, b| a == b) {
-            let e = &run[0];
-            lines.push(if run.len() == 1 {
-                text("item.minecraft.firework_rocket.single_star").replacen("%s", &shape(e), 1)
-            } else {
-                text("item.minecraft.firework_rocket.multiple_stars")
-                    .replacen("%s", &run.len().to_string(), 1)
-                    .replacen("%s", &shape(e), 1)
-            });
-            details(e, "  ", &mut lines);
+        FireworkTooltip::Explosion => {
+            if let Some(e) = data.and_then(|d| d.firework_explosion.as_ref()) {
+                lines.push(shape(e));
+                details(e, "", &mut lines);
+            }
         }
-    }
-    if let Some(e) = data.and_then(|d| d.firework_explosion.as_ref())
-        && display.shows("minecraft:firework_explosion")
-    {
-        lines.push(shape(e));
-        details(e, "", &mut lines);
     }
     lines
 }
@@ -2922,196 +2854,6 @@ mod tests {
         assert_eq!(line(zombie, false), None);
         assert_eq!(line(Some("minecraft:pig"), true), None);
         assert_eq!(line(None, true), None);
-    }
-
-    /// An appender that adds its own name, so the order of the lines shows.
-    struct Named(&'static str);
-    impl Named {
-        fn append(&self, _: &ItemStack, lines: &mut Vec<(Text, u32)>) {
-            lines.push((Text::literal(self.0), u32::MAX));
-        }
-    }
-
-    #[test]
-    fn empty_component_boundaries_keep_builder_order() {
-        let mut marks = DetailMarks::new(true);
-        for id in [
-            "minecraft:tropical_fish/pattern",
-            "minecraft:instrument",
-            "minecraft:map_id",
-            "minecraft:bees",
-            "minecraft:container",
-            "minecraft:banner_patterns",
-            "minecraft:written_book_content",
-            "minecraft:charged_projectiles",
-            "minecraft:fireworks",
-            "minecraft:potion_contents",
-            "minecraft:jukebox_playable",
-            "minecraft:trim",
-            "minecraft:stored_enchantments",
-            "minecraft:enchantments",
-            "minecraft:dyed_color",
-            "minecraft:lore",
-            "minecraft:attribute_modifiers",
-            "minecraft:unbreakable",
-            "minecraft:ominous_bottle_amplifier",
-            "minecraft:suspicious_stew_effects",
-            "minecraft:block_state",
-            "minecraft:entity_data",
-            "minecraft:block_entity_data",
-        ] {
-            marks.start(id, 1);
-        }
-        marks.end(1);
-        let before = TooltipPlacement::Before("minecraft:bees".into());
-        let after = TooltipPlacement::After("minecraft:enchantments".into());
-        let starts = marks.starts.as_deref().unwrap();
-        assert!(anchor(&TooltipPlacement::BeforeAll, starts, 1) < anchor(&before, starts, 1));
-        assert!(anchor(&before, starts, 1) < anchor(&after, starts, 1));
-        assert!(anchor(&after, starts, 1) < anchor(&TooltipPlacement::AfterAll, starts, 1));
-        let mut stack = ItemStack::new("minecraft:stick", 1);
-        stack
-            .data_mut()
-            .set_other("test:component", Some(Tag::Int(1)));
-        let names = [
-            Named("after"),
-            Named("before 1"),
-            Named("first"),
-            Named("before 2"),
-            Named("last"),
-        ];
-        let placements = [
-            &after,
-            &before,
-            &TooltipPlacement::BeforeAll,
-            &before,
-            &TooltipPlacement::AfterAll,
-        ];
-        let mut lines = vec![(Text::literal("name"), u32::MAX)];
-        add_appender_lines(
-            &mut lines,
-            &marks,
-            &stack,
-            None,
-            Named::append,
-            placements
-                .into_iter()
-                .zip(&names)
-                .map(|(placement, appender)| {
-                    ("test:component", placement, true, appender as &Named)
-                }),
-        );
-        assert_eq!(
-            lines
-                .iter()
-                .map(|(text, _)| text.plain())
-                .collect::<Vec<_>>(),
-            ["name", "first", "before 1", "before 2", "after", "last"]
-        );
-    }
-
-    /// Two mods' appenders, before and after the details: a component's lines go where its
-    /// placement puts them, and only for a stack that carries the component, whose tooltip
-    /// shows it, and whose mod is enabled.
-    #[test]
-    fn appended_lines_go_where_their_placement_puts_them() {
-        let mut lines = vec![
-            (Text::literal("lore"), u32::MAX),
-            (Text::literal("enchantments"), u32::MAX),
-        ];
-        let marks = DetailMarks {
-            starts: Some(vec![("minecraft:lore", 0), ("minecraft:enchantments", 1)]),
-            finish: 2,
-        };
-        let mut stack = ItemStack::new("minecraft:stick", 1);
-        for id in [
-            "mymod:charge",
-            "mymod:glow",
-            "mymod:hidden",
-            "mymod:tail",
-            "mymod:pre",
-            "mymod:off",
-        ] {
-            stack.data_mut().set_other(id, Some(Tag::Int(1)));
-        }
-        stack.data_mut().set_other(
-            "minecraft:tooltip_display",
-            Some(Tag::compound([(
-                "hidden_components",
-                Tag::List(vec![Tag::String("mymod:hidden".into())]),
-            )])),
-        );
-        let (after_lore, before_all, after_all, before_enchantments) = (
-            TooltipPlacement::After("minecraft:lore".into()),
-            TooltipPlacement::BeforeAll,
-            TooltipPlacement::AfterAll,
-            TooltipPlacement::Before("minecraft:enchantments".into()),
-        );
-        let (charge, glow, hidden, tail, pre, off, absent) = (
-            Named("mod A: after lore"),
-            Named("mod B: before all"),
-            Named("mod A: hidden"),
-            Named("mod A: after all"),
-            Named("mod A: before enchantments"),
-            Named("mod B: disabled"),
-            Named("mod B: not carried"),
-        );
-        let registered = [
-            ("mymod:charge", &after_lore, true, &charge as &Named),
-            ("mymod:glow", &before_all, true, &glow as &Named),
-            ("mymod:hidden", &after_all, true, &hidden as &Named),
-            ("other:absent", &after_all, true, &absent as &Named),
-            ("mymod:off", &after_all, false, &off as &Named),
-            ("mymod:pre", &before_enchantments, true, &pre as &Named),
-            ("mymod:tail", &after_all, true, &tail as &Named),
-        ];
-        add_appender_lines(
-            &mut lines,
-            &marks,
-            &stack,
-            None,
-            Named::append,
-            registered.into_iter(),
-        );
-        let texts: Vec<String> = lines.iter().map(|(text, _)| text.plain()).collect();
-        assert_eq!(
-            texts,
-            [
-                "mod B: before all",
-                "lore",
-                "mod A: after lore",
-                "mod A: before enchantments",
-                "enchantments",
-                "mod A: after all",
-            ]
-        );
-    }
-
-    /// A component that only the live data sets (`map_post_processing`, which the saved form
-    /// leaves out) still reaches its appender.
-    #[test]
-    fn an_appender_sees_a_transient_component() {
-        let mut map = ItemStack::new("minecraft:filled_map", 1);
-        map.data_mut().map_post_processing = Some(1);
-        let mut lines = Vec::new();
-        let scale = Named("scale");
-        let after_all = TooltipPlacement::AfterAll;
-        add_appender_lines(
-            &mut lines,
-            &DetailMarks::new(true),
-            &map,
-            None,
-            Named::append,
-            [(
-                "minecraft:map_post_processing",
-                &after_all,
-                true,
-                &scale as &Named,
-            )]
-            .into_iter(),
-        );
-        let texts: Vec<String> = lines.iter().map(|(text, _)| text.plain()).collect();
-        assert_eq!(texts, ["scale"]);
     }
 }
 

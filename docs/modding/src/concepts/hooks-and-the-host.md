@@ -222,8 +222,23 @@ receive the same context: local player identity, `advanced` (F3+H), `creative`
 (creative-tab slot), `nested` (a loaded crossbow projectile), and `tick_rate`.
 The rate follows vanilla 26.3's `Item.TooltipContext.tickRate()`: the current
 client level's tick-rate manager, or 20 when no level is present. It is not
-measured TPS or the frame rate. The item hook still does not fire for nested
-projectiles or hidden tooltips; adding context does not change line ordering.
+measured TPS or the frame rate. The item hook does not fire for nested projectiles or
+hidden tooltips.
+
+In `Hooks::register`, use `registrar.register_tooltip_appender(component, placement, appender)`
+for a component's own lines. `component` is a registered data-component ID such as
+`"my_mod:charge"`. A component has one appender; a vanilla appender already owns its slot.
+For example, `TooltipPlacement::Before("other_mod:heat".into())` orders your appender before
+that component's appender, even if that mod registers its appender later. Registering the
+component type alone does not make it an anchor. Unknown components, missing anchors,
+duplicate appenders and ordering cycles are startup errors.
+
+`BeforeAll` is before the first vanilla component appender, after the item's own lines.
+`AfterAll` is after the last one (durability), before the advanced item ID and component count.
+`Before` and `After` constrain order, not adjacency. When several entries are ready, they run
+in registration order with vanilla entries first. Hidden or absent components do not contribute
+lines but keep their place in the ordering. Use the `item_tooltip` hook instead if you need to
+edit the completed tooltip or add lines that are not tied to a component.
 
 ## Level hosts
 

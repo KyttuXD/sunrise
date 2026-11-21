@@ -1793,7 +1793,7 @@ impl Game<'_> {
                     Ok(stack) => stack,
                     Err(error) => {
                         log::error!(
-                            "mod {}: tooltip appender for {} could not read the stack: {error}",
+                            "mod {}: tooltip appender for {} could not read the stack: {error:?}",
                             appender.mod_id(),
                             appender.component()
                         );
@@ -1952,10 +1952,15 @@ impl Game<'_> {
                     }
                 }
                 Fireworks | FireworkExplosion => {
-                    // Fireworks / FireworkExplosion.addToTooltip.
-                    for text in sunrise_client::item_tooltip::firework_component_lines(
-                        stack, &display, id, &translate,
-                    ) {
+                    use item_tooltip::FireworkTooltip;
+                    let detail = if vanilla == Fireworks {
+                        FireworkTooltip::Rocket
+                    } else {
+                        FireworkTooltip::Explosion
+                    };
+                    for text in
+                        item_tooltip::firework_component_lines(stack, &display, detail, &translate)
+                    {
                         push(&mut lines, text, rgba(170, 170, 170, 255));
                     }
                 }
@@ -2148,10 +2153,16 @@ impl Game<'_> {
                 }
                 CanBreak | CanPlaceOn => {
                     // AdventureModePredicate.addToTooltip under its header.
-                    for (text, c) in sunrise_client::item_tooltip::adventure_lines(
+                    let header = if vanilla == CanBreak {
+                        "item.canBreak"
+                    } else {
+                        "item.canPlace"
+                    };
+                    for (text, c) in item_tooltip::adventure_lines(
                         stack,
                         &display,
                         id,
+                        header,
                         &|tag| {
                             let mut blocks: Vec<String> = self
                                 .items()
@@ -3735,3 +3746,7 @@ mod brewing_tick_tests;
 #[cfg(test)]
 #[path = "stations/stonecutter_scroll_tests.rs"]
 mod stonecutter_scroll_tests;
+
+#[cfg(test)]
+#[path = "stations/component_tooltip_tests.rs"]
+mod component_tooltip_tests;

@@ -62,6 +62,7 @@ pub struct PartRegistrar {
     /// Parts registered so far, by every mod: the next part's `order`.
     pub(crate) registered: usize,
     pub(crate) parts: Parts,
+    pub(crate) tooltip_appenders: Vec<TooltipAppenderRegistration>,
     /// Aggregate selector metadata bytes during this registration pass.
     pub(crate) entity_selector_bytes: usize,
     pub(crate) tags: TagParts,
@@ -119,6 +120,7 @@ impl PartRegistrar {
             mod_index: 0,
             registered: 0,
             parts: Self::capability_parts(),
+            tooltip_appenders: Vec::new(),
             entity_selector_bytes: 0,
             tags: TagParts::default(),
             block_entity_types: Vec::new(),
@@ -303,6 +305,12 @@ pub(crate) fn install_registrar(
     }
     registrar.validate_recipe_types();
     registrar.skip_absent_effect_parts();
+    if !registrar.tooltip_appenders.is_empty() {
+        match freeze_tooltip_appenders(&registrar.tooltip_appenders) {
+            Ok(appenders) => registrar.parts.tooltip_appenders = appenders,
+            Err(error) => registrar.refused.push(error),
+        }
+    }
     if !registrar.refused.is_empty() {
         return Err(registrar.refused);
     }

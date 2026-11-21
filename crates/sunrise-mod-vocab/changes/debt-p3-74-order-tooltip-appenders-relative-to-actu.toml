@@ -1,0 +1,8 @@
+ids = [
+    "type:TooltipPlacement",
+    "method:ItemsRegistrar::register_tooltip_appender",
+    "trait:TooltipAppender",
+    "method:TooltipAppender::append",
+]
+why = "Component tooltips now run in the actual appender order instead of splicing lines at a fixed set of marks. This follows vanilla 26.3 ItemStack.addDetailsToTooltip and NeoForge's VanillaDataComponentTooltips.collectVanillaAppenders, RegisterTooltipAppendersEvent.registerComponentAppenderBefore/After, and ItemTooltipHandler.addDataComponentAppenders: one appender per registered component, stable topological order, including modded anchors. A panicking appender loses only its own lines and is disabled for the session. Placement is native registration data, not a Wire payload."
+migrate = "Keep register_tooltip_appender(component, placement, callback), but use a registered data-component ID and keep one callback per component (combine multiple old callbacks into one). Before(id) and After(id) must name a vanilla or mod component with an appender; declarations may refer forward but must not form a cycle. BeforeAll/AfterAll now mean before the first/after the last vanilla appender; change an old AfterAll that must still precede durability to Before(\"minecraft:damage\".into()). Relative constraints do not guarantee adjacency; ties between ready entries use registration order with vanilla first. If you previously attached a second appender to a component vanilla already handles, add the extra lines in Hooks::item_tooltip instead. Pass TooltipPlacement directly during registration; if you sent it through Wire, define a separate payload type and map it to TooltipPlacement at registration."
