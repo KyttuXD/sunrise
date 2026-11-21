@@ -158,8 +158,8 @@ impl dyn Registrar + '_ {
     /// Built-in types are usable for capabilities, but not for native payload Parts.
     ///
     /// A missing type refuses startup, naming the mod, Part, and type. For optional
-    /// integrations, check [`RegistrationContext::mods`](crate::RegistrationContext::mods) for
-    /// the package ID before requesting the type key; the registry namespace need not match it.
+    /// integrations, check [`RegistrationContext::has_optional_dependency`](crate::RegistrationContext::has_optional_dependency)
+    /// for the package ID before requesting the type key; the registry namespace need not match it.
     /// The Part's saved state is the key it declares (see [`Self::block_entity_part_with_state`]),
     /// which a package declares only in its own namespace, so it is saved under this package's id; it
     /// reaches the owner's state only through the owner's declared attachments. Declaring the type, its
@@ -236,7 +236,9 @@ pub trait BlockEntitiesRegistrar {
         step: Arc<dyn crate::BlockEntityTransform>,
     );
     /// Request a type by registry ID. A missing type in the complete registry refuses load.
-    /// Check package presence before requesting a key for an optional integration.
+    /// For optional integration, check
+    /// [`RegistrationContext::has_optional_dependency`](crate::RegistrationContext::has_optional_dependency)
+    /// before requesting the key.
     fn block_entity_type_key(&mut self, id: &str) -> crate::BlockEntityTypeKey;
 
     /// Declare block entity type `path` in a namespace owned by this mod's manifest, held by `blocks`

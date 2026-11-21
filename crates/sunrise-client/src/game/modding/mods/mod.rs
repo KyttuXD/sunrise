@@ -97,6 +97,9 @@ pub(super) struct ModsState {
     pub(super) overrides_dir: PathBuf,
     pub(super) load_notices: Arc<Mutex<Vec<sunrise_mod_package::dependencies::Notice>>>,
     pub(super) selected: std::sync::Arc<[sunrise_mod_package::selection::SelectedPackage]>,
+    /// Startup layers already admitted before Parts registered. The loading screen can
+    /// rebuild resource packs on those same layers until it hands off to the game.
+    pub(super) startup_content: Option<Arc<AdmittedContent>>,
     /// The content mods the loaded resources were built with: a switch the
     /// game can apply live moves it to the player's choice (`switch_mods`).
     pub(super) applied: Option<std::collections::BTreeSet<String>>,
@@ -217,27 +220,40 @@ fn builtin_registry_names(root: &Path) -> sunrise_client::Result<BTreeMap<String
     Ok(registries)
 }
 
+fn registration_registry_names(
+    root: &Path,
+) -> sunrise_client::Result<BTreeMap<String, Vec<String>>> {
+    use sunrise_client_core::potions::{EFFECTS, namespaced};
+    let mut registries = builtin_registry_names(root)?;
+    // Effects resolve against the engine table even if the prepared report omits an entry.
+    registries.insert(
+        "minecraft:mob_effect".into(),
+        EFFECTS
+            .iter()
+            .map(|def| namespaced(def.id).to_owned())
+            .collect(),
+    );
+    Ok(registries)
+}
+
 /// Capture registration's stable registries, settings and stock capability type owners.
-pub(super) fn install_registration_data(
+pub(super) fn registration_data(
     root: &Path,
     runtime_files: BTreeMap<String, Arc<dyn mod_api::RuntimeFileSource>>,
-) -> sunrise_client::Result<()> {
+) -> sunrise_client::Result<mod_api::__private::RegistrationData> {
     let packages = mod_api::__private::loaded_mods();
     let directory = Game::game_dir();
-    (mod_api::__private::platform::platform()?.install_registration_data)(
-        mod_api::__private::RegistrationData::new(
-            builtin_registry_names(root)?,
-            sunrise_world::native_load_context::capture_settings(
-                &Game::mod_data_root(),
-                packages.ids(),
-            ),
-            directory,
-            crate::entry::runtime_environment::get().clone(),
-        )
-        .with_capability_coverage(coverage::builtin, coverage::block_entity)
-        .with_runtime_files(runtime_files),
-    );
-    Ok(())
+    Ok(mod_api::__private::RegistrationData::new(
+        registration_registry_names(root)?,
+        sunrise_world::native_load_context::capture_settings(
+            &Game::mod_data_root(),
+            packages.ids(),
+        ),
+        directory,
+        crate::entry::runtime_environment::get().clone(),
+    )
+    .with_capability_coverage(coverage::builtin, coverage::block_entity)
+    .with_runtime_files(runtime_files))
 }
 
 fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::registry::Builtin> {
@@ -250,9 +266,12 @@ fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::r
 /// Freeze native component IDs before reading content or opening a connection.
 /// With no mod registering any, nothing is installed, which every reader
 /// treats as no custom components, and `registries.json` isn't read.
-pub(super) fn register_components(root: &std::path::Path) -> sunrise_client::Result<()> {
+pub(super) fn register_components(
+    root: &Path,
+    context: &RegistrationContext,
+) -> sunrise_client::Result<()> {
     let mut names = Vec::new();
-    Game::native_component_types(&RegistrationContext::new(), &mut names);
+    Game::native_component_types(context, &mut names);
     if names.is_empty() {
         return Ok(());
     }
@@ -264,11 +283,6 @@ pub(super) fn register_components(root: &std::path::Path) -> sunrise_client::Res
     sunrise_protocol::item::custom::install(first, names)
         .map_err(|error| format!("invalid native component registration: {error}"))?;
     Ok(())
-}
-
-/// Finish every once-only content declaration on the registration thread.
-pub(super) fn freeze_declarations() {
-    let _ = native_declared();
 }
 
 #[derive(Clone, Debug)]
@@ -718,19 +732,30 @@ pub(super) fn register_particles(role: ExecutionRole) {
     sunrise_client::particles::register_particle_groups(group_factories);
 }
 
-/// `root` with the content mods that are on layered over it
-/// (docs/modpacks.md): their blocks, items, data and assets. Read once at
-/// start, before the resources load; a mod whose content is refused is left
-/// out here and its row on the Mods page says why.
-/// The merged content root and the accepted content mods behind it, before
-/// any process-wide registration. A caller that only reads the overlay (the
-/// reload tests) must not freeze the mod registries for the rest of the
-/// process.
+/// Content files admitted under the dependency rules, before native declarations join them.
+pub(super) struct FileContent<'a> {
+    manifests: Vec<&'a sunrise_mod_package::Manifest>,
+    known: Option<std::collections::BTreeSet<String>>,
+    mods: Vec<sunrise_client::mod_content::ContentMod>,
+    announced: Vec<sunrise_protocol::mod_list::Entry>,
+    content_mods: Vec<sunrise_client::save::level_mods::ModRecord>,
+    pub(super) resolution: sunrise_mod_package::dependencies::Resolution,
+}
+
+/// The admitted layers, shared by startup resource generations until game handoff.
+pub(super) struct AdmittedContent {
+    mods: Arc<[sunrise_client::mod_content::ContentMod]>,
+    announced: Vec<sunrise_protocol::mod_list::Entry>,
+    content_mods: Vec<sunrise_client::save::level_mods::ModRecord>,
+    warnings: Vec<sunrise_mod_package::dependencies::Notice>,
+}
+
+/// The merged content root and the admitted layers behind it, before publishing registries.
 pub(super) struct ContentOverlay {
     /// The root with the mods' content merged in.
     pub(super) root: sunrise_assets::resource_source::ResourceRoot,
     /// The accepted content mods, in overlay order.
-    pub(super) mods: Vec<sunrise_client::mod_content::ContentMod>,
+    pub(super) mods: Arc<[sunrise_client::mod_content::ContentMod]>,
     /// The protocol entries of the accepted mods.
     pub(super) announced: Vec<sunrise_protocol::mod_list::Entry>,
     /// Whether the protocol's local mod list is still unset.
@@ -765,16 +790,14 @@ fn refuse_primary_namespace_claims(
     Ok(())
 }
 
-/// Builds the content overlay: every enabled or dev content mod's files
-/// merged over `root`. Registration of what the mods declare is
-/// [`content_root`]'s step.
-pub(super) fn content_overlay(
-    root: &std::path::Path,
-    sources: &ModsState,
-    jar_store: &std::path::Path,
-) -> sunrise_client::Result<ContentOverlay> {
+/// Admit content files and resolve the graph before optional integrations register Parts.
+pub(super) fn admit_file_content<'a>(
+    root: &Path,
+    sources: &'a ModsState,
+    jar_store: &Path,
+) -> sunrise_client::Result<FileContent<'a>> {
     use sunrise_client::mod_content::{self, ContentMod};
-    let original_base = root.to_owned();
+    let _step = sunrise_client::spans::startup::step("mods.admit_file_content");
 
     let requirements = collect_jar_requirements(
         sources
@@ -856,8 +879,6 @@ pub(super) fn content_overlay(
     )
     .map_err(|error| error.to_string())?;
     let order = resolution.order;
-    // Hooks are queried on the calling thread, never from a content reader.
-    let declared = native_declared();
     let requests: Vec<_> = order
         .iter()
         .map(|&index| {
@@ -914,6 +935,51 @@ pub(super) fn content_overlay(
             Err(e) => log::warn!("Sunrise: mod {} content not loaded: {e}", m.id),
         }
     }
+    // Revalidate against what really loaded, not what selection discovered. A
+    // native package remains admitted if only its accompanying content was refused.
+    let loaded: Vec<_> = manifests
+        .iter()
+        .copied()
+        .filter(|package| {
+            mods.iter().any(|content| content.id == package.id)
+                || sources
+                    .native
+                    .built()
+                    .iter()
+                    .any(|native| native.id == package.id)
+        })
+        .collect();
+    let resolution = sunrise_mod_package::dependencies::resolve_manifests(
+        &loaded,
+        sources.installation_side,
+        &overrides,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(FileContent {
+        manifests,
+        known,
+        mods,
+        announced,
+        content_mods,
+        resolution,
+    })
+}
+
+/// Join native declarations on the registration thread, now that Parts have registered.
+pub(super) fn finish_content_admission(
+    root: &Path,
+    files: FileContent<'_>,
+) -> sunrise_client::Result<AdmittedContent> {
+    use sunrise_client::mod_content;
+    let FileContent {
+        manifests,
+        mut known,
+        mut mods,
+        announced,
+        content_mods,
+        resolution,
+    } = files;
+    let declared = native_declared();
     let mut refusals = declared.refusals.clone();
     if !declared.batches.is_empty() {
         let known = match &mut known {
@@ -963,41 +1029,64 @@ pub(super) fn content_overlay(
         }
     }
     validate_entity_type_families(&mods, super::general::general_type_catalog())?;
-    // Content validation may refuse a package. Revalidate against what really
-    // loaded so dependents cannot start with a missing required content mod.
-    let loaded: Vec<_> = manifests
-        .into_iter()
-        .filter(|package| {
-            mods.iter().any(|content| content.id == package.id)
-                || sources
-                    .native
-                    .built()
-                    .iter()
-                    .any(|native| native.id == package.id)
-        })
-        .collect();
-    let resolved = sunrise_mod_package::dependencies::resolve_manifests(
-        &loaded,
-        sources.installation_side,
-        &overrides,
-    )
-    .map_err(|error| error.to_string())?;
+    Ok(AdmittedContent {
+        mods: mods.into(),
+        announced,
+        content_mods,
+        warnings: resolution.warnings,
+    })
+}
+
+/// Build the resource root over the admitted layers, without publishing registries.
+pub(super) fn content_overlay(
+    root: &Path,
+    sources: &ModsState,
+    jar_store: &Path,
+) -> sunrise_client::Result<ContentOverlay> {
+    let fresh;
+    let admitted = if let Some(admitted) = &sources.startup_content {
+        admitted.as_ref()
+    } else {
+        fresh = finish_content_admission(root, admit_file_content(root, sources, jar_store)?)?;
+        &fresh
+    };
     let cache = sunrise_client::logging::cache_dir();
     // Content admission and the live code-dispatch boundary jointly determine
     // what loaded. Namespaces and raw startup metadata cannot answer this.
-    let inventory = sources.enabled_inventory(|id| mods.iter().any(|loaded| loaded.id == id));
+    let inventory =
+        sources.enabled_inventory(|id| admitted.mods.iter().any(|loaded| loaded.id == id));
     let prepared = super::load_conditions::content_root_with_conditions(
-        root, jar_store, &mods, &cache, &inventory, sources,
-    )?;
-    let root = mod_content::resolved_resources(root, prepared, jar_store, &mods, cache)?;
-    let _ = sources.content_base.set(original_base);
-    *sources.load_notices.lock().unwrap() = resolved.warnings;
-    Ok(ContentOverlay {
         root,
-        mods,
-        announced,
+        jar_store,
+        &admitted.mods,
+        &cache,
+        &inventory,
+        sources,
+    )?;
+    let resources = sunrise_client::mod_content::resolved_resources(
+        root,
+        prepared,
+        jar_store,
+        &admitted.mods,
+        cache,
+    )?;
+    let _ = sources.content_base.set(root.to_owned());
+    sources
+        .load_notices
+        .lock()
+        .unwrap()
+        .clone_from(&admitted.warnings);
+    let announce = !sunrise_protocol::mod_list::is_set();
+    Ok(ContentOverlay {
+        root: resources,
+        mods: Arc::clone(&admitted.mods),
+        announced: if announce {
+            admitted.announced.clone()
+        } else {
+            Vec::new()
+        },
         announce,
-        content_mods,
+        content_mods: admitted.content_mods.clone(),
     })
 }
 
@@ -2353,6 +2442,13 @@ mod tests {
         );
         assert!(collect_key_mappings(ExecutionRole::IntegratedServer, &declared).is_empty());
         assert!(collect_key_mappings(ExecutionRole::DedicatedServer, &declared).is_empty());
+    }
+
+    mod content_admission {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/game/modding/mods/content_admission_tests.rs"
+        ));
     }
 
     mod inventory {

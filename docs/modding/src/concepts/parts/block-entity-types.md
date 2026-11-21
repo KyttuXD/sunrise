@@ -41,16 +41,21 @@ so a Part can target a type declared later.
 A Part attaches by type ID, whoever declared the type: `r.block_entity_type_key("machines:press")`
 then `r.block_entity_part(&press, MyPart)`. An unguarded attachment to a missing native type refuses
 startup, naming the mod, Part and type, even if the manifest lists an optional dependency. To integrate
-with an optional package, check its package ID before requesting the key or registering a provider:
+with an optional package, declare it as optional in `[dependencies]` and opt in by its package ID
+before requesting the key or registering a provider:
 
 ```rust,ignore
-if context.mods().get("machine_library").is_some() {
+if context.has_optional_dependency("machine_library") {
     let press = r.block_entity_type_key("machines:press");
-    r.block_entity_part(&press, MyPart)?;
+    if let Err(error) = r.block_entity_part(&press, MyPart) {
+        context.refuse(&error.to_string());
+        return;
+    }
 }
 ```
 
-The package ID need not match the type's namespace. Parts of several packages on one type still run
+The check uses admitted packages and the installation's effective dependency rows. It does not
+require the package ID to match the type's namespace. Parts of several packages on one type still run
 in dispatch order, then registration order.
 
 Declaring the type, `transform` and the type's initial data stay with the owner, and a vanilla type is still refused.

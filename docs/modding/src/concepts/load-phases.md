@@ -71,13 +71,17 @@ Not every registration-context hook runs only at startup. `register_fluid_models
 `register_texture_atlases` collect declarations again on client resource reload before baking or
 stitching, respectively. Atlas admission, duplicate handling and dispatch timing are unchanged.
 
-The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read
-one view captured before the first of them runs, so every registration step sees the same values
-whatever the dispatch order: the loaded packages, the built-in registries as `registries.json`
-lists them (not what mods declare during registration) and the settings on disk when the snapshot is captured. A
-mod validates the keys it declares against them from `Hooks::register`; a name that is not a
-namespaced identifier, an unknown registry, an empty or path-like setting key, a package that is
-not loaded, or a context the engine gave no data returns a `RegistrationReadError`. Client setup
+The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read one startup snapshot:
+package metadata, built-in registry names (the engine's effect table for mob effects and the prepared
+report for other registries), and the settings on disk when the snapshot was captured. Registry reads
+exclude what mods declare during registration. Invalid registry names, unknown registries, empty or
+path-like setting keys, unknown packages and unavailable snapshots return a `RegistrationReadError`.
+
+Package metadata describes what was selected, not what content admission accepted. Component types
+register first so content files can use them. In `Hooks::register` or a later registration hook,
+`context.has_optional_dependency("package_id")` opts in using the calling mod's admitted,
+side- and override-filtered optional dependency row. It does not guarantee that a registry key exists.
+Client setup
 runs once after the initial asset apply. The window's Client/Common configs load once immediately after client setup and before title,
 connection, input, render or ordinary tick callbacks. This includes pack-error recovery: the failed
 selection is cleared and saved during initialization, but its options screen opens only after Config

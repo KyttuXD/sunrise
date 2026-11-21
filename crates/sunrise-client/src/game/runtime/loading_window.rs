@@ -289,7 +289,7 @@ pub(super) fn start_game<'a>(
     res: &'a Arc<Resources>,
     pack: PackResources,
     gui: UiResources,
-    options: Options,
+    mut options: Options,
     pack_error: Option<String>,
     audio: Audio,
     vanilla_root: PathBuf,
@@ -322,6 +322,7 @@ pub(super) fn start_game<'a>(
             pack.render.model_library.as_deref().ok(),
         )?),
     };
+    options.mods.startup_content = None;
     let mut game = Game::new(res, pack, gui, options, settings, audio, prepared)?;
     // `new DebugRenderer()` refreshes its list.
     game.refresh_debug_renderers();

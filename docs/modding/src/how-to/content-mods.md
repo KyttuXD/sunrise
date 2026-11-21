@@ -727,8 +727,8 @@ recipe uses it, as a milk bucket leaves a bucket (vanilla's
 `namespace:path`, and Sunrise resolves both against the completed registries at startup. A missing
 target refuses loading with the declaring item, field and missing ID. If your pack needs another package
 to register that target, declare the package as required in `[dependencies]`; registry namespaces do not
-identify packages or set their load order. Native code can make the declaration conditional by checking
-`context.mods().get("package_id")` before submitting it.
+identify packages or set their load order. Native code integrating with a declared optional package
+can check `context.has_optional_dependency("package_id")` before submitting the declaration.
 
 A crafting remainder works on the crafting table, the inventory grid, the crafter and as furnace fuel (the last of the stack leaves it in
 the fuel slot, a stack with more left drops it), not in a brewing stand. What the item leaves once eaten

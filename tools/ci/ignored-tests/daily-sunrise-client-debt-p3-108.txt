@@ -1,0 +1,1 @@
+sunrise-client game::mods::tests::content_admission::optional_effect_targets_use_admitted_packages_and_effective_dependency_rows lib daily child-process

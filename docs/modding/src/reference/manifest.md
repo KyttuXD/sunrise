@@ -131,7 +131,8 @@ is `Required`, `Optional`, `Incompatible`, `Discouraged` or `LoadBefore`; `Depen
 `Before` or `None` and still reads and writes the lowercase manifest strings through Serde. The package
 metadata has no Wire encoding of its own. To send a fact from it, copy just the fields your protocol needs
 into your own Wire record. The declarations include inactive sides and do not reflect the effective
-override-rewritten graph. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Before` and side
+override-rewritten graph. In `Hooks::register`, use `context.has_optional_dependency(id)` to opt in
+only when an applicable optional dependency was admitted. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Before` and side
 is `Both`, not an API library declaration. The metadata is the same on client and server (NeoForge's
 `ModContainer.getModInfo`, `IModInfo` and `getModProperties`).
 

@@ -13976,8 +13976,22 @@ pub(crate) fn run_with(
         .select(&std::env::current_dir()?, &early_settings.mods.enabled);
     let mod_phase = mod_api::__private::PhaseOwner::new(mod_api::__private::ModPhase::Packages);
     api_values::install_packages(options.mods.native.packages(), &options.mods.selected)?;
-    mods::install_registration_data(&vanilla_root, mods::runtime_files::sources(&options.mods))?;
+    let registration_data =
+        mods::registration_data(&vanilla_root, mods::runtime_files::sources(&options.mods))?;
     mod_phase.advance(mod_api::__private::ModPhase::Registration)?;
+    // Content files may use native components. Admit the files with those IDs known, then
+    // register Parts against the resolved dependencies, not the selected-package metadata.
+    mods::register_components(
+        &vanilla_root,
+        &registration_data.component_registration_context(),
+    )?;
+    let jar_store = sunrise_client::logging::game_home().join("jars");
+    let mut content = mods::admit_file_content(&vanilla_root, &options.mods, &jar_store)?;
+    (mod_api::__private::platform::platform()?.install_registration_data)(
+        registration_data.with_optional_dependencies(std::mem::take(
+            &mut content.resolution.optional_dependencies,
+        )),
+    );
     crate::game::part_admission::admit_parts(mod_api::__private::mods())?;
     // The structure types those mods registered, handed to the engine before
     // any world opens, as its StructureRegistry reads them.
@@ -14007,7 +14021,6 @@ pub(crate) fn run_with(
     // Their chunk generators and biome sources, which those levels' and the packs' stems name.
     native_chunk_generator::install();
     native_biome_source::install();
-    mods::register_components(&vanilla_root)?;
     mods::register_standalone_models(options.execution_role);
     mods::register_layer_definitions(options.execution_role, &vanilla_root);
     mods::register_debug_entries(options.execution_role);
@@ -14020,7 +14033,10 @@ pub(crate) fn run_with(
     mods::register_client_presentations(options.execution_role);
     mods::register_meshing(options.execution_role);
     mods::register_particles(options.execution_role);
-    mods::freeze_declarations();
+    options.mods.startup_content = Some(Arc::new(mods::finish_content_admission(
+        &vanilla_root,
+        content,
+    )?));
     mod_phase.advance(mod_api::__private::ModPhase::Setup)?;
     // Minecraft.<init>: read the last start's flag, then mark this one as not
     // finished until onGameLoadFinished. A dedicated server has no options.txt.

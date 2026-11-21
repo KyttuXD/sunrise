@@ -4,7 +4,7 @@ mod notices;
 pub use notices::{Notice, NoticeKind};
 use semver::{Version, VersionReq};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::path::Path;
 
@@ -178,6 +178,9 @@ pub struct Resolution {
     pub order: Vec<usize>,
     /// What the load rules let through: a discouraged pair, an override applied.
     pub warnings: Vec<Notice>,
+    /// Applicable, installed optional dependencies by requesting package ID.
+    /// Empty for physical link resolution, which does not apply runtime rules.
+    pub optional_dependencies: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The dependency rows a standalone build can wire to the projects it was given.
@@ -386,6 +389,7 @@ fn resolve_all(
     }
     let mut edges = vec![Vec::new(); mods.len()];
     let mut warnings = Vec::new();
+    let mut optional_dependencies = BTreeMap::<String, BTreeSet<String>>::new();
     for (index, item) in mods.iter().enumerate() {
         if links && !item.code {
             continue;
@@ -453,6 +457,12 @@ fn resolve_all(
                     target: dep.id.clone(),
                     reason: "unsupported dependency order".into(),
                 });
+            }
+            if !links && dep.optional {
+                optional_dependencies
+                    .entry(item.id.into())
+                    .or_default()
+                    .insert(dep.id.clone());
             }
         }
     }
@@ -535,7 +545,11 @@ fn resolve_all(
         done[next] = true;
         order.push(next);
     }
-    Ok(Resolution { order, warnings })
+    Ok(Resolution {
+        order,
+        warnings,
+        optional_dependencies,
+    })
 }
 
 /// A target's staged Cargo package, or none for an absent optional mod.

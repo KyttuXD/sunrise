@@ -4,7 +4,10 @@ Attach server-side behaviour to a content-declared effect with a `MobEffectPart`
 
 ```rust,ignore
 let effect = r.effect_key("meals:comfort");
-r.mob_effect_part(&effect, Comfort).expect("attach Comfort to its effect");
+if let Err(error) = r.mob_effect_part(&effect, Comfort) {
+    context.refuse(&format!("Cannot attach Comfort: {error:?}"));
+    return;
+}
 ```
 
 Implement the Part with `#[mod_api::sunrise_part]`. Its two methods are:
@@ -27,10 +30,12 @@ This owner-first rule is specific to effects; it does not change package dispatc
 the order of block entity Parts.
 
 A Part may attach to any registered mod effect, regardless of which package declared it. If you
-integrate with an optional dependency, use `context.mods().get("package_id")` in `Hooks::register`
-and request the effect key and attach the Part only when the package is present. Use the package ID
-in that check, not the effect's namespace. An unguarded request for a missing effect always refuses
-startup with the requesting mod and effect ID, even if the manifest lists an optional dependency.
+integrate with an optional dependency, declare it as optional in `[dependencies]` and use
+`context.has_optional_dependency("package_id")` in `Hooks::register`. Put both the key request and
+Part attachment inside the check. It uses the admitted packages and effective dependency rows for
+this installation. Use the package ID in that check, not the effect's namespace. An unguarded request
+for a missing effect always refuses startup with the requesting mod and effect ID, even if the
+manifest lists an optional dependency.
 
 Invalid keys refuse with `MobEffectPartError::InvalidKey`; built-in vanilla effects refuse
 immediately with `MobEffectPartError::VanillaEffect`; attaching the same concrete

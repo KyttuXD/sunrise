@@ -444,7 +444,7 @@ pub mod tests {
         #[mod_api::__subscriptions]
         impl Hooks for Optional {
             fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
-                if cx.mods().get("owner-lib").is_some() {
+                if cx.has_optional_dependency("owner-lib") {
                     Attaches(FromB).register(r, cx);
                 }
             }
@@ -458,30 +458,24 @@ pub mod tests {
                     .build();
             }
         }
-        let provider = PackageInfo::new(
-            "owner-lib".into(),
-            "1".into(),
-            PackageKind::Code,
-            Side::Both,
-            vec!["owner-lib".into(), "owner".into()],
-            vec![],
-        );
-        for present in [false, true] {
-            let mut inventory = vec![package_of(
-                "b",
-                Side::Both,
-                &["owner-lib"],
-                DependencyKind::Optional,
-            )];
+        for admitted in [false, true] {
             let mut mods = vec![ModEntry::new("b", Box::new(Optional))];
-            if present {
-                inventory.push(provider.clone());
+            let mut optional = std::collections::BTreeMap::new();
+            if admitted {
+                optional.insert("b".into(), ["owner-lib".into()].into_iter().collect());
                 mods.push(ModEntry::new("owner-lib", Box::new(Provider)));
             }
-            crate::load_state::with_test_package_inventory(inventory, || {
+            let data = mod_vocab::__private::RegistrationData::new(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                RuntimeEnvironment::new(Dist::Client, "26.3".into(), "test".into(), false),
+            )
+            .with_optional_dependencies(optional);
+            crate::load_state::with_test_registration_data(data, || {
                 let (attached, refused) = attached_to_owner_block(&mods);
                 assert!(refused.is_empty(), "{refused:?}");
-                assert_eq!(attached, if present { &["b"][..] } else { &[] });
+                assert_eq!(attached, if admitted { &["b"][..] } else { &[] });
             });
         }
     }

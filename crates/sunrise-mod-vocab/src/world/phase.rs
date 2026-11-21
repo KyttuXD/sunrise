@@ -1,6 +1,6 @@
 //! Restricted views for registration and data loading.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -456,6 +456,7 @@ pub struct RegistrationData {
     block_entity_coverage: Option<fn(&str, &str) -> bool>,
     /// Each package's checked runtime files, by mod ID.
     runtime_files: Arc<std::collections::BTreeMap<String, Arc<dyn crate::RuntimeFileSource>>>,
+    optional_dependencies: Arc<BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl RegistrationData {
@@ -473,6 +474,7 @@ impl RegistrationData {
             capability_coverage: None,
             block_entity_coverage: None,
             runtime_files: Default::default(),
+            optional_dependencies: Default::default(),
             registries: registries
                 .into_iter()
                 .map(|(name, ids)| (name, ids.into()))
@@ -483,6 +485,17 @@ impl RegistrationData {
                 .collect(),
         }
     }
+    /// Open the captured read view for component registration, before content admission.
+    pub fn component_registration_context(&self) -> RegistrationContext {
+        RegistrationContext::from_data(Some(self.clone()))
+    }
+
+    /// Publish the optional rows from the admitted startup dependency graph.
+    pub fn with_optional_dependencies(mut self, rows: BTreeMap<String, BTreeSet<String>>) -> Self {
+        self.optional_dependencies = Arc::new(rows);
+        self
+    }
+
     /// The engine's initial load shares the published registration settings
     /// rather than capturing the same startup files again on its workers.
     /// Without a registration publication, the load owns a fresh capture.
@@ -612,15 +625,15 @@ impl std::error::Error for RegistrationReadError {}
 /// A registration phase's view. Declarations go on the hook's event; there is
 /// no world, handle constructor, transaction or game Host at this point.
 ///
-/// Every registration hook (`register`, `component_types`, `blocks`, `items`,
-/// `standalone_models` and the other `Register*` hooks) reads the same frozen view,
-/// captured once before the first of them runs, so an answer never depends on
-/// dispatch order or on which hook asks:
+/// Registration hooks read the startup snapshot. The current mod's optional dependencies
+/// become available after component registration and content admission:
 ///
-/// - [`mods`](Self::mods): the loaded packages.
-/// - [`registry`](Self::registry): the built-in registries, as `registries.json` lists them.
-///   Entries that mods declare during registration are not in it; a mod already has its own
-///   declarations on its event or registrar.
+/// - [`mods`](Self::mods): startup package metadata.
+/// - [`has_optional_dependency`](Self::has_optional_dependency): the calling mod's applicable
+///   optional dependencies after content admission.
+/// - [`registry`](Self::registry): the built-in registries. Mob effects come from the game's
+///   built-in effect table; other registry names come from the prepared report. Entries that mods
+///   declare during registration are not in it; a mod already has those on its event or registrar.
 /// - [`setting`](Self::setting): the settings on disk for the loaded packages when registration
 ///   began. Later writes are not seen.
 ///
@@ -660,7 +673,10 @@ pub struct RegistrationContext {
 
 impl RegistrationContext {
     pub(crate) fn new() -> Self {
-        let data = registration_data();
+        Self::from_data(registration_data())
+    }
+
+    fn from_data(data: Option<RegistrationData>) -> Self {
         let runtime = data.as_ref().map(|data| data.runtime.clone());
         Self {
             mods: LoadedMods::new(),
@@ -701,9 +717,26 @@ impl RegistrationContext {
         Ok(self.data()?.instance_dir.as_ref())
     }
 
-    /// The loaded-mod view, independent of this phase's event or registrar.
+    /// The startup package metadata, independent of this phase's event or registrar.
+    /// Use [`Self::has_optional_dependency`] to opt in to integration after package admission.
     pub fn mods(&self) -> &LoadedMods {
         &self.mods
+    }
+
+    /// Whether the calling mod has an admitted optional dependency on this package ID.
+    /// Use this in [`Hooks::register`](crate::Hooks::register) to opt in before requesting a
+    /// registry key. An absent or refused package, a declaration for a different installation
+    /// side, or a declaration removed by an instance override does not enable the integration.
+    /// This is false before content admission; a true result does not guarantee any particular
+    /// registry key exists.
+    pub fn has_optional_dependency(&self, package_id: &str) -> bool {
+        let Some(owner) = crate::content::crash::current_native_mod() else {
+            return false;
+        };
+        self.data
+            .as_ref()
+            .and_then(|data| data.optional_dependencies.get(owner))
+            .is_some_and(|targets| targets.contains(package_id))
     }
 
     /// A built-in registry's names in ID order, for validating the keys a mod declares.

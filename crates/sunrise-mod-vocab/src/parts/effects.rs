@@ -18,11 +18,14 @@ pub(crate) fn resolved_effects() -> &'static OnceLock<sunrise_mod_runtime::regis
 /// Registrar operations for effects.
 pub trait EffectsRegistrar {
     /// Request an effect by registry ID. A missing effect in the complete registry refuses load.
-    /// Check package presence before requesting a key for an optional integration.
+    /// For optional integration, check
+    /// [`RegistrationContext::has_optional_dependency`](crate::RegistrationContext::has_optional_dependency)
+    /// before requesting the key.
     fn effect_key(&mut self, id: &str) -> crate::EffectKey;
     /// Attach tick behaviour to a registered mod effect regardless of its declaring package.
     /// A requested effect missing from the registry refuses loading. For optional integrations,
-    /// check [`RegistrationContext::mods`](crate::RegistrationContext::mods) before requesting the key.
+    /// check [`RegistrationContext::has_optional_dependency`](crate::RegistrationContext::has_optional_dependency)
+    /// before requesting the key.
     fn attach_mob_effect_part(
         &mut self,
         effect: &crate::EffectKey,
@@ -61,8 +64,8 @@ impl dyn crate::Registrar + '_ {
     /// keep their vanilla tick behaviour and refuse immediately.
     ///
     /// A missing target is a load error. Optional integrations should check
-    /// [`RegistrationContext::mods`](crate::RegistrationContext::mods) for the package ID
-    /// before requesting the key; the effect's namespace need not match that ID.
+    /// [`RegistrationContext::has_optional_dependency`](crate::RegistrationContext::has_optional_dependency)
+    /// for the package ID before requesting the key; the effect's namespace need not match it.
     pub fn mob_effect_part<P: MobEffectPart>(
         &mut self,
         effect: &crate::EffectKey,
