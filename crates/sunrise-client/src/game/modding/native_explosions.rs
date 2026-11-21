@@ -112,7 +112,7 @@ impl Game<'_> {
     /// blast: a registered damage type, a finite knockback multiplier, a block
     /// tag that exists, particle types that need no options with finite
     /// numbers and weights the packet holds (each at least 1, their total at
-    /// most `i32::MAX`), and a sound event id (a `minecraft:` one the server has).
+    /// most `i32::MAX`), and a valid namespaced sound event key.
     fn native_blast_settings(
         &self,
         settings: ExplosionSettings,

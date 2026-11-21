@@ -1,0 +1,3 @@
+version = 1
+doc = "PlayerRef::set_abilities stores flight and walking speeds as supplied, including non-finite floats. Changing game mode updates the mode flags, not those two speeds."
+tests = ["crates/sunrise-client/src/game/modding/native_entity_refs.rs::acting_guest_handles_resolve_during_guest_turns"]

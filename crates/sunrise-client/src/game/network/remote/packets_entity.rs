@@ -1,4 +1,5 @@
 use super::*;
+use sunrise_client::lan::guest::Guest;
 
 impl Game<'_> {
     /// `C::SetEntityData`: its arms of `apply_packet`, guard and order kept.
@@ -136,9 +137,9 @@ impl Game<'_> {
         // player lies down in the bed, or gets up.
         if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
             for (index, _, value) in &p.values {
-                match (index, value) {
+                match (*index, value) {
                     // Player.DATA_SCORE_ID: DeathScreen reads this, not the XP packet.
-                    (18, Value::Int(score)) => self.player_score = *score,
+                    (Guest::SCORE_DATA_ID, Value::Int(score)) => self.player_score = *score,
                     (14, Value::OptPos(bed)) => {
                         if bed.is_some() && self.sleeping.is_none() {
                             self.sleep_timer = 0;

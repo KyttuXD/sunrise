@@ -3,7 +3,7 @@
 //! `/particle` uses) and `ClientboundExplodePacket` (`ServerLevel.explode`).
 use super::{Game, explosion_settings::BlastEffects, lan::LanHost, level_sounds::LevelSound};
 use mod_api::{SoundSource, client::particles::PositionSource};
-use sunrise_client::lan::containers::within_range;
+use sunrise_client::lan::containers::{sound_event_range, within_range};
 use sunrise_client::lan::hub::Hub;
 use sunrise_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
 use sunrise_core::{
@@ -668,7 +668,7 @@ impl Game<'_> {
                 (packet, _) => packet,
             }
             .encode();
-            let range = f64::from(heard.volume.max(1.0)) * 16.0;
+            let range = sound_event_range(heard.volume);
             // Wrapped for the level's viewers too: one bound to an entity for those tracking it.
             let (dimension, at) = (sound.dimension, sound.at);
             host.hub

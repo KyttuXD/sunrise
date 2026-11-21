@@ -1,7 +1,6 @@
 use mod_api::SoundPlay;
 
-/// Whether `id` is a sound event's id, `namespace:path` as `Identifier`
-/// allows: the namespace of `[a-z0-9_.-]`, the path also with `/`.
+/// Whether `id` is a fully qualified sound event key, with vanilla `Identifier` syntax.
 pub(in crate::game) fn sound_id(id: &str) -> bool {
     let Some((namespace, path)) = id.split_once(':') else {
         return false;
@@ -10,6 +9,7 @@ pub(in crate::game) fn sound_id(id: &str) -> bool {
         c.is_ascii_lowercase() || c.is_ascii_digit() || "_.-".contains(c) || (slash && c == '/')
     };
     !namespace.is_empty()
+        && namespace != ".."
         && !path.is_empty()
         && namespace.chars().all(|c| allowed(c, false))
         && path.chars().all(|c| allowed(c, true))

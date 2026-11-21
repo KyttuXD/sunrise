@@ -6378,6 +6378,14 @@ mod player_rule_tests {
                 })
                 .unwrap();
             assert_eq!(seen, (Some(110), Some(true)));
+
+            // Writing the counter does not borrow the player's level or enter a bed.
+            game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                guest.dimension = "minecraft:the_nether".into();
+            });
+            assert!(a.set_sleep_timer(game, i32::MIN));
+            assert_eq!(a.sleep_timer(&*game), Some(i32::MIN));
+            assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].bed, None);
         });
     }
 }

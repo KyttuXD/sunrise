@@ -204,7 +204,9 @@ pub(super) mod tests {
             for key in ["minecraft:no.such.sound", "example:no.such.sound"] {
                 assert!(game.player_play_sound(pb, key, SoundSource::Neutral, -1.0, -2.0));
             }
-            assert!(!game.player_play_sound(pb, "invalid key", SoundSource::Neutral, 1.0, 1.0));
+            for key in ["invalid key", "..:event"] {
+                assert!(!game.player_play_sound(pb, key, SoundSource::Neutral, 1.0, 1.0));
+            }
             assert!(packets(&rx_a).is_empty());
             let got = packets(&rx_b);
             assert_eq!(got.len(), 3);
@@ -313,24 +315,21 @@ pub(super) mod tests {
             game.lan.as_mut().unwrap().hub.guests.extend([near, edge]);
 
             let level = game.level("minecraft:overworld").unwrap();
-            let sound = "minecraft:entity.player.burp";
+            let sounds = ["minecraft:no.such.sound", "example:no.such.sound"];
             // The sound source's draws bookend the queue's: each queued sound
             // takes one of its own, distinct from every neighbour's.
             let before = game.lan.as_ref().unwrap().hub.next_sound_seed();
             let mut level_random = game.world.random.clone();
-            for _ in 0..2 {
-                assert!(
-                    game.native_queue_sound(
-                        level,
-                        sound,
-                        [0.5, 64.0, 0.0],
-                        SoundSource::Neutral,
-                        1.0,
-                        1.0,
-                        None,
-                    )
-                    .is_some()
-                );
+            for sound in sounds {
+                assert!(level.play_sound(
+                    game,
+                    sound,
+                    [0.5, 64.0, 0.0],
+                    SoundSource::Neutral,
+                    -1.0,
+                    -2.0,
+                    None,
+                ));
             }
             // The gameplay random is exactly where it was: a mod's sound
             // moves no level draw.
@@ -345,10 +344,13 @@ pub(super) mod tests {
             assert_eq!(got.len(), 2, "both queued sounds reach the near player");
             let seeds: Vec<i64> = got
                 .iter()
-                .map(|packet| {
+                .zip(sounds)
+                .map(|(packet, key)| {
                     let Clientbound::Sound(p) = packet else {
                         panic!("expected sound")
                     };
+                    assert_eq!(p.sound, (-1, Some((key.to_owned(), None))));
+                    assert_eq!((p.volume, p.pitch), (-1.0, -2.0));
                     p.seed
                 })
                 .collect();

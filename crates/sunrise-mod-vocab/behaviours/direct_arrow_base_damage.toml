@@ -1,0 +1,3 @@
+version = 1
+doc = "ProjectileRef::set_base_damage stores the supplied double unchanged for an arrow. It returns false when the projectile is unavailable or has no arrow base-damage state."
+tests = ["crates/sunrise-client/src/game/modding/native_projectile_refs.rs::projectile_handles_read_and_write_owner_deflection_and_arrow_state"]

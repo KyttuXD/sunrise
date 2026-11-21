@@ -1,5 +1,5 @@
 //! Keep captured level sounds between an emitter's pairing and removal.
-use super::{containers::captured_sound_range, entity::EntityState, guest::Guest, hub::Hub};
+use super::{containers::sound_event_range, entity::EntityState, guest::Guest, hub::Hub};
 use crate::{audio::CapturedSound, fast_hash::FxHashSet};
 use sunrise_protocol::{
     buf::Reader,
@@ -49,7 +49,7 @@ impl Hub {
                                 && super::containers::within_range(
                                     sound.position,
                                     g.position,
-                                    captured_sound_range(sound),
+                                    sound_event_range(sound.volume),
                                 )
                         })
                 })

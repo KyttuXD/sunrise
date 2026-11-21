@@ -32,9 +32,8 @@ pub trait PlayerExperienceBackendMut {
     #[access(WorldOnly)]
     fn player_set_exp_cooldown(&mut self, player: PlayerRef, ticks: u32) -> bool;
     /// Side: server.
-    /// `ServerPlayer.setExperiencePoints`: sets the progress toward the next
-    /// level to `points` of the points it needs, kept below a full bar. The
-    /// level and the total are kept.
+    /// `ServerPlayer.setExperiencePoints`: sets the progress toward the next level to the
+    /// supplied signed points, using vanilla's progress clamp. Level, total and score are kept.
     #[access(WorldOnly)]
     fn player_set_experience_points(&mut self, player: PlayerRef, points: i32) -> bool;
     /// Side: server.

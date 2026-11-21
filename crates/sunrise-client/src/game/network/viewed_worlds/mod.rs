@@ -580,6 +580,8 @@ pub(in crate::game) mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_viewed_sound_plays_where_a_listener_puts_it() {
+        use sunrise_client::sound_engine::Sounds;
+
         let asked = Arc::default();
         let mods = vec![mod_api::ModEntry::new(
             "portal",
@@ -590,6 +592,21 @@ pub(in crate::game) mod tests {
             let mut resources = None;
             let mut game = client(&mut resources);
             game.handle_packet(open(1, "minecraft:the_nether")).unwrap();
+            let engine = game.audio.engine();
+            engine.loaded = true;
+            engine.registry.add_file(
+                "minecraft",
+                br#"{"block.anvil.land":{"replace":true,"sounds":["p3_86/anvil"]}}"#,
+                &|_, _| true,
+            );
+            game.audio.backend_live_for_bench();
+            game.audio.insert_cached_sound(
+                "minecraft:sounds/p3_86/anvil.ogg",
+                vec![0.5; 32],
+                48_000,
+                1,
+            );
+            game.audio.set_listener([1.5, 70.0, -2.5], 0.0, 0.0);
             game.audio.capture = Some(Vec::new());
             let anvil = sound("minecraft:block.anvil.land", [452, 512, 66], 2.0, -2.0, 42);
             game.handle_packet(run(1, std::slice::from_ref(&anvil)))
@@ -600,6 +617,10 @@ pub(in crate::game) mod tests {
             assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
             assert_eq!((played[0].volume, played[0].pitch), (0.25, -2.0));
             assert_eq!(played[0].source, SoundSource::Blocks.index());
+            assert_eq!(game.audio.engine().used_channels(), [1, 0]);
+            let mut samples = [0.0; 8];
+            game.audio.mix_buffer(&mut samples, 2, 48_000);
+            assert!(samples.iter().any(|&sample| sample > 0.0));
             let C::Sound(p) = &anvil else { unreachable!() };
             assert_eq!(
                 game.ask_viewed_level_sound(1, ViewedSound::at_position(p)),
@@ -647,6 +668,11 @@ pub(in crate::game) mod tests {
             assert_eq!(played.len(), 1);
             assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
             assert_eq!((played[0].volume, played[0].pitch), (-0.25, -2.0));
+            assert_eq!(
+                game.audio.engine().used_channels(),
+                [1, 0],
+                "no new channel at zero final volume"
+            );
             // The player's own level: played where it is, without asking.
             game.handle_packet(sound(
                 "minecraft:block.anvil.land",

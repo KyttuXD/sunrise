@@ -34,6 +34,13 @@ Use `project()` when you need components or an owned stack after the callback. F
 server-side attacker's live weapon, use `with_weapon_item`; for the weapon recorded by a
 projectile, see [Death sources and weapons](../items/death-loot-context.md).
 
+## Setting an arrow's base damage
+
+On the server, resolve the entity with `host.projectile(entity)`, then call
+`projectile.set_base_damage(host, damage)`. This stores the `f64` as supplied, like
+`AbstractArrow.setBaseDamage`. The hit calculation still applies velocity and the normal
+arrow hit rules. A stale handle or a projectile with no arrow base-damage state returns `false`.
+
 ## Checking an entity's tags
 
 In a server hook that gives you an entity and a host, use

@@ -576,6 +576,9 @@ pub struct Guest {
 }
 
 impl Guest {
+    /// The player score metadata index (`Player.DATA_SCORE_ID`).
+    pub const SCORE_DATA_ID: u8 = 18;
+
     /// The client's socket address, including the port.
     pub fn address(&self) -> SocketAddr {
         self.address
@@ -965,7 +968,7 @@ impl Guest {
             self.sent_score = self.score;
             self.send(&play::Clientbound::SetEntityData(play::SetEntityData {
                 id: self.entity_id,
-                values: vec![(18, serializer::INT, Value::Int(self.score))],
+                values: vec![(Self::SCORE_DATA_ID, serializer::INT, Value::Int(self.score))],
             }));
         }
     }

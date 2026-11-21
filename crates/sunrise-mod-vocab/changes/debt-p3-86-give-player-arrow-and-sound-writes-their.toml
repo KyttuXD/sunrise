@@ -1,34 +1,47 @@
 ids = [
     "handle:PlayerRef::give_experience_points",
-    "handle:PlayerRef::give_levels",
-    "handle:PlayerRef::set_experience_points",
-    "handle:PlayerRef::set_total_experience",
     "handle:PlayerRef::sleep_timer",
     "handle:PlayerRef::set_sleep_timer",
-    "handle:PlayerRef::set_abilities",
-    "handle:PlayerRef::play_sound",
-    "handle:ProjectileRef::set_base_damage",
-    "handle:EntityRef::play_sound",
-    "handle:EntityRef::play_bound_sound",
-    "handle:LevelRef::play_sound",
-    "handle:LevelRef::explode",
-    "method:LevelWriteHost::play_sound",
-    "method:HitHost::play_sound_at",
-    "method:HitHost::play_sound_from",
-    "type:ExplosionSettings.sound",
-    "type:ExplodeError.UnknownSound",
+    "behaviour:direct_player_experience",
+    "behaviour:direct_player_ability_speeds",
+    "behaviour:direct_arrow_base_damage",
+    "behaviour:server_sound_event_resolution",
     "hook:play_level_sound_at_position",
     "hook:play_level_sound_at_entity",
     "hook:viewed_level_sound",
     "hook:xp_repair_ratio",
 ]
-why = "Direct writes follow vanilla 26.3 Player.giveExperiencePoints and giveExperienceLevels, ServerPlayer.setExperiencePoints, Player.totalExperience and Player.tick's signed sleep counter, Abilities.setFlyingSpeed/setWalkingSpeed, and AbstractArrow.setBaseDamage. NeoForge's PlayerXpEvent.XpChange supplies the signed amount before Player.increaseScore; DeathScreen reads that independent score. Mending stays at ExperienceOrb.playerTouch/repairPlayerItems and NeoForge's IItemExtension.getXpRepairRatio. Level sounds follow ServerLevel.playSeededSound and ClientboundSoundPacket's registered or inline holder, NeoForge's PlayLevelSoundEvent, and SoundManager/SoundEngine.calculateVolume/calculatePitch, including when Sunrise forwards a viewed-level sound to playback."
+why = "Vanilla 26.3 Player.giveExperiencePoints changes score and XP separately, Player.giveExperienceLevels plays the level-up sound in the player's level, and ServerPlayer.setExperiencePoints clamps only the bar. NeoForge's PlayerXpEvent.XpChange adjusts signed points before Player.increaseScore; Mending belongs to ExperienceOrb.playerTouch/repairPlayerItems and NeoForge's IItemExtension.getXpRepairRatio. The direct writes follow Player.totalExperience, Player.tick's signed sleep counter, Abilities.setFlyingSpeed/setWalkingSpeed, and AbstractArrow.setBaseDamage without unrelated admission rules. ServerLevel.playSeededSound and SoundEvent.STREAM_CODEC use registered or inline holders regardless of namespace. NeoForge's PlayLevelSoundEvent cancels explicitly and SoundManager/SoundEngine resolves the resource, gain, and pitch; viewed levels use that same playback path."
 migrate = """
-Replace `player.give_experience_points(host, points_u32)` with `player.give_experience_points(host, points_i32)`; use `i32::try_from(points_u32)` if the source is unsigned and handle conversion failure at the call site. Use a negative amount to remove points. The hook-adjusted amount also changes the player's score. Direct grants neither repair items nor call `xp_repair_ratio`; let the player pick up an experience orb to use Mending. Keep `player.give_levels(host, levels_i32)` for changing levels without awarding score. Both grants play any level-up sound in the target player's level, not the caller's.
-Keep `player.set_experience_points(host, points_i32)` for the bar alone; the engine applies the vanilla progress clamp. To decide whether a point count should fit without clamping, compare it to `player.xp_needed_for_next_level(host)` before the call. Keep `player.set_total_experience(host, total_i32)` for the total alone: a negative value is stored, not refused, and this changes neither the bar, level nor score. Reject negative totals yourself if your mod requires that invariant.
-Keep `player.sleep_timer(host) -> Option<i32>` and `player.set_sleep_timer(host, ticks_i32)`. The write no longer refuses a counter above 109 or a player solely because they are in another level or are fake. Use the sleep/wake actions, not the timer setter, to change bed occupancy or pose.
-Keep `player.set_abilities(host, abilities)` and `projectile.set_base_damage(host, damage_f64)`. They no longer refuse non-finite floats. If your mod requires finite values, test `abilities.fly_speed.is_finite()` and `abilities.walk_speed.is_finite()`, or `damage.is_finite()`, before the call.
-Keep calling `PlayerRef::play_sound`, `EntityRef::play_sound`, `EntityRef::play_bound_sound`, `LevelRef::play_sound`, `LevelWriteHost::play_sound`, `HitHost::play_sound_at`, and `HitHost::play_sound_from` with a valid `namespace:path` key. Registered events go by ID; valid but unregistered events go by name in every namespace. Do not use the return value as a registry-membership or playback check: success means accepted for delivery, and the client needs resources for the event. Do not use volume or pitch to trigger a refusal; omit the call if the sound should not be sent.
-Keep setting `ExplosionSettings::sound` to `Some(key)` in `LevelRef::explode`. Match `ExplodeError::UnknownSound` only as a malformed key, not a missing vanilla registry entry. A valid unregistered key is sent by name, not refused.
-In `play_level_sound_at_position` and `play_level_sound_at_entity`, return `Flow::Cancel` to suppress the sound rather than writing an invalid volume or pitch. In `viewed_level_sound`, leave or set `*event.play_at = None` to suppress playback; when placed, both positional and entity sounds pass volume and pitch to the normal sound engine. The hook signatures are unchanged.
+Replace `player.give_experience_points(host, points_u32)` with `player.give_experience_points(host, points_i32)`.
+If the source is unsigned, use `i32::try_from(points_u32)` and handle a failed conversion. Use a negative amount
+to remove points. The hook-adjusted amount also changes the player's score. Direct grants neither repair items
+nor call `xp_repair_ratio`; let the player pick up an experience orb to use Mending. Keep
+`player.give_levels(host, levels_i32)` for changing levels without awarding score. Any level-up sound plays
+in the receiving player's level, not the caller's.
+
+Keep `player.set_experience_points(host, points_i32)` for the bar alone; the engine applies vanilla's progress
+clamp. Keep `player.set_total_experience(host, total_i32)` for the total alone: a negative value is stored,
+not refused, and this changes neither the bar, level nor score. Reject negative totals in your mod if needed.
+
+Change `player.sleep_timer(host)` from `Option<u32>` to `Option<i32>` and pass `ticks_i32` to
+`player.set_sleep_timer(host, ticks_i32)`. The counter is not restricted to the sleep or wake fade, and the
+write does not refuse a player just because they are fake or in another level. Use the sleep and wake actions,
+not the timer setter, to change bed occupancy or pose.
+
+Keep calling `player.set_abilities(host, abilities)` and `projectile.set_base_damage(host, damage_f64)`.
+They no longer refuse non-finite floats. If your mod requires finite values, test
+`abilities.fly_speed.is_finite()` and `abilities.walk_speed.is_finite()`, or `damage.is_finite()`, before the call.
+
+Keep passing a valid `namespace:path` key to `PlayerRef::play_sound`, `EntityRef::play_sound`,
+`EntityRef::play_bound_sound`, `LevelRef::play_sound`, `LevelWriteHost::play_sound`, `HitHost::play_sound_at`,
+and `HitHost::play_sound_from`. Registered events go by ID; valid unregistered events go by name in every
+namespace. Success means accepted for delivery, not registry membership or playback. The client still needs
+sound resources for the event. Set `ExplosionSettings::sound` to `Some(key)` for `LevelRef::explode` as before;
+`ExplodeError::UnknownSound` now means only a malformed key, not a missing registry entry.
+
+Do not use an out-of-range volume or pitch to veto a sound. Omit the direct call, or return `Flow::Cancel`
+from `play_level_sound_at_position` or `play_level_sound_at_entity`. In `viewed_level_sound`, leave or set
+`*event.play_at = None` to suppress playback. When placed, both positional and entity sounds pass their
+volume and pitch to the normal sound engine. The four hook signatures are unchanged.
 """

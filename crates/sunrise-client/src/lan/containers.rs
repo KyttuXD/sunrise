@@ -53,16 +53,13 @@ pub fn captured_sound_packet(
             seed,
         }),
     };
-    (packet, captured_sound_range(sound))
+    (packet, sound_event_range(sound.volume))
 }
 
-pub(super) fn captured_sound_range(sound: &crate::audio::CapturedSound) -> f64 {
-    // SoundEvent.getRange multiplies as floats before the broadcast widens it.
-    f64::from(if sound.volume > 1.0 {
-        16.0 * sound.volume
-    } else {
-        16.0
-    })
+/// `SoundEvent.getRange` for a variable-range event. The level widens the float result
+/// only after the sound event computes it.
+pub fn sound_event_range(volume: f32) -> f64 {
+    f64::from(if volume > 1.0 { 16.0 * volume } else { 16.0 })
 }
 
 /// A container click read from the world and not yet run (`Hub::prepare_click`).
@@ -217,7 +214,7 @@ impl Hub {
         // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
         let seed = self.next_sound_seed();
         let packet = self.sound_packet(name, at, volume, pitch, source, seed);
-        let range = f64::from(volume.max(1.0)) * 16.0;
+        let range = sound_event_range(volume);
         self.broadcast_near(at, range, &packet, except);
         self.send_viewed_sound(&self.config.dimension, at, range, None, || packet.encode());
     }

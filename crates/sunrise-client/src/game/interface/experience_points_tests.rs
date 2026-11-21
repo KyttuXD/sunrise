@@ -74,9 +74,5 @@ fn a_point_lost_above_level_zero_only_takes_that_point() {
     let xp = &game.experience;
     assert_eq!(xp.total, 99);
     assert_eq!(xp.level, 4);
-    assert!(
-        (xp.progress - (1.0 - 1.0 / 15.0)).abs() < 1e-6,
-        "{}",
-        xp.progress
-    );
+    assert_eq!(xp.progress, 1.0 - 1.0 / 15.0);
 }

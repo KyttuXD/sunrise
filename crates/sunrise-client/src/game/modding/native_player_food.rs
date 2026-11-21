@@ -115,9 +115,8 @@ impl Game<'_> {
     pub(super) fn player_xp_needed_for_next_level(&self, player: PlayerRef) -> Option<i32> {
         Some(Experience::needed(self.player_experience(player)?.level))
     }
-    /// `ServerPlayer.setExperiencePoints`: sets the progress toward the next
-    /// level to `points` of the points it needs, kept below a full bar. The
-    /// level and the total are kept.
+    /// `ServerPlayer.setExperiencePoints`: clamps the bar progress without changing the
+    /// level, total, or score.
     pub(super) fn player_set_experience_points(&mut self, player: PlayerRef, points: i32) -> bool {
         self.native_player_write(player, |game| {
             let limit = Experience::needed(game.experience.level) as f32;
@@ -209,6 +208,26 @@ mod tests {
                 game.experience.progress, 0.0,
                 "the clamp clears the progress"
             );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn setting_points_uses_the_signed_vanilla_progress_clamp() {
+        with_game(|game| {
+            let player = acting_player(game);
+            assert!(player.set_experience_levels(game, 5));
+            assert!(player.set_experience_points(game, 17));
+            assert_eq!(player.experience(game).unwrap().progress, 16.0 / 17.0);
+            assert!(player.set_experience_points(game, -1));
+            assert_eq!(player.experience(game).unwrap().progress, 0.0);
+
+            // (477218606 - 30) * 9 + 112 wraps to zero in getXpNeededForNextLevel.
+            assert!(player.set_experience_levels(game, 477_218_606));
+            assert!(player.set_experience_points(game, 0));
+            let xp = player.experience(game).unwrap();
+            assert!(xp.progress.is_nan());
+            assert_eq!((xp.level, xp.total, game.player_score), (477_218_606, 0, 0));
         });
     }
 

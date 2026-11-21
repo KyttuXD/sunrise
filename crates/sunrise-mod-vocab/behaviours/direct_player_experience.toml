@@ -1,0 +1,9 @@
+version = 1
+doc = "Setting the signed XP total leaves level, bar and score unchanged; setting points uses ServerPlayer.setExperiencePoints for just the bar. A signed grant changes score by the hook-adjusted amount and does not repair items. An XP level-up sound goes to the receiving player's level."
+tests = [
+    "crates/sunrise-client/src/game/modding/native_player_food.rs::setting_points_uses_the_signed_vanilla_progress_clamp",
+    "crates/sunrise-client/src/game/modding/native_player_food.rs::signed_points_bypass_mending",
+    "crates/sunrise-client/src/game/modding/native_player_food.rs::the_signed_total_is_set_alone",
+    "crates/sunrise-client/src/game/modding/native_player_food.rs::player_score_uses_the_signed_hook_adjusted_grant",
+    "crates/sunrise-client/src/game/interface/level_sounds.rs::experience_level_up_reaches_only_the_gaining_players_level",
+]

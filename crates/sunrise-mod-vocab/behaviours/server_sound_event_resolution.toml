@@ -1,0 +1,7 @@
+version = 1
+doc = "Server sound writes, including explosion sounds, send registered events by ID and other valid namespaced keys by name without distinguishing vanilla from mod namespaces. Queued or sent does not mean played: client resources resolve both forms and the sound engine interprets the supplied volume and pitch."
+tests = [
+    "crates/sunrise-client/src/game/modding/native_sound_refs.rs::sounds_reach_the_right_connections",
+    "crates/sunrise-client/src/game/modding/native_sound_refs.rs::queued_sounds_draw_sound_seeds_at_play_and_cut_at_the_range_edge",
+    "crates/sunrise-client/src/game/network/viewed_worlds/mod.rs::a_viewed_sound_plays_where_a_listener_puts_it",
+]
