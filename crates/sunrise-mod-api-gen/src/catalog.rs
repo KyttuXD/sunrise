@@ -513,18 +513,17 @@ impl Hook {
             return Err(CatalogError::InvalidContract(name));
         }
         // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
+        // stops dispatch (#2414). A separate listener event or answer can be dropped instead.
         let isolate = api.isolate.unwrap_or(false);
         if isolate
             && (scope.is_some()
                 || !(api.contract == Contract::Cancel
-                    || api.contract == Contract::Collect && answered_by_mod))
+                    || api.contract == Contract::Collect && answered_by_mod
+                    || api.contract == Contract::Listen && entry.event_per_listener))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
+                error: "isolate requires a global cancel hook, a global collect hook answered by mod, or a global listen hook with event_per_listener".into(),
             });
         }
         if let Some(validator) = &api.output_validator

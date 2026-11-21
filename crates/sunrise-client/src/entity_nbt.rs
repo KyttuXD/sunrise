@@ -2786,6 +2786,13 @@ pub fn item_entity_to_nbt(
     ] {
         put(&mut tag, key, value);
     }
+    // NeoForge's ItemEntity.addAdditionalSaveData stores the absolute lifespan.
+    // Omit its default so untouched items keep vanilla's save form.
+    if e.lifespan != ItemEntity::DEFAULT_LIFESPAN {
+        put(&mut tag, "Lifespan", Tag::Int(e.lifespan));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Lifespan".into());
+    }
     if let Some(thrower) = e.thrower {
         put(&mut tag, "Thrower", Tag::IntArray(thrower.to_vec()));
     } else if let Tag::Compound(map) = &mut tag {
@@ -2945,7 +2952,10 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         // Entity.load: getDoubleOr, any number widened.
         fall_distance: float(tag.get("fall_distance")).unwrap_or(0.0),
         age: i32::from(short("Age", 0)),
-        lifespan: ItemEntity::DEFAULT_LIFESPAN,
+        lifespan: sunrise_world::datafix::dynamic::as_int(
+            tag.get("Lifespan"),
+            ItemEntity::DEFAULT_LIFESPAN,
+        ),
         pickup_delay: i64::from(short("PickupDelay", 0)),
         bob_offset,
         ticks: 0,
@@ -5868,11 +5878,32 @@ mod tests {
         assert_eq!(back.position.x, 100.5);
         assert_eq!(back.fall_distance, 2.5);
         assert_eq!(back.thrower, e.thrower);
+        assert!(tag.get("Lifespan").is_none(), "vanilla items omit Lifespan");
+        assert_eq!(back.lifespan, 6000);
         let mut cleared = back;
         cleared.thrower = None;
         let cleared = item_entity_to_nbt(&cleared, [1, 2, 3, 4], Some(&tag), &Default::default());
         assert!(cleared.get("Thrower").is_none());
     }
+
+    #[test]
+    fn dropped_item_saves_absolute_lifespan_without_rewinding_age() {
+        let mut item = ItemEntity::new(
+            2,
+            ItemStack::new("minecraft:apple", 1),
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.0,
+        );
+        item.age = 6120;
+        item.lifespan = 6300;
+        let tag = item_entity_to_nbt(&item, [1; 4], None, &Default::default());
+        assert_eq!(tag.get("Lifespan"), Some(&Tag::Int(6300)));
+        assert_eq!(tag.get("Age"), Some(&Tag::Short(6120)));
+        let loaded = item_entity_from_nbt(&tag, 2, 0.0).unwrap();
+        assert_eq!((loaded.age, loaded.lifespan), (6120, 6300));
+    }
+
     #[test]
     fn nbt_numeric_flags_decode_and_save_modeled_values_without_raw() {
         let mut kind = crate::mobs::sensor_scan_tests::kind();

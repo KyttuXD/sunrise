@@ -354,31 +354,98 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
     });
 }
 
-/// Extends the lifetime of the dropped item it names, through `extra_life`.
-struct ExtendLife {
-    id: Arc<AtomicU32>,
+#[derive(Debug, PartialEq, Eq)]
+enum ItemLifetimeNotice {
+    Expire {
+        id: u32,
+        live: bool,
+        extra_life: i32,
+    },
+    Leave {
+        id: u32,
+        live: bool,
+    },
 }
 
+#[derive(Default)]
+struct ItemLifetimeTrace {
+    extension: i32,
+    panic_on_expire: bool,
+    panics: usize,
+    notices: Vec<ItemLifetimeNotice>,
+}
+
+struct PanicOnExpiry(Arc<Mutex<ItemLifetimeTrace>>);
+
 #[mod_api::__subscriptions]
-impl mod_api::Hooks for ExtendLife {
+impl mod_api::Hooks for PanicOnExpiry {
     fn item_expire(&self, _: &mut dyn ServerHost, event: &mut mod_api::ItemExpireEvent<'_>) {
-        if event.entity == self.id.load(Ordering::Relaxed) {
-            event.extra_life += 100;
+        let mut trace = self.0.lock().unwrap();
+        if trace.panic_on_expire {
+            trace.panics += 1;
+            drop(trace);
+            event.extra_life = i32::MAX;
+            panic!("expiry test panic");
         }
     }
 }
 
-/// The item family keeps its own contract while the mob slice changes: the
-/// item tick still lifts its list, and an `item_expire` listener still edits
-/// the item's lifetime, which the engine applies when the tick ends.
+struct ObserveLifetime(Arc<Mutex<ItemLifetimeTrace>>);
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for ObserveLifetime {
+    fn item_expire(&self, host: &mut dyn ServerHost, event: &mut mod_api::ItemExpireEvent<'_>) {
+        let live = host
+            .entity(event.entity)
+            .and_then(|entity| entity.position(host))
+            .is_some();
+        let mut trace = self.0.lock().unwrap();
+        trace.notices.push(ItemLifetimeNotice::Expire {
+            id: event.entity,
+            live,
+            extra_life: event.extra_life,
+        });
+        event.extra_life = event.extra_life.wrapping_add(trace.extension);
+    }
+
+    fn entity_leave_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityLeaveLevelEvent<'_>,
+    ) {
+        if event.kind == "minecraft:item" {
+            let live = host
+                .entity(event.entity)
+                .and_then(|entity| entity.position(host))
+                .is_some();
+            self.0
+                .lock()
+                .unwrap()
+                .notices
+                .push(ItemLifetimeNotice::Leave {
+                    id: event.entity,
+                    live,
+                });
+        }
+    }
+}
+
+/// The NeoForge expiry decision uses absolute lifespan, not a rewind of age.
+/// The general leave listener sees the entity only after the actual removal.
 #[test]
 #[ignore = "daily"]
-fn item_lifetime_edit_in_the_item_tick_still_lands() {
-    let named = Arc::new(AtomicU32::new(0));
-    let mods: mod_api::Mods = vec![ModEntry::new(
-        "item-lifetime-access",
-        Box::new(ExtendLife { id: named.clone() }),
-    )]
+fn item_expiry_preserves_age_and_reports_actual_removal() {
+    let trace = Arc::new(Mutex::new(ItemLifetimeTrace::default()));
+    let mods: mod_api::Mods = vec![
+        ModEntry::new(
+            "item-lifetime-panic",
+            Box::new(PanicOnExpiry(trace.clone())),
+        ),
+        ModEntry::new(
+            "item-lifetime-access",
+            Box::new(ObserveLifetime(trace.clone())),
+        ),
+    ]
     .into();
     mod_platform::testing::with_mods(mods, || {
         let root = std::env::temp_dir().join(format!(
@@ -394,27 +461,77 @@ fn item_lifetime_edit_in_the_item_tick_still_lands() {
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-            game.push_item_entity(
-                ItemStack::new("minecraft:apple", 1),
-                [1.5, 64.0, 1.5],
-                Some([0.0, 0.0, 0.0]),
-                0,
-                None,
-            );
-            let id = game.dropped.last().unwrap().id;
-            named.store(id, Ordering::Relaxed);
-            game.ticked_entities_through = id;
-            game.dropped.last_mut().unwrap().age = 6000;
-            let mut round = game.native_tick_round();
-            game.tick_dropped_items(&mut round);
-            let item = game
-                .dropped
-                .iter()
-                .find(|item| item.id == id)
-                .expect("the extended item stayed");
+            for (age, lifespan, extension, expected, fired) in [
+                (5998, 6000, 0, Some((5999, 6000)), false),
+                (5999, 6000, 100, Some((6000, 6100)), true),
+                (6099, 6100, 20, Some((6100, 6120)), true),
+                (6100, 6100, 1, None, true),
+                (5999, 6000, 0, None, true),
+                (5999, 6000, -10, None, true),
+                (5999, 6000, 40_000, Some((6000, 32766)), true),
+                (32765, 32766, 100, None, true),
+                (5999, 6000, i32::MAX, None, true),
+                (-32768, 6000, 0, Some((-32768, 6000)), false),
+                (-3, -2, -5, Some((-2, 0)), true),
+                (5999, 6000, 11, Some((6000, 6011)), true),
+                (5999, 6000, 12, Some((6000, 6012)), true),
+            ] {
+                {
+                    let mut trace = trace.lock().unwrap();
+                    trace.extension = extension;
+                    trace.panic_on_expire = matches!(extension, 11 | 12);
+                }
+                let at = [1.5, 64.0, 1.5];
+                game.push_item_entity(
+                    ItemStack::new("minecraft:apple", 1),
+                    at,
+                    Some([0.0, 0.0, 0.0]),
+                    0,
+                    None,
+                );
+                let item = game.dropped.last_mut().unwrap();
+                item.age = age;
+                item.lifespan = lifespan;
+                let id = item.id;
+                assert!(game.join_item_entity(id, at));
+                game.ticked_entities_through = id;
+                let mut round = game.native_tick_round();
+                game.tick_dropped_items(&mut round);
+                let index = game.dropped.iter().position(|item| item.id == id);
+                let actual =
+                    index.map(|index| (game.dropped[index].age, game.dropped[index].lifespan));
+                assert_eq!(
+                    actual, expected,
+                    "age={age}, lifespan={lifespan}, extra={extension}"
+                );
+                let mut expected_notices = Vec::new();
+                if fired {
+                    expected_notices.push(ItemLifetimeNotice::Expire {
+                        id,
+                        live: true,
+                        extra_life: 0,
+                    });
+                }
+                if expected.is_none() {
+                    expected_notices.push(ItemLifetimeNotice::Leave { id, live: false });
+                }
+                // In particular, leave has already fired without a later tick-boundary flush.
+                assert_eq!(trace.lock().unwrap().notices, expected_notices);
+                game.native_leaves_flush();
+                assert_eq!(trace.lock().unwrap().notices, expected_notices);
+                if let Some(index) = index {
+                    game.remove_dropped(index);
+                }
+                trace.lock().unwrap().notices.clear();
+            }
             assert_eq!(
-                item.age, 5900,
-                "the listener's 100 ticks landed on the item's age"
+                trace.lock().unwrap().panics,
+                1,
+                "one callback was disabled after its panic"
+            );
+            assert_eq!(
+                mod_api::__private::poisoned_listeners(mod_api::HookId::ItemExpire),
+                1
             );
         });
         let _ = std::fs::remove_dir_all(&root);

@@ -480,7 +480,7 @@ impl ItemEntity {
         let before = self.velocity;
         let (water, _) = self.update_fluids(world, fluids, context);
         self.water_entry(water > 0.0, false, before, &mut |_| {});
-        alive
+        alive && self.age < self.lifespan
     }
 }
 impl ItemEntity {
@@ -608,9 +608,9 @@ impl ItemEntity {
         );
     }
     /// The rest of `ItemEntity.tick`, after the bubble column's push: slime,
-    /// drag, block contact, age. Returns false when the item should be
-    /// removed. The game then runs the fluid push again (`ItemEntity.tick`
-    /// refreshes immersion after moving).
+    /// drag, block contact, age. Returns false if the item is below the world.
+    /// The game runs the server lifespan check after merging and refreshes
+    /// immersion after moving (`ItemEntity.tick`).
     pub fn tick_settle(
         &mut self,
         world: &World,
@@ -683,7 +683,7 @@ impl ItemEntity {
         if self.age != i16::MIN as i32 {
             self.age = self.age.wrapping_add(1);
         }
-        self.age < 6000 && self.position.y >= f64::from(world.shape.min_y - 64)
+        self.position.y >= f64::from(world.shape.min_y - 64)
     }
     /// `Entity.makeStuckInBlock` as `WebBlock.entityInside` and
     /// `PowderSnowBlock.entityInside` call it for an item (which, unlike a
@@ -781,11 +781,12 @@ impl ItemEntity {
         self.pickup_delay == i64::from(i16::MAX) || self.pickup_delay == i64::from(u32::MAX)
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
-    /// delay isn't infinite, before its lifetime ends.
+    /// delay isn't infinite. NeoForge's `ItemEntity` patch changes the expiry
+    /// check, but leaves this vanilla 6000-tick merging threshold unchanged.
     fn mergeable(&self, age: i32, max_stack: u32) -> bool {
         !self.has_infinite_pickup_delay()
             && age != i16::MIN as i32
-            && age < 6000
+            && age < Self::DEFAULT_LIFESPAN
             && self.stack.count < max_stack
     }
 }

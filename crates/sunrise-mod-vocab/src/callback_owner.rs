@@ -165,7 +165,7 @@ pub fn take_callback_panic_notices() -> Vec<CallbackPanicNotice> {
     queue.drain(..).collect()
 }
 
-fn record_callback_panic(
+pub(crate) fn record_callback_panic(
     owner: &'static str,
     kind: &'static str,
     operation: &'static str,

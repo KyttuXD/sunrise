@@ -22,3 +22,18 @@ batch or final write-back.
 Pickup delay and target changes, spawning, motion and non-item removals are
 not covered by the dropped-item journal. The transaction is not a whole-world
 snapshot.
+
+## Expiry and removal
+
+Implement `Hooks::item_expire(&self, host: &mut dyn ServerHost, event: &mut ItemExpireEvent<'_>)`
+to observe or extend the life of a dropped item at its server-side expiry check.
+Read the stack from `event.stack` or resolve the still-live item with `host.entity(event.entity)`.
+Leave `event.extra_life` unchanged to observe without changing the outcome, or compose with earlier
+listeners using `event.extra_life = event.extra_life.wrapping_add(ticks)`.
+
+`extra_life` starts at zero for every check. The server adds it to the current lifespan using
+signed 32-bit wrapping addition, then clamps the total lifespan to `0..=32766`, as in NeoForge's
+`ItemEntity.tick` patch. The age does not reset. The item stays only if its age is below the new lifespan.
+
+For actual removal, implement `Hooks::entity_leave_level` and filter for `event.kind == "minecraft:item"`.
+The item is already gone in that callback, which also covers non-expiry removals such as pickup.

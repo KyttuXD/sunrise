@@ -37,6 +37,7 @@ impl Game<'_> {
     pub(super) fn joined_during_entity_pass(&self, id: u32) -> bool {
         id > self.ticked_entities_through || self.contact_drops.contains(&id)
     }
+    /// `ItemEntity.tick`: move, merge, then check the server-side lifespan.
     pub(super) fn tick_dropped_items(&mut self, round: &mut native_ticks::TickRound) {
         let mut items = self.dropped.lift();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
@@ -45,8 +46,8 @@ impl Game<'_> {
         let mut cells = sunrise_client::entities::ItemCells::new(&items);
         // A LAN or server guest only shows the host's items.
         let merging = self.remote.is_none();
-        // `Entity.checkBelowWorld`: below `Level.getMinY() - 64`.
-        let void = f64::from(self.level_min_y() - 64);
+        let expiry_hook = merging && mod_api::__private::listened(mod_api::HookId::ItemExpire);
+        let leave_hook = merging && mod_api::__private::listened(mod_api::HookId::EntityLeaveLevel);
         let mut obstacles =
             sunrise_client::entities::ObstacleGrid::new(self.entity_collisions(Mover::Passive));
         let mut nearby = Vec::new();
@@ -135,16 +136,16 @@ impl Game<'_> {
                     // `moveTowardsClosestSpace` draws the speed from the item's own random.
                     let escape_speed = no_physics.then(|| item.random.next_float() * 0.2 + 0.1);
                     let mut entered = Vec::new();
-                    let (alive, discarded) = self.tick_item_with_block_contacts(
+                    let (above_void, discarded) = self.tick_item_with_block_contacts(
                         item,
                         escape_speed,
                         &nearby,
                         false,
                         &mut |splash| entered.push(splash),
                     );
-                    (no_physics, alive, discarded, entered)
+                    (no_physics, above_void, discarded, entered)
                 };
-                let (no_physics, alive, discarded, entered) =
+                let (no_physics, above_void, discarded, entered) =
                     match moves.take(i, item, &mut at_turn) {
                         Some(moved) => moved,
                         None => at_turn(item),
@@ -190,10 +191,7 @@ impl Game<'_> {
                 } else {
                     2
                 };
-                if merging
-                    && (alive || item.age == 6000 && item.position.y >= void)
-                    && item.ticks.is_multiple_of(rate)
-                {
+                if merging && above_void && item.ticks.is_multiple_of(rate) {
                     let max_stack = |stack: &ItemStack| self.stack_max_size(stack).max(1);
                     // A merge may take this item or a neighbour out of the pass.
                     gone |= sunrise_client::entities::merge_with_neighbours(
@@ -205,29 +203,65 @@ impl Game<'_> {
                         &max_stack,
                     );
                 }
-                let item = &mut items[i];
-                let mut alive = alive || (item.age < 6000 && item.position.y >= void);
-                if merging && !removed[i] && item.age >= 6000 && item.position.y >= void {
-                    let mut extra_life = 0;
-                    self.native_item_expire(item.id, &item.stack, &mut extra_life);
-                    if extra_life > 0 {
-                        item.age = 6000 - extra_life.min(32766);
-                        alive = true;
-                    } else if self.serving.is_some() || self.options.dedicated.is_some() {
-                        self.native_item_despawn(
-                            item.id,
-                            &item.stack.item,
-                            item.stack.count as i32,
-                            [item.position.x, item.position.y, item.position.z],
-                        );
-                    }
-                }
-                if !alive || removed[i] {
+                if removed[i] || !above_void {
                     removed[i] = true;
                     gone = true;
-                    cells.remove(i, item.position);
+                    cells.remove(i, items[i].position);
                     break 'tick;
                 }
+                if merging && items[i].age >= items[i].lifespan {
+                    let id = items[i].id;
+                    let mut extra_life = 0;
+                    if expiry_hook {
+                        // Like NeoForge's event, this runs with the item still in the level.
+                        let stack = items[i].stack.clone();
+                        let given = self.give_items_back(
+                            items,
+                            &mut removed,
+                            &mut cells,
+                            &mut gone,
+                            i,
+                            |game| game.native_item_expire(id, &stack, &mut extra_life),
+                        );
+                        (items, next) = (given.items, given.next);
+                        let Some(at) = given.at else {
+                            // The listener already removed the item.
+                            continue;
+                        };
+                        i = at;
+                    }
+                    let item = &mut items[i];
+                    // NeoForge's ItemEntity.tick clamps the absolute lifespan after Java int
+                    // addition. Short.MAX_VALUE is excluded because Age is saved as a short.
+                    item.lifespan = item
+                        .lifespan
+                        .wrapping_add(extra_life)
+                        .clamp(0, i32::from(i16::MAX) - 1);
+                    if item.age >= item.lifespan || item.stack.count == 0 {
+                        removed[i] = true;
+                        gone = true;
+                        cells.remove(i, item.position);
+                        if leave_hook {
+                            let given = self.give_items_back(
+                                items,
+                                &mut removed,
+                                &mut cells,
+                                &mut gone,
+                                i,
+                                |game| {
+                                    game.native_entity_left(id);
+                                    if alone {
+                                        game.native_tick_post_one(round, id, native_ticks::ITEM);
+                                    }
+                                },
+                            );
+                            (items, next) = (given.items, given.next);
+                            continue;
+                        }
+                        break 'tick;
+                    }
+                }
+                let item = &mut items[i];
                 let from = item.previous;
                 let to = item.position;
                 if round.sections() {

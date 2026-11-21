@@ -555,6 +555,12 @@ pub(super) fn emit<'a>(
                 inits.push(name.clone());
             }
         }
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
+        if isolated_listen && rollback.iter().any(|(_, by_reference)| *by_reference) {
+            return Err(format!(
+                "{name}: an isolated listener cannot write through a borrowed event field"
+            ));
+        }
         if mod_cancel {
             if args.iter().any(|(arg, _)| arg == "cancelled") {
                 return Err(format!(
@@ -1255,6 +1261,22 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_listen => {
+                let call = format!(
+                    "super::runtime::run_isolated_listener(HookId::{hook_id}, mod_id, \"{name}\", || super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))"
+                );
+                let step = if local_write_back.is_empty() {
+                    format!("{call};")
+                } else {
+                    format!("if {call} {{ {local_write_back} }}")
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {step} }} }}"
+                    ),
+                )
+            }
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.

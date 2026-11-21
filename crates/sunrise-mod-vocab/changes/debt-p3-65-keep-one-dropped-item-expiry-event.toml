@@ -1,0 +1,13 @@
+ids = [
+    "hook:item_despawn",
+    "method:Hooks::item_despawn",
+    "type:ItemDespawnEvent",
+    "hook:item_expire",
+    "method:Hooks::item_expire",
+    "type:ItemExpireEvent",
+    "hook:entity_leave_level",
+    "method:Hooks::entity_leave_level",
+    "type:EntityLeaveLevelEvent",
+]
+why = "The legacy item_despawn notice duplicated the server lifespan check. The remaining item_expire hook follows NeoForge EventHooks.onItemExpire and the ItemEntity.tick patch: add signed extra life to the absolute lifespan with Java int arithmetic, clamp to 0 through Short.MAX_VALUE - 1, and discard only if the age still reaches the new lifespan. Item age is no longer reset. Actual expiry removal reports through entity_leave_level, following ServerLevel.EntityCallbacks.onTrackingEnd. A panicking expiry or leave callback is reported and disabled for the session without suppressing later listeners."
+migrate = "Replace Hooks::item_despawn and ItemDespawnEvent with Hooks::item_expire and ItemExpireEvent to observe the live item. Keep event.entity; replace the old item and count fields with event.stack.item().id(host) (an optional item ID) and event.stack.count() (u32), and get the position with host.entity(event.entity).and_then(|entity| entity.position(host)). To observe actual removal, implement Hooks::entity_leave_level with EntityLeaveLevelEvent and check event.kind == \"minecraft:item\"; it also reports pickup and other removals, and the item is already gone. Existing item_expire listeners keep their signature; use event.extra_life = event.extra_life.wrapping_add(ticks) to add without replacing earlier contributions. A positive delta does not guarantee survival if the age still reaches the new lifespan."

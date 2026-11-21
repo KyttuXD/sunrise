@@ -954,6 +954,7 @@ impl Game<'_> {
         sunrise_client::block_contact::inside_written(state, at, writes);
     }
 
+    /// Move and age the item; return whether it is above the void and whether a block discarded it.
     pub(super) fn tick_item_with_block_contacts(
         &mut self,
         item: &mut ItemEntity,
@@ -1036,7 +1037,7 @@ impl Game<'_> {
             self.res.facts(),
             self.collision,
         );
-        let alive = item.tick_settle(
+        let above_void = item.tick_settle(
             &self.world,
             self.pack.assets.registry,
             self.res.facts(),
@@ -1050,7 +1051,7 @@ impl Game<'_> {
         let (water, _) =
             item.push_by_fluid(&self.world, &self.res.motion().fluids, &self.loop_context);
         item.water_entry(water > 0.0, false, before, splash);
-        (alive, false)
+        (above_void, false)
     }
 }
 

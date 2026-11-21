@@ -1,0 +1,2 @@
+# Dropped-item expiry and removal use the server game fixture and prepared resources.
+sunrise-client game::creatures::borrowed_tick::mob_tick_access_tests::item_expiry_preserves_age_and_reports_actual_removal lib daily resources

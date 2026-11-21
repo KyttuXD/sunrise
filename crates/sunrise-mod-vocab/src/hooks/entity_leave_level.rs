@@ -10,9 +10,10 @@ pub trait Hooks {
     /// loaded when the server stops, as in vanilla. `entity` is its ID and
     /// `kind` its type (`minecraft:item`); it is no longer in the level's lists.
     /// It only hears. It tells every kind `entity_join_level` does
-    /// (`kind` is the type), each once, when the game next notices it gone
-    /// (the tick or action that removed
-    /// it). Inside a transaction (`Host::transaction`) opened in the entity's
+    /// (`kind` is the type), each once. For a dropped item's lifespan expiry,
+    /// it runs at the removal, after `item_expire`; other removals are reported
+    /// when the game notices them gone (the tick or action that removed them).
+    /// Inside a transaction (`Host::transaction`) opened in the entity's
     /// own level an entity's removal takes effect, and this hook fires, at that
     /// transaction's root commit, not at the removal call (an entity in another
     /// level, as by a command run `in` it, leaves at once): from the call on its handle and selectors no longer find
@@ -25,7 +26,9 @@ pub trait Hooks {
         side = "server",
         contract = "listen",
         neoforge = "EntityLeaveLevelEvent",
-        version = 3
+        version = 4,
+        event_per_listener = true,
+        isolate = true
     )]
     fn entity_leave_level(dimension: &str, entity: u32, kind: &str);
 }

@@ -367,8 +367,6 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   potion or trident. It fires after the projectile is created and only for guest players in a LAN world.
 - **`entity_unleash(entity, kind)`**: a mob's leash was removed, before any lead drop is handled.
 - **`entity_drop_item(entity, item, count, pos)`**: a mob is about to drop `count` of `item` at `pos`.
-- **`item_despawn(entity, item, count, pos)`**: a dropped item entity reached its 6000-tick lifetime and is
-  about to be removed.
 - **`explosion_prime(center, radius)`**: a server explosion is about to begin at `center` with `radius`.
   It is listen-only, so the explosion proceeds as usual; it also fires on the single-player server.
 - **`vehicle_damage(kind, damage, cancel)`**: a player is about to damage a boat or minecart. Change `damage`
@@ -2682,7 +2680,7 @@ registration path.
 
 - A player saved to the world's store: `player_save_to_file(player, name, directory)` is heard once for each save of a placed player (when they leave or the world closes, when the dedicated server saves everyone, and for an integrated server's owner when the world saves them; LAN guests are not heard on integrated autosaves) after their data is written (NeoForge's `PlayerEvent.SaveToFile`, `PlayerList.save`). `directory` is the world's player directory (`players/data`); write your own file there, named `<uuid>.<suffix>`, never the player's `.dat`. The player may be leaving, so no player's state is swapped in. It cannot change or stop anything.
 
-- `item_expire(entity, stack, extra_life)`, a dropped item reaching its lifetime on the server (NeoForge's `ItemExpireEvent`, vanilla `ItemEntity.tick`): every mod may set or add to `extra_life`, in ticks from zero; a positive total keeps the item that much longer, zero or less lets it expire. Extensions are capped at 32766 ticks.
+- `item_expire(entity, stack, extra_life)` runs before removal, while the dropped item is live. The signed `extra_life` starts at zero and is added to its stored lifespan, not subtracted from its age (NeoForge's `ItemEntity.tick` patch). The resulting lifespan is clamped to `0..=32766`. Use `entity_leave_level` to observe the actual removal.
 
 - The title's own screens to the screen hooks. `ScreenView.id` has one id per title state (`title`, `world_select`, `world_create`, `world_create_flat`, `world_create_buffet`, `world_preset_editor`, `world_edit`, `world_backup`, `world_backup_confirm`, `world_optimize_confirm`, `world_optimize`, `low_disk_space`, `world_delete`, `world_recover`, `world_recovered`, `error`, `multiplayer`, `add_server`, `edit_server`, `direct_connect`, `server_delete`, `friends_join`, `disconnected`, `multiplayer_warning`, `onboarding`, `ban_notice`), with no `menu`, no `title` and no `slots`, and the whole window as `rect`. `screen_render_post` fires after the title draws its screen (before its toasts), and the `_pre` input hooks — mouse buttons, drag, wheel, key press and release, character typed — fire on it and can cancel it as on any screen, so a mod draws its own button or browser over Create New World and takes the clicks. A dialog, a prompt or a server's pack prompt over the title keeps them away, and typing still goes to the title's own boxes (with no box focused the key's text stays on the key, as on Options, so `screen_char_typed_pre` fires before the key acts there). `native_instance_dir()` is the instance folder, where `options.txt`, `saves/`, `resourcepacks/`, `shaderpacks/` and `sunrise-mods/` are; a world's `datapacks/` is in that world's folder.
 - On the server, `anvil_craft_post(host, event)` reports a completed take after the level charge, input consumption and anvil wear. `event.inputs` lends the same pre-take stacks as Pre, even if the anvil broke. Vetoed takes do not fire Post.
@@ -2700,8 +2698,6 @@ registration path.
 - A hopper selects a container while searching for items: `hopper_inventory_search(hopper, container, entity)` identifies the hopper and the selected block container or container entity.
 
 - A hopper is about to move one item between containers: `inventory_move_item(source, destination, item, cancel)` runs before the source slot is changed, a composter's bone meal included; a chest boat or minecart is reported at the block it is in. Set `cancel` to keep the item in its source slot.
-
-- A dropped item entity reached its 6000-tick lifetime and is about to be removed: `item_despawn(entity, item, count, pos)`.
 
 - A boat or minecart joined the level at `pos`, after a player or dispenser placed it: `vehicle_create(kind, pos)` is listen-only.
 
