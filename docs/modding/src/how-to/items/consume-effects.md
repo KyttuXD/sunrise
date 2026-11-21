@@ -3,8 +3,9 @@
 Implement `Hooks::consume_effect` to handle a consumable's `on_consume_effects`
 entry whose type is in your mod's namespace. Decoding the definition binds it to
 that namespace's subscriber; only that callback receives the entry while enabled.
-The hook runs on the server thread for the consuming
-player or mob, including potions, ominous bottles, and witch and trader drinks.
+If you pin this hook in your manifest, request `hook_version = 3`. The hook runs on the
+server thread for the consuming player or mob, including potions, ominous bottles,
+and witch and trader drinks.
 Entries run in the stack's effective consumable list order, interleaved with
 built-in effects; stack patches can change or remove the list.
 

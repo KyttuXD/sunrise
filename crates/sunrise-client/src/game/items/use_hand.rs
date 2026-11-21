@@ -764,7 +764,8 @@ impl Game<'_> {
                     Some(living) => self.entity_sound_source(living.entity())?,
                     None => mod_api::SoundSource::Players,
                 };
-                self.queue_consume_sound(sound, BlockPos::containing(at), source)?;
+                // Vanilla's PlaySoundConsumeEffect.apply succeeds even with no audience.
+                let _ = self.queue_consume_sound(sound, BlockPos::containing(at), source);
                 true
             }
             ConsumeEffect::Native(effect) => self.native_consume_effect(effect, consumed, user),

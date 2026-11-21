@@ -346,9 +346,10 @@ pub trait LivingBackendMut {
     /// Apply one loaded consumable effect without consuming the item.
     /// Mod-defined kinds enter the normal `consume_effect` hook: `Some(true)` means
     /// the callback completed, not that it changed game state. A missing, disabled
-    /// or failing callback returns `Some(false)`. Nested effects of any kind run
-    /// normally. `None` means an unavailable
-    /// item/index/target or an unsupported vanilla effect for that target.
+    /// or failing callback returns `Some(false)`. Nested applications run immediately,
+    /// even for the same kind. `None` means an unavailable item, index or target,
+    /// or a vanilla effect unsupported for that target.
+    /// A delegated engine or other listener panic is not attributed to the caller.
     #[access(WorldOnly)]
     #[delegate_engine]
     fn living_apply_consume_effect(

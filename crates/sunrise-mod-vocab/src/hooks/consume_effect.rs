@@ -16,7 +16,7 @@ pub trait Hooks {
         dispatch = "direct",
         side = "server",
         contract = "listen",
-        version = 2,
+        version = 3,
         neoforge = "none (runtime ConsumeEffect.apply; RegisterEvent registers effect types, not invocations)"
     )]
     #[notes = "`consume_effect` receives the custom kind, retained definition data, pre-shrink stack snapshot and consuming entity (player or mob). Entries come from the effective consumable, including stack patches, and run in list order between the built-in entries. The callback is bound at decode; nested effects are not filtered by kind."]

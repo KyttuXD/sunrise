@@ -501,10 +501,10 @@ mod tests {
                 game.living_apply_consume_effect(cow, &item("minecraft:milk_bucket"), 0),
                 Some(false)
             );
-            // This fixture has no server sound hub; a sound cannot be queued.
+            // Vanilla's sound effect returns true even with nobody to hear it.
             assert_eq!(
                 game.living_apply_consume_effect(cow, &item("minecraft:ominous_bottle"), 0),
-                None
+                Some(true)
             );
             assert_eq!(
                 game.living_apply_consume_effect(cow, &item("minecraft:chorus_fruit"), 0),

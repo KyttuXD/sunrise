@@ -55,6 +55,13 @@ impl Hooks for Second {
 #[test]
 #[ignore = "daily"]
 fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
+    // A definition admitted without its callback must not look it up on execution.
+    let unbound = mod_platform::testing::with_mods(Vec::<ModEntry>::new().into(), || {
+        parse_consumable(&serde_json::json!({
+            "on_consume_effects": [{"type": "second:effect"}]
+        }))
+        .unwrap()
+    });
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![
         ModEntry::new("first", Box::new(First(trace.clone()))),
@@ -66,7 +73,6 @@ fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
             for (item, kind) in [
                 ("minecraft:pufferfish", "first:effect"),
                 ("minecraft:honey_bottle", "second:effect"),
-                ("minecraft:apple", "unclaimed:effect"),
             ] {
                 let component = parse_consumable(&serde_json::json!({
                     "on_consume_effects": [{"type": kind}]
@@ -74,6 +80,7 @@ fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
                 .unwrap();
                 items.items.get_mut(item).unwrap().consumable = Some(Arc::new(component));
             }
+            items.items.get_mut("minecraft:apple").unwrap().consumable = Some(Arc::new(unbound));
             game.server_items = Some(Arc::new(items));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             game.mobs
@@ -83,9 +90,9 @@ fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
                 .try_into_api()
                 .unwrap();
             assert_eq!(living.apply_consume_effect(game, &stack, 0), Ok(Some(true)));
-            let unclaimed = ItemStack::new("minecraft:apple", 1).try_into_api().unwrap();
+            let apple = ItemStack::new("minecraft:apple", 1).try_into_api().unwrap();
             assert_eq!(
-                living.apply_consume_effect(game, &unclaimed, 0),
+                living.apply_consume_effect(game, &apple, 0),
                 Ok(Some(false))
             );
             assert_eq!(

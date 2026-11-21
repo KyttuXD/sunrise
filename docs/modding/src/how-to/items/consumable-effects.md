@@ -11,6 +11,7 @@ or the effect is unsupported. Mob random teleport, armor stands and dragons are 
 supported. Chance and random teleport use the target's own random stream, including when the
 engine swaps in a guest. `play_sound` accepts a registered id or a direct sound event
 (`{sound_id: "example:bell", range: 8.0}`); omitting `range` gives it the normal variable range.
+It returns `Some(true)` even when nobody is in range to hear it.
 
 Mod-defined kinds dispatch through the ordinary `consume_effect` hook. For these
 kinds, `Some(true)` means the bound callback completed, not that it changed game
