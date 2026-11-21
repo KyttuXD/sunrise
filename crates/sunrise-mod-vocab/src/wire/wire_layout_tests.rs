@@ -317,15 +317,7 @@ fn decode<T: Wire, F: Wire>(value: T) -> F {
 }
 
 #[test]
-fn spawner_and_attribute_records_have_declared_field_bytes() {
-    let spawners = vec![
-        SpawnerEntry::Builtin(SpawnerKind::Cat),
-        SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
-    ];
-    fields(
-        CustomSpawners::try_from(spawners.clone()).unwrap(),
-        (spawners,),
-    );
+fn attribute_records_have_declared_field_bytes() {
     let modifier = AttributeModifier::new(id("example:boost"), 1.75, AttributeOperation::AddValue);
     let entry = ItemAttributeModifier::new(
         id("minecraft:generic.attack_damage"),

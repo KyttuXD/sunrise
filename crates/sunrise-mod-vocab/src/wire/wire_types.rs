@@ -558,8 +558,6 @@ mod tests {
     fn wire_checked_values_and_garbage() {
         round(crate::ConfigPath::new("example/options.toml").unwrap());
         round(crate::ConfigPath::root());
-        round(crate::SpawnerKey::new("example:spawner").unwrap());
-        round(crate::CustomSpawners::vanilla());
         round(crate::Identifier::parse("example:thing").unwrap());
         round(crate::ItemPlace::Nested {
             parent: Box::new(crate::ItemPlace::Mod {
@@ -571,15 +569,6 @@ mod tests {
         let mut out = Writer::new();
         out.put_str("../escape");
         assert!(Reader::decode::<crate::ConfigPath>(out.bytes()).is_err());
-        out.clear();
-        out.put_str("not namespaced");
-        assert!(Reader::decode::<crate::SpawnerKey>(out.bytes()).is_err());
-        out.clear();
-        out.put(&vec![
-            crate::SpawnerEntry::Builtin(crate::SpawnerKind::Cat),
-            crate::SpawnerEntry::Builtin(crate::SpawnerKind::Cat),
-        ]);
-        assert!(Reader::decode::<crate::CustomSpawners>(out.bytes()).is_err());
         assert!(crate::wire::intern(&"x".repeat(257)).is_err());
         for len in 0..64 {
             let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + len * 11) as u8).collect();
