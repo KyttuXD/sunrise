@@ -151,8 +151,8 @@ open. Its block reads read the viewed level's own world, never the player's: `bl
 `block_property`, `clip`, `collision_boxes`, `has_collisions`, `visit_block_collision`, and the fluid reads built on
 `block_state` (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`, `fluid_can_be_replaced_with`).
 So a mod can aim a ray or collide a box through a portal. They never write and never load a column: a
-column the client doesn't hold is `None`, for a collision box as soon as its walk reaches one. `clip`
-keeps its traversal limit and `collision_boxes` its cell cap.
+column the client doesn't hold is `None` as soon as the walk reaches it. `clip` uses the full
+finite segment without a visit quota; the separate collision box query has its own scan policy.
 
 The handle is `None` while the server has the level closed. If the server closes the level and opens it
 again within the same client level, the old handle reads again. A login, a reconfiguration or a respawn

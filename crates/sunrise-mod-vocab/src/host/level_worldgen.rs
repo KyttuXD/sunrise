@@ -28,8 +28,9 @@ pub trait LevelWorldgenBackend {
     /// [`StructureSearch::radius`]; concentric rings (strongholds) check every
     /// ring position whatever the radius. Starts are built as the search needs
     /// them, without loading or generating chunks or switching parked levels.
+    /// A negative radius visits no random-spread rings, but still checks concentric ones.
     /// None for no start, a structure that does not generate in this level,
-    /// a world without structures, a stale level, a client, or a negative radius.
+    /// a world without structures, a stale level, or a client.
     /// Candidates are ranked by three-axis distance to the placement's locate position.
     #[access(WorldOnly)]
     fn level_find_nearest_structure(

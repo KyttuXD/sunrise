@@ -1,8 +1,12 @@
 ids = [
     "handle:BiomeSearch::MAX_SAMPLES",
+    "handle:BiomeSearch::new",
     "handle:StructureSearch::MAX_RADIUS",
+    "handle:StructureSearch::new",
     "handle:LevelRef::find_closest_biome",
     "handle:LevelRef::find_nearest_structure",
+    "handle:LevelRef::clip",
+    "handle:LevelRef::line_of_sight",
     "method:prelude::ClientViewClientHost::raycast",
     "method:prelude::ClientViewClientHost::view_hit",
     "method:prelude::ClientViewClientHost::client_surface_heights",
@@ -15,25 +19,32 @@ ids = [
     "type:ColumnBlocks.blocks",
     "type:ColumnBlocks.water_colors",
     "type:TerrainColumn",
+    "type:TerrainColumn.height",
+    "type:TerrainColumn.block",
+    "type:TerrainColumn.water",
+    "type:TerrainColumn.biome",
     "type:TerrainColumnView",
+    "handle:LevelRef::edit_blocks",
     "handle:LevelRef::visit_surface_heights",
     "handle:LevelRef::visit_terrain_surface",
     "handle:LevelRef::visit_column_blocks",
     "type:ColumnRead",
     "type:ColumnReadError",
 ]
-why = "Native mods no longer need guest result quotas. Column queries follow LevelReader.getHeight and ChunkGenerator.getBaseColumn at the active or parked level without loading chunks; NeoForge's ILevelReaderExtension keeps the same underlying height and chunk reads. BlockGetter.clip and VoxelShape.clip now use the original view ray while visiting only the resident extent. Both biome searches use the actual build height (ServerLevel.findClosestBiome3d and LocateCommand.locateBiome) and BlockPos.spiralAround's signed leg count. Structure search has no separate origin gate and ranks locate positions in all three dimensions, as ChunkGenerator.findNearestMapStructure and Vec3i.distSqr do."
+why = "Native mods no longer need guest result quotas. Column queries follow LevelReader.getHeight, Heightmap.getFirstAvailable and ChunkGenerator.getBaseColumn, using the named dimension without loading chunks. NeoForge's ILevelReaderExtension uses the same LevelReader boundary. BlockGetter.clip and VoxelShape.clip use the original ray; the view query still only hits resident blocks, and the LevelRef ray no longer has a visit quota. Both biome searches use the actual build height (ServerLevel.findClosestBiome3d and LocateCommand.locateBiome) and BlockPos.spiralAround's signed leg count. Structure search has no separate origin gate, always checks concentric placements and ranks locate positions in all three dimensions, as ChunkGenerator.findNearestMapStructure and Vec3i.distSqr do."
 migrate = '''
 ### Biome and structure search
 - Drop references to `BiomeSearch::MAX_SAMPLES`. Continue calling `level.find_closest_biome(host, selector, BiomeSearch::new(origin, radius, horizontal_step, vertical_step))` with a nonnegative radius and positive steps. The search no longer refuses vanilla `/locate biome` parameters (`6400, 32, 64`); vertical clamping uses the actual build range. Very large sample radii follow vanilla's wrapping spiral leg count and can yield no sample.
-- Drop references to `StructureSearch::MAX_RADIUS`. Continue calling `level.find_nearest_structure(host, selector, StructureSearch::new(origin, radius))` with a nonnegative radius. The origin is not rejected merely for lying outside the ordinary world bounds. Results can change for tags whose placements have different locate heights: the nearest candidate is judged in 3D even though `/locate structure` displays horizontal distance.
+- Drop references to `StructureSearch::MAX_RADIUS`. Continue calling `level.find_nearest_structure(host, selector, StructureSearch::new(origin, radius))`. A negative radius searches only concentric placements; it visits no random-spread rings. The origin is not rejected merely for lying outside the ordinary world bounds. Results can change for tags whose placements have different locate heights: the nearest candidate is judged in 3D even though `/locate structure` displays horizontal distance.
 
 ### Client view rays
 - Keep `host.raycast(distance)` to clip the full finite segment against loaded block outlines, without the old 1024-block ceiling. Pass `1024.0` explicitly for that extent. Check `None` for a miss, nonpositive or non-finite distance, or a sweep too short for vanilla shape clipping. Inside hits use the original sweep, not a sweep cut to loaded bounds.
 - Keep `host.view_hit()` to use the loaded extent as the end of the view ray. Far terrain is still not hit.
+- Keep `level.clip(host, from, to, blocks, fluids)` and `level.line_of_sight(host, from, to)`: each uses the whole supplied segment instead of refusing beyond 4096 visited cells. `None` still means the ray could not be read, including cases where the level does not hold a chunk on the segment, not that the ray missed.
 
 ### Column queries
 - Replace `host.surface_heights(dimension, columns, heightmap)` with `level.visit_surface_heights(host, columns, heightmap, &mut |pos, height| { /* use (pos, height) */ ControlFlow::Continue(()) })?` on `host.level(dimension)` after checking for `None`. Replace `client_host.client_surface_heights(columns, heightmap)` with the same visit on the displayed level's handle (for example, via `host.local_player()?.entity().level(host)?` in an `Option`-returning function). A visited `None` height means the chunk is not resident; a failed query returns `LevelReadError`.
 - Replace `host.terrain_surface(dimension, columns)` with `level.visit_terrain_surface(host, columns, &mut |pos, column| { /* use (pos, column) */ ControlFlow::Continue(()) })?` on that server level. Replace owned `TerrainColumn` with the callback's `TerrainColumnView<'_>`; copy `biome` into a string only if retaining it. The per-column `None` still means no undecorated surface. Delete `MAX_TERRAIN_COLUMNS`. Both visitors accept active or parked server levels and stop early on `ControlFlow::Break(())`.
-- Replace `host.read_columns(dimension, columns, heightmap, (below, above))` with one `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)?` per input pair, in the same order. Instead of indexing `ColumnBlocks.palette` with `ColumnBlocks.blocks`, use each complete `BlockState` passed to the visitor, bottom first. Return `ControlFlow::Continue(())` to keep reading or `ControlFlow::Break(())` to stop that column. Read `ColumnRead.base` instead of that column's entry in `ColumnBlocks.bases`, and `ColumnRead.water_color` instead of its entry in `ColumnBlocks.water_colors`. Air padding and the zero water colour for nonresident chunks are unchanged. If a palette is required for your own output format, build it from the visited states in your mod.
+- Replace `host.read_columns(dimension, columns, heightmap, (below, above))` with one `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)?` per input pair, in the same order. Instead of indexing `ColumnBlocks.palette` with `ColumnBlocks.blocks`, use each complete `BlockState` passed to the visitor, bottom first. Return `ControlFlow::Continue(())` to keep reading or `ControlFlow::Break(())` to stop that column. Read `ColumnRead.base` instead of that column's entry in `ColumnBlocks.bases`, and `ColumnRead.water_color` instead of its entry in `ColumnBlocks.water_colors`. A nonresident chunk still yields air around Y=0 and a zero water colour. An unmappable state returns `ColumnReadError::InvalidState` at that block; a stale or unavailable level refuses before the visitor runs. If a palette is required for your own output format, build it from the visited states in your mod.
+- Keep `level.edit_blocks(host, &edit)` for bulk writes. For a `BlockRun` relative to a heightmap, measure offsets from the level's actual build range; storage padding no longer contributes to the base.
 '''

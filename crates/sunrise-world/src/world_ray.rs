@@ -4,7 +4,7 @@ use std::fmt;
 use sunrise_core::{
     geometry::{
         BlockHit, BlockTraversalBounds, Direction, TraversalError, Vec3, VoxelShape,
-        traverse_blocks, traverse_blocks_in_bounds,
+        traverse_blocks, traverse_blocks_in_bounds, traverse_blocks_on_segment,
     },
     position::BlockPos,
 };
@@ -115,6 +115,24 @@ pub fn clip_world<W: RayWorld>(
     )
 }
 
+/// Clip the full finite segment; the provider controls which positions are readable.
+pub fn clip_world_on_segment<W: RayWorld>(
+    world: &mut W,
+    start: Vec3,
+    end: Vec3,
+    blocks: RayBlockMode,
+    fluids: RayFluidMode,
+) -> Result<RayResult, RayError<W::Error>> {
+    clip(
+        world,
+        start,
+        end,
+        blocks,
+        fluids,
+        ClipTraversal::FullSegment,
+    )
+}
+
 /// The same clip for a world known to be empty outside `bounds`. Neither
 /// the entry nor the exit of the box replaces the original shape endpoints.
 pub fn clip_world_in_bounds<W: RayWorld>(
@@ -137,6 +155,7 @@ pub fn clip_world_in_bounds<W: RayWorld>(
 
 enum ClipTraversal {
     Budget(usize),
+    FullSegment,
     Bounds(BlockTraversalBounds),
 }
 
@@ -175,6 +194,7 @@ fn clip<W: RayWorld>(
     };
     let result = match traversal {
         ClipTraversal::Budget(budget) => traverse_blocks(start, end, budget, visit),
+        ClipTraversal::FullSegment => traverse_blocks_on_segment(start, end, visit),
         ClipTraversal::Bounds(bounds) => traverse_blocks_in_bounds(start, end, bounds, visit),
     }
     .map_err(RayError::Traversal)?;

@@ -883,10 +883,8 @@ impl Game<'_> {
         )
     }
 
-    /// Clip an empty-context ray against collider or outline shapes, without fluids, in the
-    /// world `native_level_view_world` reads. None on failed reads, dynamic shapes (unless
-    /// the block's entity published its shapes, which stand over them), invalid rays or
-    /// traversal limits.
+    /// Clip the full ray in the named level, without fluids. Refuse invalid rays, unreadable
+    /// positions or dynamic shapes with no published block-entity shape.
     pub(super) fn level_clip(
         &self,
         level: LevelRef,
@@ -899,7 +897,7 @@ impl Game<'_> {
         use sunrise_core::geometry::Direction;
         use sunrise_world::{
             collision_context::CollisionContext,
-            world_ray::{RayBlockMode, RayFluidMode, clip_world},
+            world_ray::{RayBlockMode, RayFluidMode, clip_world_on_segment},
         };
         let world = self.native_level_view_world(level)?;
         let mut rays = super::explosion::ColliderRays {
@@ -925,13 +923,12 @@ impl Game<'_> {
             ClipFluid::None => RayFluidMode::None,
             _ => unreachable!("ClipFluid: unhandled variant"),
         };
-        let result = clip_world(
+        let result = clip_world_on_segment(
             &mut rays,
             Vec3::new(from[0], from[1], from[2]),
             Vec3::new(to[0], to[1], to[2]),
             mode,
             fluid,
-            4096,
         )
         .ok()?;
         let h = result.hit;

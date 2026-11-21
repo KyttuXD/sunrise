@@ -1816,7 +1816,7 @@ pub struct StructureSearch {
 }
 
 impl StructureSearch {
-    /// The radius must be nonnegative.
+    /// A negative radius skips random-spread placements, not concentric ones.
     pub fn new(origin: [i32; 3], radius: i32) -> Self {
         Self { origin, radius }
     }

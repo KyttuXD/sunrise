@@ -49,7 +49,8 @@ impl Game<'_> {
         let chunk = world.chunks.get(&(x >> 4, z >> 4));
         let base = chunk.map(|_| self.world_column_height(world, heightmap, x, z));
         let water_color = chunk.zip(base).map_or(0, |(chunk, y)| {
-            world_biomes!(self).get(chunk.biome(x, y - 1, z)).water
+            let y = (y - 1).max(world.shape.min_y);
+            world_biomes!(self).get(chunk.biome(x, y, z)).water
         });
         let origin = i64::from(base.unwrap_or(0));
         if below != 0 || above != 0 {
@@ -57,7 +58,7 @@ impl Game<'_> {
             let air = index.to_api(world.air)?;
             for y in origin - i64::from(below)..origin + i64::from(above) {
                 let state = match (chunk, i32::try_from(y)) {
-                    (Some(chunk), Ok(y)) if (chunk.min_y()..chunk.max_y()).contains(&y) => {
+                    (Some(chunk), Ok(y)) if world.shape.contains_y(y) => {
                         index.to_api(chunk.block(x & 15, y, z & 15))?
                     }
                     _ => air,

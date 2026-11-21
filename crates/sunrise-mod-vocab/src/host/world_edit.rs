@@ -75,7 +75,7 @@ pub trait WorldEditBackend {
     /// Side: server.
     /// Visits complete block states, bottom first, from `below` blocks below `[x, z]`'s heightmap
     /// base through `above - 1` above it. A nonresident chunk uses zero as the base and yields
-    /// air, as do positions outside a resident chunk's height. An empty range visits nothing.
+    /// air, as do positions outside the level's build height. An empty range visits nothing.
     /// The optional base and the server biome's water colour are returned even if the visitor
     /// stops early with [`core::ops::ControlFlow::Break`]. Works on active and parked server
     /// levels. Doesn't load chunks, allocate a block list, or visit another level.

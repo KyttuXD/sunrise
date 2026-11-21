@@ -169,9 +169,6 @@ impl Game<'_> {
         parameters: mod_api::StructureSearch,
     ) -> Option<mod_api::StructureSearchResult> {
         self.native_level_world(level)?;
-        if parameters.radius < 0 {
-            return None;
-        }
         let terrain = self.level_locator(level)?;
         let names = self.structure_names(&normalized_selector(structure));
         terrain
@@ -3504,7 +3501,17 @@ mod environment_read_tests {
                     "minecraft:stronghold",
                     StructureSearch::new([0, 64, 0], -1),
                 ),
+                Some(found.clone()),
+                "concentric placements ignore the random-spread search radius",
+            );
+            assert_eq!(
+                overworld.find_nearest_structure(
+                    game,
+                    "minecraft:mineshaft",
+                    StructureSearch::new([0, 64, 0], -1),
+                ),
                 None,
+                "a negative radius visits no random-spread rings",
             );
             let outside = [30_000_000, i32::MIN, i32::MIN];
             let (name, pos) = game

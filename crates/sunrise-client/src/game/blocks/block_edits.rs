@@ -140,22 +140,31 @@ fn column_height(
     air: impl Fn(BlockStateId) -> bool,
     counts: impl Fn(HeightmapType, BlockStateId) -> bool,
 ) -> i32 {
-    if h == Heightmap::WorldSurface {
-        return world.world_surface(x, z, air);
-    }
-    // (as `rain_height` reads it: both others count only blocks that block motion, so they are at or under it)
-    let top = world.motion_blocking(x, z, |s| counts(HeightmapType::MotionBlocking, s));
-    let kind = match h {
-        Heightmap::MotionBlockingNoLeaves => HeightmapType::MotionBlockingNoLeaves,
-        Heightmap::OceanFloor => HeightmapType::OceanFloor,
-        _ => return top,
+    // MotionBlockingNoLeaves and OceanFloor only count states at or below MotionBlocking.
+    let top = if h == Heightmap::WorldSurface {
+        world.world_surface(x, z, &air)
+    } else {
+        world.motion_blocking(x, z, |s| counts(HeightmapType::MotionBlocking, s))
     };
-    let bottom = world
-        .chunks
-        .get(&(x >> 4, z >> 4))
-        .map_or(world.layout().min_y(), |c| c.min_y());
-    let mut y = top;
-    while y > bottom && !counts(kind, world.block(x, y - 1, z)) {
+    // Heightmap.getFirstAvailable uses the level's build range, not the chunk's padding.
+    let (bottom, ceiling) = (world.shape.min_y, world.shape.max_y());
+    let mut y = top.clamp(bottom, ceiling);
+    if top <= ceiling && matches!(h, Heightmap::WorldSurface | Heightmap::MotionBlocking) {
+        return y;
+    }
+    while y > bottom {
+        let state = world.block(x, y - 1, z);
+        let matches = match h {
+            Heightmap::WorldSurface => !air(state),
+            Heightmap::MotionBlockingNoLeaves => {
+                counts(HeightmapType::MotionBlockingNoLeaves, state)
+            }
+            Heightmap::OceanFloor => counts(HeightmapType::OceanFloor, state),
+            _ => counts(HeightmapType::MotionBlocking, state),
+        };
+        if matches {
+            break;
+        }
         y -= 1;
     }
     y
@@ -774,6 +783,18 @@ mod tests {
         // an empty column, and one not loaded: the bottom
         assert_eq!(height(&w, Heightmap::OceanFloor, 5, 5), -64);
         assert_eq!(height(&w, Heightmap::WorldSurface, 100, 100), -64);
+    }
+
+    #[test]
+    fn column_heights_exclude_storage_padding() {
+        let mut w = columns_world();
+        w.shape = sunrise_client::chunk::LevelShape::NETHER;
+        w.set(1, 319, 1, BlockStateId(1)).unwrap();
+        w.set(5, -1, 5, BlockStateId(1)).unwrap();
+        assert_eq!(height(&w, Heightmap::WorldSurface, 1, 1), 65);
+        assert_eq!(height(&w, Heightmap::MotionBlocking, 1, 1), 65);
+        assert_eq!(height(&w, Heightmap::WorldSurface, 5, 5), 0);
+        assert_eq!(height(&w, Heightmap::OceanFloor, 5, 5), 0);
     }
 
     #[test]

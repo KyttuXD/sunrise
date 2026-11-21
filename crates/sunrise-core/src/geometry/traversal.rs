@@ -37,6 +37,16 @@ pub fn traverse_blocks<T>(
     traverse(start, end, Some(max_visits), None, visitor)
 }
 
+/// Visit blocks in vanilla order until the visitor returns Some or the segment ends.
+/// The caller's provider owns its policy for positions it cannot read.
+pub fn traverse_blocks_on_segment<T>(
+    start: Vec3,
+    end: Vec3,
+    visitor: impl FnMut(BlockPos) -> Option<T>,
+) -> Result<Option<T>, TraversalError> {
+    traverse(start, end, None, None, visitor)
+}
+
 /// Visit only blocks in `bounds`, without a visit quota or changing the ray's
 /// endpoints. The time and tie order of the first retained step are unchanged.
 pub fn traverse_blocks_in_bounds<T>(
@@ -94,6 +104,14 @@ fn traverse<T>(
                 fraction
             }
     });
+    // A NaN cannot participate in the strict boundary ordering below. For example,
+    // a subnormal delta leaving an integer face can multiply infinity by zero.
+    if boundary
+        .iter()
+        .any(|t| t.is_nan() || *t == f64::NEG_INFINITY)
+    {
+        return Err(TraversalError::NonFinite);
+    }
     if let Some(bounds) = bounds {
         if (0..3).any(|i| bounds.min[i] > bounds.max[i]) {
             return Err(TraversalError::InvalidBounds);
@@ -175,6 +193,11 @@ fn skip_empty_prefix(
     };
     for i in 0..3 {
         if sign[i] == 0 {
+            // A stationary axis on an integer plane still has one boundary at time zero.
+            // Consume it if the ordinary walk would have visited it in the skipped prefix.
+            if boundary[i] < time || (boundary[i] == time && i > axis) {
+                boundary[i] += step[i];
+            }
             continue;
         }
         let steps = if i == axis {
@@ -254,12 +277,17 @@ mod tests {
             (
                 Vec3::new(-63.5, -63.5, -63.5),
                 Vec3::new(9.5, 9.5, 9.5),
-                [[0, 0, 0], [0, 0, 1], [0, 1, 1], [1, 1, 1]],
+                &[[0, 0, 0], [0, 0, 1], [0, 1, 1], [1, 1, 1]][..],
             ),
             (
                 Vec3::new(63.5, 63.5, 63.5),
                 Vec3::new(-9.5, -9.5, -9.5),
-                [[1, 1, 1], [1, 1, 0], [1, 0, 0], [0, 0, 0]],
+                &[[1, 1, 1], [1, 1, 0], [1, 0, 0], [0, 0, 0]][..],
+            ),
+            (
+                Vec3::new(0.0, 0.5, -8.5),
+                Vec3::new(0.0, 0.5, 3.5),
+                &[[0, 0, 0], [0, 0, 1]][..],
             ),
         ] {
             let mut actual = Vec::new();
@@ -268,7 +296,7 @@ mod tests {
                 None::<()>
             })
             .unwrap();
-            assert_eq!(actual, expected);
+            assert_eq!(actual.as_slice(), expected);
         }
     }
 

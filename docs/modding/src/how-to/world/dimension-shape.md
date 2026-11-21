@@ -218,8 +218,8 @@ players were sent it and have it inside their view distance; fake players watch 
 `level.find_nearest_structure(host, structure, StructureSearch::new(origin, radius))` searches
 for a structure id or `#tag` and returns its structure and locate position. This is a
 synchronous, `/locate`-cost search, not a cheap loaded-chunk lookup: cache results and avoid
-per-tick use. The radius counts placement-cell rings (nonnegative; `/locate` uses 100);
-stronghold rings are checked regardless of radius. Ranking uses all three axes, even
+per-tick use. The radius counts placement-cell rings (`/locate` uses 100). A negative
+radius skips random-spread placements; stronghold rings are checked regardless of radius. Ranking uses all three axes, even
 though `/locate structure` displays horizontal distance. The query does not load or
 generate chunks.
 

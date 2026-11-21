@@ -2,19 +2,22 @@ use sunrise_core::{
     geometry::{TraversalError, Vec3, VoxelShape},
     position::BlockPos,
 };
-use sunrise_world::world_ray::{RayBlockMode, RayError, RayFluidMode, RayWorld, clip_world};
+use sunrise_world::world_ray::{
+    RayBlockMode, RayError, RayFluidMode, RayWorld, clip_world, clip_world_on_segment,
+};
 #[derive(Default)]
 struct World {
     reads: usize,
     fail_fluid: bool,
+    solid: Option<BlockPos>,
 }
 impl RayWorld for World {
     type Error = &'static str;
-    type Block = ();
+    type Block = bool;
     type Fluid = ();
-    fn block_state(&mut self, _: BlockPos) -> Result<(), Self::Error> {
+    fn block_state(&mut self, pos: BlockPos) -> Result<bool, Self::Error> {
         self.reads += 1;
-        Ok(())
+        Ok(self.solid == Some(pos))
     }
     fn fluid_state(&mut self, _: BlockPos) -> Result<(), Self::Error> {
         self.reads += 1;
@@ -26,14 +29,19 @@ impl RayWorld for World {
     }
     fn block_shape(
         &mut self,
-        _: (),
+        solid: bool,
         _: BlockPos,
         _: RayBlockMode,
     ) -> Result<VoxelShape, Self::Error> {
-        Ok(VoxelShape::empty())
+        Ok(if solid {
+            VoxelShape::block()
+        } else {
+            VoxelShape::empty()
+        })
     }
-    fn interaction_shape(&mut self, _: (), _: BlockPos) -> Result<VoxelShape, Self::Error> {
-        panic!("empty block cannot have interaction hit")
+    fn interaction_shape(&mut self, solid: bool, _: BlockPos) -> Result<VoxelShape, Self::Error> {
+        assert!(solid, "empty block cannot have interaction hit");
+        Ok(VoxelShape::empty())
     }
     fn fluid_is_source(&mut self, _: ()) -> Result<bool, Self::Error> {
         panic!("fluid mode is NONE")
@@ -66,6 +74,24 @@ fn visit_limit_retains_queries_and_does_not_report_miss() {
     assert_eq!(world.reads, 2);
 }
 #[test]
+fn full_segment_hits_past_the_old_level_query_quota() {
+    let mut world = World {
+        solid: Some(BlockPos::new(5000, 0, 0)),
+        ..Default::default()
+    };
+    let result = clip_world_on_segment(
+        &mut world,
+        Vec3::new(0.5, 0.5, 0.5),
+        Vec3::new(8192.5, 0.5, 0.5),
+        RayBlockMode::Collider,
+        RayFluidMode::None,
+    )
+    .unwrap();
+    assert!(!result.miss);
+    assert_eq!(result.hit.block, BlockPos::new(5000, 0, 0));
+    assert_eq!(result.hit.location, Vec3::new(5000.0, 0.5, 0.5));
+}
+#[test]
 fn nonfinite_ray_fails_before_world_reads() {
     let mut world = World::default();
     let result = clip_world(
@@ -75,6 +101,22 @@ fn nonfinite_ray_fails_before_world_reads() {
         RayBlockMode::Collider,
         RayFluidMode::None,
         10,
+    );
+    assert!(matches!(
+        result,
+        Err(RayError::Traversal(TraversalError::NonFinite))
+    ));
+    assert_eq!(world.reads, 0);
+}
+#[test]
+fn undefined_boundary_time_fails_before_world_reads() {
+    let mut world = World::default();
+    let result = clip_world_on_segment(
+        &mut world,
+        Vec3::new(0.0, 0.5, 0.5),
+        Vec3::new(-f64::from_bits(1), 0.5, 8.5),
+        RayBlockMode::Collider,
+        RayFluidMode::None,
     );
     assert!(matches!(
         result,

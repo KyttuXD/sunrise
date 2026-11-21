@@ -44,10 +44,10 @@ pub trait LevelCollisionBackend {
         kind: BlockShapeKind,
     ) -> Option<Vec<[f64; 6]>>;
     /// Side: both.
-    /// Clip an empty-context ray against collider or outline shapes, without fluids.
-    /// None on failed reads, dynamic shapes, invalid rays or traversal limits, and for a ray
-    /// that enters a column the level doesn't hold. On a client, the level it shows or a
-    /// viewed one (`host.level`), each through its own world.
+    /// Clip the finite segment against collider or outline shapes, without fluids, as
+    /// `BlockGetter.clip` does with an empty context. There is no visit quota.
+    /// `None` for invalid rays, unavailable reads (including a nonresident column), or
+    /// unsupported dynamic shapes. On a client, uses the displayed or named viewed level.
     #[access(WorldOnly)]
     fn level_clip(
         &self,

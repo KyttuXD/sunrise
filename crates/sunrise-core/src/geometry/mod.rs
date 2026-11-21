@@ -20,6 +20,7 @@ pub use shape::{ShapeError, ShapeOp, VoxelShape};
 pub use sweep::sweep_intersected_blocks;
 pub use traversal::{
     BlockTraversalBounds, TraversalError, traverse_blocks, traverse_blocks_in_bounds,
+    traverse_blocks_on_segment,
 };
 
 pub const COLLISION_EPSILON: f64 = 1.0e-7;
