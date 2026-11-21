@@ -1,0 +1,16 @@
+ids = [
+    "type:Native",
+    "type:mixin::Forwarded",
+    "fn:Manifest::parse",
+    "fn:Package::read",
+    "fn:Package::read_zip",
+    "fn:Package::read_with_diagnostics",
+    "type:NativeStateRefusal",
+    "fn:package::read",
+    "fn:package::tool_manifest",
+    "fn:Bundle::needs_mixins",
+    "fn:native_route::changes_game",
+    "fn:game_uses::unjudged",
+]
+why = "The native-build split (df4a9501dd4) carried old layout checks into the builder. Discovery now looks for sunrise-mod.toml and relies on the package reader's schema and path rules. Loose projects no longer reserve the retired names; the native archive file allowlist is unchanged. The manifest reader refuses native state before serialization or build routing because adding fields would change the prebuilt game's layout. The builder preserves the named, translatable refusal. This is Sunrise's .smod format, with no vanilla or NeoForge counterpart."
+migrate = "Keep metadata and build pins in root sunrise-mod.toml, Cargo.toml and src/ for code, assets/ and data/ for pack resources, and declared runtime/ files for native runtime data. Move packaged code from native/ or rust/ to src/. Move any handwritten tool declarations into supported [[native.*]] tables in sunrise-mod.toml and remove horizon-mixin.toml from the project; the builder generates it in staging. Repack manually assembled archives with cargo sunrise-mod build. Remove [[native.state]] or state = []. For per-object data, declare its id with registrar.register_attachment_type in Hooks::register, define an AttachmentType<T>, and use its get(host, holder) and set(host, holder, value) with the corresponding Holder. For Game-wide data used in a published loop, put the field on the type named by [[native.loop]]'s with field, initialize it in Default, and use self in the slot callbacks. Tools reading Native.state must drop that access and use Manifest::parse or Package::read for E_MIXIN_STATE_LAYOUT. Tools that translate that refusal can call Package::read_with_diagnostics(path, render) and fill NativeStateRefusal::TEMPLATE with mod_id for {mod} and row for {state}. Other reader and classifier calls stay the same."

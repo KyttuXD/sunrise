@@ -283,6 +283,7 @@ impl Rule {
     }
 }
 
+/// The build pins and supported `[[native.*]]` tables of a native mod.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Native {
@@ -300,9 +301,6 @@ pub struct Native {
     /// Accessor and invoker bridges, forwarded as horizon-mixins' `[[bridge]]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bridge: Vec<mixin::Forwarded>,
-    /// State fields added to game types, forwarded as horizon-mixins' `[[state]]`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub state: Vec<mixin::Forwarded>,
     /// Slots of published game loops, native only (`mod_api::loops`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#loop: Vec<loops::Loop>,
@@ -483,9 +481,57 @@ fn edit_distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// The `E_MIXIN_STATE_LAYOUT` diagnostic from a refused native state declaration.
+pub struct NativeStateRefusal<'a> {
+    /// The manifest's mod id, or its filename if the id is unavailable.
+    pub mod_id: &'a str,
+    /// The first state row's id, or `native.state` if it has no id.
+    pub row: &'a str,
+}
+
+impl NativeStateRefusal<'_> {
+    /// The stable diagnostic and translation key. `{mod}` is the mod id and `{state}` is the row.
+    pub const TEMPLATE: &str = "E_MIXIN_STATE_LAYOUT: {mod}:{state}: native state changes the prebuilt game's layout; use an attachment instead";
+}
+
+fn english_state_refusal(error: NativeStateRefusal<'_>) -> String {
+    // Insert from right to left so placeholders in an id are left as written.
+    NativeStateRefusal::TEMPLATE
+        .replacen("{state}", error.row, 1)
+        .replacen("{mod}", error.mod_id, 1)
+}
+
 impl Manifest {
+    /// Read the package manifest. Native state declarations are refused with
+    /// `E_MIXIN_STATE_LAYOUT`; they cannot enter the parsed native tables.
     pub fn parse(text: &str) -> Result<Self, String> {
-        let m: Manifest = toml::from_str(text).map_err(|e| toml_error(text, &e))?;
+        Self::parse_with_diagnostics(text, english_state_refusal)
+    }
+
+    fn parse_with_diagnostics(
+        text: &str,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
+        let document = toml::de::DeTable::parse(text).map_err(|e| toml_error(text, &e))?;
+        let root = document.get_ref();
+        if let Some(state) = root
+            .get("native")
+            .and_then(|native| native.get_ref().get("state"))
+        {
+            let id = root
+                .get("id")
+                .and_then(|id| id.get_ref().as_str())
+                .unwrap_or(MANIFEST);
+            let row = state
+                .get_ref()
+                .get(0usize)
+                .and_then(|row| row.get_ref().get("id"))
+                .and_then(|id| id.get_ref().as_str())
+                .unwrap_or("native.state");
+            return Err(render(NativeStateRefusal { mod_id: id, row }));
+        }
+        let m = Self::deserialize(toml::de::Deserializer::from(document))
+            .map_err(|e| toml_error(text, &e))?;
         Internal::check_all(&m.internals)?;
         if !m.internals.is_empty() && m.native.is_none() {
             return Err(format!("{MANIFEST}: internals need a [native] mod"));
@@ -590,12 +636,12 @@ impl Manifest {
                 .mixin
                 .iter()
                 .map(|entry| &entry.id)
-                .chain(native.bridge.iter().chain(&native.state).map(|row| &row.id))
+                .chain(native.bridge.iter().map(|row| &row.id))
                 .chain(native.r#loop.iter().map(|row| &row.id))
             {
                 if id.trim().is_empty() || !ids.insert(id) {
                     return Err(format!(
-                        "{MANIFEST}: empty or duplicate mixin, bridge, state or loop id"
+                        "{MANIFEST}: empty or duplicate mixin, bridge or loop id"
                     ));
                 }
             }
@@ -795,22 +841,23 @@ impl Package {
     }
 
     /// Read a flat `.smod` or project folder, without executing native code.
+    /// A folder is read by its package paths, not by the names of unrelated files beside them.
     pub fn read(path: &Path) -> Result<Self, String> {
+        Self::read_with_diagnostics(path, english_state_refusal)
+    }
+
+    /// Read a package with the same validation as [`Self::read`], passing a native-state refusal
+    /// to `render` with its original arguments so a build host can localize it.
+    /// All other errors are reported as usual.
+    pub fn read_with_diagnostics(
+        path: &Path,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
         let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         let mut icon = None;
         let mut has_cargo = false;
         let mut has_source = false;
         let toml = if metadata.is_dir() {
-            for old in [
-                "sunrise-native.json",
-                "horizon-mixin.toml",
-                "native",
-                "rust",
-            ] {
-                if std::fs::symlink_metadata(path.join(old)).is_ok() {
-                    return Err(format!("{old}: unsupported package path"));
-                }
-            }
             if std::fs::symlink_metadata(path.join("Cargo.toml")).is_ok() {
                 check_folder_file(path, "Cargo.toml")?;
                 has_cargo = true;
@@ -862,15 +909,22 @@ impl Package {
             }
             let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-            return Self::read_zip(&mut zip);
+            return Self::read_zip_with_diagnostics(&mut zip, render);
         };
-        let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
+        let package = Self::from_parts(&toml, icon, has_cargo, has_source, render)?;
         package.check_runtime_layout(&crate::content::runtime_folder_files(path)?)?;
         Ok(package)
     }
 
     /// Read and validate an archive, including all selected source and resource entries.
     pub fn read_zip<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Result<Self, String> {
+        Self::read_zip_with_diagnostics(zip, english_state_refusal)
+    }
+
+    fn read_zip_with_diagnostics<R: Read + std::io::Seek>(
+        zip: &mut zip::ZipArchive<R>,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
         let mut icon = None;
         let mut has_cargo = false;
         let mut has_source = false;
@@ -882,14 +936,7 @@ impl Package {
             let name = entry.name().map_err(|e| e.to_string())?.into_owned();
             let mode = entry.unix_mode().unwrap_or_default();
             entries.push((name.clone(), entry.size(), entry.is_dir()));
-            let first = name.split('/').next().unwrap_or("");
-            if matches!(
-                first,
-                "sunrise-native.json" | "horizon-mixin.toml" | "native" | "rust"
-            ) {
-                return Err(format!("{name}: unsupported package path"));
-            }
-            has_source |= first == "src";
+            has_source |= name.split('/').next() == Some("src");
             if entry.is_dir() && matches!(mode & 0o170000, 0 | 0o040000) {
                 continue;
             }
@@ -942,7 +989,7 @@ impl Package {
         if toml.len() as u64 > MAX_MANIFEST {
             return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
         }
-        let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
+        let package = Self::from_parts(&toml, icon, has_cargo, has_source, render)?;
         if uses && !package.is_native() {
             return Err(format!("a content mod has no code, so no {USES_FILE}"));
         }
@@ -1063,8 +1110,9 @@ impl Package {
         icon: Option<crate::icon::Icon>,
         has_cargo: bool,
         has_source: bool,
+        render: fn(NativeStateRefusal<'_>) -> String,
     ) -> Result<Self, String> {
-        let manifest = Manifest::parse(text)?;
+        let manifest = Manifest::parse_with_diagnostics(text, render)?;
         if has_cargo != manifest.native.is_some() || has_source != has_cargo {
             return Err("[native] and Rust source must be declared together".into());
         }
@@ -1943,9 +1991,73 @@ capabilities = ["registries"]
         );
         std::fs::write(root.join(MANIFEST), format!("{EXAMPLE}{native}")).unwrap();
         assert_eq!(Package::read(&root).unwrap().manifest.id, "ruby");
-        std::fs::create_dir(root.join("native")).unwrap();
-        assert!(Package::read(&root).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_state_is_refused_in_project_and_archive_manifests() {
+        use std::io::{Cursor, Write};
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let cargo = b"[package]\nname = 'ruby'\nversion = '0.1.0'\n";
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), b"").unwrap();
+        std::fs::write(root.join("Cargo.toml"), cargo).unwrap();
+        let base = format!(
+            "{EXAMPLE}[native]\ngame = '26.3'\nsunrise = '{}'\n",
+            "a".repeat(40)
+        );
+        for (row, state) in [
+            (
+                "autosave",
+                "[[native.state]]\nid = 'autosave'\ntarget = 'game::Game'\nty = 'u32'\ninitial = '0'\nconstructor = []\n",
+            ),
+            ("native.state", "state = []\n"),
+        ] {
+            let manifest = format!("{base}{state}");
+            let expected = format!(
+                "E_MIXIN_STATE_LAYOUT: ruby:{row}: native state changes the prebuilt game's layout; use an attachment instead"
+            );
+            std::fs::write(root.join(MANIFEST), &manifest).unwrap();
+            assert_eq!(Package::read(root).err().unwrap(), expected);
+
+            // Write directly so the packer cannot refuse the manifest before the reader sees it.
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, bytes) in [
+                (MANIFEST, manifest.as_bytes()),
+                ("Cargo.toml", cargo.as_slice()),
+                ("src/lib.rs", b""),
+            ] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            let mut zip = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
+            assert_eq!(Package::read_zip(&mut zip).err().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn a_project_reader_ignores_unrelated_root_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::write(root.join(MANIFEST), EXAMPLE).unwrap();
+        for dir in ["native", "rust"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("sunrise-native.json"), "not a manifest").unwrap();
+        std::fs::write(root.join("horizon-mixin.toml"), "not a manifest").unwrap();
+        let package = Package::read(root).unwrap();
+        assert_eq!(package.manifest.id, "ruby");
+        assert_eq!(
+            package
+                .directory_files(root)
+                .unwrap()
+                .into_keys()
+                .collect::<Vec<_>>(),
+            [MANIFEST],
+        );
     }
 
     #[test]

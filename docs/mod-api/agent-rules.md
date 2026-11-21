@@ -12,7 +12,7 @@ Rules for a coding agent making a Sunrise mod. They are short on purpose; each l
 4. **Names:** NeoForge 26.3 names for hooks that have a counterpart; no `on_` prefix; the event is `&mut`;
    handles come from the event; writes take `host`.
 5. **Layout:** `sunrise-mod.toml`, `assets/`, `data/`, `Cargo.toml` and `src/` at the top. The id and version come
-   only from `sunrise-mod.toml`; ids are `[a-z0-9_]`. No `native/` folder, no `sunrise-native.json`.
+   only from `sunrise-mod.toml`; ids are `[a-z0-9_]`. Follow the [package layout](../modding/src/reference/manifest.md#project-and-archive-layout).
 6. **Manifest fields:** `id`, `name`, `version`, `description`, `authors`, `api = "0.2"`, `side`,
    `capabilities = ["registries"]`, `[dependencies]`, `[incompatible]`, `[discouraged]`, `load_before`, top-level `internals`, `[native]`
    (`game`, `sunrise`, `mixins`, optional `mixin`, `loop`, `bridge`, `module`; `state` is refused; see [the native route](../modding/src/concepts/native-route.md)) and `[[jar]]`. Unknown fields are refused

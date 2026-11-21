@@ -52,7 +52,7 @@ and lets you cancel it.
 | `E_NATIVE_BUILD_SCRIPT` | Remove the mod's build script and ship its generated Rust source. `build = false` disables an incidental `build.rs`. Registry dependency build scripts are handled by the separate dependency permission prompt. |
 | `E_NATIVE_FEATURES` | Use the pinned SDK's feature set; remove mod feature declarations and custom SDK feature requests. |
 | `E_NATIVE_HOST` | Build on a host supported by the prebuilt SDK. |
-| `E_MIXIN_STATE_LAYOUT` | Store per-object mod data in attachments instead of declaring `[[native.state]]`. |
+| `E_MIXIN_STATE_LAYOUT` | Remove `[[native.state]]`. Use an attachment for per-object data or a published loop slot for state owned by the whole `Game`; see [Native state](../../concepts/native-route/6-native-state.md). |
 
 Unavailable downloads can be retried. Missing SDKs, incompatible compiler identities and unsupported
 transformations are refusals, not reasons to build the game locally.

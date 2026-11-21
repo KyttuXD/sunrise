@@ -44,7 +44,6 @@ pub fn changes_game(manifest: &Manifest, cargo: &toml::Table) -> Option<&'static
         mixin,
         module,
         bridge,
-        state: _,
         r#loop,
     }) = &manifest.native
     {

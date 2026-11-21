@@ -34,9 +34,10 @@ my_mod.smod
 
 There is no mod-id directory level inside the archive. `sunrise-mod.toml` is the only manifest and the only
 source of the mod's id and version; Cargo's package name and version are not mod identity. IDs are plain
-`[a-z0-9_]{1,64}` names, also used as resource namespaces. The launcher writes `horizon-mixin.toml` in its
-staging area when needed. Hand-written tool manifests, `sunrise-native.json`, and input `native/` or `rust/`
-folders are unsupported.
+`[a-z0-9_]{1,64}` names, also used as resource namespaces. The native builder writes its own tool manifest
+in its staging area when needed. A loose project can have unrelated files and folders beside the package;
+packing selects the package files. A loose native project can only put Rust and TOML files at its supported
+source or data paths, and a native `.smod` refuses files outside the package's allowed paths.
 
 ## `sunrise-mod.toml`
 
@@ -63,7 +64,13 @@ file that receives it, a `name` that is a Rust module identifier, and a `source`
 `"pub"` or `"pub(crate)"`, the default. See [Support modules](../concepts/native-route/5-support-modules.md).
 
 Native source edits use `[[native.mixin]]` with `id`, `target`, uppercase `kind`, `helper` and the
-other horizon-mixins options ([Mixins](../concepts/native-route/2-mixins.md)). This package reads only `id`, `target`, `kind` and `helper` of a row (and refuses `hook` and `hook_version`) and forwards every other key to the tool as written; the tool then refuses a key it does not know, so an unknown key on a mixin row fails at build time, not when the manifest is read. The same holds for the keys of `[[native.bridge]]` and `[[native.state]]` rows. An `OVERWRITE` row must carry the tool's `fingerprint`. `[[native.loop]]`, `[[native.bridge]]` and `[[native.module]]` complete the route; `[[native.state]]` is refused. See [The native route](../concepts/native-route.md) for every table, its fields and its refusals.
+other horizon-mixins options ([Mixins](../concepts/native-route/2-mixins.md)). The package reader checks
+`id`, `target`, `kind` and `helper`, refuses `hook` and `hook_version`, and forwards the other keys as
+written. An unknown mixin option fails at build time, when the tool reads it. The tool also validates
+forwarded `[[native.bridge]]` options. An `OVERWRITE` row must carry the tool's `fingerprint`.
+`[[native.loop]]`, `[[native.bridge]]` and `[[native.module]]` complete the route. The package reader
+refuses `[[native.state]]` with `E_MIXIN_STATE_LAYOUT`; it is never forwarded to the tool.
+See [The native route](../concepts/native-route.md) for each table and its fields.
 
 ### `[runtime]`: data files beside the code
 
