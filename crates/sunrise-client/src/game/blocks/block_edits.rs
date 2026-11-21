@@ -420,7 +420,6 @@ mod tests {
             let stone = registry.default_state("minecraft:stone").unwrap();
             let api_air = air.try_into_api().unwrap();
             let api_stone = stone.try_into_api().unwrap();
-            let metadata = mod_api::__private::block_definitions().unwrap();
             let air_filter = StatePredicate::block(api_air.block(), &[]).unwrap();
             let stone_filter = StatePredicate::block(api_stone.block(), &[]).unwrap();
             let mut edit = BlockEdit {

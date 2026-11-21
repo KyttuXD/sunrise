@@ -1,24 +1,31 @@
 ids = [
     "type:StatePredicate",
+    "handle:StatePredicate::block",
+    "handle:StatePredicate::tag",
     "type:StatePredicateTarget",
     "type:StatePredicateTarget.Block",
     "type:StatePredicateTarget.Tag",
     "type:StatePredicateRecord",
-    "method:StatePredicateRecord::new",
+    "handle:StatePredicateRecord::new",
     "type:StatePredicateRecord.target",
     "type:StatePredicateRecord.constraints",
     "fn:__private::validate_state_predicate",
     "type:BlockEdit",
     "type:BlockRun",
-    "method:WorldEditServerHost::edit_blocks",
+    "method:prelude::WorldEditServerHost::edit_blocks",
 ]
-why = "StatePredicate now stays native from construction through matching. Vanilla BlockStateParser.readProperties and readVagueProperties check explicit properties at parse time; BlockPredicateArgument.parse then uses those properties to match, without checking them again. NeoForge leaves those argument rules unchanged. Sunrise's bulk edit has no vanilla equivalent; it no longer rejects filter lists at an artificial 65,536 entries."
+why = "StatePredicate stays native from construction through matching. Vanilla BlockStateParser.readBlock and readProperties resolve the block and check explicit properties against its registered definition; readVagueProperties treats tag properties as strings and refuses duplicates. BlockPredicateArgument.parse passes these requirements into matching. NeoForge leaves those argument rules unchanged; ExtendPoiTypesEvent.addBlockToPoi likewise takes states from the registered block's definition. Sunrise's bulk edit has no vanilla equivalent; it no longer rejects filter lists at an artificial 65,536 entries."
 migrate = """
 Replace `StatePredicate::from(StatePredicateRecord::new(StatePredicateTarget::Block(key), constraints))`
-with `StatePredicate::block(metadata, key, &constraints)?`. For `StatePredicateTarget::Tag(key)`, use
-`StatePredicate::tag(metadata, tags, key, &constraints)?`. Handle `BlockStateError` at that call
-instead of calling `__private::validate_state_predicate` or waiting for the edit to check properties.
-If you already used those constructors, the calls do not change.
+with `StatePredicate::block(key, &constraints)?`. For `StatePredicateTarget::Tag(key)`, use
+`StatePredicate::tag(key, &constraints)?`. If you already called `StatePredicate::block(metadata, key, &constraints)` or
+`StatePredicate::tag(metadata, tags, key, &constraints)`, drop the metadata and tag-service
+arguments. In `extend_poi_types`, handle the result of `StatePredicate::block(key, &constraints)`
+and pass the predicate to `event.extensions.extend(poi_type, predicate)` without borrowing
+`event.extensions.metadata()`. Construct exact block predicates after the game publishes its
+resolved block definitions, for example in `extend_poi_types` or a world hook. Handle
+`BlockStateError` from the constructor instead of calling `__private::validate_state_predicate`
+or waiting for the edit to check properties.
 
 Replace `StatePredicateRecord::from(&predicate).target` with `predicate.block_key()` or
 `predicate.tag_key()`, and `record.constraints` with `predicate.constraints()` (a borrowed slice).

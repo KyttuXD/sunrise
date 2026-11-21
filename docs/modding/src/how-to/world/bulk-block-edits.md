@@ -2,9 +2,11 @@
 
 Use complete `BlockState` values in `BlockEdit.palette`. Construct them with
 `BlockState::of(&host.block_states(), block, constraints)` (or change an existing state
-with `with`). `filters` contains owned `StatePredicate` values. `StatePredicate::block`
-validates property names and values strictly; `StatePredicate::tag` retains arbitrary
-property requirements, including for an empty tag, and rejects duplicate properties.
+with `with`). `filters` contains owned `StatePredicate` values. Use
+`StatePredicate::block(block, constraints)` once the block registry has resolved. It checks
+property names and values against the game's block definition, not a caller's metadata.
+`StatePredicate::tag(tag, constraints)` retains arbitrary property requirements, including
+for an empty tag. Both constructors reject duplicate properties.
 
 A predicate requires block identity or tag membership and every supplied property.
 Omitted properties are wildcards, never default-state requirements. An unknown or

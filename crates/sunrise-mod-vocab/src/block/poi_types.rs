@@ -3,7 +3,7 @@ use crate::{BlockMetadata, Identifier, StatePredicate};
 
 /// Registrar of the block states a mod adds to vanilla POI types (`extend_poi_types`).
 pub trait PoiTypeExtensions {
-    /// Block metadata for building the predicates, with every block resolved.
+    /// Resolved block metadata for [`crate::BlockState`] operations.
     fn metadata(&self) -> &dyn BlockMetadata;
     /// Add the states `states` selects to the POI type `poi_type` (`minecraft:home`).
     /// A block predicate with no constraints means all of the block's states.

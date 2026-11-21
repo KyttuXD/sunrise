@@ -1,7 +1,11 @@
 use super::*;
 use std::collections::BTreeMap;
+use sunrise_mod_runtime::block_definitions::BlockDefinition;
 
-fn metadata() -> sunrise_mod_runtime::block_definitions::Blocks {
+#[test]
+fn strict_block_predicates_validate_schema_without_default_bias() {
+    crate::parts::install_input(Default::default());
+    let id = "test:connected";
     let off = BTreeMap::from([
         ("left".into(), "false".into()),
         ("right".into(), "false".into()),
@@ -10,83 +14,63 @@ fn metadata() -> sunrise_mod_runtime::block_definitions::Blocks {
         ("left".into(), "true".into()),
         ("right".into(), "true".into()),
     ]);
-    sunrise_mod_runtime::block_definitions::Blocks {
-        names: Default::default(),
-        definitions: vec![
-            sunrise_mod_runtime::block_definitions::BlockDefinition::new(&[&off, &on], 0).unwrap(),
-        ],
-    }
-}
-struct TagsAvailable;
-impl Tags for TagsAvailable {}
-
-#[test]
-fn strict_block_predicates_validate_schema_without_default_bias() {
-    let metadata = metadata();
-    let key = BlockKey(0);
+    assert_eq!(
+        StatePredicate::block(BlockKey(0), &[]),
+        Err(BlockStateError::Unavailable)
+    );
+    registry_keys::resolve_block_keys([id], |_| Ok(BlockDefinition::new(&[&off, &on], 0).unwrap()))
+        .unwrap();
+    let key = registry_keys::block_key(id).unwrap();
+    assert_eq!(
+        StatePredicate::block(BlockKey(u32::MAX), &[]),
+        Err(BlockStateError::UnknownBlock)
+    );
     // The default is false/false, so setting just left=true would not be a complete state.
     // It is nevertheless a legal partial predicate matching the independent true/true row.
-    assert!(StatePredicate::block(key, &[StateConstraint::new("left", "true")]).is_ok());
+    let predicate = StatePredicate::block(key, &[StateConstraint::new("left", "true")]).unwrap();
+    assert_eq!(predicate.block_key(), Some(key));
+    assert_eq!(predicate.tag_key(), None);
     assert_eq!(
-        StatePredicate::block(key, &[StateConstraint::new("missing", "true")])
-            .unwrap_err(),
-        BlockStateError::UnknownProperty(0)
-    );
-    assert_eq!(
-        StatePredicate::block(key,
-            &[StateConstraint::new("left", "not_a_value")]
-        )
-        .unwrap_err(),
-        BlockStateError::InvalidValue(0)
-    );
-    assert_eq!(
-        StatePredicate::block(key,
-            &[
-                StateConstraint::new("left", "true"),
-                StateConstraint::new("left", "false")
-            ]
-        )
-        .unwrap_err(),
-        BlockStateError::DuplicateProperty(1)
+        predicate.constraints(),
+        &[StateConstraint::new("left", "true")]
     );
     for (name, value, error) in [
         ("missing", "true", BlockStateError::UnknownProperty(1)),
         ("right", "invalid", BlockStateError::InvalidValue(1)),
+        ("left", "false", BlockStateError::DuplicateProperty(1)),
     ] {
         assert_eq!(
-            StatePredicate::block(key,
+            StatePredicate::block(
+                key,
                 &[
                     StateConstraint::new("left", "true"),
-                    StateConstraint::new(name, value)
-                ]
-            )
-            .unwrap_err(),
-            error
+                    StateConstraint::new(name, value),
+                ],
+            ),
+            Err(error)
         );
     }
 }
 
 #[test]
 fn tag_predicates_keep_vague_properties_and_refuse_duplicates() {
-    let metadata = metadata();
-    let vague = StatePredicate::tag(TagKey(0),
-        &[StateConstraint::new(
-            "property_no_member_has",
-            "arbitrary_value",
-        )],
-    )
-    .unwrap();
-    assert_eq!(vague.constraints()[0].name, "property_no_member_has");
-    assert_eq!(vague.constraints()[0].value, "arbitrary_value");
-    assert_eq!(vague.tag_key(), Some(TagKey(0)));
+    let tag = TagKey(0);
+    let constraints = [StateConstraint::new(
+        "property_no_member_has",
+        "arbitrary_value",
+    )];
+    let predicate = StatePredicate::tag(tag, &constraints).unwrap();
+    assert_eq!(predicate.constraints(), &constraints);
+    assert_eq!(predicate.block_key(), None);
+    assert_eq!(predicate.tag_key(), Some(tag));
     assert_eq!(
-        StatePredicate::tag(TagKey(0),
+        StatePredicate::tag(
+            tag,
             &[
                 StateConstraint::new("unknown", "a"),
                 StateConstraint::new("unknown", "b"),
             ],
-        )
-        .unwrap_err(),
-        BlockStateError::DuplicateProperty(1)
+        ),
+        Err(BlockStateError::DuplicateProperty(1))
     );
 }

@@ -110,17 +110,17 @@ mod tests {
     #[test]
     fn typed_bulk_sparse_predicates_use_existing_matcher_and_unknown_tag_properties_never_match() {
         let registry = registry();
-        let metadata = block_metadata_table().unwrap();
         let state = BlockStateId(2).try_into_api().unwrap();
-        let exact = StatePredicate::block(state.block(),
-            &[StateConstraint::new("left", "true")],
-        )
-        .unwrap();
+        let exact =
+            StatePredicate::block(state.block(), &[StateConstraint::new("left", "true")]).unwrap();
         let filter = compile_filter(&exact).unwrap();
-        let tags = HashMap::from([(
-            "stairs".to_owned(),
-            HashSet::from(["minecraft:stairs".to_owned()]),
-        )]);
+        let tags = HashMap::from([
+            (
+                "stairs".to_owned(),
+                HashSet::from(["minecraft:stairs".to_owned()]),
+            ),
+            ("test:empty".to_owned(), HashSet::new()),
+        ]);
         let tags = [&tags, &tags];
         assert!(filter.matches(&registry, tags, BlockStateId(2)));
         assert!(!filter.matches(&registry, tags, BlockStateId(1)));
@@ -140,6 +140,9 @@ mod tests {
         };
         assert!(tag_matches("minecraft:stairs", &[], 2));
         assert!(!tag_matches("minecraft:stairs", &[], 0));
+        let matching = [StateConstraint::new("left", "true")];
+        assert!(tag_matches("minecraft:stairs", &matching, 2));
+        assert!(!tag_matches("minecraft:stairs", &matching, 1));
         assert!(!tag_matches(
             "minecraft:stairs",
             &[StateConstraint::new("unknown", "anything")],
@@ -157,8 +160,7 @@ mod tests {
     fn typed_bulk_preparation_rejects_late_bad_values_before_any_write() {
         let _registry = registry();
         let state = BlockStateId(2).try_into_api().unwrap();
-        let good =
-            StatePredicate::block(state.block(), &[]).unwrap();
+        let good = StatePredicate::block(state.block(), &[]).unwrap();
         let mut edit = mod_api::BlockEdit {
             palette: vec![state],
             filters: vec![good],

@@ -1,5 +1,5 @@
 //! Typed partial block predicates for prepared bulk edits.
-use crate::{BlockKey, BlockMetadata, BlockState, BlockStateError, StateConstraint, TagKey, Tags};
+use crate::{BlockKey, BlockStateError, StateConstraint, TagKey, content::registry_keys};
 
 /// A block or tag filter, validated on construction, with unspecified properties left as
 /// wildcards. An unknown or missing property on a tag member never matches.
@@ -17,32 +17,42 @@ enum Target {
     Tag(TagKey),
 }
 impl StatePredicate {
-    /// A block filter; unknown properties, illegal values and duplicate properties refuse.
-    /// A partial filter need not produce the default state's complete combination.
+    /// A filter validated against the game's resolved definition for `block`.
+    /// Unknown or duplicate properties and illegal values are refused. Omitted properties
+    /// are wildcards, so a partial filter need not form a complete state with defaults.
+    /// Returns [`BlockStateError::Unavailable`] before block definitions are published.
     pub fn block(
-        metadata: &dyn BlockMetadata,
         block: BlockKey,
         constraints: &[StateConstraint],
     ) -> Result<Self, BlockStateError> {
-        let target = Target::Block(block);
-        validate(metadata, target, constraints)?;
+        let blocks = registry_keys::block_definitions().ok_or(BlockStateError::Unavailable)?;
+        let definition = blocks
+            .definitions
+            .get(block.0 as usize)
+            .ok_or(BlockStateError::UnknownBlock)?;
+        let properties: Vec<_> = constraints
+            .iter()
+            .map(|constraint| (constraint.name.as_str(), constraint.value.as_str()))
+            .collect();
+        definition.validate_properties(&properties)?;
         Ok(Self {
-            target,
+            target: Target::Block(block),
             constraints: constraints.to_vec(),
         })
     }
-    /// A tag filter; duplicate properties refuse, but arbitrary properties and empty tags remain valid.
+    /// A tag filter; duplicate properties are refused, but arbitrary properties and empty tags are valid.
     /// Membership is evaluated against authoritative tags at application, not frozen here.
-    pub fn tag(
-        metadata: &dyn BlockMetadata,
-        _tags: &dyn Tags,
-        tag: TagKey,
-        constraints: &[StateConstraint],
-    ) -> Result<Self, BlockStateError> {
-        let target = Target::Tag(tag);
-        validate(metadata, target, constraints)?;
+    pub fn tag(tag: TagKey, constraints: &[StateConstraint]) -> Result<Self, BlockStateError> {
+        for (input, constraint) in constraints.iter().enumerate() {
+            if constraints[..input]
+                .iter()
+                .any(|previous| previous.name == constraint.name)
+            {
+                return Err(BlockStateError::DuplicateProperty(input as u32));
+            }
+        }
         Ok(Self {
-            target,
+            target: Target::Tag(tag),
             constraints: constraints.to_vec(),
         })
     }
@@ -64,40 +74,6 @@ impl StatePredicate {
     pub fn constraints(&self) -> &[StateConstraint] {
         &self.constraints
     }
-}
-fn validate(
-    metadata: &dyn BlockMetadata,
-    target: Target,
-    constraints: &[StateConstraint],
-) -> Result<(), BlockStateError> {
-    let default = match target {
-        Target::Block(block) => Some(BlockState::of(metadata, block, &[])?),
-        Target::Tag(_) => None,
-    };
-    for (input, constraint) in constraints.iter().enumerate() {
-        if constraints[..input]
-            .iter()
-            .any(|previous| previous.name == constraint.name)
-        {
-            return Err(BlockStateError::DuplicateProperty(input as u32));
-        }
-        if let Some(default) = default {
-            match default.with(metadata, &constraint.name, &constraint.value) {
-                // This is schema validation, not filling unspecified fields from defaults.
-                // A legal partial property can match a nondefault combination even if this
-                // particular complete default-plus-one combination does not exist.
-                Ok(_) | Err(BlockStateError::InvalidCombination) => {}
-                Err(BlockStateError::UnknownProperty(_)) => {
-                    return Err(BlockStateError::UnknownProperty(input as u32));
-                }
-                Err(BlockStateError::InvalidValue(_)) => {
-                    return Err(BlockStateError::InvalidValue(input as u32));
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

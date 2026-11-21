@@ -18,15 +18,11 @@ mod tests {
     use mod_platform::testing::with_mods;
     use sunrise_world::{chunk::BlockState, poi::PoiExtension, registry::BlockRegistry};
 
-    struct Tags;
-    impl mod_api::Tags for Tags {}
-
     struct TestMod;
     #[mod_api::__subscriptions]
     impl Hooks for TestMod {
         fn extend_poi_types(&self, _: &RegistrationContext, event: &mut ExtendPoiTypesEvent<'_>) {
             let key = |id: &str| mod_api::__private::block_key(id).unwrap();
-            let metadata = event.extensions.metadata();
             let additions = [
                 (
                     "minecraft:home",
@@ -38,7 +34,8 @@ mod tests {
                 ),
                 (
                     "minecraft:meeting",
-                    StatePredicate::block(key("minecraft:red_bed"),
+                    StatePredicate::block(
+                        key("minecraft:red_bed"),
                         &[StateConstraint::new("part", "foot")],
                     )
                     .unwrap(),
@@ -46,14 +43,6 @@ mod tests {
                 (
                     "minecraft:nowhere",
                     StatePredicate::block(key("minecraft:stone"), &[]).unwrap(),
-                ),
-                (
-                    "minecraft:armorer",
-                    StatePredicate::tag(mod_api::__private::tag_key(&Identifier::parse("minecraft:beds").unwrap())
-                            .unwrap(),
-                        &[],
-                    )
-                    .unwrap(),
                 ),
             ];
             for (poi, states) in additions {
@@ -116,13 +105,7 @@ mod tests {
                         addition("minecraft:stone", &[], "minecraft:nowhere"),
                     ]
                 );
-                // The tag predicate is the one refusal the engine makes before the table does.
-                assert_eq!(refusals.len(), 1, "{refusals:?}");
-                assert!(
-                    refusals[0].contains("minecraft:armorer") && refusals[0].contains("tag"),
-                    "{}",
-                    refusals[0]
-                );
+                assert!(refusals.is_empty(), "{refusals:?}");
             },
         );
     }
