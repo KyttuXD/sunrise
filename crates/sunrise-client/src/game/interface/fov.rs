@@ -95,13 +95,12 @@ impl Game<'_> {
             self.native_compute_fov_modifier(&player, base, &mut modifier);
             valid_fov_modifier(modifier, base)
         });
-        let target = self.zoomed_fov_target(target);
         // A server's spectator camera on a mob or an armor stand: its eye
         // height. Its modifier stays 1 (another player's own modifier is not
         // modelled here); the zoom extra still narrows it.
         if let Some(e) = self.spectated_camera_snapshot() {
             self.view
-                .tick(Some(e.eye_height), self.zoomed_fov_target(1.0));
+                .tick(Some(e.eye_height), 1.0);
             return;
         }
         let eye = self.player.as_ref().map(|p| {
@@ -173,7 +172,7 @@ impl Game<'_> {
             self.camera_fluid(camera),
             false,
         );
-        let vanilla = self.zoomed_fov_degrees(fov);
+        let vanilla = fov;
         let mut degrees = vanilla;
         self.native_compute_fov(partial, camera, &mut degrees);
         if degrees.is_finite() && (1.0..=179.0).contains(&degrees) {

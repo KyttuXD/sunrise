@@ -63,8 +63,3 @@ pub(super) fn local_sound_ok(sound: &SoundPlay, after: u32) -> bool {
 pub(super) fn finite_params(params: [[f32; 4]; 8]) -> [[f32; 4]; 8] {
     params.map(|v| v.map(|x| if x.is_finite() { x } else { 0.0 }))
 }
-
-/// `v` within `lo..=hi`; `lo` when it is not a number.
-pub(super) fn finite(v: f32, lo: f32, hi: f32) -> f32 {
-    if v.is_finite() { v.clamp(lo, hi) } else { lo }
-}

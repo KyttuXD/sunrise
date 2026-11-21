@@ -642,13 +642,6 @@ fn dispatch_contracts() {
     dispatch_level_tick_pre(HostSide::Server(&mut host), LevelRef);
     assert_eq!(*calls.lock().unwrap(), [1, 2]);
     calls.lock().unwrap().clear();
-    let mut zoom = None;
-    dispatch_zoom(&host, &mut zoom);
-    assert_eq!(zoom, Some(Zoom(1)));
-    assert_eq!(*calls.lock().unwrap(), [1]);
-    calls.lock().unwrap().clear();
-    dispatch_zoom(&host, &mut zoom);
-    assert!(calls.lock().unwrap().is_empty());
     install_parts(Parts {
         items: vec![part(1, &calls), part(2, &calls)],
         ..Parts::default()

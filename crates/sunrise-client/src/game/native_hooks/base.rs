@@ -772,11 +772,6 @@ impl Game<'_> {
     ) {
         self.fire_compute_fov(partial, camera, degrees);
     }
-    /// The zoom a native mod asks for, applied while playing (the spyglass's
-    /// own view wins): set `zoom` when it is none yet.
-    pub(in crate::game) fn native_zoom(&self, zoom: &mut Option<mod_api::Zoom>) {
-        self.fire_zoom(zoom);
-    }
     /// Computed world fog RGB, after ordinary effects and before upload. Title panoramas skip it.
     /// Only finite RGB components in 0..=1 are accepted; alpha and distances stay unchanged.
     pub(in crate::game) fn native_compute_fog_color(
