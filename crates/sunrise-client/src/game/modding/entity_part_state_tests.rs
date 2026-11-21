@@ -291,8 +291,12 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
         assert_eq!(game.entity_attachments[&b.id()].to_nbt(), raw);
 
         // A mob out of its list for its own tick can't be reached until it is back.
-        let taken = game.mobs.lift();
+        let mut taken = game.mobs.lift();
         assert_eq!(a.residency(game), EntityResidency::Busy);
+        let actor = taken.iter_mut().find(|mob| mob.id == a.id()).unwrap();
+        game.in_goal_view(actor, |host| {
+            assert_eq!(a.residency(host), EntityResidency::Busy);
+        });
         assert_eq!(Charge::state(game, a), Err(PartStateError::HolderBusy));
         assert_eq!(
             Charge::edit_state(game, a, |_, n| *n = 1),

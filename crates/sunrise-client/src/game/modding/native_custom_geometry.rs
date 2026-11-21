@@ -1048,8 +1048,17 @@ mod tests {
                 draw.reset(camera.to_array(), Mat4::IDENTITY, [0.0; 2]);
                 context(game, &mut draw).draw_instance_group(group).unwrap();
                 context(game, &mut draw).draw_instance_group(group).unwrap();
-                // Retiring storage must not remove copies already accepted by this view.
-                group.destroy(game).unwrap();
+                // A holder can retire a shared handle without undoing accepted copies.
+                {
+                    let _other = mod_platform::content::crash::enter_native_mod(
+                        mod_api::content::crash::ModCall {
+                            id: "group-user",
+                            hook: "test",
+                            part: None,
+                        },
+                    );
+                    group.destroy(game).unwrap();
+                }
                 assert_eq!(group.write(game, 0, &[copy]), Err(GroupError::Stale));
                 assert_eq!(group.destroy(game), Err(GroupError::Stale));
                 assert_eq!(

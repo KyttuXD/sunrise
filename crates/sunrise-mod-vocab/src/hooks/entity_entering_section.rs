@@ -23,10 +23,11 @@ pub trait Hooks {
     /// moving or removing the entity until the write completes, because the write is still in
     /// progress while this hook runs.
     ///
-    /// During a borrowed mob pass, the Host answers only this entity's position. During a
-    /// borrowed player move, it also answers that player's ground flag and velocity before
-    /// the move updates them, and `local_player` on the client. Other Host operations are
-    /// refused while these views are borrowed.
+    /// During a borrowed mob pass, the view answers the moving entity's position and
+    /// `entity.residency(host)` reports `EntityResidency::Busy`: the mob is lent, not gone.
+    /// A borrowed player move also exposes the player's ground flag and velocity before the move
+    /// updates them; on the client, `local_player` is available and residency is `InPlace`.
+    /// Other operations are refused while these views are borrowed.
     #[notes = r#"## Entering a section
 
 `Hooks::entity_entering_section` (NeoForge's `EntityEvent.EnteringSection`) tells a mod each time an entity's
@@ -59,10 +60,11 @@ subscription check per position update.
 The hook runs at the position write: at once for a teleport (`/tp`, `teleport_to`, `random_teleport` from outside the tick,
 an enderman's or a shulker's teleport when hurt), a piston or shulker push, a server player's sent move and, on a client,
 a packet that places an entity. Mob ticks dispatch synchronously inside each position write, in write order,
-not by replaying captured moves after the tick. During a borrowed mob pass the Host answers only the current
-entity's position. During a borrowed player move it also answers that player's ground flag and velocity before
-the move updates them, and `local_player` on the client. Other Host operations are refused while these views
-are borrowed. There is no automatic mutation deferral: listeners must not move or remove the entity while its
+not by replaying captured moves after the tick. During a borrowed mob pass the view answers the moving entity's
+position, and `entity.residency(host)` is `Busy`: the mob is lent, not gone. During a borrowed player move the
+view also answers that player's ground flag and velocity before the move updates them. On the client,
+`local_player` is available and its residency is `InPlace`. Other operations are refused while these views are
+borrowed. There is no automatic mutation deferral: listeners must not move or remove the entity while its
 write is in progress."#]
     #[hook(
         dispatch = "flat",

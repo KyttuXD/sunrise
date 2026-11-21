@@ -179,7 +179,7 @@ impl InstanceGroupRef {
         instances: &[ModelInstance],
     ) -> Result<(), GroupError> {
         crate::backend_of(host)
-            .ok_or_else(crate::NoBackend::no_backend)?
+            .ok_or(GroupError::Stale)?
             .instance_group_write(self, first, instances)
     }
     /// Atomically change the drawn length. Unwritten slots contain identity, full-bright copies.
@@ -188,7 +188,7 @@ impl InstanceGroupRef {
     /// Growth converts the newly exposed range using the current group pose.
     pub fn set_len(self, host: &dyn crate::ClientHost, len: u32) -> Result<(), GroupError> {
         crate::backend_of(host)
-            .ok_or_else(crate::NoBackend::no_backend)?
+            .ok_or(GroupError::Stale)?
             .instance_group_set_len(self, len)
     }
     /// Atomically replace the row-major 3x4 group pose (identity by default).
@@ -202,7 +202,7 @@ impl InstanceGroupRef {
         transform: [f32; 12],
     ) -> Result<(), GroupError> {
         crate::backend_of(host)
-            .ok_or_else(crate::NoBackend::no_backend)?
+            .ok_or(GroupError::Stale)?
             .instance_group_set_transform(self, transform)
     }
     /// Retire this handle and release its reserved copies and CPU caches immediately.
@@ -210,7 +210,7 @@ impl InstanceGroupRef {
     /// destroy, return [`GroupError::Stale`]; a new group cannot revive this handle.
     pub fn destroy(self, host: &dyn crate::ClientHost) -> Result<(), GroupError> {
         crate::backend_of(host)
-            .ok_or_else(crate::NoBackend::no_backend)?
+            .ok_or(GroupError::Stale)?
             .instance_group_destroy(self)
     }
 }

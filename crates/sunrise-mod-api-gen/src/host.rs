@@ -1527,16 +1527,6 @@ mod tests {
         assert!(code.contains(
             "backend_mut_of(host).map(|backend| backend.entity_run_command_with_output(self, line, level)).unwrap_or_default()"
         ));
-        // A residency read defaults to `EntityResidency::Gone` without a backend.
-        let residency = entry("fn entity_residency(&self, entity: EntityRef) -> EntityResidency;");
-        let (handle, code) = handle_method(&residency, Tier::Backend, &handles)
-            .unwrap()
-            .unwrap();
-        assert_eq!(handle, "EntityRef");
-        assert!(code.contains("pub fn residency (self , host : & dyn Host) -> EntityResidency"));
-        assert!(code.contains(
-            "backend_of(host).map(|backend| backend.entity_residency(self)).unwrap_or_default()"
-        ));
         // A `Result` method refuses with its error's `NoBackend` value on a host without a game.
         let tried = entry("fn level_attempt(&mut self, level: LevelRef) -> Result<u8, Refused>;");
         let (_, code) = handle_method(&tried, Tier::BackendMut, &handles)
@@ -1806,22 +1796,6 @@ mod tests {
             assert!(area_tiers(area, file.clone()).unwrap().is_empty());
             assert!(area_tiers("Items", file).is_err());
         }
-    }
-
-    #[test]
-    fn goal_view_forwards_entity_residency_to_the_host_backend() {
-        let method = entry("fn entity_residency(&self, entity: EntityRef) -> EntityResidency;");
-        let area = Area {
-            stem: "entities".into(),
-            camel: "Entities".into(),
-            tiers: BTreeMap::new(),
-            tables: BTreeMap::new(),
-        };
-        let code = goal_view(&[], &[(&area, Tier::Backend, &method)], &[]).unwrap();
-        assert!(code.contains(
-            "mod_api::__private::backend_read(self.host, |backend| backend.entity_residency(entity)).unwrap_or(EntityResidency::Gone)"
-        ));
-        assert!(!code.contains("is_game_entity"));
     }
 
     #[test]
