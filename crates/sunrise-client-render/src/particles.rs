@@ -1884,8 +1884,6 @@ impl ParticleEngine {
     ) -> Option<Particle> {
         use ParticleType as T;
         let ty = o.ty;
-        // A native mod's SimpleParticleType: vanilla's TextureSheetParticle with
-        // the sprite set its particles/<name>.json names, no tint, 20..40 ticks.
         // A pack's custom particle: a new type, or one replacing the vanilla type of its id.
         let custom = match &o.mod_particle {
             Some(name) => Some(name.as_ref()),
@@ -1907,48 +1905,7 @@ impl ParticleEngine {
             return Some(particle);
         }
         if let Some(name) = &o.mod_particle {
-            let entry = self.mod_sets.get(name.as_ref())?;
-            let (set, behaviour, provider, group) = (
-                entry.set,
-                entry.behaviour,
-                entry.provider.clone(),
-                entry.group,
-            );
-            let mut r = LegacyRandom::new(seed);
-            let mut q = Particle::moving(&mut r, ParticleType::Smoke, p, v);
-            q.ty = ParticleType::Smoke;
-            q.gravity = 0.0;
-            q.rgba = [1.0; 4];
-            q.lifetime = 20 + r.next_int_bound(20).unwrap_or(0);
-            q.set = Some(set);
-            q.group = group;
-            let sprites = &self.set_sprites[set as usize];
-            q.sprite = Sprite::Index(
-                sprites[r.next_int_bound(sprites.len() as i32).unwrap_or(0) as usize],
-            );
-            if let Some(behaviour) = behaviour {
-                behaviour.apply(&mut q, v, &mut r);
-                if behaviour.starts_on_first_sprite() {
-                    q.sprite = Sprite::Index(sprites[0]);
-                }
-            }
-            if let Some((slot, provider)) = provider {
-                // The declared values seed the particle; the provider owns its tick from here.
-                // Its sprite is chosen by frame, so the set stays attached.
-                let frame = sprites
-                    .iter()
-                    .position(|&s| matches!(q.sprite, Sprite::Index(i) if i == s))
-                    .unwrap_or(0);
-                q.set = Some(set);
-                q.behaviour = Behaviour::Controlled { translucent: true };
-                q.provided = Some(Box::new(native::Provided::new(
-                    provider,
-                    slot,
-                    frame as u32,
-                    &self.provided_live,
-                )));
-            }
-            return Some(q);
+            return self.make_named(name.as_ref(), p, v, seed);
         }
         let set = self.set_of(ty);
         let mut local = LegacyRandom::new(seed);
@@ -3647,28 +3604,6 @@ impl ParticleEngine {
                 }
             }
         }
-    }
-    /// The providers' part of a tick: each provider once with every particle of its type that
-    /// `tick_particle` aged. Nothing runs while no provider particle lives.
-    fn tick_providers(&mut self, particles: &mut [Particle], level: &ParticleLevel) {
-        if self
-            .provided_live
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == 0
-        {
-            return;
-        }
-        let mut batch = std::mem::take(&mut self.batch);
-        if batch.gather(particles)
-            && let Some(states) = (self.block_state_source)()
-        {
-            let view = native::ProviderLevel {
-                level,
-                states: (*states).as_ref(),
-            };
-            batch.run(particles, &view, |p, frame| self.set_sprite_frame(p, frame));
-        }
-        self.batch = batch;
     }
     /// `ParticleGroup.add`: each group's last quarter fills with decreasing probability.
     fn group_has_space(&mut self, size: usize) -> bool {
