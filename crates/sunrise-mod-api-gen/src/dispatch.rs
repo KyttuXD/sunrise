@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -930,6 +931,19 @@ pub(super) fn emit<'a>(
         if declaration_only {
             continue;
         }
+        // Isolated read-only listeners propose scalar output values. The game writes them back
+        // only on success, so a fault needs no rollback of the previous listener's answer.
+        if isolated_listen
+            && (receiver_mut != Some(false)
+                || host.is_none()
+                || hook.context.is_some()
+                || rollback.iter().any(|(_, by_reference)| *by_reference)
+                || hook.output_validator.is_some() && rollback.is_empty())
+        {
+            return Err(format!(
+                "{name}: an isolated listener needs a read-only world Host and only scalar outputs"
+            ));
+        }
         let build = if declaration.is_some() {
             String::new()
         } else {
@@ -946,7 +960,8 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener || isolated_collect || isolated_listen
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -969,7 +984,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if hook.event_per_listener || isolated_listen {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
@@ -1173,7 +1188,7 @@ pub(super) fn emit<'a>(
         // before any listener), the refusal names the mod and the field, and later listeners
         // run on the accepted values.
         let (validated_start, validated_arms) = match &hook.output_validator {
-            Some(validator) if hook.isolate => {
+            Some(validator) if mod_cancel && hook.isolate => {
                 let accepted = rollback
                     .iter()
                     .map(|(name, by_reference)| {
@@ -1255,6 +1270,26 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_listen => {
+                let commit = if let Some(validator) = &hook.output_validator {
+                    let proposed = rollback
+                        .iter()
+                        .map(|(field, _)| format!("&{event}.{field}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "match {validator}({proposed}) {{ Ok(()) => {{ {local_write_back} }} Err(reason) => log::warn!(\"mod {{}} hook {name} refused: {{reason}}\", {mod_entry}.id), }}"
+                    )
+                } else {
+                    local_write_back.clone()
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} if super::runtime::invoke_isolated_listener(HookId::{hook_id}, {mod_entry}.id, \"{name}\", contained, || {mod_item}.{name}({invoke})) {{ {commit} }} }} }}"
+                    ),
+                )
+            }
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.

@@ -2,16 +2,20 @@
 // catalog-order: 0112
 
 pub trait Hooks {
-    /// World field of view, after normal calculation and zoom and before projection/Nausea.
-    /// Called for world rendering and near-plane overlays; hand/HUD FOV uses its own path.
-    /// Only finite values in 1..=179 degrees replace the computed FOV.
+    /// The final world field of view, after the eased player modifier, death and camera fluid,
+    /// and before projection and Nausea. Runs at world camera extraction, including spectating,
+    /// with the actual camera position and its partial tick. The hand/HUD has its own angle.
+    /// Edit `degrees`; a non-finite proposal is refused and the previous answer stands.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_compute_fov",
         receiver = "read",
         dispatch = "flat",
         side = "client",
         contract = "listen",
-        neoforge = "ViewportEvent.ComputeFov"
+        isolate = true,
+        output_validator = "super::client::camera::validate_fov",
+        neoforge = "ViewportEvent.ComputeFov",
+        version = 2
     )]
     fn compute_fov(partial: f32, camera: [f64; 3], degrees: &mut f32);
 }

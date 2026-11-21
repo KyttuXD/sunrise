@@ -23,11 +23,11 @@ use sunrise_client::{
     hud_layout, hud_overlays,
 };
 
-fn valid_fov_modifier(modifier: f32, fallback: f32) -> f32 {
-    if modifier.is_finite() && (0.01..=10.0).contains(&modifier) {
-        modifier
-    } else {
-        fallback
+fn fov_use(item: &str) -> UseItem {
+    match item {
+        "minecraft:bow" => UseItem::Bow,
+        "minecraft:spyglass" => UseItem::Spyglass,
+        _ => UseItem::Other,
     }
 }
 
@@ -69,12 +69,7 @@ impl Game<'_> {
         let p = self.player.as_ref()?;
         let using = self.using.and_then(|(slot, ticks)| {
             let stack = self.stack_in(slot)?;
-            let item = match &*stack.item {
-                "minecraft:bow" => UseItem::Bow,
-                "minecraft:spyglass" => UseItem::Spyglass,
-                _ => UseItem::Other,
-            };
-            Some((item, ticks as i32))
+            Some((fov_use(&stack.item), ticks as i32))
         });
         Some(FovPlayer {
             flying: p.flying,
@@ -87,28 +82,49 @@ impl Game<'_> {
     /// `Camera.tick`: the eye height and the field-of-view modifier ease
     /// halfway toward the player's each tick.
     pub(super) fn tick_fov(&mut self) {
-        let first_person = self.camera_type.is_first_person();
-        let effect = self.fov_effect_scale();
-        let target = self.fov_player().map_or(1.0, |player| {
-            let base = field_of_view_modifier(&player, first_person, effect);
+        // Camera.tickFov asks its viewpoint player, not necessarily the local player.
+        let (eye, player) = if let Some(camera) = self.spectated_camera_snapshot() {
+            let player = self
+                .camera_mob()
+                .filter(|mob| &*mob.kind.id == "minecraft:player")
+                .map(|mob| FovPlayer {
+                    // Only the owning client receives the abilities packet. RemotePlayer has
+                    // Abilities' ordinary defaults; attribute/equipment updates are tracked.
+                    flying: false,
+                    walking_speed: 0.1,
+                    movement_speed: mob.attrs.speed,
+                    using: (mob.extra.using_item > 0)
+                        .then(|| {
+                            let slot = if mob.extra.using_off_hand {
+                                sunrise_items::equipment::OFFHAND
+                            } else {
+                                sunrise_items::equipment::MAINHAND
+                            };
+                            let stack = mob.extra.slot_stack(slot)?;
+                            Some((fov_use(&stack.item), mob.extra.using_item - 1))
+                        })
+                        .flatten(),
+                });
+            (Some(camera.eye_height), player)
+        } else {
+            let eye = self.player.as_ref().map(|p| {
+                if self.sleeping.is_some() {
+                    0.2
+                } else {
+                    p.dimensions.eye_height
+                }
+            });
+            (eye, self.fov_player())
+        };
+        let target = player.map_or(1.0, |player| {
+            let base = field_of_view_modifier(
+                &player,
+                self.camera_type.is_first_person(),
+                self.fov_effect_scale(),
+            );
             let mut modifier = base;
             self.native_compute_fov_modifier(&player, base, &mut modifier);
-            valid_fov_modifier(modifier, base)
-        });
-        // A server's spectator camera on a mob or an armor stand: its eye
-        // height. Its modifier stays 1 (another player's own modifier is not
-        // modelled here); the zoom extra still narrows it.
-        if let Some(e) = self.spectated_camera_snapshot() {
-            self.view
-                .tick(Some(e.eye_height), 1.0);
-            return;
-        }
-        let eye = self.player.as_ref().map(|p| {
-            if self.sleeping.is_some() {
-                0.2
-            } else {
-                p.dimensions.eye_height
-            }
+            modifier
         });
         self.view.tick(eye, target);
     }
@@ -164,7 +180,7 @@ impl Game<'_> {
         if self.studio.flying() {
             return self.studio.freecam.fov.clamp(1.0, 179.0);
         }
-        let fov = self.view.calculate_fov(
+        let mut degrees = self.view.calculate_fov(
             partial,
             self.settings.fov as i32,
             self.fov_effect_scale(),
@@ -172,42 +188,18 @@ impl Game<'_> {
             self.camera_fluid(camera),
             false,
         );
-        let vanilla = fov;
-        let mut degrees = vanilla;
         self.native_compute_fov(partial, camera, &mut degrees);
-        if degrees.is_finite() && (1.0..=179.0).contains(&degrees) {
-            degrees
-        } else {
-            vanilla
-        }
+        degrees
     }
-    /// How many times the view is magnified right now: the player's field of
-    /// view over the one actually in use, and 1 when nothing is zooming.
-    ///
-    /// Reads the result rather than any one zoom, so it covers all three:
-    /// the spyglass (`AbstractClientPlayer.getFieldOfViewModifier`'s tenth
-    /// while `isScoping`), the zoom mod (`native_zoom`) and any mod that
-    /// narrows the field of view through `native_compute_fov`.
-    pub(super) fn zoom_magnification(&self, camera: [f64; 3]) -> f32 {
-        let now = self.fov_degrees(1.0, camera);
-        let base = self.settings.fov.clamp(1.0, 179.0);
-        if now.is_finite() && now > 0.5 {
-            (base / now).max(1.0)
-        } else {
-            1.0
-        }
-    }
-    /// What far terrain should plan for a zoomed view, or `None` when the
-    /// `lodZoomDetail` extra is off or nothing is zooming (`lod::ZoomAim`).
-    pub(super) fn lod_aim(&self, camera: [f64; 3]) -> Option<sunrise_client::lod::ZoomAim> {
-        if !self.settings.extras.lod_zoom_detail {
+    /// Far terrain plans from the field of view `Camera.update` actually drew, without
+    /// resampling its effects or asking another mod callback.
+    pub(super) fn lod_aim(&self) -> Option<sunrise_client::lod::ZoomAim> {
+        if !self.settings.extras.lod_zoom_detail || self.player.is_none() {
             return None;
         }
-        sunrise_client::lod::ZoomAim::new(
-            self.yaw,
-            self.fov_degrees(1.0, camera),
-            self.zoom_magnification(camera),
-        )
+        let fov = self.view.fov;
+        let yaw = self.posed_rotation.map_or(self.view.y_rot, |(yaw, _)| yaw);
+        sunrise_client::lod::ZoomAim::new(yaw, fov, self.settings.fov / fov)
     }
     /// `Camera.calculateHudFov`: the first-person hand's field of view.
     pub(super) fn hud_fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
@@ -303,13 +295,50 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{camera_effects_enabled, studio_draws_hand, valid_fov_modifier};
+    use super::{camera_effects_enabled, studio_draws_hand};
+
     #[test]
-    fn modifier_validation() {
-        assert_eq!(valid_fov_modifier(0.5, 1.0), 0.5);
-        for value in [f32::NAN, f32::INFINITY, 0.0, 10.1] {
-            assert_eq!(valid_fov_modifier(value, 1.0), 1.0);
+    #[ignore = "daily"]
+    fn fov_listeners_bracket_the_vanilla_camera_calculation() {
+        use mod_api::{ClientHost, ComputeFovEvent, ComputeFovModifierEvent, Hooks, ModEntry};
+        use sunrise_client::motion::PlayerMotion;
+        use sunrise_core::geometry::Vec3;
+
+        const AT: [f64; 3] = [4.0, 200.0, -2.0];
+        struct Lens;
+        #[mod_api::__subscriptions]
+        impl Hooks for Lens {
+            fn compute_fov_modifier(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut ComputeFovModifierEvent<'_>,
+            ) {
+                event.modifier = 12.0;
+            }
+
+            fn compute_fov(&self, _: &dyn ClientHost, event: &mut ComputeFovEvent) {
+                // A 70 degree option, interpolated halfway between 1 and the vanilla clamp 1.5.
+                if event.camera == AT && event.partial == 0.5 && event.degrees == 87.5 {
+                    event.degrees = 0.5;
+                }
+            }
         }
+
+        mod_platform::testing::with_mods(
+            vec![ModEntry::new("lens", Box::new(Lens))].into(),
+            || {
+                crate::game::native_entity_refs::tests::with_client_game(|game| {
+                    game.title = None;
+                    game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                    game.settings.fov = 70.0;
+                    game.view.fov_modifier = 1.0;
+                    game.tick_fov();
+                    assert_eq!(game.view.fov_modifier, 1.5);
+                    assert_eq!(game.fov_degrees(0.5, AT), 0.5);
+                    assert_eq!(game.hud_fov_degrees(0.5, AT), 70.0);
+                });
+            },
+        );
     }
 
     #[test]

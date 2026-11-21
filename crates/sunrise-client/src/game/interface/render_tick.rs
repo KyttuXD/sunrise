@@ -364,7 +364,7 @@ impl Game<'_> {
             p.position.y + f64::from(p.dimensions.eye_height),
             p.position.z,
         ];
-        let mut effects = self.block_screen_effects(p, eye, partial, size, scale);
+        let mut effects = self.block_screen_effects(p, eye, self.view.fov, size, scale);
         let custom = self.custom_screen_effects(&mut effects, partial, hand_projection);
         // ScreenEffectRenderer: the block's particle material.
         let block_overlay = effects
@@ -475,7 +475,7 @@ impl Game<'_> {
         &self,
         p: &PlayerMotion,
         eye: [f64; 3],
-        partial: f32,
+        fov: f32,
         size: [u32; 2],
         scale: f32,
     ) -> BlockScreenEffects {
@@ -489,7 +489,7 @@ impl Game<'_> {
         if !spectator {
             // Frustum.getNearPlaneBounds, moved to the eye.
             let (near_min, near_max) = sunrise_client::camera::near_plane_bounds(
-                self.fov_degrees(partial, eye),
+                fov,
                 size[0] as f32,
                 size[1] as f32,
                 self.yaw,
@@ -1183,7 +1183,7 @@ mod tests {
                 game.world.set(0, 65, 0, block).unwrap();
                 let p = game.player.as_ref().unwrap();
                 let eye = [0.5, 64.0 + f64::from(p.dimensions.eye_height), 0.5];
-                let effects = game.block_screen_effects(p, eye, 0.0, [854, 480], 1.0);
+                let effects = game.block_screen_effects(p, eye, 70.0, [854, 480], 1.0);
                 assert!(effects.custom.iter().all(Option::is_none));
                 (effects.block, effects.water, effects.on_fire)
             };

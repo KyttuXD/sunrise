@@ -16,6 +16,33 @@ pub fn wrap_degrees(angle: f32) -> f32 {
     }
     normalized
 }
+pub(crate) fn validate_turn_delta(yaw_delta: &f64, pitch_delta: &f64) -> Result<(), &'static str> {
+    // Entity.turn converts its double arguments to float before multiplying by 0.15F.
+    if !(*yaw_delta as f32).is_finite() {
+        return Err("yaw_delta is not a finite float");
+    }
+    if !(*pitch_delta as f32).is_finite() {
+        return Err("pitch_delta is not a finite float");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_fov(value: &f32) -> Result<(), &'static str> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err("field of view is not finite")
+    }
+}
+
+pub(crate) fn validate_mouse_turn(sensitivity: &f64, _: &bool) -> Result<(), &'static str> {
+    if sensitivity.is_finite() {
+        Ok(())
+    } else {
+        Err("mouse_sensitivity is not finite")
+    }
+}
+
 /// What `AbstractClientPlayer.getFieldOfViewModifier` reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it

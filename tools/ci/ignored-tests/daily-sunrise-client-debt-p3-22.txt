@@ -1,0 +1,2 @@
+sunrise-client game::fov::tests::fov_listeners_bracket_the_vanilla_camera_calculation lib daily resources
+sunrise-client game::native_hooks::adjust_player_turn::tests::relative_turns_keep_accepted_values_when_a_listener_fails lib daily resources

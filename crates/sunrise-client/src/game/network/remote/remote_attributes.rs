@@ -59,19 +59,22 @@ impl Game<'_> {
             }
             return;
         };
-        // A horse its rider's client moves goes at its own speed and jumps
-        // its own height (`getSpeed`, `getCustomJump`).
-        if sunrise_client::mobs::equine::moved_by_rider(m.species()) {
-            if let Some(speed) = speed {
-                sunrise_client::mobs::finalize::set_base(
-                    m,
-                    sunrise_client::mobs::finalize::Attr::MovementSpeed,
-                    speed,
-                );
-            }
-            if let Some(jump) = jump {
-                m.extra.vector[0] = jump;
-            }
+        // A horse its rider's client moves uses its own speed and jump height. A
+        // spectated player uses its own movement attribute in Camera.tickFov.
+        let locally_ridden_type = sunrise_client::mobs::equine::moved_by_rider(m.species());
+        if let Some(speed) = speed
+            && (locally_ridden_type || &*m.kind.id == "minecraft:player")
+        {
+            sunrise_client::mobs::finalize::set_base(
+                m,
+                sunrise_client::mobs::finalize::Attr::MovementSpeed,
+                speed,
+            );
+        }
+        if let Some(jump) = jump
+            && locally_ridden_type
+        {
+            m.extra.vector[0] = jump;
         }
         if let Some(max_health) = max_health {
             sunrise_client::mobs::finalize::set_base(

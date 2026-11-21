@@ -1,21 +1,44 @@
 # Field of view and name tags
 
-Two client hooks change what the local player sees without drawing anything yourself, and a world draw hook can
+Camera hooks change the world projection without drawing anything yourself, and a world draw hook can
 add labels of its own.
 
 ## Field of view
 
-`compute_fov_modifier` runs on the client once per tick while there is a local player, after vanilla's effects
-(sprinting, a drawn bow) and before zoom and camera easing. It is NeoForge's `ComputeFovModifierEvent`.
+`compute_fov_modifier` runs once per client tick when a player is the viewpoint, including when spectating
+another player. It is NeoForge's `ComputeFovModifierEvent`. The hook does not fire for a non-player camera.
+It runs after vanilla's player effects, including the first-person spyglass, but before `Camera.tickFov`
+eases and clamps the modifier to vanilla's `0.1..=1.5`.
 
 | `ComputeFovModifierEvent` field | Meaning |
 | --- | --- |
-| `player` | The inputs of the calculation (`FovPlayer`) |
+| `player` | The viewpoint's calculation inputs (`FovPlayer`), including the item in use |
 | `base` | The scale before any mod ran |
-| `modifier` | The scale to use; write it to change the field of view |
+| `modifier` | The scale to ease towards; later listeners see the last accepted answer |
 
-A value that is not finite, or lies outside `0.01..=10`, falls back to `base`. The hook does not affect a spectator
-camera attached to a mob.
+`compute_fov` runs at world camera extraction, also for non-player viewpoints, after modifier interpolation,
+death and camera fluid, before projection and Nausea. `ComputeFovEvent.camera` is the actual world-space
+camera position, `partial` is its interpolation fraction, and `degrees` is the world angle to edit.
+It does not set the hand/HUD angle or the title panorama. Both hooks report non-finite edits and keep the
+preceding answer.
+
+### Composing a zoom
+
+Register a [key mapping](../native-mods/13-runtime-packages-and-identity.md#registered-key-mappings),
+resolve it in `client_setup` with `host.mod_key_mapping(owner, id)`, and keep the returned mapping.
+Read `mapping.is_down(host)` and `host.playing()` in `client_tick_post` or `render_frame_pre`.
+Keep the held state and any easing in your own client state.
+
+For vanilla tick easing, divide `event.modifier` by your zoom factor in `compute_fov_modifier`. For an
+instant change or your own animation, instead divide `event.degrees` in `compute_fov` by the factor
+interpolated using `event.partial`. Don't divide in both hooks for the same zoom. If your effect should
+yield to the spyglass, check for `UseItem::Spyglass` in `ComputeFovModifierEvent.player.using` with
+`host.camera_type().is_first_person()`; use the viewpoint state, not the local player's off-camera
+item. `host.camera_entity()` identifies the current viewpoint.
+
+To adjust mouse and controller turning together, multiply both deltas by your mod's turn scale in
+[`adjust_player_turn`](camera-and-collision-reads.md#camera-snapshots-and-perspective). Use
+`calculate_player_turn` only for mouse sensitivity or cinematic smoothing for that turn.
 
 ## Name tags
 

@@ -47,9 +47,8 @@ impl Game<'_> {
             self.look_turn(xo, yo);
         }
     }
-    /// A look from any device, in `Entity.turn` units: the tutorial's "look
-    /// around" step hears it and Sunrise's zoom slows it, for the mouse and a
-    /// controller alike.
+    /// A look from any device, in `Entity.turn` units. The tutorial hears the
+    /// device input before the player turn is adjusted.
     pub(super) fn look_turn(&mut self, x: f64, y: f64) {
         self.tutorial.mouse(x, y);
         self.turn_player(x, y);

@@ -1106,7 +1106,8 @@ mod tests {
 
     #[test]
     fn contracted_hook_requires_dispatch_call() {
-        let missing: syn::ImplItemFn = syn::parse_quote! { fn native_compute_fov(&self) { unrelated(); } };
+        let missing: syn::ImplItemFn =
+            syn::parse_quote! { fn native_compute_fov(&self) { unrelated(); } };
         let present: syn::ImplItemFn =
             syn::parse_quote! { fn native_compute_fov(&self) { mod_api::dispatch_compute_fov(); } };
         assert!(!super::has_call(&missing.block, "dispatch_compute_fov"));

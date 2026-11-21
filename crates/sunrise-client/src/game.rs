@@ -10962,7 +10962,9 @@ impl Game<'_> {
         let fov_degrees = if title {
             85.0
         } else {
-            self.fov_degrees(camera_alpha as f32, camera.to_array())
+            let degrees = self.fov_degrees(camera_alpha as f32, camera.to_array());
+            self.view.fov = degrees;
+            degrees
         };
         let camera_effects = fov::camera_effects_enabled(title, self.studio.flying());
         let bob = if !camera_effects {

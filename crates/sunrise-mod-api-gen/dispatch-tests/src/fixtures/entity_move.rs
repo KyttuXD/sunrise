@@ -134,6 +134,21 @@ mod root {
             Ok(call())
         }
 
+        pub(super) fn invoke_isolated_listener(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            _: bool,
+            call: impl FnOnce(),
+        ) -> bool {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).is_ok() {
+                true
+            } else {
+                poison(hook, id);
+                false
+            }
+        }
+
         pub(super) fn listening_kind_owner(
             hook: super::HookId,
             kind: &str,

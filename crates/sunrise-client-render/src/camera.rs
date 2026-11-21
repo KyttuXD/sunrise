@@ -687,6 +687,8 @@ pub struct Camera {
     pub eye_height_old: f32,
     pub fov_modifier: f32,
     pub old_fov_modifier: f32,
+    /// The last world projection angle extracted by `Camera.update`.
+    pub fov: f32,
     pub position: [f64; 3],
     pub x_rot: f32,
     pub y_rot: f32,
@@ -707,6 +709,7 @@ impl Default for Camera {
             eye_height_old: 0.0,
             fov_modifier: 0.0,
             old_fov_modifier: 0.0,
+            fov: 0.0,
             position: [0.0; 3],
             x_rot: 0.0,
             y_rot: 0.0,

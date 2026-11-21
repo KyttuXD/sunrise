@@ -1,0 +1,16 @@
+ids = [
+  "hook:zoom",
+  "type:Zoom",
+  "type:ZoomEvent",
+  "hook:adjust_player_turn",
+  "type:AdjustPlayerTurnEvent",
+  "hook:compute_fov_modifier",
+  "hook:compute_fov",
+  "hook:calculate_player_turn",
+]
+why = """
+A standalone hook made the game own a zoom mod's factor, animation and turn policy. Vanilla Camera.tickFov asks the actual player viewpoint, applies its own 0.1..=1.5 easing range, then Camera.calculateFov interpolates the modifier and applies death and camera fluid before projection. NeoForge ComputeFovModifierEvent and ViewportEvent.ComputeFov are the corresponding extension sites. Vanilla MouseHandler.turnPlayer processes mouse input before Entity.turn; NeoForge CalculatePlayerTurnEvent is specifically about mouse options, so a separate relative input hook runs at Entity.turn for any device. KeyMapping.isDown and NeoForge RegisterKeyMappingsEvent supply held state. The dedicated factor, easing policy and synthetic caps are gone. Invalid proposals are reported without disabling a listener; a panic discards that listener's proposal, logs and shows a named error toast, and disables only that callback for the session.
+"""
+migrate = """
+Delete Hooks::zoom, ZoomEvent, Zoom { factor, smooth, turn }, and HookId::Zoom subscriptions. Register a key mapping, retain host.mod_key_mapping(owner, id) from client_setup, and read mapping.is_down(host) and host.playing() in client_tick_post or render_frame_pre. Put the held state and animation in your mod. Replace smooth: true with dividing ComputeFovModifierEvent.modifier by factor, or smooth: false with dividing ComputeFovEvent.degrees by factor. For custom easing, animate the factor in the mod and interpolate it using ComputeFovEvent.partial. Pick one FOV hook for the zoom adjustment, not both. To yield to the spyglass, use ComputeFovModifierEvent.player.using and host.camera_type().is_first_person() when the camera entity is a player. Replace turn with multiplying AdjustPlayerTurnEvent.yaw_delta and pitch_delta by that scale in Hooks::adjust_player_turn. Keep calculate_player_turn only for mouse options. Existing FOV listener signatures are unchanged; compute_fov_modifier now follows the actual player viewpoint and compute_fov runs for the extracted world camera instead of also being polled by terrain and overlays. Remove assumptions about the old FOV bounds or dispatch counts.
+"""
