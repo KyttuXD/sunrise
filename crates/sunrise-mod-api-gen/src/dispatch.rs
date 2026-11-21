@@ -1076,7 +1076,7 @@ pub(super) fn emit<'a>(
         let run = |expression: &str| {
             if hook.isolate && contract == Contract::Listen {
                 return format!(
-                    "super::runtime::run_isolated_listener(HookId::{hook_id}, \"{name}\", contained, || {expression})"
+                    "super::runtime::run_isolated_listener(HookId::{hook_id}, mod_id, \"{name}\", contained, || {expression})"
                 );
             }
             format!(
@@ -1283,6 +1283,13 @@ pub(super) fn emit<'a>(
                     o = cancel_out.unwrap()
                 ),
             ),
+            None if hook.isolate && contract == Contract::Listen => (
+                String::new(),
+                format!(
+                    "for (mod_id, {mod_item}) in super::entered_with_id(HookId::{hook_id}, \"{name}\") {{ {} }}",
+                    call(&mod_item, "")
+                ),
+            ),
             None => (
                 String::new(),
                 format!("for {binding} in {each} {{ {} }}", call(&mod_item, "break")),
@@ -1322,6 +1329,11 @@ pub(super) fn emit<'a>(
                     format!(
                         "'dispatch_parts: {{ for {part_item} in super::entered_parts(&{part_list}[..{inert_owner}.unwrap_or({part_list}.len())], \"{name}\") {{ {} }} if {inert_owner}.is_some() {{ {inert} }} }}",
                         call(&part_item, "break 'dispatch_parts"),
+                    )
+                } else if hook.isolate && contract == Contract::Listen {
+                    format!(
+                        "for (mod_id, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ {} }}",
+                        call(&part_item, "")
                     )
                 } else {
                     format!(

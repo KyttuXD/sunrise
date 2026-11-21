@@ -452,15 +452,21 @@ pub(crate) fn refusable<T>(
 /// Run a generated observer without letting a panic interrupt the remaining dispatch.
 pub(crate) fn run_isolated_listener(
     hook: generated::HookId,
+    id: &'static str,
     operation: &'static str,
     contained: bool,
     call: impl FnOnce(),
 ) {
-    let id = crate::content::crash::current_native_mod().expect("entered listener");
     if poisoned(hook, id) {
         return;
     }
-    match crate::callback_owner::contain_unwind(|| refusable(contained, call)) {
+    match crate::callback_owner::contain_unwind(|| {
+        if contained {
+            crate::world::phase_refusal::contain_refusal(id, call)
+        } else {
+            Ok(call())
+        }
+    }) {
         Ok(Ok(())) => {}
         Ok(Err(refusal)) => refusal.report_each(),
         Err(message) => {
@@ -485,6 +491,13 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
 ) -> impl Iterator<Item = &'a P> {
+    entered_parts_with_id(parts, hook).map(|(_, part)| part)
+}
+
+pub(crate) fn entered_parts_with_id<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a P)> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -500,7 +513,7 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            &*attached.part
+            (attached.mod_id, &*attached.part)
         })
 }
 
