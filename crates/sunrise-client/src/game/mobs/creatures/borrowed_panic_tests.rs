@@ -170,13 +170,6 @@ impl mod_api::Hooks for Hooks {
             eprintln!("RETAINED_MIXED_ITEM_AFTER_GUEST");
         }
     }
-    fn entity_tick_listened(
-        &self,
-        _: mod_api::HostSide<'_>,
-        event: &mut mod_api::EntityTickListenedEvent,
-    ) {
-        event.listened = true;
-    }
     fn entity_tick_post(
         &self,
         _: mod_api::HostSide<'_>,

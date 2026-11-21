@@ -198,10 +198,6 @@ impl Hooks for Observe {
         }
     }
 
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickListenedEvent) {
-        event.listened = true;
-    }
-
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPreEvent<'_>) {
         if event.entities.contains(&72) && self.0.veto_rider_tick.load(Ordering::Relaxed) {
             event.canceled.push(72);

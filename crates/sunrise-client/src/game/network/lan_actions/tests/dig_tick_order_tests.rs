@@ -89,9 +89,6 @@ impl mod_api::Hooks for Observe {
     fn register(&self, registrar: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         registrar.entity_tick_each("minecraft:player");
     }
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else { return };
         for &id in event.entities {

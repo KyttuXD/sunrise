@@ -155,9 +155,6 @@ impl Hooks for Declare {
             },
         );
     }
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
