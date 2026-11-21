@@ -577,7 +577,6 @@ impl Scene {
             glowing: &[],
             dynamic_lights: &[],
             colored_lights: &[],
-            emissive_layers: &[],
             clouds: f.clouds.as_ref().map(Clouds::input),
             lightning: Default::default(),
             additive: &[],

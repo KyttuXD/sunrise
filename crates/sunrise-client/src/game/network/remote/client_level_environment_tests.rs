@@ -158,6 +158,7 @@ fn reload(game: &mut Game<'_>, server: &[sunrise_client::packs::Pack]) {
         &game.mods,
         game.register_client_reload_listeners(),
         &[],
+        (&[], None),
         &game.pack.assets,
         &game.res,
         &game.pack.context,

@@ -24,8 +24,6 @@ struct Globals {
     dynamic_lights: array<vec4<f32>, 16>,
     colored_lights: array<vec4<f32>, 32>,
     colored_count: vec4<u32>,
-    emissive_layers: array<vec4<u32>, 128>,
-    emissive_count: vec4<u32>,
     sunrise_fan: array<vec4<f32>, 32>,
     filtering: vec4<f32>,
     // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,

@@ -257,6 +257,7 @@ fn a_failed_reload_fires_no_model_baking_completed() {
                 &game.mods,
                 game.register_client_reload_listeners(),
                 &[],
+                (&[], None),
                 &game.pack.assets,
                 &game.res,
                 &game.pack.context,
