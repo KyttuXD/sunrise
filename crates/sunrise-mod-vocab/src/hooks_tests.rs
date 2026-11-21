@@ -846,7 +846,7 @@ fn player_rules_take_their_hosts(
     let _: Option<bool> = player.text_filtering(read);
     let _: Option<bool> = player.sleep_ignored(read);
     let _: Option<bool> = player.counts_for_sleep(read);
-    let _: Option<u32> = player.sleep_timer(read);
+    let _: Option<i32> = player.sleep_timer(read);
     let _: bool = player.set_respawn_config(server, Some(config));
     let _: bool = player.set_sleep_timer(server, 0);
 }

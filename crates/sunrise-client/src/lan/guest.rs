@@ -259,7 +259,7 @@ pub struct Guest {
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
     pub woke_from: Option<[i32; 3]>,
-    pub sleep_timer: u32,
+    pub sleep_timer: i32,
     pub sent_bed: Option<[i32; 3]>,
     /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
     /// None for the world spawn.

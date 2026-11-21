@@ -23,7 +23,7 @@ pub trait PlayerSleepBackend {
     /// counting up 101 to 109 and back to 0 once they are up. None for a stale or unavailable
     /// player.
     #[access(WorldOnly)]
-    fn player_sleep_timer(&self, player: PlayerRef) -> Option<u32>;
+    fn player_sleep_timer(&self, player: PlayerRef) -> Option<i32>;
 }
 /// The handles' writes of the `player_sleep` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -45,5 +45,5 @@ pub trait PlayerSleepBackendMut {
     /// skip. False for a value past 109, a stale or unavailable player, a fake player and a
     /// player in another level than the one in place.
     #[access(WorldOnly)]
-    fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: u32) -> bool;
+    fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: i32) -> bool;
 }

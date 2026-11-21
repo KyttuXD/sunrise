@@ -3708,7 +3708,7 @@ struct Game<'a> {
     lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
     sleeping: Option<[i32; 3]>,
-    sleep_timer: u32,
+    sleep_timer: i32,
     /// The beds players sleep in that this game marked `occupied`, by level
     /// (game/blocks/beds.rs).
     player_beds: Vec<(Dim, [i32; 3])>,
@@ -7481,7 +7481,7 @@ impl Game<'_> {
             }
         }
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
-        let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
+        let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer);
         self.gui_layer(
             VanillaGuiLayer::SleepOverlay,
             &mut batch,
@@ -14149,10 +14149,10 @@ fn player_arms(
 
 /// The most `Player.sleepCounter` reaches: 100 asleep, then up to here over the
 /// waking fade.
-const MAX_SLEEP_TIMER: u32 = 109;
+const MAX_SLEEP_TIMER: i32 = 109;
 
 // Player.tick: cap the sleeping fade at 100, then fade out over 10 waking ticks.
-fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
+fn tick_sleep_timer(timer: i32, sleeping: bool) -> i32 {
     if sleeping {
         (timer + 1).min(100)
     } else if (1..MAX_SLEEP_TIMER).contains(&timer) {

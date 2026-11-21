@@ -1641,7 +1641,7 @@ impl Game<'_> {
     /// `Player.getSleepTimer`: the ticks in bed (`sleepCounter`), in the
     /// record of a guest or in place for the acting player. None for a
     /// stale or unavailable player.
-    pub(super) fn player_sleep_timer(&self, player: PlayerRef) -> Option<u32> {
+    pub(super) fn player_sleep_timer(&self, player: PlayerRef) -> Option<i32> {
         Some(match self.player_handle_read(player)? {
             PlayerRead::Acting { .. } => self.sleep_timer,
             PlayerRead::Guest(guest) => guest.sleep_timer,
@@ -1650,7 +1650,7 @@ impl Game<'_> {
     /// Sets `Player.sleepCounter` to `ticks`, 0 to 109 (what `tick_sleep_timer`
     /// reaches), through the sleep writes' guard: false for a fake player,
     /// a guest in another level and a stale player.
-    pub(super) fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: u32) -> bool {
+    pub(super) fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: i32) -> bool {
         if ticks > super::MAX_SLEEP_TIMER || self.player_handle_read(player).is_none() {
             return false;
         }

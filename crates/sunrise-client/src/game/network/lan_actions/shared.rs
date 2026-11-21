@@ -213,7 +213,7 @@ pub(super) struct GuestSwap {
     riding: Option<u32>,
     host_station: Option<super::stations::Station>,
     sleeping: Option<[i32; 3]>,
-    sleep_timer: u32,
+    sleep_timer: i32,
     spawn: Option<Vec3>,
     respawn: (
         Option<super::respawn_anchor::RespawnConfig>,

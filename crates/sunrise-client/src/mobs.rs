@@ -3265,7 +3265,7 @@ pub struct PlayerView {
     /// `isSleeping` and `getSleepTimer` (100 once slept through, then the
     /// ticks fading out after waking up).
     pub sleeping: bool,
-    pub sleep_timer: u32,
+    pub sleep_timer: i32,
     /// `isPassenger`.
     pub passenger: bool,
     /// The vehicle entity id, including mounts without a `Vehicle` follow view.
