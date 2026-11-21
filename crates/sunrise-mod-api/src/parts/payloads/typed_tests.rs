@@ -346,42 +346,120 @@ fn a_typed_id_has_one_declaration_in_one_protocol() {
 }
 
 #[test]
-fn a_callback_that_panicked_is_never_invoked_again() {
-    static CALLS: Mutex<u32> = Mutex::new(0);
+fn typed_handler_panics_fail_only_the_delivery_in_both_directions() {
+    use PayloadDirection::{ToClient, ToServer};
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let handler = |direction| {
+        let calls = calls.clone();
+        move |value: Counter, _: &mut dyn IPayloadContext| {
+            calls.lock().unwrap().push((direction, value.counter));
+            assert_ne!(value.counter, 7, "the handler panics on seven");
+            Ok(())
+        }
+    };
     let mut registrar = PartRegistrar::new("test");
     (&mut registrar as &mut dyn Registrar)
         .payload_handlers()
         .registrar("1")
-        .play_to_server_typed::<Counter>(PayloadId("test:panics".into()), |_, _| {
-            *CALLS.lock().unwrap() += 1;
-            panic!("the handler panics");
-        });
-    let table = frozen(&registrar);
-    let receiver = || {
-        table
-            .handler(
-                "test:panics",
-                PayloadProtocol::Play,
-                PayloadDirection::ToServer,
-            )
-            .unwrap()
-    };
-    let first = receiver();
-    assert!(first.enabled());
-    let error = first
-        .handle(PayloadBytes(vec![7]), &mut Unreached)
-        .unwrap_err();
-    let PayloadHandleError::Failed(error) = error;
-    assert!(error.contains("panicked"), "{error}");
-    // Disabled for this connection and for one that resolves the callback later.
-    for receiver in [first, receiver()] {
-        assert!(!receiver.enabled());
-        assert_eq!(
-            receiver.handle(PayloadBytes(vec![7]), &mut Unreached),
-            Err(PayloadHandleError::Failed(
-                "payload owner is disabled".into()
-            ))
+        .play_bidirectional_typed(
+            PayloadId("test:panics".into()),
+            handler(ToServer),
+            handler(ToClient),
         );
+    let table = frozen(&registrar);
+    for direction in [ToServer, ToClient] {
+        let receiver = || {
+            table
+                .handler("test:panics", PayloadProtocol::Play, direction)
+                .unwrap()
+        };
+        let first = receiver();
+        let still_connected = receiver();
+        let PayloadHandleError::Failed(error) = first
+            .handle(PayloadBytes(vec![7]), &mut Unreached)
+            .unwrap_err();
+        assert!(error.contains("the handler panics on seven"), "{error}");
+        for receiver in [still_connected, receiver()] {
+            receiver
+                .handle(PayloadBytes(vec![8]), &mut Unreached)
+                .unwrap();
+        }
     }
-    assert_eq!(*CALLS.lock().unwrap(), 1);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            (ToServer, 7),
+            (ToServer, 8),
+            (ToServer, 8),
+            (ToClient, 7),
+            (ToClient, 8),
+            (ToClient, 8)
+        ]
+    );
+}
+
+#[test]
+fn owned_payload_work_disposes_captures_after_panics_and_cancellation() {
+    struct Work {
+        events: Arc<Mutex<Vec<(&'static str, bool)>>>,
+        fail_run: bool,
+    }
+    impl PayloadWork for Work {
+        fn run(&self, _: &mut dyn IPayloadContext) -> Result<(), String> {
+            self.events.lock().unwrap().push((
+                "run",
+                mod_vocab::__private::game::retained_callback_active(),
+            ));
+            assert!(!self.fail_run, "work body failed");
+            Ok(())
+        }
+    }
+    impl Drop for Work {
+        fn drop(&mut self) {
+            self.events.lock().unwrap().push((
+                "drop",
+                mod_vocab::__private::game::retained_callback_active(),
+            ));
+            panic!("work destructor failed");
+        }
+    }
+
+    let mut registrar = PartRegistrar::new("test");
+    (&mut registrar as &mut dyn Registrar)
+        .payload_handlers()
+        .registrar("1")
+        .play_to_server_typed::<Counter>(PayloadId("test:work".into()), ignore);
+    let receiver = frozen(&registrar)
+        .handler(
+            "test:work",
+            PayloadProtocol::Play,
+            PayloadDirection::ToServer,
+        )
+        .unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let work = |fail_run| {
+        receiver.own_work(Arc::new(Work {
+            events: events.clone(),
+            fail_run,
+        }))
+    };
+    for (fail_run, expected) in [
+        (false, "work destructor failed"),
+        (true, "work body failed"),
+    ] {
+        let error = work(fail_run).run(&mut Unreached).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+    drop(work(false));
+    assert_eq!(
+        *events.lock().unwrap(),
+        [
+            ("run", true),
+            ("drop", true),
+            ("run", true),
+            ("drop", true),
+            ("drop", true)
+        ]
+    );
 }

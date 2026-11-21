@@ -403,12 +403,28 @@ fn lan(game: &mut super::Game<'_>) {
         Some(full),
         "the failed handler's write was rolled back"
     );
-    // The panicked callback is disabled: a later message on it is refused at ingress, as for
-    // a disabled owner, and the session ends without running it.
+    // The same callback still answers both an existing peer and a new peer.
+    send(&mut witness, UP, empty(7).to_vec());
+    assert_eq!(await_reply(&mut witness, DOWN), empty(8));
     let mut later = super::sender_tests::connect_peer(port, "TypedLater");
     send(&mut later, UP, empty(7).to_vec());
-    await_disconnect(&mut later, DOWN);
-    assert_eq!(SERVER.lock().unwrap().len(), seen.len());
+    assert_eq!(await_reply(&mut later, DOWN), empty(8));
+    assert_eq!(
+        SERVER.lock().unwrap()[seen.len()..],
+        [(UP, 7, Some(full)); 2]
+    );
+    let notices = mod_api::__private::game::take_callback_panic_notices();
+    let notice = notices
+        .iter()
+        .find(|notice| notice.mod_id == "typed_probe")
+        .expect("the failing payload reports the mod to the error toast queue");
+    assert_eq!(notice.kind, "payload");
+    assert!(!notice.disabled);
+    assert!(
+        notice
+            .message
+            .contains("typed handler panics after a staged write")
+    );
 }
 
 /// Send `data` on `channel` from a TCP peer in play.

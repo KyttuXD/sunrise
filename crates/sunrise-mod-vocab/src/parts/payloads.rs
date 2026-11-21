@@ -14,10 +14,6 @@ pub(crate) struct Registered {
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client_thread: HandlerThread,
-    /// Set once the server callback panicked: it is never invoked again, on any connection.
-    pub(crate) server_panicked: Arc<std::sync::atomic::AtomicBool>,
-    /// The same for the client callback.
-    pub(crate) client_panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: frozen process-local registration storage contains callback trait objects and owning-mod identities.
@@ -80,8 +76,6 @@ pub(crate) struct RawRegistered {
     pub(crate) owner: &'static str,
     pub(crate) owner_index: usize,
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
-    /// Set once the server callback panicked: it is never invoked again.
-    pub(crate) panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: resolved process-local callback and its owning mod's live enable guard.
@@ -95,8 +89,6 @@ pub struct PayloadReceiver {
     /// Its chosen executor.
     pub thread: HandlerThread,
     owner_index: usize,
-    /// Shared by every connection's receiver of this callback.
-    panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PayloadReceiver {
@@ -104,40 +96,71 @@ impl PayloadReceiver {
     pub fn owner(&self) -> &'static str {
         self.owner
     }
-    /// Recheck the owner without scanning registrations or resolving the id again: off when
-    /// its mod is off or this callback panicked.
+    /// Recheck mod enablement without scanning registrations or resolving the id again.
     pub fn enabled(&self) -> bool {
         crate::mod_index_on(self.owner_index)
-            && !self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
-    /// Invoke only this owner. The caller owns the root transaction and handles
-    /// a native panic as `Failed`, never as retryable contention. A panic disables
-    /// this callback for every connection; later calls refuse without running it.
+    /// Invoke only this owner. The caller handles a native panic as `Failed` and settles
+    /// the current delivery; the registered callback remains available on other connections.
     pub fn handle(
         &self,
         bytes: crate::PayloadBytes,
         context: &mut dyn crate::IPayloadContext,
     ) -> Result<(), crate::PayloadHandleError> {
-        self.call("payload", || self.handler.handle(bytes, context))
-            .map_err(crate::PayloadHandleError::Failed)?
+        crate::callback_owner::call_payload(self.owner, Some(self.owner_index), "payload", || {
+            self.handler.handle(bytes, context)
+        })
+        .map_err(crate::PayloadHandleError::Failed)?
     }
-    /// Scheduled work retains its original receiving owner and enable guard.
-    pub fn run_work(
-        &self,
-        work: &dyn crate::PayloadWork,
-        context: &mut dyn crate::IPayloadContext,
-    ) -> Result<(), String> {
-        self.call("payload work", || work.run(context))?
+    /// Transfer an engine-owned work reference with the original owner's attribution.
+    pub fn own_work(&self, work: Arc<dyn crate::PayloadWork>) -> PayloadWorkCall {
+        PayloadWorkCall {
+            owner: self.owner,
+            owner_index: self.owner_index,
+            work: Some(work),
+        }
     }
-    fn call<T>(&self, operation: &'static str, call: impl FnOnce() -> T) -> Result<T, String> {
-        crate::callback_owner::call(
+}
+
+// no wire: one delivery's owned native work reference and its in-process attribution.
+/// Work owned by one packet delivery; cancellation disposes of it without invoking it.
+#[non_exhaustive]
+pub struct PayloadWorkCall {
+    owner: &'static str,
+    owner_index: usize,
+    work: Option<Arc<dyn crate::PayloadWork>>,
+}
+impl PayloadWorkCall {
+    /// Run and then release the work reference under the original owner's attribution.
+    pub fn run(mut self, context: &mut dyn crate::IPayloadContext) -> Result<(), String> {
+        let work = self.work.as_deref().expect("work has not been consumed");
+        let result = crate::callback_owner::call_payload(
             self.owner,
-            self.owner_index,
-            &self.panicked,
-            "payload",
-            operation,
-            call,
-        )
+            Some(self.owner_index),
+            "payload work",
+            || work.run(context),
+        );
+        let disposed = self.dispose();
+        result?.and(disposed)
+    }
+
+    /// Release work refused by a live call, reporting a destructor failure to that call.
+    pub fn discard(mut self) -> Result<(), String> {
+        self.dispose()
+    }
+
+    fn dispose(&mut self) -> Result<(), String> {
+        if let Some(work) = self.work.take() {
+            crate::callback_owner::call_payload(self.owner, None, "payload work drop", || {
+                drop(work)
+            })?;
+        }
+        Ok(())
+    }
+}
+impl Drop for PayloadWorkCall {
+    fn drop(&mut self) {
+        let _ = self.dispose();
     }
 }
 
@@ -173,14 +196,12 @@ impl Payloads {
                 thread: entry.client_thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
-                panicked: entry.client_panicked.clone(),
             }),
             PayloadDirection::ToServer => entry.server.clone().map(|handler| PayloadReceiver {
                 handler,
                 thread: entry.declaration.thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
-                panicked: entry.server_panicked.clone(),
             }),
             PayloadDirection::Bidirectional => None,
         }
@@ -235,7 +256,6 @@ impl Payloads {
                         owner: owner.owner,
                         thread: HandlerThread::Main,
                         owner_index: owner.owner_index,
-                        panicked: owner.panicked.clone(),
                     })
                 })
                 .collect()

@@ -1,4 +1,4 @@
-//! A retained payload callback fired outside the world (`callback_owner::call`).
+//! A payload callback fired outside the world through the shared attribution boundary.
 use mod_api::{
     ClientHost, Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes, PayloadId,
     Registrar, ServerHost,
@@ -100,7 +100,7 @@ impl IPayloadContext for Context<'_, '_> {
 
 /// Callbacks run in ticks and on the network, after the thread reached World. Fired in Setup and in
 /// Reloading anyway, a handler's world read is a refused call, not the no-scope panic, and the
-/// owner is not poisoned: a second call in World runs the handler to its end.
+/// handler remains available: a later call in World runs it to completion.
 #[test]
 #[ignore = "daily"]
 fn a_payload_handler_outside_the_world_is_refused_not_a_panic() {
@@ -143,7 +143,10 @@ fn a_payload_handler_outside_the_world_is_refused_not_a_panic() {
                     "{refused:?}"
                 );
                 assert_eq!(reads.completed.load(Ordering::Relaxed), 0);
-                assert!(receiver.enabled(), "a refusal does not poison the owner");
+                assert!(
+                    receiver.enabled(),
+                    "the mod is still enabled after a refusal"
+                );
             }
             let _world = PhaseOwner::scope(ModPhase::World);
             receiver

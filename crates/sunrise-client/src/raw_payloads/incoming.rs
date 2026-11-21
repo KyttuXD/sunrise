@@ -4,8 +4,8 @@ use super::{
     connection::{Epoch, IngressLease, MainTask},
 };
 use mod_api::{
-    __private::game::PayloadReceiver, PayloadBytes, PayloadContextError, PayloadId,
-    PayloadSendError, PayloadWork,
+    __private::game::{PayloadReceiver, PayloadWorkCall},
+    PayloadBytes, PayloadContextError, PayloadId, PayloadSendError,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,7 +13,7 @@ use sunrise_protocol::{packets::custom_payload::CustomPayload, payload_negotiati
 
 pub enum Body {
     Payload(PayloadBytes),
-    Work(Arc<dyn PayloadWork>),
+    Work(PayloadWorkCall),
 }
 pub struct Incoming {
     pub epoch: Arc<Epoch>,
@@ -189,21 +189,30 @@ impl Incoming {
         }
         Ok(Classified::Raw(deliveries))
     }
-    /// Reserve before cloning the channel or retaining the guest's work resource.
-    pub fn work(
+    /// Release a delivery refused by the main queue, including any call-owned work.
+    pub(super) fn discard(self) -> Result<(), String> {
+        match self.body {
+            Body::Payload(_) => Ok(()),
+            Body::Work(work) => work.discard(),
+        }
+    }
+
+    /// Reserve before cloning the channel. Return refused work to the current call for disposal.
+    pub(super) fn work(
         &self,
         transport: &Transport,
-        work: Arc<dyn PayloadWork>,
-    ) -> Result<Self, PayloadContextError> {
+        work: PayloadWorkCall,
+    ) -> Result<Self, (PayloadContextError, PayloadWorkCall)> {
         if !self.epoch.active() {
-            return Err(PayloadContextError::Disconnected);
+            return Err((PayloadContextError::Disconnected, work));
         }
-        let lease = transport
-            .reserve_ingress(self.id.0.len())
-            .map_err(|error| match error {
-                PayloadSendError::Backpressure => PayloadContextError::Backpressure,
-                _ => PayloadContextError::Disconnected,
-            })?;
+        let lease = match transport.reserve_ingress(self.id.0.len()) {
+            Ok(lease) => lease,
+            Err(PayloadSendError::Backpressure) => {
+                return Err((PayloadContextError::Backpressure, work));
+            }
+            Err(_) => return Err((PayloadContextError::Disconnected, work)),
+        };
         Ok(Self {
             epoch: self.epoch.clone(),
             id: self.id.clone(),

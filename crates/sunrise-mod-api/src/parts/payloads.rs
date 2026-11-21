@@ -136,8 +136,6 @@ impl PartRegistrar {
                     .expect("fewer typed payloads than u32::MAX"),
             )
         });
-        let server_panicked = Arc::default();
-        let client_panicked = Arc::default();
         for &index in indices(declaration.protocol) {
             let mut normalized = declaration.clone();
             normalized.protocol = if index == 0 {
@@ -154,8 +152,6 @@ impl PartRegistrar {
                     server: server.clone(),
                     client: client.clone(),
                     client_thread: declaration.thread,
-                    server_panicked: Arc::clone(&server_panicked),
-                    client_panicked: Arc::clone(&client_panicked),
                 },
             );
         }
@@ -258,14 +254,12 @@ impl PayloadsRegistrar for PartRegistrar {
             ));
             return;
         }
-        let panicked = Arc::default();
         for phase in &mut Arc::make_mut(payloads).phases {
             if let Some(entry) = phase.get_mut(&id.0)
                 && entry.declaration.direction != PayloadDirection::ToServer
             {
                 entry.client = Some(handler.clone());
                 entry.client_thread = thread;
-                entry.client_panicked = Arc::clone(&panicked);
             }
         }
     }
@@ -316,7 +310,6 @@ impl PayloadsRegistrar for PartRegistrar {
                 owner,
                 owner_index,
                 server,
-                panicked: Arc::default(),
             });
     }
 }

@@ -11,9 +11,9 @@ use std::{
     },
 };
 
-/// A retained mod callback panicked and was disabled for the rest of this session.
+/// A mod callback panicked. Some callback categories disable the callback for the session.
 // no wire: in-process notification drained by the client's error toast queue.
-// exhaustive: engine-only notification record produced by `callback_owner::call`.
+// exhaustive: engine-only notification record produced by the callback boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallbackPanicNotice {
     /// The `[mod] id` whose callback panicked.
@@ -24,6 +24,8 @@ pub struct CallbackPanicNotice {
     pub operation: &'static str,
     /// Panic message payload, if it was a string.
     pub message: String,
+    /// Whether the callback was disabled for the session.
+    pub disabled: bool,
 }
 
 static PANIC_NOTICES: Mutex<VecDeque<CallbackPanicNotice>> = Mutex::new(VecDeque::new());
@@ -170,6 +172,7 @@ fn record_callback_panic(
     kind: &'static str,
     operation: &'static str,
     message: String,
+    disabled: bool,
 ) {
     PANIC_NOTICES
         .lock()
@@ -179,6 +182,7 @@ fn record_callback_panic(
             kind,
             operation,
             message,
+            disabled,
         });
 }
 
@@ -247,7 +251,7 @@ impl CallbackOwner {
 
     /// Whether this callback is still enabled for this session.
     pub fn is_enabled(&self) -> bool {
-        enabled_opt(self.index, &self.poisoned)
+        enabled_opt(self.index, Some(&self.poisoned))
     }
 
     /// Invoke retained code with its owner's enablement, attribution and panic policy.
@@ -260,7 +264,7 @@ impl CallbackOwner {
         call_opt(
             self.id,
             self.index,
-            &self.poisoned,
+            Some(&self.poisoned),
             kind,
             operation,
             Invocation::Isolated,
@@ -280,7 +284,7 @@ impl CallbackOwner {
         call_opt(
             self.id,
             self.index,
-            &self.poisoned,
+            Some(&self.poisoned),
             kind,
             operation,
             Invocation::Listener,
@@ -294,7 +298,7 @@ impl CallbackOwner {
         let _ = call_opt(
             self.id,
             self.index,
-            &self.poisoned,
+            Some(&self.poisoned),
             kind,
             operation,
             Invocation::Dispose,
@@ -324,11 +328,12 @@ impl CallbackOwner {
 }
 
 pub(crate) fn enabled(index: usize, poisoned: &AtomicBool) -> bool {
-    enabled_opt(Some(index), poisoned)
+    enabled_opt(Some(index), Some(poisoned))
 }
 
-fn enabled_opt(index: Option<usize>, poisoned: &AtomicBool) -> bool {
-    index.is_none_or(crate::mod_index_on) && !poisoned.load(Ordering::Acquire)
+fn enabled_opt(index: Option<usize>, poisoned: Option<&AtomicBool>) -> bool {
+    index.is_none_or(crate::mod_index_on)
+        && poisoned.is_none_or(|state| !state.load(Ordering::Acquire))
 }
 
 pub(crate) fn call<T>(
@@ -342,8 +347,27 @@ pub(crate) fn call<T>(
     call_opt(
         owner,
         Some(index),
-        poisoned,
+        Some(poisoned),
         kind,
+        operation,
+        Invocation::Isolated,
+        invoke,
+    )
+}
+
+/// Attribute packet callbacks to their mod without tying the invocation's failure to the
+/// lifetime of the registration. Pass no index only for unconditional work disposal.
+pub(crate) fn call_payload<T>(
+    owner: &'static str,
+    index: Option<usize>,
+    operation: &'static str,
+    invoke: impl FnOnce() -> T,
+) -> Result<T, String> {
+    call_opt(
+        owner,
+        index,
+        None,
+        "payload",
         operation,
         Invocation::Isolated,
         invoke,
@@ -364,7 +388,7 @@ fn run_scheduled<T>(
 ) -> Result<T, ScheduledFailure> {
     let _guard = crate::mark_mod(owner, operation);
     match contain_unwind(|| {
-        if state.is_some_and(|(index, poisoned)| enabled_opt(index, poisoned)) {
+        if state.is_some_and(|(index, poisoned)| enabled_opt(index, Some(poisoned))) {
             invoke().map(Some)
         } else {
             // Captures also belong to the owner if the callable is discarded without running.
@@ -390,7 +414,7 @@ fn run_scheduled<T>(
 fn call_opt<T>(
     owner: &'static str,
     index: Option<usize>,
-    poisoned: &AtomicBool,
+    poisoned: Option<&AtomicBool>,
     kind: &'static str,
     operation: &'static str,
     invocation: Invocation,
@@ -404,8 +428,8 @@ fn call_opt<T>(
     let _guard = crate::mark_mod(owner, operation);
     let contained = RetainedCallbackScope(RETAINED_CALLBACK.replace(true));
     let scope = PanicScope::enter();
-    // A refusal by the phase gate refuses this call and nothing more; a real panic disables
-    // this callback for the session, logs loudly and notifies the client error toast queue.
+    // A phase refusal affects this call only. Report a real panic to the log and the client
+    // error toast queue; only callbacks with session-wide health state are disabled.
     let result = catch_unwind(AssertUnwindSafe(|| {
         if invocation == Invocation::Listener {
             Ok(invoke())
@@ -437,7 +461,7 @@ fn call_opt<T>(
                 drop(contained);
                 std::panic::resume_unwind(payload);
             }
-            let first = !poisoned.swap(true, Ordering::AcqRel);
+            let first = poisoned.is_none_or(|state| !state.swap(true, Ordering::AcqRel));
             let msg = scope
                 .take_message()
                 .unwrap_or_else(|| panic_payload_text(payload.as_ref()));
@@ -447,11 +471,15 @@ fn call_opt<T>(
             if !first && invocation != Invocation::Dispose {
                 return Err(format!("{kind} callback panicked; it is disabled"));
             }
-            log::error!(
-                "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {msg}"
-            );
-            record_callback_panic(owner, kind, operation, msg.clone());
-            Err(format!("{kind} callback panicked; it is disabled: {msg}"))
+            let disabled = poisoned.is_some();
+            let (log_status, error_status) = if disabled {
+                (" and is disabled for this session", "; it is disabled")
+            } else {
+                ("", "")
+            };
+            log::error!("mod {owner}: {kind} callback ({operation}) panicked{log_status}: {msg}");
+            record_callback_panic(owner, kind, operation, msg.clone(), disabled);
+            Err(format!("{kind} callback panicked{error_status}: {msg}"))
         }
     }
 }

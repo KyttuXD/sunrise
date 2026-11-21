@@ -1151,5 +1151,6 @@
   "sunrise.studio.unknown_server": "Unknown",
   "sunrise.title.not_affiliated": "Not affiliated with Mojang or Microsoft",
   "sunrise.title.playing_offline": "Playing offline",
-  "sunrise.toast.mod_callback_disabled": "Mod %s callback disabled"
+  "sunrise.toast.mod_callback_disabled": "Mod %s callback disabled",
+  "sunrise.toast.mod_callback_failed": "Mod %s callback failed"
 }

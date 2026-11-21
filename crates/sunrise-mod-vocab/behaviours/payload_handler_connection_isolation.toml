@@ -1,0 +1,10 @@
+version = 1
+doc = "A panicking declared payload handler fails its receiving connection without disabling the registration for other connections. A panicking raw handler fails only its delivery. Failed deliveries discard staged effects; cancelled native work is released without running it, and panics in work or its destructor are attributed to its mod."
+tests = [
+    "crates/sunrise-client/src/game/modding/payload_transport/raw_fault_tests.rs::a_failing_raw_handler_rolls_back_alone_and_the_next_one_commits",
+    "crates/sunrise-client/src/game/modding/payload_transport/typed_tests.rs::typed_payloads_follow_the_raw_routes",
+    "crates/sunrise-client/src/raw_payloads/executor_tests.rs::handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies",
+    "crates/sunrise-client/src/raw_payloads/executor_tests.rs::provider_pressure_refuses_work_before_acceptance",
+    "crates/sunrise-mod-api/src/parts/payloads/typed_tests.rs::owned_payload_work_disposes_captures_after_panics_and_cancellation",
+    "crates/sunrise-mod-api/src/parts/payloads/typed_tests.rs::typed_handler_panics_fail_only_the_delivery_in_both_directions",
+]
