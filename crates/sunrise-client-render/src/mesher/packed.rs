@@ -1,6 +1,6 @@
 //! The compact layout of a section's solid quads in the arena: most of them are whole faces
-//! of a block's cube on the block grid, and those take one 24-byte record each instead of
-//! four 24-byte vertices. terrain.wgsl's `section_corner` expands a record into the very
+//! of a block's cube on the block grid, and those take one arena slot each instead of
+//! four vertices. terrain.wgsl's `section_corner` expands a record into the very
 //! vertex words `TerrainVertex` would hold (`packed_vertex` here is the same on the CPU, and
 //! a record is kept only when it gives back the quad's four vertices bit for bit), so every
 //! pass draws the same picture from either layout.
@@ -97,11 +97,12 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
     let mut uvs = [[0u32; 2]; 4];
     for (uv, v) in uvs.iter_mut().zip(quad) {
         for k in 0..2 {
-            let raw = u32::from(v.uv[k]);
-            if raw & 1023 != 0 {
+            let steps = v.uv[k] * 32.0;
+            let raw = steps as u32;
+            if raw > 63 || steps != raw as f32 {
                 return None;
             }
-            uv[k] = raw >> 10;
+            uv[k] = raw;
             ranges[k] = [ranges[k][0].min(uv[k]), ranges[k][1].max(uv[k])];
         }
     }
@@ -200,7 +201,7 @@ pub fn packed_vertex(words: &[u32; 6], corner: usize) -> TerrainVertex {
     let select = w2 >> 24;
     let us = select >> (2 * i) & 1;
     let vs = select >> (2 * i + 1) & 1;
-    let uv = [w2 >> (6 * us) & 63, w2 >> (12 + 6 * vs) & 63].map(|k| (k << 10) as u16);
+    let uv = [w2 >> (6 * us) & 63, w2 >> (12 + 6 * vs) & 63].map(|k| k as f32 / 32.0);
     let light = [w3 >> 16, w4, w4 >> 12, w5][corner] & 0xFFF;
     let light = ((light & 63) << 2 | (light >> 6 & 63) << 10) as u16;
     let g = w1 >> (8 * i) & 255;
@@ -225,9 +226,12 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// An arena slot is one vertex or a six-word compact record plus padding.
+pub type ArenaSlot = [u32; 7];
+
 /// The compact layout of sorted solid quads with their tints (`SectionMesh::packed`), or
 /// nothing when it would be no smaller than their vertices.
-pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
+pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<ArenaSlot> {
     let mut out = Vec::new();
     layout_into(solid, tints, &mut out);
     out
@@ -235,7 +239,7 @@ pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
 
 /// Writes the compact layout of sorted solid quads with their tints into `out`,
 /// reusing `out`'s allocation and a thread-local record scratch buffer.
-pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<[u32; 6]>) {
+pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<ArenaSlot>) {
     let quads = solid.as_chunks::<4>().0;
     RECORDS_SCRATCH.with(|cell| {
         let mut records = cell.borrow_mut();
@@ -253,7 +257,7 @@ pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<[u32; 6
 ///
 /// Shared with `lod::packed`, whose records hold a far tile's quads instead but
 /// spill and pad the same way.
-pub fn place(records: &[Option<[u32; 6]>], quads: &[[TerrainVertex; 4]]) -> Vec<[u32; 6]> {
+pub fn place(records: &[Option<[u32; 6]>], quads: &[[TerrainVertex; 4]]) -> Vec<ArenaSlot> {
     let mut out = Vec::new();
     place_into(records, quads, &mut out);
     out
@@ -262,7 +266,7 @@ pub fn place(records: &[Option<[u32; 6]>], quads: &[[TerrainVertex; 4]]) -> Vec<
 pub fn place_into(
     records: &[Option<[u32; 6]>],
     quads: &[[TerrainVertex; 4]],
-    out: &mut Vec<[u32; 6]>,
+    out: &mut Vec<ArenaSlot>,
 ) {
     out.clear();
     let n = quads.len();
@@ -278,25 +282,26 @@ pub fn place_into(
     out.reserve(n + pad + 4 * full);
     let mut next = n + pad;
     for (i, record) in records.iter().enumerate() {
-        out.push(record.unwrap_or_else(|| {
+        let [a, b, c, d, e, f] = record.unwrap_or_else(|| {
             let at = next;
             next += 4;
             [(at - i) as u32, 0, 0, 0, 0, FULL]
-        }));
+        });
+        out.push([a, b, c, d, e, f, 0]);
     }
-    out.resize(n + pad, [0; 6]);
+    out.resize(n + pad, [0; 7]);
     for (q, record) in quads.iter().zip(records) {
         if record.is_none() {
             out.extend(
                 q.iter()
-                    .map(|v| bytemuck::cast::<TerrainVertex, [u32; 6]>(*v)),
+                    .map(|v| bytemuck::cast::<TerrainVertex, ArenaSlot>(*v)),
             );
         }
     }
 }
 
 /// Quads `layout` gave a record of their own.
-pub fn packed_quads(layout: &[[u32; 6]], quads: usize) -> usize {
+pub fn packed_quads(layout: &[ArenaSlot], quads: usize) -> usize {
     layout
         .iter()
         .take(quads)
@@ -325,7 +330,7 @@ mod tests {
             [4.0, 16.0, 6.0],
             [4.0, 16.0, 5.0],
         ];
-        let uv = [[0, 0], [16 << 10, 0], [16 << 10, 16 << 10], [0, 16 << 10]];
+        let uv = [[0., 0.], [0.5, 0.], [0.5, 0.5], [0., 0.5]];
         let grays = [200, 180, 160, 200];
         order.map(|i| TerrainVertex {
             pos: pos[i],
@@ -380,7 +385,7 @@ mod tests {
         assert!(pack_quad(&slab, TINT).is_none());
         // A UV between the 1/32 steps.
         let mut uv = top([0, 1, 2, 3]);
-        uv[2].uv[0] += 1;
+        uv[2].uv[0] += 1.0 / super::UV_STEPS;
         assert!(pack_quad(&uv, TINT).is_none());
         // Light between the steps of 4.
         let mut light = top([0, 1, 2, 3]);
@@ -406,7 +411,7 @@ mod tests {
         assert_eq!(out[4][5], FULL);
         let at = 4 + out[4][0] as usize;
         for (slot, v) in out[at..at + 4].iter().zip(&odd) {
-            assert!(same(&bytemuck::cast::<[u32; 6], TerrainVertex>(*slot), v));
+            assert!(same(&bytemuck::cast::<ArenaSlot, TerrainVertex>(*slot), v));
         }
         // Nothing smaller to gain: no layout at all.
         assert!(layout(&odd, &[TINT]).is_empty());

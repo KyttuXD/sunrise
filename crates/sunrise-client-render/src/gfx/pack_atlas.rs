@@ -554,15 +554,15 @@ impl PackAtlas {
 /// give back their quad's vertices bit for bit, so packs read either layout alike.
 /// `hz_arena_corner`: a vertex's position and UV words; `hz_record_corner`: corner `k`'s of the
 /// record `lo`, `hi`; `hz_record_rest`: its layer-with-light and colour words.
-const CORNER_FN: &str = "void hz_arena_corner(uint hz_av, out uvec3 hz_p, out uint hz_uv) {\n    \
-    uint hz_w = hz_av * 6u;\n    \
+const CORNER_FN: &str = "void hz_arena_corner(uint hz_av, out uvec3 hz_p, out vec2 hz_uv) {\n    \
+    uint hz_w = hz_av * 7u;\n    \
     hz_p = uvec3(hz_vertices[hz_w], hz_vertices[hz_w + 1u], hz_vertices[hz_w + 2u]);\n    \
-    hz_uv = hz_vertices[hz_w + 3u];\n\
+    hz_uv = uintBitsToFloat(uvec2(hz_vertices[hz_w + 3u], hz_vertices[hz_w + 4u]));\n\
 }\n\
 uint hz_corner_offset(uint hz_rel, uint hz_side, uint hz_du, uint hz_dw) {\n    \
     return hz_rel == 0u ? hz_side : (hz_rel == 1u ? hz_du : hz_dw);\n\
 }\n\
-void hz_record_corner(uvec3 hz_lo, uvec3 hz_hi, uint hz_k, out uvec3 hz_p, out uint hz_uv) {\n    \
+void hz_record_corner(uvec3 hz_lo, uvec3 hz_hi, uint hz_k, out uvec3 hz_p, out vec2 hz_uv) {\n    \
     uint hz_o = (hz_hi.z >> 12u) & 0x3ffffu;\n    \
     uvec3 hz_block = uvec3(hz_o & 15u, (hz_o >> 4u) & 15u, (hz_o >> 8u) & 15u);\n    \
     uint hz_axis = (hz_o >> 12u) & 3u;\n    \
@@ -577,7 +577,7 @@ void hz_record_corner(uvec3 hz_lo, uvec3 hz_hi, uint hz_k, out uvec3 hz_p, out u
     uint hz_u = (hz_lo.z >> (6u * ((hz_sel >> (2u * hz_k)) & 1u))) & 63u;\n    \
     uint hz_v = (hz_lo.z >> (12u + 6u * ((hz_sel >> (2u * hz_k + 1u)) & 1u))) & 63u;\n    \
     hz_p = floatBitsToUint(vec3(hz_pos));\n    \
-    hz_uv = (hz_u << 10u) | (hz_v << 26u);\n\
+    hz_uv = vec2(hz_u, hz_v) / 32.0;\n\
 }\n\
 uvec2 hz_record_rest(uvec3 hz_lo, uvec3 hz_hi, uint hz_k) {\n    \
     uint hz_l = hz_k == 0u ? hz_hi.x >> 16u : (hz_k == 1u ? hz_hi.y : (hz_k == 2u ? hz_hi.y >> 12u : hz_hi.z));\n    \
@@ -607,14 +607,14 @@ const PULL_FLAT: &str = "    uint hz_qv = uint(gl_VertexIndex);\n    \
     uvec3 hz_hi = uvec3(0u);\n    \
     if (hz_av >= 0x10000000u) {\n        \
         hz_slot = (hz_av - 0x10000000u) >> 2u;\n        \
-        uint hz_rw = hz_slot * 6u;\n        \
+        uint hz_rw = hz_slot * 7u;\n        \
         hz_lo = uvec3(hz_vertices[hz_rw], hz_vertices[hz_rw + 1u], hz_vertices[hz_rw + 2u]);\n        \
         hz_hi = uvec3(hz_vertices[hz_rw + 3u], hz_vertices[hz_rw + 4u], hz_vertices[hz_rw + 5u]);\n        \
         hz_rec = (hz_hi.z & 0x80000000u) == 0u;\n        \
         hz_av = hz_slot + hz_lo.x;\n    \
     }\n    \
     uvec3 hz_cp0; uvec3 hz_cp1; uvec3 hz_cp2; uvec3 hz_cp3;\n    \
-    uint hz_uv0; uint hz_uv1; uint hz_uv2; uint hz_uv3;\n    \
+    vec2 hz_uv0; vec2 hz_uv1; vec2 hz_uv2; vec2 hz_uv3;\n    \
     uvec2 hz_rest;\n    \
     if (hz_rec) {\n        \
         hz_record_corner(hz_lo, hz_hi, 0u, hz_cp0, hz_uv0);\n        \
@@ -627,31 +627,26 @@ const PULL_FLAT: &str = "    uint hz_qv = uint(gl_VertexIndex);\n    \
         hz_arena_corner(hz_av + 1u, hz_cp1, hz_uv1);\n        \
         hz_arena_corner(hz_av + 2u, hz_cp2, hz_uv2);\n        \
         hz_arena_corner(hz_av + 3u, hz_cp3, hz_uv3);\n        \
-        uint hz_ow = (hz_av + hz_own) * 6u;\n        \
-        hz_rest = uvec2(hz_vertices[hz_ow + 4u], hz_vertices[hz_ow + 5u]);\n    \
+        uint hz_ow = (hz_av + hz_own) * 7u;\n        \
+        hz_rest = uvec2(hz_vertices[hz_ow + 5u], hz_vertices[hz_ow + 6u]);\n    \
     }\n    \
     uvec3 hz_vp = hz_own == 0u ? hz_cp0 : (hz_own == 1u ? hz_cp1 : (hz_own == 2u ? hz_cp2 : hz_cp3));\n    \
-    uvec3 hz_vr = uvec3(hz_own == 0u ? hz_uv0 : (hz_own == 1u ? hz_uv1 : (hz_own == 2u ? hz_uv2 : hz_uv3)), hz_rest);\n    \
+    hz_v_uv = hz_own == 0u ? hz_uv0 : (hz_own == 1u ? hz_uv1 : (hz_own == 2u ? hz_uv2 : hz_uv3));\n    \
     hz_v_pos = uintBitsToFloat(hz_vp);\n    \
-    hz_v_uv = uvec2(hz_vr.x & 65535u, hz_vr.x >> 16u);\n    \
-    hz_v_layer = hz_vr.y & 65535u;\n    \
-    hz_v_light = uvec2((hz_vr.y >> 16u) & 255u, hz_vr.y >> 24u);\n    \
-    hz_v_color = vec4(float(hz_vr.z & 255u), float((hz_vr.z >> 8u) & 255u), float((hz_vr.z >> 16u) & 255u),\n        \
-        float(hz_vr.z >> 24u)) * (1.0 / 255.0);\n";
+    hz_v_layer = hz_rest.x & 65535u;\n    \
+    hz_v_light = uvec2((hz_rest.x >> 16u) & 255u, hz_rest.x >> 24u);\n    \
+    hz_v_color = vec4(float(hz_rest.y & 255u), float((hz_rest.y >> 8u) & 255u), float((hz_rest.y >> 16u) & 255u),\n        \
+        float(hz_rest.y >> 24u)) * (1.0 / 255.0);\n";
 
 /// GLSL: the face normal and tangent of a flat-drawn vertex, from its quad's first three corners
 /// (`PULL_FLAT`'s corners: four consecutive vertex indices, in either layout).
 const FACE: &str = "    vec3 hz_p0 = uintBitsToFloat(hz_cp0);\n    \
     vec3 hz_p1 = uintBitsToFloat(hz_cp1);\n    \
     vec3 hz_p2 = uintBitsToFloat(hz_cp2);\n    \
-    uvec3 hz_w = uvec3(hz_uv0, hz_uv1, hz_uv2);\n    \
-    vec2 hz_t0 = vec2(hz_w.x & 65535u, hz_w.x >> 16u);\n    \
-    vec2 hz_d1 = vec2(hz_w.y & 65535u, hz_w.y >> 16u) - hz_t0;\n    \
-    vec2 hz_d2 = vec2(hz_w.z & 65535u, hz_w.z >> 16u) - hz_t0;\n    \
-    uint hz_w3 = hz_uv3;\n    \
-    vec2 hz_t3 = vec2(hz_w3 & 65535u, hz_w3 >> 16u);\n    \
-    hz_mid = (clamp(hz_t0 * hz_uv_scale, 0.0, 1.0) + clamp((hz_t0 + hz_d1) * hz_uv_scale, 0.0, 1.0)\n        \
-        + clamp((hz_t0 + hz_d2) * hz_uv_scale, 0.0, 1.0) + clamp(hz_t3 * hz_uv_scale, 0.0, 1.0)) * 0.25;\n    \
+    vec2 hz_d1 = (hz_uv1 - hz_uv0) / hz_uv_scale;\n    \
+    vec2 hz_d2 = (hz_uv2 - hz_uv0) / hz_uv_scale;\n    \
+    hz_mid = (clamp(hz_uv0, 0.0, 1.0) + clamp(hz_uv1, 0.0, 1.0)\n        \
+        + clamp(hz_uv2, 0.0, 1.0) + clamp(hz_uv3, 0.0, 1.0)) * 0.25;\n    \
     vec3 hz_e1 = hz_p1 - hz_p0;\n    \
     vec3 hz_e2 = hz_p2 - hz_p0;\n    \
     vec3 hz_n = cross(hz_e1, hz_e2);\n    \
@@ -722,11 +717,11 @@ impl PackAtlas {
         // solid quads in the compact layout; others read them as vertex attributes.
         let mut declarations = if flat {
             String::from(
-                "vec3 hz_v_pos; uvec2 hz_v_uv; uint hz_v_layer; vec4 hz_v_color; uvec2 hz_v_light;\n",
+                "vec3 hz_v_pos; vec2 hz_v_uv; uint hz_v_layer; vec4 hz_v_color; uvec2 hz_v_light;\n",
             )
         } else {
             String::from(
-                "layout(location = 0) in vec3 hz_v_pos;\nlayout(location = 1) in uvec2 hz_v_uv;\n\
+                "layout(location = 0) in vec3 hz_v_pos;\nlayout(location = 1) in vec2 hz_v_uv;\n\
                  layout(location = 2) in uint hz_v_layer;\nlayout(location = 3) in vec4 hz_v_color;\n\
                  layout(location = 4) in uvec2 hz_v_light;\n",
             )
@@ -797,7 +792,7 @@ impl PackAtlas {
              hz_Vertex = vec4(floor(hz_v_pos * 32768.0 + 0.03125) / 32768.0 + hz_origin.xyz, 1.0);\n    \
              hz_uv_scale = hz_origin.w > 0.0 ? uintBitsToFloat(floatBitsToUint(hz_origin.w) & 0xff800000u) : fract(abs(hz_origin.w));\n    \
              hz_mid = vec2(0.5);\n    \
-             hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_uv_scale, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
+             hz_MultiTexCoord0 = vec4((hz_cell + clamp(hz_v_uv, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
              hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
              hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
              hz_Color = vec4(hz_v_color.rgb, {color_a});\n    \

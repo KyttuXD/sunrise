@@ -311,8 +311,7 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
 // distance, so near chunks win over tiles still under them (gfx/lod.rs's
 // `previous`, columns not complete yet): near water lies a little below a
 // tile's (vanilla's fluid corner heights), and under a smaller step the
-// tile's drew over it, two waters, opaque. A tile's UV step is 1/32, a
-// section's 1/32768 (`terrain_uv`).
+// tile's drew over it, two waters, opaque.
 fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
     let code = fade_code(w);
     let tile = instance_step(w) > 0.001;
@@ -360,14 +359,6 @@ fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
     return textureSampleLevel(lightmap, lightmap_sampler,
         clamp(uv / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
 }
-// mesher.rs's TerrainVertex holds the UV in fixed point; the instance's
-// origin.w is the step: 1/32768 per unit for sections (a power of two on an
-// integer below 2^24, so it decodes exactly), 1/32 per block for distant
-// terrain tiles (TerrainVertex::tiled). A fading tile negates it past its
-// dither code (gfx/lod.rs's `instance`): the step is the fraction either way.
-fn terrain_uv(packed: vec2<u32>, w: f32) -> vec2<f32> {
-    return vec2<f32>(packed) * instance_step(w);
-}
 // A whole section's step (a power of two) carries its fade-in in the mantissa's 23 bits, as
 // `1 - visibility` (gfx.rs's `section_instance`): masked off, the step; the rest is
 // `RenderSection.getVisibility`. A fading one (negative) is fully visible.
@@ -388,10 +379,10 @@ fn fade_code(w: f32) -> u32 {
     return u32(floor(max(-w, 0.0)));
 }
 @vertex fn vs_terrain(
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainWire {
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 // Flat section draws (gfx/flat.rs): one draw per arena page over the frame's
@@ -401,11 +392,11 @@ fn fade_code(w: f32) -> u32 {
 @group(1) @binding(1) var<storage, read> slot_origins: array<vec4<f32>>;
 @vertex fn vs_terrain_flat(
     @builtin(vertex_index) vertex: u32,
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
     let origin = slot_origins[block_slots[vertex >> 8u]];
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 // Solid terrain draws in two passes, each over its own part of every mesh's quads
@@ -425,65 +416,61 @@ fn left_out() -> TerrainOut {
     return out;
 }
 @vertex fn vs_terrain_opaque(
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainWire {
     if !opaque_quad(layer, origin.w) { return to_wire(left_out()); }
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 @vertex fn vs_terrain_cutout(
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainWire {
     if opaque_quad(layer, origin.w) { return to_wire(left_out()); }
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 @vertex fn vs_terrain_flat_opaque(
     @builtin(vertex_index) vertex: u32,
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
     let origin = slot_origins[block_slots[vertex >> 8u]];
     if !opaque_quad(layer, origin.w) { return to_wire(left_out()); }
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 @vertex fn vs_terrain_flat_cutout(
     @builtin(vertex_index) vertex: u32,
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
     let origin = slot_origins[block_slots[vertex >> 8u]];
     if opaque_quad(layer, origin.w) { return to_wire(left_out()); }
-    return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
+    return to_wire(terrain_vertex(position, uv, layer, color, light, origin.xyz,
         origin.w));
 }
 // Solid section draws that read their vertices from the arena page (gfx.rs's `pulled`
 // pipelines; `mesher/packed.rs`): a draw's vertex indices below PACKED_BASE name vertices
-// (`TerrainVertex`, six words, as `TERRAIN_ATTRIBUTES` reads them), from PACKED_BASE on a
+// (`TerrainVertex`, as `TERRAIN_ATTRIBUTES` reads it), from PACKED_BASE on a
 // corner of the quad whose record is at that slot (`PACKED_BASE + 4 * slot + corner`).
-// Either way they come out as the six words of the vertex, so the work after is the same.
+// Both decode to the same vertex fields before shading.
 // Binding 19: visbuffer.wgsl, in the same module, takes 2 to 18 of its own group 1.
-@group(1) @binding(19) var<storage, read> arena_page: array<vec2<u32>>;
+@group(1) @binding(19) var<storage, read> arena_page: array<u32>;
 const PACKED_BASE: u32 = 0x10000000u;
 // Far tiles' own compact layout (`lod/packed.rs`), read apart from a section's by the base
 // its draws use: from FAR_BASE on, a corner of the quad whose far record is at that slot.
 const FAR_BASE: u32 = 0x20000000u;
-// `TerrainVertex::tiled`: a far tile's UVs are in blocks from the face's corner, this many
-// fixed-point steps each (`mesher::TILED_UV_STEPS`).
-const TILED_UV_STEPS: f32 = 32.0;
 // A vertex's words: position bits, then UV, layer with light, colour.
 struct ArenaCorner {
     p: vec3<u32>,
-    r: vec3<u32>,
+    r: vec4<u32>,
 }
 fn arena_vertex(v: u32) -> ArenaCorner {
-    let a = arena_page[v * 3u];
-    let b = arena_page[v * 3u + 1u];
-    let c = arena_page[v * 3u + 2u];
-    return ArenaCorner(vec3(a.x, a.y, b.x), vec3(b.y, c.x, c.y));
+    let b = v * 7u;
+    return ArenaCorner(vec3(arena_page[b], arena_page[b + 1u], arena_page[b + 2u]),
+        vec4(arena_page[b + 3u], arena_page[b + 4u], arena_page[b + 5u], arena_page[b + 6u]));
 }
 // The offset a block corner adds on one component: `side` on the face's axis (rel 0), `du`
 // on the next axis (rel 1), `dw` on the one after (rel 2).
@@ -542,7 +529,8 @@ fn packed_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
     let color = (g * ((t >> 16u) & 255u) / 255u) | ((g * ((t >> 8u) & 255u) / 255u) << 8u)
         | ((g * (t & 255u) / 255u) << 16u) | alpha;
     return ArenaCorner(bitcast<vec3<u32>>(vec3<f32>(pos)),
-        vec3((u << 10u) | (v << 26u), (hi.x & 0xffffu) | (packed_light << 16u), color));
+        vec4(bitcast<u32>(f32(u) / 32.0), bitcast<u32>(f32(v) / 32.0),
+            (hi.x & 0xffffu) | (packed_light << 16u), color));
 }
 // `lod::packed::Face::vertices`: corner `corner` of the far record whose words are lo (0 to
 // 2) and hi (3 to 5). A far quad is a rectangle in an axis-aligned plane with one colour,
@@ -573,9 +561,9 @@ fn far_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
     }
     // The UV is `[u, -v]` of the face counted from its corner, which is `[u0, -v1]`: every
     // coordinate is whole, so the mesher's `floor` of the least corner is the corner itself.
-    let uv = vec2<u32>(vec2(far_u - u0, v1 - far_v) * TILED_UV_STEPS);
+    let uv = vec2(far_u - u0, v1 - far_v);
     // Word 1 is the layer with the light, word 0 the colour, as a vertex holds them.
-    return ArenaCorner(bitcast<vec3<u32>>(pos), vec3(uv.x | (uv.y << 16u), lo.y, lo.x));
+    return ArenaCorner(bitcast<vec3<u32>>(pos), vec4(bitcast<vec2<u32>>(uv), lo.y, lo.x));
 }
 // A solid draw's vertex `vertex`, and the slot its block is found by (`block_slots`, 256
 // slots a block): the vertex's own, or its quad's record's. `packed`: it has a record.
@@ -590,26 +578,26 @@ fn section_corner(vertex: u32) -> SectionCorner {
     }
     if vertex >= FAR_BASE {
         let far_slot = (vertex - FAR_BASE) >> 2u;
-        let a = arena_page[far_slot * 3u];
-        let b = arena_page[far_slot * 3u + 1u];
-        let c = arena_page[far_slot * 3u + 2u];
+        let r = far_slot * 7u;
+        let lo = vec3(arena_page[r], arena_page[r + 1u], arena_page[r + 2u]);
+        let hi = vec3(arena_page[r + 3u], arena_page[r + 4u], arena_page[r + 5u]);
         // `FULL`: the quad's four vertices, word 0 slots on, as a section's spill.
-        if (c.y & 0x80000000u) != 0u {
-            return SectionCorner(arena_vertex(far_slot + a.x + (vertex & 3u)), far_slot, true);
+        if (hi.z & 0x80000000u) != 0u {
+            return SectionCorner(arena_vertex(far_slot + lo.x + (vertex & 3u)), far_slot, true);
         }
-        return SectionCorner(far_corner(vec3(a.x, a.y, b.x), vec3(b.y, c.x, c.y), vertex & 3u),
+        return SectionCorner(far_corner(lo, hi, vertex & 3u),
             far_slot, true);
     }
     let slot = (vertex - PACKED_BASE) >> 2u;
     let corner = vertex & 3u;
-    let a = arena_page[slot * 3u];
-    let b = arena_page[slot * 3u + 1u];
-    let c = arena_page[slot * 3u + 2u];
+    let r = slot * 7u;
+    let lo = vec3(arena_page[r], arena_page[r + 1u], arena_page[r + 2u]);
+    let hi = vec3(arena_page[r + 3u], arena_page[r + 4u], arena_page[r + 5u]);
     // `packed::FULL`: the quad's four vertices, word 0 slots on.
-    if (c.y & 0x80000000u) != 0u {
-        return SectionCorner(arena_vertex(slot + a.x + corner), slot, true);
+    if (hi.z & 0x80000000u) != 0u {
+        return SectionCorner(arena_vertex(slot + lo.x + corner), slot, true);
     }
-    return SectionCorner(packed_corner(vec3(a.x, a.y, b.x), vec3(b.y, c.x, c.y), corner), slot,
+    return SectionCorner(packed_corner(lo, hi, corner), slot,
         true);
 }
 // The colour as the vertex fetch converts a Unorm8x4 attribute, bit for bit (Apple's M1:
@@ -620,24 +608,24 @@ fn unorm8x4(c: u32) -> vec4<f32> {
         * (1.0 / 255.0);
 }
 fn corner_layer(c: ArenaCorner) -> u32 {
-    return c.r.y & 0xffffu;
+    return c.r.z & 0xffffu;
 }
 // A corner's inputs as `TERRAIN_ATTRIBUTES` name them; a shader pack's material and shadow
 // pass read their solid corners through this too (gfx/native_material.rs's `SECTION_CORNER`).
 struct CornerInputs {
     position: vec3<f32>,
-    uv: vec2<u32>,
+    uv: vec2<f32>,
     layer: u32,
     color: vec4<f32>,
     light: vec2<u32>,
 }
 fn corner_inputs(c: ArenaCorner) -> CornerInputs {
-    return CornerInputs(bitcast<vec3<f32>>(c.p), vec2(c.r.x & 0xffffu, c.r.x >> 16u),
-        corner_layer(c), unorm8x4(c.r.z), vec2((c.r.y >> 16u) & 0xffu, c.r.y >> 24u));
+    return CornerInputs(bitcast<vec3<f32>>(c.p), bitcast<vec2<f32>>(c.r.xy),
+        corner_layer(c), unorm8x4(c.r.w), vec2((c.r.z >> 16u) & 0xffu, c.r.z >> 24u));
 }
 fn corner_vertex(c: ArenaCorner, origin: vec4<f32>) -> TerrainOut {
     let i = corner_inputs(c);
-    return terrain_vertex(i.position, terrain_uv(i.uv, origin.w), i.layer, i.color, i.light,
+    return terrain_vertex(i.position, i.uv, i.layer, i.color, i.light,
         origin.xyz, origin.w);
 }
 @vertex fn vs_section(@builtin(vertex_index) vertex: u32,

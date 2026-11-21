@@ -1262,7 +1262,7 @@ mod tests {
         )
     }
     fn tiled_uv(v: &TerrainVertex) -> [f32; 2] {
-        v.uv.map(|u| f32::from(u) / crate::mesher::TILED_UV_STEPS)
+        v.uv()
     }
     #[test]
     fn wide_faces_split_and_keep_their_texture_phase() {
@@ -1426,8 +1426,8 @@ mod tests {
             let back = crate::lod::packed::corners(words)
                 .unwrap_or_else(|| panic!("quad {i}'s record names no face"));
             assert_eq!(
-                bytemuck::cast::<_, [[u32; 6]; 4]>(back),
-                bytemuck::cast::<_, [[u32; 6]; 4]>(*quad),
+                bytemuck::cast::<_, [crate::mesher::packed::ArenaSlot; 4]>(back),
+                bytemuck::cast::<_, [crate::mesher::packed::ArenaSlot; 4]>(*quad),
                 "quad {i} came back changed"
             );
         }

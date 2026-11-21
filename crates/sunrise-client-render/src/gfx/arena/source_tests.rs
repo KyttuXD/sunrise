@@ -32,7 +32,8 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         .expect("GPU control requires an adapter");
     eprintln!("TERRAIN_SOURCE_ARENA_ADAPTER {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    let mut arena = Arena::new(&device, 24, GRAIN, true);
+    let stride = size_of::<TerrainVertex>() as u64;
+    let mut arena = Arena::new(&device, stride, GRAIN, true);
     arena.page_limit = GRAIN * 2;
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut uploads = super::super::upload::Uploads::new(&device);
@@ -45,7 +46,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
     uploads.buffer(
         &mut encoder,
         arena.buffer(first.0),
-        first.1 * 24,
+        first.1 * stride,
         bytemuck::cast_slice(&geometry),
     );
     let source = TerrainSource::new(71, [2, 3, 4], 13, false);
@@ -98,7 +99,13 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         [0; 8]
     );
     assert_eq!(
-        read(&device, &queue, arena.buffer(third.0), third.1 * 24, 96),
+        read(
+            &device,
+            &queue,
+            arena.buffer(third.0),
+            third.1 * stride,
+            4 * stride
+        ),
         bytemuck::cast_slice::<_, u8>(&geometry)
     );
 
@@ -113,14 +120,14 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         ..Default::default()
     }))
     .unwrap();
-    let mut arena = Arena::translucent(&device, 24, GRAIN);
+    let mut arena = Arena::translucent(&device, stride, GRAIN);
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut uploads = super::super::upload::Uploads::new(&device);
     let at = arena.alloc(&device, &mut encoder, 4).unwrap();
     uploads.buffer(
         &mut encoder,
         arena.buffer(at.0),
-        at.1 * 24,
+        at.1 * stride,
         bytemuck::cast_slice(&geometry),
     );
     arena.write_sources(
@@ -140,7 +147,13 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
     uploads.finish(&encoder);
     queue.submit([encoder.finish()]);
     assert_eq!(
-        read(&device, &queue, arena.buffer(at.0), at.1 * 24, 96),
+        read(
+            &device,
+            &queue,
+            arena.buffer(at.0),
+            at.1 * stride,
+            4 * stride
+        ),
         bytemuck::cast_slice::<_, u8>(&geometry)
     );
 }

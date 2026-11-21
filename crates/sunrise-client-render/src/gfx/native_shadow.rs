@@ -44,19 +44,19 @@ fn sunrise_shadow_vertex(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<
     return out;
 }
 fn sunrise_shadow_terrain(c: SunriseCorner, origin: vec4<f32>) -> SunriseShadowOut {
-    let atlas = sunrise_terrain_terrain_uv(c.uv, origin.w);
+    let atlas = c.uv;
     let pos = sunrise_material_displace(c.position + origin.xyz, atlas, c.layer, c.color, c.light);
     return sunrise_shadow_vertex(pos, atlas, c.layer, c.color);
 }
 @vertex fn sunrise_shadow_vs(
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> SunriseShadowOut {
     return sunrise_shadow_terrain(SunriseCorner(position, uv, layer, color, light), origin);
 }
 @vertex fn sunrise_shadow_vs_flat(
     @builtin(vertex_index) index: u32,
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>, @location(2) layer: u32,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) layer: u32,
     @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> SunriseShadowOut {
     let origin = sunrise_terrain_slot_origins[sunrise_terrain_block_slots[index >> 8u]];

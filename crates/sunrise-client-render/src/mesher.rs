@@ -78,11 +78,8 @@ pub fn cull_back(normal: [i8; 4]) -> [i8; 4] {
     }
 }
 /// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
-/// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes
-/// rather than vanilla's 28: the UV is fixed point, which holds model UVs
-/// (multiples of 1/16 and their halves) exactly. The position stays a float:
-/// fixed point would move the edges of offset plants and rotated elements by
-/// a fraction of a pixel. Terrain has no normal: `ModelBlockRenderer` bakes
+/// UV0, UV2), with the sprite's array layer beside the light. Terrain has no
+/// normal: `ModelBlockRenderer` bakes
 /// the face shade into the colour and `terrain.vsh` only multiplies it by the
 /// lightmap.
 #[repr(C)]
@@ -90,9 +87,8 @@ pub fn cull_back(normal: [i8; 4]) -> [i8; 4] {
 pub struct TerrainVertex {
     /// Section-relative position.
     pub pos: [f32; 3],
-    /// UV within the sprite, `UV_STEPS` per unit (`TerrainVertex::new`,
-    /// `terrain.wgsl`'s `terrain_uv`).
-    pub(crate) uv: [u16; 2],
+    /// UV in sprite units.
+    pub(crate) uv: [f32; 2],
     /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves and quads over opaque texels.
     pub layer: u16,
     /// Smooth light, 16x fixed point: sky in the low byte, block in the high one.
@@ -121,7 +117,7 @@ impl TerrainVertex {
     pub fn new(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
         Self {
             pos,
-            uv: uv.map(|v| round_to_u16(v * UV_STEPS)),
+            uv: uv.map(|v| f32::from(round_to_u16(v * UV_STEPS)) / UV_STEPS),
             layer,
             light,
             color,
@@ -138,18 +134,18 @@ impl TerrainVertex {
     ) -> Self {
         Self {
             pos,
-            uv,
+            uv: uv.map(|v| f32::from(v) / UV_STEPS),
             layer,
             light,
             color,
         }
     }
     /// A vertex of a merged distant-terrain face, its UV in blocks from the
-    /// face's corner. Drawn with an instance UV scale of `1 / TILED_UV_STEPS`.
+    /// face's corner.
     pub fn tiled(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
         Self {
             pos,
-            uv: uv.map(|v| round_to_u16(v * TILED_UV_STEPS)),
+            uv: uv.map(|v| f32::from(round_to_u16(v * TILED_UV_STEPS)) / TILED_UV_STEPS),
             layer,
             light,
             color,
@@ -157,7 +153,7 @@ impl TerrainVertex {
     }
     /// The UV the GPU samples.
     pub fn uv(&self) -> [f32; 2] {
-        self.uv.map(|v| f32::from(v) / UV_STEPS)
+        self.uv
     }
 }
 #[cfg(test)]
@@ -391,7 +387,7 @@ mod section_mesh_tests {
     }
 }
 /// A shader terrain quad's unmodified source state and owning section cell. Two words
-/// per quad, kept beside (not in) the native 24-byte vertex format. Word 1 has cell XYZ
+/// per quad, kept beside (not in) the native vertex format. Word 1 has cell XYZ
 /// in three nibbles, a fluid flag, a valid flag, then the emitted light (0..15).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -431,7 +427,7 @@ pub struct SectionMesh {
     pub packed_far: bool,
     /// `solid` in the compact layout (`packed`), when the renderer reads it and it is
     /// smaller; empty otherwise. Made by `sort_solid`.
-    pub packed: Vec<[u32; 6]>,
+    pub packed: Vec<packed::ArenaSlot>,
     /// The tint of each solid quad as the mesher multiplied it (`packed::UNKNOWN_TINT` where
     /// it does not say), for `packed`; dropped once that is made.
     pub(crate) solid_tints: Vec<u32>,
@@ -515,7 +511,7 @@ impl SectionMesh {
             + self.translucent.capacity() * std::mem::size_of::<TerrainVertex>()
             + (self.solid_sources.capacity() + self.translucent_sources.capacity())
                 * std::mem::size_of::<TerrainSource>()
-            + self.packed.capacity() * std::mem::size_of::<[u32; 6]>()
+            + self.packed.capacity() * std::mem::size_of::<packed::ArenaSlot>()
             + self.solid_tints.capacity() * std::mem::size_of::<u32>()
             + self.block_entities.capacity() * std::mem::size_of::<([i32; 3], u32)>()
             + self.lights.capacity() * std::mem::size_of::<([i32; 3], u32)>()

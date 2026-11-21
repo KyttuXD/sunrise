@@ -72,19 +72,19 @@ struct SunriseDisplaceCorner {
     light: vec2<f32>,
     color: vec4<f32>,
 }
-// A corner of a quad as `TerrainVertex` holds it (24 bytes); light: sky, block.
-fn sunrise_displace_corner(quad: u32, i: u32, step: f32) -> SunriseDisplaceCorner {
-    let b = (quad * 4u + i) * 6u;
+// A corner of a quad as `TerrainVertex` holds it; light: sky, block.
+fn sunrise_displace_corner(quad: u32, i: u32) -> SunriseDisplaceCorner {
+    let b = (quad * 4u + i) * 7u;
     var c: SunriseDisplaceCorner;
     c.position = vec3(bitcast<f32>(sunrise_displace_vertices[b]),
         bitcast<f32>(sunrise_displace_vertices[b + 1u]),
         bitcast<f32>(sunrise_displace_vertices[b + 2u]));
-    let uv = sunrise_displace_vertices[b + 3u];
-    c.uv = vec2<f32>(vec2(uv & 0xffffu, uv >> 16u)) * step;
-    let w = sunrise_displace_vertices[b + 4u];
+    c.uv = vec2(bitcast<f32>(sunrise_displace_vertices[b + 3u]),
+        bitcast<f32>(sunrise_displace_vertices[b + 4u]));
+    let w = sunrise_displace_vertices[b + 5u];
     c.layer = w & 0xffffu;
     c.light = vec2(f32((w >> 16u) & 0xffu), f32(w >> 24u));
-    c.color = unpack4x8unorm(sunrise_displace_vertices[b + 5u]);
+    c.color = unpack4x8unorm(sunrise_displace_vertices[b + 6u]);
     return c;
 }
 // The height map at `uv`, filtered between the texels of mip level `lod`.
@@ -228,10 +228,10 @@ fn sunrise_displace_step(v: u32, q: SunriseDisplaceQuad) -> SunriseDisplacePoint
 fn sunrise_displace_point(v: u32, instance: u32) -> SunriseDisplacePoint {
     let pick = sunrise_displace_picked[instance];
     let section = sunrise_displace_sections[pick.y];
-    let c0 = sunrise_displace_corner(pick.x, 0u, section.origin.w);
-    let c1 = sunrise_displace_corner(pick.x, 1u, section.origin.w);
-    let c2 = sunrise_displace_corner(pick.x, 2u, section.origin.w);
-    let c3 = sunrise_displace_corner(pick.x, 3u, section.origin.w);
+    let c0 = sunrise_displace_corner(pick.x, 0u);
+    let c1 = sunrise_displace_corner(pick.x, 1u);
+    let c2 = sunrise_displace_corner(pick.x, 2u);
+    let c3 = sunrise_displace_corner(pick.x, 3u);
     if sunrise_displace_steps {
         return sunrise_displace_step(v, SunriseDisplaceQuad(c0, c1, c2, c3, section.origin.xyz,
             normalize(cross(c1.position - c0.position, c2.position - c0.position))));
@@ -298,7 +298,7 @@ struct Section {
 @group(0) @binding(5) var normals: texture_2d_array<f32>;
 
 fn corner(quad: u32, i: u32, origin: vec3<f32>) -> vec3<f32> {
-    let b = (quad * 4u + i) * 6u;
+    let b = (quad * 4u + i) * 7u;
     return vec3(bitcast<f32>(vertices[b]), bitcast<f32>(vertices[b + 1u]),
         bitcast<f32>(vertices[b + 2u])) + origin;
 }
@@ -329,7 +329,7 @@ fn outside(lo: vec3<f32>, hi: vec3<f32>) -> bool {
     }
     let quad = section.first + id.x;
     // As `sunrise_displaced_layer`: opaque, with a LabPBR height that varies.
-    let layer = vertices[quad * 24u + 4u] & 0xffffu;
+    let layer = vertices[quad * 28u + 5u] & 0xffffu;
     let l = layer & 0x7fffu;
     if (layer & 0x8000u) == 0u || textureDimensions(normals).x <= 1u
         || l >= textureNumLayers(normals) {
@@ -822,7 +822,7 @@ mod tests {
             let gray = 120 + 9 * i;
             [[0, 0], [0, 1], [1, 1], [1, 0]].map(|[dx, dz]: [u32; 2]| TerrainVertex {
                 pos: [x + dx as f32, 9.0, z + dz as f32],
-                uv: [((dx * 16) << 10) as u16, ((dz * 16) << 10) as u16],
+                uv: [dx as f32 * 0.5, dz as f32 * 0.5],
                 layer: crate::mesher::OPAQUE_LAYER | i as u16,
                 light: ((4 * i) | (60 - 4 * i) << 8) as u16,
                 color: gray | gray << 8 | gray << 16 | 0xFF00_0000,
@@ -859,7 +859,7 @@ mod tests {
         let mut two = vec![[0u32; 6]; 4];
         two.extend(
             b.iter()
-                .map(|v| bytemuck::cast::<TerrainVertex, [u32; 6]>(*v)),
+                .map(|v| bytemuck::cast::<TerrainVertex, packed::ArenaSlot>(*v)),
         );
         let base = |slot: u32| packed::PACKED_BASE + 4 * slot;
         let expected: Vec<TerrainVertex> = [&a, &b, &c].into_iter().flatten().copied().collect();
@@ -874,7 +874,7 @@ mod tests {
                     }
                 };
             eprintln!("displacement quads on {} ({name})", adapter.get_info().name);
-            let page = |words: &[[u32; 6]]| {
+            let page = |words: &[packed::ArenaSlot]| {
                 use wgpu::util::DeviceExt;
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
@@ -952,7 +952,7 @@ mod tests {
         use wgpu::util::DeviceExt;
         let corner = |x: f32, y: f32| crate::mesher::TerrainVertex {
             pos: [at[0] + x, at[1] + y, -1.0],
-            uv: [0; 2],
+            uv: [0.; 2],
             layer: crate::mesher::OPAQUE_LAYER,
             light: 0,
             color: u32::MAX,

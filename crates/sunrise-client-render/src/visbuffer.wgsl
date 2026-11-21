@@ -10,8 +10,7 @@
 
 // Bit 31: terrain is here; bit 30: the quad has a record (`mesher/packed.rs`); bits 24 to 29:
 // the arena page (`visbuffer::MAX_PAGES`); bits 0 to 23: the quad's record's slot in the page,
-// else its first vertex over 4 (a page holds at most `arena::PAGE_BYTES` / 24 bytes =
-// 11 184 810 slots, under 2^24).
+// else its first vertex over 4 (a page holds at most `arena::PAGE_BYTES` / 28 bytes, under 2^24).
 fn vis_id(page: u32, s: SectionCorner) -> u32 {
     let at = 0x80000000u | ((page & 0x3fu) << 24u);
     if s.packed {
@@ -115,12 +114,12 @@ struct VisCutoutOut {
         return out;
     }
     let position = bitcast<vec3<f32>>(s.c.p);
-    let uv = vec2(s.c.r.x & 0xffffu, s.c.r.x >> 16u);
-    let light = vec2((s.c.r.y >> 16u) & 0xffu, s.c.r.y >> 24u);
+    let uv = bitcast<vec2<f32>>(s.c.r.xy);
+    let light = vec2((s.c.r.z >> 16u) & 0xffu, s.c.r.z >> 24u);
     let pos = position + origin.xyz;
     out.clip = fade_depth(globals.view_proj * vec4(pos, 1.0), origin.w);
     out.id = vis_id(page, s);
-    out.uv = terrain_uv(uv, origin.w);
+    out.uv = uv;
     out.layer = layer;
     let block = max(f32(light.y), dynamic_block_light(pos));
     out.alpha = sample_lightmap(f32(light.x) / 16.0, block / 16.0).a;
@@ -137,8 +136,8 @@ struct VisCutoutOut {
     return in.id;
 }
 
-// Pass 2. Up to 16 arena pages (mesher.rs's TerrainVertex, 24 bytes: position, UV as two u16,
-// layer and light as u16 each, RGBA8 colour), a quad's 96 bytes as six vec4s; at bindings 0 and
+// Pass 2. Up to 16 arena pages (mesher.rs's TerrainVertex: position and UV as floats,
+// layer and light as u16 each, RGBA8 colour), a quad as seven vec4s; at bindings 0 and
 // 1 the block tables of all pages, page after page, `VIS_BLOCKS_PER_PAGE` entries each
 // (`Visbuffer::resolve` copies them from the flat draws' own), and the origins by section id
 // (terrain.wgsl's flat draws); pass 1's IDs.
@@ -161,76 +160,76 @@ override VIS_BLOCKS_PER_PAGE: u32 = 1u;
 @group(1) @binding(17) var<storage, read> vis_page_15: array<vec4<u32>>;
 @group(1) @binding(18) var vis_ids: texture_2d<u32>;
 
-// A quad's 96 bytes, six 16-byte words from `i` on, of the page in `slot`: one switch for
+// A quad's seven vec4s from `i` on, of the page in `slot`: one switch for
 // all of them, so a thread group whose pixels show several pages walks its cases once.
 struct VisQuad {
-    q: array<vec4<u32>, 6>,
+    q: array<vec4<u32>, 7>,
 }
 fn vis_quad(slot: u32, i: u32) -> VisQuad {
     switch slot {
         case 0u: {
             return VisQuad(array(vis_page_0[i], vis_page_0[i + 1u], vis_page_0[i + 2u],
-                vis_page_0[i + 3u], vis_page_0[i + 4u], vis_page_0[i + 5u]));
+                vis_page_0[i + 3u], vis_page_0[i + 4u], vis_page_0[i + 5u], vis_page_0[i + 6u]));
         }
         case 1u: {
             return VisQuad(array(vis_page_1[i], vis_page_1[i + 1u], vis_page_1[i + 2u],
-                vis_page_1[i + 3u], vis_page_1[i + 4u], vis_page_1[i + 5u]));
+                vis_page_1[i + 3u], vis_page_1[i + 4u], vis_page_1[i + 5u], vis_page_1[i + 6u]));
         }
         case 2u: {
             return VisQuad(array(vis_page_2[i], vis_page_2[i + 1u], vis_page_2[i + 2u],
-                vis_page_2[i + 3u], vis_page_2[i + 4u], vis_page_2[i + 5u]));
+                vis_page_2[i + 3u], vis_page_2[i + 4u], vis_page_2[i + 5u], vis_page_2[i + 6u]));
         }
         case 3u: {
             return VisQuad(array(vis_page_3[i], vis_page_3[i + 1u], vis_page_3[i + 2u],
-                vis_page_3[i + 3u], vis_page_3[i + 4u], vis_page_3[i + 5u]));
+                vis_page_3[i + 3u], vis_page_3[i + 4u], vis_page_3[i + 5u], vis_page_3[i + 6u]));
         }
         case 4u: {
             return VisQuad(array(vis_page_4[i], vis_page_4[i + 1u], vis_page_4[i + 2u],
-                vis_page_4[i + 3u], vis_page_4[i + 4u], vis_page_4[i + 5u]));
+                vis_page_4[i + 3u], vis_page_4[i + 4u], vis_page_4[i + 5u], vis_page_4[i + 6u]));
         }
         case 5u: {
             return VisQuad(array(vis_page_5[i], vis_page_5[i + 1u], vis_page_5[i + 2u],
-                vis_page_5[i + 3u], vis_page_5[i + 4u], vis_page_5[i + 5u]));
+                vis_page_5[i + 3u], vis_page_5[i + 4u], vis_page_5[i + 5u], vis_page_5[i + 6u]));
         }
         case 6u: {
             return VisQuad(array(vis_page_6[i], vis_page_6[i + 1u], vis_page_6[i + 2u],
-                vis_page_6[i + 3u], vis_page_6[i + 4u], vis_page_6[i + 5u]));
+                vis_page_6[i + 3u], vis_page_6[i + 4u], vis_page_6[i + 5u], vis_page_6[i + 6u]));
         }
         case 7u: {
             return VisQuad(array(vis_page_7[i], vis_page_7[i + 1u], vis_page_7[i + 2u],
-                vis_page_7[i + 3u], vis_page_7[i + 4u], vis_page_7[i + 5u]));
+                vis_page_7[i + 3u], vis_page_7[i + 4u], vis_page_7[i + 5u], vis_page_7[i + 6u]));
         }
         case 8u: {
             return VisQuad(array(vis_page_8[i], vis_page_8[i + 1u], vis_page_8[i + 2u],
-                vis_page_8[i + 3u], vis_page_8[i + 4u], vis_page_8[i + 5u]));
+                vis_page_8[i + 3u], vis_page_8[i + 4u], vis_page_8[i + 5u], vis_page_8[i + 6u]));
         }
         case 9u: {
             return VisQuad(array(vis_page_9[i], vis_page_9[i + 1u], vis_page_9[i + 2u],
-                vis_page_9[i + 3u], vis_page_9[i + 4u], vis_page_9[i + 5u]));
+                vis_page_9[i + 3u], vis_page_9[i + 4u], vis_page_9[i + 5u], vis_page_9[i + 6u]));
         }
         case 10u: {
             return VisQuad(array(vis_page_10[i], vis_page_10[i + 1u], vis_page_10[i + 2u],
-                vis_page_10[i + 3u], vis_page_10[i + 4u], vis_page_10[i + 5u]));
+                vis_page_10[i + 3u], vis_page_10[i + 4u], vis_page_10[i + 5u], vis_page_10[i + 6u]));
         }
         case 11u: {
             return VisQuad(array(vis_page_11[i], vis_page_11[i + 1u], vis_page_11[i + 2u],
-                vis_page_11[i + 3u], vis_page_11[i + 4u], vis_page_11[i + 5u]));
+                vis_page_11[i + 3u], vis_page_11[i + 4u], vis_page_11[i + 5u], vis_page_11[i + 6u]));
         }
         case 12u: {
             return VisQuad(array(vis_page_12[i], vis_page_12[i + 1u], vis_page_12[i + 2u],
-                vis_page_12[i + 3u], vis_page_12[i + 4u], vis_page_12[i + 5u]));
+                vis_page_12[i + 3u], vis_page_12[i + 4u], vis_page_12[i + 5u], vis_page_12[i + 6u]));
         }
         case 13u: {
             return VisQuad(array(vis_page_13[i], vis_page_13[i + 1u], vis_page_13[i + 2u],
-                vis_page_13[i + 3u], vis_page_13[i + 4u], vis_page_13[i + 5u]));
+                vis_page_13[i + 3u], vis_page_13[i + 4u], vis_page_13[i + 5u], vis_page_13[i + 6u]));
         }
         case 14u: {
             return VisQuad(array(vis_page_14[i], vis_page_14[i + 1u], vis_page_14[i + 2u],
-                vis_page_14[i + 3u], vis_page_14[i + 4u], vis_page_14[i + 5u]));
+                vis_page_14[i + 3u], vis_page_14[i + 4u], vis_page_14[i + 5u], vis_page_14[i + 6u]));
         }
         default: {
             return VisQuad(array(vis_page_15[i], vis_page_15[i + 1u], vis_page_15[i + 2u],
-                vis_page_15[i + 3u], vis_page_15[i + 4u], vis_page_15[i + 5u]));
+                vis_page_15[i + 3u], vis_page_15[i + 4u], vis_page_15[i + 5u], vis_page_15[i + 6u]));
         }
     }
 }
@@ -272,14 +271,15 @@ fn vis_rows(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> mat3x3<f32> {
     return mat3x3(cross(b, c), cross(c, a), cross(a, b));
 }
 
-// A corner's `terrain_vertex` from its six words: position, UV, layer and light, colour (the
-// vertex attributes `TERRAIN_ATTRIBUTES` in gfx.rs give: Float32x3, Uint16x2, Uint16, Uint8x2
-// with sky in the low byte, Unorm8x4).
-fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> TerrainOut {
-    let uv = vec2(rest.x & 0xffffu, rest.x >> 16u);
-    let light = vec2((rest.y >> 16u) & 0xffu, rest.y >> 24u);
-    return terrain_vertex(bitcast<vec3<f32>>(position), terrain_uv(uv, origin.w),
-        rest.y & 0xffffu, unpack4x8unorm(rest.z), light, origin.xyz, origin.w);
+fn vis_word(words: VisQuad, offset: u32) -> u32 {
+    return words.q[offset >> 2u][offset & 3u];
+}
+
+fn vis_corner(position: vec3<u32>, rest: vec4<u32>, origin: vec4<f32>) -> TerrainOut {
+    let uv = bitcast<vec2<f32>>(rest.xy);
+    let light = vec2((rest.z >> 16u) & 0xffu, rest.z >> 24u);
+    return terrain_vertex(bitcast<vec3<f32>>(position), uv,
+        rest.z & 0xffffu, unpack4x8unorm(rest.w), light, origin.xyz, origin.w);
 }
 
 @fragment fn fs_vis_resolve(in: VisResolveOut) -> @location(0) vec4<f32> {
@@ -298,12 +298,12 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
     var hi = vec3(0u);
     if (id & 0x40000000u) != 0u {
         first = index;
-        // The record's six words from word 6 * index: two 16-byte words from the one it
-        // starts in, at its start or its middle.
-        let w = vis_quad(slot, (6u * index) >> 2u).q;
-        let middle = ((6u * index) & 3u) != 0u;
-        lo = select(w[0].xyz, vec3(w[0].zw, w[1].x), middle);
-        hi = select(vec3(w[0].w, w[1].xy), w[1].yzw, middle);
+        // Six record words at the start of a seven-word arena slot.
+        let word = 7u * index;
+        let w = vis_quad(slot, word >> 2u);
+        let at = word & 3u;
+        lo = vec3(vis_word(w, at), vis_word(w, at + 1u), vis_word(w, at + 2u));
+        hi = vec3(vis_word(w, at + 3u), vis_word(w, at + 4u), vis_word(w, at + 5u));
         record = (hi.z & 0x80000000u) == 0u;
         if !record {
             // `packed::FULL`: its four vertices, word 0 slots on.
@@ -315,13 +315,13 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
     let block = select(index >> 6u, index >> 8u, (id & 0x40000000u) != 0u);
     let origin = slot_origins[block_slots[page * VIS_BLOCKS_PER_PAGE + block]];
     var p0: vec3<u32>;
-    var r0: vec3<u32>;
+    var r0: vec4<u32>;
     var p1: vec3<u32>;
-    var r1: vec3<u32>;
+    var r1: vec4<u32>;
     var p2: vec3<u32>;
-    var r2: vec3<u32>;
+    var r2: vec4<u32>;
     var p3: vec3<u32>;
-    var r3: vec3<u32>;
+    var r3: vec4<u32>;
     if record {
         let c0 = packed_corner(lo, hi, 0u);
         let c1 = packed_corner(lo, hi, 1u);
@@ -336,22 +336,16 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
         p3 = c3.p;
         r3 = c3.r;
     } else {
-        // Corner k is words 6k to 6k + 5 of the quad's 24.
-        let words = vis_quad(slot, 6u * (first >> 2u)).q;
-        let q0 = words[0];
-        let q1 = words[1];
-        let q2 = words[2];
-        let q3 = words[3];
-        let q4 = words[4];
-        let q5 = words[5];
-        p0 = q0.xyz;
-        r0 = vec3(q0.w, q1.x, q1.y);
-        p1 = vec3(q1.z, q1.w, q2.x);
-        r1 = q2.yzw;
-        p2 = q3.xyz;
-        r2 = vec3(q3.w, q4.x, q4.y);
-        p3 = vec3(q4.z, q4.w, q5.x);
-        r3 = q5.yzw;
+        // Corner k occupies seven words; the quad starts at a vec4 boundary.
+        let q = vis_quad(slot, 7u * (first >> 2u)).q;
+        p0 = q[0].xyz;
+        r0 = vec4(q[0].w, q[1].xyz);
+        p1 = vec3(q[1].w, q[2].xy);
+        r1 = vec4(q[2].zw, q[3].xy);
+        p2 = vec3(q[3].zw, q[4].x);
+        r2 = vec4(q[4].yzw, q[5].x);
+        p3 = q[5].yzw;
+        r3 = q[6];
     }
     let c0 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p0) + origin.xyz, 1.0)).xyw;
     let c1 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p1) + origin.xyz, 1.0)).xyw;

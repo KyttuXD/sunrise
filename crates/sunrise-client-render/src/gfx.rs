@@ -27,7 +27,7 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 };
 /// `TerrainVertex` for `vs_terrain`: position, UV, layer, light, colour.
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
 fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
     layered && !pack && world

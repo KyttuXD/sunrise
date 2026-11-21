@@ -1,5 +1,5 @@
-//! The compact layout of a far tile's solid quads in the arena: one 24-byte
-//! record each instead of four 24-byte vertices.
+//! The compact layout of a far tile's solid quads in the arena: one arena slot
+//! each instead of four vertices.
 //!
 //! A far tile's quads are not blocks' faces -- they are merged rectangles of a
 //! voxel column's exposed side, hundreds of blocks wide -- so none of them fits
@@ -233,8 +233,8 @@ pub fn pack(quad: &[TerrainVertex; 4]) -> Option<[u32; 6]> {
             let words = face.words();
             // The record is kept only where it gives the quad back exactly, so
             // a quad this layout cannot hold is spilled rather than altered.
-            if bytemuck::cast::<_, [[u32; 6]; 4]>(face.vertices())
-                == bytemuck::cast::<_, [[u32; 6]; 4]>(*quad)
+            if bytemuck::cast::<_, [packed::ArenaSlot; 4]>(face.vertices())
+                == bytemuck::cast::<_, [packed::ArenaSlot; 4]>(*quad)
             {
                 return Some(words);
             }
@@ -265,7 +265,7 @@ pub fn lay_out(mesh: &mut crate::mesher::SectionMesh) {
 /// A far tile's solid quads laid out compactly: a record each in mesh order,
 /// then the vertices of the quads no record fits. Empty where that would not
 /// be smaller than the vertices.
-pub fn layout(solid: &[TerrainVertex]) -> Vec<[u32; 6]> {
+pub fn layout(solid: &[TerrainVertex]) -> Vec<packed::ArenaSlot> {
     let quads = solid.as_chunks::<4>().0;
     let records: Vec<Option<[u32; 6]>> = quads.iter().map(pack).collect();
     packed::place(&records, quads)
@@ -277,7 +277,7 @@ mod tests {
 
     /// The four corners as bits: `TerrainVertex` has no `PartialEq`, and bit
     /// identity is the guarantee the layout makes in any case.
-    fn words_of(quad: [TerrainVertex; 4]) -> [[u32; 6]; 4] {
+    fn words_of(quad: [TerrainVertex; 4]) -> [packed::ArenaSlot; 4] {
         bytemuck::cast(quad)
     }
 
@@ -415,7 +415,8 @@ mod tests {
         let out = layout(&solid);
         assert_eq!(out.len(), solid.len() / 4, "a slot a quad, none spilled");
         for (quad, record) in solid.as_chunks::<4>().0.iter().zip(&out) {
-            let face = Face::from_words(*record).expect("a record names a face");
+            let [a, b, c, d, e, f, _] = *record;
+            let face = Face::from_words([a, b, c, d, e, f]).expect("a record names a face");
             assert_eq!(words_of(face.vertices()), words_of(*quad),);
         }
     }

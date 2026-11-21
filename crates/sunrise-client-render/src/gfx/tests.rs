@@ -1463,7 +1463,7 @@ fn terrain_attributes_follow_the_terrain_vertex() {
             (3, offset_of!(TerrainVertex, color)),
         ]
     );
-    assert_eq!(std::mem::size_of::<TerrainVertex>(), 24);
+    assert_eq!(std::mem::size_of::<TerrainVertex>(), 28);
 }
 #[test]
 fn cracks_multiply_instead_of_covering_the_block() {

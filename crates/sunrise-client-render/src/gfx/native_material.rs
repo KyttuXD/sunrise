@@ -119,24 +119,24 @@ fn sunrise_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f
     return out;
 }
 @vertex fn sunrise_material_vs(
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> SunriseMaterialOut {
-    return sunrise_material_vertex(position, sunrise_terrain_terrain_uv(uv, origin.w), layer,
+    return sunrise_material_vertex(position, uv, layer,
         color, light, origin);
 }
 @vertex fn sunrise_material_vs_flat(
     @builtin(vertex_index) vertex: u32,
-    @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> SunriseMaterialOut {
     let origin = sunrise_terrain_slot_origins[sunrise_terrain_block_slots[vertex >> 8u]];
-    return sunrise_material_vertex(position, sunrise_terrain_terrain_uv(uv, origin.w), layer,
+    return sunrise_material_vertex(position, uv, layer,
         color, light, origin);
 }
 // Solid draws reading the arena page (`SECTION_CORNER`), in either layout of the solid quads.
 fn sunrise_material_corner(c: SunriseCorner, origin: vec4<f32>) -> SunriseMaterialOut {
-    return sunrise_material_vertex(c.position, sunrise_terrain_terrain_uv(c.uv, origin.w), c.layer,
+    return sunrise_material_vertex(c.position, c.uv, c.layer,
         c.color, c.light, origin);
 }
 @vertex fn sunrise_material_vs_section(@builtin(vertex_index) vertex: u32,
@@ -1028,7 +1028,7 @@ mod tests {
     let c = {p}corner_inputs({p}section_corner(v).c);
     let q = bitcast<vec3<u32>>(c.position);
     let t = bitcast<vec4<u32>>(c.color);
-    test_out[v & 0xfffffffu] = array<u32, 12>(q.x, q.y, q.z, c.uv.x, c.uv.y, c.layer, t.x,
+    test_out[v & 0xfffffffu] = array<u32, 12>(q.x, q.y, q.z, bitcast<u32>(c.uv.x), bitcast<u32>(c.uv.y), c.layer, t.x,
         t.y, t.z, t.w, c.light.x, c.light.y);
     return vec4(2.0, 2.0, 2.0, 1.0);
 }}
@@ -1239,7 +1239,7 @@ mod tests {
                 let light = [u32::from(v.light & 0xff), u32::from(v.light >> 8)];
                 let words = [
                     v.pos.map(f32::to_bits).to_vec(),
-                    v.uv.map(u32::from).to_vec(),
+                    v.uv.map(f32::to_bits).to_vec(),
                 ];
                 assert_eq!(got[..5], words.concat()[..], "{device_name}: corner {i}");
                 assert_eq!(got[5], u32::from(v.layer), "{device_name}: corner {i}");

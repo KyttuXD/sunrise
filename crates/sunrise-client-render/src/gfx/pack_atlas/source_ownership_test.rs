@@ -96,7 +96,7 @@ fn terrain_source_ownership_gpu() {
          void main() {{\n\
          uint hz_index=gl_GlobalInvocationID.x;\n\
          vec3 hz_v_pos=uintBitsToFloat(uvec3(hz_vertices[6u*hz_index],hz_vertices[6u*hz_index+1u],hz_vertices[6u*hz_index+2u]));\n\
-         uvec2 hz_v_uv=uvec2(0); uint hz_v_layer=0u; vec4 hz_v_color=vec4(1); uvec2 hz_v_light=uvec2(0);\n\
+         vec2 hz_v_uv=vec2(0); uint hz_v_layer=0u; vec4 hz_v_color=vec4(1); uvec2 hz_v_light=uvec2(0);\n\
          vec4 hz_Vertex, hz_MultiTexCoord0, hz_MultiTexCoord1, hz_MultiTexCoord2, hz_Color; vec3 hz_Normal;\n\
          {}\nresult[2u*hz_index]={}; result[2u*hz_index+1u]={};\n}}",
         inputs.body.replace("gl_VertexIndex", "hz_index"),

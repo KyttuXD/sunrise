@@ -287,7 +287,7 @@ fn compact_records_feed_a_pack_the_vertices_they_hold() {
             [x + 1.0, y, 6.0],
             [x + 1.0, y, 5.0],
         ];
-        let uv = [[0, 0], [16 << 10, 0], [16 << 10, 16 << 10], [0, 16 << 10]];
+        let uv = [[0., 0.], [0.5, 0.], [0.5, 0.5], [0., 0.5]];
         (0..4).map(move |i| {
             let [r, g, b] = [16, 8, 0].map(|s| 200 * (tint >> s & 255) / 255);
             TerrainVertex {
@@ -353,10 +353,14 @@ fn compact_records_feed_a_pack_the_vertices_they_hold() {
     }
     // A pack's frames keep the translucent quads in the section arena after the solid range: three
     // records and no `FULL` quad, then a water quad, whose corners must read as its own.
-    let mut page: Vec<[u32; 6]> = packed::layout(&solid[..12], &[tint; 3]);
+    let mut page: Vec<packed::ArenaSlot> = packed::layout(&solid[..12], &[tint; 3]);
     let water: Vec<_> = face(9.0, 15.0).collect();
     let at = page.len() as u32;
-    page.extend(water.iter().map(|v| bytemuck::cast::<_, [u32; 6]>(*v)));
+    page.extend(
+        water
+            .iter()
+            .map(|v| bytemuck::cast::<_, packed::ArenaSlot>(*v)),
+    );
     for expression in ["vec4(gl_Normal, 0.0)", "at_tangent", "at_midBlock"] {
         let flags = [true, false];
         let wide = sample_probe(&device, &queue, &atlas, &water, origin, flags, expression);
