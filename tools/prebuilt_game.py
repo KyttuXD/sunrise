@@ -800,8 +800,12 @@ def smoke(out: Path) -> None:
     if installed.exists():
         shutil.rmtree(installed)
     installed.mkdir()
-    # The game's libraries load from beside the executable (sunrise-launcher's src/native_mods/prebuilt.rs `compile`).
-    origin = {"linux": ["-Wl,-rpath,$ORIGIN"], "darwin": ["-Wl,-rpath,@executable_path"]}.get(sys.platform, [])
+    # Exercise the same library link arguments as sunrise-native-build.
+    target_os = {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+    prefix = f"{target_os} "
+    policy = ROOT / "crates/sunrise-native-build/src/dylib-link-args.txt"
+    link_args = [line.removeprefix(prefix) for line in policy.read_text(encoding="utf-8").splitlines()
+                 if line.startswith(prefix)]
     identity = json.loads((out / IDENTITY).read_text())
     release = next(line.removeprefix("release: ") for line in identity["rustc"].splitlines() if line.startswith("release: "))
     starter = (ROOT / "crates/cargo-sunrise-mod/template/native/lib.rs").read_text()
@@ -830,7 +834,7 @@ def smoke(out: Path) -> None:
             library = installed / f"{dylib_prefix()}{mod}{dylib_suffix()}"
             run(["rustc", *common, "-L", f"dependency={installed}", "--crate-type", "dylib", "--crate-name", mod,
                  *extern("mod_api"), "--extern", f"sunrise_mod_host={dylib(deps, 'sunrise_mod_host')}", *externs,
-                 *(flag for arg in origin for flag in ("-C", f"link-arg={arg}")),
+                 *(flag for arg in link_args for flag in ("-C", f"link-arg={arg}")),
                  "-o", str(library), str(scratch / f"{mod}.rs")])
             records.append({"file": library.name, "sha256": sha256(library), "kind": "mod", "mod": mod,
                             "identity": f"{build} unwind"})

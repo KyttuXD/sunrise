@@ -113,19 +113,9 @@ pub fn compile(
     let mut members = Vec::new();
     let mut wrapper_deps = toml::Table::new();
     let deps = game.join("deps");
-    // A mod library's link arguments: only the rpath ones, putting the library's own folder on
-    // its search path (not the game executable's link policy).
-    let mod_link_args = || {
-        let mut link_args = Vec::new();
-        if cfg!(target_os = "linux") {
-            link_args.push("-Wl,--disable-new-dtags".into());
-            link_args.push("-Wl,-rpath,$ORIGIN".into());
-        }
-        if cfg!(target_os = "macos") {
-            link_args.push("-Wl,-rpath,@loader_path".into());
-        }
-        link_args
-    };
+    let link_args: Vec<_> = prebuilt::dylib_link_args(std::env::consts::OS)
+        .map(str::to_owned)
+        .collect();
     // Each mod's staged folder and library root, for the shared registry library.
     let mut mod_dirs = BTreeMap::new();
     let mut mod_roots = BTreeMap::new();
@@ -239,26 +229,18 @@ pub fn compile(
             }
             fs::write(path, manifest.to_string()).map_err(|e| e.to_string())?;
         }
-        let mut externs: BTreeMap<String, PathBuf> = BTreeMap::from([
-            ("mod_api".into(), prebuilt::library(&deps, "mod_api")?),
-            ("mod_vocab".into(), prebuilt::library(&deps, "mod_vocab")?),
-        ]);
-        for (name, path) in &externs {
-            prebuilt::refuse_closure_rlib(id, name, path)?;
-        }
-        for (name, package) in project.api_dependencies() {
-            if package != "internals" {
+        let mut externs = BTreeMap::new();
+        let mut facade_aliases = Vec::new();
+        for (name, package) in prebuilt::mod_sdk_externs(project) {
+            if package == "internals" {
+                facade_aliases.push(name);
+            } else {
                 let path = prebuilt::library(&deps, package)?;
                 prebuilt::refuse_closure_rlib(id, package, &path)?;
                 externs.insert(name, path);
             }
         }
-        if internals::needed(&bundle.manifest)
-            || project
-                .api_dependencies()
-                .iter()
-                .any(|(_, package)| *package == "internals")
-        {
+        if internals::needed(&bundle.manifest) || !facade_aliases.is_empty() {
             let facade = &generated[id.as_str()];
             let facade_relative = internals::relative(id);
             let facade_dir = out.join(&facade_relative);
@@ -296,13 +278,7 @@ pub fn compile(
                 .or_insert_with(|| toml::Table::new().into())
                 .as_table_mut()
                 .ok_or("invalid dependencies")?;
-            let aliases: Vec<_> = project
-                .api_dependencies()
-                .into_iter()
-                .filter(|(_, package)| *package == "internals")
-                .map(|(name, _)| name)
-                .collect();
-            for alias in aliases {
+            for alias in facade_aliases {
                 dependencies.insert(alias, toml::toml! { path = (format!("../../{facade_relative}")) package = (facade_package.clone()) }.into());
             }
             fs::write(dest.join("Cargo.toml"), manifest.to_string()).map_err(|e| e.to_string())?;
@@ -315,7 +291,7 @@ pub fn compile(
             dest,
             registry_rustc::Bindings {
                 externs,
-                link_args: mod_link_args(),
+                link_args: link_args.clone(),
             },
         );
         members.push(relative);
@@ -493,7 +469,7 @@ pub fn compile(
             out.join(registry_shared::RELATIVE),
             registry_rustc::Bindings {
                 externs,
-                link_args: mod_link_args(),
+                link_args: link_args.clone(),
             },
         );
         // Cargo records the new local package in the lock, offline: every crate it names is
@@ -516,18 +492,9 @@ pub fn compile(
     if inventory.added_crates > 0 && !options.consent.is_some_and(|ask| ask(&inventory)) {
         return Err(crate::host::tr("The mods' crates.io dependencies were not compiled: the plan's \"registry\" field is false or the question was declined. \"registry\": true approves compiling them; their build scripts and proc macros then run on this computer").into());
     }
-    let mut externs = prebuilt::wrapper_externs(&deps)?;
-    externs.insert("mod_vocab".into(), prebuilt::library(&deps, "mod_vocab")?);
+    let externs = prebuilt::wrapper_externs(&deps)?;
     for (name, path) in &externs {
         prebuilt::refuse_closure_rlib("sunrise_patch", name, path)?;
-    }
-    let mut link_args = Vec::new();
-    if cfg!(target_os = "linux") {
-        link_args.push("-Wl,--disable-new-dtags".into());
-        link_args.push("-Wl,-rpath,$ORIGIN".into());
-    }
-    if cfg!(target_os = "macos") {
-        link_args.push("-Wl,-rpath,@executable_path".into());
     }
     bindings.insert(
         out.to_path_buf(),

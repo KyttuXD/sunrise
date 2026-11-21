@@ -4,7 +4,7 @@ use super::{MixinsIdentity, Target, api, dependencies, internals};
 use crate::host::{tr, trf};
 use crate::rust::Toolchain;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -467,9 +467,8 @@ pub fn library(deps: &Path, krate: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Both compiler routes link the same SDK-owned executable template, and the patch library, so `sunrise_mod_host`
-/// is always an extern: the game crates it carries (`sunrise_client` and its closure, metadata only in `deps/`) are
-/// code only inside that dylib.
+/// SDK externs for the patch dylib in both compiler routes. `sunrise_mod_host` supplies the code
+/// for the game crates whose metadata alone is in `deps/`, including `sunrise_client`.
 pub fn wrapper_externs(deps: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
     let mut externs = BTreeMap::new();
     for name in [
@@ -538,7 +537,16 @@ fn rustc(rust: &dyn Toolchain, game: &Path, out: &Path, edition: &str) -> Comman
     cmd
 }
 
-/// rustc with the prebuilt game's settings and only `search` as dependency search paths.
+/// The runtime search path for mod, registry dependency and patch dylibs, also used by the SDK
+/// smoke build. On Linux, keep DT_RPATH so the search applies to transitive dependencies.
+pub(super) fn dylib_link_args(os: &str) -> impl Iterator<Item = &'static str> + '_ {
+    include_str!("dylib-link-args.txt")
+        .lines()
+        .filter_map(move |line| line.strip_prefix(os)?.strip_prefix(' '))
+}
+
+/// rustc with the prebuilt game's settings, the native dylib runtime search path and only
+/// `search` as dependency search paths.
 pub fn rustc_with(rust: &dyn Toolchain, search: &[&Path], edition: &str) -> Command {
     let mut cmd = rust.command(&rust.rustc());
     crate::rust::low_priority(&mut cmd);
@@ -550,12 +558,8 @@ pub fn rustc_with(rust: &dyn Toolchain, search: &[&Path], edition: &str) -> Comm
         "-C",
         OPT_LEVEL,
     ]);
-    if let Some(origin) = match std::env::consts::OS {
-        "linux" => Some("-Wl,-rpath,$ORIGIN"),
-        "macos" => Some("-Wl,-rpath,@loader_path"),
-        _ => None,
-    } {
-        cmd.arg("-C").arg(format!("link-arg={origin}"));
+    for arg in dylib_link_args(std::env::consts::OS) {
+        cmd.arg("-C").arg(format!("link-arg={arg}"));
     }
     for folder in search {
         cmd.arg("-L")
@@ -906,9 +910,17 @@ pub fn library_entry(
         )
 }
 
-/// Compiles `project`'s crate as an rlib into `out` with `rustc` (given the edition: rustc with
+/// SDK library bindings for a mod. Its entry needs the canonical `mod_api` name even when the
+/// mod uses an alias. Include that binding only once if the mod uses it under its original name.
+pub(super) fn mod_sdk_externs(project: &api::Project<'_>) -> BTreeSet<(String, &'static str)> {
+    let mut externs = project.api_dependencies();
+    externs.extend(["mod_api", "mod_vocab"].map(|name| (name.to_owned(), name)));
+    externs
+}
+
+/// Compiles `project`'s crate as a dylib into `out` with `rustc` (given the edition: rustc with
 /// the route's search paths), its game packages from `library` and its installed mod dependencies
-/// from `rlibs`. Returns the rlib and the crate's name.
+/// from `rlibs`. Returns the dylib and the crate's name.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_mod<'a>(
     project: &api::Project<'_>,
@@ -958,14 +970,11 @@ pub fn compile_mod<'a>(
     ])
     .arg("-C")
     .arg(format!("metadata={id}"));
-    for name in ["mod_api", "mod_vocab"] {
-        refuse_closure_rlib(id, name, library(name))?;
+    for (name, package) in mod_sdk_externs(project) {
+        let path = library(package);
+        refuse_closure_rlib(id, package, path)?;
         cmd.arg("--extern")
-            .arg(format!("{name}={}", library(name).display()));
-    }
-    for (name, package) in project.api_dependencies() {
-        cmd.arg("--extern")
-            .arg(format!("{name}={}", library(package).display()));
+            .arg(format!("{name}={}", path.display()));
     }
     for dependency in declared {
         let Some(rlib) = rlibs.get(dependency.id.as_str()) else {
@@ -1092,13 +1101,12 @@ pub fn compiling(id: &str) -> String {
     trf("Compiling {mod}", &[("mod", id)])
 }
 
-/// The launcher's settings for a kept registry build: bumped whenever the launcher changes the
-/// cargo arguments, the compiler plan or how it stages, so a build made the old way is not reused.
-const KEPT_BUILD_FLAGS: u32 = 2;
+/// Settings for kept native builds. Bump when rustc or Cargo arguments, the compiler plan or
+/// staging change so a build made the old way is not reused.
+const KEPT_BUILD_FLAGS: u32 = 3;
 
-/// The folder a registry build's cargo output is kept in, under `native/prebuilt-build`: one per
-/// game build, Rust toolchain and launcher settings ([`KEPT_BUILD_FLAGS`]). Inside one, cargo's
-/// own fingerprints decide what to rebuild.
+/// The build key under `native/prebuilt-build`: one per game build, Rust toolchain and tool
+/// settings ([`KEPT_BUILD_FLAGS`]). Inside one, the route's fingerprints decide what to rebuild.
 fn kept_build(rust: &dyn Toolchain, package: &Package) -> Result<String, String> {
     let sdk = identity(&package.runtime)?;
     let mut hasher = Sha256::new();
@@ -1524,13 +1532,49 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert!(args.iter().any(|arg| arg == "prefer-dynamic"), "{args:?}");
-        let rpath = match std::env::consts::OS {
-            "linux" => Some("link-arg=-Wl,-rpath,$ORIGIN"),
-            "macos" => Some("link-arg=-Wl,-rpath,@loader_path"),
-            _ => None,
-        };
-        if let Some(rpath) = rpath {
-            assert!(args.iter().any(|arg| arg == rpath), "{args:?}");
+        let link_args: Vec<_> = args
+            .iter()
+            .filter_map(|arg| arg.strip_prefix("link-arg="))
+            .collect();
+        for (os, expected) in [
+            (
+                "linux",
+                &["-Wl,--disable-new-dtags", "-Wl,-rpath,$ORIGIN"][..],
+            ),
+            ("macos", &["-Wl,-rpath,@loader_path"][..]),
+            ("windows", &[][..]),
+        ] {
+            assert!(dylib_link_args(os).eq(expected.iter().copied()), "{os}");
+            if os == std::env::consts::OS {
+                assert_eq!(link_args.as_slice(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn mod_sdk_externs_keep_the_canonical_binding_once_and_preserve_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        super::super::tests::write_bundle(dir.path(), "fixture", "");
+        let manifest = dir.path().join("Cargo.toml");
+        for (dependency, alias) in [("sunrise-mod-api", None), ("game-api", Some("game_api"))] {
+            fs::write(
+                &manifest,
+                format!(
+                    "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\n\
+                     {dependency}={{package='sunrise-mod-api',path='.sunrise/sdk/api/crates/sunrise-mod-api'}}"
+                ),
+            )
+            .unwrap();
+            let bundle = super::super::bundle_in(dir.path()).unwrap().unwrap();
+            let project = api::Project::read(&bundle).unwrap();
+            let mut expected = BTreeSet::from([
+                ("mod_api".to_owned(), "mod_api"),
+                ("mod_vocab".to_owned(), "mod_vocab"),
+            ]);
+            if let Some(alias) = alias {
+                expected.insert((alias.to_owned(), "mod_api"));
+            }
+            assert_eq!(mod_sdk_externs(&project), expected);
         }
     }
 

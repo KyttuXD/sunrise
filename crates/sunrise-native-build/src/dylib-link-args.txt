@@ -1,0 +1,4 @@
+# Rust target_os followed by one linker argument for a native mod SDK dylib.
+linux -Wl,--disable-new-dtags
+linux -Wl,-rpath,$ORIGIN
+macos -Wl,-rpath,@loader_path

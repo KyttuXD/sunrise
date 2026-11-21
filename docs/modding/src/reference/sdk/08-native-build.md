@@ -11,6 +11,11 @@ Native mod authors keep the same code and `sunrise-mod.toml`. On Windows the SDK
 reservation when it links the fixed game executable, not when it links native mod libraries. If your tooling
 inspects the SDK's `sunrise-prebuilt.json` identity, stop reading `link_args`: that field has no replacement.
 
+Mod, patch and shared registry dependency libraries use the same runtime search path. On macOS, `@loader_path`
+starts at the library that loads the dependency, not the game executable. On Linux, `$ORIGIN` in `DT_RPATH`
+also covers transitive dependencies. Mods do not supply these flags; install all libraries returned in the
+`built` event together beside the executable.
+
 The caller does what needs a player or their game: it checks that native code is allowed, fetches and verifies the
 SDK's slices, installs the pinned Rust, chooses the mods and which of them a build leaves out, and installs what the
 tool built. The tool compiles, and nothing else.

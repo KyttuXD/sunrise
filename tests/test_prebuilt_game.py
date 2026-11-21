@@ -971,6 +971,38 @@ class LauncherCheckoutTests(unittest.TestCase):
                 pin_file.write_text(original)
 
 
+class SmokeBuildTests(unittest.TestCase):
+    def test_both_mod_libraries_use_the_sdk_platform_link_args(self):
+        for platform, expected in (
+            ("linux", ["-Wl,--disable-new-dtags", "-Wl,-rpath,$ORIGIN"]),
+            ("darwin", ["-Wl,-rpath,@loader_path"]),
+            ("win32", []),
+        ):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory, \
+                 patch.object(prebuilt_game.sys, "platform", platform):
+                out = Path(directory) / "sdk"
+                out.mkdir()
+                write_build_data(out, {"facade_crates": [], "rustc": "release: fixture\n"})
+                (out / "deps/libsunrise_mod_package.rmeta").touch()
+                linked = {}
+
+                def run(command, **kwargs):
+                    if command == ["git", "rev-parse", "HEAD"]:
+                        return COMMIT
+                    self.assertEqual(command[0], "rustc")
+                    self.assertEqual(command[command.index("--crate-type") + 1], "dylib")
+                    name = command[command.index("--crate-name") + 1]
+                    linked[name] = [arg.removeprefix("link-arg=") for arg in command if arg.startswith("link-arg=")]
+                    Path(command[command.index("-o") + 1]).touch()
+                    return ""
+
+                with patch.object(prebuilt_game, "run", side_effect=run), \
+                     patch.object(prebuilt_game, "runtime_libraries", return_value=[]), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    prebuilt_game.smoke(out)
+                self.assertEqual(linked, {"smoke": expected, "smoke_user": expected})
+
+
 class SmokeStartTests(unittest.TestCase):
     def test_launcher_files_fetched_at_the_pin_keep_the_layout_that_includes_the_icon(self):
         urls = []

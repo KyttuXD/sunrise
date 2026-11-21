@@ -1,0 +1,18 @@
+# SDK build tooling is outside the exported mod API, so these ids are not in surface-diff.
+ids = [
+    "fn:sunrise_native_build::prebuilt::rustc_with",
+    "fn:sunrise_native_build::prebuilt::compile_mod",
+    "fn:sunrise_native_build::registry_compile::compile",
+]
+why = """
+The Sunrise SDK uses one set of link arguments for direct and registry builds, including the patch
+library and shared registry dependencies. On macOS the loader looks beside the library that needs
+a dependency instead of beside the executable; on Linux the library-relative search path still
+covers transitive dependencies. The SDK supplies each default extern once without removing
+dependency aliases or runtime libraries. The release smoke build exercises the same flags.
+This is a Sunrise-only SDK detail with no vanilla or NeoForge counterpart.
+"""
+migrate = """
+No source, Cargo.toml or sunrise-mod.toml changes. Keep using the target build's SDK tool and install
+its returned libraries together beside its executable. Do not add any linker flags to the mod.
+"""
