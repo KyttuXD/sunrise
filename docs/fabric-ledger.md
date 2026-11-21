@@ -214,7 +214,7 @@ unless the file says otherwise.
 Scope: `base.rs`'s `player_login`, `player_load_from_file`, `player_logged_in`,
 `player_logged_out`, `player_save_to_file`, `player_client_loaded_world` and
 `player_kicked`, and the one hook in `client_information_updated.rs`,
-`client_information_updated`. All eight record a gap; no keys are added.
+`client_information_updated`. These hooks record a gap; no keys are added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
 |---|---|---|
@@ -254,7 +254,7 @@ Scope: `loot_table_load`, `loot_drops`, and the hooks in `block_drops.rs` (`bloc
 `living_experience_drop.rs` (`living_experience_drop`). This is the loot part of
 `base.rs`, after the server connection, chunk, level, entity load, player
 connection, and effects/interaction/damage/chat parts in the earlier sections.
-All eight record a gap; none of these reviewed hooks carries a key and none is added.
+These hooks record a gap; none of these reviewed hooks carries a key and none is added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
 |---|---|---|
@@ -335,7 +335,7 @@ Scope: `base.rs`'s `entities_load`, `entities_unload`, `entity_join_level`,
 `living_equipment_change` and `living_equipment_listened`. This is the entity load,
 tracking and equipment part of `base.rs`, after the server connection, chunk, level,
 player connection, effects/interaction/damage/chat and loot parts in the earlier
-sections. All eight record a gap; none of these reviewed hooks carries a key and none
+sections. These hooks record a gap; none of these reviewed hooks carries a key and none
 is added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
@@ -408,7 +408,7 @@ Scope: `base.rs`'s `use_on`, `use_item`, `right_click_block`, `left_click_block`
 `block_use_without_item.rs`'s `use_without_item`. This is the block and item
 interaction part of `base.rs`, after the server connection, chunk, level, player
 connection, effects/interaction/damage/chat, loot, item/tooltip, entity lifecycle
-and command parts in the earlier sections. All eight record a gap; no key is added.
+and command parts in the earlier sections. These hooks record a gap; no key is added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
 |---|---|---|
@@ -668,7 +668,7 @@ change.
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Sunrise call
 sites are named by function. Scope: the eight `misc-add` hooks `add_attribute_tooltips`,
 `affect_neighbors_after_removal`, `animal_tame`, `anvil_update`, `armor_hurt`, `arrow_nock`,
-`baby_entity_spawn` and `block_jump_factor`. All eight record a gap; no keys are added.
+`baby_entity_spawn` and `block_jump_factor`. These hooks record a gap; no keys are added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
 |---|---|---|
@@ -780,7 +780,7 @@ twelve record a gap; no keys are added.
 
 Fabric evidence is at `fabric-26.3/` pinned `2065040b236a0d5ac011bd6a45625dc49579b222`. Sunrise call
 sites are named by function. Scope: the twelve `base` hooks `screen_mouse_button_pressed_pre`,
-`screen_mouse_button_released_pre`, `camera_shake`, `shader_params`, `block_highlight`, `render_hand`,
+`screen_mouse_button_released_pre`, `render_view_transform`, `shader_params`, `block_highlight`, `render_hand`,
 `use_duration`, `use_animation`, `can_eat`, `living_entity_use_item_start`, `living_entity_use_item_finish`
 and `screen_mouse_scrolled_pre`. All twelve record a gap; no keys are added.
 
@@ -788,7 +788,7 @@ and `screen_mouse_scrolled_pre`. All twelve record a gap; no keys are added.
 |---|---|---|
 | `screen_mouse_button_pressed_pre` | **Gap:** `ScreenMouseEvents.allowMouseClick` / `beforeMouseClick` (one moment split in two) | [The screen mouse events][screen-mouse-events] lines 48-63 declare a boolean `allowMouseClick` veto and a separate void `beforeMouseClick` notification; [the mouse handler mixin][screen-mouse-mixin] lines 32-53 invokes both around `Screen.mouseClicked` inside `MouseHandler.onButton`, after the handler has routed the press to a real `Screen`. Sunrise's `native_screen_mouse_button_pressed_pre` is fired by `handle_window_event_inner` straight from `WindowEvent::MouseInput`, before that routing, with the screen, the GLFW button, the modifier bits and a mutable `canceled`, and it deliberately skips connect, loading, dialog and overlay screens that Fabric still sees as `Screen`s. Fabric's allow callback can veto on its own, but the different routing and screen coverage prevent a match; the `MouseButtonEvent` signature does not prove that modifier data is absent: gap. No key. |
 | `screen_mouse_button_released_pre` | **Gap:** `ScreenMouseEvents.allowMouseRelease` / `beforeMouseRelease` (one moment split in two) | [The screen mouse events][screen-mouse-events] lines 81-96 declare a boolean `allowMouseRelease` veto and a separate void `beforeMouseRelease`; [the mouse handler mixin][screen-mouse-mixin] lines 55-73 invokes them around `Screen.mouseReleased`, again only after the release has been routed to a `Screen`. Sunrise's `native_screen_mouse_button_released_pre` is fired by `handle_window_event_inner` from the same window-event point as the press, with the screen, button, modifier bits and a mutable `canceled` that stops the release before any slot, drag or slider sees it. Fabric's allow callback can veto on its own; the different routing point and screen coverage are the proven mismatch: gap. No key. |
-| `camera_shake` | **Gap:** none | Fabric API 26.3 has no camera-angle or viewport event: the pinned index lists none, and NeoForge's `ViewportEvent.ComputeCameraAngles` has no counterpart. Sunrise's `native_camera_shake` is called by `native_shake_matrix` once a frame while playing, with the partial tick and a mutable `Shake` whose pitch, yaw, roll and offset Sunrise bounds and applies to the camera pose. No Fabric event fires at that pose computation or carries that mutable shake: gap. No key. |
+| `render_view_transform` | **Gap:** none | Fabric API 26.3 has no event at the `GameRenderer.bobHurt` / `bobView` render transform stage. No key. |
 | `shader_params` | **Gap:** none | Sunrise's shader packs and their `frame.mods` slots are its own; the pinned index has no shader, pipeline or parameter event. Sunrise's `native_shader_params` is asked by `native_shader_params_now` once a frame while a pack is on, with the partial tick and eight mutable `vec4` slots that Sunrise sanitises. Fabric offers no event at that moment or with that data: gap. No key. |
 | `block_highlight` | **Gap:** `LevelExtractionEvents.AFTER_BLOCK_OUTLINE_EXTRACTION` / `LevelRenderEvents.BEFORE_BLOCK_OUTLINE` (split and after the extraction moment) | [The extraction events][level-extraction-events] lines 46-57 declare a void callback that runs at `LevelExtractor.extractBlockOutline` `RETURN` ([the extractor mixin][level-extractor-mixin] lines 64-66) and can suppress default rendering by nulling the already-extracted state; [the render events][level-render-events] lines 97-114 declare a separate boolean veto that [the level renderer mixin][level-renderer-mixin] lines 110-113 invokes inside `submitBlockOutline`. Sunrise's `native_block_highlight` is fired by `render_with` from the picked hit before the outline geometry is built, after the HUD and game-mode gates, with the position, block state and partial tick, and `canceled` skips only the default outline. Both Fabric events run later in the pipeline, take a `LevelExtractionContext`/`LevelRenderContext` and hit or outline state rather than the block state and partial tick, and split extraction from rendering: gap. No key. |
 | `render_hand` | **Gap:** none | Fabric API 26.3 declares no first-person hand-render event; the pinned index lists no hand entry, and `HudElementRegistry` only adds HUD layers rather than replacing hand geometry. Sunrise's `native_render_hand` is called by `hand_geometry` through `render_hand_cancelled` before one hand's vertices are built, with a `HandRender` (player, hand, stack, pose data, light), a draw context in the hands' view space and a mutable `canceled` that skips the default geometry. No Fabric event fires at that moment, exposes that render data or takes geometry for the hand: gap. No key. |
@@ -1258,7 +1258,7 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 
 ## Event counterparts: landing, bone meal, camera and sleep hooks (#1014)
 
-Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Sunrise call sites are named by function, never by line. Scope: the eight hooks `fall_on`, `bounce_on`, `bonemeal`, `calculate_player_turn`, `camera_pose`, `camera_type_cycle`, `can_continue_sleeping` and `can_player_sleep`. All eight record a gap and no keys are added.
+Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`); Sunrise call sites are named by function, never by line. Scope: the hooks `fall_on`, `bounce_on`, `bonemeal`, `calculate_player_turn`, `compute_camera_angles`, `camera_position`, `camera_type_cycle`, `can_continue_sleeping` and `can_player_sleep`. These hooks record a gap and no keys are added.
 
 | Sunrise hook | Fabric event considered / status | Evidence and porting boundary |
 |---|---|---|
@@ -1266,7 +1266,8 @@ Fabric evidence is at `2065040b236a0d5ac011bd6a45625dc49579b222` (`fabric-26.3/`
 | `bounce_on` | **Gap:** none | Fabric API 26.3 declares no bounce or restitution event; nothing fires after `Block.bounceOn` has produced an entity's bounce. `native_bounce_on` runs inside the entity's move with the entity object, the state, position, fall distance and a mutable movement vector; no Fabric event offers that moment or those arguments. No key. |
 | `bonemeal` | **Gap:** nearest `UseBlockCallback.EVENT` | [The callback API][use-block-api] lines 28-54 passes the player, level, hand and hit result, with `PASS` continuing vanilla; it fires at server `useItemOn` HEAD ([server mixin][interaction-server] lines 85-94) and in client prediction ([client mixin][interaction-client] lines 98-115), before the item's use. `native_bonemeal` fires inside `BoneMealItem.growCrop` with the stack, state, position, the player or none for a dispenser/villager, the validity answer and mutable cancel and success, so moment, guards and arguments differ. No key. |
 | `calculate_player_turn` | **Gap:** none | Fabric API 26.3 declares no mouse-turn or sensitivity event; its client tick events fire at tick boundaries, not while `MouseHandler.turnPlayer` reads the sensitivity and cinematic-camera options. `native_calculate_player_turn` fires for the grabbed local player with the entity id, uuid and mutable sensitivity and cinematic flag, once per look application. No key. |
-| `camera_pose` | **Gap:** none | Fabric API 26.3 declares no camera setup or pose event exposing this mutable pose contract. `native_camera_pose_now` fires after `Camera.setup` with the partial tick and a mutable position, yaw and pitch, before the picture is drawn. No Fabric event offers that firing point with those mutable arguments. No key. |
+| `compute_camera_angles` | **Gap:** none | Fabric API 26.3 has no counterpart for NeoForge’s angle event before `Camera.setRotation` in `Camera.alignWithEntity`. No key. |
+| `camera_position` | **Gap:** none | Fabric API 26.3 has no mutable render-only position event at frame camera placement. No key. |
 | `camera_type_cycle` | **Gap:** none | Fabric API 26.3 declares no camera-type or perspective event, so nothing fires when `Minecraft.handleKeybinds` cycles `Options.setCameraType` on the F5 press. `native_camera_type_cycle` fires on the client before the type changes, with the previous type and a mutable next type that may skip or keep a type. No key. |
 | `can_continue_sleeping` | **Gap:** nearest `EntitySleepEvents.ALLOW_BED`; also `START_SLEEPING` and `STOP_SLEEPING` | [The sleep API][sleep-api] lines 98-120 declares `ALLOW_BED`, fired at `checkBedExists` RETURN with the living entity, sleeping position, block state and vanilla boolean ([the living entity mixin][living-mixin] lines 111-124); it overrides bed validity, not the combined sleep problem including the player's daytime rule. `native_can_continue_sleeping` asks each tick whether a sleeping player, villager or wandering trader may stay asleep, with the uuid, name, kind, bed position, the vanilla problem and a mutable may-continue answer; arguments and decision scope differ. `START_SLEEPING` and `STOP_SLEEPING` instead notify one-shot transitions at `startSleeping` RETURN and guarded `stopSleeping` HEAD (mixin lines 94-109). No key. |
 | `can_player_sleep` | **Gap:** nearest `EntitySleepEvents.ALLOW_SLEEPING` | `ALLOW_SLEEPING` injects at `startSleepInBed` HEAD and only returns a `BedSleepingProblem` veto before the vanilla problem exists ([the API][sleep-api] lines 53-68, [the player mixin][sleep-player-mixin] lines 32-40); `ALLOW_NEARBY_MONSTERS` redirects the monster-list check alone and `ALLOW_SETTING_SPAWN` wraps `setRespawnPosition` ([the server player mixin][base-block-server-player-mixin] lines 102-118). `native_can_player_sleep` fires after vanilla computed its first problem and lets a mod clear or replace it, with the uuid, name, bed position and mutable problem. Moment, arguments and control differ. No key. |

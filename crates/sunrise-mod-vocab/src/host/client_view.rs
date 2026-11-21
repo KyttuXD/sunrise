@@ -33,9 +33,9 @@ pub trait ClientViewClientHost {
     /// Side: client.
     /// Request the window's camera type without cycling, also from shared-host callbacks.
     /// The last request wins and [`Self::camera_type`] reports it immediately. Requests before
-    /// or during `camera_pose` apply to that frame's camera, FOV and spectator post effects;
-    /// later requests apply at the next frame's camera extraction. Explicit pose overrides
-    /// remain unchanged when vanilla placement is refreshed. No cycle hook is emitted.
+    /// or during `compute_camera_angles` apply before that frame's detached camera placement,
+    /// FOV and spectator post effects. Requests during `camera_position` or later apply at the
+    /// next frame's camera setup. No cycle hook is emitted.
     #[access(WorldOnly)]
     fn set_camera_type(&self, camera_type: CameraType);
     /// Side: client.
@@ -59,14 +59,14 @@ pub trait ClientViewClientHost {
     fn view_hit(&self) -> Option<(f32, Hit)>;
     /// Side: client.
     /// The most recently extracted world frame's camera, if one exists.
-    /// During GUI rendering this is the current frame, including bob/spin and FOV.
+    /// During GUI rendering this is the current frame, including view transforms, bob/spin and FOV.
     #[access(ClientSetup)]
     fn camera(&self) -> Option<Camera>;
     /// Side: client.
     /// World point `at` projected on this frame's screen (`GameRenderer.projectPointToScreen`):
     /// normalised device x and y, -1 to 1 across the screen (x to the right, y up), and depth z
-    /// (reversed: nearer is larger). The view is the camera's rotation without bob or spin, as
-    /// vanilla's. Unlike vanilla, None for a point behind the camera or a non-finite `at`; also None
+    /// (reversed: nearer is larger). The camera's rotation includes roll, but not the bob, spin or
+    /// other presentation transforms. Unlike vanilla, None for a point behind the camera or a non-finite `at`; also None
     /// outside a world, before extraction, and between render frames. Supported during GUI,
     /// screen and world drawing after camera extraction. In GUI pixels of a [`DrawContext`] of size
     /// `[w, h]`: `((x + 1) / 2 * w, (1 - y) / 2 * h)`.

@@ -16,7 +16,7 @@ impl Game<'_> {
         ProjectionFrame(PROJECT_VIEW.replace(self as *const Self as usize))
     }
     /// The most recently extracted world frame's camera, if one exists.
-    /// During GUI rendering this is the current frame, including bob/spin and FOV.
+    /// During GUI rendering this is the current frame, including view transforms, bob/spin and FOV.
     pub(in crate::game) fn camera(&self) -> Option<mod_api::Camera> {
         self.native_camera_frame.clone()
     }
@@ -30,8 +30,7 @@ impl Game<'_> {
         sunrise_client::camera::project_point(
             &camera.projection,
             camera.position,
-            camera.yaw,
-            camera.pitch,
+            [camera.yaw, camera.pitch, camera.roll],
             at,
         )
     }

@@ -96,21 +96,47 @@ mod camera_type_tests {
 
     #[derive(Default)]
     struct Calls {
-        poses: std::sync::atomic::AtomicUsize,
+        angles: std::sync::atomic::AtomicUsize,
+        positions: std::sync::atomic::AtomicUsize,
         cycles: std::sync::atomic::AtomicUsize,
     }
     struct SharedCamera(Arc<Calls>);
     #[mod_api::__subscriptions]
     impl Hooks for SharedCamera {
-        fn camera_pose(&self, host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {
+        fn compute_camera_angles(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut mod_api::ComputeCameraAnglesEvent,
+        ) {
             self.0
-                .poses
+                .angles
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             host.set_camera_type(CameraType::ThirdPersonFront);
             assert_eq!(host.camera_type(), CameraType::ThirdPersonFront);
             host.set_camera_type(CameraType::ThirdPersonBack);
             assert_eq!(host.camera_type(), CameraType::ThirdPersonBack);
-            event.yaw += 15.0;
+            event.yaw = 180.0;
+            event.roll = 180.0;
+        }
+        fn camera_position(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut mod_api::CameraPositionEvent<'_>,
+        ) {
+            self.0
+                .positions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Third-person-back at yaw 180 faces -Z, so detached placement moved into +Z.
+            // Retain that coordinate to check placement order from the engine's result.
+            event.position[0] = 32.25;
+            event.position[1] = 80.0;
+        }
+        fn render_view_transform(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut mod_api::RenderViewTransformEvent<'_>,
+        ) {
+            event.transform.translate(8.0, -2.0, 1.0);
         }
         fn camera_type_cycle(&self, _: &mut dyn ClientHost, _: &mut CameraTypeCycleEvent<'_>) {
             self.0
@@ -121,7 +147,7 @@ mod camera_type_tests {
 
     #[test]
     #[ignore = "daily"]
-    fn shared_camera_pose_requests_apply_before_frame_consumers() {
+    fn angles_position_and_view_transform_apply_at_their_frame_stages() {
         use std::sync::atomic::Ordering;
         use sunrise_client::motion::PlayerMotion;
         use sunrise_core::geometry::Vec3;
@@ -137,18 +163,27 @@ mod camera_type_tests {
                 game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
                 game.title = None;
                 game.spectated_post_effect = Some("minecraft:creeper");
-                let vanilla = game.camera_view(1.0).unwrap();
-                assert_eq!(vanilla.0.z, 0.0);
-                let posed = game.native_camera_pose_now(1.0, vanilla);
+                let posed = game.frame_camera(1.0).unwrap();
                 assert_eq!(game.camera_type, CameraType::ThirdPersonBack);
                 assert_eq!(game.camera_type(), CameraType::ThirdPersonBack);
                 assert_eq!(game.spectated_post_effect, None);
-                assert!((posed.0.z + 4.0).abs() < 1e-6, "refresh unchanged position");
-                assert_eq!(posed.1, 15.0, "preserve the explicit yaw override");
-                assert_eq!(posed.2, vanilla.2);
+                assert_eq!(
+                    posed,
+                    (glam::DVec3::new(32.25, 80.0, 4.0), 180.0, 0.0, 180.0)
+                );
+                assert_eq!(game.view.eye, [0.0; 3]);
+                assert_eq!(game.view.eye_rotation, [0.0; 2]);
+                assert_eq!(game.player.as_ref().unwrap().position, Vec3::ZERO);
+                game.settings.view_bobbing = false;
+                assert_eq!(
+                    game.bob_matrix(1.0).w_axis,
+                    glam::Vec4::new(8.0, -2.0, 1.0, 1.0)
+                );
+                assert_eq!(game.view.position, [32.25, 80.0, 4.0]);
             });
         });
-        assert_eq!(calls.poses.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.angles.load(Ordering::Relaxed), 1);
+        assert_eq!(calls.positions.load(Ordering::Relaxed), 1);
         assert_eq!(calls.cycles.load(Ordering::Relaxed), 0);
     }
 }

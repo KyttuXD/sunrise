@@ -632,45 +632,6 @@ impl Game<'_> {
 /// furnace sets its `lit`.
 pub(super) use sunrise_world::level::flags;
 
-/// A mod's camera (`native_camera_pose`): each value that isn't finite keeps vanilla's from `view`.
-fn posed_camera(
-    view: (glam::DVec3, f32, f32),
-    position: [f64; 3],
-    yaw: f32,
-    pitch: f32,
-) -> (glam::DVec3, f32, f32) {
-    let position = std::array::from_fn(|i| {
-        if position[i].is_finite() {
-            position[i]
-        } else {
-            view.0[i]
-        }
-    });
-    (
-        glam::DVec3::from_array(position),
-        if yaw.is_finite() { yaw } else { view.1 },
-        if pitch.is_finite() { pitch } else { view.2 },
-    )
-}
-
-/// The largest turn a shake gives, in degrees, on each axis.
-const SHAKE_MAX_DEGREES: f32 = 10.0;
-/// The largest offset a shake gives, in blocks, along each axis.
-const SHAKE_MAX_OFFSET: f32 = 0.5;
-
-use camera_pose::bounded_shake;
-pub(super) use camera_pose::hand_pose_matrix;
-
-/// The pose a bounded shake multiplies into the projection, after the view
-/// bobbing: the offset, then roll, pitch and yaw.
-fn shake_pose(shake: Shake) -> glam::Mat4 {
-    let [x, y, z] = shake.offset;
-    glam::Mat4::from_translation(glam::Vec3::new(-x, -y, -z))
-        * glam::Mat4::from_rotation_z(shake.roll.to_radians())
-        * glam::Mat4::from_rotation_x(shake.pitch.to_radians())
-        * glam::Mat4::from_rotation_y(shake.yaw.to_radians())
-}
-
 /// This client's window-owned mod screen and its local slot state.
 pub(super) struct OpenNativeScreen {
     /// Fixed for the opening; slot moves have their own revision.
@@ -3144,55 +3105,6 @@ impl Game<'_> {
             },
         })
     }
-    /// The pose of native mods' camera shake in this frame (`native_camera_shake`),
-    /// none while not playing.
-    pub(super) fn native_shake_matrix(&self, partial: f32) -> glam::Mat4 {
-        if !self.playing() {
-            return glam::Mat4::IDENTITY;
-        }
-        let mut shake = Shake::default();
-        self.native_camera_shake(partial, &mut shake);
-        if shake == Shake::default() {
-            return glam::Mat4::IDENTITY;
-        }
-        shake_pose(bounded_shake(shake, self.screen_effect_scale()))
-    }
-
-    /// The camera native mods draw this frame from (`native_camera_pose`), starting from
-    /// `view`, vanilla's position, yaw and pitch.
-    pub(super) fn native_camera_pose_now(
-        &mut self,
-        partial: f32,
-        view: (glam::DVec3, f32, f32),
-    ) -> (glam::DVec3, f32, f32) {
-        let (mut position, mut yaw, mut pitch) = (view.0.to_array(), view.1, view.2);
-        self.native_camera_pose(partial, &mut position, &mut yaw, &mut pitch);
-        let posed = posed_camera(view, position, yaw, pitch);
-        if self.apply_requested_camera_type()
-            && let Some(refreshed) = self.camera_view(partial)
-        {
-            // Refresh vanilla components, not the listener's explicit overrides.
-            return (
-                if posed.0 == view.0 {
-                    refreshed.0
-                } else {
-                    posed.0
-                },
-                if posed.1 == view.1 {
-                    refreshed.1
-                } else {
-                    posed.1
-                },
-                if posed.2 == view.2 {
-                    refreshed.2
-                } else {
-                    posed.2
-                },
-            );
-        }
-        posed
-    }
-
     /// What native mods hand shader packs in this frame (`native_shader_params`),
     /// with values that aren't finite as 0.
     pub(super) fn native_shader_params_now(&self, partial: f32) -> [[f32; 4]; 8] {

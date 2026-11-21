@@ -311,44 +311,66 @@ impl Game<'_> {
         self.apply_camera_type(camera_type);
         changed
     }
-    /// `Camera.update` (`alignWithEntity` and `getMaxZoom`): the
-    /// interpolated eye, or a point up to the camera distance behind (or in
-    /// front of) it, pulled in where visual shapes are in the way. Returns the
-    /// position, yaw and pitch to render from.
+    /// `Camera.update` for a render frame, including the camera hooks.
+    pub(super) fn frame_camera(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32, f32)> {
+        self.apply_requested_camera_type();
+        self.posed_rotation = None;
+        self.align_camera(partial, !self.shows_panorama())
+    }
+
+    /// The placed entity camera for Studio commands, without frame hook dispatch.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        self.align_camera(partial, false)
+            .map(|(position, yaw, pitch, _)| (position, yaw, pitch))
+    }
+
+    /// `Camera.alignWithEntity`: propose the rotation before detached collision placement,
+    /// then lend the placed position before the frame's FOV, fog, and sound consume it.
+    fn align_camera(&mut self, partial: f32, frame: bool) -> Option<(glam::DVec3, f32, f32, f32)> {
+        use sunrise_world::collision_context::EntityContextKind;
+
         if self.studio.flying() {
+            let camera = &self.studio.freecam;
+            let mut position = camera.position.to_array();
+            if frame {
+                self.native_camera_position(partial, &mut position);
+            }
+            // Studio stores positive-Z rotation; Camera.setRotation uses negative roll.
             return Some((
-                self.studio.freecam.position,
-                self.studio.freecam.yaw,
-                self.studio.freecam.pitch,
+                glam::DVec3::from_array(position),
+                camera.yaw,
+                camera.pitch,
+                -camera.roll,
             ));
         }
-        // Minecraft.cameraEntity: a server's spectator camera on a mob or
-        // another player.
-        let (entity, descending, entity_kind) = match self.spectated_camera_snapshot() {
-            Some(e) => (
-                e,
-                false,
-                sunrise_world::collision_context::EntityContextKind::Living,
-            ),
+        let (entity, descending, entity_kind, new_minecart) = match self.spectated_camera_snapshot()
+        {
+            Some(entity) => (entity, false, EntityContextKind::Living, false),
             None => {
                 let mut entity = self.player_camera_entity()?;
-                if let Some(position) = self.remote_minecart_rider_position(partial) {
-                    // Already evaluated at partial: do not linearly interpolate
-                    // between tick endpoints across a corner a second time.
+                let cart_position = self.remote_minecart_rider_position(partial);
+                if let Some(position) = cart_position {
+                    // Already evaluated at partial: do not interpolate across the corner again.
                     entity.position = position;
                     entity.previous = position;
                 }
                 (
                     entity,
                     self.player.as_ref()?.shift_key_down,
-                    sunrise_world::collision_context::EntityContextKind::Player,
+                    EntityContextKind::Player,
+                    cart_position.is_some(),
                 )
             }
         };
+        let original = (entity.view_y_rot(partial), entity.view_x_rot(partial), 0.0);
+        let (mut yaw, mut pitch, mut roll) = original;
+        if frame && !new_minecart {
+            // The NeoForge patch posts on the regular entity alignment branch only.
+            self.native_compute_camera_angles(partial, &mut yaw, &mut pitch, &mut roll);
+            self.apply_requested_camera_type();
+        }
         let mut view = self.view;
         let kind = self.camera_type;
-
         let context = CollisionContext::for_entity(
             CollisionEntity {
                 identity: EntityIdentity(0),
@@ -371,10 +393,11 @@ impl Game<'_> {
             },
             facts: self.res.facts(),
         };
-        view.align_with_entity_distance(
+        view.align_with_entity_angles(
             &entity,
             partial,
             kind,
+            (yaw, pitch, roll),
             |mut distance| {
                 self.native_camera_distance(partial, kind.is_mirrored(), &entity, &mut distance);
                 distance
@@ -392,23 +415,32 @@ impl Game<'_> {
                 (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
             },
         );
+        if frame {
+            self.native_camera_position(partial, &mut view.position);
+            // Billboards otherwise track the local entity's unmodified orientation.
+            if (yaw, pitch, roll) != original || matches!(entity_kind, EntityContextKind::Living) {
+                self.posed_rotation = Some((view.y_rot, view.x_rot, view.roll));
+            }
+        }
         self.view = view;
         Some((
             glam::DVec3::from_array(view.position),
             view.y_rot,
             view.x_rot,
+            view.roll,
         ))
     }
+
     /// `Camera.rotation()` as the quads of particles take it: the frame's camera (a
     /// bed's, a front view's, a mod's), not the player's own yaw and pitch.
     pub(super) fn particle_rotation(&self) -> glam::Quat {
         if self.studio.flying() {
             return self.camera_orientation();
         }
-        let (yaw, pitch) = self
-            .posed_rotation
-            .unwrap_or((self.view.y_rot, self.view.x_rot));
-        super::camera_rotation(CameraType::FirstPerson, yaw, pitch)
+        let (yaw, pitch, roll) =
+            self.posed_rotation
+                .unwrap_or((self.view.y_rot, self.view.x_rot, self.view.roll));
+        super::camera_rotation_rolled(CameraType::FirstPerson, yaw, pitch, roll)
     }
     /// The player as `Camera.alignWithEntity` sees it.
     pub(super) fn player_camera_entity(&mut self) -> Option<CameraEntity> {

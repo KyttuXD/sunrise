@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::camera_type::camera_type_tests::angles_position_and_view_transform_apply_at_their_frame_stages lib daily resources

@@ -126,3 +126,190 @@ impl CameraEntity {
         }
     }
 }
+
+pub(crate) fn validate_camera_angles(
+    yaw: &f32,
+    pitch: &f32,
+    roll: &f32,
+) -> Result<(), &'static str> {
+    if !yaw.is_finite() {
+        Err("non-finite yaw")
+    } else if !pitch.is_finite() {
+        Err("non-finite pitch")
+    } else if !roll.is_finite() {
+        Err("non-finite roll")
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_camera_position(position: &[f64; 3]) -> Result<(), &'static str> {
+    if position.iter().all(|value| value.is_finite()) {
+        Ok(())
+    } else {
+        Err("non-finite position")
+    }
+}
+
+/// Column-major 4x4 presentation-only view transform composed at vanilla's
+/// `GameRenderer.bobHurt` / `bobView` stage (`render_view_transform`).
+///
+/// Operations post-multiply onto the current matrix (`self = self * m`), matching vanilla's
+/// `PoseStack` multiplication order. Every mutating method rejects non-finite inputs without
+/// changing the stored matrix.
+// no wire: client-local per-frame render transform at the GameRenderer bob stage.
+// exhaustive: its field is private, so mods compose through its transform methods
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewTransform {
+    matrix: [f32; 16],
+}
+
+impl Default for ViewTransform {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl ViewTransform {
+    /// The identity transform.
+    pub const IDENTITY: Self = Self {
+        matrix: [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ],
+    };
+
+    /// Returns the column-major 4x4 matrix.
+    pub const fn matrix(&self) -> [f32; 16] {
+        self.matrix
+    }
+
+    /// Replaces the transform with `matrix`; reports and returns `false` for non-finite entries.
+    pub fn set_matrix(&mut self, matrix: [f32; 16]) -> bool {
+        if !matrix.iter().all(|v| v.is_finite()) {
+            if let Some(call) = crate::content::crash::current_native_call() {
+                log::warn!(
+                    "mod {} hook {} refused a non-finite view transform",
+                    call.id,
+                    call.hook
+                );
+            }
+            return false;
+        }
+        self.matrix = matrix;
+        true
+    }
+
+    /// Post-multiplies by a column-major 4x4 matrix; refuses a non-finite result.
+    pub fn append_matrix(&mut self, rhs: [f32; 16]) -> bool {
+        let lhs = self.matrix;
+        self.set_matrix(std::array::from_fn(|index| {
+            let (col, row) = (index / 4 * 4, index % 4);
+            lhs[row] * rhs[col]
+                + lhs[4 + row] * rhs[col + 1]
+                + lhs[8 + row] * rhs[col + 2]
+                + lhs[12 + row] * rhs[col + 3]
+        }))
+    }
+
+    /// Post-multiplies a translation `(x, y, z)` in blocks along camera-local axes.
+    pub fn translate(&mut self, x: f32, y: f32, z: f32) -> bool {
+        self.append_matrix([
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            x, y, z, 1.0,
+        ])
+    }
+
+    /// Post-multiplies a rotation about the local X axis by `radians`.
+    pub fn rotate_x(&mut self, radians: f32) -> bool {
+        let (s, c) = rotation_components(radians);
+        self.append_matrix([
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, c, s, 0.0, //
+            0.0, -s, c, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ])
+    }
+
+    /// Post-multiplies a rotation about the local Y axis by `radians`.
+    pub fn rotate_y(&mut self, radians: f32) -> bool {
+        let (s, c) = rotation_components(radians);
+        self.append_matrix([
+            c, 0.0, -s, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            s, 0.0, c, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ])
+    }
+
+    /// Post-multiplies a rotation about the local Z axis by `radians`.
+    pub fn rotate_z(&mut self, radians: f32) -> bool {
+        let (s, c) = rotation_components(radians);
+        self.append_matrix([
+            c, s, 0.0, 0.0, //
+            -s, c, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ])
+    }
+
+    /// Post-multiplies a scale `(x, y, z)`.
+    pub fn scale(&mut self, x: f32, y: f32, z: f32) -> bool {
+        self.append_matrix([
+            x, 0.0, 0.0, 0.0, //
+            0.0, y, 0.0, 0.0, //
+            0.0, 0.0, z, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ])
+    }
+}
+
+fn rotation_components(radians: f32) -> (f32, f32) {
+    let angle = f64::from(radians);
+    (
+        sunrise_core::jmath::sin(angle) as f32,
+        sunrise_core::jmath::cos(angle) as f32,
+    )
+}
+
+#[cfg(test)]
+mod view_transform_tests {
+    use super::ViewTransform;
+
+    #[test]
+    fn post_multiplies_translation_and_rejects_non_finite_inputs() {
+        let mut t = ViewTransform::default();
+        assert_eq!(t, ViewTransform::IDENTITY);
+        assert!(t.translate(1.0, -2.0, 3.0));
+        assert!(t.scale(2.0, 2.0, 2.0));
+        assert_eq!(
+            t.matrix(),
+            [
+                2.0, 0.0, 0.0, 0.0, //
+                0.0, 2.0, 0.0, 0.0, //
+                0.0, 0.0, 2.0, 0.0, //
+                1.0, -2.0, 3.0, 1.0,
+            ]
+        );
+        let before = t;
+        assert!(!t.translate(f32::NAN, 0.0, 0.0));
+        assert!(!t.rotate_z(f32::INFINITY));
+        assert!(!t.scale(1.0, f32::NEG_INFINITY, 1.0));
+        assert!(!t.set_matrix([f32::NAN; 16]));
+        assert_eq!(t, before);
+        assert!(!t.scale(f32::MAX, 1.0, 1.0));
+        assert_eq!(t, before);
+    }
+
+    #[test]
+    fn rotations_match_right_handed_axes() {
+        let mut rz = ViewTransform::IDENTITY;
+        assert!(rz.rotate_z(core::f32::consts::FRAC_PI_2));
+        let m = rz.matrix();
+        assert_eq!([m[1], m[4]], [1.0, -1.0]);
+    }
+}

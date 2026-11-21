@@ -180,6 +180,16 @@ mod root {
         pub(super) fn poison(hook: super::HookId, id: &'static str) {
             POISONED.with(|poisoned| poisoned.borrow_mut().insert((hook as usize, id)));
         }
+        pub(super) fn invoke_isolated_listen<T>(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            invoke: impl FnOnce() -> T,
+        ) -> Option<T> {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(invoke))
+                .map_err(|_| poison(hook, id))
+                .ok()
+        }
         pub(super) fn poisoned(hook: super::HookId, id: &str) -> bool {
             POISONED.with(|poisoned| {
                 poisoned

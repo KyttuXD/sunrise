@@ -123,7 +123,7 @@ fn camera_fluid_height(
     if s.fluid == Fluid::None {
         return None;
     }
-    let above = facts.get(block([b[0], b[1] + 1, b[2]]));
+    let above = facts.get(block([b[0], b[1].wrapping_add(1), b[2]]));
     let source = s.fluid_level >= 8 && !s.fluid_falling;
     let height = if (source && above.full_collision) || above.fluid == s.fluid {
         1.0

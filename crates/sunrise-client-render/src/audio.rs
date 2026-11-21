@@ -185,9 +185,10 @@ struct Mixer {
     listener: [f64; 3],
     listener_yaw: f32,
     listener_pitch: f32,
-    /// Additional listeners' cameras (position, yaw, pitch) by owner. A world sound is
+    listener_roll: f32,
+    /// Additional listeners' cameras (position, angles) by owner. A world sound is
     /// heard from the nearest camera, and panned half as wide while several share the speakers.
-    listeners: HashMap<u8, ([f64; 3], f32, f32)>,
+    listeners: HashMap<u8, ([f64; 3], [f32; 3])>,
     /// Each camera's world by owner, as ids: the callback compares and copies integers.
     worlds: HashMap<u8, u32>,
     /// World names by id - 1 (`world_id`).
@@ -468,6 +469,7 @@ pub struct Audio {
     pub listener: [f64; 3],
     pub listener_yaw: f32,
     pub listener_pitch: f32,
+    listener_roll: f32,
     pub master: f32,
     /// Seeds of positional plays (the client level random's `nextLong`).
     random: LegacyRandom,
@@ -964,7 +966,7 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     data.fill(0.0);
     // The camera's forward and up vectors (`Camera.forwardVector`/`upVector`)
     // and OpenAL's right = forward x up.
-    let basis = |yaw: f32, pitch: f32| {
+    let basis = |[yaw, pitch, roll]: [f32; 3]| {
         let (yaw, pitch) = (f64::from(yaw.to_radians()), f64::from(pitch.to_radians()));
         let (yaw_sin, yaw_cos) = yaw.sin_cos();
         let (pitch_sin, pitch_cos) = pitch.sin_cos();
@@ -975,14 +977,30 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             forward[2] * up[0] - forward[0] * up[2],
             forward[0] * up[1] - forward[1] * up[0],
         ];
-        (forward, up, right)
+        if roll == 0.0 {
+            (forward, up, right)
+        } else {
+            let (sin, cos) = f64::from(roll.to_radians()).sin_cos();
+            (
+                forward,
+                std::array::from_fn(|i| up[i] * cos + right[i] * sin),
+                std::array::from_fn(|i| right[i] * cos - up[i] * sin),
+            )
+        }
     };
     // Every active listener's camera, in the mixer's scratch buffer.
     mixer.cameras.clear();
     mixer.cameras.extend(
         std::iter::once((
             0,
-            (mixer.listener, mixer.listener_yaw, mixer.listener_pitch),
+            (
+                mixer.listener,
+                [
+                    mixer.listener_yaw,
+                    mixer.listener_pitch,
+                    mixer.listener_roll,
+                ],
+            ),
         ))
         .chain(
             mixer
@@ -990,10 +1008,10 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 .iter()
                 .map(|(&owner, &camera)| (owner, camera)),
         )
-        .map(|(owner, (at, yaw, pitch))| {
+        .map(|(owner, (at, angles))| {
             (
                 at,
-                basis(yaw, pitch),
+                basis(angles),
                 mixer.worlds.get(&owner).copied().unwrap_or_default(),
             )
         }),
@@ -1564,6 +1582,7 @@ impl Audio {
             listener: [0.0; 3],
             listener_yaw: 0.0,
             listener_pitch: 0.0,
+            listener_roll: 0.0,
             master: 1.0,
             random: crate::random_source::create(),
             source_override: None,
@@ -1697,21 +1716,25 @@ impl Audio {
 
     /// `SoundManager.updateSource`: the camera position and rotation
     /// (`Listener.setTransform` takes its forward and up vectors).
-    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
-        if self.listener == position && self.listener_yaw == yaw && self.listener_pitch == pitch {
+    pub fn set_listener(&mut self, position: [f64; 3], angles: [f32; 3]) {
+        let [yaw, pitch, roll] = angles;
+        if self.listener == position
+            && [self.listener_yaw, self.listener_pitch, self.listener_roll] == angles
+        {
             return;
         }
         self.listener = position;
         self.listener_yaw = yaw;
         self.listener_pitch = pitch;
+        self.listener_roll = roll;
         if let Ok(mut m) = self.backend.mixer.lock() {
             if self.backend.owner == 0 {
                 m.listener = position;
                 m.listener_yaw = yaw;
                 m.listener_pitch = pitch;
+                m.listener_roll = roll;
             } else {
-                m.listeners
-                    .insert(self.backend.owner, (position, yaw, pitch));
+                m.listeners.insert(self.backend.owner, (position, angles));
             }
         }
     }
@@ -1746,6 +1769,7 @@ impl Audio {
             listener: [0.0; 3],
             listener_yaw: 0.0,
             listener_pitch: 0.0,
+            listener_roll: 0.0,
             master: self.master,
             random: crate::random_source::create(),
             source_override: None,
@@ -3068,7 +3092,7 @@ mod tests {
             listener: [100.0, 0.0, 0.0],
             ..Mixer::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners.insert(1, ([0.0, 0.0, 1.0], [0.0; 3]));
         m.channels
             .insert(1, channel(vec![1.0; 4], Some(16.0), [0.0, 0.0, 2.0], true));
         let mut data = [0.0; 2];
@@ -3092,7 +3116,7 @@ mod tests {
         host.set_world("minecraft:overworld");
         let mut guest = host.share(1);
         guest.set_world("minecraft:overworld");
-        guest.set_listener([1.0, 2.0, 3.0], 0.0, 0.0);
+        guest.set_listener([1.0, 2.0, 3.0], [0.0; 3]);
         let id = guest.backend.create(false).unwrap();
         let mixer = host.backend.mixer.lock().unwrap();
         let overworld = mixer
@@ -3110,7 +3134,7 @@ mod tests {
             listener: [100.0, 0.0, 0.0],
             ..Default::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners.insert(1, ([0.0, 0.0, 1.0], [0.0; 3]));
         let nether = m.world_id("nether");
         m.worlds.insert(1, nether);
         m.channels
@@ -3241,7 +3265,7 @@ mod tests {
         ));
         let mut guest = host.share(1);
         guest.set_world("overworld");
-        guest.set_listener([1.0, 0.0, 0.0], 0.0, 0.0);
+        guest.set_listener([1.0, 0.0, 0.0], [0.0; 3]);
         let old = guest.backend.create(false).unwrap();
         drop(guest);
         {

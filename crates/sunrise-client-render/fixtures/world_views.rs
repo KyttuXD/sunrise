@@ -24,11 +24,11 @@ use client::{
     },
 };
 use glam::DVec3;
-use sunrise_client_render as client;
 use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+use sunrise_client_render as client;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -345,7 +345,7 @@ fn fixture(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
     // then the frame drawn with them.
     let camera = DVec3::new(8.0, 104.0, 0.5);
     let entity_frusta = |renderer: &mut Renderer| {
-        renderer.camera_frustum(camera, 85.0, 0.0, 0.0, glam::Mat4::IDENTITY, 1000.0)
+        renderer.camera_frustum(camera, 85.0, [0.0; 3], glam::Mat4::IDENTITY, 1000.0)
     };
     let shot = |renderer: &mut Renderer, name: &str, views: Vec<WorldView>| {
         *VIEWS.lock().unwrap() = views;

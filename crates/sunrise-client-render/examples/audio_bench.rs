@@ -38,8 +38,7 @@ fn main() {
                 64.0,
                 200.0 + (angle.sin() as f64) * 5.0,
             ],
-            angle,
-            0.0,
+            [angle, 0.0, 0.0],
         );
     }
     let listener_elapsed = start.elapsed();
@@ -54,7 +53,7 @@ fn main() {
     let stationary_iterations = 200_000;
     let start = Instant::now();
     for _ in 0..stationary_iterations {
-        audio.set_listener([100.0, 64.0, 200.0], 0.0, 0.0);
+        audio.set_listener([100.0, 64.0, 200.0], [0.0; 3]);
     }
     let stationary_elapsed = start.elapsed();
     println!(
@@ -147,7 +146,7 @@ fn main() {
         instance.effects = effects;
         shaped.play_instance(instance, false);
     }
-    shaped.set_listener([100.0, 64.0, 200.0], 0.0, 0.0);
+    shaped.set_listener([100.0, 64.0, 200.0], [0.0; 3]);
     let start = Instant::now();
     for _ in 0..mix_iterations {
         shaped.mix_buffer(&mut buffer, 2, 48_000);

@@ -707,9 +707,9 @@ pub fn gaussian_weights(
             for y in 0..6 {
                 let wy = weight(1, y);
                 let biome = biome_at_quart(
-                    integral[0] - 2 + x as i32,
-                    integral[1] - 2 + y as i32,
-                    integral[2] - 2 + z as i32,
+                    integral[0].wrapping_add(x as i32 - 2),
+                    integral[1].wrapping_add(y as i32 - 2),
+                    integral[2].wrapping_add(z as i32 - 2),
                 );
                 let w = wx * wy * wz;
                 match weights.iter_mut().find(|(b, _)| *b == biome) {

@@ -24,6 +24,7 @@ pub(super) struct Sequence {
     reply: Sender<String>,
     /// What must stay as it was at the start (`Game::sequence_scene`).
     scene: String,
+    camera: Option<([u64; 3], [u32; 3])>,
     pack: Value,
 }
 
@@ -93,11 +94,8 @@ impl Game<'_> {
         }
     }
 
-    /// What a sequence's frames must share: the world, the camera, the settings, the pack and
-    /// the window's size.
-    fn sequence_scene(&mut self) -> Result<String> {
-        let view = self.camera_view(1.0).ok_or("no camera")?;
-        let (position, yaw, pitch) = self.native_camera_pose_now(1.0, view);
+    /// The world, settings, pack and window a sequence's frames must share.
+    fn sequence_scene(&self) -> Result<String> {
         let renderer = self.renderer.as_ref().ok_or("no renderer")?;
         Ok(format!(
             "{:?}",
@@ -105,17 +103,29 @@ impl Game<'_> {
                 (self.dim.id(), self.world.game_time, self.world.day_time),
                 (self.world.revision, self.world.chunks.len()),
                 self.world.chunks.membership_revision(),
-                (
-                    position.to_array().map(f64::to_bits),
-                    yaw.to_bits(),
-                    pitch.to_bits()
-                ),
                 format!("{:?}", self.camera_type),
                 format!("{:?}", self.settings),
                 (&self.native_shaders.picked, renderer.shader_pack_kind()),
                 [renderer.config.width, renderer.config.height],
             )
         ))
+    }
+
+    /// Compare the frame camera in its normal setup, without dispatching camera hooks twice.
+    pub(super) fn check_sequence_camera(&mut self, view: Option<(glam::DVec3, f32, f32, f32)>) {
+        let Some(sequence) = &mut self.screenshot_sequence else {
+            return;
+        };
+        if let Some((position, yaw, pitch, roll)) = view {
+            let camera = (
+                position.to_array().map(f64::to_bits),
+                [yaw, pitch, roll].map(f32::to_bits),
+            );
+            if *sequence.camera.get_or_insert(camera) == camera {
+                return;
+            }
+        }
+        self.end_screenshot_sequence(Err("the camera changed while the sequence ran".into()));
     }
 
     /// `screenshot-sequence ...`; `None` while the reply waits for the PNG.
@@ -159,6 +169,7 @@ impl Game<'_> {
             path,
             reply: reply.clone(),
             scene,
+            camera: None,
             pack: json!({
                 "kind": kind.unwrap_or("none"),
                 "name": (!picked.is_empty()).then_some(picked),
@@ -235,6 +246,9 @@ impl Game<'_> {
             renderer.screenshot_result = None;
         }
         let drawn = self.render_frame();
+        if self.screenshot_sequence.is_none() {
+            return drawn;
+        }
         let renderer = self.renderer.as_mut().ok_or("no renderer")?;
         // Still queued when the frame wasn't drawn, or when the PNG is to be taken
         // again smaller (out of memory): not this sequence's frame.

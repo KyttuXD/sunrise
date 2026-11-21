@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -199,15 +200,16 @@ pub(super) fn emit<'a>(
                     param,
                 )
             });
-        if isolated_collect
+        if (isolated_collect || isolated_listen)
             && (hook.context.is_some()
+                || hook.owner.is_some()
                 || host.as_ref().is_some_and(|(_, host)| {
                     host.ty.starts_with("&mut ")
                         || matches!(host.ty.as_str(), "HostSide" | "LevelSide")
                 }))
         {
             return Err(format!(
-                "{name}: an isolated collector needs a read-only world Host"
+                "{name}: isolated listen and collect hooks need a read-only world Host and no owner filter"
             ));
         }
         // A block notice may identify a watching block entity. Its Parts receive
@@ -444,7 +446,7 @@ pub(super) fn emit<'a>(
             }
             syn::visit_mut::VisitMut::visit_type_mut(&mut OwnedLootContext, &mut owned_ty);
             let ty = &owned_ty;
-            if isolated_collect {
+            if isolated_collect || isolated_listen {
                 struct MutableBorrow(bool);
                 impl<'ast> syn::visit::Visit<'ast> for MutableBorrow {
                     fn visit_type_reference(&mut self, reference: &'ast syn::TypeReference) {
@@ -452,11 +454,17 @@ pub(super) fn emit<'a>(
                         syn::visit::visit_type_reference(self, reference);
                     }
                 }
+                // An isolated listener can edit a stack-local Copy output, but cannot
+                // lend nested mutable references to state it would write through directly.
+                let inspected = match ty {
+                    Type::Reference(r) if isolated_listen && r.mutability.is_some() => &*r.elem,
+                    _ => ty,
+                };
                 let mut mutable = MutableBorrow(false);
-                syn::visit::Visit::visit_type(&mut mutable, ty);
+                syn::visit::Visit::visit_type(&mut mutable, inspected);
                 if mutable.0 {
                     return Err(format!(
-                        "{}: an isolated collector cannot also write to {name}",
+                        "{}: cannot isolate writes through {name}",
                         hook.name
                     ));
                 }
@@ -505,7 +513,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && !isolated_listen
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -546,6 +558,12 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
+            } else if isolated_listen
+                && rollback
+                    .last()
+                    .is_some_and(|(field, by_ref)| field == name && *by_ref)
+            {
+                inits.push(format!("{name}: &mut __proposed_{name}"));
             } else if hook.event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
@@ -597,6 +615,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if isolated_listen {
+            "// no wire: these outputs belong to one in-process callback.\n"
         } else {
             ""
         };
@@ -946,7 +966,8 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener || isolated_collect || isolated_listen
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -969,7 +990,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if hook.event_per_listener || isolated_listen {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
@@ -1225,6 +1246,39 @@ pub(super) fn emit<'a>(
         };
         let inert_owner = fresh_name("disabled_owner", &mut used);
         let (lookup, calls) = match &scoped {
+            None if isolated_listen => {
+                if !surfaces.is_empty() || (hook.output_validator.is_some() && rollback.is_empty())
+                {
+                    return Err(format!(
+                        "{name}: isolated listen outputs must be Copy values"
+                    ));
+                }
+                let mut proposal = String::new();
+                let mut write = local_write_back.clone();
+                let mut args = Vec::new();
+                for (field, by_ref) in &rollback {
+                    if *by_ref {
+                        proposal.push_str(&format!("let mut __proposed_{field} = *{field};"));
+                        write.push_str(&format!("*{field} = *{event}.{field};"));
+                        args.push(format!("&*{event}.{field}"));
+                    } else {
+                        args.push(format!("&{event}.{field}"));
+                    }
+                }
+                let accept = match &hook.output_validator {
+                    Some(validate) => format!(
+                        "match {validate}({args}) {{ Ok(()) => {{ {write} }} Err(field) => log::warn!(\"mod {{}} hook {name} refused {{field}}\", {mod_entry}.id), }}",
+                        args = args.join(", "),
+                    ),
+                    None => write,
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {proposal} {local_event} match super::runtime::invoke_isolated_listen(HookId::{hook_id}, {mod_entry}.id, \"{name}\", || super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{ Some(Ok(())) => {{ {accept} }}, Some(Err(refusal)) => refusal.report_each(), None => {{}} }} }} }}"
+                    ),
+                )
+            }
             None if declaration.is_some() => (
                 String::new(),
                 format!(

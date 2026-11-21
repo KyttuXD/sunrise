@@ -239,8 +239,15 @@ impl Game<'_> {
             )),
         };
         let tilt = self.settings.file.double("damageTiltStrength");
-        glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m)
-            * self.native_shake_matrix(partial)
+        let bob =
+            glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m);
+        let mut transform = mod_api::ViewTransform::IDENTITY;
+        self.native_render_view_transform(partial, &mut transform);
+        if transform == mod_api::ViewTransform::IDENTITY {
+            bob
+        } else {
+            bob * glam::Mat4::from_cols_array(&transform.matrix())
+        }
     }
     /// `AbstractClientPlayer.tick` and `aiStep` (`ClientAvatarState.tick`,
     /// `updateBob`), `rideTick`'s `resetBob` and `LocalPlayer.move`'s walked

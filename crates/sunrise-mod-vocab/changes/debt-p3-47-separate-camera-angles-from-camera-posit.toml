@@ -1,0 +1,46 @@
+ids = [
+    "hook:camera_pose",
+    "method:Hooks::camera_pose",
+    "type:CameraPoseEvent",
+    "hook:camera_shake",
+    "method:Hooks::camera_shake",
+    "type:CameraShakeEvent",
+    "type:Shake",
+    "hook:compute_camera_angles",
+    "hook:camera_position",
+    "hook:render_view_transform",
+    "type:ViewTransform",
+    "type:Camera",
+    "type:Camera.roll",
+    "type:ClientGuiOptions",
+    "type:ClientGuiOptions.screen_effect_scale",
+]
+why = """
+The old hooks mixed three jobs: entity camera orientation, moving the camera in world space,
+and adding an effect to the drawn picture. The new angle event follows NeoForge's
+ViewportEvent.ComputeCameraAngles in Camera.alignWithEntity, before setRotation and before
+mirroring or detached placement. Position is lent separately after Camera.update's alignment and
+setPosition. View effects compose at GameRenderer.bobHurt and bobView, before the portal/Nausea
+projection effect. Options.screenEffectScale is exposed as a normal preference rather than a
+policy applied to every effect. The old shake angle and translation caps are gone.
+"""
+migrate = """
+Replace Hooks::camera_pose(&mut CameraPoseEvent) with compute_camera_angles(&mut
+ComputeCameraAnglesEvent) for the scalar event.yaw, event.pitch and event.roll fields (degrees).
+This event runs before third-person front mirroring and sleeping bed rotation, not after those
+placements. Move position writes to camera_position(&mut CameraPositionEvent<'_>) and assign
+*event.position in world blocks. To follow a different entity and use its viewpoint, use
+ClientHost::set_camera_entity instead.
+
+Replace Hooks::camera_shake(&mut CameraShakeEvent) and Shake with
+render_view_transform(&mut RenderViewTransformEvent<'_>). For the old cosmetic effect, read
+s = host.gui_options().screen_effect_scale if you want to honor that preference. Call
+let [x, y, z] = offset; event.transform.translate(-x * s, -y * s, -z * s); then rotate_z, rotate_x
+and rotate_y on event.transform in that order, with (roll * s).to_radians(),
+(pitch * s).to_radians() and (yaw * s).to_radians(), respectively. Omit scaling when your effect
+should not use Distortion Effects. For an actual orientation change, edit compute_camera_angles
+instead. The camera snapshot and project report/use the accepted roll; project continues to omit
+view effects. Camera and ClientGuiOptions literals or exhaustive patterns must add roll and
+screen_effect_scale, respectively. To change perspective in the current frame, request it before
+camera setup or in compute_camera_angles; a request in camera_position is for the next frame.
+"""

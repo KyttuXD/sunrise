@@ -67,7 +67,7 @@ impl Columns {
     fn section_of(&self, pos: DVec3) -> SectionKey {
         (
             (pos.x.floor() as i32) >> 4,
-            (pos.y.floor() as i32 - self.min_y) >> 4,
+            (floor(pos.y) >> 4) - (self.min_y >> 4),
             (pos.z.floor() as i32) >> 4,
         )
     }
@@ -285,7 +285,7 @@ impl Graph {
         } else {
             (self.sections - 1, 0)
         };
-        let block = (camera.x.floor() as i64, camera.z.floor() as i64);
+        let block = (i64::from(floor(camera.x)), i64::from(floor(camera.z)));
         let mut seeds = Vec::with_capacity(((2 * self.radius + 1) as usize).pow(2));
         for dx in -self.radius..=self.radius {
             for dz in -self.radius..=self.radius {
@@ -335,11 +335,15 @@ impl Graph {
         let mut grew = false;
         let eye = (
             (camera.x.floor() as i32) >> 4,
-            (camera.y.floor() as i32 - self.min_y) >> 4,
+            (floor(camera.y) >> 4) - (self.min_y >> 4),
             (camera.z.floor() as i32) >> 4,
         );
         // `SectionPos.center` of the camera's section.
-        let centre = [eye.0 * 16 + 8, eye.1 * 16 + self.min_y + 8, eye.2 * 16 + 8];
+        let centre = [
+            (eye.0 << 4) + 8,
+            ((eye.1 + (self.min_y >> 4)) << 4) + 8,
+            (eye.2 << 4) + 8,
+        ];
         while let Some(index) = queue.pop_front() {
             let i = index as usize;
             let key = self.key(i);
@@ -410,7 +414,7 @@ impl Graph {
         camera: DVec3,
         full: bool,
     ) -> bool {
-        let origin = [key.0 * 16, key.1 * 16 + self.min_y, key.2 * 16];
+        let origin = [key.0 << 4, (key.1 << 4) + self.min_y, key.2 << 4];
         // The step's axis in x, y, z order: down/up, north/south, west/east.
         let axis = [1, 2, 0][d / 2];
         let far = |c: usize| {
@@ -446,9 +450,9 @@ impl Graph {
     /// points) without looking them up.
     fn walk(&self, corner: SectionKey, camera: DVec3, known: u8) -> Option<u8> {
         let mut check = [
-            f64::from(corner.0 * 16),
+            f64::from(corner.0 << 4),
             f64::from(corner.1 * 16 + self.min_y),
-            f64::from(corner.2 * 16),
+            f64::from(corner.2 << 4),
         ];
         let camera = [camera.x, camera.y, camera.z];
         let to = [
@@ -458,6 +462,10 @@ impl Graph {
         ];
         let inverse = 1.0 / (to[0] * to[0] + (to[1] * to[1] + to[2] * to[2])).sqrt();
         let step = to.map(|t| t * inverse * SECTION_DIAGONAL);
+        // A direction that cannot be represented cannot establish a sight line.
+        if step == [0.0; 3] {
+            return Some(0);
+        }
         let (min_y, max_y) = (
             f64::from(self.min_y),
             f64::from(self.min_y + self.sections * 16 - 1),

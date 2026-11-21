@@ -553,9 +553,10 @@ use joml::{Mat4, Quat};
 /// `Camera.getViewRotationMatrix` to the last bit: `Matrix4f.rotation` of the conjugate of
 /// `setRotation`'s quaternion, and its JOML `invert()`. `view_matrix` turns the same quaternion
 /// into a matrix by glam's formula, which differs in the last bits (1.0 for 0.99999994, 6e-8 for
-/// 0).
-pub fn view_rotation_matrix(yaw: f32, pitch: f32) -> (glam::Mat4, glam::Mat4) {
-    let q = Quat::rotation_yxz(PI - yaw * DEG_TO_RAD, -pitch * DEG_TO_RAD, 0.0);
+/// 0). With NeoForge roll, the Z rotation is the negative roll angle in radians.
+pub fn view_rotation_matrix(yaw: f32, pitch: f32, roll: f32) -> (glam::Mat4, glam::Mat4) {
+    let angle_z = if roll == 0.0 { 0.0 } else { -roll * DEG_TO_RAD };
+    let q = Quat::rotation_yxz(PI - yaw * DEG_TO_RAD, -pitch * DEG_TO_RAD, angle_z);
     let mut m = Mat4::IDENTITY;
     m.rotation(Quat {
         x: -q.x,
@@ -575,16 +576,13 @@ pub fn view_matrix(yaw: f32, pitch: f32) -> glam::Mat4 {
     glam::Mat4::from_quat(glam::Quat::from_xyzw(-q.x, -q.y, -q.z, q.w))
 }
 
-/// `GameRenderer.projectPointToScreen`: world point `at` seen from a camera at `position` facing
-/// `yaw`/`pitch` through column-major `projection` (the frame's reversed-Z perspective), as
-/// normalised device x and y (-1 to 1 across the screen) and depth z. The view is the camera's
-/// rotation only, without bob or spin, as vanilla's. None for a point at or behind the camera and
-/// for a non-finite `at`, where vanilla returns a mirrored or NaN point.
+/// `GameRenderer.projectPointToScreen`: world point `at` through the camera's rotation and
+/// reversed-Z projection without bob or spin, as normalized screen x and y and depth z.
+/// Returns `None` for a point at or behind the camera, or a non-finite point.
 pub fn project_point(
     projection: &[f32; 16],
     position: [f64; 3],
-    yaw: f32,
-    pitch: f32,
+    angles: [f32; 3],
     at: [f64; 3],
 ) -> Option<[f32; 3]> {
     if !at.iter().all(|v| v.is_finite()) {
@@ -597,12 +595,21 @@ pub fn project_point(
         (at[2] - position[2]) as f32,
     );
     let clip =
-        glam::Mat4::from_cols_array(projection) * view_matrix(yaw, pitch) * offset.extend(1.0);
+        glam::Mat4::from_cols_array(projection) * frame_view_matrix(angles) * offset.extend(1.0);
     if clip.w.is_nan() || clip.w <= 0.0 {
         return None;
     }
     let ndc = [clip.x / clip.w, clip.y / clip.w, clip.z / clip.w];
     ndc.iter().all(|v| v.is_finite()).then_some(ndc)
+}
+
+/// The primary frame view. The unrolled path uses the engine's replaceable `view_matrix`.
+pub fn frame_view_matrix([yaw, pitch, roll]: [f32; 3]) -> glam::Mat4 {
+    if roll == 0.0 {
+        view_matrix(yaw, pitch)
+    } else {
+        view_matrix_rolled(yaw, pitch, roll)
+    }
 }
 
 /// `view_matrix` with a roll about the view direction, in degrees.
@@ -690,6 +697,7 @@ pub struct Camera {
     pub position: [f64; 3],
     pub x_rot: f32,
     pub y_rot: f32,
+    pub roll: f32,
     pub rotation: Quat,
     pub forwards: [f32; 3],
     pub up: [f32; 3],
@@ -710,6 +718,7 @@ impl Default for Camera {
             position: [0.0; 3],
             x_rot: 0.0,
             y_rot: 0.0,
+            roll: 0.0,
             rotation: Quat::IDENTITY,
             forwards: [0.0, 0.0, -1.0],
             up: [0.0, 1.0, 0.0],
@@ -735,9 +744,15 @@ impl Camera {
     }
     /// `Camera.setRotation`.
     pub fn set_rotation(&mut self, y_rot: f32, x_rot: f32) {
+        self.set_rotation_with_roll(y_rot, x_rot, 0.0);
+    }
+    /// `Camera.setRotation` with NeoForge's `roll` (in degrees; `rotationYXZ(PI - yaw, -pitch, -roll)`).
+    pub fn set_rotation_with_roll(&mut self, y_rot: f32, x_rot: f32, roll: f32) {
         self.x_rot = x_rot;
         self.y_rot = y_rot;
-        self.rotation = Quat::rotation_yxz(PI - y_rot * DEG_TO_RAD, -x_rot * DEG_TO_RAD, 0.0);
+        self.roll = roll;
+        let angle_z = if roll == 0.0 { 0.0 } else { -roll * DEG_TO_RAD };
+        self.rotation = Quat::rotation_yxz(PI - y_rot * DEG_TO_RAD, -x_rot * DEG_TO_RAD, angle_z);
         self.forwards = self.rotation.transform([0.0, 0.0, -1.0]);
         self.up = self.rotation.transform([0.0, 1.0, 0.0]);
         self.left = self.rotation.transform([-1.0, 0.0, 0.0]);
@@ -788,9 +803,30 @@ impl Camera {
         partial: f32,
         camera_type: CameraType,
         adjust_distance: impl FnOnce(f32) -> f32,
+        clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
+    ) {
+        self.align_with_entity_angles(
+            entity,
+            partial,
+            camera_type,
+            (entity.view_y_rot(partial), entity.view_x_rot(partial), 0.0),
+            adjust_distance,
+            clip,
+        );
+    }
+    /// `Camera.alignWithEntity` with angles `(yaw, pitch, roll)` supplied at NeoForge's
+    /// `ViewportEvent.ComputeCameraAngles` moment — before `setRotation`, third-person mirroring
+    /// (`yaw + 180`, `-pitch`, `-roll`), detached back-off, and sleeping bed rotation.
+    pub fn align_with_entity_angles(
+        &mut self,
+        entity: &CameraEntity,
+        partial: f32,
+        camera_type: CameraType,
+        (yaw, pitch, roll): (f32, f32, f32),
+        adjust_distance: impl FnOnce(f32) -> f32,
         mut clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
     ) {
-        self.set_rotation(entity.view_y_rot(partial), entity.view_x_rot(partial));
+        self.set_rotation_with_roll(yaw, pitch, roll);
         let p = f64::from(partial);
         self.position = [
             lerp_d(p, entity.previous[0], entity.position[0]),
@@ -799,11 +835,11 @@ impl Camera {
             lerp_d(p, entity.previous[2], entity.position[2]),
         ];
         self.eye = self.position;
-        self.eye_rotation = [self.y_rot, self.x_rot];
+        self.eye_rotation = [entity.view_y_rot(partial), entity.view_x_rot(partial)];
         self.detached = !camera_type.is_first_person();
         if self.detached {
             if camera_type.is_mirrored() {
-                self.set_rotation(self.y_rot + 180.0, -self.x_rot);
+                self.set_rotation_with_roll(self.y_rot + 180.0, -self.x_rot, -self.roll);
             }
             let (mut distance, mut scale) = (4.0f32, 1.0f32);
             if let Some(living) = &entity.living {
@@ -1166,7 +1202,7 @@ mod tests {
     fn project(at: [f64; 3]) -> Option<[f32; 3]> {
         let projection =
             glam::Mat4::perspective_rh(70f32.to_radians(), 16.0 / 9.0, 512.0, 0.05).to_cols_array();
-        super::project_point(&projection, [0.0, 64.0, 0.0], 0.0, 0.0, at)
+        super::project_point(&projection, [0.0, 64.0, 0.0], [0.0; 3], at)
     }
 
     #[test]
@@ -1381,6 +1417,34 @@ mod tests {
             |_, _| None,
         );
         assert_eq!(camera.position, camera.eye);
+    }
+    #[test]
+    fn third_person_front_mirrors_camera_angles_but_not_entity_eye() {
+        let entity = CameraEntity {
+            position: [0.0; 3],
+            previous: [0.0; 3],
+            x_rot: 0.0,
+            y_rot: 0.0,
+            x_rot_o: 0.0,
+            y_rot_o: 0.0,
+            eye_height: 1.62,
+            living: None,
+            mount: None,
+        };
+        let mut camera = Camera::default();
+        camera.align_with_entity_angles(
+            &entity,
+            1.0,
+            CameraType::ThirdPersonFront,
+            (90.0, 20.0, 15.0),
+            |d| d,
+            |_, _| None,
+        );
+        assert_eq!(
+            (camera.y_rot, camera.x_rot, camera.roll),
+            (270.0, -20.0, -15.0)
+        );
+        assert_eq!(camera.eye_rotation, [0.0, 0.0]);
     }
     #[test]
     fn fov_modifier_combines_speed_flight_and_bow() {

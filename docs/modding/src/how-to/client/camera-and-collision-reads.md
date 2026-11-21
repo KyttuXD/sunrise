@@ -49,7 +49,7 @@ has no such rule: Sunrise adds it.
 
 ## Camera snapshots and perspective
 
-The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, angles, final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame. `block_collision(pos)` returns block-local `[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context; unloaded blocks and collision errors give no boxes.
+The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, angles (`yaw`, `pitch`, and `roll`), final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes roll, bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame. `block_collision(pos)` returns block-local `[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context; unloaded blocks and collision errors give no boxes.
 
 `ClientHost::project(at)` places a world point on this frame's screen, as vanilla's
 `GameRenderer.projectPointToScreen`: normalised device x and y (-1 to 1, x right, y up) and a
@@ -68,14 +68,48 @@ next tick. NaN or infinity returns `NotFinite` and changes nothing; outside a wo
 `NoWorld`. The server sees an ordinary client look, at tick granularity, as from a mouse.
 `calculate_player_turn` changes how far the mouse turns the view; `set_local_rotation` sets it directly.
 
-`ClientHost::set_camera_type(type)` is a queued client-only effect and takes `&self`, so
-shared callbacks such as `camera_pose` can request a perspective. `camera_type()` reports
-the latest request immediately; several requests coalesce to the last one. Requests before
-or during `camera_pose` apply before that frame's final camera, FOV and spectator post effects.
-The pose hook runs only once: its explicit position or angle overrides survive a refreshed
-vanilla camera. Requests from later render callbacks apply at the next frame's extraction.
-Setting a type never emits `camera_type_cycle`; F5 alone cycles, and its final event choice
-wins over requests made inside the cycle callback.
+### Camera angles, camera position, and view transforms
+
+The camera entity is the viewpoint: use `ClientHost::set_camera_entity` if the camera should follow
+another entity. For a frame-only change, use the stage that owns the value you want to change:
+
+- `compute_camera_angles` lends yaw, pitch and roll in degrees, starting from the camera entity's
+  interpolated yaw and pitch and zero roll. It matches `ViewportEvent.ComputeCameraAngles` in
+  `Camera.alignWithEntity`, before `Camera.setRotation`, mirrored third-person rotation and
+  back-off, and the sleeping bed rotation. Like NeoForge, it does not run on the interpolated
+  new-minecart branch. It does not turn the player or change aim.
+- `camera_position` lends `*event.position`, the world-space position in blocks after frame
+  placement (`Camera.setPosition`), including third-person back-off or an existing custom view.
+  World rendering, camera fog and the sound listener follow it. The entity's eye, targeting,
+  position and the world's chunk tickets do not change.
+- `render_view_transform` lends `event.transform`, an identity `ViewTransform` at the end of
+  `GameRenderer.bobHurt` / `bobView`. It post-multiplies camera-local transforms into the world and
+  first-person hand passes before the world's portal or Nausea distortion. Neither the camera
+  pose, the sound listener nor the player's aim changes. `ClientHost::project` uses the actual
+  camera angles and position without these presentation effects, just as it omits vanilla bob.
+
+Listeners see edits left by earlier listeners. A non-finite angle or position proposal is
+reported without replacing the preceding value. `ViewTransform` reports and rejects operations
+with a non-finite result. A panicking callback loses its uncommitted output, is reported with its
+mod id in the log and error toast, and is disabled for that hook for the rest of the session.
+Other listeners keep running.
+
+For example, a cosmetic effect can read the player's `Options.screenEffectScale` preference
+through `gui_options()` instead of turning the actual camera:
+
+```rust,ignore
+fn render_view_transform(&self, host: &dyn ClientHost, event: &mut RenderViewTransformEvent<'_>) {
+    let scale = host.gui_options().screen_effect_scale;
+    event.transform.translate(0.0, self.vertical_offset(event.partial) * scale, 0.0);
+    event.transform.rotate_z((self.roll_degrees(event.partial) * scale).to_radians());
+}
+```
+
+`ClientHost::set_camera_type(type)` queues a perspective change from a shared callback.
+`camera_type()` reports the last request immediately. A request made before or during
+`compute_camera_angles` applies before that frame's detached placement, FOV and spectator post
+effects. Requests in `camera_position` or later apply at the next frame's camera setup. Setting
+a type does not emit `camera_type_cycle`; F5 alone cycles, and its final event choice wins.
 
 ## The fluid the camera is in
 
