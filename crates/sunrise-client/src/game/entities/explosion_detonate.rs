@@ -2,11 +2,33 @@
 //! reach (NeoForge's `ExplosionEvent.Detonate`), and the list of them the
 //! listeners leave behind.
 use super::Game;
-use crate::game::entity::EntityHandle;
+use crate::game::entity::{Entity as _, EntityHandle, EntityIdCursor, with_entity};
 use mod_api::EntityRef;
 use std::collections::HashSet;
 
+/// `ServerExplosion.hurtEntities`: below this radius NeoForge does not post Detonate.
+pub(super) const DETONATE_RADIUS: f32 = 1.0e-5;
+
 impl Game<'_> {
+    /// Detonate and consume its edited entity list in one blast, without inheriting a nested
+    /// blast's list or letting it inherit ours. Both blasts see their own block lists.
+    pub(super) fn with_explosion_detonate<T>(
+        &mut self,
+        source: Option<u32>,
+        center: [f64; 3],
+        radius: f32,
+        blocks: &mut Vec<[i32; 3]>,
+        hurt: impl FnOnce(&mut Self, &[[i32; 3]]) -> T,
+    ) -> T {
+        let outer = self.combat.blast_hit_list.take();
+        let outer_ids = std::mem::take(&mut self.combat.blast_hit_ids);
+        self.explosion_detonate(source, center, radius, blocks);
+        let result = hurt(self, blocks);
+        self.combat.blast_hit_list = outer;
+        self.combat.blast_hit_ids = outer_ids;
+        result
+    }
+
     /// `ServerExplosion.explode` posting `onExplosionDetonate` before any block or
     /// entity is hit. The entities are `level.getEntities(source, box)`, the box
     /// the centre ± (2 × radius + 1) floored, without the exploding source; every
@@ -17,23 +39,23 @@ impl Game<'_> {
     /// Order controls only the ordinary-storage walk, not the separate crystal,
     /// dragon, player and decoration passes. Without a listener nothing is listed, and the walks
     /// enumerate the storages as before.
-    pub(super) fn explosion_detonate(
+    fn explosion_detonate(
         &mut self,
+        source: Option<u32>,
         center: [f64; 3],
         radius: f32,
         blocks: &mut Vec<[i32; 3]>,
     ) {
         // `ServerExplosion.hurtEntities` fires it only for a radius of at least 0.00001.
-        if radius < 1.0e-5 || !mod_api::__private::listened(mod_api::HookId::ExplosionDetonate) {
+        if radius < DETONATE_RADIUS
+            || !self.is_logical_server()
+            || !mod_api::__private::listened(mod_api::HookId::ExplosionDetonate)
+        {
             return;
         }
         let reach = f64::from(radius) * 2.0 + 1.0;
         let min = center.map(|c| (c - reach).floor());
         let max = center.map(|c| (c + reach).floor());
-        let source = self
-            .combat
-            .explosion_direct
-            .or(self.combat.explosion_source);
         let mut entities = self
             .level(self.dim.id())
             .and_then(|level| self.level_entities_in(level, min, max))
@@ -45,7 +67,7 @@ impl Game<'_> {
         // The walks follow the list: one a listener added is walked as any
         // other, so a handle that names nothing real is refused here, and a
         // repeated id is taken once (`getEntities` lists an entity once).
-        entities.retain(|entity| self.native_entity_target(*entity).is_some());
+        entities.retain(|entity| self.native_explosion_source(*entity).is_some());
         let mut seen = HashSet::new();
         entities.retain(|entity| seen.insert(entity.id()));
         self.combat.blast_hit_ids = seen;
@@ -100,11 +122,38 @@ impl Game<'_> {
         }
     }
 
+    /// Visit the next ordinary target in the edited list's order, or storage order with no
+    /// listener. A callback may discard a later original without sweeping its storage yet.
+    pub(super) fn next_blast_entity(
+        &self,
+        cursor: &mut EntityIdCursor,
+        listed_at: &mut usize,
+    ) -> Option<(u32, EntityHandle)> {
+        loop {
+            let (id, handle) = if let Some(list) = &self.combat.blast_hit_list {
+                let &id = list.get(*listed_at)?;
+                *listed_at += 1;
+                let Some(handle) = self.blast_handle(id) else {
+                    continue;
+                };
+                (id, handle)
+            } else {
+                self.next_entity_id(cursor)?
+            };
+            if !with_entity!(self, handle, entity => entity.is_removed())
+                && !with_entity!(self, handle, entity => entity.selector_target())
+                    .is_some_and(|target| self.target_removed(&target))
+            {
+                return Some((id, handle));
+            }
+        }
+    }
+
     /// The handle of the storaged entity `id` names, for the listed walk.
     /// The kinds outside the storages (frames, paintings, cushions, crystals,
     /// the dragon and its parts, hooks, players) answer None: their own
     /// passes and the player walk read the list for them.
-    pub(in crate::game) fn blast_handle(&self, id: u32) -> Option<EntityHandle> {
+    fn blast_handle(&self, id: u32) -> Option<EntityHandle> {
         if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Mob(i));
         }
@@ -429,7 +478,7 @@ mod tests {
                 zombie(game, SPARED, -2.0);
                 // The outer blast lists its entities and spares the zombie.
                 let mut blocks = Vec::new();
-                game.explosion_detonate([0.0, 1.0, 0.0], 3.0, &mut blocks);
+                game.explosion_detonate(None, [0.0, 1.0, 0.0], 3.0, &mut blocks);
                 assert!(
                     game.combat.blast_hit_list.is_some(),
                     "the outer list is set"
@@ -558,7 +607,7 @@ mod tests {
                         fall: (false, 0.0),
                     });
                 }
-                game.explosion_detonate([0.0, 1.0, 0.0], 3.0, &mut Vec::new());
+                game.explosion_detonate(None, [0.0, 1.0, 0.0], 3.0, &mut Vec::new());
                 let listed = game.combat.blast_hit_list.as_ref().unwrap();
                 assert!(!listed.contains(&940));
                 assert!(listed.contains(&941));
@@ -759,5 +808,201 @@ mod tests {
                 if empty { vec![] } else { vec![960, 955] }
             );
         }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn wind_charges_consume_both_edited_detonate_lists() {
+        use sunrise_client::{
+            chunk::Chunk,
+            gamerules::Value,
+            projectiles::{Hit, Projectile, ProjectileKind},
+        };
+        use sunrise_core::position::ChunkPos;
+
+        const SPARED_LEVER: [i32; 3] = [6, 80, 8];
+        const ADDED_LEVER: [i32; 3] = [14, 80, 8];
+        const FIRST: u32 = 903;
+        const SECOND: u32 = 902;
+
+        #[derive(Default)]
+        struct Calls {
+            candidates: Option<(bool, bool, Vec<u32>)>,
+            pushes: Vec<u32>,
+        }
+        struct Edit(Arc<Mutex<Calls>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Edit {
+            fn explosion_detonate(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut ExplosionDetonateEvent<'_>,
+            ) {
+                self.0.lock().unwrap().candidates = Some((
+                    event.blocks.contains(&SPARED_LEVER),
+                    event.blocks.contains(&ADDED_LEVER),
+                    event.entities.iter().map(|e| e.id()).collect(),
+                ));
+                event.blocks.retain(|p| *p != SPARED_LEVER);
+                event.blocks.push(ADDED_LEVER);
+                event.blocks.push([6, i32::MIN, 8]);
+                event.entities.retain(|e| [FIRST, SECOND].contains(&e.id()));
+                event.entities.sort_by_key(|e| e.id() != FIRST);
+            }
+            fn explosion_knockback(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut mod_api::ExplosionKnockbackEvent<'_>,
+            ) {
+                if let Some(id) = event.entity {
+                    self.0.lock().unwrap().pushes.push(id);
+                }
+            }
+        }
+
+        crate::game::native_entity_refs::tests::run_with_game_stack(|| {
+            for (kind, mob_griefing, triggers_blocks) in [
+                (ProjectileKind::WindCharge, false, true),
+                (ProjectileKind::BreezeWindCharge, true, true),
+                (ProjectileKind::BreezeWindCharge, false, false),
+            ] {
+                let heard = Arc::new(Mutex::new(Calls::default()));
+                let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+                    "edit_wind",
+                    Box::new(Edit(heard.clone())),
+                )]
+                .into();
+                mod_platform::testing::with_mods(mods, || {
+                    with_game(|game| {
+                        game.build_registries();
+                        game.set_allow_commands(true);
+                        game.options.dedicated = Some(Vec::new());
+                        assert!(game.ui.rules.set("mob_griefing", Value::Bool(mob_griefing)));
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                        game.block_ticks
+                            .add_empty_chunk(ChunkPos::new(0, 0))
+                            .unwrap();
+                        for [x, y, z] in [SPARED_LEVER, ADDED_LEVER] {
+                            assert!(game.run_command(&format!(
+                                "setblock {x} {} {z} minecraft:stone",
+                                y - 1
+                            )));
+                            assert!(game.run_command(&format!(
+                                "setblock {x} {y} {z} minecraft:lever[face=floor]"
+                            )));
+                        }
+                        let zombie = game
+                            .res
+                            .mob_types()
+                            .get("minecraft:zombie")
+                            .unwrap()
+                            .clone();
+                        for (id, z) in [(SPARED, 8.5), (SECOND, 9.0), (FIRST, 7.5)] {
+                            game.mobs.push(Mob::new(
+                                id,
+                                zombie.clone(),
+                                Vec3::new(6.5, 80.5, z),
+                                0.0,
+                            ));
+                        }
+                        let at = Vec3::new(5.0, 80.5, 8.5);
+                        let id = game.add_projectile(Projectile::new(kind, at, None));
+                        let charge = game.creatures.projectiles[0].clone();
+                        game.wind_charge_hit(
+                            &charge,
+                            Hit::Block {
+                                pos: [4, 80, 8],
+                                at,
+                                face: [1, 0, 0],
+                            },
+                        )
+                        .unwrap();
+                        game.apply_late_wind_pushes();
+
+                        let heard = heard.lock().unwrap();
+                        let (near, far, entities) = heard
+                            .candidates
+                            .as_ref()
+                            .expect("wind charge posted Detonate");
+                        assert!(*near && !*far);
+                        assert!(!entities.contains(&id), "the direct source is excluded");
+                        assert!(entities.contains(&SPARED));
+                        assert_eq!(heard.pushes, [FIRST, SECOND]);
+                        for mob in game.mobs.iter() {
+                            assert_eq!(mob.health, 20.0);
+                            assert_eq!(mob.velocity == Vec3::ZERO, mob.id == SPARED);
+                        }
+                        let powered = |[x, y, z]| {
+                            let state = game.world.block(x, y, z);
+                            &*game.pack.assets.registry.state(state).unwrap().properties["powered"]
+                                == "true"
+                        };
+                        assert!(!powered(SPARED_LEVER));
+                        assert_eq!(powered(ADDED_LEVER), triggers_blocks);
+                    });
+                });
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn detonate_can_add_blocks_a_full_explosions_calculator_did_not_select() {
+        struct AddBlocks;
+        #[mod_api::__subscriptions]
+        impl Hooks for AddBlocks {
+            fn explosion_detonate(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut ExplosionDetonateEvent<'_>,
+            ) {
+                assert!(event.blocks.is_empty());
+                event.blocks.extend([[12, 80, 12], [0, i32::MIN, 0]]);
+            }
+        }
+        crate::game::native_entity_refs::tests::run_with_game_stack(|| {
+            let mods: mod_api::Mods =
+                vec![mod_api::ModEntry::new("add_blocks", Box::new(AddBlocks))].into();
+            mod_platform::testing::with_mods(mods, || {
+                with_game(|game| {
+                    game.build_registries();
+                    game.load_server_loot();
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    game.block_ticks
+                        .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                        .unwrap();
+                    let stone = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:stone")
+                        .unwrap();
+                    game.world.set(12, 80, 12, stone).unwrap();
+                    let level = game.level("minecraft:overworld").unwrap();
+                    level
+                        .explode(
+                            game,
+                            None,
+                            [4.0, 80.0, 4.0],
+                            3.0,
+                            true,
+                            mod_api::ExplosionInteraction::Block,
+                            mod_api::ExplosionSettings {
+                                calculator: Some(mod_api::ExplosionCalculator {
+                                    explodes_blocks: false,
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(game.world.block(12, 80, 12), game.world.air);
+                });
+            });
+        });
     }
 }

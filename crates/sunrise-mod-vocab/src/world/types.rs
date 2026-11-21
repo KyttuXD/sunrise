@@ -573,11 +573,12 @@ pub enum ExplosionInteraction {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ExplosionResistance {
-    /// No answer: the chunk isn't loaded, the level or the source is stale, or the cell holds a
-    /// state the game doesn't know.
+    /// No answer: the in-height cell's chunk isn't loaded, the level or source isn't available,
+    /// or the cell holds a state the game doesn't know.
     Unavailable,
-    /// No resistance at all (air with no fluid, or a cell an immune-blocks calculator does not
-    /// name): a ray loses only its fixed step there. Not the same as a resistance of 0.
+    /// No resistance at all (void air outside build height, air with no fluid, or a cell an
+    /// immune-blocks calculator does not name): a ray loses only its fixed step there. Not the
+    /// same as a resistance of 0.
     NoResistance,
     /// This resistance: a ray's step through the cell takes `(r + 0.3) * 0.3` of its power.
     Resists(f32),
@@ -609,11 +610,6 @@ pub enum ResistanceCells {
     },
 }
 
-impl ResistanceCells {
-    /// The most cells one batched read covers; a larger one is refused.
-    pub const MAX: u64 = 262_144;
-}
-
 /// Why a batched explosion resistance read was refused, with nothing read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -621,8 +617,8 @@ impl ResistanceCells {
 pub enum ResistanceCellsError {
     /// A box whose `max` is below its `min` on some axis, or columns whose `max_y` is below `min_y`.
     Inverted,
-    /// More cells than [`ResistanceCells::MAX`]: this many.
-    TooMany(u64),
+    /// The result vector cannot be represented or its storage cannot be allocated.
+    Capacity,
     /// A host without a game.
     NoGame,
 }
@@ -639,19 +635,12 @@ impl crate::NoBackend for ResistanceCellsError {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ExplosionDestroyError {
-    /// More positions than [`ExplosionDestroyError::MAX_POSITIONS`]: this many.
-    TooMany(u64),
     /// A stale level, or one not in place; a stale source or one in another level; a client.
     Unavailable,
-    /// A centre or radius that isn't finite, or a negative radius.
+    /// A centre or radius that isn't finite.
     InvalidBlast,
     /// A host without a game.
     NoGame,
-}
-
-impl ExplosionDestroyError {
-    /// The most positions one call takes.
-    pub const MAX_POSITIONS: u64 = 65_536;
 }
 
 impl crate::NoBackend for ExplosionDestroyError {

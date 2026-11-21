@@ -1,0 +1,27 @@
+ids = [
+    "hook:explosion_detonate",
+    "hook:explosion_resistance",
+    "method:BlockPart::explosion_resistance",
+    "handle:LevelRef::explode",
+    "handle:LevelRef::explosion_resistance",
+    "handle:LevelRef::explosion_resistances",
+    "handle:LevelRef::explosion_destroy_blocks",
+    "type:ExplosionCalculator",
+    "type:ExplosionResistance",
+    "type:ResistanceCells",
+    "type:ResistanceCellsError",
+    "type:ExplosionDestroyError",
+    "type:ExplodeError",
+]
+why = """
+NeoForge ExplosionEvent.Detonate and its ServerExplosion.hurtEntities patch pass the affected lists on to the real blast. The block-only helper now uses the edited list as-is, and WindCharge.explode and BreezeWindCharge.explode also post Detonate before their effects. ServerExplosion.interactWithBlocks shuffles the list supplied, and createFire walks it including repetitions. The actual block effects check residency and build height at use, following the engine's Level.isLoaded contract, without loading chunks.
+ServerLevel.explode does not admit a blast by its centre's bounds or residency; ServerExplosion.calculateExplodedPositions checks individual ray positions. Level.getBlockState returns void air outside build height before reading a chunk. Fixed batch and destruction counts are not world access checks and have been removed.
+NeoForge's ExplosionDamageCalculator.getBlockExplosionResistance patch takes the greater of the block answer and the fluid answer. Finite negative answers are valid block answers: a dry cell becomes resistance 0, and water or lava still wins at 100. The source calculator's overrides still apply.
+"""
+migrate = """
+Keep Hooks::explosion_detonate(host, event) and edit event.blocks directly. For explosion_destroy_blocks, additions and reordering now take effect, and a repeated entry added by a listener is kept. Do not issue a separate write to break a block you added. An empty initial block list (for example, ExplosionCalculator::explodes_blocks = false) still accepts additions; the blast's interaction and fire settings apply to those additions. Detonate also hears wind bursts, including a breeze charge whose block effects mob griefing prevents. Update a pinned explosion_detonate hook_version from 2 to 3.
+Keep BlockPart::explosion_resistance(level, event). Return None, not a negative sentinel, to leave the block's static resistance unchanged. Update a pinned explosion_resistance hook_version from 1 to 2. LevelRef::explosion_resistance and LevelRef::explosion_resistances return the result after combining even a finite negative override with the fluid. Read results outside build height are NoResistance even when the column is not loaded.
+Keep level.explode(host, source, center, radius, fire, interaction, settings). ExplodeError::Unavailable no longer reports an unloaded centre chunk; ExplodeError::InvalidBlast no longer reports finite centres outside world bounds. If your mod needs those checks for its own logic, do them before calling. Resistance reads check the sampled cell, not the described centre.
+Remove ResistanceCells::MAX. Replace ResistanceCellsError::TooMany(_) with ResistanceCellsError::Capacity for a result vector that cannot be represented or allocated; Inverted still reports reversed limits. Box and Columns retain their result order.
+Remove ExplosionDestroyError::MAX_POSITIONS and the ExplosionDestroyError::TooMany(_) match arm. Store the success count from level.explosion_destroy_blocks(...) as usize instead of u32. For a finite negative radius the helper runs explosion_start and the block step, but not explosion_detonate; check the radius yourself if your mod wants to refuse such a blast. Rebuild native mods against the updated SDK.
+"""

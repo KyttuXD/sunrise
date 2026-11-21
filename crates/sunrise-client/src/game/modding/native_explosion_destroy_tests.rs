@@ -39,7 +39,7 @@ fn destroy(
     game: &mut Game<'_>,
     positions: &[[i32; 3]],
     blast: Blast,
-    expected: Result<u32, ExplosionDestroyError>,
+    expected: Result<usize, ExplosionDestroyError>,
 ) {
     let level = game.level("minecraft:overworld").unwrap();
     assert_eq!(
@@ -61,7 +61,8 @@ fn destroy(
 struct Watch {
     /// `explosion_start` cancels.
     cancel: Arc<AtomicBool>,
-    /// `explosion_detonate` takes `[1, 80, 1]` out and puts `[3, 80, 3]` in.
+    /// `explosion_detonate` takes `[1, 80, 1]` out, prepends `[3, 80, 3]` (plus a duplicate),
+    /// and appends an unloaded and out-of-height position.
     edit: Arc<AtomicBool>,
     /// The detonate lists heard.
     detonated: Arc<Mutex<Vec<Vec<[i32; 3]>>>>,
@@ -96,7 +97,10 @@ impl mod_api::Hooks for Watch {
         self.detonated.lock().unwrap().push(event.blocks.clone());
         if self.edit.load(Ordering::Relaxed) {
             event.blocks.retain(|p| *p != [1, 80, 1]);
+            event.blocks.insert(0, [3, 80, 3]);
             event.blocks.push([3, 80, 3]);
+            event.blocks.push([100, 80, 100]);
+            event.blocks.push([1, 400, 1]);
         }
     }
 }
@@ -208,17 +212,37 @@ fn a_part_hears_its_block_exploded_once() {
 
 #[test]
 #[ignore = "daily"]
-fn a_detonate_listener_spares_a_position_and_adds_none() {
+fn a_detonate_listener_edits_reorders_and_adds_positions() {
     with_watch(|game, watch| {
+        assert!(game.ui.rules.set(
+            "block_explosion_drop_decay",
+            sunrise_client::gamerules::Value::Bool(false),
+        ));
         for p in [[1, 80, 1], [2, 80, 1], [3, 80, 3]] {
-            set(game, p, "stone");
+            set(game, p, "cobblestone");
         }
         watch.edit.store(true, Ordering::Relaxed);
+        // Java Random seed 7 shuffles the five entries with swap indices 1, 2, 0, 0.
+        // After the two unavailable positions, the added block is the first one hit.
+        game.world.random.set_seed(7);
         let positions = [[1, 80, 1], [2, 80, 1]];
-        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
-        assert_eq!(name(game, [1, 80, 1]), "minecraft:stone", "spared");
+        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(2));
+        // Four shuffle draws plus three nextDouble offsets for the merged drop.
+        assert_eq!(game.world.random.next_int(), 1_511_462_400);
+        assert_eq!(name(game, [1, 80, 1]), "minecraft:cobblestone", "spared");
         assert_eq!(name(game, [2, 80, 1]), "minecraft:air");
-        assert_eq!(name(game, [3, 80, 3]), "minecraft:stone", "added, ignored");
+        assert_eq!(name(game, [3, 80, 3]), "minecraft:air", "added, destroyed");
+        assert!(!game.world.chunks.contains_key(&(6, 6)), "never loaded");
+        // Reordered [3, 80, 3] first -> merged cobblestone drop pops from [3, 3], not [2, 1].
+        let drops: Vec<_> = game
+            .dropped
+            .iter()
+            .map(|e| (e.stack.item.to_string(), e.stack.count, e.position))
+            .collect();
+        assert_eq!(drops.len(), 1, "{drops:?}");
+        let (item, count, at) = &drops[0];
+        assert_eq!((item.as_str(), *count), ("minecraft:cobblestone", 2));
+        assert_eq!([at.x.floor() as i32, at.z.floor() as i32], [3, 3], "{at:?}");
     });
 }
 
@@ -305,17 +329,26 @@ fn an_unloaded_position_is_skipped_and_not_counted() {
 
 #[test]
 #[ignore = "daily"]
-fn more_positions_than_the_cap_are_refused_with_nothing_changed() {
+fn more_than_the_old_cap_of_positions_is_accepted() {
     with_watch(|game, watch| {
         set(game, [1, 80, 1], "stone");
         let positions = vec![[1, 80, 1]; 65_537];
-        destroy(
-            game,
-            &positions,
-            blast(ExplosionInteraction::Block),
-            Err(ExplosionDestroyError::TooMany(65_537)),
-        );
-        assert_eq!(name(game, [1, 80, 1]), "minecraft:stone");
+        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
+        assert_eq!(name(game, [1, 80, 1]), "minecraft:air");
+        assert_eq!(*watch.detonated.lock().unwrap(), [vec![[1, 80, 1]]]);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_negative_radius_still_destroys_the_supplied_blocks_without_detonate() {
+    with_watch(|game, watch| {
+        let pos = [1, 80, 1];
+        let mut blast = blast(ExplosionInteraction::Block);
+        blast.radius = -1.0;
+        set(game, pos, "stone");
+        destroy(game, &[pos], blast, Ok(1));
+        assert_eq!(name(game, pos), "minecraft:air");
         assert!(watch.detonated.lock().unwrap().is_empty());
     });
 }

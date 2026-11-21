@@ -232,8 +232,23 @@ fn a_cell_reads_what_a_blast_meets_there() {
             .set(9, 80, 1, sunrise_world::registry::BlockStateId(u32::MAX))
             .unwrap();
         assert_eq!(read(game, at(9), None), Some(Unavailable));
-        // Above the level: void air.
-        assert_eq!(read(game, [1, 400, 1], None), Some(NoResistance));
+        // Outside build height, vanilla returns void air before looking for a chunk.
+        assert_eq!(read(game, [100, 400, 100], None), Some(NoResistance));
+        let level = game.level("minecraft:overworld").unwrap();
+        assert_eq!(
+            level.explosion_resistance(
+                game,
+                at(1),
+                None,
+                [100.5, 80.5, 100.5],
+                4.0,
+                false,
+                ExplosionInteraction::Block,
+            ),
+            Some(Resists(6.0)),
+            "read the sampled cell, not the centre's unloaded chunk",
+        );
+        assert!(!game.world.loaded(100, 100));
     });
 }
 
@@ -279,13 +294,21 @@ fn a_batched_read_answers_each_cell_in_order() {
             ]
         );
         assert!(!game.world.chunks.contains_key(&(6, 6)));
-        let too_many = ResistanceCells::Box {
+        let past_old_cap = ResistanceCells::Box {
             min: [0, 0, 0],
             max: [63, 63, 64],
         };
+        let large = reads(game, &past_old_cap, None).unwrap();
+        assert_eq!(large.len(), 266_240);
+        assert_eq!(large[0], NoResistance);
+        assert_eq!(large[63], Unavailable);
+        let overflow = ResistanceCells::Box {
+            min: [i32::MIN; 3],
+            max: [i32::MAX; 3],
+        };
         assert_eq!(
-            reads(game, &too_many, None),
-            Err(ResistanceCellsError::TooMany(266_240))
+            reads(game, &overflow, None),
+            Err(ResistanceCellsError::Capacity)
         );
         assert_eq!(
             parts.pure.0.load(Ordering::Relaxed),

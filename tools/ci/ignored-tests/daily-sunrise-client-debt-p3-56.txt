@@ -1,0 +1,6 @@
+sunrise-client game::explosion_detonate::tests::detonate_can_add_blocks_a_full_explosions_calculator_did_not_select lib daily resources
+sunrise-client game::explosion_detonate::tests::wind_charges_consume_both_edited_detonate_lists lib daily resources
+sunrise-client game::native_explosion_destroy_tests::a_detonate_listener_edits_reorders_and_adds_positions lib daily resources
+sunrise-client game::native_explosion_destroy_tests::a_negative_radius_still_destroys_the_supplied_blocks_without_detonate lib daily resources
+sunrise-client game::native_explosion_destroy_tests::more_than_the_old_cap_of_positions_is_accepted lib daily resources
+sunrise-client game::native_explosions_tests::unloaded_centre_and_far_coordinates_still_explode_without_loading_chunks lib daily resources

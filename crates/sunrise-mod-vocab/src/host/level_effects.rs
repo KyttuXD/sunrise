@@ -120,8 +120,9 @@ pub trait LevelEffectsBackendMut {
     /// `settings` holds the damage calculator, particles and sound, each
     /// vanilla's default when `None`. There is no radius limit, as in
     /// vanilla: a big blast costs the blocks its rays find, and one of 0 or
-    /// below finds none. Refused, with nothing exploded and no hook told, as
-    /// [`ExplodeError`] says.
+    /// below finds none. A finite centre doesn't have to be in bounds or in a loaded chunk;
+    /// the blast checks the positions it reaches. Refused, with nothing exploded and no hook
+    /// told, as [`ExplodeError`] says.
     #[access(WorldOnly)]
     fn level_explode(
         &mut self,
@@ -138,17 +139,20 @@ pub trait LevelEffectsBackendMut {
     /// would set off would meet in the cell at `pos`, as its rays read it
     /// (`ExplosionDamageCalculator.getBlockExplosionResistance`), without exploding anything. The
     /// larger of the block's answer (its parts' `explosion_resistance` first, then its own value)
-    /// and the fluid's (water and lava 100); `NoResistance` for air with no fluid. The blast's
-    /// calculator is the one `explode` gives that source, read from the same selection: as
+    /// and the fluid's (0 for empty; water and lava 100). A finite negative part answer still
+    /// replaces the block's own value before this comparison. `NoResistance` for air with no
+    /// fluid, including void air outside the build height. The blast's calculator is the one
+    /// `explode` gives that source, read from the same selection: as
     /// vanilla's `EntityBasedExplosionDamageCalculator` asks the source, a primed TNT minecart's
     /// rails and the blocks under them resist 0 (and the blast spares them), and a dangerous
     /// wither skull caps a block it may destroy at 0.8; any other source has the default one.
-    /// A respawn anchor's water cell
-    /// belongs to the anchor's own sourceless blast, which no description names, so no read sees
-    /// it. The causing entity and damage type come from `source` as for `explode`, and parts are
-    /// asked with that `ExplosionStart`. `Unavailable` for a stale level or `source`, a chunk
-    /// that isn't loaded (it is never loaded) or a state the game doesn't know; None only from a
-    /// host without a game. The level does not change.
+    /// A respawn anchor's water cell belongs to the anchor's own sourceless blast, which no
+    /// description names, so no read sees it. The causing entity and damage type come from
+    /// `source` as for `explode`, and parts are asked with that `ExplosionStart`. The centre's
+    /// bounds and residency do not decide whether the target cell can be read. `Unavailable`
+    /// for a level or source that isn't available, an in-height target in an unloaded chunk,
+    /// or a state the game doesn't know. None only from a host without a game. The level does
+    /// not change and no chunk is loaded.
     #[access(WorldOnly)]
     fn level_explosion_resistance(
         &mut self,
@@ -165,9 +169,8 @@ pub trait LevelEffectsBackendMut {
     /// `cells` gives them. A state is asked once per call only when every part on its block that
     /// answers `explosion_resistance` declares the answer pure
     /// (`BlockPart::explosion_resistance_is_pure`); otherwise its parts are asked once a cell.
-    /// Refused, with nothing read, for an inverted area or more than
-    /// `ResistanceCells::MAX` (262,144) cells: it runs on the server tick, so read big areas in
-    /// pieces.
+    /// `Inverted` for an inverted area or `Capacity` if the results cannot be represented or
+    /// allocated; neither reads any cells. It runs on the server tick, so read big areas in pieces.
     #[access(WorldOnly)]
     fn level_explosion_resistances(
         &mut self,
@@ -186,20 +189,21 @@ pub trait LevelEffectsBackendMut {
     /// found with it, spread over ticks if it likes. A Sunrise addition. Each call is one
     /// explosion to the hooks: `explosion_start` first, which may cancel it (then nothing breaks
     /// and the answer is 0), then, for a radius of at least 0.00001, `explosion_detonate` with
-    /// the positions as its block list, in the order given, a repeated one once; a listener may
-    /// only take positions out (spare them), and one it adds is ignored. Then the block step in
-    /// vanilla's order: the positions shuffled with the level's random, and each block hit as
+    /// the positions as its block list, in the order given, a repeated one once; listeners may
+    /// remove, add, repeat or reorder positions (`ExplosionEvent.Detonate`). Negative finite
+    /// radii still run `explosion_start` and the block step, but not `explosion_detonate`.
+    /// Then the block step in vanilla's order: the edited list is shuffled with the level's
+    /// random, preserving repetitions, and each block is hit as
     /// the blast hits one (air skipped; `can_drop_from_explosion`; loot with the radius under
     /// the decay interaction; experience when the causing entity is a player;
     /// `on_block_exploded`, whose default sets air and primes TNT owned by the causing entity),
     /// the drops of the whole call merged and popped after the last block; then, with `fire`, a
     /// third of the cells left air above a solid block catch fire, under `None` too. `None`
-    /// breaks nothing else, and `Trigger` only works the blocks it may. Unlike vanilla's rays, a
-    /// position in a chunk that isn't loaded is skipped, never loaded and not counted, and so is
-    /// one outside the level's height. The number of blocks destroyed: those that were not air
-    /// when their turn came. `Err`, with nothing changed, for more than 65,536 positions
-    /// (`ExplosionDestroyError::MAX_POSITIONS`), a stale level or `source`, or a centre or
-    /// radius that isn't finite or a negative radius.
+    /// breaks nothing else, and `Trigger` only works the blocks it may. Block effects check
+    /// residency and build height when they reach each position; they never load a chunk.
+    /// Returns the number of non-air blocks hit by the destruction step. `Err`, with nothing
+    /// changed, for a level or source that isn't available, or a
+    /// centre or radius that isn't finite.
     #[access(WorldOnly)]
     fn level_explosion_destroy_blocks(
         &mut self,
@@ -210,5 +214,5 @@ pub trait LevelEffectsBackendMut {
         radius: f32,
         fire: bool,
         interaction: ExplosionInteraction,
-    ) -> Result<u32, ExplosionDestroyError>;
+    ) -> Result<usize, ExplosionDestroyError>;
 }

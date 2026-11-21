@@ -47,9 +47,9 @@ pub struct ExplosionSettings {
 #[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
 // exhaustive: vanilla's four constructor arguments, built directly by mods
 pub struct ExplosionCalculator {
-    /// The blocks the rays reach break (or react, under `Trigger`); false
-    /// finds none, so nothing breaks, burns or reaches `explosion_detonate`'s
-    /// block list.
+    /// Whether the rays select blocks to break (or work, under `Trigger`). False
+    /// starts `explosion_detonate` with an empty block list. Listeners can still add
+    /// positions; the explosion's interaction and fire settings apply to those positions.
     pub explodes_blocks: bool,
     /// Entities in reach are hurt; false leaves their health alone (they are
     /// still pushed).
@@ -59,7 +59,7 @@ pub struct ExplosionCalculator {
     /// neither damaged nor pushed (`damages_entities` false and exactly 0) is
     /// not even checked for exposure.
     pub knockback_multiplier: Option<f32>,
-    /// A block tag (`minecraft:logs`) whose blocks the blast never breaks.
+    /// A block tag (`minecraft:logs`) whose blocks the rays never select.
     /// When given it replaces the whole resistance rule: its blocks resist
     /// 3,600,000 and every other cell resists nothing, obsidian and fluids
     /// included, and no part's `explosion_resistance` is asked.
@@ -112,12 +112,10 @@ impl Default for ExplosionBlockParticle {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ExplodeError {
-    /// A client, a parked level or a stale handle, a `source` that is stale,
-    /// names no entity or is in another level, or a centre in a chunk that
-    /// isn't loaded.
+    /// A client, a parked level or a stale handle, or a `source` that is stale,
+    /// names no entity or is in another level.
     Unavailable,
-    /// The centre is outside the world or not finite, or the radius or the
-    /// knockback multiplier is not finite.
+    /// The centre, the radius or the knockback multiplier is not finite.
     InvalidBlast,
     /// The damage type is not registered.
     UnknownDamageType,

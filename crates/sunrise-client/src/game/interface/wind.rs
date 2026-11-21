@@ -2,7 +2,7 @@
 //! breezes shoot, and the burst they make (`ServerExplosion` with
 //! `TRIGGER_BLOCK`: no damage, only knockback and the blocks that react).
 use super::Game;
-use super::entity::{Blast, Entity as _, for_each_entity_mut};
+use super::entity::{Blast, Entity as _, for_each_entity_mut, with_entity, with_entity_mut};
 use std::collections::BTreeSet;
 use sunrise_client::advancements::EntityView;
 use sunrise_client::chunk::LevelShape;
@@ -194,7 +194,7 @@ impl Game<'_> {
     /// `ServerExplosion.hurtEntities` knockback for a trigger-only blast such
     /// as Wind Burst. The dragon is not in the normal entity lists, but its
     /// body still receives the blast impulse (without taking damage).
-    pub(super) fn wind_burst_knockback(
+    fn wind_burst_knockback(
         &mut self,
         center: [f64; 3],
         radius: f32,
@@ -204,6 +204,9 @@ impl Game<'_> {
         let Some(d) = self.dragon.as_ref() else {
             return;
         };
+        if !self.combat.visits(d.id) {
+            return;
+        }
         let whole = d.whole_box();
         let (lo, hi) = (whole.min_position(), whole.max_position());
         let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
@@ -535,7 +538,11 @@ impl Game<'_> {
         // The player, then every other player in the level (LAN guests),
         // each swapped in as the player. In a guest's turn (a mace's wind
         // burst) the player is that guest.
-        let own = self.wind_push_player(center, radius, multiplier, src, blocks);
+        let own = if self.combat.visits(self.own_entity_id() as u32) {
+            self.wind_push_player(center, radius, multiplier, src, blocks)
+        } else {
+            None
+        };
         let mut pushed: Vec<_> = self.lan_acting.zip(own).into_iter().collect();
         if let Some(host) = self.lan.as_ref() {
             let guests: Vec<u32> = host
@@ -543,6 +550,7 @@ impl Game<'_> {
                 .guests
                 .iter()
                 .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+                .filter(|g| self.combat.visits(g.entity_id as u32))
                 .map(|g| g.conn)
                 .collect();
             for conn in guests {
@@ -570,45 +578,41 @@ impl Game<'_> {
         };
         let source = self.creatures.wind_source;
         let (done, announced) = (self.ordered.done, self.ordered.announced);
-        let mut late = Vec::new();
-        let mut entities = self.take_entities();
-        for_each_entity_mut!(entities, entity => {
-            if entity.ignores_explosion(&burst) || !entity.pushed_by_wind() {
-                return;
-            }
-            let feet = entity.position();
-            let feet = [feet.x, feet.y, feet.z];
-            let dist = distance(feet) / diameter;
-            if dist > 1.0 {
-                return;
-            }
-            let b = entity.explosion_box();
-            let (lo, hi) = (b.min_position(), b.max_position());
-            let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
-            let power = (1.0 - dist) * f64::from(exposure) * multiplier;
-            let dir = direction([feet[0], feet[1] + entity.explosion_eye_height(), feet[2]]);
-            let mut push = [dir[0] * power, dir[1] * power, dir[2] * power];
-            let id = Some(entity.id());
-            self.native_explosion_knockback(self.dim.id(), center, blocks, id, &mut push);
+        let mut cursor = self.entity_id_cursor();
+        let mut listed_at = 0;
+        while let Some((id, handle)) = self.next_blast_entity(&mut cursor, &mut listed_at) {
+            let (mut push, deferred) = with_entity!(self, handle, entity => {
+                if entity.ignores_explosion(&burst) || !entity.pushed_by_wind() {
+                    continue;
+                }
+                let feet = entity.position();
+                let feet = [feet.x, feet.y, feet.z];
+                let dist = distance(feet) / diameter;
+                if dist > 1.0 {
+                    continue;
+                }
+                let b = entity.explosion_box();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
+                let power = (1.0 - dist) * f64::from(exposure) * multiplier;
+                let dir = direction([feet[0], feet[1] + entity.explosion_eye_height(), feet[2]]);
+                // ServerLevel ticks entities in join order. One that joined before the
+                // charge has ticked by now in vanilla; if its tick is still due here,
+                // hold the push for afterwards as before.
+                let joined = entity.join_seq();
+                let waiting = entity.ticks_after_projectiles()
+                    && (done.is_none_or(|d| joined > d)
+                        || (joined >= announced && entity.waits_for_spawn_packet()));
+                (dir.map(|d| d * power), push_waits_for_tick(waiting, joined, source))
+            });
+            self.native_explosion_knockback(self.dim.id(), center, blocks, Some(id), &mut push);
             let push = Vec3::new(push[0], push[1], push[2]);
-            // ServerLevel ticks entities in the order they joined. One that
-            // joined before the charge has ticked by now in vanilla, so the
-            // push is for its next tick; here its kind ticks after the
-            // projectiles, so the push waits for that tick to run. An orb
-            // can advance the early cursor past an unannounced TNT or falling
-            // block; that entity still waits for the late pass.
-            let joined = entity.join_seq();
-            let waiting = entity.ticks_after_projectiles()
-                && (done.is_none_or(|d| joined > d)
-                    || (joined >= announced && entity.waits_for_spawn_packet()));
-            if push_waits_for_tick(waiting, joined, source) {
-                late.push((entity.id(), push));
-            } else {
-                entity.push_from_explosion(push);
+            if deferred {
+                self.creatures.late_wind_pushes.push((id, push));
+            } else if let Some(handle) = self.refresh_entity_handle(id, handle) {
+                with_entity_mut!(self, handle, entity => entity.push_from_explosion(push));
             }
-        });
-        self.restore_entities(entities);
-        self.creatures.late_wind_pushes.extend(late);
+        }
         pushed
     }
     /// The pushes `wind_knockback` held for entities that tick after the
@@ -727,7 +731,7 @@ impl Game<'_> {
             return Ok(());
         }
         let cause = src.cause;
-        if self.serving.is_some() || self.options.dedicated.is_some() {
+        if self.is_logical_server() {
             let start = mod_api::ExplosionStart::from(mod_api::__private::built::ExplosionStart {
                 dimension: self.dim.id(),
                 center,
@@ -751,23 +755,28 @@ impl Game<'_> {
         let ctx = sunrise_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.wind_positions(center, radius);
-        let pushed = self.wind_knockback(center, radius, multiplier, src, &targets);
-        self.wind_burst_knockback(center, radius, multiplier, &targets);
+        let pushed = self.with_explosion_detonate(
+            cause.source,
+            center,
+            radius,
+            &mut targets,
+            |game, blocks| {
+                let pushed = game.wind_knockback(center, radius, multiplier, src, blocks);
+                game.wind_burst_knockback(center, radius, multiplier, blocks);
+                pushed
+            },
+        );
         let block_count = targets.len();
-        // Explosion.canTriggerBlocks: a breeze's charge needs mob griefing.
+        // Keep the wind-burst RNG order: a breeze with mob griefing off still posts
+        // Detonate for its entity effects, but does not shuffle or trigger blocks.
         if !src.breeze
             || self
                 .ui
                 .rules
                 .bool_at(sunrise_client::gamerules::vanilla::MOB_GRIEFING)
         {
-            // Util.shuffle(list, level.random)
-            for i in (2..=targets.len()).rev() {
-                let swap = self.world.random.next_int_bound(i as i32).unwrap_or(0) as usize;
-                targets.swap(i - 1, swap);
-            }
-            let dimension = self.dim.id();
-            self.native_wind_burst(dimension, center, &mut targets);
+            self.shuffle_explosion_targets(&mut targets);
+            self.native_wind_burst(self.dim.id(), center, &mut targets);
             for pos in targets {
                 self.wind_trigger_block(pos)?;
             }
@@ -804,11 +813,7 @@ impl Game<'_> {
     /// the blocks, shuffled, react and none breaks. `canTriggerBlocks`: with a
     /// breeze's charge as the source they react only under mob griefing.
     pub(super) fn explosion_trigger_blocks(&mut self, targets: &mut [[i32; 3]]) -> Result<()> {
-        // Util.shuffle(list, level.random)
-        for i in (2..=targets.len()).rev() {
-            let swap = self.world.random.next_int_bound(i as i32).unwrap_or(0) as usize;
-            targets.swap(i - 1, swap);
-        }
+        self.shuffle_explosion_targets(targets);
         let breeze = self.combat.explosion_source.is_some_and(|id| {
             self.creatures
                 .projectiles
@@ -831,6 +836,9 @@ impl Game<'_> {
     /// `BlockBehaviour.onExplosionHit` for `TRIGGER_BLOCK`: doors, gates,
     /// buttons, levers and bells react as if used; candles go out.
     fn wind_trigger_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        if !self.world.is_loaded_at(pos[0], pos[1], pos[2]) {
+            return Ok(());
+        }
         let state = self.world.block(pos[0], pos[1], pos[2]);
         // FenceGateBlock.onExplosionHit tests power and toggles the gate
         // without turning it towards anyone, as a click would.
