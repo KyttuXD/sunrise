@@ -10,7 +10,6 @@ use super::{
 };
 use crate::game::{
     api_values::TryIntoApi,
-    decided_action::Epoch,
     transactions::{After, decision::Reply},
 };
 use mod_api::item::menu::AnvilCraftInputs;
@@ -335,7 +334,6 @@ impl Game<'_> {
                             "grindstone_take",
                             route,
                             actor,
-                            Epoch::Player,
                             // The station is the one the click ran on, its block is as it was and
                             // nothing the take read has changed.
                             |game| fresh(game) && menu.borrow().mutation_stamp() == read,
@@ -430,7 +428,6 @@ impl Game<'_> {
                             "grindstone_place",
                             route,
                             actor,
-                            Epoch::Player,
                             |game| fresh(game) && menu.borrow().mutation_stamp() == read,
                             |game| {
                                 let mut cancel = false;

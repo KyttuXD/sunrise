@@ -1,7 +1,7 @@
 //! A shift-click in a mod container's menu, routed by the mods
 //! (`native_menu_quick_move`, `AbstractContainerMenu.quickMoveStack`) before
 //! the game's own routing.
-use super::{Game, decided_action::Epoch};
+use super::Game;
 use crate::game::transactions::decision::{InvalidReason, Reply};
 use std::{
     cell::{Cell, RefCell},
@@ -411,7 +411,6 @@ impl Game<'_> {
                 "menu_quick_move",
                 route,
                 actor,
-                Epoch::Player,
                 // Everything the click was admitted on is still so.
                 move |game| admitted.holds(game),
                 move |game| match game

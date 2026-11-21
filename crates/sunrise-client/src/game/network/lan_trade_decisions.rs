@@ -2,7 +2,7 @@
 //! frozen menu plan, collect and apply; a later refusal aborts every earlier iteration.
 use super::{
     Game,
-    decided_action::{DecidedTarget, Epoch},
+    decided_action::DecidedTarget,
     lan_trading::{MerchantRun, opaque_villager},
     stacked_on_other::Pickup,
     trading::MadeMaps,
@@ -344,7 +344,6 @@ impl Game<'_> {
             let accepted = self.decided_action_on(
                 "trade_with_villager",
                 DecidedTarget { route, identity },
-                Epoch::Player,
                 |game| reads.fresh(game),
                 |game| {
                     let mut slot = plan.borrow_mut();
