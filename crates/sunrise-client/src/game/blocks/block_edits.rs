@@ -317,7 +317,7 @@ fn resolve_runs(
         };
         let only = match r.only {
             None => None,
-            Some(f) if (f as usize) < filters => Some(f as u16),
+            Some(f) if (f as usize) < filters => Some(f),
             Some(f) => return Err(format!("run {i}: filter {f} of {filters}")),
         };
         if r.height == 0 {

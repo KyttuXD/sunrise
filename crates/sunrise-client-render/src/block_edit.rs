@@ -17,7 +17,7 @@ pub struct Run {
     pub y0: i32,
     pub y1: i32,
     pub state: u32,
-    pub only: Option<u16>,
+    pub only: Option<u32>,
 }
 
 /// What an edit changed.
@@ -65,7 +65,7 @@ impl World {
     pub fn edit_runs(
         &mut self,
         runs: &[Run],
-        mut matches: impl FnMut(u16, u32) -> bool,
+        mut matches: impl FnMut(u32, u32) -> bool,
         mut tracked: impl FnMut(u32) -> bool,
     ) -> Outcome {
         let mut out = Outcome::default();
@@ -125,7 +125,7 @@ impl World {
                             if filter_memo.len() <= f {
                                 filter_memo.resize_with(f + 1, || Memo(Vec::new()));
                             }
-                            if !filter_memo[f].get(old, |s| matches(f as u16, s)) {
+                            if !filter_memo[f].get(old, |s| matches(f as u32, s)) {
                                 continue;
                             }
                         }
@@ -211,7 +211,7 @@ mod tests {
         w.block_log = Some(Vec::new());
         w
     }
-    fn run(x: i32, z: i32, y0: i32, y1: i32, state: u32, only: Option<u16>) -> Run {
+    fn run(x: i32, z: i32, y0: i32, y1: i32, state: u32, only: Option<u32>) -> Run {
         Run {
             x,
             z,
