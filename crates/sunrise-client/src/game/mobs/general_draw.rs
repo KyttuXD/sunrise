@@ -1,8 +1,8 @@
 //! A mod's general entity rows on the window (#792, stage 5): each row the server shows, with its
 //! first synced fields here (`game/network/remote/general.rs`), drawn by the renderer a mod
 //! registered for its type (`register_entity_renderers`), with the row's shared, frozen synced
-//! attachments. A general type has no look of its own: without a renderer, or
-//! with one that failed until the next resource load, its rows draw nothing.
+//! attachments. A general type has no look of its own: without a successful renderer submission,
+//! its row draws nothing for that frame.
 use super::native_entity_renderers::EntityRendererTable;
 use super::remote::general::RemoteGeneral;
 use super::{Game, entity_culling};
@@ -83,7 +83,7 @@ impl Game<'_> {
         let Some(resolved) = frame.renderers.general(row.type_slot) else {
             return;
         };
-        if resolved.failed.load(std::sync::atomic::Ordering::Relaxed) {
+        if !resolved.owner.is_enabled() {
             return;
         }
         let position = DVec3::from_array(row.position);

@@ -5,6 +5,6 @@ mod __private {
     }
 }
 pub use client::entity_renderers::{
-    EntityRenderState, EntityRenderer, EntityRendererRegistry, EntityRenderers,
-    ItemFrameRenderState, LivingRenderState, PaintingRenderState,
+    EntityRenderState, EntityRenderer, EntityRenderers, ItemFrameRenderState, LivingRenderState,
+    PaintingRenderState,
 };

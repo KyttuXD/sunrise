@@ -49,9 +49,10 @@ pub trait EntityRenderLayer: Send + Sync + 'static {
     /// the body is nonhumanoid. `draw` also has the partial tick, the game time and the entity's
     /// light. In the world, called once a frame for each entity of the target in view, but not
     /// when its `render_living_pre` or `render_player_pre` was canceled. A frame is drawn afresh:
-    /// `draw.keep()` does nothing here. `Ok(())` keeps what it drew. On an `Err`
-    /// or panic, what it drew this frame is dropped, the error is logged once, and the layer
-    /// is asked no more until the next resource load adds it again.
+    /// `draw.keep()` does nothing here. `Ok(())` keeps what it drew. An `Err` is logged for each
+    /// failure and discards just this submission; later layers and later draws still run. A panic
+    /// discards this submission and disables this callback for the session, with an error log and
+    /// toast naming its mod. Re-adding the same layer on reload does not re-enable it.
     fn submit(
         &self,
         entity: &EntityRenderState,
@@ -65,13 +66,13 @@ pub trait EntityRenderLayer: Send + Sync + 'static {
 pub trait EntityLayers {
     /// `getEntityTypes`: every entity type that has a renderer this load, vanilla's and the mods'
     /// (`minecraft:oak_boat`, `mymod:bolt`), sorted. A player has none of its own: its renderers
-    /// are the player models'.
-    fn entity_types(&self) -> Vec<String>;
+    /// are the player models'. This borrows the registration's type metadata.
+    fn entity_types(&self) -> &[String];
     /// Whether `entity_type`'s renderer is a living entity's, the only kind that takes layers.
     /// False for a type with no renderer.
     fn is_living(&self, entity_type: &str) -> bool;
-    /// `getSkins`: the player models, each with a renderer of its own.
-    fn player_models(&self) -> Vec<PlayerModel>;
+    /// `getSkins`: a borrowed list of player models, each with a renderer of its own.
+    fn player_models(&self) -> &[PlayerModel];
     /// Whether a mod registered `entity_type`'s renderer (`register_entity_renderers`), rather than
     /// it being the game's own.
     fn has_mod_renderer(&self, entity_type: &str) -> bool;

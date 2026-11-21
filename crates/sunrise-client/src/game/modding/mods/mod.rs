@@ -702,9 +702,9 @@ pub(super) fn register_entity_renderers(role: ExecutionRole) {
     if !role.is_client() {
         return;
     }
-    let mut registry = mod_api::EntityRendererRegistry::default();
+    let mut registry = super::native_entity_renderers::RendererRegistrations::default();
     Game::native_register_entity_renderers(&RegistrationContext::new(), &mut registry);
-    super::native_entity_renderers::register(registry.into_renderers());
+    registry.install();
 }
 /// The native mods' particle providers (`native_register_particle_providers`) and render groups
 /// (`native_register_particle_groups`) are registered once at startup. Each particle engine

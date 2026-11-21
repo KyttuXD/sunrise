@@ -3,14 +3,14 @@
 //! item, a vanilla boat is unchanged, the later registration for a type wins, an unknown type is
 //! refused by name, and a resource reload keeps the registered renderer in use.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
-use mod_api::{BlockEntityDrawContext, EntityRenderState, EntityRenderer};
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-    },
+use super::native_entity_renderers::{EntityDrawCallback, EntityRendererTable, RenderersByType};
+use mod_api::{
+    __private::game::{CallbackOwner, take_callback_panic_notices},
+    BlockEntityDrawContext, EntityRenderState, EntityRenderer,
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use sunrise_client::{mesher::Vertex, projectiles::ThrownType};
 
@@ -43,11 +43,11 @@ impl EntityRenderer for Raised {
     }
 }
 
-/// Refuses its first call with an `Err`, then draws one stone quad 400 blocks above the entity;
-/// `calls` counts the calls.
+/// Refuses its first two calls with an `Err`, then draws one stone quad 400 blocks up.
 #[derive(Default)]
 struct Flaky {
     calls: AtomicU32,
+    panic: AtomicBool,
 }
 impl Flaky {
     fn calls(&self) -> u32 {
@@ -60,10 +60,11 @@ impl EntityRenderer for Flaky {
         _: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        let first = self.calls.fetch_add(1, Ordering::Relaxed) == 0;
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
         raised_quad(draw, 400.0);
-        if first {
-            return Err("refused its first frame".into());
+        assert!(!self.panic.load(Ordering::Relaxed), "test renderer panic");
+        if call < 2 {
+            return Err("refused this frame".into());
         }
         Ok(())
     }
@@ -99,12 +100,15 @@ static TYPES: [ThrownType; 2] = [
 /// Resolves `ids`, each with a renderer of its own, against [`TYPES`] and the entity types
 /// `minecraft:oak_boat`, `ruby:bolt` and `ruby:dart`.
 fn resolve(ids: &[&str]) -> (EntityRendererTable, Vec<String>) {
-    let registered: BTreeMap<String, Arc<dyn EntityRenderer>> = ids
+    let registered: RenderersByType = ids
         .iter()
         .map(|id| {
             (
                 (*id).to_owned(),
-                Raised::new(1.0) as Arc<dyn EntityRenderer>,
+                Arc::new(EntityDrawCallback::<dyn EntityRenderer> {
+                    inner: Raised::new(1.0),
+                    owner: CallbackOwner::for_mod("fixture"),
+                }),
             )
         })
         .collect();
@@ -141,8 +145,8 @@ fn a_registration_for_a_vanilla_type_is_kept_silently() {
 }
 
 /// The renderers the scene's mod registers: `ruby:bolt` twice (`first` 100 blocks up, then
-/// `second` 200 up), `minecraft:oak_boat` (`boat`, 300 up) and `ruby:spike` (`spike`, failing its
-/// first call). `ruby:dart` has none.
+/// `second` 200 up), `minecraft:oak_boat` (`boat`, 300 up) and `ruby:spike` (`spike`, refusing its
+/// first two submissions). `ruby:dart` has none.
 struct Scene {
     first: Arc<Raised>,
     second: Arc<Raised>,
@@ -299,28 +303,50 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
     );
 }
 
-/// A failing renderer falls back to the item and is asked no more; only a reload's fresh table asks
-/// it again, so this also fails when a reload does not rebuild the table (or does not finish).
 #[test]
 #[ignore = "daily"]
-fn a_failed_renderer_draws_the_item_until_a_resource_reload_resolves_it_again() {
+fn a_refused_renderer_draws_the_item_only_for_that_submission() {
     in_scene(
-        "a_failed_renderer_draws_the_item_until_a_resource_reload_resolves_it_again",
+        "a_refused_renderer_draws_the_item_only_for_that_submission",
         |game, scene| {
-            for frame in ["the failing frame", "the next frame"] {
+            for call in 1..=2 {
                 let spike = thrown_frame(game, &["ruby:spike"]);
-                assert!(!spike.is_empty(), "{frame}: its snowball item");
-                assert!(
-                    spike.iter().all(|v| above(v) < 2.0),
-                    "{frame}: no quad kept: {spike:?}"
-                );
-                assert_eq!(scene.spike.calls(), 1, "{frame}: asked once, then no more");
+                assert!(!spike.is_empty(), "the snowball item still draws");
+                assert!(spike.iter().all(|v| above(v) < 2.0), "no partial quad");
+                assert_eq!(scene.spike.calls(), call);
             }
+            let spike = thrown_frame(game, &["ruby:spike"]);
+            assert_eq!(scene.spike.calls(), 3, "no reload was needed");
+            assert_eq!(spike.len(), 4, "one quad and no item: {spike:?}");
+            assert!(spike.iter().all(|v| matches!(above(v), 400.0 | 401.0)));
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_panicking_renderer_stays_disabled_without_muting_another_renderer() {
+    in_scene(
+        "a_panicking_renderer_stays_disabled_without_muting_another_renderer",
+        |game, scene| {
+            scene.spike.panic.store(true, Ordering::Relaxed);
+            let spike = thrown_frame(game, &["ruby:spike"]);
+            assert!(!spike.is_empty(), "the snowball item still draws");
+            assert!(spike.iter().all(|v| above(v) < 2.0), "no partial quad");
+            let notices = take_callback_panic_notices();
+            assert!(
+                notices
+                    .iter()
+                    .any(|n| n.mod_id == "ruby" && n.kind == "entity renderer")
+            );
+
             super::model_baking_completed_tests::reload(game);
             let spike = thrown_frame(game, &["ruby:spike"]);
-            assert_eq!(scene.spike.calls(), 2, "the reload resolved it again");
-            assert_eq!(spike.len(), 4, "one quad and no item: {spike:?}");
-            assert!(spike.iter().all(|v| (400.0..=401.0).contains(&above(v))));
+            assert!(spike.iter().all(|v| above(v) < 2.0));
+            assert_eq!(scene.spike.calls(), 1);
+            let bolt = thrown_frame(game, &["ruby:bolt"]);
+            assert_eq!(bolt.len(), 4);
+            assert!(bolt.iter().all(|v| matches!(above(v), 200.0 | 201.0)));
         },
     );
 }

@@ -5,7 +5,7 @@
 //! keeps the registrations from start and resolves each type's renderer on every resource load, so
 //! a frame hands an entity to the renderer of its type's slot and to no other mod.
 use crate::BlockEntityDrawContext;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 /// One entity's frame, as `EntityRenderer.extractRenderState` fills an `EntityRenderState`:
 /// what a renderer reads to place and turn its model. Angles are in degrees, interpolated to the
@@ -141,10 +141,11 @@ pub trait EntityRenderer: Send + Sync + 'static {
     /// the partial tick, the game time and the entity's light. Asked once a frame for each entity
     /// of the type in view; a general entity is drawn only after its first synced attachment
     /// generation is published. What this method draws replaces the type's own drawing. A frame
-    /// is drawn afresh: `draw.keep()` does nothing here. `Ok(())` keeps what it drew. On an `Err` or
-    /// panic, what it drew this frame is dropped, the error is logged once, and the renderer
-    /// is asked no more until the next resource load resolves it again. Until then its type
-    /// draws as it would without a registered renderer.
+    /// is drawn afresh: `draw.keep()` does nothing here. `Ok(())` keeps what it drew. An `Err` is
+    /// logged for each failure and discards just this submission; later draws still call the
+    /// renderer. A panic discards this submission and disables this callback for the session,
+    /// with an error log and toast naming its mod. In either case the entity draws as it would
+    /// without a registered renderer on that draw.
     fn submit(
         &self,
         entity: &EntityRenderState,
@@ -160,77 +161,4 @@ pub trait EntityRenderers {
     /// whichever mod made it. A type the game does not know is logged with its id when resources
     /// load, and nothing is drawn by it.
     fn register(&mut self, entity_type: String, renderer: Arc<dyn EntityRenderer>);
-}
-
-// no wire: process-local listener or callback storage; trait objects are invoked through host dispatch, not serialized.
-/// The game's [`EntityRenderers`]: the registrations by entity type.
-#[derive(Default)]
-// exhaustive: its field is private; the game builds it
-pub struct EntityRendererRegistry {
-    renderers: BTreeMap<String, Arc<dyn EntityRenderer>>,
-}
-
-impl EntityRenderers for EntityRendererRegistry {
-    fn register(&mut self, entity_type: String, renderer: Arc<dyn EntityRenderer>) {
-        self.renderers.insert(entity_type, renderer);
-    }
-}
-
-impl EntityRendererRegistry {
-    /// Each type's renderer, the last registration for a type winning.
-    pub fn into_renderers(self) -> BTreeMap<String, Arc<dyn EntityRenderer>> {
-        self.renderers
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Marked(u32);
-    impl EntityRenderer for Marked {
-        fn submit(
-            &self,
-            _entity: &EntityRenderState,
-            draw: &mut dyn BlockEntityDrawContext,
-        ) -> Result<(), String> {
-            draw.set_light(self.0);
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    struct Light(u32);
-    impl BlockEntityDrawContext for Light {
-        fn set_light(&mut self, light: u32) {
-            self.0 = light;
-        }
-    }
-
-    #[test]
-    fn a_later_registration_for_a_type_replaces_the_earlier_one() {
-        let mut registry = EntityRendererRegistry::default();
-        registry.register("mymod:bolt".into(), Arc::new(Marked(1)));
-        registry.register("mymod:dart".into(), Arc::new(Marked(2)));
-        registry.register("mymod:bolt".into(), Arc::new(Marked(3)));
-        let renderers = registry.into_renderers();
-        assert_eq!(renderers.len(), 2);
-        let state = EntityRenderState {
-            id: 7,
-            partial: 0.5,
-            age: 3.5,
-            yaw: 0.0,
-            pitch: 0.0,
-            living: None,
-            tnt_fuse: None,
-            orb_value: None,
-            painting: None,
-            item_frame: None,
-            attachments: None,
-        };
-        let (mut bolt, mut dart) = (Light::default(), Light::default());
-        renderers["mymod:bolt"].submit(&state, &mut bolt).unwrap();
-        renderers["mymod:dart"].submit(&state, &mut dart).unwrap();
-        assert_eq!((bolt.0, dart.0), (3, 2));
-    }
 }

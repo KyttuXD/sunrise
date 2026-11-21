@@ -1,20 +1,19 @@
 //! `register_entity_layers` on the client (#860 stage 2): the event tells what renderers this load
 //! built and refuses a target that is no living entity type by name; a living type's layers draw
 //! over it in the order they were added, a player's are its model's, a type with none draws none,
-//! and a failing layer is dropped until a resource reload adds it again.
+//! and one failed submission cannot affect any other draw.
 use super::Game;
 use super::entity_type_rows::EntityTypeRows;
-use super::native_entity_layers::LayerRegistration;
+use super::native_entity_layers::{LayerOwners, LayerRegistration};
+use super::native_entity_renderers::{EntityDrawCallback, RenderersByType};
 use mod_api::{
+    __private::game::{CallbackOwner, take_callback_panic_notices},
     BlockEntityDrawContext, EntityLayers, EntityRenderLayer, EntityRenderState, EntityRenderer,
     FrameModel, LayerTarget, PlayerModel,
 };
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use sunrise_client::{mesher::Vertex, mobs::Mob};
 
@@ -41,6 +40,7 @@ fn routed(id: &str) -> bool {
 struct Raised {
     height: f32,
     refuse: u32,
+    panic: AtomicBool,
     calls: AtomicU32,
     /// The entity id of the last call.
     id: AtomicU32,
@@ -53,6 +53,7 @@ impl Raised {
         Arc::new(Self {
             height,
             refuse,
+            panic: AtomicBool::new(false),
             calls: AtomicU32::new(0),
             id: AtomicU32::new(u32::MAX),
         })
@@ -78,6 +79,7 @@ impl EntityRenderLayer for Raised {
             [1.0, high, 0.0],
         ];
         draw.quad("block/stone", corners, [0.0, 0.0, 16.0, 16.0], 0xFF_FFFF);
+        assert!(!self.panic.load(Ordering::Relaxed), "test layer panic");
         if call < self.refuse {
             return Err("refused this frame".into());
         }
@@ -88,7 +90,7 @@ impl EntityRenderLayer for Raised {
 #[test]
 fn the_event_tells_the_renderers_this_load_built() {
     let rows = rows();
-    let mut renderers: BTreeMap<String, Arc<dyn EntityRenderer>> = BTreeMap::new();
+    let mut renderers = RenderersByType::new();
     struct Nothing;
     impl EntityRenderer for Nothing {
         fn submit(
@@ -99,11 +101,27 @@ fn the_event_tells_the_renderers_this_load_built() {
             Ok(())
         }
     }
-    renderers.insert("ruby:golem".into(), Arc::new(Nothing));
-    renderers.insert("nope:ghost".into(), Arc::new(Nothing));
-    let event = LayerRegistration::new(&rows, &renderers, &routed);
-    assert_eq!(
+    for id in ["ruby:golem", "nope:ghost"] {
+        renderers.insert(
+            id.into(),
+            Arc::new(EntityDrawCallback::<dyn EntityRenderer> {
+                inner: Arc::new(Nothing),
+                owner: CallbackOwner::for_mod("fixture"),
+            }),
+        );
+    }
+    let owners = LayerOwners::default();
+    let event = LayerRegistration::new(&rows, &renderers, &routed, &owners);
+    assert!(std::ptr::eq(
         event.entity_types(),
+        rows.non_player_ids.as_slice()
+    ));
+    assert_eq!(
+        event
+            .entity_types()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         [
             "minecraft:armor_stand",
             "minecraft:ender_dragon",
@@ -123,7 +141,7 @@ fn the_event_tells_the_renderers_this_load_built() {
     assert!(!event.is_living("nope:ghost"));
     assert_eq!(
         event.player_models(),
-        [PlayerModel::Wide, PlayerModel::Slim]
+        &[PlayerModel::Wide, PlayerModel::Slim]
     );
     assert!(event.has_mod_renderer("ruby:golem"));
     assert!(!event.has_mod_renderer("minecraft:zombie"));
@@ -133,8 +151,10 @@ fn the_event_tells_the_renderers_this_load_built() {
 #[test]
 fn a_target_that_is_no_living_entity_type_is_refused_by_name() {
     let rows = rows();
-    let renderers = BTreeMap::new();
-    let mut event = LayerRegistration::new(&rows, &renderers, &routed);
+    let renderers = RenderersByType::new();
+    let owners = LayerOwners::default();
+    let mut event = LayerRegistration::new(&rows, &renderers, &routed, &owners);
+    let _listener = mod_api::__private::enter("fixture", "register_entity_layers");
     let mut add = |target: &str| event.add(LayerTarget::Entity(target.into()), Raised::new(1.0));
     assert_eq!(
         add("minecraft:oak_boat"),
@@ -165,14 +185,15 @@ fn a_target_that_is_no_living_entity_type_is_refused_by_name() {
 }
 
 /// The layers the scene's mods add on every load: the first mod `zombie` 100 blocks up, `wide`
-/// 300 up, `slim` 400 up and `pig` (refusing its first call) 500 up; the second mod `second`, on
-/// the zombie too, 200 up.
+/// 300 up, `slim` 400 up and two pig layers 450 and 500 up (the latter refusing initially); the
+/// second mod adds a zombie layer 200 up and another pig layer 600 up.
 struct Scene {
     zombie: Arc<Raised>,
     second: Arc<Raised>,
     wide: Arc<Raised>,
     slim: Arc<Raised>,
     pig: Arc<Raised>,
+    current_pig: Arc<Mutex<Arc<Raised>>>,
 }
 
 /// The camera, south of the entity and looking at it.
@@ -190,7 +211,7 @@ fn above(v: &Vertex) -> f32 {
 /// The heights the quads `out` holds start at, in order.
 fn quads(out: &[Vertex]) -> Vec<f32> {
     out.chunks(4)
-        .map(|quad| quad.iter().map(above).fold(f32::MAX, f32::min).round())
+        .map(|quad| quad.iter().map(above).fold(f32::MAX, f32::min))
         .collect()
 }
 
@@ -236,15 +257,20 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
         return;
     }
     use mod_api::{Hooks, RegisterEntityLayersEvent, RegistrationContext};
+    let pig = Raised::refusing(500.0, 2);
     let scene = Scene {
         zombie: Raised::new(100.0),
         second: Raised::new(200.0),
         wide: Raised::new(300.0),
         slim: Raised::new(400.0),
-        pig: Raised::refusing(500.0, 1),
+        current_pig: Arc::new(Mutex::new(pig.clone())),
+        pig,
     };
     /// A mod adding `layers` on every load.
-    struct Layers(Vec<(LayerTarget, Arc<Raised>)>);
+    struct Layers(
+        Vec<(LayerTarget, Arc<Raised>)>,
+        Option<Arc<Mutex<Arc<Raised>>>>,
+    );
     #[mod_api::__subscriptions]
     impl Hooks for Layers {
         fn register_entity_layers(
@@ -255,16 +281,32 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
             for (target, layer) in &self.0 {
                 event.layers.add(target.clone(), layer.clone()).unwrap();
             }
+            if let Some(pig) = &self.1 {
+                let layer = pig.lock().unwrap().clone();
+                event
+                    .layers
+                    .add(LayerTarget::Entity("minecraft:pig".into()), layer)
+                    .unwrap();
+            }
         }
     }
     let entity = |id: &str| LayerTarget::Entity(id.into());
-    let first = Layers(vec![
-        (entity("minecraft:zombie"), scene.zombie.clone()),
-        (LayerTarget::Player(PlayerModel::Wide), scene.wide.clone()),
-        (LayerTarget::Player(PlayerModel::Slim), scene.slim.clone()),
-        (entity("minecraft:pig"), scene.pig.clone()),
-    ]);
-    let second = Layers(vec![(entity("minecraft:zombie"), scene.second.clone())]);
+    let first = Layers(
+        vec![
+            (entity("minecraft:zombie"), scene.zombie.clone()),
+            (LayerTarget::Player(PlayerModel::Wide), scene.wide.clone()),
+            (LayerTarget::Player(PlayerModel::Slim), scene.slim.clone()),
+            (entity("minecraft:pig"), Raised::new(450.0)),
+        ],
+        Some(scene.current_pig.clone()),
+    );
+    let second = Layers(
+        vec![
+            (entity("minecraft:zombie"), scene.second.clone()),
+            (entity("minecraft:pig"), Raised::new(600.0)),
+        ],
+        None,
+    );
     let mods = vec![
         mod_api::ModEntry::new("first", Box::new(first)),
         mod_api::ModEntry::new("second", Box::new(second)),
@@ -408,20 +450,57 @@ fn this_windows_player_is_told_its_own_entity_id() {
 
 #[test]
 #[ignore = "daily"]
-fn a_failing_layer_is_dropped_until_a_resource_reload_adds_it_again() {
+fn a_refused_layer_drops_only_its_own_submission_and_runs_on_the_next_draw() {
     in_scene(
-        "a_failing_layer_is_dropped_until_a_resource_reload_adds_it_again",
+        "a_refused_layer_drops_only_its_own_submission_and_runs_on_the_next_draw",
         |game, scene| {
-            for frame in ["the failing frame", "the next frame"] {
-                assert!(
-                    layer_frame(game, "minecraft:pig", false).is_empty(),
-                    "{frame}"
+            for call in 1..=2 {
+                assert_eq!(
+                    quads(&layer_frame(game, "minecraft:pig", false)),
+                    [450.0, 600.0]
                 );
-                assert_eq!(scene.pig.calls(), 1, "{frame}: asked once, then no more");
+                assert_eq!(scene.pig.calls(), call);
             }
+            assert_eq!(
+                quads(&layer_frame(game, "minecraft:pig", false)),
+                [450.0, 500.0, 600.0]
+            );
+            assert_eq!(scene.pig.calls(), 3);
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_panicking_layer_stays_disabled_on_reload_but_a_replacement_draws() {
+    in_scene(
+        "a_panicking_layer_stays_disabled_on_reload_but_a_replacement_draws",
+        |game, scene| {
+            scene.pig.panic.store(true, Ordering::Relaxed);
+            assert_eq!(
+                quads(&layer_frame(game, "minecraft:pig", false)),
+                [450.0, 600.0]
+            );
+            let notices = take_callback_panic_notices();
+            assert!(
+                notices
+                    .iter()
+                    .any(|n| n.mod_id == "first" && n.kind == "entity layer")
+            );
+
             super::model_baking_completed_tests::reload(game);
-            assert_eq!(quads(&layer_frame(game, "minecraft:pig", false)), [500.0]);
-            assert_eq!(scene.pig.calls(), 2, "the reload added it again");
+            assert_eq!(
+                quads(&layer_frame(game, "minecraft:pig", false)),
+                [450.0, 600.0]
+            );
+            assert_eq!(scene.pig.calls(), 1, "reload re-added the same callback");
+
+            *scene.current_pig.lock().unwrap() = Raised::new(700.0);
+            super::model_baking_completed_tests::reload(game);
+            assert_eq!(
+                quads(&layer_frame(game, "minecraft:pig", false)),
+                [450.0, 700.0, 600.0]
+            );
         },
     );
 }

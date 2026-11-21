@@ -471,7 +471,10 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
         return ids.clone();
     }
     let data = root.join("data/minecraft");
-    let entity_types = super::entity_type_rows::entity_type_rows(root).ids.clone();
+    let entity_types = super::entity_type_rows::entity_type_rows(root)
+        .ids()
+        .map(str::to_owned)
+        .collect();
     let (timelines, markers) = overworld_timelines(root);
     let ids = Arc::new(ResourceIds {
         // `/recipe <id>` must suggest a content mod's recipes too.

@@ -1,0 +1,10 @@
+ids = [
+  "method:EntityLayers::entity_types",
+  "method:EntityLayers::player_models",
+  "type:EntityRendererRegistry",
+  "handle:EntityRendererRegistry::into_renderers",
+  "hook:register_entity_layers",
+  "hook:register_entity_renderers",
+]
+why = "NeoForge's EntityRenderersEvent.AddLayers.getEntityTypes and getSkins expose views of the renderer metadata. In vanilla 26.3, EntityRenderer.submit, LivingEntityRenderer.submit and RenderLayer.submit submit the current draw in layer order; they do not mute the next draw. The old guest-era render latch made a returned error silence that renderer or layer until a reload. An error now discards only that submission and is reported each time. A panic uses the shared session callback policy and names the mod in the log and error toast. The engine collects renderer registrations so it can bind each one to its registering mod. Both registration hooks are now version 5."
+migrate = "Use event.layers.entity_types().iter().map(String::as_str) instead of consuming the old Vec<String>, or use event.layers.entity_types().to_vec() only if you need to keep an owned list. Use event.layers.player_models().iter().copied() instead of consuming the old Vec<PlayerModel>. To register a renderer, replace EntityRendererRegistry::default(), register(...) and into_renderers() with event.renderers.register(entity_type, renderer) inside register_entity_renderers; the engine owns the collector. The submit signatures are unchanged: return Err for a failure local to that invocation and expect later submissions without reloading. A panic disables the callback for the session, including when the same layer is re-added by a reload."

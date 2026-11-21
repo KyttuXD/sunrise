@@ -85,14 +85,15 @@ pitch follow `ItemFrame.setDirection` and are not interpolated (it has no previo
 (whose cancel skips it), the mods' layers and `render_living_post`, in the order the type's own
 model has, so it changes with #3915 and not before. When the replacement succeeds, the layers and
 Post receive `model: None`. Boats, displays and the other
-projectiles come in follow-ups of #860. A renderer that returns an `Err` or panics is logged once with
-the error and asked no more until the next resource load resolves it again. What it drew that frame is
-dropped, and until then its type draws as it would without one."#]
+projectiles come in follow-ups of #860. An `Err` is logged each time and discards just that
+submission; the renderer still runs on later draws. A panic discards the submission and disables the
+callback for the session, with an error log and toast naming the mod. When a replacement did not
+submit successfully, that entity draws as it would without a registered renderer."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",
         side = "client",
-        version = 4,
+        version = 5,
         contract = "listen",
         context = "registration",
         neoforge = "EntityRenderersEvent.RegisterRenderers"

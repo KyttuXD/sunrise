@@ -1,0 +1,4 @@
+sunrise-client game::native_entity_layers_tests::a_panicking_layer_stays_disabled_on_reload_but_a_replacement_draws lib daily child-process
+sunrise-client game::native_entity_layers_tests::a_refused_layer_drops_only_its_own_submission_and_runs_on_the_next_draw lib daily child-process
+sunrise-client game::native_entity_renderers_tests::a_panicking_renderer_stays_disabled_without_muting_another_renderer lib daily child-process
+sunrise-client game::native_entity_renderers_tests::a_refused_renderer_draws_the_item_only_for_that_submission lib daily child-process

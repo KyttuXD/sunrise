@@ -7,11 +7,15 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
+/// Player renderers are keyed by model, not by this type id.
+pub(in crate::game) const PLAYER: &str = "minecraft:player";
+
 /// The entity types under one root, each list sorted.
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::game) struct EntityTypeRows {
-    /// Every entity type (`minecraft:boat`), namespaced as commands name it.
-    pub(in crate::game) ids: Vec<String>,
+    /// Types listed by the layer registration event. Players have their own model list.
+    pub(super) non_player_ids: Vec<String>,
+    player: bool,
     /// The living ones.
     living: Vec<String>,
 }
@@ -26,16 +30,41 @@ impl EntityTypeRows {
             if row.get("attributes").is_some() {
                 out.living.push(id.clone());
             }
-            out.ids.push(id);
+            if id == PLAYER {
+                out.player = true;
+            } else {
+                out.non_player_ids.push(id);
+            }
         }
-        out.ids.sort();
+        out.non_player_ids.sort();
         out.living.sort();
         out
     }
 
+    /// All types, including the player, in command suggestion order.
+    pub(in crate::game) fn ids(&self) -> impl Iterator<Item = &str> {
+        let (before, after) = self.non_player_ids.split_at(if self.player {
+            self.non_player_ids
+                .partition_point(|id| id.as_str() < PLAYER)
+        } else {
+            self.non_player_ids.len()
+        });
+        before
+            .iter()
+            .map(String::as_str)
+            .chain(self.player.then_some(PLAYER))
+            .chain(after.iter().map(String::as_str))
+    }
+
     /// Whether `id` is an entity type.
     pub(in crate::game) fn contains(&self, id: &str) -> bool {
-        self.ids.binary_search_by(|t| t.as_str().cmp(id)).is_ok()
+        if id == PLAYER {
+            self.player
+        } else {
+            self.non_player_ids
+                .binary_search_by(|t| t.as_str().cmp(id))
+                .is_ok()
+        }
     }
 
     /// Whether `id` is a living entity type.
@@ -68,12 +97,19 @@ mod tests {
         let rows = EntityTypeRows::parse(
             br#"{"minecraft:oak_boat": {"width": 1.375},
                  "minecraft:zombie": {"width": 0.6, "attributes": {"minecraft:armor": 2.0}},
+                 "minecraft:player": {"attributes": {}},
                  "ruby:golem": {"template": "minecraft:zombie", "attributes": {}}}"#,
         );
         assert_eq!(
-            rows.ids,
-            ["minecraft:oak_boat", "minecraft:zombie", "ruby:golem"]
+            rows.ids().collect::<Vec<_>>(),
+            [
+                "minecraft:oak_boat",
+                PLAYER,
+                "minecraft:zombie",
+                "ruby:golem"
+            ]
         );
+        assert!(rows.contains(PLAYER));
         assert!(rows.contains("minecraft:oak_boat"));
         assert!(!rows.contains("nope:ghost"));
         assert!(!rows.is_living("minecraft:oak_boat"));

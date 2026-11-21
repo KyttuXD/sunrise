@@ -1233,7 +1233,6 @@ sunrise-client game::native_entity_invulnerable::tests::the_piercing_query_follo
 sunrise-client game::native_entity_invulnerable::tests::the_players_flag_and_window_ride_the_save lib daily resources
 sunrise-client game::native_entity_invulnerable::tests::the_players_permanent_flag_is_apart_from_their_abilities lib daily resources
 sunrise-client game::native_entity_invulnerable::tests::the_window_refuses_damage_and_hides_the_mob_from_enemies lib daily resources
-sunrise-client game::native_entity_layers_tests::a_failing_layer_is_dropped_until_a_resource_reload_adds_it_again lib daily child-process
 sunrise-client game::native_entity_layers_tests::a_living_type_draws_its_layers_in_the_order_they_were_added lib daily child-process
 sunrise-client game::native_entity_layers_tests::a_mob_looks_up_only_its_own_types_or_models_layers lib daily child-process
 sunrise-client game::native_entity_layers_tests::a_player_draws_the_layers_of_its_model lib daily child-process
@@ -1296,7 +1295,6 @@ sunrise-client game::native_entity_remove::tests::removal_dismounts_and_tells_mo
 sunrise-client game::native_entity_remove::tests::selectors_stop_matching_a_discarded_entity_before_the_sweep lib daily resources
 sunrise-client game::native_entity_remove::tests::spawn_at_location_drops_an_item_above_the_entity lib daily resources
 sunrise-client game::native_entity_remove::tests::spawn_at_location_offsets_hanging_entities_out_from_the_wall lib daily resources
-sunrise-client game::native_entity_renderers_tests::a_failed_renderer_draws_the_item_until_a_resource_reload_resolves_it_again lib daily child-process
 sunrise-client game::native_entity_renderers_tests::a_registered_thrown_type_draws_the_later_renderer_and_no_item lib daily child-process
 sunrise-client game::native_entity_renderers_tests::a_vanilla_boat_is_unchanged_by_a_registration_for_its_type lib daily child-process
 sunrise-client game::native_entity_renderers_tests::an_unregistered_thrown_type_still_draws_its_item lib daily child-process

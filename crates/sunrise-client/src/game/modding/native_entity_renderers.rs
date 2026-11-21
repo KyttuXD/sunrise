@@ -18,11 +18,15 @@
 use super::general::GeneralTypeCatalog;
 use super::{
     Game,
+    entity_type_rows::PLAYER,
     host::draw::GameBlockEntityDrawContext,
     native_block_entity_draw::{BlockEntityDraw, LevelLight},
 };
 use glam::{DVec3, Mat4};
-use mod_api::{BlockEntityDrawContext, EntityRenderState, EntityRenderer};
+use mod_api::{
+    __private::game::CallbackOwner, BlockEntityDrawContext, EntityRenderState, EntityRenderer,
+    EntityRenderers, content::crash::current_native_mod,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
@@ -38,11 +42,13 @@ use sunrise_client::{
     projectiles::ThrownType,
 };
 
+pub(super) type RenderersByType = BTreeMap<String, Arc<EntityDrawCallback<dyn EntityRenderer>>>;
+
 /// The registrations, by entity type, the last one for a type winning: kept once at start.
-static REGISTERED: OnceLock<BTreeMap<String, Arc<dyn EntityRenderer>>> = OnceLock::new();
+static REGISTERED: OnceLock<RenderersByType> = OnceLock::new();
 
 /// The registrations when no mod registered any (and before the start registered them).
-static NO_RENDERERS: BTreeMap<String, Arc<dyn EntityRenderer>> = BTreeMap::new();
+static NO_RENDERERS: RenderersByType = BTreeMap::new();
 
 /// The table the last resource load resolved; none before the first.
 static TABLE: RwLock<Option<Arc<EntityRendererTable>>> = RwLock::new(None);
@@ -68,9 +74,6 @@ static ANY_ITEM_FRAME: AtomicBool = AtomicBool::new(false);
 /// when none was registered, so the general route stays off the table lock.
 static ANY_GENERAL: AtomicBool = AtomicBool::new(false);
 
-/// The player's entity type: its model goes by its skin, not by entity type.
-const PLAYER: &str = "minecraft:player";
-
 /// Primed TNT's entity type.
 const TNT: &str = "minecraft:tnt";
 /// An experience orb's entity type.
@@ -83,25 +86,39 @@ const ITEM_FRAME: &str = "minecraft:item_frame";
 /// A glow item frame's entity type.
 const GLOW_ITEM_FRAME: &str = "minecraft:glow_item_frame";
 
-/// Keeps the mods' registrations, once per process (false when they already were).
-pub(super) fn register(renderers: BTreeMap<String, Arc<dyn EntityRenderer>>) -> bool {
-    REGISTERED.set(renderers).is_ok()
+/// The engine's registration collector binds each renderer to the mod that registered it.
+#[derive(Default)]
+pub(super) struct RendererRegistrations(RenderersByType);
+
+impl EntityRenderers for RendererRegistrations {
+    fn register(&mut self, entity_type: String, renderer: Arc<dyn EntityRenderer>) {
+        let Some(mod_id) = current_native_mod() else {
+            log::warn!(
+                "An entity renderer for {entity_type} was registered outside a mod callback"
+            );
+            return;
+        };
+        self.0.insert(
+            entity_type,
+            Arc::new(EntityDrawCallback {
+                owner: CallbackOwner::for_mod(mod_id),
+                inner: renderer,
+            }),
+        );
+    }
 }
 
-/// A mod's renderer or layer as a load resolved it, and whether it has failed (then it is asked no
-/// more until the next resource load resolves it again).
+impl RendererRegistrations {
+    /// Keeps the mods' registrations, once per process.
+    pub(super) fn install(self) {
+        let _ = REGISTERED.set(self.0);
+    }
+}
+
+/// One submission callback and its session-scoped owner. Rebuilding draw slots does not reset it.
 pub(in crate::game) struct EntityDrawCallback<T: ?Sized> {
     pub(super) inner: Arc<T>,
-    pub(super) failed: AtomicBool,
-}
-
-impl<T: ?Sized> EntityDrawCallback<T> {
-    pub(super) fn new(inner: Arc<T>) -> Self {
-        Self {
-            inner,
-            failed: AtomicBool::new(false),
-        }
-    }
+    pub(super) owner: CallbackOwner,
 }
 
 /// The registered renderers, by the slot each draw route reads: rebuilt on every resource load.
@@ -131,7 +148,7 @@ impl EntityRendererTable {
     /// type, which it leaves out. A registration for a known type no route reads yet is kept
     /// silently: the type keeps its own drawing.
     pub(super) fn resolve(
-        registered: &BTreeMap<String, Arc<dyn EntityRenderer>>,
+        registered: &RenderersByType,
         thrown: &[ThrownType],
         mobs: &HashMap<String, Arc<MobType>>,
         general: &GeneralTypeCatalog,
@@ -149,23 +166,24 @@ impl EntityRendererTable {
         };
         let mut unknown = Vec::new();
         for (id, renderer) in registered {
-            let resolved = || Arc::new(EntityDrawCallback::new(renderer.clone()));
             if let Some(t) = thrown.iter().find(|t| t.id == id) {
-                table.thrown[t.slot] = Some(resolved());
+                table.thrown[t.slot] = Some(renderer.clone());
             } else if let Some(kind) = mobs.get(id).filter(|_| id != PLAYER) {
-                table.living.insert(Arc::as_ptr(kind) as usize, resolved());
+                table
+                    .living
+                    .insert(Arc::as_ptr(kind) as usize, renderer.clone());
             } else if id == TNT {
-                table.tnt = Some(resolved());
+                table.tnt = Some(renderer.clone());
             } else if id == EXPERIENCE_ORB {
-                table.experience_orb = Some(resolved());
+                table.experience_orb = Some(renderer.clone());
             } else if id == PAINTING {
-                table.painting = Some(resolved());
+                table.painting = Some(renderer.clone());
             } else if id == ITEM_FRAME {
-                table.item_frame = Some(resolved());
+                table.item_frame = Some(renderer.clone());
             } else if id == GLOW_ITEM_FRAME {
-                table.glow_item_frame = Some(resolved());
+                table.glow_item_frame = Some(renderer.clone());
             } else if let Some(slot) = general.slot(id) {
-                table.general[slot] = Some(resolved());
+                table.general[slot] = Some(renderer.clone());
             } else if !known(id) {
                 unknown.push(id.clone());
             }
@@ -346,8 +364,8 @@ impl Game<'_> {
     /// Draws `entity` with `resolved`'s renderer at `at` relative to the camera, with
     /// `world_origin` the same point in the level (`None` for a preview). `block` is the
     /// item owner's block. `light` is the entity pass's fixed light. True when it drew, and the
-    /// type's own drawing is left out. False, with nothing it drew kept, when it fails this frame
-    /// and from then until the next resource load resolves it again.
+    /// type's own drawing is left out. False, with nothing it drew kept, when this submission
+    /// fails or its callback isn't enabled.
     pub(in crate::game) fn mod_entity_renderer_geometry(
         &self,
         resolved: &EntityDrawCallback<dyn EntityRenderer>,
@@ -361,7 +379,8 @@ impl Game<'_> {
     ) -> bool {
         let pose = Mat4::from_translation(at.as_vec3());
         self.guarded_entity_draw(
-            &resolved.failed,
+            &resolved.owner,
+            "entity renderer",
             entity.partial,
             entity_type,
             block,
@@ -375,12 +394,13 @@ impl Game<'_> {
 
     /// Runs one mod renderer's or layer's `submit` on a draw posed at `pose` (`block` the block the
     /// entity stands in, lit by `light`). `world_origin` enables level light for a translation-only
-    /// starting pose. Adds to `out` and returns true when it drew. An error or panic discards this
-    /// frame's drawing, logs once and disables the renderer until the next resource load.
+    /// starting pose. A failed callback discards only the geometry it submitted. CallbackOwner
+    /// handles phase refusals, enablement and panic reporting; an ordinary Err is logged here.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::game) fn guarded_entity_draw(
+    pub(super) fn guarded_entity_draw(
         &self,
-        failed: &AtomicBool,
+        owner: &CallbackOwner,
+        kind: &'static str,
         partial: f32,
         entity_type: &str,
         block: [i32; 3],
@@ -390,7 +410,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
         submit: impl FnOnce(&mut dyn BlockEntityDrawContext) -> Result<(), String>,
     ) -> bool {
-        if failed.load(Ordering::Relaxed) {
+        if !owner.is_enabled() {
             return false;
         }
         let start = out.len();
@@ -407,14 +427,13 @@ impl Game<'_> {
         if world_origin.is_some() {
             surface.track_entity_local_light_pose();
         }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = owner.call(kind, "submit", || {
             submit(&mut GameBlockEntityDrawContext {
                 game: self,
                 surface: &mut surface,
             })
-        }))
-        .unwrap_or_else(|_| Err("it panicked".into()));
-        let Err(error) = result else {
+        });
+        if let Ok(Ok(())) = result {
             let light_at = |[x, y, z]: [i32; 3]| self.world.light(x, y, z);
             let level = world_origin.map(|origin| LevelLight {
                 origin,
@@ -422,12 +441,13 @@ impl Game<'_> {
             });
             *out = surface.into_vertices_with_light(level.as_ref());
             return true;
-        };
+        }
         *out = surface.into_vertices();
         out.truncate(start);
-        if !failed.swap(true, Ordering::Relaxed) {
+        if let Ok(Err(error)) = result {
             log::warn!(
-                "Sunrise: the entity renderer or layer for {entity_type} failed ({error}); it is asked no more until resources reload"
+                "Mod {}: {kind} submission for {entity_type} failed: {error}",
+                owner.id()
             );
         }
         false
@@ -477,7 +497,10 @@ mod tests {
             Arc::make_mut(&mut chunk.sections[section]).light = Light::packed(cells);
             game.world.chunks.insert((0, 1), Arc::new(chunk));
 
-            let renderer = EntityDrawCallback::<dyn EntityRenderer>::new(Arc::new(LitQuad));
+            let renderer = EntityDrawCallback::<dyn EntityRenderer> {
+                inner: Arc::new(LitQuad),
+                owner: CallbackOwner::for_mod("test"),
+            };
             let entity = mod_api::__private::built::EntityRenderState {
                 id: 1,
                 partial: 0.5,

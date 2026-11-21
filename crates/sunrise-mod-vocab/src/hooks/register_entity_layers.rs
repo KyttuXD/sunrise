@@ -6,8 +6,8 @@ pub trait Hooks {
     /// type, or every player of the player model, in view draws `EntityRenderLayer::submit` after
     /// its model and the layers added before. The final body model is borrowed for `submit`;
     /// it is `None` when no body was posed, as after a successful replacement renderer.
-    /// `entity_types`, `is_living`, `player_models` and
-    /// `has_mod_renderer` tell what renderers this load built. A target that is no living entity
+    /// `entity_types` and `player_models` lend registration metadata; `is_living` and
+    /// `has_mod_renderer` describe what renderers this load built. A target that is no living entity
     /// type is refused by name. Asked on the client on every resource load, the first one and each
     /// reload, after the renderers resolve (`register_entity_renderers`): layers don't carry over
     /// from one load to the next, so add them again each time. In the ordered body pass,
@@ -60,9 +60,10 @@ fn register_entity_layers(
 }
 ```
 
-The event tells what renderers this load built: `entity_types()` lists every entity type with a renderer,
-`is_living(type)` says whether it is a living entity's, `player_models()` lists `Wide` and `Slim`, and
-`has_mod_renderer(type)` whether a mod registered the type's renderer. No renderer object crosses the API.
+The event tells what renderers this load built: `entity_types()` borrows the sorted entity type ids,
+`is_living(type)` says whether it is a living entity's, `player_models()` borrows the list of models
+(`Wide` and `Slim`), and `has_mod_renderer(type)` says whether a mod registered the type's renderer.
+No renderer object crosses the API.
 
 A layer attaches only to a living renderer, a mod's own included: `add` refuses a target that is no entity
 type, a type whose renderer isn't a living one (a boat, a display, a projectile), `minecraft:player`,
@@ -75,15 +76,16 @@ frame (at its feet, turned with its body, as `render_living_pre` draws). `entity
 and `entity.pitch` the head's. `model` lends the final body hierarchy for the callback, including for
 nonhumanoids, or `None` if no body pose was produced (such as after a successful replacement
 renderer). Read a named part or follow the hierarchy and compose its parent transforms to attach
-geometry. A layer that returns an `Err` or panics is logged once with the error
-and asked no more until the next resource load adds it again; what it drew that frame is dropped. The layers draw on the mobs (vanilla's and the content mods'
+geometry. An `Err` is logged each time and discards just that submission, leaving the next layers
+and draws alone. A panic also discards the submission and disables that callback for the session, with
+an error log and toast naming the mod. The layers draw on the mobs (vanilla's and the content mods'
 living types) and the players; the armour stand and the ender dragon take them once their own draws run
 layers, in a follow-up of #860, which lifts their refusal."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",
         side = "client",
-        version = 4,
+        version = 5,
         contract = "listen",
         context = "registration",
         neoforge = "EntityRenderersEvent.AddLayers"

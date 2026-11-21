@@ -182,9 +182,10 @@ scan over the mods.
 - A later registration for a type replaces the earlier one silently, whichever mod made it, as in
   NeoForge, also for a vanilla type.
 - A type the game does not know is logged with its id and left out; nothing panics.
-- `submit` returns `Ok(())` to keep what it drew. A renderer that returns an `Err` or panics is logged once and asked no more until the next resource
-  load (a reload resolves it again); what it drew that frame is dropped, and until then its type draws
-  as it would without one.
+- `submit` returns `Ok(())` to keep what it drew. An `Err` is logged each time and discards only
+  this submission. The renderer still runs on later draws. A panic discards the submission and
+  disables that callback for the session, with an error log and toast naming the mod. When the
+  replacement did not submit successfully, the entity draws as it would without one.
 
 ## What draws through registered renderers
 
@@ -213,8 +214,8 @@ Registered renderers draw these routes:
   Without a renderer, the quads are unchanged.
 - your general entity types (`declare_general_entity`): the renderer is their only look, asked
   through `submit` with each visible row's frozen attachment snapshot. A general type with no
-  renderer draws nothing, which is logged once a resource load, naming the type; a failed
-  renderer draws nothing until the next resource load.
+  renderer draws nothing, which is logged once a resource load, naming the type. A failed
+  submission contributes no geometry for that draw.
 - item frames and glow item frames (`minecraft:item_frame`, `minecraft:glow_item_frame`): the
   renderer draws instead of the frame model and the item or map on its face, and reads
   `item_frame`. `age` is the unsaved `Entity.tickCount` plus the partial tick. Yaw and pitch

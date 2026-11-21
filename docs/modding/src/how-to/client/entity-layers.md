@@ -74,9 +74,9 @@ carry over, so add them each time. The event also tells what renderers this load
 
 | Method | Tells |
 | --- | --- |
-| `entity_types()` | every entity type with a renderer, vanilla's and the mods', sorted (not `minecraft:player`: a player's renderers are its models') |
+| `entity_types()` | a borrowed slice of entity type ids, vanilla's and the mods', sorted (not `minecraft:player`: a player's renderers are its models') |
 | `is_living(type)` | whether the type's renderer is a living entity's, the only kind that takes layers |
-| `player_models()` | `Wide` and `Slim` |
+| `player_models()` | a borrowed slice of player models (`Wide` and `Slim`) |
 | `has_mod_renderer(type)` | whether a mod registered the type's renderer ([entity renderers](entity-renderers.md)) |
 
 - A layer attaches only to a living renderer, a mod's own included. `add` refuses a target that is no
@@ -84,14 +84,18 @@ carry over, so add them each time. The event also tells what renderers this load
   `minecraft:player`, whose layers go to a player model, and a living type that draws through a route
   of its own which doesn't run layers yet (the armour stand, the ender dragon): the `Err` names the
   target, and the game logs it too.
+- Iterate the borrowed metadata directly. If you need it after registration, copy just the ids or
+  models you intend to keep.
 - Several mods may add to one target: the layers draw in the order they were added, after the
   entity's model and its vanilla layers. On a type a mod registered a renderer for
   ([entity renderers](entity-renderers.md)), they draw after that renderer, which replaces the model
   and the vanilla layers. They receive `model: None` when the replacement renderer succeeds.
 - An entity whose `render_living_pre` or `render_player_pre` a mod canceled draws none of its layers,
   as NeoForge's canceled `RenderLivingEvent.Pre` skips them.
-- `submit` returns `Ok(())` to keep what it drew. A layer that returns an `Err` or panics is logged once and asked no more until the next resource load
-  adds it again; what it drew that frame is dropped.
+- `submit` returns `Ok(())` to keep what it drew. An `Err` is logged each time and discards only
+  this submission. The other layers and later draws still run. A panic also discards the submission
+  and disables that callback for the session, with an error log and toast naming the mod. Re-adding
+  the same layer on reload does not re-enable it; a different layer can still take its place.
 
 ## Where layers draw
 
