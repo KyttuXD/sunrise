@@ -83,7 +83,6 @@ fn catalog_for_mod(
             crate::run(
                 crate::apply(rust, &tool, prepared, input, fresh),
                 "horizon-mixins",
-                |_| {},
             )
         },
     )

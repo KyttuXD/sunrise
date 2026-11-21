@@ -564,7 +564,6 @@ pub fn compile(
     let result = super::run_checked(
         command,
         tr("Compiling registry mod libraries"),
-        |_| {},
         Some(fs::File::create(&messages).map_err(|e| e.to_string())?),
         None,
     );

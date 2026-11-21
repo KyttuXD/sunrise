@@ -114,13 +114,13 @@ impl Plan {
     ) -> Result<(), String> {
         let mut index = cargo("update");
         index.arg("--workspace");
-        super::run(index, "Checking the pinned registry index", |_| {})
+        super::run(index, "Checking the pinned registry index")
             .map_err(|error| self.explain_resolution(error))?;
         let pins = RegistryLock::parse(&super::read_lock(directory)?)?;
         self.allowed.check_pins(&pins)?;
         let mut fetch = cargo("fetch");
         fetch.arg("--locked");
-        super::run(fetch, "Downloading the mods' pinned crates", |_| {})
+        super::run(fetch, "Downloading the mods' pinned crates")
     }
 }
 

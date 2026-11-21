@@ -773,7 +773,6 @@ pub fn compile(
             super::run(
                 cmd,
                 &trf("Compiling {mod}'s declared internals", &[("mod", id)]),
-                |_| {},
             )?;
             facades.insert(id, rlib);
         }
@@ -851,7 +850,7 @@ pub fn compile(
         }
         cmd.arg("-o").arg(&library).arg(source);
         if !unchanged {
-            super::run(cmd, tr("Compiling the patch library"), |_| {})?;
+            super::run(cmd, tr("Compiling the patch library"))?;
             fs::write(saved, fingerprint).map_err(|e| e.to_string())?;
         }
         super::library_record::validate_exports(&library, "sunrise_patch")?;

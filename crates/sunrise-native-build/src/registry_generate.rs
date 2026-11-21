@@ -224,7 +224,7 @@ pub fn generate<T: Toolchain>(
     // ignore the seed.
     let mut command = super::cargo(&rust, work.path(), "update");
     command.arg("--workspace");
-    super::run(command, "Resolving registry dependency pins", |_| {})?;
+    super::run(command, "Resolving registry dependency pins")?;
     let text = super::read_lock(work.path())?;
     super::registry_lock::RegistryLock::parse(&text)?;
     // Refusals and resolution errors above never mutate the existing lock.

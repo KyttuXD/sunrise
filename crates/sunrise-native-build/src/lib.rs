@@ -304,17 +304,17 @@ pub fn source_digest(bundle: &Bundle) -> Option<String> {
     Some(digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice()))))
 }
 
-/// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
+/// Runs `cmd`, its output appended to the build log.
 /// An error ends with its first `error` lines and the last lines: a failed build script's output
 /// alone could push the line naming its crate out of the last ones.
-pub fn run(cmd: Command, what: &str, line: impl FnMut(&str)) -> Result<(), String> {
-    run_checked(cmd, what, line, None, None).map_err(|e| e.error)
+pub fn run(cmd: Command, what: &str) -> Result<(), String> {
+    run_checked(cmd, what, None, None).map_err(|e| e.error)
 }
 
 /// [`run`] for a compiler started with `--error-format=json`: a diagnostic it prints is shown at
 /// the author's files (`sources`), and the build log keeps what the compiler printed.
 pub fn run_diagnosed(cmd: Command, what: &str, sources: &present::Sources) -> Result<(), String> {
-    run_checked(cmd, what, |_| {}, None, Some(sources)).map_err(|e| e.error)
+    run_checked(cmd, what, None, Some(sources)).map_err(|e| e.error)
 }
 
 /// A failed command, with diagnostic ownership for build isolation.
@@ -325,7 +325,6 @@ struct Ran {
 fn run_checked(
     mut cmd: Command,
     what: &str,
-    mut line: impl FnMut(&str),
     stdout_file: Option<fs::File>,
     sources: Option<&present::Sources>,
 ) -> Result<(), Ran> {
@@ -387,7 +386,6 @@ fn run_checked(
                 if let Some(kept) = log_text(&raw) {
                     let _ = writeln!(log, "{kept}");
                 }
-                line(&raw);
                 blocked |= rust::blocked_by_app_control(&raw);
                 libraries |= rust::missing_system_libraries(&raw);
                 if shown.starts_with("error") && errors.len() < 4 {
@@ -1052,7 +1050,7 @@ mod tests {
                  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo \"warning: build failed, waiting ($i)\" >&2; done
                  exit 101"
             )]);
-            run(cmd, "Compiling the mod", |_| {}).unwrap_err()
+            run(cmd, "Compiling the mod").unwrap_err()
         };
         for library in ["-ludev", "-lasound"] {
             let e = script(library);
@@ -1082,7 +1080,7 @@ mod tests {
             for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo "warning: build failed, waiting ($i)" >&2; done
             exit 101
         "#]);
-        let e = run(cmd, "Building horizon-mixins", |_| {}).unwrap_err();
+        let e = run(cmd, "Building horizon-mixins").unwrap_err();
         assert!(e.starts_with(&rust::smart_app_control()), "{e}");
         assert!(e.contains("quote v1.0.47"), "{e}");
         // Another failure says nothing about it.
@@ -1091,7 +1089,7 @@ mod tests {
             "-c",
             "echo 'error: could not compile `sunrise-client`' >&2; exit 101",
         ]);
-        let e = run(cmd, "Compiling the game", |_| {}).unwrap_err();
+        let e = run(cmd, "Compiling the game").unwrap_err();
         assert!(!e.contains("Smart App Control"), "{e}");
     }
 
@@ -1105,10 +1103,10 @@ mod tests {
         // Its stdout, which goes to the log, does not end its line.
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "printf output; sleep 0.05"]);
-        run(cmd, "Linking the game", |_| {}).unwrap();
+        run(cmd, "Linking the game").unwrap();
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exit 1"]);
-        run(cmd, "Compiling fnr_alpha", |_| {}).unwrap_err();
+        run(cmd, "Compiling fnr_alpha").unwrap_err();
         let log = fs::read_to_string(log_path()).unwrap();
         let ms: u64 = log
             .lines()
