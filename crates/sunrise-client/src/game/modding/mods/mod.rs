@@ -226,13 +226,18 @@ pub(super) fn install_registration_data(
     runtime_files: BTreeMap<String, Arc<dyn mod_api::RuntimeFileSource>>,
 ) -> sunrise_client::Result<()> {
     let packages = mod_api::__private::loaded_mods();
+    let settings_owners = packages.ids().chain(
+        mod_api::__private::mods()
+            .iter()
+            .map(mod_api::__private::parts_installation::mod_entry_id),
+    );
     let directory = Game::game_dir();
     (mod_api::__private::platform::platform()?.install_registration_data)(
         mod_api::__private::RegistrationData::new(
             builtin_registry_names(root)?,
             sunrise_world::native_load_context::capture_settings(
                 &Game::mod_data_root(),
-                packages.ids(),
+                settings_owners,
             ),
             directory,
             crate::entry::runtime_environment::get().clone(),

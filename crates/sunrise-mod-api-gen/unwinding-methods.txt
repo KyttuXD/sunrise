@@ -158,7 +158,6 @@ config::server_set_simulation_distance
 config::server_set_view_distance
 config::server_simulation_distance
 config::server_view_distance
-config::set_setting
 config::set_tick_rate
 config::setting
 config::sunrise_version
