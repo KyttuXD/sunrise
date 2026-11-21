@@ -490,7 +490,7 @@ impl<'a> DamageLevel<'a> {
         self.attack
     }
     /// The authoritative world's merged tag tables, if available.
-    pub fn tags(&self) -> Option<&crate::items::Items> {
+    pub fn tags(&self) -> Option<&'a crate::items::Items> {
         self.tags
     }
     /// The cached block parser context, if available.

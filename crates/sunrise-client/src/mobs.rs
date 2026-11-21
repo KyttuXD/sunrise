@@ -4019,7 +4019,8 @@ impl Mob {
             return false;
         }
         let reflected = self.reflected_fireball(&source, level.attack());
-        if self.invulnerable_to_attempt(level, &source) {
+        let (immune, forced_allow) = self.invulnerable_to_attempt(level, &source);
+        if immune {
             return reflected;
         }
         *passed_invulnerability = true;
@@ -4112,13 +4113,19 @@ impl Mob {
             }
             amount = incoming - self.last_hurt;
         }
+        // LivingEntity.actuallyHurt checks immunity again. A conditional effect
+        // may now match without rejecting the outer hit or its reactions. The
+        // invulnerability hook still observes the attempt only once.
+        let absorbed = self.wolf_armor_absorbs(&source);
+        let actually_hurt =
+            absorbed || forced_allow || reflected || !self.enchantment_immune(level, &source);
         // LivingEntity.getDamageAfterArmorAbsorb asks `hurtArmor` *before*
         // `CombatRules.getDamageAfterAbsorb`, so a worn piece wears by the
         // damage the armour, toughness and enchantment reductions have not
         // touched yet, and only a hit outside `#bypasses_armor` asks at all.
-        let armor_hit = (!source.bypasses_armor() && amount > 0.0).then_some(amount);
+        let armor_ran = actually_hurt && !source.bypasses_armor();
+        let armor_hit = (armor_ran && amount > 0.0).then_some(amount);
         let entered = amount;
-        let armor_ran = !source.bypasses_armor();
         if armor_ran {
             let (armor, armor_toughness) = armor::values(self);
             if armor > 0.0 {
@@ -4143,7 +4150,8 @@ impl Mob {
         // LivingEntity.getDamageAfterMagicAbsorb: Resistance takes 20% per level off
         // (`#bypasses_resistance` and `#bypasses_effects` skip it) ...
         let mut resisted = false;
-        if !source.kind.bypasses_effects()
+        if actually_hurt
+            && !source.kind.bypasses_effects()
             && !source.kind.bypasses_resistance()
             && let Some(&StoredEffect { amplifier: amp, .. }) = self
                 .extra
@@ -4167,7 +4175,7 @@ impl Mob {
         // ... then, with damage left and outside `#bypasses_enchantments` (a
         // warden's sonic boom), CombatRules.getDamageAfterMagicAbsorb's
         // enchantment protection (#11308).
-        let enchanted = amount > 0.0 && !source.kind.bypasses_enchantments();
+        let enchanted = actually_hurt && amount > 0.0 && !source.kind.bypasses_enchantments();
         if enchanted {
             let epf = gear::protection(self, source.kind);
             if epf > 0.0 {
@@ -4184,7 +4192,7 @@ impl Mob {
         let after_enchantments = amount;
         // Witch.getDamageAfterMagicAbsorb: none from its own doing, else
         // 85% less from `#witch_resistant_to`.
-        let witch = self.species() == Species::Witch;
+        let witch = actually_hurt && self.species() == Species::Witch;
         if witch {
             if source.attacker == Some(Who::Mob(self.id)) {
                 amount = 0.0;
@@ -4199,30 +4207,26 @@ impl Mob {
             amount,
             witch,
         );
-        // Wolf.actuallyHurt: wolf armor takes the damage instead of the wolf.
-        let absorbed = self.wolf_armor_absorbs(&source);
         let mut knock = true;
         let window = cooldown;
         container.record_should_cause_side_effects(!window);
         if window {
             container.record_reduction(Reduction::Invulnerability, self.last_hurt);
         }
-        let mut dealt = amount;
+        let mut dealt = if actually_hurt { amount } else { 0.0 };
         // The cooldown the hit leaves: what is left of it within it, else vanilla's 20 or
         // what `LivingIncomingDamageEvent` set.
         if window {
             container.set_post_attack_invulnerability_ticks(self.invulnerable);
         }
         // Wolf.actuallyHurt keeps a hit its armor takes away from LivingEntity.actuallyHurt.
-        if !absorbed {
-            container.enter_pre(dealt);
-            level.damage_pre(crate::health::Hurting::Mob(self, &source), &mut container);
-            dealt = container.capture_inflicted();
-        }
         let mut through = 0.0;
         if absorbed {
             self.hurt_wolf_armor(dealt);
-        } else {
+        } else if actually_hurt {
+            container.enter_pre(dealt);
+            level.damage_pre(crate::health::Hurting::Mob(self, &source), &mut container);
+            dealt = container.capture_inflicted();
             through = self.soak_hit(dealt, &source, &container);
             container.record_reduction(Reduction::Absorption, dealt - through);
             self.health -= through;
