@@ -3632,19 +3632,8 @@ impl Hub {
                 g.sent_health = Some(health);
             }
         });
-        let xp = {
-            let g = &self.guests[i];
-            (g.xp_progress, g.xp_level, g.xp_total)
-        };
-        if self.guests[i].sent_xp != Some(xp) {
-            self.guests.update(i, |g| {
-                g.send(&C::SetExperience(play::SetExperience {
-                    progress: xp.0,
-                    level: xp.1,
-                    total: xp.2,
-                }));
-                g.sent_xp = Some(xp);
-            });
+        if self.guests[i].experience_changed() {
+            self.guests.update(i, Guest::sync_experience);
         }
         // AbstractContainerMenu.broadcastChanges for the inventory menu.
         let mut changes = Vec::new();
@@ -4909,13 +4898,8 @@ impl Hub {
                 difficulty: ctx.difficulty,
                 locked: ctx.difficulty_locked,
             }));
-            let xp = (g.xp_progress, g.xp_level, g.xp_total);
-            g.send(&C::SetExperience(play::SetExperience {
-                progress: xp.0,
-                level: xp.1,
-                total: xp.2,
-            }));
-            g.sent_xp = Some(xp);
+            g.sent_xp = None;
+            g.sync_experience();
             // ServerPlayer.sendPostEffects.
             let list = g.post_effects.clone();
             g.post_effects_dirty = false;

@@ -449,7 +449,8 @@ pub struct Guest {
     pub sent_health: Option<(f32, i32, bool)>,
     /// Whether the entity tracker has sent the initial health metadata to this player.
     pub(super) sent_health_data: bool,
-    pub sent_xp: Option<(f32, i32, i32)>,
+    /// Last experience packet's progress bits, level and total.
+    pub(super) sent_xp: Option<(u32, i32, i32)>,
     pub(super) sent_score: i32,
     /// The air supply and absorption the player's client was last sent
     /// (Entity.DATA_AIR_SUPPLY_ID, Player.DATA_PLAYER_ABSORPTION_ID); their
@@ -962,6 +963,24 @@ impl Guest {
             Err(error) => eprintln!("[lan] send refused: {error}"),
         }
     }
+
+    /// Compare the actual progress bits so NaN progress does not resend every tick.
+    pub(super) fn experience_changed(&self) -> bool {
+        self.sent_xp != Some((self.xp_progress.to_bits(), self.xp_level, self.xp_total))
+    }
+
+    /// `ServerPlayer.doTick`: send the experience fields when changed.
+    pub(super) fn sync_experience(&mut self) {
+        if self.experience_changed() {
+            self.send(&play::Clientbound::SetExperience(play::SetExperience {
+                progress: self.xp_progress,
+                level: self.xp_level,
+                total: self.xp_total,
+            }));
+            self.sent_xp = Some((self.xp_progress.to_bits(), self.xp_level, self.xp_total));
+        }
+    }
+
     /// Send `Player.DATA_SCORE_ID` when its synced value changes, including before a death screen.
     pub fn sync_score(&mut self) {
         if self.score != self.sent_score {
@@ -2727,6 +2746,33 @@ mod tests {
             position,
             10,
         )
+    }
+
+    #[test]
+    fn unchanged_nan_experience_progress_is_not_resent() {
+        let mut guest = guest_at([0.0; 3]);
+        let (sender, received) = std::sync::mpsc::channel();
+        guest.sender = PlayerSender::new(sender, Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        guest.xp_progress = f32::from_bits(0x7fc0_0001);
+        guest.xp_level = 477_218_606;
+        guest.xp_total = -7;
+        guest.sync_experience();
+        guest.sync_experience();
+        let super::super::Out::Packet(bytes) = received.try_recv().unwrap() else {
+            panic!("expected an experience packet");
+        };
+        let mut reader = Reader::new(&bytes);
+        let id = reader.varint().unwrap();
+        let play::Clientbound::SetExperience(xp) =
+            play::Clientbound::decode(id, reader.rest()).unwrap()
+        else {
+            panic!("expected an experience packet");
+        };
+        assert_eq!(
+            (xp.progress.to_bits(), xp.level, xp.total),
+            (0x7fc0_0001, 477_218_606, -7)
+        );
+        assert!(received.try_recv().is_err());
     }
 
     #[test]

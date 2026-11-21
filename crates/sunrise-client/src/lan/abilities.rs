@@ -4,7 +4,7 @@
 use sunrise_protocol::packets::play;
 
 /// `Abilities`, with vanilla's defaults.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct PlayerAbilities {
     pub invulnerable: bool,
     pub flying: bool,
@@ -13,6 +13,16 @@ pub struct PlayerAbilities {
     pub may_build: bool,
     pub flying_speed: f32,
     pub walking_speed: f32,
+}
+
+impl PartialEq for PlayerAbilities {
+    /// Compare snapshots as stored so an unchanged NaN does not send another abilities packet.
+    fn eq(&self, other: &Self) -> bool {
+        self.flags() == other.flags()
+            && self.may_build == other.may_build
+            && self.flying_speed.to_bits() == other.flying_speed.to_bits()
+            && self.walking_speed.to_bits() == other.walking_speed.to_bits()
+    }
 }
 
 impl Default for PlayerAbilities {
@@ -77,6 +87,36 @@ impl PlayerAbilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ability_snapshots_distinguish_changes_to_the_packet_bits() {
+        let snapshot = PlayerAbilities {
+            flying_speed: -0.0,
+            walking_speed: f32::from_bits(0x7fc0_0001),
+            ..PlayerAbilities::default()
+        };
+        assert_eq!(
+            snapshot,
+            PlayerAbilities {
+                walking_speed: f32::from_bits(0x7fc0_0001),
+                ..snapshot
+            }
+        );
+        assert_ne!(
+            snapshot,
+            PlayerAbilities {
+                flying_speed: 0.0,
+                ..snapshot
+            }
+        );
+        assert_ne!(
+            snapshot,
+            PlayerAbilities {
+                walking_speed: f32::from_bits(0x7fc0_0002),
+                ..snapshot
+            }
+        );
+    }
 
     #[test]
     fn a_mode_sets_the_flags_as_vanilla_does() {
