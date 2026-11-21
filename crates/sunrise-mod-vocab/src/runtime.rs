@@ -220,9 +220,15 @@ pub(crate) fn poisoned_count(hook: generated::HookId) -> usize {
     })
 }
 
-pub(crate) fn first_output_refusal(hook: generated::HookId, id: &'static str) -> bool {
-    crate::dispatch_scope::backend()
-        .is_none_or(|backend| (backend.diagnostics.first_output_refusal)(hook, id))
+/// Disable just the panicking hook registration and notify the owning window.
+pub(crate) fn listener_panicked(
+    hook: generated::HookId,
+    id: &'static str,
+    operation: &'static str,
+    diagnostic: String,
+) {
+    poison(hook, id);
+    crate::callback_owner::report_callback_panic(id, "hook", operation, diagnostic);
 }
 
 /// The process-wide list in dispatch order, or an empty list before installation.

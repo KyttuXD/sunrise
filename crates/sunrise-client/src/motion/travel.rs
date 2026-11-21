@@ -51,7 +51,6 @@ impl MotionWorld<'_, '_, '_> {
         let branch = self.travel_branch()?;
         let requested_velocity = self.player.velocity;
         let mut input = requested_input;
-        let mut velocity = requested_velocity;
         if !self.player.replaying
             && !crate::travel_gate::decide(
                 self.loop_context,
@@ -68,7 +67,7 @@ impl MotionWorld<'_, '_, '_> {
                     }
                 },
                 &mut input,
-                &mut velocity,
+                &mut self.player.velocity,
             )
         {
             return Ok(ServerTravel::Veto);
@@ -78,11 +77,11 @@ impl MotionWorld<'_, '_, '_> {
         // a correction even if the live move's collision absorbs it.
         let within_dead_zone =
             |input: Vec3| input.length_squared() < living_air::MIN_INPUT_LENGTH_SQUARED;
+        let velocity = self.player.velocity;
         let edited = self.player.server_copy
             && (!same_vector(velocity, requested_velocity)
                 || (!same_vector(input, requested_input)
                     && !(within_dead_zone(input) && within_dead_zone(requested_input))));
-        self.player.velocity = velocity;
         // Creative flight damps the accepted vertical speed, not the speed
         // left by the branch after the move.
         let flying_y = self.player.flying.then_some(velocity.y);
@@ -276,14 +275,15 @@ mod tests {
         assert_eq!(velocity.y, 0.6);
     }
 
-    /// Cancel skips the branch, its move and the flying damping: the flying
-    /// player keeps its position and its `0.5` vertical speed.
+    /// A velocity write is independent of the cancellation. No move or flight
+    /// damping runs, but the player keeps the newly written delta movement.
     #[test]
     #[ignore = "daily"]
     fn a_cancelled_flying_travel_moves_and_damps_nothing() {
-        let (position, velocity, start) = flying_travel(Decide(Flow::Cancel, None), false);
+        let (position, velocity, start) =
+            flying_travel(Decide(Flow::Cancel, Some([0.2, 1.0, 0.0])), false);
         assert_eq!(position, start);
-        assert_eq!(velocity, Vec3::new(0.2, 0.5, 0.0));
+        assert_eq!(velocity, Vec3::new(0.2, 1.0, 0.0));
     }
 
     /// A replayed tick never reaches a listener: its cancel does not hold the

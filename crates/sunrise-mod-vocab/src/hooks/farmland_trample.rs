@@ -26,7 +26,7 @@ pub trait Hooks {
         out = "cancel",
         neoforge = "BlockEvent.FarmlandTrampleEvent",
         cancellable = true,
-        isolate = true,
+        isolate = "restore",
         version = 3
     )]
     fn farmland_trample(

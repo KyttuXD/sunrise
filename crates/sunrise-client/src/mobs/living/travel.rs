@@ -52,18 +52,16 @@ impl Mob {
         let Some(route) = self.travel_route(w) else {
             return Ok(());
         };
-        let mut velocity = self.velocity;
         if !crate::travel_gate::decide(
             w.loop_context,
             self.id,
             &self.kind.id,
             || route.mode(),
             &mut input,
-            &mut velocity,
+            &mut self.velocity,
         ) {
             return Ok(());
         }
-        self.velocity = velocity;
         // Camel.travel: on the ground, a camel that sits or changes pose keeps
         // the vertical part of its motion and drops the horizontal input.
         if super::super::camel::is_camel(self.species())

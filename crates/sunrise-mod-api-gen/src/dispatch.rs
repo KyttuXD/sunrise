@@ -1,5 +1,5 @@
 use super::*;
-use crate::catalog::{DispatchStyle, EFFECT_TICK_TARGET, Receiver, RegistrationAppend};
+use crate::catalog::{DispatchStyle, EFFECT_TICK_TARGET, Isolation, Receiver, RegistrationAppend};
 
 pub(super) struct HookSources {
     pub traits: String,
@@ -120,7 +120,8 @@ pub(super) fn emit<'a>(
         let contract = hook.contract;
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
-        let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_collect =
+            answered && hook.isolate == Some(Isolation::Live) && contract == Contract::Collect;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +506,10 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate == Some(Isolation::Restore)
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -555,13 +559,22 @@ pub(super) fn emit<'a>(
                 inits.push(name.clone());
             }
         }
+        if mod_cancel && hook.isolate == Some(Isolation::Live) && !rollback.is_empty() {
+            return Err(format!(
+                "{name}: live isolation requires scoped edits, not mutable event outputs"
+            ));
+        }
         if mod_cancel {
             if args.iter().any(|(arg, _)| arg == "cancelled") {
                 return Err(format!(
                     "{name}: a cancel hook's event has its own `cancelled` field"
                 ));
             }
-            fields.push_str("/// Whether the event is cancelled: by the game or an earlier listener, or by this one\n/// setting it. Only a listener that receives cancelled events (`#[listener(receive_cancelled)]`)\n/// sees `true`, and setting it back to `false` lets the game's behaviour run.\npub cancelled: bool,\n");
+            if hook.isolate == Some(Isolation::Live) {
+                fields.push_str("/// Whether the event is cancelled. Set it to `true` to cancel on return.\n/// A listener that receives an already cancelled event cannot clear its cancellation.\npub cancelled: bool,\n");
+            } else {
+                fields.push_str("/// Whether the event is cancelled: by the game or an earlier listener, or by this one\n/// setting it. Only a listener that receives cancelled events (`#[listener(receive_cancelled)]`)\n/// sees `true`, and setting it back to `false` lets the game's behaviour run.\npub cancelled: bool,\n");
+            }
             inits.push(format!("cancelled: *{}", cancel_out.unwrap()));
         }
         if let Some((name, ty)) = output
@@ -840,8 +853,8 @@ pub(super) fn emit<'a>(
         // A scoped hook is its part's method alone: a global moment beside it is its own hook.
         let callee = if scoped.is_some() { "part" } else { "mod" };
         match (contract, out) {
-            (Contract::Cancel, Some(out)) if mod_cancel && hook.output_validator.is_some() => method_source.push_str(&format!(
-                "///\n/// Return `Flow::Cancel` to propose setting `{out}`. Once accepted, a cancellation cannot be\n/// cleared; only mods registered with `#[listener(receive_cancelled)]` still run.\n"
+            (Contract::Cancel, Some(out)) if mod_cancel && hook.isolate == Some(Isolation::Live) => method_source.push_str(&format!(
+                "///\n/// Return `Flow::Cancel` to set `{out}`. Once accepted, a cancellation cannot be\n/// cleared; only mods registered with `#[listener(receive_cancelled)]` still run.\n"
             )),
             (Contract::Cancel, Some(out)) if mod_cancel => method_source.push_str(&format!(
                 "///\n/// Return `Flow::Cancel` to take it: this sets `{out}`, and later mods are skipped unless they\n/// listen with `#[listener(receive_cancelled)]`; those see `{event}.cancelled` and may set it back to\n/// `false`.\n"
@@ -1126,35 +1139,36 @@ pub(super) fn emit<'a>(
         // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
         // **requested** outputs — not one an earlier listener had proposed — is skipped by this
         // hook for the session, and no later listener runs on this invocation.
-        let (isolate_snapshot, isolate_restore) = if mod_cancel && hook.isolate {
-            let snapshot = rollback
-                .iter()
-                .map(|(name, by_reference)| {
-                    format!(
-                        "let __requested_{name} = {}{event}.{name}; ",
-                        if *by_reference { "*" } else { "" }
-                    )
-                })
-                .chain(std::iter::once(format!(
-                    "let __requested_cancelled = {event}.cancelled; "
-                )))
-                .collect::<String>();
-            let restore = rollback
-                .iter()
-                .map(|(name, by_reference)| {
-                    format!(
-                        "{}{event}.{name} = __requested_{name}; ",
-                        if *by_reference { "*" } else { "" }
-                    )
-                })
-                .chain(std::iter::once(format!(
-                    "{event}.cancelled = __requested_cancelled; "
-                )))
-                .collect::<String>();
-            (snapshot, restore)
-        } else {
-            (String::new(), String::new())
-        };
+        let (isolate_snapshot, isolate_restore) =
+            if mod_cancel && hook.isolate == Some(Isolation::Restore) {
+                let snapshot = rollback
+                    .iter()
+                    .map(|(name, by_reference)| {
+                        format!(
+                            "let __requested_{name} = {}{event}.{name}; ",
+                            if *by_reference { "*" } else { "" }
+                        )
+                    })
+                    .chain(std::iter::once(format!(
+                        "let __requested_cancelled = {event}.cancelled; "
+                    )))
+                    .collect::<String>();
+                let restore = rollback
+                    .iter()
+                    .map(|(name, by_reference)| {
+                        format!(
+                            "{}{event}.{name} = __requested_{name}; ",
+                            if *by_reference { "*" } else { "" }
+                        )
+                    })
+                    .chain(std::iter::once(format!(
+                        "{event}.cancelled = __requested_cancelled; "
+                    )))
+                    .collect::<String>();
+                (snapshot, restore)
+            } else {
+                (String::new(), String::new())
+            };
         // A listener's stack-list commit follows the cancel statement, separated by `;` so the
         // generated `if` is never read as the start of an `else if`.
         let cancel_step = {
@@ -1167,61 +1181,6 @@ pub(super) fn emit<'a>(
             } else {
                 format!("{cancel}; {stack_after}")
             }
-        };
-        // A hook with an `output_validator` checks each listener's outputs as that listener
-        // returns: a refused set is rolled back to the last accepted one (the requested values
-        // before any listener), the refusal names the mod and the field, and later listeners
-        // run on the accepted values.
-        let (validated_start, validated_arms) = match &hook.output_validator {
-            Some(validator) if hook.isolate => {
-                let accepted = rollback
-                    .iter()
-                    .map(|(name, by_reference)| {
-                        format!(
-                            "let mut __accepted_{name} = {}{event}.{name}; ",
-                            if *by_reference { "*" } else { "" }
-                        )
-                    })
-                    .collect::<String>();
-                let arguments = rollback
-                    .iter()
-                    .map(|(name, _)| format!("&__accepted_{name}"))
-                    .chain(rollback.iter().map(|(name, by_reference)| {
-                        format!("&{}{event}.{name}", if *by_reference { "*" } else { "" })
-                    }))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let keep = rollback
-                    .iter()
-                    .map(|(name, by_reference)| {
-                        format!(
-                            "__accepted_{name} = {}{event}.{name}; ",
-                            if *by_reference { "*" } else { "" }
-                        )
-                    })
-                    .collect::<String>();
-                let undo = rollback
-                    .iter()
-                    .map(|(name, by_reference)| {
-                        format!(
-                            "{}{event}.{name} = __accepted_{name}; ",
-                            if *by_reference { "*" } else { "" }
-                        )
-                    })
-                    .collect::<String>();
-                (
-                    format!("{accepted} let mut __accepted_cancelled = {event}.cancelled;"),
-                    format!(
-                        "Ok(Ok(__flow)) => {{ match {validator}({arguments}) {{ Ok(()) => {{ {keep} __accepted_cancelled |= {event}.cancelled || matches!(__flow, Flow::Cancel); }} Err(__field) => {{ {undo} if super::runtime::first_output_refusal(HookId::{hook_id}, {mod_entry}.id) {{ log::warn!(\"mod {{}} hook {name} output {{__field}} refused: its outputs are dropped and the preceding ones stand\", {mod_entry}.id); }} }} }} {event}.cancelled = __accepted_cancelled; }} "
-                    ),
-                )
-            }
-            _ => (
-                String::new(),
-                format!(
-                    "Ok(Ok(Flow::Cancel)) => {{ {event}.cancelled = true; }} Ok(Ok(_)) => {{}} "
-                ),
-            ),
         };
         let inert_owner = fresh_name("disabled_owner", &mut used);
         let (lookup, calls) = match &scoped {
@@ -1264,10 +1223,28 @@ pub(super) fn emit<'a>(
                     o = out.unwrap()
                 ),
             ),
-            None if mod_cancel && hook.isolate => (
+            None if mod_cancel && hook.isolate == Some(Isolation::Live) => (
                 String::new(),
                 format!(
-                    "{{ {isolate_snapshot} {validated_start} let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) || ({event}.cancelled && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ {validated_arms}Ok(Err(refusal)) => {{ refusal.report(); {isolate_restore} super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); *{o} = {event}.cancelled; return; }} Err(_unwound) => {{ {isolate_restore} super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); *{o} = {event}.cancelled; return; }} }} }} }} *{o} = {event}.cancelled;",
+                    "let mut {entered} = super::runtime::ListenerScope::new();
+                     for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{
+                         let mod_id = {mod_entry}.id;
+                         if super::runtime::poisoned(HookId::{hook_id}, mod_id) || ({event}.cancelled && !{receives}) {{ continue; }}
+                         let {mod_item} = {entered}.enter({mod_entry}, \"{name}\");
+                         match super::callback_owner::contain_unwind(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{
+                             Ok(Ok(flow)) => *{o} |= {event}.cancelled || matches!(flow, Flow::Cancel),
+                             Ok(Err(refusal)) => refusal.report_each(),
+                             Err(message) => super::runtime::listener_panicked(HookId::{hook_id}, mod_id, \"{name}\", message),
+                         }}
+                         {event}.cancelled = *{o};
+                     }}",
+                     o = out.unwrap()
+                ),
+            ),
+            None if mod_cancel && hook.isolate == Some(Isolation::Restore) => (
+                String::new(),
+                format!(
+                    "{{ {isolate_snapshot} let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) || ({event}.cancelled && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(Flow::Cancel)) => {{ {event}.cancelled = true; }} Ok(Ok(_)) => {{}} Ok(Err(refusal)) => {{ refusal.report(); {isolate_restore} super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); *{o} = {event}.cancelled; return; }} Err(_unwound) => {{ {isolate_restore} super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); *{o} = {event}.cancelled; return; }} }} }} }} *{o} = {event}.cancelled;",
                     o = out.unwrap()
                 ),
             ),
@@ -2819,7 +2796,7 @@ fn main() {{
                 contract: Contract::Collect,
                 out: Some("answers".into()),
                 answered_by_mod: true,
-                isolate: true,
+                isolate: Some(Isolation::Live),
                 receiver,
                 dispatch: DispatchStyle::Flat,
                 call,
