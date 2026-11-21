@@ -1333,8 +1333,9 @@ pub(super) fn emit<'a>(
                 },
                 if let Some(output) = isolated_output {
                     let draft = fresh_name("draft", &mut used);
+                    let owner = fresh_name("part_owner", &mut used);
                     format!(
-                        "for {part_item} in super::entered_parts({part_list}, \"{name}\") {{ if let Some({replacement}) = super::runtime::isolated_part_answer(HookId::{hook_id}, \"{name}\", || {{ let mut {draft} = ToOwned::to_owned(&*{output}); {{ let {output} = &mut {draft}; {local_event} {part_item}.{name}({invoke}); }} {draft} }}) {{ *{output} = {replacement}; }} }}"
+                        "for ({owner}, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ if let Some({replacement}) = super::runtime::isolated_part_answer(HookId::{hook_id}, {owner}, \"{name}\", || {{ let mut {draft} = ToOwned::to_owned(&*{output}); {{ let {output} = &mut {draft}; {local_event} {part_item}.{name}({invoke}); }} {draft} }}) {{ *{output} = {replacement}; }} }}"
                     )
                 } else if let Some(inert) = &hook.inert {
                     let inert = if inert_signal {

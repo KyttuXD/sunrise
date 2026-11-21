@@ -83,7 +83,8 @@ impl Game<'_> {
             return;
         }
         let sound = self.selected_block_sound(pos, state, None, BlockSoundCause::Break);
-        self.audio.play(
+        self.audio.play_on(
+            mod_api::SoundSource::Blocks.index(),
             sound.event.as_str(),
             Some(pos.map(|v| f64::from(v) + 0.5)),
             (sound.volume + 1.0) / 2.0,
@@ -138,6 +139,27 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_block_part_answers_the_sound_type_a_block_plays() {
+        const CHILD: &str = "SUNRISE_BLOCK_SOUND_TYPE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::a_block_part_answers_the_sound_type_a_block_plays"
+                    )
+                    .split_once("::")
+                    .unwrap()
+                    .1,
+                    "--include-ignored",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
         mod_platform::__private::part_tests::sound_type_game_thread();
         // The client library asks the mods through the executable's callbacks.
         crate::entry::install_client_hooks();
@@ -200,10 +222,17 @@ mod tests {
                 sound(game, "minecraft:blue_wool", creeper, Step),
                 ("minecraft:block.amethyst_block.step".to_owned(), 2.0, 1.5)
             );
-            assert_eq!(
-                sound(game, "minecraft:blue_wool", None, Break),
-                ("mymod:missing".to_owned(), 2.0, 1.5)
-            );
+            let blue_wool = registry.default_state("minecraft:blue_wool").unwrap();
+            game.audio.capture = Some(Vec::new());
+            game.play_break_sound([5, 64, 5], blue_wool);
+            let capture = game.audio.capture.take().unwrap();
+            let [played] = capture.as_slice() else {
+                panic!("expected only the selected event, got {capture:?}");
+            };
+            assert_eq!(played.event, "mymod:missing");
+            assert_eq!(played.position, [5.5, 64.5, 5.5]);
+            assert_eq!(played.source, mod_api::SoundSource::Blocks.index());
+            assert_eq!((played.volume, played.pitch), (1.5, 1.5 * 0.8));
             // The server's placement (`BlockItem.place`) asks with the acting player, and with
             // none when nothing places it (a dispenser).
             let glass = registry.default_state("minecraft:glass").unwrap();

@@ -133,8 +133,15 @@ mod root {
         pub(super) fn refusable<T>(_: bool, call: impl FnOnce() -> T) -> Result<T, Refusal> {
             Ok(call())
         }
+        pub(super) fn entered_parts_with_id<'a, P: ?Sized>(
+            parts: &'a [&'a P],
+            hook: &'static str,
+        ) -> impl Iterator<Item = (&'static str, &'a P)> {
+            super::entered_parts(parts, hook).map(|part| ("test_mod", part))
+        }
         pub(super) fn isolated_part_answer<T>(
             _: super::HookId,
+            _: &'static str,
             _: &'static str,
             call: impl FnOnce() -> T,
         ) -> Option<T> {
