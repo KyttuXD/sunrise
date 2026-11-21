@@ -1,10 +1,7 @@
 use super::*;
 use crate::game::host::draw::GameDrawContext;
 use mod_api::{__private::game::CallbackOwner, ClientHost, DrawContext, GuiLayerWrapContext};
-use sunrise_client::{
-    gui_layers::{self, GuiLayerBody, VanillaGuiLayer},
-    hud::HudPaintCheckpoint,
-};
+use sunrise_client::gui_layers::{self, GuiLayerBody, VanillaGuiLayer};
 
 #[allow(dead_code)]
 impl Game<'_> {
@@ -171,7 +168,6 @@ struct GuiLayerWrapFrame<'a, 'p, 'g> {
     batch: &'a mut HudBatch,
     previous: &'a GuiLayerBody,
     vanilla: Option<&'a mut VanillaGuiDraw<'p, 'g>>,
-    paint: &'a mut HudPaintCheckpoint,
 }
 
 impl GuiLayerWrapContext for GuiLayerWrapFrame<'_, '_, '_> {
@@ -184,11 +180,8 @@ impl GuiLayerWrapContext for GuiLayerWrapFrame<'_, '_, '_> {
     }
 
     fn draw_previous(&mut self) {
-        let start = self.batch.vertices.len();
         self.game
             .draw_gui_layer_body(self.batch, self.previous, self.vanilla.as_deref_mut());
-        self.paint
-            .preserve_delegated(start..self.batch.vertices.len());
     }
 }
 
@@ -254,6 +247,7 @@ impl<'g> Game<'g> {
         self.native_gui_layer_post(id, batch);
     }
 
+    // CallbackOwner reports and contains mod failures; completed paint stays in the batch.
     fn draw_gui_layer_body(
         &mut self,
         batch: &mut HudBatch,
@@ -269,15 +263,9 @@ impl<'g> Game<'g> {
             }
             GuiLayerBody::Native { owner, draw } => {
                 if let Some(owner) = owner.as_ref().filter(|owner| owner.is_enabled()) {
-                    let paint = batch.paint_checkpoint();
-                    if owner
-                        .call("HUD layer", "gui_layer_draw", || {
-                            draw(self, &mut GameDrawContext::new(self, batch));
-                        })
-                        .is_err()
-                    {
-                        paint.discard(batch);
-                    }
+                    let _ = owner.call("HUD layer", "gui_layer_draw", || {
+                        draw(self, &mut GameDrawContext::new(self, batch));
+                    });
                 }
             }
             GuiLayerBody::Wrapped {
@@ -289,21 +277,14 @@ impl<'g> Game<'g> {
                     self.draw_gui_layer_body(batch, previous, vanilla);
                     return;
                 };
-                let mut paint = batch.paint_checkpoint();
-                if owner
-                    .call("HUD layer", "gui_layer_wrapper", || {
-                        wrap(&mut GuiLayerWrapFrame {
-                            game: self,
-                            batch,
-                            previous,
-                            vanilla,
-                            paint: &mut paint,
-                        });
-                    })
-                    .is_err()
-                {
-                    paint.discard(batch);
-                }
+                let _ = owner.call("HUD layer", "gui_layer_wrapper", || {
+                    wrap(&mut GuiLayerWrapFrame {
+                        game: self,
+                        batch,
+                        previous,
+                        vanilla,
+                    });
+                });
             }
         }
     }

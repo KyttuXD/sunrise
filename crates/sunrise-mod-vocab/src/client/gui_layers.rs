@@ -6,16 +6,18 @@ use crate::{ClientHost, DrawContext};
 /// Draws one registered HUD layer with the current client and drawing context.
 /// The client owns the closure for the session and calls it as the mod that installed it.
 /// Capture per-layer data; the host and canvas are borrowed only for this draw.
-/// A disabled owner is skipped. A refused or panicking draw discards its paint;
-/// only a panic disables this callback for the session.
+/// A disabled callback is skipped. A refusal is reported each time. A panic disables this
+/// callback for the session and is reported in the log and an error toast naming the mod.
+/// Completed primitives stay in the HUD batch on either failure; other layers still draw.
 pub type GuiLayerDraw = dyn Fn(&dyn ClientHost, &mut dyn DrawContext) + Send + Sync + 'static;
 
 // no wire: the wrapper and its captures are kept in the client process.
 /// Draws around the previous body of a layer, or omits that body for this draw.
 /// The client owns this callback for its lifetime. A disabled wrapper (including one
 /// disabled by panic) leaves the previous layer body to draw directly.
-/// On refusal or panic, the wrapper's own paint is discarded; paint it already delegated
-/// to the previous body stays in order without drawing that body again.
+/// A refusal is reported each time; a panic is reported in the log and an error toast naming the mod.
+/// On either failure, the wrapper's completed primitives and any delegated paint stay in order.
+/// The previous body is not called again to recover from the failure.
 pub type GuiLayerWrapper = dyn Fn(&mut dyn GuiLayerWrapContext) + Send + Sync + 'static;
 
 // no wire: lends the current client and the HUD batch only while a wrapper runs.
@@ -25,12 +27,14 @@ pub trait GuiLayerWrapContext {
     fn host(&self) -> &dyn ClientHost;
 
     /// Paint into the current HUD batch with a draw context scoped to this call.
+    /// Any open scissors close when the scope ends. Completed paint stays in the batch.
     fn with_draw(&mut self, draw: &mut dyn FnMut(&mut dyn DrawContext));
 
     /// Paint the previous body at this point in the same batch without firing layer hooks again.
-    /// The previous mod body runs as its own mod; a previous vanilla body runs as the engine.
-    /// A vanilla paint panic still escapes the layer as an engine fault, even if the wrapper
-    /// catches its unwind. Omit this call to skip the previous body for this draw.
+    /// The previous mod body runs as its own mod and keeps completed primitives if it fails.
+    /// A previous vanilla body runs as the engine. A vanilla paint panic escapes the layer
+    /// as an engine fault even if the wrapper catches its unwind.
+    /// Omit this call to skip the previous body for this draw.
     fn draw_previous(&mut self);
 }
 

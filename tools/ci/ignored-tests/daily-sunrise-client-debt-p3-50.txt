@@ -1,0 +1,1 @@
+sunrise-client game::gui_layer_tests::failed_gui_layers_keep_completed_paint_and_leave_other_callbacks_enabled lib daily child-process
