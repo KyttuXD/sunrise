@@ -37,7 +37,7 @@ impl Game<'_> {
     /// `TagParser.parseCompoundFully` followed by `ItemStack.CODEC`. This is text, not
     /// binary input to `NbtAccounter`.
     pub(super) fn item_from_snbt(&self, snbt: &str) -> Option<mod_api::ItemStack> {
-        item_nbt::item_from_snbt(snbt)
+        item_nbt::item_from_snbt(snbt, |id| sunrise_protocol::item::custom::id(id).is_some())
             .and_then(|stack| {
                 self.items()
                     .get(&stack.item)

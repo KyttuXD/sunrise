@@ -376,38 +376,13 @@ impl Template {
         self.tag(Projection::Tree)
     }
     fn tag(&self, projection: Projection) -> Result<Tag, String> {
-        let children = if projection == Projection::Presentation {
-            projection
-        } else {
-            Projection::Codec
-        };
         let mut fields = vec![("id".into(), Tag::String(self.item.as_str().into()))];
         if self.count != 1 {
             fields.push(("count".into(), Tag::Int(self.count)));
         }
-        let mut patch = Compound::new();
-        for (name, value) in effective_patch(&self.patch) {
-            if projection != Projection::Presentation && !is_persistent(name) {
-                continue;
-            }
-            let (key, projected) = match value {
-                Some(value) => match value.tag(children) {
-                    Ok(tag) => (name.as_str().into(), tag),
-                    Err(error) => {
-                        discard_tag(Tag::Compound(patch));
-                        return Err(format!("{name}: {error}"));
-                    }
-                },
-                None => (
-                    format!("!{name}").as_str().into(),
-                    Tag::Compound(Compound::new()),
-                ),
-            };
-            // A directly constructed set key may collide with a !-prefixed removal.
-            if let Some(replaced) = patch.insert(key, projected) {
-                discard_tag(replaced);
-            }
-        }
+        let entries = effective_patch(&self.patch)
+            .filter(|(name, _)| projection == Projection::Presentation || is_persistent(name));
+        let patch = project_patch(entries, projection)?;
         if !patch.is_empty() {
             fields.push(("components".into(), Tag::Compound(patch)));
         }
@@ -424,6 +399,39 @@ impl Template {
         Ok(tag)
     }
 }
+
+fn project_patch<'a>(
+    entries: impl Iterator<Item = &'a (String, Option<Value>)>,
+    projection: Projection,
+) -> Result<Compound, String> {
+    let children = if projection == Projection::Presentation {
+        projection
+    } else {
+        Projection::Codec
+    };
+    let mut patch = Compound::new();
+    for (name, value) in entries {
+        let (key, projected) = match value {
+            Some(value) => match value.tag(children) {
+                Ok(tag) => (name.as_str().into(), tag),
+                Err(error) => {
+                    discard_tag(Tag::Compound(patch));
+                    return Err(format!("{name}: {error}"));
+                }
+            },
+            None => (
+                format!("!{name}").as_str().into(),
+                Tag::Compound(Compound::new()),
+            ),
+        };
+        // A directly constructed set key may collide with a !-prefixed removal.
+        if let Some(replaced) = patch.insert(key, projected) {
+            discard_tag(replaced);
+        }
+    }
+    Ok(patch)
+}
+
 /// The pinned component types that intentionally have no persistent codec.
 pub fn is_persistent(name: &str) -> bool {
     if name.contains(':') {

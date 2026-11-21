@@ -25,7 +25,8 @@ fn an_snbt_item_goes_through_the_api_unchanged() {
             r#"{id:"minecraft:potion",count:1,components:{"minecraft:potion_contents":{potion:"minecraft:strong_healing"}}}"#,
             r#"{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":{title:{raw:"Log"},author:"guest13",pages:[{raw:"one"}]}}}"#,
         ] {
-            let engine = item_nbt::item_from_snbt(snbt).unwrap_or_else(|error| panic!("{error}"));
+            let engine =
+                item_nbt::item_from_snbt(snbt, |_| false).unwrap_or_else(|error| panic!("{error}"));
             let api = api_item(game, snbt).unwrap();
             assert_eq!(
                 Some(&api),
@@ -53,6 +54,11 @@ fn item_from_snbt_refuses_what_is_not_one_item_compound() {
         assert_eq!(count(r#"{id:"minecraft:stone",count:99}"#), Some(99));
         assert_eq!(count(r#"{id:"minecraft:stone",count:1}"#), Some(1));
         assert_eq!(
+            count(r#"{id:"minecraft:stone",count:4294967297L}"#),
+            Some(1),
+            "Codec.INT uses Number.intValue before checking the range"
+        );
+        assert_eq!(
             count(r#"{id:"minecraft:stone",count:100}"#),
             None,
             "a count past 99 is refused, not clamped"
@@ -77,6 +83,16 @@ fn item_from_snbt_refuses_what_is_not_one_item_compound() {
         assert_eq!(count(r#"{id:"nomod:thing",count:1}"#), None);
         assert_eq!(count(r#"{count:1}"#), None);
         assert_eq!(count(r#"{id:"stone",components:1}"#), None);
+        assert_eq!(
+            count(r#"{id:"diamond_sword",components:{"minecraft:damage":-1}}"#),
+            None,
+            "negative damage is a codec error, not zero damage"
+        );
+        assert_eq!(
+            count(r#"{id:"stone",components:{"missing:component":{}}}"#),
+            None,
+            "unregistered components are not opaque payloads"
+        );
         assert_eq!(
             count(r#"{id:"stone",components:{"minecraft:creative_slot_lock":{}}}"#),
             None
@@ -124,7 +140,7 @@ fn a_given_stack_fills_the_inventory_then_drops_for_its_player() {
         let b = game.players().server_players()[1];
         let rock = r#"{id:"minecraft:stone",count:10,components:{"minecraft:custom_name":"Rock"}}"#;
         let named = api_item(game, rock).unwrap();
-        let engine = item_nbt::item_from_snbt(rock).unwrap();
+        let engine = item_nbt::item_from_snbt(rock, |_| false).unwrap();
         game.lan
             .as_mut()
             .unwrap()

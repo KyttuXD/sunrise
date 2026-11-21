@@ -63,10 +63,12 @@ pub trait ItemsHost {
     /// Side: both.
     /// Parse one complete SNBT compound as a saved `ItemStack.CODEC` item:
     /// `{id:"minecraft:diamond_sword",count:1,components:{"minecraft:damage":5}}`
-    /// (`count` defaults to 1 and must be in 1..=99; `stone` is `minecraft:stone`).
+    /// `stone` is `minecraft:stone`. `count` defaults to 1 and must be in 1..=99 after
+    /// the saved codec's 32-bit integer conversion. Component keys must resolve to registered
+    /// persistent types, and values must pass those types' saved codecs.
     /// Trailing whitespace is allowed. The shared SNBT parser's structural rules apply,
-    /// but no binary NBT byte quota is applied to the text. Bad syntax, an invalid item or
-    /// component patch, and an unknown item return `None` and log the failure reason.
+    /// but no binary NBT byte quota is applied to the text. Bad syntax, unknown items and
+    /// invalid item fields or components return `None` and log the failure reason.
     #[access(WorldOnly)]
     #[forward_api_output]
     fn item_from_snbt(&self, snbt: &str) -> Option<ItemStack>;

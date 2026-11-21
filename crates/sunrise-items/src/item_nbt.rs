@@ -2,7 +2,8 @@
 //! slot lists.
 use std::sync::Arc;
 use sunrise_client_core::nbt_value::{number, string, text};
-use sunrise_core::nbt::{Tag, parse_snbt, snbt_whitespace};
+use sunrise_core::nbt::{Tag, discard_tag, parse_snbt, snbt_whitespace};
+use sunrise_world::component_value::source::saved_stack_fields;
 
 /// The two measured saved forms of `BlockPredicate.CODEC`, and the `Identifier`s
 /// of `attribute_modifiers` written whole. Operate only on
@@ -88,38 +89,40 @@ pub fn item_to_nbt(stack: &crate::items::ItemStack, items: &crate::items::Items)
 /// Read one `TagParser.parseCompoundFully` compound as an `ItemStack.CODEC` item.
 /// The SNBT grammar and saved-item decoder report their own errors; binary NBT quotas
 /// are not part of this text boundary.
-pub fn item_from_snbt(snbt: &str) -> Result<crate::items::ItemStack, String> {
+pub fn item_from_snbt(
+    snbt: &str,
+    is_native: fn(&str) -> bool,
+) -> Result<crate::items::ItemStack, String> {
     let (tag, end) = parse_snbt(snbt)?;
-    if let Some((pos, _)) = snbt[end..]
+    let stack = if let Some((pos, _)) = snbt[end..]
         .char_indices()
         .find(|&(_, ch)| !snbt_whitespace(ch.into()))
     {
-        return Err(format!("argument.nbt.trailing at {}", end + pos));
-    }
-    item_from_persistent_nbt(&tag)
+        Err(format!("argument.nbt.trailing at {}", end + pos))
+    } else {
+        item_from_persistent_nbt(&tag, is_native)
+    };
+    discard_tag(tag);
+    stack
 }
 
 /// Decode an `ItemStack.CODEC` compound at a strict input boundary. Unlike the save
 /// reader, refuse an invalid count or component patch and preserve the diagnostic.
-pub fn item_from_persistent_nbt(tag: &Tag) -> Result<crate::items::ItemStack, String> {
+/// The caller supplies its native component registry and resolves the resulting item ID.
+pub fn item_from_persistent_nbt(
+    tag: &Tag,
+    is_native: fn(&str) -> bool,
+) -> Result<crate::items::ItemStack, String> {
     if !matches!(tag, Tag::Compound(_)) {
         return Err("argument.nbt.expected.compound".into());
     }
     let id = saved_item_id(tag).ok_or("id must name a non-air item")?;
-    let count = match tag.get("count") {
-        None => 1,
-        Some(value) => number(Some(value))
-            .filter(|count| (1..=99).contains(count))
-            .ok_or("count must be a number in 1..=99")? as u32,
-    };
-    let components = tag.get("components");
+    let (count, components) = saved_stack_fields(tag, is_native)?;
+    let stack = decode_item_fields(&id, count, components.as_ref());
     if let Some(components) = components {
-        if !matches!(components, Tag::Compound(_)) {
-            return Err("components must be a compound".into());
-        }
-        sunrise_world::item_defaults::validate_component_map_tag(components)?;
+        discard_tag(components);
     }
-    Ok(decode_item_fields(&id, count, components))
+    Ok(stack)
 }
 
 fn saved_item_id(tag: &Tag) -> Option<String> {
@@ -129,8 +132,8 @@ fn saved_item_id(tag: &Tag) -> Option<String> {
 }
 /// A stack read from a save. Earlier Sunrise saves can hold transient components
 /// (`creative_slot_lock`, `additional_trade_cost`, `map_post_processing`), so only
-/// those entries are dropped and the stack stays; commands and data files use
-/// [`item_from_persistent_nbt`]. Cost: one pass over the component keys; the
+/// those entries are dropped and the stack stays; use [`item_from_persistent_nbt`]
+/// for strict input. Cost: one pass over the component keys; the
 /// patch is cloned only when it holds a transient entry.
 ///
 /// ItemStack.CODEC's count range is independent of the item's stack limit;
@@ -247,8 +250,23 @@ mod tests {
     #[test]
     fn item_snbt_reports_the_trailing_data_cursor() {
         assert_eq!(
-            item_from_snbt("{id:stone} x").unwrap_err(),
+            item_from_snbt("{id:stone} x", |_| false).unwrap_err(),
             "argument.nbt.trailing at 11"
+        );
+    }
+
+    #[test]
+    fn item_snbt_projects_canonical_component_keys_from_the_owning_registry() {
+        let stack = item_from_snbt(
+            r#"{id:"diamond_sword",components:{":damage":2,"test:note":{mark:7}}}"#,
+            |name| name == "test:note",
+        )
+        .unwrap();
+        let patch = crate::item_data::component_snapshot(&stack).unwrap();
+        assert_eq!(patch.get("minecraft:damage"), Some(&Tag::Int(2)));
+        assert_eq!(
+            patch.get("test:note"),
+            Some(&Tag::compound([("mark", Tag::Int(7))]))
         );
     }
 
@@ -334,8 +352,8 @@ mod tests {
             assert_eq!(live.get("minecraft:repair_cost"), Some(&Tag::Int(2)));
             // Strict input keeps the component codec's reason instead of stripping it.
             assert_eq!(
-                item_from_persistent_nbt(&saved).unwrap_err(),
-                format!("'{transient}' is not a persistent component")
+                item_from_persistent_nbt(&saved, |_| false).unwrap_err(),
+                format!("{transient} has no persistent codec")
             );
         }
     }

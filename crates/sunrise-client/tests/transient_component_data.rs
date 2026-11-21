@@ -386,7 +386,7 @@ fn persistent_nbt_and_component_syntax_refuse_transients_without_rejecting_runti
         ("id", Tag::String("minecraft:stone".into())),
         ("components", patch.clone()),
     ]);
-    assert!(item_nbt::item_from_persistent_nbt(&saved).is_err());
+    assert!(item_nbt::item_from_persistent_nbt(&saved, |_| false).is_err());
     let (_, runtime) = item_data::decode_components(Some(&patch));
     assert!(
         runtime

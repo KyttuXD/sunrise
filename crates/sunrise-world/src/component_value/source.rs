@@ -12,9 +12,8 @@ pub fn identifier(s: &str) -> Result<String> {
 #[doc(hidden)]
 pub fn normalized_identifier(s: &str) -> Result<std::borrow::Cow<'_, str>> {
     use std::borrow::Cow;
-    let (namespace, path) = s.split_once(':').unwrap_or(("minecraft", s));
-    if namespace.is_empty()
-        || path.is_empty()
+    let (namespace, path) = s.split_once(':').unwrap_or(("", s));
+    if path.is_empty()
         || !namespace
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-".contains(&c))
@@ -24,10 +23,10 @@ pub fn normalized_identifier(s: &str) -> Result<std::borrow::Cow<'_, str>> {
     {
         return Err(format!("invalid identifier {s}"));
     }
-    Ok(if s.contains(':') {
-        Cow::Borrowed(s)
+    Ok(if namespace.is_empty() {
+        Cow::Owned(format!("minecraft:{path}"))
     } else {
-        Cow::Owned(format!("minecraft:{s}"))
+        Cow::Borrowed(s)
     })
 }
 
@@ -753,7 +752,7 @@ impl Source {
 #[doc(hidden)]
 pub fn validate_template_count(count: i32) -> Result<()> {
     if !(1..=99).contains(&count) {
-        return Err("template count outside 1..99".into());
+        return Err("count outside 1..=99".into());
     }
     Ok(())
 }
@@ -778,14 +777,39 @@ fn template_tag(t: &Tag, source: Source) -> Result<Template> {
     if item == "minecraft:air" {
         return Err("air is not a template item".into());
     }
+    let (count, patch) = stack_fields(t, source)?;
+    Ok(Template { item, count, patch })
+}
+
+/// Decode the count and own component patch shared by `ItemStack.MAP_CODEC` and
+/// `ItemStackTemplate.MAP_CODEC`. The caller owns the compound and item ID lookup.
+/// Return the admitted patch in canonical saved form without re-decoding it.
+pub fn saved_stack_fields(stack: &Tag, is_native: fn(&str) -> bool) -> Result<(u32, Option<Tag>)> {
+    let (count, patch) = stack_fields(
+        stack,
+        Source {
+            is_native,
+            ..Source::SAVED
+        },
+    )?;
+    let components = if patch.is_empty() {
+        None
+    } else {
+        Some(Tag::Compound(super::project_patch(
+            patch.iter(),
+            super::Projection::Codec,
+        )?))
+    };
+    Ok((count as u32, components))
+}
+
+fn stack_fields(t: &Tag, source: Source) -> Result<(i32, Patch)> {
     let count = t
         .get("count")
-        .map(int)
-        .transpose()?
-        .unwrap_or(Value::Int(1));
-    let Value::Int(count) = count else {
-        unreachable!()
-    };
+        .map(integer)
+        .transpose()
+        .map_err(|error| format!("count: {error}"))?
+        .unwrap_or(1);
     if source.upgraded {
         if count == 0 {
             return Err("native template count must be nonzero".into());
@@ -796,7 +820,7 @@ fn template_tag(t: &Tag, source: Source) -> Result<Template> {
     let mut patch: Patch = vec![];
     if let Some(c) = t.get("components") {
         let Tag::Compound(c) = c else {
-            return Err("template components are not a map".into());
+            return Err("components are not a map".into());
         };
         for (name, value) in c {
             let name = name.to_string_lossy();
@@ -820,7 +844,7 @@ fn template_tag(t: &Tag, source: Source) -> Result<Template> {
         }
         super::normalize_map(&mut patch, |(name, _)| name);
     }
-    Ok(Template { item, count, patch })
+    Ok((count, patch))
 }
 fn template(t: &Tag, source: Source) -> Result<Value> {
     Ok(Value::Template(Box::new(template_tag(t, source)?)))
