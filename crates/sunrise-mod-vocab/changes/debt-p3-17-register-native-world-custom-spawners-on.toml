@@ -32,7 +32,8 @@ why = "NeoForge's ModifyCustomSpawnersEvent fires at the end of ServerLevel cons
 migrate = """
 Keep Hooks::modify_custom_spawners. It now fires at level construction, before level_load,
 even when mob spawning is off. Compare event.dimension to a DimensionKey such as
-DimensionKey::OVERWORLD; use event.dimension.id(host) if you need the dimension name.
+DimensionKey::OVERWORLD. To match a custom dimension, use
+`host.level("example:moon").is_some_and(|level| level.dimension() == event.dimension)`.
 Replace event.spawners.add(SpawnerKey::new(id).unwrap()) with
 `event.spawners.add_custom_spawner(Box::new(MySpawner { /* initial state */ }))`.
 Implement `CustomSpawner for MySpawner` with `fn tick(&mut self, host: &mut dyn ServerHost,
