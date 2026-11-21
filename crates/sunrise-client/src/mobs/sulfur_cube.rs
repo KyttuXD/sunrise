@@ -232,7 +232,11 @@ pub const ARCHETYPES: [Archetype; 12] = [
         0.05
     ),
 ];
-/// `SulfurCubeArchetype.DEFAULT_*`: no block swallowed.
+/// `SulfurCubeArchetype.DEFAULT_KNOCKBACK_MODIFIERS`.
+const DEFAULT_KNOCKBACK: (f32, f32) = (0.33, 0.06);
+/// Hit sound from `SulfurCubeArchetype.DEFAULT_SOUND_SETTINGS`.
+const DEFAULT_HIT_SOUND: &str = "entity.sulfur_cube.regular.hit";
+/// `SulfurCubeArchetype.DEFAULT_SOUND_SETTINGS`: push settings without a matching archetype.
 const DEFAULT_PUSH: (&str, f32, f32) = ("entity.sulfur_cube.regular.push", 0.5, 0.2);
 static ITEMS: OnceLock<Vec<HashSet<String>>> = OnceLock::new();
 /// The items of each archetype's `#sulfur_cube_archetype/<name>` tag.
@@ -1155,8 +1159,7 @@ fn launch(
     [-kx, f64::from(v) * 1.2, -kz]
 }
 /// `LivingEntity.dealDefaultKnockback` for a cube with a block: from where the blow came
-/// (`source.getSourcePosition()`) with `knockback(0.4, ...)`. A source with a causing entity goes
-/// through `SulfurCube.knockback`; one with none (a cactus, a fall) through `super.knockback`.
+/// (`source.getSourcePosition()`) with the short `knockback(0.4, ...)` entry.
 fn deal_default_knockback(m: &mut Mob, level: &mut DamageLevel<'_>, source: &Damage, damage: f32) {
     // A projectile knocks the way it travelled (`calculateHorizontalHurtKnockbackDirection`),
     // else from the source's position.
@@ -1166,29 +1169,29 @@ fn deal_default_knockback(m: &mut Mob, level: &mut DamageLevel<'_>, source: &Dam
             .from
             .map_or((0.0, 0.0), |f| (f[0] - m.position.x, f[2] - m.position.z)),
     };
-    if source.attacker.is_some() {
-        knockback(m, (xd, zd), source.from, damage, None);
-    } else {
-        m.knockback(level, f64::from(0.4_f32), xd, zd, source, damage);
-    }
+    m.knockback(level, f64::from(0.4_f32), xd, zd, source, damage);
 }
-/// `SulfurCube.knockback` with a block and a causing entity: the archetype's powers, turned by
+/// `SulfurCube.knockback` with a body item and a causing entity: the launch powers, turned by
 /// where the blow came from and by the entity's aim (`Mob::attacker_aim`, from the game).
-pub fn knockback(
+pub(super) fn knockback(
     m: &mut Mob,
     direction: (f64, f64),
     from: Option<[f64; 3]>,
     damage: f32,
     effect_power: Option<f64>,
-) -> bool {
-    let Some(a) = archetype(m) else {
-        return false;
+) {
+    let (powers, knockback_resistance) = match archetype(m) {
+        Some(a) => (
+            (a.horizontal_power, a.vertical_power),
+            a.knockback_resistance,
+        ),
+        None => (DEFAULT_KNOCKBACK, m.knockback_resistance()),
     };
     let aim = m.attacker_aim.take();
     let from = from.unwrap_or([m.position.x, m.position.y, m.position.z]);
     let delta = launch(
-        (a.horizontal_power, a.vertical_power),
-        resistance(a.knockback_resistance),
+        powers,
+        resistance(knockback_resistance),
         damage,
         direction,
         aim.map_or(from, |a| a.feet),
@@ -1207,7 +1210,6 @@ pub fn knockback(
     m.extra.scratch[1] = 2;
     // needsSync: the push reaches the other players at once.
     m.needs_sync = true;
-    true
 }
 /// `SulfurCube.tickFuse`: count down and discard at zero before the living
 /// tick, including NoAI cubes. Pickup and push cooldowns belong to AI instead.
@@ -1253,10 +1255,9 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if pending & 1 != 0 {
         events.push(MobEvent::Sound("entity.tnt.primed", m.center(), 1.0, 1.0));
     }
-    if pending & 2 != 0
-        && let Some(a) = archetype(m)
-    {
-        events.push(MobEvent::Sound(a.hit_sound, m.center(), 1.0, 1.0));
+    if pending & 2 != 0 {
+        let sound = archetype(m).map_or(DEFAULT_HIT_SOUND, |a| a.hit_sound);
+        events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
     }
     m.extra.scratch[1] = 0;
     if m.extra.ints[3] > 0 {

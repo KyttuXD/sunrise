@@ -27,7 +27,7 @@ mod health {
 }
 mod sulfur_cube {
     pub fn has_body(_: &super::Mob) -> bool { false }
-    pub fn knockback(_: &mut super::Mob, _: (f64, f64), _: Option<[f64; 3]>, _: f32, _: Option<f64>) -> bool { panic!("ordinary mob") }
+    pub fn knockback(_: &mut super::Mob, _: (f64, f64), _: Option<[f64; 3]>, _: f32, _: Option<f64>) { panic!("ordinary mob") }
 }
 extern crate self as sunrise_client;
 use health::{Knock, Hurting};

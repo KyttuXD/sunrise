@@ -1,1 +1,4 @@
+sunrise-client game::creatures::borrowed_panic_tests::a_knockback_listener_panic_does_not_abort_the_borrowed_mob_tick lib daily resources
+sunrise-client game::native_knockback_tests::a_body_carrying_sulfur_cube_bypasses_living_knockback_for_a_causing_entity lib daily resources
 sunrise-client game::native_knockback_tests::one_event_per_living_knockback_operation lib daily resources
+sunrise-client game::native_knockback_tests::unprojectable_hand_and_credit_components_do_not_hide_the_push lib daily resources

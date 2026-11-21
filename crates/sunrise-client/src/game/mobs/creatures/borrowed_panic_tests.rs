@@ -510,6 +510,29 @@ fn run_output(family: Family, output: Output) {
                         1,
                         "real native listener was not reached once"
                     );
+                    if family == Family::Knockback {
+                        result
+                            .expect("knockback callback escaped its isolation")
+                            .unwrap();
+                        assert_eq!(
+                            mod_api::__private::poisoned_listeners(
+                                mod_api::HookId::LivingKnockback
+                            ),
+                            1
+                        );
+                        assert!(probe.posts.load(Ordering::SeqCst) > 0);
+                        assert_eq!(
+                            game.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
+                            rows
+                        );
+                        assert_eq!(
+                            VALUE
+                                .get_existing(&mut game.world.attachments, Holder::Level)
+                                .unwrap(),
+                            Some(314)
+                        );
+                        return;
+                    }
                     assert_eq!(
                         probe.posts.load(Ordering::SeqCst),
                         0,
@@ -527,11 +550,7 @@ fn run_output(family: Family, output: Output) {
                     assert_eq!(token.0, 0xdecaf);
                     let progressed = matches!(
                         family,
-                        Family::Damage
-                            | Family::Shield
-                            | Family::Totem
-                            | Family::Knockback
-                            | Family::Landing
+                        Family::Damage | Family::Shield | Family::Totem | Family::Landing
                     );
                     let expected_value = if progressed { 314 } else { 42 };
                     let mut expected_random = LegacyRandom::new(LEVEL_SEED);
@@ -752,7 +771,13 @@ macro_rules! cases {
         fn $name() { run(Family::$family); }
     )*};
 }
-cases!(damage => Damage, shield => Shield, totem => Totem, movement => Movement, goal => Goal, mounted_goal => MountedGoal, knockback => Knockback, landing => Landing);
+cases!(damage => Damage, shield => Shield, totem => Totem, movement => Movement, goal => Goal, mounted_goal => MountedGoal, landing => Landing);
+
+#[test]
+#[ignore = "daily"]
+fn a_knockback_listener_panic_does_not_abort_the_borrowed_mob_tick() {
+    run(Family::Knockback);
+}
 
 #[test]
 #[ignore = "daily"]

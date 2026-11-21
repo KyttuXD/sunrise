@@ -1,0 +1,20 @@
+ids = [
+    "hook:living_knockback",
+    "hook:living_knockback.entry",
+    "hook:living_knockback.attacker_main",
+    "hook:living_knockback.attacker_off",
+    "hook:living_knockback.kill_credit_main",
+    "type:LivingKnockbackEvent.entry",
+    "type:LivingKnockbackEvent.attacker_main",
+    "type:LivingKnockbackEvent.attacker_off",
+    "type:LivingKnockbackEvent.kill_credit_main",
+    "type:KnockbackEntry",
+    "type:KnockbackEntry.Short",
+    "type:KnockbackEntry.Full",
+]
+why = "Vanilla 26.3 LivingEntity.knockback delegates to the actual push, where NeoForge CommonHooks.onLivingKnockBack posts one LivingKnockBackEvent before resistance and motion. The stable event no longer exposes the overload marker introduced to emulate a Java mixin on both entries. Its three stack inputs are borrowed so unrelated components cannot suppress the push event. Vanilla SulfurCube.knockback handles a body-carrying cube's launch when there is a causing entity, without calling the base operation, whether or not the push comes from an effect. A panicking listener is reported and disabled without stopping the remaining listeners or losing their edits."
+migrate = '''
+- Rebuild against `living_knockback` version 3. Remove `KnockbackEntry` imports and `event.entry` matches: replace the short/full branches with one intended strength or direction rule per push. Use `event.strength`, `event.x`, `event.z` and `Flow::Cancel` as before. Source, attacker and kill-credit resolution are unchanged.
+- `event.attacker_main`, `event.attacker_off` and `event.kill_credit_main` are now `Option<&ItemStackView<'_>>`, not `Option<&ItemStack>`. Scalar reads such as `event.attacker_main.map(|stack| stack.item())` stay the same. Replace `event.attacker_main.cloned()` with `event.attacker_main.and_then(|view| view.project())` when you need an owned value, and project first for component reads. Handle `None` from `project()` as a failed projection even when the view is present. The view cannot leave the callback.
+- Expect one event only for pushes that reach the base living operation. In particular, a body-carrying sulfur cube's launch from a source with a causing entity does not dispatch, including ordinary or sweep knockback that is not an effect.
+'''

@@ -449,6 +449,28 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// An isolated listener's failure cannot interrupt the level or the remaining listeners.
+pub(crate) fn isolated_refusable<T>(
+    hook: generated::HookId,
+    id: &'static str,
+    operation: &'static str,
+    contained: bool,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    match crate::callback_owner::contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            None
+        }
+        Err(message) => {
+            poison(hook, id);
+            crate::callback_owner::report_callback_panic(id, "hook", operation, message);
+            None
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,

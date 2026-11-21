@@ -8,36 +8,40 @@ pub trait Hooks {
     /// attacker's side), and the entity is pushed the other way. `source` is the push's
     /// `DamageSource`, named as `native_living_incoming_damage` names a hit's. `attacker` is the
     /// attacking entity's network id, falling back to the victim's last hurt-by mob, or 0 when
-    /// unknown; `attacker_main` and `attacker_off` are what it holds (a player's selected and
-    /// off-hand stacks, a mob's main hand), none when unknown. `entry` is `Short` when the push
-    /// came in through `knockback(power, x, z)`, which only delegates to the full entry, and `Full`
-    /// when the full entry was called directly. The hook fires once per call of the full entry
-    /// either way, so a listener that wants its change applied twice for a short-entry push, as
-    /// a mixin on both entries would, applies it twice when `entry` is `Short`. Change
-    /// `strength`, `x` or `z`, or
-    /// set `canceled`, and the push follows them: canceled, the entity's motion is left alone. A
-    /// `strength` of 0 or less after the hook is no push, and a direction too short to tell
-    /// draws a random one after it, as in vanilla. A value a mod leaves that is not a finite
-    /// number is put back as it was. It fires for the players, mobs and armor stands the game
-    /// knocks back: a hit's own push, a sprinting or Knockback hit, a sweep, a spear, a
+    /// unknown; `attacker_main` and `attacker_off` lend its captured hand stacks (a player's
+    /// selected and off-hand stacks, a mob's main hand), when available. Both vanilla entry
+    /// forms reach the same operation, which fires this hook once per push. Edit `strength`,
+    /// `x` or `z`, or cancel to leave the entity's motion unchanged. A nonpositive `strength`
+    /// gives no push, and a direction too short to tell draws a random one after the event, as
+    /// in vanilla. A non-finite output is reported and the original value is kept.
+    /// The hook fires for living pushes on players, mobs, armor stands and a non-sitting ender
+    /// dragon: a hit's own push, a sprinting or Knockback hit, a sweep, a spear, a
     /// shield's push on its holder, a goat's ram and a mob's melee push. It does not fire for a
     /// sulfur cube with a block that a hit with a causing entity knocks back
     /// (`SulfurCube.knockback` does not call `super` there), for the pushes vanilla doesn't make
     /// with `LivingEntity.knockback` (the ender dragon's wings, Punch arrows, explosions, wind
-    /// charges, a mace smash's area, a hoglin's throw), nor for the ones Sunrise makes another
-    /// way (the ender dragon's). The level is the hit's: its blocks, random and own attachments.
+    /// charges, a mace smash's area or a hoglin's throw), nor when a living override skips the
+    /// base operation (a sitting ender dragon or a creaking that cannot move). The level is the
+    /// hit's: its blocks, random and own attachments.
     /// `kill_credit` is the pushed living entity's kill credit at this pre-motion moment:
     /// a remembered player takes precedence over its last hurting mob, even when that player
     /// cannot resolve (then 0, without falling back). `kill_credit_main` is that entity's
-    /// current main-hand stack, or none. This is not the immediate damage-source attacker.
+    /// current main-hand stack. This is not the immediate damage-source attacker.
     /// Accepted-hit memories, including a tame wolf's owner, are committed before this read.
-    /// Both are additions: NeoForge's `LivingKnockBackEvent` doesn't carry them, and mods
-    /// there read the pushed entity's kill credit and its holder's main hand themselves.
-    #[notes = "Version 2 adds the pushed entity's kill credit and its current main-hand stack; remembered player precedence and expiry match LivingRef::kill_credit."]
+    /// A hand view is absent for an empty or unavailable stack. Use [`ItemStackView`] to
+    /// inspect item, count and damage without copying components. A failed
+    /// [`ItemStackView::project`] affects only that read, not the push or its dispatch.
+    /// The source and credit fields are Sunrise additions; on NeoForge mods read the relevant
+    /// entities and their equipment themselves. A listener that panics is named in the log and
+    /// error toast and is disabled for this hook for the session. Its unfinished event edits
+    /// are discarded; other listeners and the push still run.
+    #[notes = "Version 3 fires once per knockback operation without an overload discriminator, and lends the attacker and credit stacks as read-only views."]
     #[hook(
         dispatch = "api_carrier",
         side = "server",
-        version = 2,
+        version = 3,
+        cancellable = true,
+        isolate_listener = true,
         contract = "cancel",
         out = "canceled",
         host = "level",
@@ -49,10 +53,10 @@ pub trait Hooks {
         kind: &str,
         source: &HurtSource<'_>,
         attacker: i32,
-        attacker_main: Option<&ItemStack>,
-        attacker_off: Option<&ItemStack>,
+        attacker_main: Option<&ItemStackView<'_>>,
+        attacker_off: Option<&ItemStackView<'_>>,
         kill_credit: i32,
-        kill_credit_main: Option<&ItemStack>,
+        kill_credit_main: Option<&ItemStackView<'_>>,
         strength: &mut f64,
         x: &mut f64,
         z: &mut f64,

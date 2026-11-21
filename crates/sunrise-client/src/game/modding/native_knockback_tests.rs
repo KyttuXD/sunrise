@@ -34,7 +34,7 @@ impl Hooks for Probe {
         event: &mut LivingKnockbackEvent<'_>,
     ) -> mod_api::Flow {
         let mut heard = self.0.lock().unwrap();
-        let id = |s: Option<&mod_api::ItemStack>| {
+        let id = |s: Option<&mod_api::ItemStackView<'_>>| {
             s.and_then(|s| mod_api::__private::item_key_id(s.item()).map(str::to_owned))
         };
         heard.knocks.push((
@@ -210,6 +210,97 @@ fn a_canceled_push_is_reported() {
         ));
     });
     assert_eq!(heard.knocks.len(), 1);
+}
+
+#[test]
+#[ignore = "daily"]
+fn unprojectable_hand_and_credit_components_do_not_hide_the_push() {
+    use sunrise_client::health::KnockbackCredit;
+    use sunrise_core::nbt::Tag;
+
+    struct Credit(ItemStack);
+    impl KnockbackCredit for Credit {
+        fn accepted_mob_hit(&mut self, _: &mut Mob) {}
+        fn snapshot<'a>(&'a self, _: &Hurting<'_>, _: &'a Attack) -> (i32, Option<&'a ItemStack>) {
+            (19, Some(&self.0))
+        }
+    }
+    type Hand = Option<(mod_api::ItemKey, u32, bool)>;
+    type Observation = (i32, i32, [Hand; 3]);
+    struct ReadAndCancel(Arc<Mutex<Option<Observation>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for ReadAndCancel {
+        fn living_knockback(
+            &self,
+            _: &mut dyn LevelRandomHost,
+            event: &mut LivingKnockbackEvent<'_>,
+        ) -> mod_api::Flow {
+            let hands = [
+                event.attacker_main,
+                event.attacker_off,
+                event.kill_credit_main,
+            ]
+            .map(|stack| stack.map(|view| (view.item(), view.count(), view.project().is_some())));
+            *self.0.lock().unwrap() = Some((event.attacker, event.kill_credit, hands));
+            mod_api::Flow::Cancel
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(None));
+    let mods = vec![mod_api::ModEntry::new(
+        "read-and-cancel",
+        Box::new(ReadAndCancel(seen.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            let malformed = |item, count| {
+                let mut stack = ItemStack::new(item, count);
+                stack
+                    .data_mut()
+                    .set_other("minecraft:damage", Some(Tag::Int(-1)));
+                stack
+            };
+            let attack = Attack {
+                attacker: 7,
+                held: [
+                    Some(malformed("minecraft:iron_sword", 2)),
+                    Some(ItemStack::new("minecraft:shield", 1)),
+                ],
+                ..Attack::default()
+            };
+            let mut credit = Credit(malformed("minecraft:iron_axe", 3));
+            zombie_at(game, 42, Vec3::ZERO);
+            let mut mob = game.mobs.pop().unwrap();
+            mob.velocity = Vec3::ZERO;
+            mob.knockback(
+                damage_level_of!(game, &attack, &mut credit, None),
+                0.4,
+                1.0,
+                0.0,
+                &Damage::mob(7, [1.0, 0.0, 0.0]),
+                0.0,
+            );
+            assert_eq!(
+                mob.velocity,
+                Vec3::ZERO,
+                "the listener's cancellation must apply"
+            );
+            let key = |id| mod_api::__private::item_key(id).unwrap();
+            assert_eq!(
+                seen.lock().unwrap().take(),
+                Some((
+                    7,
+                    19,
+                    [
+                        Some((key("minecraft:iron_sword"), 2, false)),
+                        Some((key("minecraft:shield"), 1, true)),
+                        Some((key("minecraft:iron_axe"), 3, false)),
+                    ]
+                )),
+            );
+        });
+    });
 }
 
 #[test]
@@ -500,14 +591,11 @@ fn one_event_per_living_knockback_operation() {
         zombie_at(game, 42, Vec3::ZERO);
         let mut mob = game.mobs.pop().unwrap();
         mob.on_ground = false;
-        for (i, from_effect) in [false, true].into_iter().enumerate() {
+        for (i, effect) in [None, Some(false), Some(true)].into_iter().enumerate() {
             mob.velocity = Vec3::ZERO;
-            with_detached_credit(game, 42, |level| {
-                if from_effect {
-                    mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, true);
-                } else {
-                    mob.knockback(level, 0.4, 1.0, 0.0, &hit, 0.0);
-                }
+            with_detached_credit(game, 42, |level| match effect {
+                None => mob.knockback(level, 0.4, 1.0, 0.0, &hit, 0.0),
+                Some(effect) => mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, effect),
             });
             assert_eq!(mob.velocity, Vec3::new(0.8, 0.0, 0.0));
             assert_eq!(log.lock().unwrap().knocks.len(), i + 1);
@@ -515,13 +603,60 @@ fn one_event_per_living_knockback_operation() {
 
         player_with_sword(game);
         game.player.as_mut().unwrap().ground.on_ground = false;
-        game.knock_back_player(0.4, 1.0, 0.0, source(0), &NO_ATTACK, 0.0);
-        assert_eq!(
-            game.player.as_ref().unwrap().velocity,
-            Vec3::new(0.8, 0.0, 0.0)
-        );
+        for (i, effect) in [None, Some(false), Some(true)].into_iter().enumerate() {
+            game.player.as_mut().unwrap().velocity = Vec3::ZERO;
+            match effect {
+                None => game.knock_back_player(0.4, 1.0, 0.0, source(0), &NO_ATTACK, 0.0),
+                Some(effect) => {
+                    game.knock_back_player_full(0.4, 1.0, 0.0, source(0), &NO_ATTACK, 0.0, effect);
+                }
+            }
+            assert_eq!(
+                game.player.as_ref().unwrap().velocity,
+                Vec3::new(0.8, 0.0, 0.0)
+            );
+            assert_eq!(log.lock().unwrap().knocks.len(), i + 4);
+        }
     });
-    assert_eq!(heard.knocks.len(), 3);
+    assert_eq!(heard.knocks.len(), 6);
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_body_carrying_sulfur_cube_bypasses_living_knockback_for_a_causing_entity() {
+    let heard = heard(|game, log| {
+        log.lock().unwrap().cancel = true;
+        let kind = game
+            .res
+            .mob_types()
+            .get("minecraft:sulfur_cube")
+            .unwrap()
+            .clone();
+        let hit = Damage::player([1.0, 0.0, 0.0]);
+        // Vanilla TNT and default archetype powers, with a centered four-damage blow.
+        for (body, expected_speed) in [
+            ("minecraft:tnt", 0.66_f32),
+            ("minecraft:iron_sword", 0.33_f32 * 2.0 * 0.4),
+        ] {
+            let mut mob = Mob::new(42, kind.clone(), Vec3::ZERO, 0.0);
+            mob.extra.set_body(Some(body.into()));
+            let aim = sunrise_client::mobs::Aim {
+                eye: [1.0, mob.center()[1], 0.0],
+                look: [-1.0, 0.0, 0.0],
+                feet: [1.0, 0.0, 0.0],
+            };
+            with_detached_credit(game, 42, |level| {
+                mob.attacker_aim = Some(aim);
+                mob.knockback(level, 0.4, 1.0, 0.0, &hit, 4.0);
+                assert_eq!(mob.velocity.x, -f64::from(expected_speed), "{body}");
+                mob.velocity = Vec3::ZERO;
+                mob.attacker_aim = Some(aim);
+                mob.knockback_full(level, 1.0, 1.0, 0.0, &hit, 4.0, true);
+                assert_eq!(mob.velocity.x, -f64::from(expected_speed) / 4.0, "{body}");
+            });
+        }
+    });
+    assert!(heard.knocks.is_empty(), "heard {:?}", heard.knocks);
 }
 
 fn with_detached_credit(

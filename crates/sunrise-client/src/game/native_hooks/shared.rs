@@ -47,7 +47,9 @@ mod system_helpers;
 mod world_helpers;
 
 use super::screen_build::ObservedScreen;
-use crate::game::api_values::{TryIntoApi, TryIntoEngine};
+use crate::game::api_values::{
+    StackReadError, TryIntoApi, TryIntoEngine, project_stack, stack_read_metadata,
+};
 use screen_chars::chars_to_type;
 use sunrise_client::containers::ModBlockEntity as EngineBlockEntity;
 
@@ -1848,25 +1850,34 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
             causing => causing,
         },
     };
-    let (kill_credit, credit_main) = level.knockback_credit(&pushed);
-    let Ok(credit_main) = credit_main.map(TryIntoApi::try_into_api).transpose() else {
-        return false;
-    };
-    let (entity, kind, source) = hurt_server_args(pushed, level.attack());
-    let mut canceled = false;
+    let (level, kill_credit, credit_main) = level.split_knockback_credit(&pushed);
+    let (entity, kind, source) = hurt_server_args(pushed, attack);
     let [main, off] = &attack.held;
-    let (Ok(main), Ok(off)) = (main.try_into_api(), off.try_into_api()) else {
-        return false;
-    };
+    let hands = [main.as_ref(), off.as_ref(), credit_main].map(|stack| {
+        stack.map(|stack| (stack, move |metadata| project_stack(stack, metadata).ok()))
+    });
+    let [attacker_main, attacker_off, kill_credit_main] = std::array::from_fn(|i| {
+        let (stack, project) = hands[i].as_ref()?;
+        match stack_read_metadata(stack) {
+            Ok(metadata) => Some(mod_api::ItemStackView::resident(metadata, project)),
+            Err(StackReadError::Empty) => None,
+            Err(error) => {
+                let field = ["attacker_main", "attacker_off", "kill_credit_main"][i];
+                log::warn!("living_knockback for {kind} {entity}: cannot lend {field}: {error:?}");
+                None
+            }
+        }
+    });
+    let mut canceled = false;
     HitLevel(level).native_living_knockback(mod_api::__private::LivingKnockbackCall {
         entity,
         kind,
         source: &source,
         attacker,
-        attacker_main: main.as_ref(),
-        attacker_off: off.as_ref(),
+        attacker_main: attacker_main.as_ref(),
+        attacker_off: attacker_off.as_ref(),
         kill_credit,
-        kill_credit_main: credit_main.as_ref(),
+        kill_credit_main: kill_credit_main.as_ref(),
         strength: &mut knock.strength,
         x: &mut knock.x,
         z: &mut knock.z,

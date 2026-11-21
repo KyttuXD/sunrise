@@ -4086,26 +4086,8 @@ impl HitLevel<'_> {
     ) {
         self.fire_living_incoming_damage(call);
     }
-    /// NeoForge's `LivingKnockBackEvent`: `LivingEntity.knockback` is about to push entity
-    /// `entity` of type `kind` (`minecraft:zombie`, `minecraft:player`) `strength` away from the
-    /// direction (`x`, `z`), on the raw strength, before the entity's knockback resistance takes
-    /// its share and its motion changes. Vanilla's direction points at the source of a hit (the
-    /// attacker's side), and the entity is pushed the other way. `source` is the push's
-    /// `DamageSource`, named as `native_living_incoming_damage` names a hit's. `attacker` is the
-    /// attacking entity's network id, falling back to the victim's last hurt-by mob, or 0 when
-    /// unknown; `attacker_main` and `attacker_off` are what it holds (a player's selected and
-    /// off-hand stacks, a mob's main hand), none when unknown. Change `strength`, `x` or `z`, or
-    /// set `canceled`, and the push follows them: canceled, the entity's motion is left alone. A
-    /// `strength` of 0 or less after the hook is no push, and a direction too short to tell
-    /// draws a random one after it, as in vanilla. A value a mod leaves that is not a finite
-    /// number is put back as it was. It fires for the players, mobs and armor stands the game
-    /// knocks back: a hit's own push, a sprinting or Knockback hit, a sweep, a spear, a
-    /// shield's push on its holder, a goat's ram and a mob's melee push. It does not fire for a
-    /// sulfur cube with a block that a hit with a causing entity knocks back
-    /// (`SulfurCube.knockback` does not call `super` there), for the pushes vanilla doesn't make
-    /// with `LivingEntity.knockback` (the ender dragon's wings, Punch arrows, explosions, wind
-    /// charges, a mace smash's area, a hoglin's throw), nor for the ones Sunrise makes another
-    /// way (the ender dragon's). The level is the hit's: its blocks, random and own attachments.
+    /// Fire [`mod_api::Hooks::living_knockback`] once at `LivingEntity.knockback`, before
+    /// resistance and motion. The call borrows the hit's source, hands and kill credit.
     pub(in crate::game) fn native_living_knockback(
         &mut self,
         call: mod_api::__private::LivingKnockbackCall<'_>,
