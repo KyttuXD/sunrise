@@ -363,8 +363,12 @@ Draws advance the live stream directly and are not rolled back on panic/unwind o
 abort, matching vanilla `Level.getRandom()` ([Randomness](randomness.md#borrow-the-live-level-stream)).
 
 `LevelTicksHost` adds scheduling through `schedule_block_tick` and `schedule_fluid_tick`, while
-`LevelWriteHost` adds random access, `set_block`, `set_block_property`, `play_sound` and
-`send_particles` and `level_event` (`levelEvent`, queued in order with the write's own events).
+`LevelWriteHost` adds random access, block writes, sounds, particles and level events. `set_block`
+and `set_block_property` take `BlockUpdateFlags`, for example `BlockUpdateFlags::CLIENTS`. A full
+`ServerHost` also takes these flags in `set_block_property_with`; its three-argument
+`set_block_property` still notifies both neighbors and clients. `play_sound` takes a `SoundSource`,
+such as `SoundSource::Blocks`. `level_event` (`levelEvent`) queues events in order with the write's
+own events.
 A damage hit's listeners (`living_incoming_damage`, `living_damage_pre`, `living_damage_post`,
 `living_shield_block`, `living_use_totem`) are given a `HitHost`: a `LevelRandomHost` that also plays level
 sounds and draws from an entity's own random, and writes no block. `host.play_sound_at(sound, at, source,

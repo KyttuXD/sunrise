@@ -251,21 +251,20 @@ pub trait Notes {
   block handles it. Only blocks that tick randomly fire it (a mod block as its vanilla template block does), once per
   draw that lands on one: it runs often, so keep it short. Bone meal's random ticks (`StemBlock.performBonemeal` calls
   `randomTick` itself) don't fire it. The hook may change the block with the level's
-  `native_set_block_property(ticks, pos, key, value, flags)` and set `handled` to skip the block's own random tick, so a
+  `set_block_property(pos, key, value, flags)` and set `handled` to skip the block's own random tick, so a
   mod crop grows its own way. Without `handled`, the block then takes its own random tick as it is now (if it still
-  ticks randomly), and lava's fluid random tick runs either way. It needs the level mutably, which only `random_tick` and `tick_block` give. It is `Game::native_set_block_property` with `Level.setBlock`'s flags (`native_hooks::flags`): a
-  vanilla crop grows with `flags::UPDATE_CLIENTS` (neighbours' shapes update, so an observer fires, but no neighbour
-  gets `neighborChanged` and comparators aren't told), a furnace sets its `lit` with `flags::UPDATE_ALL` (both). Sunrise
-  sends updates when `UPDATE_CLIENTS` (2) is set; `UPDATE_INVISIBLE` (4) suppresses notification only on the client, as in `Level.setBlock`. `UPDATE_IMMEDIATE` (8) has no effect yet. It writes at any loaded position, returns false off an authoritative server (the `Game` one too: a window that isn't a server), for a property or
-  value the block doesn't have, a position that isn't loaded, or a property that already has the value (nothing is written:
-  vanilla's `Level.setBlock` returns false for an unchanged state, as `native_set_block` does), and true when the block changed. Elsewhere, `Game::native_set_block_property_with(pos, key, value, flags)` does the same, as a brewing
-  stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
+  ticks randomly), and lava's fluid random tick runs either way. The method takes `BlockUpdateFlags` for `Level.setBlock`:
+  a vanilla crop grows with `BlockUpdateFlags::CLIENTS` (neighbours' shapes update, but no neighbour gets
+  `neighborChanged` and comparators aren't told); a furnace sets its `lit` with `BlockUpdateFlags::NEIGHBORS |
+  BlockUpdateFlags::CLIENTS` (both). It returns false off an authoritative server, for an unloaded position,
+  an unknown property or value, or an unchanged state. Elsewhere, `ServerHost::set_block_property_with` takes
+  the same flags, for example `BlockUpdateFlags::CLIENTS` when a brewing stand's tick sets its bottles.
 
 - Scheduled block ticks a mod can handle through `tick_block`: on an authoritative server, each due
   scheduled tick of a block that is still there (`ServerLevel.tickBlock` → `BlockState.tick`), with its dimension,
   position and state, before the block handles it. The hook may change the block with the level's
-  `native_set_block_property` and the flags the block's own tick would write with (an observer's tick
-  uses `flags::UPDATE_CLIENTS`) and set `handled` to skip the block's own tick. Without `handled`, the block then takes
+  `set_block_property` and the flags the block's own tick would write with (an observer's tick
+  uses `BlockUpdateFlags::CLIENTS`) and set `handled` to skip the block's own tick. Without `handled`, the block then takes
   its own tick as it is now, if it is still the tick's block.
 
 - The commands a mod owns on the client, as NeoForge's `RegisterClientCommandsEvent`: `register_client_commands` is asked for a `Command` per usage (`x <mode:word>`, the same usage form as `register_commands`), so the chat box colours, completes and lists them, arguments included, like the game's own, and `command` runs them. A name the game already has keeps that command; a nonzero `level` has no meaning on the client and the command is left out with a log line. It replaces `commands`, which gave bare names: a mod that implemented it pushes `Command::new("name <args:text>")` instead. Asked at connect, never per frame.

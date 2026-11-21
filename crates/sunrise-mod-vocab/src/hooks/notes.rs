@@ -502,8 +502,8 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   precipitation, dripstone, or a burning player being extinguished is about to change a cauldron's level. Set `cancel`
   to leave it as it was.
 - **`random_tick(ticks, dimension, pos, state, handled)`** (on `GameLevel`): a block `tickChunk`
-  random-ticks, before its own `randomTick`. Change the block with the level's `native_set_block_property(ticks, pos,
-  key, value, flags)`; set `handled` to skip the block's own random tick.
+  random-ticks, before its own `randomTick`. Change the block with `LevelWriteHost::set_block_property(pos, key,
+  value, flags)`, using `BlockUpdateFlags`; set `handled` to skip the block's own random tick.
 - **`tick_block(ticks, dimension, pos, state, handled)`** (on `GameLevel`): a due scheduled tick of a block
   that is still there (`ServerLevel.tickBlock`), before its own `tick`; the same contract as `random_tick`.
 - **`explosion_detonate(dimension, center, blocks, entities)`**: the positions an explosion is about to
@@ -1776,7 +1776,7 @@ still go on each event or registrar.
   answers itself: `is_valid_bonemeal_target(state, valid)` says whether the block takes bone meal (`Some(false)` refuses it even where its template takes it, `None` leaves the
   template's; asked on both sides, as vanilla asks it, so a client predicts the use); `is_bonemeal_success(state, success)` is
   `isBonemealSuccess`, drawn through the level host's `with_random` to keep vanilla's order; and `perform_bonemeal(state)`
-  is the growth itself, with `native_set_block`/`native_set_block_property`. The meal is used up and the growth
+  is the growth itself, with the `LevelWriteHost`'s `set_block` or `set_block_property`. The meal is used up and the growth
   particles and sound follow as vanilla's do, whether or not the roll grows the block, from a player's bone meal, a
   dispenser's and, on a crop, a villager's. A block that answers nothing keeps the `BonemealableBlock` its template gives it.
   Authoritative servers only, except the first question.

@@ -36,6 +36,9 @@ every player in range hears it, except the player in `except`. Pass the player w
 sound for its action; pass `None` to play it to everyone. The game finds that player's connection itself. A fake
 player has no client, so it leaves no one out; a stale player handle queues nothing and the call returns `false`.
 
+When a block callback lends a `LevelWriteHost`, use `host.play_sound(sound, at, SoundSource::Blocks, volume, pitch)`
+to queue a positional sound for nearby players. A transaction's level writer publishes its queued sounds only on commit.
+
 ## Engine playback and live parameters
 
 `play_sound` also observes transient playback updates. `event.starting` is true for a

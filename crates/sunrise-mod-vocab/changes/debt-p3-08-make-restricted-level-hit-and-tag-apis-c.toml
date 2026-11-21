@@ -1,0 +1,10 @@
+ids = [
+    "method:LevelWriteHost::set_block_property",
+    "method:LevelWriteHost::play_sound",
+    "method:prelude::BlockStatesServerHost::set_block_property_with",
+]
+why = "Property writes now share the same BlockUpdateFlags as whole-state writes, matching the flag combination accepted by vanilla Level.setBlock and used by NeoForge IBlockExtension.onDestroyedByPushReaction. Level sounds now take SoundSource like vanilla LevelAccessor.playSound and Level.playSound. Numeric representations stay in the engine; the sound queue and seed timing are unchanged."
+migrate = """
+- `level.set_block_property(pos, key, value, raw_flags)` -> `level.set_block_property(pos, key, value, flags)` with `flags: BlockUpdateFlags`. Make the same last-argument change in `host.set_block_property_with(pos, key, value, flags)` and in trait implementations. Use `BlockUpdateFlags::NONE` for `0`, `BlockUpdateFlags::CLIENTS` for `UPDATE_CLIENTS` (`2`), and `BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS` for `UPDATE_ALL` (`3`). If a call already combines `BlockUpdateFlags`, pass the combination without `.bits()`. The three-argument `host.set_block_property(pos, key, value)` is unchanged.
+- `level.play_sound(sound, at, source.index(), volume, pitch)` -> `level.play_sound(sound, at, source, volume, pitch)` with `source: SoundSource`; use `SoundSource::Blocks` for the old ordinal `4`, for example. In a `LevelWriteHost` implementation, change `source: usize` to `source: SoundSource` as well. `HitHost::play_sound_at` and `play_sound_from` already take `SoundSource` and need no call-site changes.
+"""
