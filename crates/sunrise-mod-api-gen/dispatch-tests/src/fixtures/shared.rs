@@ -56,8 +56,6 @@ use stubs::*;
 struct Text;
 #[derive(Clone)]
 struct ScreenshotImage;
-#[derive(Debug, PartialEq)]
-struct Zoom(u32);
 enum Flow {
     Continue,
     Cancel,
@@ -129,7 +127,7 @@ mod generated {
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
             Command, CommandRegistration, Config, DeclarationError, Dispensed, InteractionResult,
-            MapDecoration, MapInfo, Zoom,
+            MapDecoration, MapInfo,
         };
         #[derive(Clone)]
         pub struct FluidModel;
@@ -672,10 +670,6 @@ impl Hooks for Mod {
     }
     fn level_tick_pre(&self, _: HostSide, _: &mut LevelTickPreEvent) {
         self.calls.lock().unwrap().push(self.id);
-    }
-    fn zoom(&self, _: &dyn ClientHost, _: &mut ZoomEvent) -> Option<Zoom> {
-        self.calls.lock().unwrap().push(self.id);
-        Some(Zoom(self.id))
     }
     fn living_incoming_damage(
         &self,

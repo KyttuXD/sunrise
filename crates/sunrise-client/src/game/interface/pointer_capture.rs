@@ -52,8 +52,7 @@ impl Game<'_> {
     /// controller alike.
     pub(super) fn look_turn(&mut self, x: f64, y: f64) {
         self.tutorial.mouse(x, y);
-        let zoom = self.zoom_turn_scale();
-        self.turn_player(x * zoom, y * zoom);
+        self.turn_player(x, y);
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     pub(super) fn pauses_game(&self) -> bool {

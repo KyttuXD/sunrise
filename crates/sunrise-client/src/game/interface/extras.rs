@@ -1,5 +1,5 @@
-//! Sunrise's extras in the game (`docs/extras.md`); a native mod's zoom (`native_zoom`) on the
-//! camera; clicks and frame times for mods (`native_clicks`, `native_frame_rate`).
+//! Sunrise's extras in the game (`docs/extras.md`); clicks and frame times for mods
+//! (`native_clicks`, `native_frame_rate`).
 //! Each hook does nothing while its extra is off and no mod uses it.
 #[path = "extras/mouse_tweaks.rs"]
 pub(in crate::game) mod mouse_tweaks;
@@ -9,7 +9,7 @@ mod sorting;
 use super::{Game, Screen};
 use std::time::Duration;
 use sunrise_client::{
-    extras::{Corner, Cps, FpsCounter, fov_target},
+    extras::{Corner, Cps, FpsCounter},
     extras_hud::{self, Corners},
     hud::HudBatch,
 };
@@ -65,31 +65,6 @@ impl Game<'_> {
         let now = self.extras_now();
         let [l, r] = &mut self.extras.cps;
         (l.per_second(now) as u32, r.per_second(now) as u32)
-    }
-    /// A mod's zoom in effect (`native_zoom`): (factor, smooth, turning
-    /// scale); none is 1.
-    fn zoom_now(&self) -> (f32, bool, f64) {
-        self.native_zoom_now().map_or((1.0, true, 1.0), |z| {
-            (z.factor, z.smooth, f64::from(z.turn))
-        })
-    }
-    /// The field-of-view modifier target, divided by a smooth zoom.
-    pub(super) fn zoomed_fov_target(&self, vanilla: f32) -> f32 {
-        match self.zoom_now() {
-            (factor, true, _) => fov_target(vanilla, factor),
-            _ => vanilla,
-        }
-    }
-    /// The field of view in degrees, divided by an instant zoom.
-    pub(super) fn zoomed_fov_degrees(&self, fov: f32) -> f32 {
-        match self.zoom_now() {
-            (factor, false, _) => fov / factor,
-            _ => fov,
-        }
-    }
-    /// Mouse turning while zoomed.
-    pub(super) fn zoom_turn_scale(&self) -> f64 {
-        self.zoom_now().2
     }
     /// The PvP HUD widgets and mods' corner panels, in the HUD layer (hidden with F1
     /// by the caller).
