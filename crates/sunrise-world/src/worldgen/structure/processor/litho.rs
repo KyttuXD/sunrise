@@ -357,7 +357,7 @@ impl SetBlock {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{BlockInfo, PlaceSettings, ProcessorList, process_list};
+    use super::super::{PlaceSettings, ProcessorList, WorkingBlock, process_list};
     use serde_json::{Value, json};
     use std::collections::{BTreeMap, BTreeSet};
     use {
@@ -499,12 +499,12 @@ mod tests {
             piece: [i32; 3],
             pos: [i32; 3],
             state: &str,
-        ) -> Option<BlockInfo> {
+        ) -> Option<WorkingBlock<'static>> {
             let mut world = World {
                 seed: world.0,
                 block: self.id(world.1),
             };
-            let info = BlockInfo {
+            let info = WorkingBlock {
                 pos,
                 state: self.id(state),
                 nbt: None,
@@ -522,7 +522,7 @@ mod tests {
             )
             .unwrap()
         }
-        fn name(&self, info: Option<BlockInfo>) -> String {
+        fn name(&self, info: Option<WorkingBlock<'static>>) -> String {
             match info {
                 None => "none".into(),
                 Some(info) => {

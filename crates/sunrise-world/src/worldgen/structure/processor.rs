@@ -1,6 +1,6 @@
 //! Structure processors (`worldgen/processor_list`) and template placement.
 use serde_json::Value;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{borrow::Cow, collections::BTreeSet, sync::Arc};
 use sunrise_core::{
     position::BlockPos,
     random::{LegacyRandom, PositionalRandom, RandomSource, position_seed},
@@ -481,7 +481,11 @@ impl Pick {
             keep_properties: value["keep_properties"].as_bool().unwrap_or(false),
         })
     }
-    fn apply(&self, info: BlockInfo, random: &mut dyn ProcessorRandom) -> BlockInfo {
+    fn apply<'a>(
+        &self,
+        info: WorkingBlock<'a>,
+        random: &mut dyn ProcessorRandom,
+    ) -> WorkingBlock<'a> {
         let outcome = match self.picks.is_empty() {
             true => self.default.as_ref(),
             false if self.redraw => self
@@ -506,7 +510,7 @@ impl Pick {
             [one] => *one,
             many => many[random.int(many.len() as i32) as usize],
         };
-        let mut nbt = outcome.nbt.clone().map(Box::new).or(info.nbt);
+        let mut nbt = outcome.nbt.clone().map(Cow::Owned).or(info.nbt);
         for list in &outcome.lists {
             let values = (0..list.count)
                 .map(|_| {
@@ -519,10 +523,11 @@ impl Pick {
                     Tag::String(v.as_str().into())
                 })
                 .collect();
-            nbt.get_or_insert_with(Default::default)
+            nbt.get_or_insert_with(|| Cow::Owned(Compound::new()))
+                .to_mut()
                 .insert(list.key.as_str().into(), Tag::List(values));
         }
-        BlockInfo {
+        WorkingBlock {
             pos: info.pos,
             state,
             nbt,
@@ -1025,19 +1030,27 @@ fn blackstone(name: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-type ProcessResult = Result<Option<BlockInfo>, PlacementQueryError>;
+/// The placement-local block info; a delegate may borrow the working tag.
+#[derive(Clone, PartialEq)]
+struct WorkingBlock<'a> {
+    pos: [i32; 3],
+    state: BlockStateId,
+    nbt: Option<Cow<'a, Compound>>,
+}
+
+type ProcessResult<'a> = Result<Option<WorkingBlock<'a>>, PlacementQueryError>;
 /// The processors of a list in turn, until one removes the block.
 #[allow(clippy::too_many_arguments)]
-fn process_list<W: PlacementContext>(
+fn process_list<'a, W: PlacementContext>(
     list: &ProcessorList,
     world: &mut W,
     resources: &StructureResources,
     position: [i32; 3],
     reference: [i32; 3],
     relative: [i32; 3],
-    info: BlockInfo,
+    info: WorkingBlock<'a>,
     settings: &mut PlaceSettings<'_>,
-) -> ProcessResult {
+) -> ProcessResult<'a> {
     let mut current = info;
     for processor in &list.0 {
         match process_block(
@@ -1052,16 +1065,16 @@ fn process_list<W: PlacementContext>(
 /// StructureProcessor.processBlock: `position` is the piece's, `reference`
 /// the structure's pivot and `relative` the block's in the template.
 #[allow(clippy::too_many_arguments)]
-fn process_block<W: PlacementContext>(
+fn process_block<'a, W: PlacementContext>(
     processor: &Processor,
     world: &mut W,
     resources: &StructureResources,
     position: [i32; 3],
     reference: [i32; 3],
     relative: [i32; 3],
-    info: BlockInfo,
+    info: WorkingBlock<'a>,
     settings: &mut PlaceSettings<'_>,
-) -> ProcessResult {
+) -> ProcessResult<'a> {
     let registry = resources.registry;
     let name = |id: BlockStateId| registry.state(id).map(|s| s.name.as_str()).unwrap_or("");
     Ok(match processor {
@@ -1079,7 +1092,7 @@ fn process_block<W: PlacementContext>(
         }
         Processor::Gravity { heightmap, offset } => {
             let height = world.height(*heightmap, info.pos[0], info.pos[2])? + offset;
-            Some(BlockInfo {
+            Some(WorkingBlock {
                 pos: [info.pos[0], height + relative[1], info.pos[2]],
                 ..info
             })
@@ -1099,7 +1112,7 @@ fn process_block<W: PlacementContext>(
             let Some(state) = super::template::parse_state_string(registry, &text) else {
                 return Ok(None);
             };
-            (name(state) != "minecraft:structure_void").then_some(BlockInfo {
+            (name(state) != "minecraft:structure_void").then_some(WorkingBlock {
                 pos: info.pos,
                 state,
                 nbt: None,
@@ -1108,7 +1121,7 @@ fn process_block<W: PlacementContext>(
         Processor::LavaSubmerged => {
             let lava = name(world.block_state(info.pos)?) == "minecraft:lava";
             if lava && !resources.transforms.full_block(info.state) {
-                Some(BlockInfo {
+                Some(WorkingBlock {
                     state: registry.default_state("minecraft:lava").unwrap(),
                     ..info
                 })
@@ -1126,7 +1139,7 @@ fn process_block<W: PlacementContext>(
                 .into_iter()
                 .filter_map(|k| Some((k, old?.properties.get(k)?.as_str())))
                 .collect();
-            Some(BlockInfo {
+            Some(WorkingBlock {
                 state: super::legacy::state(resources, target, &properties),
                 ..info
             })
@@ -1151,13 +1164,13 @@ fn process_block<W: PlacementContext>(
                 if !position_ok {
                     continue;
                 }
-                return Ok(Some(BlockInfo {
+                return Ok(Some(WorkingBlock {
                     pos: info.pos,
                     state: rule.output,
                     nbt: rule
                         .modifier
                         .apply(info.nbt.as_deref(), &mut random)
-                        .map(Box::new),
+                        .map(Cow::Owned),
                 }));
             }
             Some(info)
@@ -1168,7 +1181,7 @@ fn process_block<W: PlacementContext>(
                 .get(name(info.state))
                 .and_then(|to| with_properties_of(registry, to, info.state));
             Some(match swapped {
-                Some(state) => BlockInfo { state, ..info },
+                Some(state) => WorkingBlock { state, ..info },
                 None => info,
             })
         }
@@ -1180,7 +1193,7 @@ fn process_block<W: PlacementContext>(
                 settings.counted = counted;
                 Some(match keep {
                     true => info,
-                    false => BlockInfo {
+                    false => WorkingBlock {
                         pos,
                         state: cap.replacement,
                         nbt: None,
@@ -1226,8 +1239,8 @@ fn process_block<W: PlacementContext>(
             let nbt = set
                 .modifier
                 .apply(info.nbt.as_deref(), &mut random)
-                .map(Box::new);
-            Some(BlockInfo { state, nbt, ..info })
+                .map(Cow::Owned);
+            Some(WorkingBlock { state, nbt, ..info })
         }
         Processor::Condition(c) => {
             let mut random = c.draws.random(world.world_seed()?, position, info.pos);
@@ -1287,11 +1300,11 @@ fn process_block<W: PlacementContext>(
             let pos = info.pos;
             let entity = spawner.pick(|| settings.with_random(pos, |r| r.float()));
             Some(match entity {
-                Some(entity) => BlockInfo {
-                    nbt: Some(Box::new(spawner.nbt(entity))),
+                Some(entity) => WorkingBlock {
+                    nbt: Some(Cow::Owned(spawner.nbt(entity))),
                     ..info
                 },
-                None => BlockInfo {
+                None => WorkingBlock {
                     pos,
                     state: spawner.replacement,
                     nbt: None,
@@ -1300,12 +1313,12 @@ fn process_block<W: PlacementContext>(
         }
     })
 }
-fn block_age(
+fn block_age<'a>(
     mossiness: f32,
-    info: BlockInfo,
+    info: WorkingBlock<'a>,
     settings: &mut PlaceSettings<'_>,
     resources: &StructureResources,
-) -> Option<BlockInfo> {
+) -> Option<WorkingBlock<'a>> {
     let registry = resources.registry;
     let state = registry.state(info.state)?.clone();
     let default = |n: &str| registry.default_state(n).unwrap();
@@ -1382,7 +1395,7 @@ fn block_age(
         }
     });
     Some(match new_state {
-        Some(state) => BlockInfo { state, ..info },
+        Some(state) => WorkingBlock { state, ..info },
         None => info,
     })
 }
@@ -1416,10 +1429,10 @@ fn process_infos<W: PlacementContext>(
         if !whole && settings.bounding_box.is_some_and(|b| !b.is_inside(pos)) {
             continue;
         }
-        let mut current = Some(BlockInfo {
+        let mut current = Some(WorkingBlock {
             pos,
             state: info.state,
-            nbt: info.nbt.clone(),
+            nbt: info.nbt.as_deref().cloned().map(Cow::Owned),
         });
         let processors = settings.processors.clone();
         for processor in processors {
@@ -1485,7 +1498,14 @@ fn process_infos<W: PlacementContext>(
             }
         }
     }
-    Ok(processed)
+    Ok(processed
+        .into_iter()
+        .map(|info| BlockInfo {
+            pos: info.pos,
+            state: info.state,
+            nbt: info.nbt.map(|nbt| Box::new(nbt.into_owned())),
+        })
+        .collect())
 }
 
 /// StructureTemplate.placeInWorld. Returns false for a template with no
@@ -2076,7 +2096,7 @@ mod tests {
         assert!(pick.keep_properties);
         let run = |f: Vec<f32>| {
             pick.apply(
-                BlockInfo {
+                WorkingBlock {
                     pos: [0; 3],
                     state: BlockStateId(0),
                     nbt: None,
@@ -2122,10 +2142,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(pick.block, "minecraft:red_stained_glass");
-        let glass = || BlockInfo {
+        let glass = || WorkingBlock {
             pos: [1, 2, 3],
             state: BlockStateId(0),
-            nbt: Some(Box::default()),
+            nbt: Some(Cow::Owned(Compound::new())),
         };
         let run = |f: f32, i: Vec<i32>| pick.apply(glass(), &mut Draws(vec![f], i));
         let sus = run(0.005, vec![]);
@@ -2136,7 +2156,7 @@ mod tests {
                 .contains_key(&JavaString::from("LootTable"))
         );
         assert_eq!(run(0.01, vec![]).state, BlockStateId(1));
-        assert_eq!(run(0.2999, vec![]).nbt, Some(Box::default()));
+        assert_eq!(run(0.2999, vec![]).nbt, Some(Cow::Owned(Compound::new())));
         assert_eq!(run(0.3, vec![]).state, BlockStateId(2));
         // The stairs' facing: Plane.HORIZONTAL[nextInt(4)] after the pick.
         assert_eq!(run(0.75, vec![2]).state, BlockStateId(12));
@@ -2153,7 +2173,7 @@ mod tests {
         .unwrap();
         // No picks: no float for them; one float per sherd.
         let out = pot.apply(
-            BlockInfo {
+            WorkingBlock {
                 nbt: None,
                 ..glass()
             },

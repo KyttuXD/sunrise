@@ -16,7 +16,9 @@
 //! and writes the world as the mods do (`ChunkAccess.setBlockState` or a
 //! chunk section). As in the mods, only blocks of the chunk being generated
 //! write: the placement's bounding box is that chunk.
-use super::{PlaceSettings, ProcessResult, ProcessorList, ProcessorRandom, process_list};
+use super::{
+    PlaceSettings, ProcessResult, ProcessorList, ProcessorRandom, WorkingBlock, process_list,
+};
 use crate::{
     block_properties::{BoundBlockProperty, BoundOcclusionFaces},
     fluid::{FluidKind, FluidStateTable},
@@ -25,7 +27,7 @@ use crate::{
         DecodeError,
         block_feature::FeatureBlockBindings,
         placement::{PlacementContext, PlacementQueryError},
-        structure::{BlockInfo, StructureResources},
+        structure::StructureResources,
     },
 };
 use serde_json::Value;
@@ -221,8 +223,8 @@ fn run_nested<W: PlacementContext>(
     at: [i32; 3],
     state: BlockStateId,
     settings: &mut PlaceSettings<'_>,
-) -> ProcessResult {
-    let info = BlockInfo {
+) -> ProcessResult<'static> {
+    let info = WorkingBlock {
         pos: at,
         state,
         nbt: None,
@@ -322,20 +324,20 @@ impl Pillar {
             blocks: Blocks::decode(bindings)?,
         })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
         resources: &StructureResources,
         position: [i32; 3],
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let Some(&(_, replacement)) = self.triggers.iter().find(|t| t.0 == info.state) else {
             return Ok(Some(info));
         };
         let origin = info.pos;
         let kept = self.original.unwrap_or(replacement);
-        let result = (!self.blocks.structure_void.contains(&kept)).then_some(BlockInfo {
+        let result = (!self.blocks.structure_void.contains(&kept)).then_some(WorkingBlock {
             pos: origin,
             state: kept,
             nbt: None,
@@ -410,15 +412,15 @@ impl BottomPillar {
         })
     }
     /// `relative` is the block's position in the template.
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
         resources: &StructureResources,
         position: [i32; 3],
         relative: [i32; 3],
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         if relative[1] != 0 || outside_chunk(settings, info.pos) {
             return Ok(Some(info));
         }
@@ -489,12 +491,12 @@ impl CloseOffFluidSources {
             blocks: Blocks::decode(bindings)?,
         })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let state = info.state;
         if self.blocks.structure_void.contains(&state)
             || self.blocks.fluid(state)
@@ -545,12 +547,12 @@ impl CloseOffAirSources {
             blocks: Blocks::decode(bindings)?,
         })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let fluid = self.blocks.fluid_kind(info.state);
         if outside_chunk(settings, info.pos) || fluid == FluidKind::Empty {
             return Ok(Some(info));
@@ -706,13 +708,13 @@ impl YungPillar {
             blocks: Blocks::decode(bindings)?,
         })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
         resources: &StructureResources,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let name = resources
             .registry
             .state(info.state)
@@ -741,7 +743,7 @@ impl YungPillar {
                 world.set_chunk_block(at, kept(self.pillar.get(random, Some(at[1]))))?;
                 at[1] -= 1;
             }
-            Ok(Some(BlockInfo { state, ..info }))
+            Ok(Some(WorkingBlock { state, ..info }))
         })
     }
 }
@@ -804,13 +806,13 @@ impl StairPillar {
         }
         registry.id(&state)
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
         resources: &StructureResources,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &mut PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let Some(old) = resources.registry.state(info.state) else {
             return Ok(Some(info));
         };
@@ -824,7 +826,7 @@ impl StairPillar {
         let Some(output) = Self::stair(resources, to, props, None) else {
             return Ok(Some(info));
         };
-        let info = BlockInfo {
+        let info = WorkingBlock {
             state: output,
             ..info
         };

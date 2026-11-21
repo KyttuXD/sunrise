@@ -17,12 +17,12 @@
 //! - `sunrise:mineshaft_sky_view`: its mineshafts are not built above the
 //!   ocean floor, but keep their rails on solid ground (its
 //!   MineshaftSkyViewProcessor).
-use super::{PlaceSettings, ProcessResult, pillars::outside_chunk};
+use super::{PlaceSettings, ProcessResult, WorkingBlock, pillars::outside_chunk};
 use crate::{
     fluid::{FluidKind, FluidState},
     heightmap::HeightmapType,
     registry::{BlockRegistry, BlockStateId},
-    worldgen::{DecodeError, placement::PlacementContext, structure::BlockInfo},
+    worldgen::{DecodeError, placement::PlacementContext},
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -47,15 +47,15 @@ impl FloodAir {
             water: known(registry, "minecraft:water")?,
         })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
-        info: BlockInfo,
-    ) -> ProcessResult {
+        info: WorkingBlock<'a>,
+    ) -> ProcessResult<'a> {
         if info.state != self.air || info.pos[1] >= world.sea_level()? {
             return Ok(Some(info));
         }
-        Ok(Some(BlockInfo {
+        Ok(Some(WorkingBlock {
             state: self.water,
             nbt: None,
             ..info
@@ -67,12 +67,12 @@ impl FloodAir {
 #[derive(Clone, Debug, Default)]
 pub struct Waterlog;
 impl Waterlog {
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         world: &mut W,
         registry: &BlockRegistry,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let Some(state) = registry.state(info.state) else {
             return Ok(Some(info));
         };
@@ -91,7 +91,7 @@ impl Waterlog {
             let mut wet = state.clone();
             wet.properties.insert("waterlogged".into(), "true".into());
             if let Some(id) = registry.id(&wet) {
-                return Ok(Some(BlockInfo { state: id, ..info }));
+                return Ok(Some(WorkingBlock { state: id, ..info }));
             }
         }
         Ok(Some(info))
@@ -119,13 +119,13 @@ impl KeepWorldBlock {
             .collect::<Result<_, DecodeError>>()?;
         Ok(Self { blocks })
     }
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         &self,
         world: &mut W,
         registry: &BlockRegistry,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let name = registry.state(info.state).map(|s| s.name.as_str());
         // A block outside the chunk is not placed, and the world there may
         // not be readable.
@@ -133,7 +133,7 @@ impl KeepWorldBlock {
             return Ok(Some(info));
         }
         let state = world.block_state(info.pos)?;
-        Ok(Some(BlockInfo { state, ..info }))
+        Ok(Some(WorkingBlock { state, ..info }))
     }
 }
 
@@ -144,12 +144,12 @@ impl KeepWorldBlock {
 /// block placed in water gets a block tick, as the mod schedules one.
 pub struct WaterlogInWorldWater;
 impl WaterlogInWorldWater {
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         world: &mut W,
         registry: &BlockRegistry,
-        info: BlockInfo,
+        info: WorkingBlock<'a>,
         settings: &PlaceSettings<'_>,
-    ) -> ProcessResult {
+    ) -> ProcessResult<'a> {
         let Some(state) = registry.state(info.state) else {
             return Ok(Some(info));
         };
@@ -165,7 +165,7 @@ impl WaterlogInWorldWater {
         let mut set = state.clone();
         set.properties
             .insert("waterlogged".into(), water.to_string());
-        Ok(Some(BlockInfo {
+        Ok(Some(WorkingBlock {
             state: registry.id(&set).unwrap_or(info.state),
             ..info
         }))
@@ -193,11 +193,11 @@ fn world_water<W: PlacementContext>(
 /// by a valley or a ravine is not built in the open.
 pub struct MineshaftSkyView;
 impl MineshaftSkyView {
-    pub(super) fn process<W: PlacementContext>(
+    pub(super) fn process<'a, W: PlacementContext>(
         world: &mut W,
         registry: &BlockRegistry,
-        info: BlockInfo,
-    ) -> ProcessResult {
+        info: WorkingBlock<'a>,
+    ) -> ProcessResult<'a> {
         let [x, y, z] = info.pos;
         let rail = registry
             .state(info.state)
@@ -209,7 +209,7 @@ impl MineshaftSkyView {
                 let water = world_water(world, registry, info.pos)?;
                 set.properties
                     .insert("waterlogged".into(), water.to_string());
-                return Ok(Some(BlockInfo {
+                return Ok(Some(WorkingBlock {
                     state: registry.id(&set).unwrap_or(info.state),
                     ..info
                 }));
@@ -308,8 +308,8 @@ mod tests {
         BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap()
     }
 
-    fn info(state: u32, pos: [i32; 3]) -> BlockInfo {
-        BlockInfo {
+    fn info(state: u32, pos: [i32; 3]) -> WorkingBlock<'static> {
+        WorkingBlock {
             pos,
             state: BlockStateId(state),
             nbt: None,
@@ -331,7 +331,8 @@ mod tests {
             marked: vec![],
             ticks: vec![],
         };
-        let state = |i: BlockInfo, sea: &mut Sea| flood.process(sea, i).unwrap().unwrap().state;
+        let state =
+            |i: WorkingBlock<'_>, sea: &mut Sea| flood.process(sea, i).unwrap().unwrap().state;
         assert_eq!(state(info(0, [0, 62, 0]), &mut sea), BlockStateId(2));
         assert_eq!(state(info(0, [0, 63, 0]), &mut sea), BlockStateId(0));
         // Cave air is not Blocks.AIR.
@@ -347,7 +348,7 @@ mod tests {
             ticks: vec![],
         };
         let settings = chunk(-16, 0);
-        let mut run = |i: BlockInfo| {
+        let mut run = |i: WorkingBlock<'_>| {
             Waterlog::process(&mut sea, &registry, i, &settings)
                 .unwrap()
                 .unwrap()
@@ -380,7 +381,7 @@ mod tests {
             ticks: vec![],
         };
         let settings = chunk(0, 0);
-        let mut run = |i: BlockInfo| {
+        let mut run = |i: WorkingBlock<'_>| {
             keep.process(&mut sea, &registry, i, &settings)
                 .unwrap()
                 .unwrap()
@@ -401,7 +402,7 @@ mod tests {
             marked: vec![],
             ticks: vec![],
         };
-        let run = |sea: &mut Sea, i: BlockInfo| {
+        let run = |sea: &mut Sea, i: WorkingBlock<'_>| {
             WaterlogInWorldWater::process(sea, &registry, i, &settings)
                 .unwrap()
                 .unwrap()
@@ -430,7 +431,7 @@ mod tests {
             marked: vec![],
             ticks: vec![],
         };
-        let run = |sea: &mut Sea, i: BlockInfo| {
+        let run = |sea: &mut Sea, i: WorkingBlock<'_>| {
             MineshaftSkyView::process(sea, &registry, i)
                 .unwrap()
                 .map(|i| i.state)
