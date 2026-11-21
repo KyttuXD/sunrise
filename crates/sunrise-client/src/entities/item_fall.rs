@@ -26,6 +26,7 @@ impl ItemEntity {
             horizontal_collision: false,
             fall_distance: 0.0,
             age: 0,
+            stack_revision: 0,
             pickup_delay: 0,
             bob_offset,
             ticks: 0,
