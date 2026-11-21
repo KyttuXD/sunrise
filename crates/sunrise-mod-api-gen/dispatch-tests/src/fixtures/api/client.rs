@@ -3,6 +3,8 @@ pub mod client {
     pub mod camera {
         pub struct CameraEntity;
         pub struct FovPlayer;
+        #[derive(Clone, Copy)]
+        pub struct FovProjection;
     }
     pub mod first_person {
         #[derive(Clone, Copy)]

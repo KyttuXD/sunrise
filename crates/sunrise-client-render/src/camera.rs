@@ -616,6 +616,12 @@ pub fn view_matrix_rolled(yaw: f32, pitch: f32, roll: f32) -> glam::Mat4 {
 }
 /// `AbstractClientPlayer.getFieldOfViewModifier(firstPerson, effectScale)`.
 pub fn field_of_view_modifier(p: &FovPlayer, first_person: bool, effect_scale: f32) -> f32 {
+    raw_field_of_view_modifier(p, first_person).map_or(0.1, |raw| lerp(effect_scale, 1.0, raw))
+}
+
+/// The modifier before FOV effect interpolation, or `None` for the first-person spyglass's
+/// early return in `AbstractClientPlayer.getFieldOfViewModifier`.
+pub fn raw_field_of_view_modifier(p: &FovPlayer, first_person: bool) -> Option<f32> {
     let mut modifier = 1.0f32;
     if p.flying {
         modifier *= 1.1;
@@ -632,11 +638,11 @@ pub fn field_of_view_modifier(p: &FovPlayer, first_person: bool, effect_scale: f
                 modifier *= 1.0 - scale * scale * 0.15;
             }
             // isScoping: using a spyglass.
-            UseItem::Spyglass if first_person => return 0.1,
+            UseItem::Spyglass if first_person => return None,
             _ => {}
         }
     }
-    lerp(effect_scale, 1.0, modifier)
+    Some(modifier)
 }
 
 /// The fluid `Camera.getFluidInCamera` reports, as the field of view sees it.

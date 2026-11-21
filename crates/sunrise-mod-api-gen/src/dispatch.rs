@@ -1382,7 +1382,7 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
+        let early_return = if isolated_listen || body.contains("refusable(") {
             format!("{early_return} let contained = super::runtime::outside_world();")
         } else {
             early_return

@@ -12,6 +12,20 @@ mod root {
                     .then_some(())
                     .ok_or("non-finite delta")
             }
+
+            pub(in crate::tests) fn validate_fov(fov: &f32) -> Result<(), &'static str> {
+                fov.is_finite().then_some(()).ok_or("non-finite FOV")
+            }
+
+            pub(in crate::tests) fn validate_mouse_turn(
+                sensitivity: &f64,
+                _: &bool,
+            ) -> Result<(), &'static str> {
+                sensitivity
+                    .is_finite()
+                    .then_some(())
+                    .ok_or("non-finite sensitivity")
+            }
         }
     }
 }

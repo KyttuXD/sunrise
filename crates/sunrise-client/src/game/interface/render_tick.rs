@@ -348,12 +348,13 @@ impl Game<'_> {
     }
     /// `ScreenEffectRenderer` + `Hud` camera overlays for this frame.
     /// `scale` is the player's `LivingEntity.getScale`.
-    /// `hand_projection` is the frame's `camera::hand_projection`, which mods draw under.
+    /// `world_fov` is the extracted world angle; mods draw overlays under `hand_projection`.
     pub(super) fn screen_quads(
         &self,
         partial: f32,
         size: [u32; 2],
         scale: f32,
+        world_fov: f32,
         hand_projection: [f32; 16],
     ) -> Vec<ScreenQuad> {
         let Some(p) = self.player.as_ref() else {
@@ -364,7 +365,7 @@ impl Game<'_> {
             p.position.y + f64::from(p.dimensions.eye_height),
             p.position.z,
         ];
-        let mut effects = self.block_screen_effects(p, eye, partial, size, scale);
+        let mut effects = self.block_screen_effects(p, eye, world_fov, size, scale);
         let custom = self.custom_screen_effects(&mut effects, partial, hand_projection);
         // ScreenEffectRenderer: the block's particle material.
         let block_overlay = effects
@@ -475,7 +476,7 @@ impl Game<'_> {
         &self,
         p: &PlayerMotion,
         eye: [f64; 3],
-        partial: f32,
+        world_fov: f32,
         size: [u32; 2],
         scale: f32,
     ) -> BlockScreenEffects {
@@ -489,7 +490,8 @@ impl Game<'_> {
         if !spectator {
             // Frustum.getNearPlaneBounds, moved to the eye.
             let (near_min, near_max) = sunrise_client::camera::near_plane_bounds(
-                self.fov_degrees(partial, eye),
+                // Camera.createProjectionMatrixForCulling uses the wider of these angles.
+                world_fov.max(self.settings.fov),
                 size[0] as f32,
                 size[1] as f32,
                 self.yaw,
@@ -1183,7 +1185,7 @@ mod tests {
                 game.world.set(0, 65, 0, block).unwrap();
                 let p = game.player.as_ref().unwrap();
                 let eye = [0.5, 64.0 + f64::from(p.dimensions.eye_height), 0.5];
-                let effects = game.block_screen_effects(p, eye, 0.0, [854, 480], 1.0);
+                let effects = game.block_screen_effects(p, eye, 70.0, [854, 480], 1.0);
                 assert!(effects.custom.iter().all(Option::is_none));
                 (effects.block, effects.water, effects.on_fire)
             };

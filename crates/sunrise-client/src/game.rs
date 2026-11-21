@@ -3784,8 +3784,8 @@ struct Game<'a> {
     waypoint_styles: sunrise_client::locator_bar::WaypointStyles,
     /// `ClientWaypointManager`: the locator bar's waypoints.
     waypoints: sunrise_client::locator_bar::ClientWaypoints,
-    /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
-    locator_camera: Option<([f64; 3], f32, f32, f32)>,
+    /// The camera the last world frame drew from (position, yaw, pitch, FOV).
+    rendered_camera: Option<([f64; 3], f32, f32, f32)>,
     native_camera_frame: Option<mod_api::Camera>,
     /// The yaw and pitch a native mod's camera drew the last frame from (`native_camera_pose`),
     /// none when it drew from vanilla's.
@@ -10959,10 +10959,10 @@ impl Game<'_> {
         } else {
             (view_yaw, view_pitch)
         };
-        let fov_degrees = if title {
-            85.0
+        let (fov_degrees, hud_fov) = if title {
+            (85.0, 70.0)
         } else {
-            self.fov_degrees(camera_alpha as f32, camera.to_array())
+            self.camera_fovs(camera_alpha as f32, camera.to_array())
         };
         let camera_effects = fov::camera_effects_enabled(title, self.studio.flying());
         let bob = if !camera_effects {
@@ -11023,8 +11023,7 @@ impl Game<'_> {
         }
         self.resolve_inline_profiles(&hud.inline_profiles);
         pr.lap("pr_hud");
-        self.locator_camera =
-            (!title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
+        self.rendered_camera = (!title).then_some((camera.to_array(), yaw, pitch, fov_degrees));
         let mut requested_post_effects = self.requested_post_effects();
         // The packs' Polytone post chains, after vanilla's (#11486).
         let game_ticks = self.world.game_time as f64 + alpha;
@@ -11151,7 +11150,6 @@ impl Game<'_> {
             self.item_activation_geometry(camera_alpha as f32, view, aspect, &mut hand);
         }
         pr.lap("pr_hand");
-        let hud_fov = self.hud_fov_degrees(camera_alpha as f32, camera.to_array());
         let screen = if title {
             Vec::new()
         } else {
@@ -11166,7 +11164,7 @@ impl Game<'_> {
                 size[1].max(1) as f32,
                 depth_far,
             );
-            self.screen_quads(alpha as f32, size, scale, hand_projection)
+            self.screen_quads(alpha as f32, size, scale, fov_degrees, hand_projection)
         };
         if !title {
             self.eye_geometry(camera, &mut entities);
@@ -13578,7 +13576,7 @@ impl<'a> Game<'a> {
             armor_stand_assets: prepared.armor_stand_assets,
             waypoint_styles: prepared.waypoint_styles,
             waypoints: Default::default(),
-            locator_camera: None,
+            rendered_camera: None,
             native_camera_frame: None,
             posed_rotation: None,
             post_effects: Vec::new(),

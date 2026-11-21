@@ -761,16 +761,16 @@ impl Game<'_> {
     ) {
         self.fire_register_client_commands(commands);
     }
-    /// World field of view, after normal calculation and zoom and before projection/Nausea.
-    /// Called for world rendering and near-plane overlays; hand/HUD FOV uses its own path.
-    /// Only finite values in 1..=179 degrees replace the computed FOV.
+    /// The extracted camera's field of view after vanilla effects and before projection/Nausea.
     pub(in crate::game) fn native_compute_fov(
         &self,
         partial: f32,
         camera: [f64; 3],
+        projection: mod_api::client::camera::FovProjection,
+        scoping: bool,
         degrees: &mut f32,
     ) {
-        self.fire_compute_fov(partial, camera, degrees);
+        self.fire_compute_fov(partial, camera, projection, scoping, degrees);
     }
     /// Computed world fog RGB, after ordinary effects and before upload. Title panoramas skip it.
     /// Only finite RGB components in 0..=1 are accepted; alpha and distances stay unchanged.

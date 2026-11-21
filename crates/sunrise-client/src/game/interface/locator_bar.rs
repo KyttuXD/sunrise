@@ -82,7 +82,7 @@ impl Game<'_> {
     }
     /// `LocatorBar.extractRenderState` from the last frame's camera.
     pub(super) fn locator_bar_draws(&self, gui_width: i32, gui_height: i32) -> Vec<GuiDraw> {
-        let (Some((camera_pos, yaw, pitch, fov)), Some(p)) = (self.locator_camera, &self.player)
+        let (Some((camera_pos, yaw, pitch, fov)), Some(p)) = (self.rendered_camera, &self.player)
         else {
             return Vec::new();
         };

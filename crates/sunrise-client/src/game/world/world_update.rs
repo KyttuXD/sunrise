@@ -292,11 +292,13 @@ impl Game<'_> {
         // `self.renderer.as_mut()` below borrows self mutably for the rest of
         // this function. Cheap: trigonometry on one angle, or None when the
         // view is not zoomed.
-        let lod_aim = self
-            .player
-            .as_ref()
-            .map(|p| [p.position.x, p.position.y, p.position.z])
-            .and_then(|camera| self.lod_aim(camera));
+        let lod_aim = if self.settings.extras.lod_zoom_detail {
+            self.rendered_camera.and_then(|(_, yaw, _, fov)| {
+                sunrise_client::lod::ZoomAim::new(yaw, fov, self.settings.fov / fov)
+            })
+        } else {
+            None
+        };
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.sunrise;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;

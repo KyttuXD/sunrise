@@ -1,1 +1,4 @@
+sunrise-client game::fov::camera_tests::camera_fov_listeners_receive_world_then_hand_at_the_actual_viewpoint lib daily resources
+sunrise-client game::fov::camera_tests::spectated_non_player_fov_does_not_dispatch_the_player_hook lib daily resources
+sunrise-client game::fov::camera_tests::spectated_player_fov_uses_their_own_attributes_and_item_use lib daily resources
 sunrise-client game::native_hooks::adjust_player_turn::tests::relative_turns_keep_accepted_values_when_a_listener_fails lib daily resources

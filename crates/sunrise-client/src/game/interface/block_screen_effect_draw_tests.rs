@@ -114,7 +114,7 @@ fn burning_player(game: &mut Game<'_>) {
 /// The frame's quads at 2:1 with the hand's usual 70 degrees.
 fn quads(game: &Game<'_>) -> Vec<ScreenQuad> {
     let projection = hand_projection(70.0, 1000.0, 500.0, 1000.0);
-    game.screen_quads(0.25, [1000, 500], 1.0, projection)
+    game.screen_quads(0.25, [1000, 500], 1.0, 70.0, projection)
 }
 /// Names the block overlays' quads in draw order, the HUD's camera overlays left out.
 fn names(quads: &[ScreenQuad]) -> Vec<&'static str> {

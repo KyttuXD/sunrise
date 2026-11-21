@@ -27,6 +27,35 @@ pub(crate) fn validate_turn_delta(yaw_delta: &f64, pitch_delta: &f64) -> Result<
     Ok(())
 }
 
+pub(crate) fn validate_fov(value: &f32) -> Result<(), &'static str> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err("field of view is not finite")
+    }
+}
+
+pub(crate) fn validate_mouse_turn(sensitivity: &f64, _: &bool) -> Result<(), &'static str> {
+    // MouseHandler.turnPlayer uses the same cubic curve as the device preprocessing.
+    let s = sensitivity * f64::from(0.6_f32) + f64::from(0.2_f32);
+    if ((s * s * s * 8.0) as f32).is_finite() {
+        Ok(())
+    } else {
+        Err("mouse sensitivity does not produce a finite Entity.turn scale")
+    }
+}
+
+/// The projection whose angle `compute_fov` is calculating.
+// no wire: identifies a camera calculation within a rendered frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FovProjection {
+    /// The level and its entities (`Camera.calculateFov`).
+    World,
+    /// First-person hands and held items (`Camera.calculateHudFov`).
+    Hud,
+}
+
 /// What `AbstractClientPlayer.getFieldOfViewModifier` reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it

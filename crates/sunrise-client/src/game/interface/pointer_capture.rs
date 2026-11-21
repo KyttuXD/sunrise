@@ -12,7 +12,7 @@ impl Game<'_> {
         LookOptions {
             sensitivity: self.settings.sensitivity,
             smooth_camera: self.smooth_camera,
-            scoping: self.scoping(),
+            scoping: self.camera_type.is_first_person() && self.scoping(),
             invert_x: self.settings.invert_x,
             invert_y: self.settings.invert_y,
         }
@@ -30,6 +30,7 @@ impl Game<'_> {
         let active = self.focused || self.agent_pointer;
         if active
             && grabbed
+            && !self.studio.flying()
             && mod_api::__private::listened(mod_api::HookId::CalculatePlayerTurn)
             && let Some(remote) = &self.remote
         {
@@ -47,9 +48,8 @@ impl Game<'_> {
             self.look_turn(xo, yo);
         }
     }
-    /// A look from any device, in `Entity.turn` units: the tutorial's "look
-    /// around" step hears it and Sunrise's zoom slows it, for the mouse and a
-    /// controller alike.
+    /// A look from any device, in `Entity.turn` units. The tutorial hears the
+    /// device input before the player turn is adjusted.
     pub(super) fn look_turn(&mut self, x: f64, y: f64) {
         self.tutorial.mouse(x, y);
         self.turn_player(x, y);

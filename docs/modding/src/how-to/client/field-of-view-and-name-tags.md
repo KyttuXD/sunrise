@@ -5,17 +5,45 @@ add labels of its own.
 
 ## Field of view
 
-`compute_fov_modifier` runs on the client once per tick while there is a local player, after vanilla's effects
-(sprinting, a drawn bow) and before zoom and camera easing. It is NeoForge's `ComputeFovModifierEvent`.
+`compute_fov_modifier` is NeoForge's `ComputeFovModifierEvent`. It runs as `Camera.tickFov` asks the
+player the camera follows for its modifier (the local player or a spectated player). A non-player
+camera uses 1 without firing the hook. First-person spyglass use returns 0.1 before the hook, as in
+`AbstractClientPlayer.getFieldOfViewModifier`.
 
 | `ComputeFovModifierEvent` field | Meaning |
 | --- | --- |
-| `player` | The inputs of the calculation (`FovPlayer`) |
-| `base` | The scale before any mod ran |
-| `modifier` | The scale to use; write it to change the field of view |
+| `player` | The viewpoint player's flying, movement and item-use inputs (`FovPlayer`) |
+| `base` | Vanilla's raw modifier, after movement and item use but before the FOV Effects option |
+| `effect_scale` | The FOV Effects option used to blend from 1 to `base` |
+| `modifier` | The blended target; edit it before vanilla's tick easing and 0.1–1.5 range |
 
-A value that is not finite, or lies outside `0.01..=10`, falls back to `base`. The hook does not affect a spectator
-camera attached to a mob.
+`compute_fov` is NeoForge's `ViewportEvent.ComputeFov`. It runs after the field of view has been
+calculated, including death and fluid effects, and before projection and nausea distortion. The world
+angle follows the FOV option and the eased modifier; the first-person hand angle starts at 70 degrees.
+The event gives `camera` (the viewpoint position), `partial` (its interpolation fraction), `projection`
+(`mod_api::client::camera::FovProjection::World` or `Hud`), and `scoping` (the viewpoint player is using
+a spyglass in first person). Edit `degrees` to change just that projection. Terrain and overlays read
+the extracted angle without firing the hook again. The title panorama and independent free camera do
+not fire it.
+
+Both hooks pass the last accepted value to the next listener. A non-finite edit is reported and does
+not replace that value. A panic is logged and shown as an error toast naming the mod; that callback
+is disabled for the session and the other listeners still run.
+
+### Compose a zoom
+
+1. Register a [key mapping](../native-mods/13-runtime-packages-and-identity.md#registered-key-mappings). Resolve it
+   during `client_setup` with `host.mod_key_mapping(owner, id)` and keep the `ModKeyMappingRef`.
+   In `client_tick_post` or `render_frame_pre`, read `mapping.is_down(host)` and `host.playing()` and
+   update the held state and animation in your mod. These callbacks also work while the camera
+   follows a non-player, where `compute_fov_modifier` is not called.
+2. For vanilla easing, divide `event.modifier` by your zoom factor in `compute_fov_modifier`.
+   For an instant zoom or your own animation, divide `event.degrees` in `compute_fov` when
+   `event.projection == FovProjection::World`. Use `event.partial` to interpolate between ticks;
+   leave the angle alone when `event.scoping` if you want the spyglass to take precedence. Apply
+   your zoom in one hook, not both.
+3. Scale `event.yaw_delta` and `event.pitch_delta` in [`adjust_player_turn`](camera-and-collision-reads.md#camera-snapshots-and-perspective)
+   while zoomed. This applies after device-specific processing and leaves the options unchanged.
 
 ## Name tags
 

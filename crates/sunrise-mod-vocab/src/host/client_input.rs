@@ -17,7 +17,7 @@ pub trait ClientInputClientHost {
     #[access(ClientSetup)]
     fn mod_key_mapping(&self, owner: &str, id: &str) -> Result<ModKeyMappingRef, ModKeyRefusal>;
     /// Side: client.
-    /// Playing, with nothing over the world: keys and zoom apply.
+    /// Playing, with no screen, sign editor, book or prompt over the world.
     #[access(ClientSetup)]
     fn playing(&self) -> bool;
     /// Side: client.
