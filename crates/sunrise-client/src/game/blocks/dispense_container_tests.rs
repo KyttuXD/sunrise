@@ -167,6 +167,60 @@ fn item(stack: &Option<ItemStack>) -> Option<(String, u32)> {
 
 #[test]
 #[ignore = "daily"]
+fn dispenser_writes_follow_the_parked_level_handle() {
+    use crate::game::{Dim, native_entity_refs::tests::run_fresh_cases};
+
+    if run_fresh_cases(
+        "game::dispense_container_tests::dispenser_writes_follow_the_parked_level_handle",
+        "SUNRISE_DISPENSE_ROUTE_CHILD",
+        &["parked"],
+    ) {
+        return;
+    }
+    with_dispenser(|game, level| {
+        let key = game
+            .item_key(&Identifier::parse("minecraft:bucket").unwrap())
+            .unwrap();
+        let filled = game
+            .item_key(&Identifier::parse("minecraft:water_bucket").unwrap())
+            .unwrap();
+        let stack = mod_api::ItemStack::new(key, 2).unwrap();
+        let remainder = mod_api::ItemStack::of(filled);
+        game.enter_command_level(Dim::Nether).unwrap();
+        assert_eq!(
+            level.dispense_default(game, [32, 64, 32], Direction::East, stack.clone()),
+            Ok(Some(stack.clone()))
+        );
+        let left = level
+            .dispense_default(game, DISPENSER, Direction::East, stack.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!((left.item(), left.count()), (key, 1));
+        let left = level
+            .dispense_with_remainder(game, DISPENSER, Direction::East, stack, remainder)
+            .unwrap()
+            .unwrap();
+        assert_eq!((left.item(), left.count()), (key, 1));
+        assert_eq!(game.dim, Dim::Nether);
+        assert!(game.dropped.is_empty());
+
+        game.enter_command_level(Dim::Overworld).unwrap();
+        assert_eq!(game.dropped.len(), 1);
+        assert_eq!(&*game.dropped[0].stack.item, "minecraft:bucket");
+        let dispenser = game
+            .world
+            .block_entities
+            .get(&(DISPENSER[0], DISPENSER[1], DISPENSER[2]))
+            .unwrap();
+        assert_eq!(
+            item(&dispenser.slots()[0]),
+            Some(("minecraft:water_bucket".into(), 1))
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_bucket_like_container_fills_from_a_source_and_empties_into_the_air() {
     with_dispenser(|game, _| {
         set_front(game, "minecraft:water");

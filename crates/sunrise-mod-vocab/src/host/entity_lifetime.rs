@@ -57,6 +57,20 @@ pub trait EntityLifetimeBackendMut {
     #[access(WorldOnly)]
     fn entity_remove(&mut self, entity: EntityRef, reason: RemovalReason) -> bool;
     /// Side: server.
+    /// Kills the entity as `/kill` does (vanilla `Entity.kill(ServerLevel)` and
+    /// `LivingEntity.kill(ServerLevel)` -> `hurtServer(level, damageSources().genericKill(), Float.MAX_VALUE)`):
+    /// a living entity dies and drops its loot, and any other entity is removed
+    /// and posts `minecraft:entity_die`. Reaches entities in parked dimensions
+    /// as well as the level in place. Returns `Ok(true)` when killed, or
+    /// `Ok(false)` for a dragon part (it is not killed independently) or a mob
+    /// that is already dead or removed (`LivingEntity.isAlive()`). Returns
+    /// `Err(LevelWriteError::Unavailable)` on a client or outside the world phase,
+    /// `Err(LevelWriteError::Stale)` for a stale, held-out, or missing handle,
+    /// and `Err(LevelWriteError::InTransaction)` when the entity lives in a
+    /// parked dimension while a Host transaction is open.
+    #[access(WorldOnly)]
+    fn entity_kill(&mut self, entity: EntityRef) -> Result<bool, LevelWriteError>;
+    /// Side: server.
     /// Sets whether this entity may be written as a root in future world saves,
     /// including chunk unload and a player's saved vehicle. `false` skips the
     /// whole passenger tree when set on its root; setting it on a rider does not

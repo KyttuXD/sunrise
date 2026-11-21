@@ -395,14 +395,15 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   bridge relays when `[discord] events` lists `announce`; `host.commands().feedback(text)`, the command's answer to the player whose command it is; `native_world_dir()`, the
   open world's folder, where a server mod keeps its data in a folder of its own so the world's backups carry it.
 - Items: a player's inventory is their [`ENTITY_ITEMS`](../concepts/capabilities/entity-items.md) handler, from any server hook.
-- Experience: `native_experience_orbs(dimension, min, max)`, the orbs in a box (id, position, `value`, and `count`
-  for merged orbs), read before a mod cancels an orb in `entity_join_level`; and a player's `give_experience_points(host,
-  points)` and `give_levels(host, levels)` through their `PlayerRef`: points given as touching an orb gives them, Mending
-  repairing their damaged items first, the rest going to their experience with the level-up sound; levels added or,
-  negative, taken off (`Player.giveExperienceLevels`, as the anvil and the enchanting table charge; below 0 the level
-  and points are 0; no level-up sound). Both return false for a player not here, dead, or swapped out by another
-  player's hook, and where the server's player list is busy (some world ticks hold it): give first, and cancel the orb
-  only when the give returned true. A merged orb is worth `value` × `count`.
+- Experience: `level.visit_experience_orbs(host, min, max, &mut |orb| ...)` visits the orbs in a box
+  (read each orb's `EntityRef::position`, `ExperienceOrbRef::value`, `count`, and `age`), used before a mod cancels an
+  orb in `entity_join_level`; and a player's `give_experience_points(host, points)` and `give_levels(host, levels)`
+  through their `PlayerRef`: points given as touching an orb gives them, Mending repairing their damaged items first,
+  the rest going to their experience with the level-up sound; levels added or, negative, taken off
+  (`Player.giveExperienceLevels`, as the anvil and the enchanting table charge; below 0 the level and points are 0; no
+  level-up sound). Both return false for a player not here, dead, or swapped out by another player's hook, and where
+  the server's player list is busy (some world ticks hold it): give first, and cancel the orb only when the give
+  returned true. A merged orb is worth `value` × `count`.
 - **`player_totem(player, name)`**: a totem of undying saved a player whose hurt would have killed them, on a server
   (`checkTotemDeathProtection`), heard just before it is used up. Listen only: the health state machine decides before a
   mod is asked, so a mod cannot veto it. The player's state is swapped in, so `host.players().acting_player`, `PlayerRef::tell` and the
@@ -530,9 +531,8 @@ place; `server_tick` does not define one, so name the dimension and expect a ref
   spawn rules do not apply, as for `/summon`. A non-mob kind, invalid or out-of-bounds position, unloaded chunk,
   stale or unavailable level, or cancellation during finalization or level entry refuses the spawn. Configure the
   resulting entity through its handle rather than a spawn-options record.
-- `native_mob(dimension, id)` and `native_mobs(dimension)` read the living mobs: id, dimension, kind, position, yaw, health and maximum health.
 - A mob's health is set with `living.set_health(host, health)` on its `LivingRef`.
-- `native_kill_mob(dimension, id)` kills as `/kill` does, with its loot. `EntityRef::discard` removes an entity without death or loot: from the call on selectors and handles no longer find it, its passengers are off and `entity_leave_level` has fired, in the same hook.
+- `EntityRef::kill(host)` kills an entity as `/kill` does (living entities fall and drop loot, other entities are removed with `minecraft:entity_die`), routing parked dimensions and returning `Result<bool, LevelWriteError>`. `EntityRef::discard` removes an entity without death or loot: from the call on selectors and handles no longer find it, its passengers are off and `entity_leave_level` has fired, in the same hook.
 - While the game ticks its mobs they are out of the level: from a hook inside that tick, a spawned mob joins after the tick, and the others
   read as gone.
 
@@ -593,12 +593,11 @@ During `block_entity_tick`, use `event.subject.with_view` to read or edit the ma
 
 ### Entities
 
-`crates/sunrise-client/src/game/modding/native_entities.rs`: helpers for server mods, for the level in place, on a server only. Each
-names the level it means by its `dimension` (`minecraft:overworld`), as `native_set_block` does.
+`crates/sunrise-client/src/game/modding/native_entities.rs`: helpers for server mods on open server levels.
 
-- `native_summon(dimension, kind, pos, nbt)` spawns an entity of `kind` from its compound, as `/summon <kind> <pos> <nbt>`
-  does (passengers included), and returns its id. None on a client, for another dimension, outside `/summon`'s bounds, an
-  unloaded chunk, an unloadable kind, or a mod's `entity_join_level` veto (in a transaction its id goes stale).
+- `LevelRef::summon(host, kind, pos, nbt)` spawns an entity of `kind` from its compound in `level`, as `/summon <kind> <pos> <nbt>`
+  does (passengers included), routing parked dimensions and returning `Result<Option<EntityRef>, LevelWriteError>`. Returns `Ok(None)` outside `/summon`'s bounds, for an
+  unloaded chunk, an unloadable kind, or a mod's `entity_join_level` veto (in a transaction its handle goes stale), and `Err(LevelWriteError)` on a client, for a stale level, or when summoning into a parked level inside an open transaction.
 
 A model that moves (a turning gun barrel, a thrown projectile) is an `item_display` showing an item whose model comes from
 the mod's `.smod` assets: summon it once, then move it and pose it with `DisplayRef` from a tick hook. Easing between ticks happens on each
@@ -1547,7 +1546,7 @@ mod mixin or use it replaces in its design or PR."#]
   landed (`Ghast.hurtServer`). A negative amount hurts by 0 and a NaN or infinite one by `Float.MAX_VALUE`, as vanilla
   clamps them. It fires for the players, mobs and the ender dragon the game hurts, and runs on the thread that ticks
   the world (the server thread), so state a mod shares with its render thread hooks needs synchronising. `/kill` and
-  `native_kill_mob` don't reach it yet: they set the health to 0 instead of hurting with `minecraft:generic_kill` as
+  `EntityRef::kill` don't reach it yet: they set the health to 0 instead of hurting with `minecraft:generic_kill` as
   vanilla does. A mod may also register reduction modifiers on the container
   (`container.add_reduction_modifier(Reduction::Armor, ReductionChange::Scale(0.5))`, NeoForge's
   `addReductionModifier`): each changes what one reduction (the damage cooldown, armor, Resistance, protection
@@ -1673,7 +1672,7 @@ one, where vanilla gives the `by` one.
 - [the renderer's functions](#render-functions): `world_drawn`, called once the world is drawn with its colour, depth, matrices and entity geometry, and
   `render_needs`, where a mod asks for the entity runs and the world's depth without a shader pack.
 
-- [entities](#entities) for server mods: `native_summon(dimension, kind, pos, nbt)` spawns any entity from its compound
+- [entities](#entities) for server mods: `LevelRef::summon(host, kind, pos, nbt)` spawns any entity from its compound
   as `/summon` does.
 
 - `item_bar(stack, bar)`: the small bar `GuiGraphicsExtractor.itemDecorations` draws under an item,
@@ -1730,7 +1729,7 @@ still go on each event or registrar.
   sets one off as `Level.explode` does, with an optional source entity, `ExplosionInteraction::None`, `Block`, `Mob`, `Tnt`
   or `Trigger` for what it does to blocks, and `ExplosionSettings` for its damage type, calculator, particles and sound.
 
-- Dispenser behaviours are chosen at `DispenserBlock.getDispenseMethod`, before any vanilla behaviour, for mod or vanilla items, on the authoritative server only (droppers are unaffected). The block the dispenser faces is asked first: `dispense_method` gives its part the dimension, dispenser position, facing, the selected stack and `state`, the block at `pos` moved by `facing` (air included), and the part is asked only for that block. Then, unless that part answered, the item's own part is asked by `dispense_item` with the same dimension, position, facing and stack. Either answer is `Some((remainder, event))`: a `None` remainder empties the slot, `Some(stack)` writes that remainder without consuming again, and `event` is the level event played with the smoke (1000 click, 1001 fail, 0 nothing, as `NOOP`). The first answer wins: the other part is not asked and vanilla's behaviour doesn't run. `host.dispense_default(dimension, pos, facing, stack)` drops one item normally, including items with a special vanilla behaviour: answer its remainder with 1000. Leave the answer `None` to let vanilla decide, as before.
+- Dispenser behaviours are chosen at `DispenserBlock.getDispenseMethod`, before any vanilla behaviour, for mod or vanilla items, on the authoritative server only (droppers are unaffected). The block the dispenser faces is asked first: `dispense_method` gives its part the dimension, dispenser position, facing, the selected stack and `state`, the block at `pos` moved by `facing` (air included), and the part is asked only for that block. Then, unless that part answered, the item's own part is asked by `dispense_item` with the same dimension, position, facing and stack. Either answer is `Some((remainder, event))`: a `None` remainder empties the slot, `Some(stack)` writes that remainder without consuming again, and `event` is the level event played with the smoke (1000 click, 1001 fail, 0 nothing, as `NOOP`). The first answer wins: the other part is not asked and vanilla's behaviour doesn't run. Resolve `host.level(dimension)`, then `level.dispense_default(host, pos, facing, stack)` drops one item normally, including items with a special vanilla behaviour: answer its successful remainder with 1000. Leave the answer `None` to let vanilla decide, as before.
 
 - Image tooltip components: `tooltip_component(stack, size)` answers finite positive width/height in GUI pixels, and `tooltip_component_draw(stack, batch, origin, size)` draws that component with `native_sprite`, `native_fill` and `native_text`. The stack supplies its data. Space and background are reserved after the text and any vanilla bundle component; the component width participates in tooltip positioning. Neither hook changes ordinary tooltips without an answer. Client-side.
 
@@ -1889,7 +1888,7 @@ still go on each event or registrar.
   armadillo or a suspicious block, carving a pumpkin, picking sweet berries or cave vines, and a player taking an item frame or
   its item pass through it, with `LootDrops::used` set and the player named.
 
-- Server experience: `native_experience_orbs(dimension, min, max)` reads the experience orbs in a box; `PlayerRef::give_experience_points` gives points as an orb they touch does (Mending first), and `PlayerRef::give_levels` gives or, for a negative amount, takes levels.
+- Server experience: `level.visit_experience_orbs(host, min, max, visit)` visits the experience orbs in a box as `ExperienceOrbRef` handles; `PlayerRef::give_experience_points` gives points as an orb they touch does (Mending first), and `PlayerRef::give_levels` gives or, for a negative amount, takes levels.
 - Server player death location: `PlayerRef::last_death_location(host)` reads where the player last died as a `GlobalPos`, the dimension's key and the block (`Player.getLastDeathLocation`, saved as `LastDeathLocation`, which the recovery compass follows). The dimension is data: a death in a dimension that is not open still reads, and `host.level(&pos.dimension().to_string())` gives the level when it is. `GlobalPos::new` takes an `Identifier` and `dimension()` returns `&Identifier`, so dimension keys are validated before they enter the typed API. Players resolve as in the other `PlayerRef` reads, so the acting player works too. It is `None` for a player who never died, a stale handle, and a player who is not online or whose record is swapped out. `set_last_death_location(host, location)` stores a location or, for `None`, forgets it (`Player.setLastDeathLocation`); the client hears of it with the player's next respawn, as in vanilla. It returns false in the same cases and for a dead player (so inside `player_died` the read works and the write does not).
 - Server player rules: `PlayerRef::may_use_item_at(host, pos, face, stack)` is `Player.mayUseItemAt`: a player who may build always may, anyone else only with a stack whose `can_place_on` matches the block `pos` lies against (the check the game's own item use asks), `None` for a player in another level than the one in place. `can_harm(host, other)` is `ServerPlayer.canHarmPlayer`: the `pvp` rule and the two teams (attacks, arrows and tridents ask the same). `respawn_config(host)` reads the respawn point as `Some(Some(PlayerRespawnConfig { position, yaw, forced }))`, `Some(None)` for a player with none (the world spawn), and `set_respawn_config(host, config)` is `/spawnpoint`'s write, `None` forgetting it: the yaw wraps, `player_set_spawn` may cancel (false), and a dead player, a dimension the game doesn't have and a yaw that is not finite are refused. `text_filtering(host)` is the client's `ClientInformation.textFilteringEnabled` (false for the player running the server); it is the client's own option, so there is no write. The sleep reads are `sleep_ignored(host)` (what `set_sleep_ignored` left), `counts_for_sleep(host)` (the night's count: not a spectator, not a fake, not ignored while out of bed) and `sleep_timer(host)` (`Player.sleepCounter`: 100 once asleep long enough, 101 to 109 on the way up); `set_sleep_timer(host, ticks)` writes 0 to 109 through the sleep writes' guard (no fake player, no guest in another level). Writes take a `ServerHost`.
 
@@ -2262,7 +2261,7 @@ registration path.
 
 - Column reads for server mods, in the level being ticked: `native_surface_heights(dimension, columns, heightmap)` and `native_read_columns(dimension, columns, heightmap, (below, above))`, the blocks round each column's height as a palette and indexes with each column's biome JSON water colour (`water_colors`). Client-side blended biome tints are read with `BlockAndTintGetter::block_tint` in block tint callbacks or `ClientHost::biome_tint` in other client hooks.
 
-- `experience_orb_can_merge(dimension, into, from, into_value, from_value, can_merge)` is asked for each pair of orbs whose boxes meet, when an orb spawns (`ExperienceOrb.tryMergeToExisting`; `from` is 0, the new orb is no entity yet) and every 20 ticks as an orb scans (`scanForMerges`); `can_merge` holds vanilla's `canMerge` answer, which a mod may flip either way. `experience_orb_merge` follows a yes and may cancel it (its own notes). A merged orb counts as `count` orbs of the keeper's value. `native_set_experience_orb(dimension, id, value, count, age)` writes an orb's `value`, `count` and `age` (each optional; false for a `count` of 0 or an orb that isn't there; signed `value` is preserved, including zero and negative values).
+- `experience_orb_can_merge(dimension, into, from, into_value, from_value, can_merge)` is asked for each pair of orbs whose boxes meet, when an orb spawns (`ExperienceOrb.tryMergeToExisting`; `from` is 0, the new orb is no entity yet) and every 20 ticks as an orb scans (`scanForMerges`); `can_merge` holds vanilla's `canMerge` answer, which a mod may flip either way. `experience_orb_merge` follows a yes and may cancel it (its own notes). A merged orb counts as `count` orbs of the keeper's value. Narrow an `EntityRef` with `host.experience_orb(entity)` to an `ExperienceOrbRef` to read (`value`, `count`, `age`) or write (`set_value`, `set_count`, `set_age`; `set_count` refuses `0` and values above `i32::MAX` with `ExperienceOrbWriteError::InvalidCount`, while `set_value` and `set_age` preserve full live signed `i32` values).
 
 - `block_entity` gives a block a block entity whatever its template: a mod's stone casing or thin part can use any template. The engine removes it when its block is broken or replaced, no piston moves it, and a mod that draws it (`block_entity_submit`) is asked for it.
 

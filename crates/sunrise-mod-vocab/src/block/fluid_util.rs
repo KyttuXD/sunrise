@@ -257,10 +257,10 @@ pub fn try_place_fluid(
 /// was picked up; the fluid's sound and game event go out as the transfer commits, before the
 /// dispenser's click and smoke. A single container is replaced in place; from a larger stack
 /// the slot keeps the rest and the changed container goes into the dispenser, else out of its
-/// front with a second click ([`dispense_with_remainder`](crate::prelude::ItemsServerHost::dispense_with_remainder)).
-/// Where neither moves anything, nothing is changed and one container is dispensed as it is
-/// ([`dispense_default`](crate::prelude::ItemsServerHost::dispense_default)). None, for vanilla
-/// to decide, only where the dispenser's level isn't open.
+/// front with a second click ([`LevelRef::dispense_with_remainder`]).
+/// Where neither moves anything, one container is dispensed as it is
+/// ([`LevelRef::dispense_default`]). Returns None to let vanilla decide if the level
+/// cannot be resolved or the dispense write is refused.
 pub fn dispense_container(
     host: &mut dyn ServerHost,
     event: &DispenseItemEvent<'_>,
@@ -291,11 +291,22 @@ pub fn dispense_container(
         // The changed container went into the first slot: a single one, replaced in place.
         Ok((first, None)) => Ok(first),
         Ok((_, Some(changed))) => {
-            host.dispense_with_remainder(event.dimension, event.pos, event.facing, stack, changed)
+            level.dispense_with_remainder(host, event.pos, event.facing, stack, changed)
         }
-        Err(()) => host.dispense_default(event.dimension, event.pos, event.facing, stack),
+        Err(()) => level.dispense_default(host, event.pos, event.facing, stack),
     };
-    Some((left.ok()?, 1000))
+    match left {
+        Ok(left) => Some((left, 1000)),
+        Err(error) => {
+            let owner = crate::content::crash::current_native_mod().unwrap_or("?");
+            log::warn!(
+                "mod {owner}: dispense_container at {} {:?}: {error:?}",
+                event.dimension,
+                event.pos
+            );
+            None
+        }
+    }
 }
 
 /// `FluidUtil.getFirstStackContained`: what the fluid container at `place` holds at its first

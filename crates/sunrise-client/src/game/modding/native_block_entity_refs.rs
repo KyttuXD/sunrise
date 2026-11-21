@@ -4,8 +4,8 @@ use super::Game;
 use mod_api::__private::game::*;
 use mod_api::{
     BlockEntityDataError, BlockEntityError, BlockEntityItemError, BlockEntityRef,
-    BlockEntityShapes, BlockEntityShapesError, BlockEntityTypeKey, LevelRef, PlayerRef,
-    Transaction,
+    BlockEntityShapes, BlockEntityShapesError, BlockEntityTypeKey, LevelRef, LevelWriteError,
+    PlayerRef, Transaction,
 };
 use sunrise_client::{
     block_entity_nbt,
@@ -46,6 +46,32 @@ impl Game<'_> {
         Some(mod_api::__private::game::block_entity_ref(
             level, pos, generation,
         ))
+    }
+
+    pub(super) fn block_entity_sync(
+        &mut self,
+        entity: BlockEntityRef,
+    ) -> Result<(), LevelWriteError> {
+        if !self.is_logical_server() {
+            return Err(LevelWriteError::Unavailable);
+        }
+        let fields = entity.fields();
+        if self.block_entity_identity(fields.level, fields.position) != Some(entity) {
+            return Err(LevelWriteError::Stale);
+        }
+        let world = if fields.level.dimension() == self.dim.key() {
+            &mut self.world
+        } else {
+            self.levels
+                .parked_world_mut_of(fields.level.dimension_id())
+                .ok_or(LevelWriteError::Stale)?
+        };
+        // The identity check already verified that the chunk is loaded.
+        if let Some(log) = world.block_log.as_mut() {
+            let [x, y, z] = fields.position;
+            log.push((x, y, z));
+        }
+        Ok(())
     }
 
     /// The data of the block entity at `pos`, as saved without identity or position
@@ -1002,6 +1028,64 @@ mod tests {
             vec![0, 2, 3],
             "two bottles and the ingredient"
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_entity_sync_targets_the_live_holder_even_when_ticking_or_parked() {
+        use super::super::Dim;
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
+
+        if run_fresh_cases(
+            "game::native_block_entity_refs::tests::block_entity_sync_targets_the_live_holder_even_when_ticking_or_parked",
+            "SUNRISE_BLOCK_ENTITY_SYNC_CHILD",
+            &["holder"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            let key = (1, 64, 1);
+            let pos = [key.0, key.1, key.2];
+            let level = game.level("minecraft:overworld").unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.world
+                .block_entities
+                .insert(key, BlockEntity::Chest(vec![None; 27]));
+            game.world.block_log = Some(Vec::new());
+            let holder = game.block_entity(level, pos).unwrap();
+            let (lease, entity) = game.world.block_entities.take(&key).unwrap();
+            assert!(game.block_entity(level, pos).is_none());
+            assert_eq!(holder.sync(game), Ok(()));
+            assert_eq!(game.world.block_log.as_deref(), Some(&[key][..]));
+            assert!(game.world.block_entities.put(lease, entity));
+            game.world.block_log = Some(Vec::new());
+
+            game.enter_command_level(Dim::Nether).unwrap();
+            game.world.block_log = Some(Vec::new());
+            assert_eq!(holder.sync(game), Ok(()));
+            assert_eq!(game.dim, Dim::Nether);
+            assert!(game.world.block_log.as_ref().unwrap().is_empty());
+            assert_eq!(
+                game.native_level_world(level).unwrap().block_log.as_deref(),
+                Some(&[key][..]),
+            );
+
+            let world = game
+                .levels
+                .parked_world_mut_of("minecraft:overworld")
+                .unwrap();
+            world.block_entities.remove(&key);
+            world
+                .block_entities
+                .insert(key, BlockEntity::Chest(vec![None; 27]));
+            assert_eq!(holder.sync(game), Err(LevelWriteError::Stale));
+            assert_eq!(
+                game.native_level_world(level).unwrap().block_log.as_deref(),
+                Some(&[key][..]),
+            );
+        });
     }
 
     #[test]

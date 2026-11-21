@@ -31,8 +31,9 @@ pub(super) use registered_commands::NativeCommandState;
 // Their old home, for mixin code that names them here.
 use mod_api::LevelRef;
 use mod_api::{
-    ActionOutcome, ActionRefused, FakeEffect, GameMode, GlobalPos, Identifier, PlayerAction,
-    PlayerActionSetup, PlayerFood, PlayerRef, PlayerRespawnConfig, ScopedActionResult,
+    ActionOutcome, ActionRefused, EntityRef, ExperienceOrbRef, ExperienceOrbWriteError, FakeEffect,
+    GameMode, GlobalPos, Identifier, LevelReadError, PlayerAction, PlayerActionSetup, PlayerFood,
+    PlayerRef, PlayerRespawnConfig, ScopedActionResult,
 };
 use serde_json::{Map, Value, json};
 use std::sync::{
@@ -1959,73 +1960,186 @@ fn ordered_box(min: [f64; 3], max: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
 /// Experience for server mods.
 #[allow(dead_code)]
 impl Game<'_> {
-    /// The experience orbs of the server level `dimension` whose box meets
-    /// the box `min`..`max`, in the level's order: what a mod reads before it
-    /// cancels an orb in `native_entity_join_level`, to give its points with
-    /// `PlayerRef::give_experience_points`. Empty for a level not in place, on a
-    /// client of a server and for a bound that is not finite (NaN or infinite); a
-    /// minimum above its maximum is the same box with the two swapped (`AABB`).
-    pub(super) fn experience_orbs(
+    /// Resolves `entity` to a live experience orb in the active or any parked server level.
+    fn native_orb_ref(
         &self,
-        dimension: &str,
+        entity: EntityRef,
+    ) -> Result<&sunrise_client::entities::ExperienceOrb, LevelReadError> {
+        if !self.is_logical_server() {
+            return Err(LevelReadError::Unavailable);
+        }
+        if self.native_lifecycle.epoch() != Some(entity.epoch())
+            || self.held_out.contains(&entity.id())
+        {
+            return Err(LevelReadError::Stale);
+        }
+        let id = entity.id();
+        let target = super::commands::Target::Orb(id);
+        if let Some(orb) = self.orbs.iter().find(|o| o.id == id) {
+            return if self.resident_source_target_visible(self.dim.key(), target) {
+                Ok(orb)
+            } else {
+                Err(LevelReadError::Stale)
+            };
+        }
+        for (dim, parked) in &self.levels.parked {
+            if let Some(orb) = parked.orbs.iter().find(|o| o.id == id) {
+                return if self.resident_source_target_visible(dim.key(), target) {
+                    Ok(orb)
+                } else {
+                    Err(LevelReadError::Stale)
+                };
+            }
+        }
+        Err(LevelReadError::Stale)
+    }
+
+    /// Resolves `entity` to a mutable live experience orb in the active or any parked server level.
+    fn native_orb_mut(
+        &mut self,
+        entity: EntityRef,
+    ) -> Result<&mut sunrise_client::entities::ExperienceOrb, ExperienceOrbWriteError> {
+        if !self.is_logical_server() {
+            return Err(ExperienceOrbWriteError::Unavailable);
+        }
+        if self.native_lifecycle.epoch() != Some(entity.epoch())
+            || self.held_out.contains(&entity.id())
+        {
+            return Err(ExperienceOrbWriteError::Stale);
+        }
+        let id = entity.id();
+        let target = super::commands::Target::Orb(id);
+        if self.orbs.iter().any(|o| o.id == id) {
+            if !self.resident_source_target_visible(self.dim.key(), target) {
+                return Err(ExperienceOrbWriteError::Stale);
+            }
+            return self
+                .orbs
+                .iter_mut()
+                .find(|o| o.id == id)
+                .ok_or(ExperienceOrbWriteError::Stale);
+        }
+        let Some(dim) = self
+            .levels
+            .parked
+            .iter()
+            .find_map(|(&dim, parked)| parked.orbs.iter().any(|o| o.id == id).then_some(dim))
+        else {
+            return Err(ExperienceOrbWriteError::Stale);
+        };
+        if !self.resident_source_target_visible(dim.key(), target) {
+            return Err(ExperienceOrbWriteError::Stale);
+        }
+        self.levels
+            .parked
+            .get_mut(&dim)
+            .and_then(|parked| parked.orbs.iter_mut().find(|o| o.id == id))
+            .ok_or(ExperienceOrbWriteError::Stale)
+    }
+
+    /// Narrows `entity` to an [`ExperienceOrbRef`] across active and parked server levels.
+    pub(super) fn experience_orb(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Option<ExperienceOrbRef>, LevelReadError> {
+        match self.native_orb_ref(entity) {
+            Ok(_) => Ok(Some(ExperienceOrbRef::new(entity))),
+            Err(LevelReadError::Stale) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Visits experience orbs in `level` (active or parked) whose bounding box meets `min`..`max`
+    /// in level order without allocating a list.
+    pub(super) fn level_visit_experience_orbs(
+        &self,
+        level: LevelRef,
         min: [f64; 3],
         max: [f64; 3],
-    ) -> Vec<mod_api::ExperienceOrb> {
-        let Some((min, max)) = ordered_box(min, max) else {
-            return Vec::new();
+        visit: &mut dyn FnMut(ExperienceOrbRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError> {
+        self.native_level_world_result(level)?;
+        let (min, max) = ordered_box(min, max).ok_or(LevelReadError::Unavailable)?;
+        let epoch = level.epoch();
+        let dimension = level.dimension();
+        let orbs = if dimension == self.dim.key() {
+            &self.orbs
+        } else {
+            &self
+                .levels
+                .parked_of(level.dimension_id())
+                .ok_or(LevelReadError::Stale)?
+                .orbs
         };
-        if (self.serving.is_none() && self.options.dedicated.is_none())
-            || dimension != self.dim.id()
-        {
-            return Vec::new();
+        for o in orbs.iter() {
+            if o.count == 0
+                || self.held_out.contains(&o.id)
+                || !self
+                    .resident_source_target_visible(dimension, super::commands::Target::Orb(o.id))
+                || !orb_meets([o.position.x, o.position.y, o.position.z], min, max)
+            {
+                continue;
+            }
+            if visit(ExperienceOrbRef::new(EntityRef::new(epoch, o.id))).is_break() {
+                return Ok(core::ops::ControlFlow::Break(()));
+            }
         }
-        self.orbs
-            .iter()
-            .filter(|o| o.count > 0)
-            .map(|o| mod_api::ExperienceOrb {
-                id: o.id,
-                position: [o.position.x, o.position.y, o.position.z],
-                value: o.value,
-                count: o.count,
-            })
-            .filter(|o| orb_meets(o.position, min, max))
-            .collect()
+        Ok(core::ops::ControlFlow::Continue(()))
     }
-    /// Writes the experience orb `id`'s `value` (the points a pickup gives), `count`
-    /// (orbs merged into it, each worth `value`) and `age` (ticks lived; an orb
-    /// despawns at 6000); a `None` is left as it is.
-    /// False, and nothing written, for an orb not in the server level `dimension`, a
-    /// `count` of 0 or above `i32::MAX`, an `age` above `i32::MAX` (`ExperienceOrb.age`
-    /// is an int), a `value` outside -32768..=32767 (a save keeps `Value` as a short
-    /// and `Count` as an int, so a write it accepts reloads
-    /// unchanged), and on a client of a server. In `experience_orb_merge`, a write to
-    /// `into` is the merged orb.
-    pub(super) fn set_experience_orb(
+
+    /// Reads `ExperienceOrb.getValue()` (`DATA_VALUE`, full `i32`).
+    pub(super) fn experience_orb_value(
+        &self,
+        orb: ExperienceOrbRef,
+    ) -> Result<i32, LevelReadError> {
+        self.native_orb_ref(orb.entity()).map(|o| o.value)
+    }
+
+    /// Reads `ExperienceOrb.count`.
+    pub(super) fn experience_orb_count(
+        &self,
+        orb: ExperienceOrbRef,
+    ) -> Result<u32, LevelReadError> {
+        self.native_orb_ref(orb.entity()).map(|o| o.count)
+    }
+
+    /// Reads `ExperienceOrb.age` (full signed `i32`).
+    pub(super) fn experience_orb_age(&self, orb: ExperienceOrbRef) -> Result<i32, LevelReadError> {
+        self.native_orb_ref(orb.entity()).map(|o| o.age)
+    }
+
+    /// Writes `ExperienceOrb.DATA_VALUE` (full `i32`; save truncates to `(short)`).
+    pub(super) fn experience_orb_set_value(
         &mut self,
-        dimension: &str,
-        id: u32,
-        value: Option<i32>,
-        count: Option<u32>,
-        age: Option<u32>,
-    ) -> bool {
-        if (self.serving.is_none() && self.options.dedicated.is_none())
-            || dimension != self.dim.id()
-            || count == Some(0)
-            || count.is_some_and(|c| c > crate::orb_limits::MAX_COUNT)
-            || value.is_some_and(|v| !crate::orb_limits::value_fits(v))
-        {
-            return false;
+        orb: ExperienceOrbRef,
+        value: i32,
+    ) -> Result<(), ExperienceOrbWriteError> {
+        self.native_orb_mut(orb.entity())?.value = value;
+        Ok(())
+    }
+
+    /// Writes `ExperienceOrb.count`, rejecting `0` and values above `i32::MAX` (`ExtraCodecs.POSITIVE_INT`).
+    pub(super) fn experience_orb_set_count(
+        &mut self,
+        orb: ExperienceOrbRef,
+        count: u32,
+    ) -> Result<(), ExperienceOrbWriteError> {
+        let orb = self.native_orb_mut(orb.entity())?;
+        if count == 0 || count > crate::orb_limits::MAX_COUNT {
+            return Err(ExperienceOrbWriteError::InvalidCount);
         }
-        let Ok(age) = age.map(i32::try_from).transpose() else {
-            return false;
-        };
-        let Some(orb) = self.orbs.iter_mut().find(|o| o.id == id) else {
-            return false;
-        };
-        orb.value = value.unwrap_or(orb.value);
-        orb.count = count.unwrap_or(orb.count);
-        orb.age = age.unwrap_or(orb.age);
-        true
+        orb.count = count;
+        Ok(())
+    }
+
+    /// Writes `ExperienceOrb.age` (full signed `i32`; save truncates to `(short)`).
+    pub(super) fn experience_orb_set_age(
+        &mut self,
+        orb: ExperienceOrbRef,
+        age: i32,
+    ) -> Result<(), ExperienceOrbWriteError> {
+        self.native_orb_mut(orb.entity())?.age = age;
+        Ok(())
     }
     /// Runs `f` in the turn of the player a handle names, against the level in place. False
     /// when it didn't run: stale or dead.
@@ -2595,8 +2709,9 @@ mod tests {
     use super::*;
     use sunrise_client::items::ItemStack;
 
-    /// Box bounds come from mod code: one that is not finite reads no orb and never
-    /// panics, and an inverted box reads what the ordered one does.
+    /// Box bounds come from mod code: non-finite bounds refuse without calling the visitor,
+    /// an inverted box visits what the ordered one does, `Break(())` stops early, and parked
+    /// levels remain visitable and readable/writable through `ExperienceOrbRef`.
     #[test]
     #[ignore = "daily"]
     fn experience_orbs_refuse_bounds_that_are_not_finite_and_swap_an_inverted_box() {
@@ -2604,12 +2719,12 @@ mod tests {
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
         game.options.dedicated = Some(Vec::new());
         let at = sunrise_core::geometry::Vec3::new(1.0, 70.0, 1.0);
-        game.orbs.push(sunrise_client::entities::ExperienceOrb {
+        let mk_orb = |id| sunrise_client::entities::ExperienceOrb {
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
-            id: 40,
+            id,
             position: at,
             previous: at,
             velocity: sunrise_core::geometry::Vec3::ZERO,
@@ -2623,15 +2738,38 @@ mod tests {
             air: 300,
             no_gravity: true,
             following: None,
-        });
-        let dimension = game.dim.id().to_owned();
-        let ids = |game: &Game<'_>, min, max| -> Vec<u32> {
-            game.experience_orbs(&dimension, min, max)
-                .into_iter()
-                .map(|orb| orb.id)
-                .collect()
         };
-        assert_eq!(ids(&game, [0.0, 69.0, 0.0], [2.0, 71.0, 2.0]), [40]);
+        game.orbs.push(mk_orb(40));
+        game.orbs.push(mk_orb(41));
+        let overworld = game.level(game.dim.id()).expect("active overworld handle");
+        let visit_ids = |game: &Game<'_>, level: LevelRef, min, max| {
+            let mut ids = Vec::new();
+            let flow = level.visit_experience_orbs(game, min, max, &mut |orb| {
+                ids.push(orb.entity().id());
+                core::ops::ControlFlow::Continue(())
+            })?;
+            Ok::<_, LevelReadError>((flow, ids))
+        };
+        assert_eq!(
+            visit_ids(&game, overworld, [0.0, 69.0, 0.0], [2.0, 71.0, 2.0]),
+            Ok((core::ops::ControlFlow::Continue(()), vec![40, 41]))
+        );
+        // Early stop on ControlFlow::Break(()).
+        let mut stopped = Vec::new();
+        assert_eq!(
+            overworld.visit_experience_orbs(
+                &game,
+                [0.0, 69.0, 0.0],
+                [2.0, 71.0, 2.0],
+                &mut |orb| {
+                    stopped.push(orb.entity().id());
+                    core::ops::ControlFlow::Break(())
+                }
+            ),
+            Ok(core::ops::ControlFlow::Break(()))
+        );
+        assert_eq!(stopped, [40]);
+
         for (min, max) in [
             ([f64::NAN, 69.0, 0.0], [2.0, 71.0, 2.0]),
             ([0.0, 69.0, 0.0], [2.0, f64::NAN, 2.0]),
@@ -2639,10 +2777,80 @@ mod tests {
             ([0.0, 69.0, 0.0], [2.0, 71.0, f64::INFINITY]),
             ([f64::NEG_INFINITY; 3], [f64::INFINITY; 3]),
         ] {
-            assert_eq!(ids(&game, min, max), Vec::<u32>::new(), "{min:?} {max:?}");
+            let mut called = false;
+            assert_eq!(
+                overworld.visit_experience_orbs(&game, min, max, &mut |_| {
+                    called = true;
+                    core::ops::ControlFlow::Continue(())
+                }),
+                Err(LevelReadError::Unavailable),
+                "{min:?} {max:?}"
+            );
+            assert!(!called, "refused visit must not invoke callback");
         }
-        assert_eq!(ids(&game, [2.0, 69.0, 0.0], [0.0, 71.0, 2.0]), [40]);
-        assert_eq!(ids(&game, [2.0, 71.0, 2.0], [0.0, 69.0, 0.0]), [40]);
+        assert_eq!(
+            visit_ids(&game, overworld, [2.0, 69.0, 0.0], [0.0, 71.0, 2.0]),
+            Ok((core::ops::ControlFlow::Continue(()), vec![40, 41]))
+        );
+        assert_eq!(
+            visit_ids(&game, overworld, [2.0, 71.0, 2.0], [0.0, 69.0, 0.0]),
+            Ok((core::ops::ControlFlow::Continue(()), vec![40, 41]))
+        );
+
+        // Park the overworld by switching to the Nether: the overworld handle still visits,
+        // narrows, reads and mutates its parked orbs.
+        game.enter_command_level(Dim::Nether).unwrap();
+        let mut parked_orbs = Vec::new();
+        assert_eq!(
+            overworld.visit_experience_orbs(
+                &game,
+                [0.0, 69.0, 0.0],
+                [2.0, 71.0, 2.0],
+                &mut |orb| {
+                    parked_orbs.push(orb);
+                    core::ops::ControlFlow::Continue(())
+                }
+            ),
+            Ok(core::ops::ControlFlow::Continue(()))
+        );
+        assert_eq!(
+            parked_orbs
+                .iter()
+                .map(|orb| orb.entity().id())
+                .collect::<Vec<_>>(),
+            vec![40, 41]
+        );
+        let orb = parked_orbs[0];
+        assert_eq!(game.experience_orb(orb.entity()), Ok(Some(orb)));
+        assert_eq!(orb.value(&game), Ok(3));
+        assert_eq!(orb.count(&game), Ok(1));
+        assert_eq!(orb.age(&game), Ok(0));
+        assert_eq!(orb.set_value(&mut game, 50_000), Ok(()));
+        assert_eq!(orb.set_count(&mut game, 4), Ok(()));
+        assert_eq!(orb.set_age(&mut game, -12), Ok(()));
+        assert_eq!(orb.value(&game), Ok(50_000));
+        assert_eq!(orb.count(&game), Ok(4));
+        assert_eq!(orb.age(&game), Ok(-12));
+
+        // Client side refuses with Unavailable.
+        let role = game.options.execution_role;
+        game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+        assert_eq!(
+            overworld.visit_experience_orbs(&game, [0.0, 69.0, 0.0], [2.0, 71.0, 2.0], &mut |_| {
+                core::ops::ControlFlow::Continue(())
+            }),
+            Err(LevelReadError::Unavailable)
+        );
+        assert_eq!(
+            game.experience_orb(orb.entity()),
+            Err(LevelReadError::Unavailable)
+        );
+        assert_eq!(orb.value(&game), Err(LevelReadError::Unavailable));
+        assert_eq!(
+            orb.set_value(&mut game, 1),
+            Err(ExperienceOrbWriteError::Unavailable)
+        );
+        game.options.execution_role = role;
     }
 
     /// A mod's `announce` reaches the dedicated server's event stream and nothing else's.

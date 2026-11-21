@@ -23,7 +23,6 @@ block_entities::block_entity_set_item_slot
 block_entities::block_entity_set_lock
 block_entities::block_entity_set_name
 block_entities::block_entity_set_shapes
-block_entities::block_entity_sync
 block_entities::block_entity_viewers
 block_entities::block_entity_watch_contents
 block_states::block_item
@@ -63,8 +62,6 @@ block_states::fluid_type_properties
 block_states::item_block
 block_states::item_crafting_remainder
 block_states::lit_block_name
-block_states::set_block_property
-block_states::set_block_property_with
 boss_bars::boss_bar
 boss_bars::boss_bar_add_player
 boss_bars::boss_bar_color
@@ -123,7 +120,6 @@ client_render::update_dynamic_texture
 client_text::text_split
 client_text::text_visual_order
 client_text::text_width
-client_view::block_collision
 client_view::camera
 client_view::camera_entity
 client_view::camera_type
@@ -245,11 +241,8 @@ entities::entity
 entities::entity_by_uuid
 entities::entity_residency
 entities::entity_sprint_particles
-entities::experience_orbs
 entities::level
-entities::set_experience_orb
 entities::spawn_falling_block
-entities::summon
 entity_actions::entity_broadcast_event
 entity_actions::entity_game_event
 entity_actions::entity_play_bound_sound
@@ -417,8 +410,6 @@ items::creative_search_items
 items::creative_stack_key
 items::creative_tab_change
 items::creative_tab_entries
-items::dispense_default
-items::dispense_with_remainder
 items::drop_at
 items::enchantment_min_cost
 items::enchantment_supports
@@ -777,7 +768,6 @@ mobs::dragon_alive_crystals
 mobs::dragon_phase
 mobs::dragon_previously_killed
 mobs::dragon_set_phase
-mobs::kill_mob
 mobs::mob
 mobs::mob_add_goal
 mobs::mob_add_target_goal

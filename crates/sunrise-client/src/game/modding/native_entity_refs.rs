@@ -27,7 +27,7 @@ use super::{
 use core::ops::ControlFlow;
 use mod_api::{
     BlockFace, BlockShapeKind, BlockUpdateFlags, ClipBlock, ClipFluid, ClipHit, DimensionKey,
-    EntityRayHit, EntityRef, LevelReadError, LevelRef, NeighbourUpdate,
+    EntityRayHit, EntityRef, LevelReadError, LevelRef, LevelWriteError, NeighbourUpdate,
 };
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_items::items::ItemStack;
@@ -578,6 +578,38 @@ impl Game<'_> {
         }
         Ok(self.native_set_block(level.dimension_id(), pos, state, flags.bits()))
     }
+    pub(super) fn level_set_block_property(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: BlockUpdateFlags,
+    ) -> Result<bool, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            LevelWriteError::InTransaction,
+            |game| {
+                if !game.native_level_write_position(level, pos)? {
+                    return Ok(false);
+                }
+                let [x, y, z] = pos;
+                let state = game.world.block(x, y, z);
+                let Some(id) = super::native_hooks::property_change(
+                    game.pack.assets.registry,
+                    state,
+                    key,
+                    value,
+                ) else {
+                    return Ok(false);
+                };
+                game.level_set_block(level, pos, id, flags)
+            },
+        )
+    }
+
     /// `Block.updateFromNeighbourShapes` for `state` at `pos`, nothing written: the state
     /// fitted to the loaded blocks around it. A position that is not loaded or outside the
     /// world gives `state` back.
@@ -804,7 +836,7 @@ impl Game<'_> {
     /// The supplied state's block-local outline or collision boxes at a level
     /// position with an empty context. The world is never modified. Returns None
     /// on a client, for a stale handle or for a closed level. Unloaded neighbors
-    /// read as air; collision errors return no boxes, like `block_collision`.
+    /// read as air; collision errors return no boxes, like `visit_block_collision`.
     pub(super) fn level_block_shape(
         &self,
         level: LevelRef,
@@ -2690,6 +2722,80 @@ pub(super) mod tests {
             assert!(game.chunk(level, [-2, 3]).is_none());
             assert!(!chunk.loaded(game));
             assert_eq!(chunk.status(game), None);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_property_write_changes_only_the_addressed_level() {
+        use mod_api::{BlockUpdateFlags, LevelWriteError};
+        use std::sync::Arc;
+        use sunrise_client::chunk::Chunk;
+        use sunrise_world::chunk::BlockState;
+
+        if run_fresh_cases(
+            "game::native_entity_refs::tests::block_property_write_changes_only_the_addressed_level",
+            "SUNRISE_BLOCK_PROPERTY_ROUTE_CHILD",
+            &["parked"],
+        ) {
+            return;
+        }
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            let registry = game.pack.assets.registry;
+            let lamp = |lit: &str| {
+                registry
+                    .resolve(&BlockState {
+                        name: "minecraft:redstone_lamp".into(),
+                        properties: [("lit".into(), lit.into())].into(),
+                    })
+                    .unwrap()
+            };
+            let unlit = lamp("false");
+            let lit = lamp("true");
+            let [x, y, z] = [2, 65, 3];
+            let pos = [x, y, z];
+            let flags = BlockUpdateFlags::CLIENTS | BlockUpdateFlags::KNOWN_SHAPE;
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.world.set(x, y, z, unlit).unwrap();
+            let level = game.level("minecraft:overworld").unwrap();
+            assert_eq!(
+                level.set_block_property(game, pos, "lit", "false", flags),
+                Ok(false)
+            );
+
+            let nether = super::super::Dim::Nether;
+            game.enter_command_level(nether).unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.world.set(x, y, z, unlit).unwrap();
+
+            let tx = game.transaction_open();
+            assert_eq!(
+                level.set_block_property(game, pos, "lit", "true", flags),
+                Err(LevelWriteError::InTransaction)
+            );
+            game.transaction_close(&tx, false);
+            assert_eq!(
+                game.native_level_world(level).unwrap().block(x, y, z),
+                unlit
+            );
+
+            assert_eq!(
+                level.set_block_property(game, pos, "lit", "true", flags),
+                Ok(true)
+            );
+            assert_eq!(game.dim, nether);
+            assert_eq!(game.world.block(x, y, z), unlit);
+            assert_eq!(game.native_level_world(level).unwrap().block(x, y, z), lit);
+            assert_eq!(
+                level.set_block_property(game, pos, "lit", "true", flags),
+                Ok(false)
+            );
+            assert_eq!(game.dim, nether);
         });
     }
 

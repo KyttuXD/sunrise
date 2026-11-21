@@ -3132,18 +3132,16 @@ mod tests {
             ("minecraft:donkey", chested),
         ];
         // An aborted write leaves a chested donkey's item list as long as it was.
+        let level = game.level("minecraft:overworld").unwrap();
         let id = game
-            .summon(
-                "minecraft:overworld",
-                "minecraft:donkey",
-                [8.5, 70.0, 8.5],
-                {
-                    let mut chested = sunrise_core::nbt::Compound::new();
-                    chested.insert("ChestedHorse".into(), sunrise_core::nbt::Tag::Byte(1));
-                    chested
-                },
-            )
-            .unwrap();
+            .level_summon(level, "minecraft:donkey", [8.5, 70.0, 8.5], {
+                let mut chested = sunrise_core::nbt::Compound::new();
+                chested.insert("ChestedHorse".into(), sunrise_core::nbt::Tag::Byte(1));
+                chested
+            })
+            .unwrap()
+            .unwrap()
+            .id();
         let len = |game: &Game<'_>| {
             game.mobs
                 .iter()
@@ -3191,8 +3189,10 @@ mod tests {
 
         for (kind, nbt) in vehicles {
             let id = game
-                .summon("minecraft:overworld", kind, [8.5, 70.0, 8.5], nbt)
-                .unwrap_or_else(|| panic!("{kind} not summoned"));
+                .level_summon(level, kind, [8.5, 70.0, 8.5], nbt)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{kind} not summoned"))
+                .id();
             let place = |slot| mod_api::ItemPlace::EntitySlot { entity: id, slot };
             let host: &mut dyn ServerHost = &mut game;
             let went =

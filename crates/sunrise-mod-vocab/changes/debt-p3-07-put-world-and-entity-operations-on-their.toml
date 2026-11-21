@@ -1,0 +1,48 @@
+ids = [
+    "trait:prelude::BlockStatesServerHost",
+    "trait:prelude::BlockEntitiesServerHost",
+    "trait:prelude::ClientViewHost",
+    "method:prelude::BlockStatesServerHost::set_block_property",
+    "method:prelude::BlockStatesServerHost::set_block_property_with",
+    "method:prelude::BlockEntitiesServerHost::block_entity_sync",
+    "method:prelude::ItemsServerHost::dispense_default",
+    "method:prelude::ItemsServerHost::dispense_with_remainder",
+    "method:prelude::ClientViewHost::block_collision",
+    "method:prelude::EntitiesServerHost::summon",
+    "method:prelude::EntitiesServerHost::experience_orbs",
+    "method:prelude::EntitiesServerHost::set_experience_orb",
+    "method:prelude::EntitiesServerHost::experience_orb",
+    "method:prelude::MobsServerHost::kill_mob",
+    "type:ExperienceOrb",
+    "type:ExperienceOrbRef",
+    "type:ExperienceOrbWriteError",
+    "handle:LevelRef::set_block_property",
+    "handle:BlockEntityRef::sync",
+    "handle:LevelRef::dispense_default",
+    "handle:LevelRef::dispense_with_remainder",
+    "handle:LevelRef::visit_block_collision",
+    "handle:LevelRef::summon",
+    "handle:LevelRef::visit_experience_orbs",
+    "handle:EntityRef::kill",
+    "handle:ExperienceOrbRef::value",
+    "handle:ExperienceOrbRef::count",
+    "handle:ExperienceOrbRef::age",
+    "handle:ExperienceOrbRef::set_value",
+    "handle:ExperienceOrbRef::set_count",
+    "handle:ExperienceOrbRef::set_age",
+    "fn:block::fluid_util::dispense_container",
+]
+why = "Block writes, dispenser actions, and entity summoning now name their level, block-entity sync names the live holder, entity killing names the live entity, experience-orb reads and writes live on ExperienceOrbRef without live save-width fencing, and collision and experience-orb queries visit the named level without building a list. These paths follow vanilla 26.3 Level.setBlock and LevelChunk.setBlockState, ServerLevel.sendBlockUpdated, DispenserBlock.dispenseFrom and DefaultDispenseItemBehavior.execute/consumeWithRemainder, BlockState.getCollisionShape with VoxelShape.forAllBoxes, SummonCommand.createEntity and ServerLevel.tryAddFreshEntityWithPassengers, Entity.kill and LivingEntity.kill (genericKill hurtServer with Float.MAX_VALUE and LivingEntity.isAlive), Level.getEntities(EntityTypeTest.forClass(ExperienceOrb.class), ...), and ExperienceOrb (DATA_VALUE SynchedEntityData<Integer>, int age, ExtraCodecs.POSITIVE_INT count, with addAdditionalSaveData truncating Value and Age to (short) only at save time). NeoForge's Level.markAndNotifyBlock preserves update flags, and DispenseFluidContainer.execute uses the same default and remainder paths."
+migrate = '''
+Remove explicit imports of BlockStatesServerHost, BlockEntitiesServerHost and ClientViewHost; keep ServerHost for writes and Host for shared reads. Resolve the desired LevelRef with `host.level(dimension)` and handle a missing level before calling its methods.
+
+- `host.set_block_property(pos, key, value)` → `level.set_block_property(host, pos, key, value, BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS)`. Replace `host.set_block_property_with(pos, key, value, flags)` with the same level call using the corresponding typed BlockUpdateFlags. Match `Ok(true)` for a change, `Ok(false)` for no write, or `Err(LevelWriteError)` for a refused level. Calls on LevelWriteHost inside block ticks are unchanged.
+- `host.block_entity_sync(pos)` → `holder.sync(host)`. Obtain the BlockEntityRef with `host.block_entity(level, pos)`, or during its own tick by returning `view.handle()` from `tick.with_view` and calling `holder.sync(tick.host())` after the view ends. Handle `Err(LevelWriteError::Stale)` for a replaced or unloaded holder and other typed refusals instead of syncing a replacement at the same position.
+- `host.dispense_default(dimension, pos, facing, stack)` → `level.dispense_default(host, pos, facing, stack)`. `host.dispense_with_remainder(dimension, pos, facing, stack, remainder)` → `level.dispense_with_remainder(host, pos, facing, stack, remainder)`. Keep using the successful Option<ItemStack> as the slot remainder. The error is now LevelWriteError, including InvalidStack for invalid input. Property writes and dispenser calls into parked levels return InTransaction if a Host transaction is open.
+- Keep `fluid_util::dispense_container(host, event)` for the standard fluid-container behavior. It uses the dispenser's resolved level and logs a refused dispense write before returning `None`.
+- Replace iteration over `host.block_collision(pos)` with `level.visit_block_collision(host, pos, &mut |bounds| { /* use bounds */ core::ops::ControlFlow::Continue(()) })`. The coordinates are still block-local. Return `Break(())` to stop early. Match the resulting `Ok(Continue(()))` or `Ok(Break(()))`, or handle `Err(LevelReadError)` for a stale or unavailable level. If you need an owned list, collect boxes inside the visitor.
+- `host.summon(dimension, kind, pos, nbt)` → `level.summon(host, kind, pos, nbt)`. Obtain `level` with `host.level(dimension)`. The call now routes parked dimensions and returns `Result<Option<EntityRef>, LevelWriteError>` (use `entity.id()` if you need the numeric id). Handle `Err(LevelWriteError::InTransaction)` when summoning into a parked level inside an open Host transaction, `Err(LevelWriteError::Stale)` for a stale or closed level, and `Err(LevelWriteError::Unavailable)` on a client or outside the world phase.
+- `host.kill_mob(dimension, id)` → `entity.kill(host)`. Obtain `entity` with `host.entity(id)` (or keep the `EntityRef` from spawn/query). `EntityRef::kill` works on any killable entity across open server levels, returns `Ok(true)` when killed and `Ok(false)` for dragon parts or already-dead/removed mobs, and returns `Err(LevelWriteError)` for stale/held-out handles, client/non-world calls, or parked-level kills inside an open Host transaction.
+- `host.experience_orbs(dimension, min, max)` and `ExperienceOrb` → `level.visit_experience_orbs(host, min, max, &mut |orb| { /* orb: ExperienceOrbRef */ core::ops::ControlFlow::Continue(()) })`. Read `orb.entity().id()`, `orb.entity().position(host)`, `orb.value(host)`, `orb.count(host)`, and `orb.age(host)` inside or after the visit; non-finite bounds or client calls return `Err(LevelReadError::Unavailable)` without invoking the visitor.
+- `host.set_experience_orb(dimension, id, value, count, age)` → narrow `host.entity(id)` with `host.experience_orb(entity)` to `ExperienceOrbRef`, then call `orb.set_value(host, v)`, `orb.set_count(host, c)`, and/or `orb.set_age(host, a)`. Live `set_value` and `set_age` accept full signed `i32` values (saving truncates to `(short)` as vanilla does); `set_count` validates `1..=i32::MAX` and returns `Err(ExperienceOrbWriteError::InvalidCount)` without mutating the orb.
+'''

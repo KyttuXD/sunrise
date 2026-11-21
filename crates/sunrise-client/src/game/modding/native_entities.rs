@@ -1,13 +1,12 @@
 //! Entities for native server mods (docs/modding/src/how-to/native-mods.md, "Entities"): spawn
-//! any entity from its compound as `/summon` does, and move, show or remove
+//! any entity from its compound as `/summon` does through [`LevelRef::summon`], and move, show or remove
 //! the entities Sunrise keeps without simulating them (displays, markers,
-//! interactions); `native_display_refs.rs` poses displays. They act where
-//! the world is simulated, in the level in place, which each names by its
-//! `dimension` (`minecraft:overworld`) as `native_set_block` does.
+//! interactions); `native_display_refs.rs` poses displays.
 use super::{
     Game,
     commands::{Target, place_summoned, strip_finalize_tree},
 };
+use mod_api::{EntityRef, LevelRef, LevelWriteError};
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::{Compound, Tag};
 
@@ -92,93 +91,101 @@ pub(super) fn target_id(t: Target) -> Option<u32> {
 }
 
 impl Game<'_> {
-    /// Whether this game simulates the level `dimension`.
-    fn native_simulates_level(&self, dimension: &str) -> bool {
-        (self.serving.is_some() || self.options.dedicated.is_some()) && dimension == self.dim.id()
-    }
     /// Spawns an entity of `kind` (`minecraft:item_display`) at `pos` in the
-    /// level in place, `dimension`, from `nbt` (its compound, as `/summon
-    /// <kind> <pos> <nbt>` takes it; passengers included): its id. None on a
-    /// client's copy of the world, for another dimension, a position outside
-    /// `/summon`'s bounds, a chunk that isn't loaded, a kind Sunrise can't
-    /// load, one a mod kept out (`native_entity_join_level`), or with the entity ids exhausted.
-    /// Inside a transaction the id comes back at once: a join a mod cancels at the root commit
-    /// leaves its handle stale.
-    pub(super) fn summon(
+    /// server level `level` names from `nbt` (its compound, as `/summon
+    /// <kind> <pos> <nbt>` takes it; passengers included): its [`EntityRef`].
+    /// Routes parked dimensions by handle and refuses with
+    /// [`LevelWriteError::InTransaction`] when summoning into a parked level
+    /// while a Host transaction is open. Returns `Ok(None)` for a position
+    /// outside `/summon`'s bounds, a chunk that isn't loaded, a kind Sunrise
+    /// can't load, one a mod kept out (`native_entity_join_level`), or with
+    /// entity ids exhausted. Inside a transaction the handle comes back at
+    /// once: a join a mod cancels at the root commit leaves its handle stale.
+    pub(super) fn level_summon(
         &mut self,
-        dimension: &str,
+        level: LevelRef,
         kind: &str,
         pos: [f64; 3],
         nbt: Compound,
-    ) -> Option<u32> {
-        if self.entity_ids_exhausted() {
-            return None;
-        }
-        if !self.native_simulates_level(dimension) || !position_ok(pos) {
-            return None;
-        }
-        let chunk = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
-        if !self.world.chunks.contains_key(&chunk) {
-            return None;
-        }
-        let mut tag = nbt;
-        tag.insert("id".into(), Tag::String(kind.into()));
-        // As `/summon <kind> <pos> <nbt>` takes it: with an NBT argument vanilla
-        // does not finalize the mob (`SummonCommand.createEntity`), so a
-        // `sunrise:finalize` in it is not the caller's to set.
-        let mut tag = Tag::Compound(tag);
-        strip_finalize_tree(&mut tag);
-        // As `/summon` does: every entity of the stack, passengers included,
-        // stands at `pos`.
-        place_summoned(&mut tag, pos);
-        let from = self.mobs.len();
-        let first = self.next_entity + 1;
-        let deferred = (self.tnts.len(), self.falling.len(), self.rockets.len());
-        let target = self.spawn_entity_from_nbt(tag);
-        // These roots take their id as they load, and a rocket has no command
-        // Target variant. Select the newly appended root, never an older waiting entity.
-        let root = match kind {
-            "minecraft:tnt" if deferred.0 < self.tnts.len() => {
-                Some(super::entity_residency::assign_resident_id!(
-                    self.tnts,
-                    deferred.0,
-                    e,
-                    &mut self.next_entity,
-                    None
-                ))
-            }
-            "minecraft:falling_block" if deferred.1 < self.falling.len() => {
-                Some(super::entity_residency::assign_resident_id!(
-                    self.falling,
-                    deferred.1,
-                    f,
-                    &mut self.next_entity,
-                    Some(&f.attachment_lifetime)
-                ))
-            }
-            "minecraft:firework_rocket" if deferred.2 < self.rockets.len() => {
-                Some(super::entity_residency::assign_resident_id!(
-                    self.rockets,
-                    deferred.2,
-                    e,
-                    &mut self.next_entity,
-                    None
-                ))
-            }
-            _ => None,
-        };
-        self.native_mobs_joined(from, false);
-        // Otherwise the root is the first entity spawned, also for kinds no
-        // command target stands for (experience orbs, end crystals, cushions). An id handed out to an
-        // entity a mod then kept out is not given back, so the root must be
-        // there.
-        root.or_else(|| {
-            root_id(target, first, |id| {
-                self.orbs.iter().any(|o| o.id == id)
-                    || self.crystals.iter().any(|c| c.id == id)
-                    || self.cushions.iter().any(|c| c.id == id)
-            })
-        })
+    ) -> Result<Option<EntityRef>, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            LevelWriteError::InTransaction,
+            |game| {
+                let epoch = game
+                    .native_lifecycle
+                    .epoch()
+                    .ok_or(LevelWriteError::Unavailable)?;
+                if game.entity_ids_exhausted() || !position_ok(pos) {
+                    return Ok(None);
+                }
+                let chunk = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+                if !game.world.chunks.contains_key(&chunk) {
+                    return Ok(None);
+                }
+                let mut tag = nbt;
+                tag.insert("id".into(), Tag::String(kind.into()));
+                // As `/summon <kind> <pos> <nbt>` takes it: with an NBT argument vanilla
+                // does not finalize the mob (`SummonCommand.createEntity`), so a
+                // `sunrise:finalize` in it is not the caller's to set.
+                let mut tag = Tag::Compound(tag);
+                strip_finalize_tree(&mut tag);
+                // As `/summon` does: every entity of the stack, passengers included,
+                // stands at `pos`.
+                place_summoned(&mut tag, pos);
+                let from = game.mobs.len();
+                let first = game.next_entity + 1;
+                let deferred = (game.tnts.len(), game.falling.len(), game.rockets.len());
+                let target = game.spawn_entity_from_nbt(tag);
+                // These roots take their id as they load, and a rocket has no command
+                // Target variant. Select the newly appended root, never an older waiting entity.
+                let root = match kind {
+                    "minecraft:tnt" if deferred.0 < game.tnts.len() => {
+                        Some(super::entity_residency::assign_resident_id!(
+                            game.tnts,
+                            deferred.0,
+                            e,
+                            &mut game.next_entity,
+                            None
+                        ))
+                    }
+                    "minecraft:falling_block" if deferred.1 < game.falling.len() => {
+                        Some(super::entity_residency::assign_resident_id!(
+                            game.falling,
+                            deferred.1,
+                            f,
+                            &mut game.next_entity,
+                            Some(&f.attachment_lifetime)
+                        ))
+                    }
+                    "minecraft:firework_rocket" if deferred.2 < game.rockets.len() => {
+                        Some(super::entity_residency::assign_resident_id!(
+                            game.rockets,
+                            deferred.2,
+                            e,
+                            &mut game.next_entity,
+                            None
+                        ))
+                    }
+                    _ => None,
+                };
+                game.native_mobs_joined(from, false);
+                // Otherwise the root is the first entity spawned, also for kinds no
+                // command target stands for (experience orbs, end crystals, cushions). An id handed out to an
+                // entity a mod then kept out is not given back, so the root must be
+                // there.
+                let id = root.or_else(|| {
+                    root_id(target, first, |id| {
+                        game.orbs.iter().any(|o| o.id == id)
+                            || game.crystals.iter().any(|c| c.id == id)
+                            || game.cushions.iter().any(|c| c.id == id)
+                    })
+                });
+                Ok(id.map(|id| EntityRef::new(epoch, id)))
+            },
+        )
     }
 }
 
@@ -787,12 +794,15 @@ mod tests {
                 let (Tag::Compound(tag), _) = sunrise_core::nbt::parse_snbt(nbt).unwrap() else {
                     unreachable!()
                 };
-                let id = game
-                    .summon(game.dim.id(), kind, [1.0, 70.0, 1.0], tag)
+                let level = game.level(game.dim.id()).unwrap();
+                let entity = game
+                    .level_summon(level, kind, [1.0, 70.0, 1.0], tag)
+                    .unwrap()
                     .unwrap();
+                let id = entity.id();
                 assert_eq!(id, base + 1);
                 assert_eq!(game.next_entity, base + 1);
-                assert!(game.entity(id).is_some());
+                assert_eq!(game.entity(id), Some(entity));
                 let waiting = match kind {
                     "minecraft:tnt" => game.tnts[0].id,
                     "minecraft:falling_block" => game.falling[0].id,
@@ -807,8 +817,10 @@ mod tests {
                         unreachable!()
                     };
                     let fallback = game
-                        .summon(game.dim.id(), kind, [1.0, 70.0, 1.0], unknown_state)
-                        .unwrap();
+                        .level_summon(level, kind, [1.0, 70.0, 1.0], unknown_state)
+                        .unwrap()
+                        .unwrap()
+                        .id();
                     assert_eq!(fallback, base + 2);
                     assert_eq!(game.next_entity, base + 2);
                     assert_eq!(game.falling.len(), 3);
@@ -1150,5 +1162,57 @@ mod tests {
         assert!(position_ok([0.5, 64.0, 0.5]));
         assert!(!position_ok([3.0e7, 64.0, 0.5]));
         assert!(!position_ok([0.5, f64::NAN, 0.5]));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn summon_into_parked_level_uses_level_handle_and_refuses_in_transaction() {
+        use sunrise_client::chunk::Chunk;
+
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+            let overworld = game.level("minecraft:overworld").unwrap();
+            let nether = super::super::Dim::Nether;
+            game.enter_command_level(nether).unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+
+            let tx = game.transaction_open();
+            assert_eq!(
+                overworld.summon(game, "minecraft:pig", [1.5, 70.0, 1.5], Compound::new()),
+                Err(LevelWriteError::InTransaction)
+            );
+            game.transaction_close(&tx, false);
+
+            let pig = overworld
+                .summon(game, "minecraft:pig", [1.5, 70.0, 1.5], Compound::new())
+                .unwrap()
+                .expect("summoned in parked overworld");
+            assert_eq!(game.dim, nether);
+            assert!(game.mobs.is_empty());
+            assert!(
+                game.levels
+                    .parked_mobs(super::super::Dim::Overworld)
+                    .unwrap()
+                    .iter()
+                    .any(|mob| mob.id == pig.id())
+            );
+
+            let stale_epoch = mod_api::WorldEpoch::new(
+                game.native_lifecycle.epoch().unwrap().get().wrapping_add(1),
+            );
+            let stale = LevelRef::new(stale_epoch, mod_api::DimensionKey::OVERWORLD);
+            assert_eq!(
+                stale.summon(game, "minecraft:pig", [1.5, 70.0, 1.5], Compound::new()),
+                Err(LevelWriteError::Stale)
+            );
+
+            game.enter_command_level(super::super::Dim::Overworld)
+                .unwrap();
+            assert_eq!(game.entity(pig.id()), Some(pig));
+        });
     }
 }

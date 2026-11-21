@@ -1169,15 +1169,12 @@ mod fox_consumption_hook_tests {
                             );
                             assert!(next.teleport_to(host, [12.5, 64.0, 8.5], None));
                             assert!(host.entity(202).unwrap().discard(host));
-                            let spawned = host
-                                .summon(
-                                    "minecraft:overworld",
-                                    "minecraft:cow",
-                                    [2.5, 64.0, 2.5],
-                                    Default::default(),
-                                )
+                            let level = host.level("minecraft:overworld").unwrap();
+                            let spawned = level
+                                .summon(host, "minecraft:cow", [2.5, 64.0, 2.5], Default::default())
+                                .unwrap()
                                 .unwrap();
-                            self.spawned.lock().unwrap().push(spawned);
+                            self.spawned.lock().unwrap().push(spawned.id());
                             *event.target = [4.5, 70.0, 4.5];
                             Flow::Continue
                         }

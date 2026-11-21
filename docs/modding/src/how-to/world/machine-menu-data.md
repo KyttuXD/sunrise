@@ -114,9 +114,11 @@ with no subscriber skips the tick entirely; pending load notices still come firs
 
 To tell clients about something that happened once, such as a burst of particles, queue
 fields instead of writing them to the saved `nbt`. In `block_entity_tick`, queue
-fields with `tick.with_view(|mut view| view.set_client_update_fields(fields))`, then
-request a sync through `tick.host().block_entity_sync(pos)`. A later call replaces
-the batch; an empty compound clears it.
+fields and take the holder's handle in the same loan:
+`tick.with_view(|mut view| { view.set_client_update_fields(fields); view.handle() })`.
+If it returns `Some(holder)`, call `holder.sync(tick.host())` after the loan ends
+and handle its `LevelWriteError`. The handle works while the holder is out for its own tick.
+A later call to `set_client_update_fields` replaces the batch; an empty compound clears it.
 
 The next block change that reaches a viewer puts the fields over what
 `block_entity_update_tag` gives, or sends them alone without one, in one packet for every

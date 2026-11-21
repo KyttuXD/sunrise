@@ -3134,7 +3134,7 @@ impl Game<'_> {
     /// level event the dispenser plays with its smoke: 1000 the click, 1001 the
     /// fail sound (`OptionalDispenseItemBehavior` without success), or 0 for
     /// nothing at all (`DispenseItemBehavior.NOOP`). To drop one normally,
-    /// answer `(dispense_default(..), 1000)`.
+    /// answer with the remainder from `LevelRef::dispense_default` and event 1000.
     pub(in crate::game) fn native_dispense_item(
         &mut self,
         dimension: &str,
@@ -3826,7 +3826,7 @@ impl Game<'_> {
     /// ticks as an orb scans for neighbours (`scanForMerges`). `can_merge` holds vanilla's
     /// answer; change it either way. A merged orb counts as `count` orbs of `into`'s
     /// value, so forcing orbs of different values together drops points unless the mod
-    /// raises `into`'s value with `set_experience_orb` in `native_experience_orb_merge`.
+    /// raises `into`'s value with `ExperienceOrbRef::set_value` in `native_experience_orb_merge`.
     /// Server-side.
     pub(in crate::game) fn native_experience_orb_can_merge(
         &mut self,
@@ -4131,7 +4131,7 @@ impl GameLevel<'_> {
     /// server, when the block has no such property or value, `pos` is not
     /// loaded, or the property already has `value` (no write, as
     /// `Level.setBlock` returns false for an unchanged state). Elsewhere,
-    /// `Game::native_set_block_property_with` does the same.
+    /// `LevelRef::set_block_property` does the same.
     pub(in crate::game) fn native_set_block_property(
         &mut self,
         ticks: &mut Ticks,
@@ -4218,61 +4218,6 @@ impl Game<'_> {
     }
     pub(in crate::game) fn item_key(&self, id: &mod_api::Identifier) -> Option<mod_api::ItemKey> {
         mod_api::__private::item_key_by_identifier(id)
-    }
-    /// Sets property `key` of the block at `pos` to `value`, as a furnace's
-    /// tick sets its `lit` (`Level.setBlock` with `UPDATE_ALL`: neighbours
-    /// and clients are told); true when the block changed, false when the
-    /// block has no such property or value, or the property already has
-    /// `value` (as `Level.setBlock` for an unchanged state). The block
-    /// entity stays.
-    pub(in crate::game) fn set_block_property(
-        &mut self,
-        pos: [i32; 3],
-        key: &str,
-        value: &str,
-    ) -> bool {
-        self.set_block_property_with(pos, key, value, flags::UPDATE_ALL)
-    }
-    /// `native_set_block_property` with `Level.setBlock`'s `flags`, as a
-    /// brewing stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
-    /// Players get the write when `UPDATE_CLIENTS` is set; false when this
-    /// window isn't a server, and in each case `native_set_block_property`
-    /// returns false.
-    pub(in crate::game) fn set_block_property_with(
-        &mut self,
-        pos: [i32; 3],
-        key: &str,
-        value: &str,
-        flags: i32,
-    ) -> bool {
-        // As `native_set_block`: a window that isn't a server holds a copy.
-        if self.serving.is_none() && self.options.dedicated.is_none() {
-            return false;
-        }
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        let Some(id) = property_change(self.pack.assets.registry, state, key, value) else {
-            return false;
-        };
-        let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags))
-    }
-    /// Sends clients the block at `pos` and its block entity's update tag
-    /// (`native_block_entity_update_tag`) again, as `Level.sendBlockUpdated`
-    /// does: with the level's other block changes, to the players who see its
-    /// chunk, once however often it is called before then. Changes made in a
-    /// block entity's tick go out at the start of the next tick, as vanilla's
-    /// do (`ServerLevel.tick` broadcasts chunks before it ticks block
-    /// entities). Call it when what clients show changed (a machine started),
-    /// not for every tick's progress: a menu's data slots carry that. Nothing
-    /// happens for an unloaded block. It also sends the one-shot fields of
-    /// `ModBlockEntityView::set_client_update_fields`.
-    pub(in crate::game) fn block_entity_sync(&mut self, pos: [i32; 3]) {
-        if !self.world.loaded(pos[0], pos[2]) {
-            return;
-        }
-        if let Some(log) = self.world.block_log.as_mut() {
-            log.push((pos[0], pos[1], pos[2]));
-        }
     }
     /// Plays `sound` for this player only (`SoundPlay`'s event: `minecraft:ui.button.click`,
     /// or a mod's own from its `assets/<id>/sounds.json`): nothing is sent to the server, and

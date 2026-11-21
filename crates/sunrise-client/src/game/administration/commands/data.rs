@@ -1941,7 +1941,7 @@ impl Game<'_> {
 /// chunk loads (`Game::load_mob`), never for a player to ask for. Taken off the
 /// compounds a player's NBT arrives in: `/summon`'s argument, `/data`'s and the
 /// `minecraft:entity_data` component's (`Game::apply_entity_nbt`), and
-/// `native_summon`, which takes `/summon`'s argument.
+/// `LevelRef::summon`, which takes `/summon`'s argument.
 pub(in crate::game) fn strip_finalize_tree(tag: &mut Tag) {
     let Tag::Compound(c) = tag else { return };
     c.remove(&"sunrise:finalize".into());

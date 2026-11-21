@@ -6,7 +6,7 @@
 use super::api_values::TryIntoApi;
 use super::level_sounds::LevelSound;
 use super::{Game, item_abilities::ability};
-use mod_api::SoundSource;
+use mod_api::{LevelRef, LevelWriteError, SoundSource};
 use sunrise_client::{
     Result,
     collisions::SceneCollisions,
@@ -257,46 +257,53 @@ impl Game<'_> {
         self.spawn_dispensed(pos, facing, one, 6);
         (stack.count > 0).then_some(stack)
     }
-    /// Drop one item as DefaultDispenseItemBehavior does. For a dispenser hook:
-    /// return this remainder in its answer with `CLICK`; the caller plays the
-    /// answer's event and smoke once. A client, another dimension or an unloaded
-    /// chunk keeps the input stack unchanged.
-    pub(super) fn dispense_default(
+    pub(super) fn level_dispense_default(
         &mut self,
-        dimension: &str,
-        pos: [i32; 3],
+        level: LevelRef,
+        [x, y, z]: [i32; 3],
         facing: Direction,
         stack: ItemStack,
-    ) -> Option<ItemStack> {
-        if !(self.serving.is_some() || self.options.dedicated.is_some())
-            || dimension != self.dim.id()
-            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
-        {
-            return Some(stack);
-        }
-        if stack.count == 0 {
-            return None;
-        }
-        self.default_execute((pos[0], pos[1], pos[2]), facing, stack)
+    ) -> std::result::Result<Option<ItemStack>, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            LevelWriteError::InTransaction,
+            |game| {
+                if stack.count == 0 {
+                    return Ok(None);
+                }
+                if !game.world.loaded(x, z) {
+                    return Ok(Some(stack));
+                }
+                Ok(game.default_execute((x, y, z), facing, stack))
+            },
+        )
     }
-    /// `dispense_with_remainder`: `consume_with_remainder` for a mod's dispense answer, in the
-    /// level in place; `stack` unchanged off it, as `dispense_default` keeps it.
-    pub(super) fn dispense_with_remainder(
+
+    pub(super) fn level_dispense_with_remainder(
         &mut self,
-        dimension: &str,
-        pos: [i32; 3],
+        level: LevelRef,
+        [x, y, z]: [i32; 3],
         facing: Direction,
         stack: ItemStack,
         remainder: ItemStack,
-    ) -> Option<ItemStack> {
-        if !(self.serving.is_some() || self.options.dedicated.is_some())
-            || dimension != self.dim.id()
-            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
-            || stack.count == 0
-        {
-            return Some(stack).filter(|stack| stack.count > 0);
-        }
-        self.consume_with_remainder((pos[0], pos[1], pos[2]), facing, stack, remainder)
+    ) -> std::result::Result<Option<ItemStack>, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            LevelWriteError::InTransaction,
+            |game| {
+                if stack.count == 0 {
+                    return Ok(None);
+                }
+                if !game.world.loaded(x, z) {
+                    return Ok(Some(stack));
+                }
+                Ok(game.consume_with_remainder((x, y, z), facing, stack, remainder))
+            },
+        )
     }
     /// `new DefaultDispenseItemBehavior().dispense(..)` including its events.
     pub(super) fn dispense_default_in_level(

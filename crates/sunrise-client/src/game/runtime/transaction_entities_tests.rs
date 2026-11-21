@@ -102,12 +102,11 @@ impl Hooks for Observer {
         if answers.is_some() {
             let removes = ON_JOIN.lock().unwrap().2.take();
             let seal = removes.map(|_| host.transaction_open());
-            let spawned = host.summon(
-                "minecraft:overworld",
-                "minecraft:pig",
-                [1.5, 70.0, 1.5],
-                Default::default(),
-            );
+            let level = host.level("minecraft:overworld").unwrap();
+            let spawned = level
+                .summon(host, "minecraft:pig", [1.5, 70.0, 1.5], Default::default())
+                .unwrap()
+                .map(EntityRef::id);
             ON_JOIN.lock().unwrap().1.extend(spawned);
             if let (Some(entity), Some(seal)) = (removes, seal) {
                 entity.remove(host, RemovalReason::Discarded);
@@ -181,8 +180,10 @@ fn summon(game: &mut Game<'_>, kind: &str, nbt: &str) -> Option<u32> {
     let (Tag::Compound(nbt), _) = parse_snbt(nbt).unwrap() else {
         panic!("not a compound");
     };
-    let dimension = game.dim.id();
-    game.summon(dimension, kind, [1.5, 70.0, 1.5], nbt)
+    let level = game.level(game.dim.id()).unwrap();
+    game.level_summon(level, kind, [1.5, 70.0, 1.5], nbt)
+        .unwrap()
+        .map(EntityRef::id)
 }
 
 /// Takes what the observer heard so far.

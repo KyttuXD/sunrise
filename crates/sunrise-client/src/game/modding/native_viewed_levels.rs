@@ -1,7 +1,8 @@
 //! A client mod's reads of the levels the server opened for viewing (#3981, gap 10), as Immersive
 //! Portals' `ClientWorldLoader.getWorld(dim)` hands out the far `ClientLevel`: on a client,
 //! `host.level(dim)` also names each level the server keeps open on `sunrise:levels`, and
-//! `block_state`, `clip`, `collision_boxes` and `has_collisions` read its world (`viewed_worlds`),
+//! `block_state`, `clip`, `visit_block_collision`, `collision_boxes` and `has_collisions`
+//! read its world (`viewed_worlds`),
 //! as do the reads built on `level_block_state`: `block`, `block_property` and the both-sided
 //! fluid reads (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
 //! `fluid_can_be_replaced_with`). A read never writes and never loads a column: a column the
@@ -13,7 +14,7 @@
 //! stale and a mod asks `host.level` again (a same-level Respawn keeps the epoch). Writes,
 //! server-only reads, the other reads and the entity reads (until step 9d) refuse it.
 use super::Game;
-use mod_api::{DimensionKey, LevelRef};
+use mod_api::{DimensionKey, LevelReadError, LevelRef};
 use sunrise_client::world::World;
 
 impl Game<'_> {
@@ -29,14 +30,28 @@ impl Game<'_> {
     /// On a client, the world a handle names now: the player's own, or a viewed level's while
     /// the server keeps it open. None before login, for a stale handle and for any other level.
     pub(super) fn client_view_world(&self, level: LevelRef) -> Option<&World> {
-        let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
+        self.client_view_world_result(level).ok()
+    }
+
+    pub(super) fn client_view_world_result(
+        &self,
+        level: LevelRef,
+    ) -> Result<&World, LevelReadError> {
+        let remote = self
+            .remote
+            .as_ref()
+            .filter(|r| r.logged_in)
+            .ok_or(LevelReadError::Unavailable)?;
         if self.native_lifecycle.epoch() != Some(level.epoch()) {
-            return None;
+            return Err(LevelReadError::Stale);
         }
         if level.dimension() == remote.level_key {
-            return Some(&self.world);
+            return Ok(&self.world);
         }
-        remote.viewed.world_of(level.dimension())
+        remote
+            .viewed
+            .world_of(level.dimension())
+            .ok_or(LevelReadError::Stale)
     }
     /// On a client, the handle the player's own level answers to now (its key and the client
     /// level's epoch): what a world view naming a level is compared with, resolved with the
@@ -185,6 +200,72 @@ mod tests {
         assert_eq!(viewed.has_collisions(&game, top), Some(true));
         assert_eq!(own.collision_boxes(&game, top), Some(vec![]));
         assert_eq!(own.has_collisions(&game, top), Some(false));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_collision_visit_uses_the_named_level_and_stops_on_break() {
+        use crate::game::native_entity_refs::tests::run_fresh_cases;
+        use core::ops::ControlFlow::{Break, Continue};
+
+        if run_fresh_cases(
+            "game::native_viewed_levels::tests::block_collision_visit_uses_the_named_level_and_stops_on_break",
+            "SUNRISE_BLOCK_COLLISION_VISIT_CHILD",
+            &["viewed"],
+        ) {
+            return;
+        }
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let (own, viewed) = viewing(&mut game);
+        let mut boxes = Vec::new();
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |bounds| {
+                boxes.push(bounds);
+                Continue(())
+            }),
+            Ok(Continue(()))
+        );
+        assert_eq!(boxes, [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]);
+        assert_eq!(
+            viewed.visit_block_collision(&game, POCKET, &mut |_| panic!("viewed air is empty")),
+            Ok(Continue(()))
+        );
+
+        // A straight stair has a bottom slab and an upper half-block.
+        let stair = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone_stairs")
+            .unwrap();
+        game.world
+            .set(POCKET[0], POCKET[1], POCKET[2], stair)
+            .unwrap();
+        boxes.clear();
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |bounds| {
+                boxes.push(bounds);
+                Continue(())
+            }),
+            Ok(Continue(()))
+        );
+        assert_eq!(boxes.len(), 2);
+        let mut visited = 0;
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |_| {
+                visited += 1;
+                Break(())
+            }),
+            Ok(Break(()))
+        );
+        assert_eq!(visited, 1);
+
+        game.handle_packet(close(1)).unwrap();
+        assert_eq!(
+            viewed.visit_block_collision(&game, POCKET, &mut |_| panic!("closed level is stale")),
+            Err(LevelReadError::Stale)
+        );
     }
 
     /// A column the viewed world does not hold answers None, and reading it loads nothing.

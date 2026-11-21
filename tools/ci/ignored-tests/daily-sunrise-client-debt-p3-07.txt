@@ -1,0 +1,6 @@
+sunrise-client game::dispense_container_tests::dispenser_writes_follow_the_parked_level_handle lib daily child-process
+sunrise-client game::native_block_entity_refs::tests::block_entity_sync_targets_the_live_holder_even_when_ticking_or_parked lib daily child-process
+sunrise-client game::native_entities::tests::summon_into_parked_level_uses_level_handle_and_refuses_in_transaction lib daily resources
+sunrise-client game::native_entity_refs::tests::block_property_write_changes_only_the_addressed_level lib daily child-process
+sunrise-client game::native_entity_remove::tests::entity_kill_kills_mobs_non_mobs_parked_entities_and_refuses_stale lib daily resources
+sunrise-client game::native_viewed_levels::tests::block_collision_visit_uses_the_named_level_and_stops_on_break lib daily child-process

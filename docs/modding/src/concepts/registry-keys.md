@@ -193,7 +193,7 @@ Unknown incoming slots are refused at the boundary.
 `block_sprites` takes API-owned `BlockState` values, preserving properties without
 parsing state strings or exposing numeric engine state IDs. The pre-change block event carries resolved `from` / `to`
 states and does not allocate their names. Property names and values in
-`set_block_property` are not block identifiers and use strings.
+`LevelRef::set_block_property` are not block identifiers and use strings.
 
 Retain keys to avoid formatting identifiers on hot paths.
 

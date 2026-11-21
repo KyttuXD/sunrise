@@ -41,12 +41,14 @@ impl Hooks for PanicAfterAdmission {
     ) -> Flow {
         if event.event == "minecraft:projectile_shoot" {
             assert!(self.admitted.load(Ordering::SeqCst));
-            let _ = host.summon(
-                event.dimension,
-                "minecraft:snowball",
-                [9.5, 70.0, 0.5],
-                Default::default(),
-            );
+            if let Some(level) = host.level(event.dimension) {
+                let _ = level.summon(
+                    host,
+                    "minecraft:snowball",
+                    [9.5, 70.0, 0.5],
+                    Default::default(),
+                );
+            }
             self.panicked.store(true, Ordering::SeqCst);
             panic!("listener panicked after impact admission");
         }

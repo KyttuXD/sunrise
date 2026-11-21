@@ -769,6 +769,49 @@ impl ItemEntityRef {
     }
 }
 
+/// An experience orb of the open world (vanilla's `ExperienceOrb`), narrowed with
+/// `host.experience_orb`.
+#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct ExperienceOrbRef(pub(crate) EntityRef);
+
+impl ExperienceOrbRef {
+    /// Create a handle for the game.
+    // hidden: a game-side helper, not part of the mod surface
+    #[doc(hidden)]
+    pub fn new(entity: EntityRef) -> Self {
+        Self(entity)
+    }
+    /// The same entity as an [`EntityRef`].
+    pub fn entity(self) -> EntityRef {
+        self.0
+    }
+}
+
+/// Why a write to an [`ExperienceOrbRef`] was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum ExperienceOrbWriteError {
+    /// The handle is stale, removed, or temporarily held out of lookup.
+    Stale,
+    /// World access is unavailable, or the call ran on a client.
+    Unavailable,
+    /// The count is 0 or exceeds `i32::MAX` (vanilla `ExperienceOrb.count`, `ExtraCodecs.POSITIVE_INT`).
+    InvalidCount,
+}
+
+impl crate::AccessRefusal for ExperienceOrbWriteError {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl crate::NoBackend for ExperienceOrbWriteError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
 /// A display entity of the open world (`block_display`, `item_display` or
 /// `text_display`), narrowed with `host.display`.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]

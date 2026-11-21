@@ -64,12 +64,14 @@ impl Hooks for CancelImpacts {
             let mut observed = self.0.lock().unwrap();
             if !observed.buffered {
                 // Shoot events fire after settlement while the tick batch is taken.
-                let _ = host.summon(
-                    event.dimension,
-                    "minecraft:snowball",
-                    [9.5, 70.0, 0.5],
-                    Default::default(),
-                );
+                if let Some(level) = host.level(event.dimension) {
+                    let _ = level.summon(
+                        host,
+                        "minecraft:snowball",
+                        [9.5, 70.0, 0.5],
+                        Default::default(),
+                    );
+                }
                 observed.buffered = true;
             }
         }
@@ -93,12 +95,14 @@ impl Hooks for CancelImpacts {
         observed.impacts.push(event.projectile);
         if !observed.spawned {
             // The projectile is installed even though summon has no projectile return target.
-            let _ = host.summon(
-                event.dimension,
-                "minecraft:snowball",
-                [8.5, 70.0, 0.5],
-                Default::default(),
-            );
+            if let Some(level) = host.level(event.dimension) {
+                let _ = level.summon(
+                    host,
+                    "minecraft:snowball",
+                    [8.5, 70.0, 0.5],
+                    Default::default(),
+                );
+            }
             observed.spawned = true;
         }
         if observed.remove == Some(event.projectile) {

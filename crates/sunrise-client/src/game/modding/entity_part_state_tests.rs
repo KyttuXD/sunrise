@@ -404,15 +404,11 @@ fn a_spawn_or_removal_inside_an_aborted_action_keeps_the_bindings() {
         let (Tag::Compound(nbt), _) = sunrise_core::nbt::parse_snbt("{}").unwrap() else {
             unreachable!()
         };
+        let level = game.level("minecraft:overworld").unwrap();
         let pig = game
-            .summon(
-                "minecraft:overworld",
-                "minecraft:pig",
-                [1.5, 70.0, 1.5],
-                nbt,
-            )
+            .level_summon(level, "minecraft:pig", [1.5, 70.0, 1.5], nbt)
+            .unwrap()
             .unwrap();
-        let pig = game.entity(pig).unwrap();
         assert_eq!(Charge::edit_state(game, pig, |_, n| *n = 5), Ok(()));
         assert_eq!(
             indexed(game, Dim::Overworld),

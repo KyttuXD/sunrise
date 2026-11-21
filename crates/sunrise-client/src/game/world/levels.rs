@@ -179,7 +179,7 @@ pub(super) struct Parked {
     knots: sunrise_client::join_seq::JoinList<super::leads::Knot>,
     projectiles: sunrise_client::join_seq::JoinList<sunrise_client::projectiles::Projectile, false>,
     dropped: sunrise_client::join_seq::JoinList<ItemEntity>,
-    orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
+    pub(super) orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
     persist: persist::EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
