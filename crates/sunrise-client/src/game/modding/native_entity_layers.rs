@@ -8,7 +8,7 @@
 use super::{
     Game,
     entity_type_rows::EntityTypeRows,
-    native_entity_renderers::Resolved,
+    native_entity_renderers::EntityDrawCallback,
     native_mob_draw::{entity_render_state, mob_pose},
 };
 use glam::DVec3;
@@ -33,7 +33,7 @@ use sunrise_client::{
 const PLAYER: &str = "minecraft:player";
 
 /// One target's layers, in the order they were added.
-pub(in crate::game) type Layers = Arc<[Resolved<dyn EntityRenderLayer>]>;
+pub(in crate::game) type Layers = Arc<[EntityDrawCallback<dyn EntityRenderLayer>]>;
 
 /// Whether the last load resolved any layer: a frame checks only this when none was added.
 static ANY: AtomicBool = AtomicBool::new(false);
@@ -145,7 +145,7 @@ impl LayerTable {
         mob_types: &HashMap<String, Arc<MobType>>,
     ) -> Self {
         let resolved = |layers: Vec<Arc<dyn EntityRenderLayer>>| -> Option<Layers> {
-            (!layers.is_empty()).then(|| layers.into_iter().map(Resolved::new).collect())
+            (!layers.is_empty()).then(|| layers.into_iter().map(EntityDrawCallback::new).collect())
         };
         let mobs = registration
             .entity

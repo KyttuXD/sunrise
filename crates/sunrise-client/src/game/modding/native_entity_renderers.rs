@@ -90,12 +90,12 @@ pub(super) fn register(renderers: BTreeMap<String, Arc<dyn EntityRenderer>>) -> 
 
 /// A mod's renderer or layer as a load resolved it, and whether it has failed (then it is asked no
 /// more until the next resource load resolves it again).
-pub(in crate::game) struct Resolved<T: ?Sized> {
+pub(in crate::game) struct EntityDrawCallback<T: ?Sized> {
     pub(super) inner: Arc<T>,
     pub(super) failed: AtomicBool,
 }
 
-impl<T: ?Sized> Resolved<T> {
+impl<T: ?Sized> EntityDrawCallback<T> {
     pub(super) fn new(inner: Arc<T>) -> Self {
         Self {
             inner,
@@ -107,21 +107,21 @@ impl<T: ?Sized> Resolved<T> {
 /// The registered renderers, by the slot each draw route reads: rebuilt on every resource load.
 pub(super) struct EntityRendererTable {
     /// By [`ThrownType::slot`].
-    thrown: Vec<Option<Arc<Resolved<dyn EntityRenderer>>>>,
+    thrown: Vec<Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>>,
     /// By the address of the mob type the game shares with every mob of the type.
-    living: FxHashMap<usize, Arc<Resolved<dyn EntityRenderer>>>,
+    living: FxHashMap<usize, Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// Primed TNT (`minecraft:tnt`).
-    tnt: Option<Arc<Resolved<dyn EntityRenderer>>>,
+    tnt: Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// An experience orb (`minecraft:experience_orb`).
-    experience_orb: Option<Arc<Resolved<dyn EntityRenderer>>>,
+    experience_orb: Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// A painting (`minecraft:painting`).
-    painting: Option<Arc<Resolved<dyn EntityRenderer>>>,
+    painting: Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// An item frame (`minecraft:item_frame`).
-    item_frame: Option<Arc<Resolved<dyn EntityRenderer>>>,
+    item_frame: Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// A glow item frame (`minecraft:glow_item_frame`).
-    glow_item_frame: Option<Arc<Resolved<dyn EntityRenderer>>>,
+    glow_item_frame: Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>,
     /// By the general type's slot in the frozen catalog (`GeneralTypeCatalog::slot`).
-    general: Vec<Option<Arc<Resolved<dyn EntityRenderer>>>>,
+    general: Vec<Option<Arc<EntityDrawCallback<dyn EntityRenderer>>>>,
 }
 
 impl EntityRendererTable {
@@ -149,7 +149,7 @@ impl EntityRendererTable {
         };
         let mut unknown = Vec::new();
         for (id, renderer) in registered {
-            let resolved = || Arc::new(Resolved::new(renderer.clone()));
+            let resolved = || Arc::new(EntityDrawCallback::new(renderer.clone()));
             if let Some(t) = thrown.iter().find(|t| t.id == id) {
                 table.thrown[t.slot] = Some(resolved());
             } else if let Some(kind) = mobs.get(id).filter(|_| id != PLAYER) {
@@ -174,32 +174,38 @@ impl EntityRendererTable {
     }
 
     /// The renderer of the thrown type `t`, when a mod registered one.
-    pub(super) fn thrown(&self, t: &ThrownType) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn thrown(
+        &self,
+        t: &ThrownType,
+    ) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.thrown.get(t.slot)?.as_ref()
     }
 
     /// The renderer of `mob`'s type, when a mod registered one for it.
-    pub(super) fn living(&self, mob: &Mob) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn living(&self, mob: &Mob) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.living.get(&(Arc::as_ptr(&mob.kind) as usize))
     }
 
     /// The renderer of primed TNT, when a mod registered one for `minecraft:tnt`.
-    pub(super) fn tnt(&self) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn tnt(&self) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.tnt.as_ref()
     }
 
     /// The renderer of an experience orb, when a mod registered one for `minecraft:experience_orb`.
-    pub(super) fn experience_orb(&self) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn experience_orb(&self) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.experience_orb.as_ref()
     }
 
     /// The renderer of a painting, when a mod registered one for `minecraft:painting`.
-    pub(super) fn painting(&self) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn painting(&self) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.painting.as_ref()
     }
 
     /// The renderer of the general type in catalog slot `slot`, when a mod registered one.
-    pub(super) fn general(&self, slot: usize) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn general(
+        &self,
+        slot: usize,
+    ) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         self.general.get(slot)?.as_ref()
     }
 
@@ -212,7 +218,10 @@ impl EntityRendererTable {
     }
 
     /// The renderer of an item frame or glow item frame, when a mod registered one for that type.
-    pub(super) fn item_frame(&self, glow: bool) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
+    pub(super) fn item_frame(
+        &self,
+        glow: bool,
+    ) -> Option<&Arc<EntityDrawCallback<dyn EntityRenderer>>> {
         if glow {
             self.glow_item_frame.as_ref()
         } else {
@@ -224,14 +233,16 @@ impl EntityRendererTable {
 /// The renderer the last resource load resolved for the thrown type `t`, when a mod registered one.
 pub(in crate::game) fn thrown_renderer(
     t: &ThrownType,
-) -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+) -> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
     table.as_ref()?.thrown(t).cloned()
 }
 
 /// The renderer the last resource load resolved for `mob`'s type, when a mod registered one: with
 /// none registered for any living type, one flag check, with no lock and no lookup.
-pub(in crate::game) fn living_renderer(mob: &Mob) -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+pub(in crate::game) fn living_renderer(
+    mob: &Mob,
+) -> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     if !ANY_LIVING.load(Ordering::Relaxed) {
         return None;
     }
@@ -241,7 +252,7 @@ pub(in crate::game) fn living_renderer(mob: &Mob) -> Option<Arc<Resolved<dyn Ent
 
 /// The renderer the last resource load resolved for primed TNT, when a mod registered one: with
 /// none registered, one flag check, with no lock.
-pub(in crate::game) fn tnt_renderer() -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+pub(in crate::game) fn tnt_renderer() -> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     if !ANY_TNT.load(Ordering::Relaxed) {
         return None;
     }
@@ -251,7 +262,8 @@ pub(in crate::game) fn tnt_renderer() -> Option<Arc<Resolved<dyn EntityRenderer>
 
 /// The renderer the last resource load resolved for an experience orb, when a mod registered one:
 /// with none registered, one flag check, with no lock.
-pub(in crate::game) fn experience_orb_renderer() -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+pub(in crate::game) fn experience_orb_renderer()
+-> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     if !ANY_EXPERIENCE_ORB.load(Ordering::Relaxed) {
         return None;
     }
@@ -261,7 +273,7 @@ pub(in crate::game) fn experience_orb_renderer() -> Option<Arc<Resolved<dyn Enti
 
 /// The renderer the last resource load resolved for a painting, when a mod registered one: with
 /// none registered, one flag check, with no lock.
-pub(in crate::game) fn painting_renderer() -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+pub(in crate::game) fn painting_renderer() -> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     if !ANY_PAINTING.load(Ordering::Relaxed) {
         return None;
     }
@@ -273,7 +285,7 @@ pub(in crate::game) fn painting_renderer() -> Option<Arc<Resolved<dyn EntityRend
 /// registered one for that type: with none registered for either, one flag check, with no lock.
 pub(in crate::game) fn item_frame_renderer(
     glow: bool,
-) -> Option<Arc<Resolved<dyn EntityRenderer>>> {
+) -> Option<Arc<EntityDrawCallback<dyn EntityRenderer>>> {
     if !ANY_ITEM_FRAME.load(Ordering::Relaxed) {
         return None;
     }
@@ -338,7 +350,7 @@ impl Game<'_> {
     /// and from then until the next resource load resolves it again.
     pub(in crate::game) fn mod_entity_renderer_geometry(
         &self,
-        resolved: &Resolved<dyn EntityRenderer>,
+        resolved: &EntityDrawCallback<dyn EntityRenderer>,
         entity: &EntityRenderState,
         entity_type: &str,
         at: DVec3,
@@ -465,7 +477,7 @@ mod tests {
             Arc::make_mut(&mut chunk.sections[section]).light = Light::packed(cells);
             game.world.chunks.insert((0, 1), Arc::new(chunk));
 
-            let renderer = Resolved::<dyn EntityRenderer>::new(Arc::new(LitQuad));
+            let renderer = EntityDrawCallback::<dyn EntityRenderer>::new(Arc::new(LitQuad));
             let entity = mod_api::__private::built::EntityRenderState {
                 id: 1,
                 partial: 0.5,
