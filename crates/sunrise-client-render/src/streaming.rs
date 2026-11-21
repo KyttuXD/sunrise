@@ -38,20 +38,6 @@ pub struct ProtoSave {
     pub proto: Proto,
 }
 
-/// Borrowed, read-only generation state, before serialization on the save worker.
-/// Fields synthesized only by the encoder are not available through this view.
-pub struct ProtoSnapshot<'a> {
-    pub dimension: &'a str,
-    pub pos: [i32; 2],
-    pub proto: &'a Proto,
-    pub access: &'a dyn ProtoAccess,
-    pub status: sunrise_world::chunk_status::ChunkStatus,
-}
-impl ProtoSnapshot<'_> {
-    pub fn block(&self, pos: [i32; 3]) -> Option<u32> {
-        self.access.block(self.proto, pos)
-    }
-}
 /// Chunk generation in vanilla's stages: a neighbour-independent proto chunk
 /// (biomes, noise, surface, carvers), decoration of a 3x3 neighbourhood
 /// (FEATURES, which may write into neighbours), then conversion of a chunk
@@ -137,15 +123,6 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn is_decorated(&self, _proto: &Proto) -> bool {
         false
     }
-    /// Generation status of a proto that can be saved, if known.
-    fn proto_status(&self, _proto: &Proto) -> Option<sunrise_world::chunk_status::ChunkStatus> {
-        None
-    }
-    /// Read an absolute block position from the proto without making a column copy.
-    fn proto_block(&self, _proto: &Proto, _pos: [i32; 3]) -> Option<u32> {
-        None
-    }
-    /// What to save of a proto chunk dropped before it became final.
     /// A decorated proto chunk's blocks as a column, to light a finished
     /// neighbour against (vanilla lights with neighbours at FEATURES).
     fn light_view(&self, _proto: &Proto) -> Option<Chunk> {
@@ -249,20 +226,7 @@ impl<G: ChunkGenerator> LodSource for G {
     }
 }
 /// The generator's saving, for the streamer (which doesn't know its type).
-/// Read-only access to checked-out generation state.
-pub trait ProtoAccess: Send + Sync {
-    fn status(&self, proto: &Proto) -> Option<sunrise_world::chunk_status::ChunkStatus>;
-    fn block(&self, proto: &Proto, pos: [i32; 3]) -> Option<u32>;
-}
-impl<G: ChunkGenerator> ProtoAccess for G {
-    fn status(&self, proto: &Proto) -> Option<sunrise_world::chunk_status::ChunkStatus> {
-        self.proto_status(proto)
-    }
-    fn block(&self, proto: &Proto, pos: [i32; 3]) -> Option<u32> {
-        self.proto_block(proto, pos)
-    }
-}
-trait Saves: LodSource + ProtoAccess {
+trait Saves: LodSource {
     fn save_protos(&self, protos: &[&Proto]);
     fn save_finished(&self, chunk: Chunk);
 }
@@ -1517,10 +1481,6 @@ impl Streaming {
             self.light_views.remove(&key);
             self.protos.insert(key, Some(proto));
         }
-    }
-    /// A read-only view of checked-out protos independent of the streaming borrow.
-    pub fn proto_access(&self) -> Arc<dyn ProtoAccess> {
-        self.saves.clone()
     }
     /// Check out proto chunks without submitting them yet.
     fn checkout_protos(&mut self, keys: impl IntoIterator<Item = (i32, i32)>) -> Vec<ProtoSave> {
@@ -3964,16 +3924,7 @@ mod tests {
     }
 
     #[test]
-    fn checked_out_proto_is_the_read_only_state_given_to_the_save_job() {
-        struct Access;
-        impl ProtoAccess for Access {
-            fn status(&self, _: &Proto) -> Option<sunrise_world::chunk_status::ChunkStatus> {
-                Some(sunrise_world::chunk_status::ChunkStatus::Features)
-            }
-            fn block(&self, proto: &Proto, _: [i32; 3]) -> Option<u32> {
-                proto.downcast_ref::<u32>().copied()
-            }
-        }
+    fn proto_checkout_transfers_the_column_and_removes_its_light_view() {
         let mut protos = FxHashMap::default();
         protos.insert((2, -1), Some(Box::new(73_u32) as Proto));
         protos.insert((3, -1), None);
@@ -3983,22 +3934,8 @@ mod tests {
         assert_eq!(saves.len(), 1);
         assert!(protos[&(2, -1)].is_none());
         assert!(!views.contains_key(&(2, -1)));
-        let snapshot = ProtoSnapshot {
-            dimension: "minecraft:overworld",
-            pos: [saves[0].pos.0, saves[0].pos.1],
-            proto: &saves[0].proto,
-            access: &Access,
-            status: Access.status(&saves[0].proto).unwrap(),
-        };
-        assert_eq!(
-            snapshot.status,
-            sunrise_world::chunk_status::ChunkStatus::Features
-        );
-        assert_eq!(snapshot.block([32, 0, -16]), Some(73));
-        let Job::Save(saved) = Job::Save(saves) else {
-            unreachable!()
-        };
-        assert_eq!(saved[0].proto.downcast_ref::<u32>(), Some(&73));
+        assert_eq!(saves[0].pos, (2, -1));
+        assert_eq!(saves[0].proto.downcast_ref::<u32>(), Some(&73));
     }
 
     #[test]
