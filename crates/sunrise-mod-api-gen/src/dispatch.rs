@@ -121,6 +121,8 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_part_cancel =
+            hook.isolate && hook.scope.is_some() && contract == Contract::Cancel;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -444,7 +446,7 @@ pub(super) fn emit<'a>(
             }
             syn::visit_mut::VisitMut::visit_type_mut(&mut OwnedLootContext, &mut owned_ty);
             let ty = &owned_ty;
-            if isolated_collect {
+            if isolated_collect || isolated_part_cancel {
                 struct MutableBorrow(bool);
                 impl<'ast> syn::visit::Visit<'ast> for MutableBorrow {
                     fn visit_type_reference(&mut self, reference: &'ast syn::TypeReference) {
@@ -456,7 +458,7 @@ pub(super) fn emit<'a>(
                 syn::visit::Visit::visit_type(&mut mutable, ty);
                 if mutable.0 {
                     return Err(format!(
-                        "{}: an isolated collector cannot also write to {name}",
+                        "{}: an isolated collector or cancel Part cannot also write to {name}",
                         hook.name
                     ));
                 }
@@ -946,7 +948,14 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if isolated_part_cancel {
+            if !rollback.is_empty() {
+                return Err(format!(
+                    "{name}: an isolated cancel Part can write only through Host"
+                ));
+            }
+            (String::new(), build)
+        } else if hook.event_per_listener || isolated_collect {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -1306,7 +1315,12 @@ pub(super) fn emit<'a>(
                         )
                     }
                 },
-                if let Some(inert) = &hook.inert {
+                if isolated_part_cancel {
+                    format!(
+                        "for (mod_id, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} {local_event} if matches!(super::runtime::isolated_part(HookId::{hook_id}, mod_id, \"{name}\", contained, || {part_item}.{name}({invoke})), Flow::Cancel) {{ *{o} = true; break; }} }}",
+                        o = out.unwrap(),
+                    )
+                } else if let Some(inert) = &hook.inert {
                     let inert = if inert_signal {
                         "*inert = true;"
                     } else {
@@ -1347,7 +1361,7 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
+        let early_return = if isolated_part_cancel || body.contains("refusable(") {
             format!("{early_return} let contained = super::runtime::outside_world();")
         } else {
             early_return

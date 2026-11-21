@@ -172,7 +172,7 @@ impl Game<'_> {
             .as_ref()
             .and_then(|host| host.hub.registry_id("minecraft:menu", &id))
             .ok_or(OpenMenuError::NotModMenu)?;
-        // An admitted click cannot send packets for a speculative screen replacement.
+        // A merchant take cannot send packets for a speculative screen replacement.
         if self.menu_click_in_progress(conn) {
             return Err(OpenMenuError::ClickInProgress);
         }
@@ -257,18 +257,12 @@ impl Game<'_> {
         let host = self.lan.as_mut().ok_or(MenuItemsRefusal::NoPlayer)?;
         host.hub
             .set_native_menu_items(conn, window, items, !transactional)?;
-        // The scoped click reconciles its own window on both override and refusal.
-        if transactional
-            && !self
-                .transactions
-                .iter()
-                .any(|level| level.menu_click_active == Some(conn))
-        {
+        if transactional {
             self.reply_menu_click(conn, super::lan_menus::ClickReply::Resend(window));
         }
         Ok(())
     }
-    /// Closes the player's native menu (a `native_menu_closed` follows). An active click
+    /// Closes the player's native menu (a `native_menu_closed` follows). A merchant take
     /// stages the close for its current window and sends it only once the transaction commits.
     pub(super) fn close_menu(&mut self, uuid: u128) {
         if let Some(conn) = self.native_conn(uuid)

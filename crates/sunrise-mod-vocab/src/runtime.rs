@@ -463,6 +463,13 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
 ) -> impl Iterator<Item = &'a P> {
+    entered_parts_with_id(parts, hook).map(|(_, part)| part)
+}
+
+pub(crate) fn entered_parts_with_id<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a P)> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -478,8 +485,29 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            &*attached.part
+            (attached.mod_id, &*attached.part)
         })
+}
+
+/// A scoped cancellation contributes no answer until the Part returns. A phase refusal is
+/// reported each time; a real panic disables only this mod's callback for this hook.
+pub(crate) fn isolated_part(
+    hook_id: generated::HookId,
+    mod_id: &'static str,
+    hook: &'static str,
+    contained: bool,
+    call: impl FnOnce() -> crate::Flow,
+) -> crate::Flow {
+    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    match contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(flow)) => return flow,
+        Ok(Err(refusal)) => refusal.report_each(),
+        Err(message) => {
+            poison(hook_id, mod_id);
+            record_callback_panic(mod_id, "part", hook, message);
+        }
+    }
+    crate::Flow::Continue
 }
 
 pub(crate) struct Entered<'a> {

@@ -138,7 +138,7 @@ impl Game<'_> {
         let transactional = !self.transactions.is_empty();
         if transactional {
             self.journal_menus(player);
-            self.journal_menu_click(conn);
+            self.journal_menu_slot_places(conn, menu.fields().generation);
         }
         let Some(lan) = self.lan.as_mut() else {
             return Err(MenuSlotBackRefusal::NoPlayerOrWindow);

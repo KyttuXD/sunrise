@@ -788,11 +788,7 @@ impl Game<'_> {
                     }
                 }
             }
-            S::ContainerClick(p) => {
-                if !self.menu_clicked_decided(conn, &p) {
-                    self.lan_default_container_click(conn, &p);
-                }
-            }
+            S::ContainerClick(p) => self.lan_container_click(conn, &p),
             S::ContainerClose(p) => {
                 // A vehicle's menu closed: its slots go back to the vehicle
                 // (`ContainerEntity`), and a chest boat's `stopOpen` fires
@@ -1322,61 +1318,142 @@ impl Game<'_> {
         host.hub.teleport(gi, Some(at));
     }
 
-    /// Ordinary click routing. A scoped override calls this inside its action on Continue;
-    /// an unsubscribed click uses it directly. False means the route refused the click.
-    pub(in crate::game) fn lan_default_container_click(
-        &mut self,
-        conn: u32,
-        p: &play::ContainerClick,
-    ) -> bool {
-        let Some(gi) = self.guest_index(conn) else {
-            return false;
+    /// `AbstractContainerMenu.clicked` on the receiving menu. Override before `doClick` reads
+    /// the slots, so continuing uses live contents, cursor and slot rules rather than a plan.
+    fn lan_container_click(&mut self, conn: u32, p: &play::ContainerClick) {
+        use super::super::lan_menus::ClickReply;
+        let Some(mut gi) = self.guest_index(conn) else {
+            return;
         };
         let guest = &self.lan.as_ref().unwrap().hub.guests[gi];
-        if let Some(open) = guest.menu.as_ref().filter(|m| m.window == p.container) {
-            if open.mod_type.is_some()
-                && usize::try_from(p.slot).is_ok_and(|s| s >= open.slot_count())
-            {
-                return false;
+        if let Some(open) = guest.menu.as_ref().filter(|m| {
+            m.window == p.container && (m.mod_type.is_some() || m.slots == Slots::Native)
+        }) {
+            if guest.disconnect_pending {
+                log::debug!("menu_clicked: player {} is disconnecting", guest.uuid);
+                return;
             }
-            if open.slots == Slots::Native && open.owned_slots().is_none() && !guest.spectator() {
-                // Display menus do not move items unless their slots were explicitly backed.
-                if let Some(applied) = self.place_menu_click(
+            // `handleContainerClick` resynchronizes a spectator before checking the slot.
+            if guest.spectator() {
+                self.reply_menu_click(conn, ClickReply::Resend(p.container));
+                return;
+            }
+            // `AbstractContainerMenu.isValidSlotIndex`: negative inputs are handled by
+            // the individual actions (including the outside slot), not by this check.
+            let slot_count = open.slot_count();
+            if usize::try_from(p.slot).is_ok_and(|slot| slot >= slot_count) {
+                log::debug!(
+                    "player {} clicked invalid slot {} in menu {} ({} slots)",
                     guest.uuid,
-                    p.container,
-                    i32::from(p.slot),
-                    i32::from(p.button),
-                    p.input,
-                ) {
-                    return applied;
+                    p.slot,
+                    open.registry_id,
+                    slot_count
+                );
+                return;
+            }
+            let uuid = guest.uuid;
+            let display = open.slots == Slots::Native && open.owned_slots().is_none();
+            if mod_api::__private::menu_listens(mod_api::HookId::MenuClicked, &open.registry_id) {
+                let generation = guest.menu_generation;
+                // Container.stillValidBlockEntity checks the original instance, not just
+                // whether the position still contains a block entity. `halves` is the one
+                // or two actual containers, not the mod's dynamically linked slots.
+                let mut holders = open
+                    .slots
+                    .halves()
+                    .map(|pos| (pos, self.world.block_entities.generation(&pos)));
+                let holders = [holders.next(), holders.next()];
+                let menu = open.registry_id.clone();
+                let mut handled = false;
+                self.native_menu_clicked(mod_api::__private::MenuClickedCall {
+                    menu: &menu,
+                    uuid,
+                    window: p.container,
+                    slot: i32::from(p.slot),
+                    button: i32::from(p.button),
+                    mode: p.input,
+                    handled: &mut handled,
+                });
+                let live = self.lan.as_ref().and_then(|host| {
+                    let i = host.hub.guests.connection_index(conn)?;
+                    let guest = &host.hub.guests[i];
+                    (guest.menu_generation == generation
+                        && !guest.disconnect_pending
+                        && guest.menu.as_ref().is_some_and(|m| m.window == p.container))
+                    .then_some((i, guest))
+                });
+                let Some((i, guest)) = live else {
+                    if !handled {
+                        log::warn!(
+                            "menu_clicked: {menu} window {} is no longer open for player {uuid}",
+                            p.container
+                        );
+                    }
+                    return;
+                };
+                gi = i;
+                if holders
+                    .into_iter()
+                    .flatten()
+                    .any(|(pos, old)| self.world.block_entities.generation(&pos) != old)
+                {
+                    log::warn!(
+                        "menu_clicked: the backing of {menu} window {} changed for player {uuid}",
+                        p.container
+                    );
+                    self.guest_close_menus_and_tell(conn);
+                    return;
                 }
-                self.reply_predicted_menu_click(conn, p, Vec::new());
-                return true;
+                if handled || guest.dead || guest.spectator() {
+                    if !handled {
+                        log::warn!("menu_clicked: player {uuid} may no longer click {menu}");
+                    }
+                    // The client predicted the ordinary slot action, not the override.
+                    self.reply_menu_click(conn, ClickReply::Resend(p.container));
+                    return;
+                }
+                if !self.container_menu_valid(guest) {
+                    log::warn!(
+                        "menu_clicked: {menu} window {} is no longer valid for player {uuid}",
+                        p.container
+                    );
+                    self.guest_close_menus_and_tell(conn);
+                    return;
+                }
+            }
+            if display {
+                // Display menus do not move items unless their slots were explicitly backed.
+                if self
+                    .place_menu_click(
+                        uuid,
+                        p.container,
+                        i32::from(p.slot),
+                        i32::from(p.button),
+                        p.input,
+                    )
+                    .is_none()
+                {
+                    self.reply_predicted_menu_click(conn, p, Vec::new());
+                }
+                return;
             }
         }
-        if let Some(applied) = self
-            .lan_owned_menu_click(conn, p)
-            .or_else(|| self.lan_mod_quick_move(conn, p))
-        {
-            return applied;
-        }
-        if self.lan_merchant_click(conn, p)
+        if self.lan_owned_menu_click(conn, p).is_some()
+            || self.lan_mod_quick_move(conn, p).is_some()
+            || self.lan_merchant_click(conn, p)
             || self.lan_inventory_click(conn, p)
             || self.lan_crafting_click(conn, p)
-        {
-            return true;
-        }
-        if let Some(applied) = self.lan_machine_click_asked(conn, p, Default::default()) {
-            return applied;
-        }
-        if self.lan_station_click(conn, p)
+            || self
+                .lan_machine_click_asked(conn, p, Default::default())
+                .is_some()
+            || self.lan_station_click(conn, p)
             || self.lan_lectern_click(conn, p)
             || self.lan_mount_click(conn, p)
         {
-            return true;
+            return;
         }
         let Some(host) = self.lan.as_ref() else {
-            return false;
+            return;
         };
         let slots = host.hub.guests[gi]
             .menu
@@ -1385,10 +1462,10 @@ impl Game<'_> {
             .map(|m| m.slots);
         let before = slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi]));
         let Some(drops) = self.lan_hub_click(conn, p) else {
-            return false;
+            return;
         };
         let Some(host) = self.lan.as_ref() else {
-            return false;
+            return;
         };
         if let Some(Slots::Block(key) | Slots::Double(key, _)) = slots
             && slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi])) != before
@@ -1404,7 +1481,6 @@ impl Game<'_> {
                 Box::new(super::super::lan_crafting::GuestMenuEffects::dropped(drops)),
             ));
         }
-        true
     }
 }
 

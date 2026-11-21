@@ -1,0 +1,6 @@
+sunrise-client game::mod_menu_decisions_tests::a_click_panic_disables_only_the_callback_and_keeps_committed_writes lib daily resources
+sunrise-client game::mod_menu_decisions_tests::a_block_menu_click_keeps_hook_writes_and_uses_live_slots lib daily resources
+sunrise-client game::mod_menu_decisions_tests::a_display_replacement_obeys_an_explicit_transaction lib daily resources
+sunrise-client game::mod_menu_decisions_tests::a_part_for_another_menu_type_does_not_receive_the_click lib daily resources
+sunrise-client game::native_menus::owned_slots_tests::a_cancelled_drag_step_keeps_the_existing_drag lib daily resources
+sunrise-client game::native_menus::owned_slots_tests::a_click_can_close_or_replace_the_receiving_window_without_running_its_default lib daily resources

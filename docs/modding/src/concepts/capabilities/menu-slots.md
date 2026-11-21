@@ -308,22 +308,21 @@ host.transaction(|host, tx| {
 })
 ```
 
-`MenuPart::menu_clicked` v3 runs on parts registered for the open mod menu's type. The event names
-that type and gives the raw slot, button and click type. Menu-button clicks, recipe placement and creative
-set-slot do not reach it. Return `Flow::Cancel` after doing the click yourself to skip the default. On
-`Flow::Continue`, the part and the default action share one transaction. If the part changes what the
-default would read, or if the default refuses, the action rolls back without trying a different click.
-The client still predicts the default action. After an override or refusal the server sends the full menu,
-cursor and any predicted swap target omitted from the menu. A display-only menu has no default moves.
+`MenuPart::menu_clicked` runs on the parts of the receiving mod menu, before its default slot
+action. Each listener receives the menu type and original slot, button and click type. Menu-button clicks,
+recipe placement and creative set-slot do not reach it. Return `Flow::Cancel` to skip the default action.
+`Flow::Continue` uses the current slots, cursor and slot rules. If the part closes or replaces the menu,
+the old click does not run in the replacement. The server corrects the client's prediction, including
+any predicted swap target omitted from the menu. A display-only menu has no default moves.
 
-A click action cannot replace a screen: `open_menu` returns `Ok(None)` and `PlayerRef::open_mod_menu`
-returns `OpenMenuError::ClickInProgress`. `close_menu` and `MenuRef::close_container` wait for a
-successful commit. An abort leaves the window and its items in place and sends no close packet.
-`menu_set_items` changes also roll back without sending a packet if the action aborts.
+The hook does not open a transaction. Use `host.transaction` to group your own writes. Committed writes
+stand even if the click is cancelled or the default action is refused. If a callback panics, the game
+logs it, shows an error toast naming the mod, and disables that mod's click callback for the session.
+The panic does not cancel the click.
 
-`menu_quick_move` v3 runs as one action too. An invalid answer, or a Host write to a player's inventory, cursor or
-menu storage, refuses that move instead of falling back to the game's routing. An answer's optional remainder
-holds what is left in the clicked slot (`None` empties it).
+`menu_quick_move` still runs as its own action. An invalid answer, or a Host write to a player's inventory,
+cursor or menu storage, refuses that move instead of falling back to the game's routing. The optional
+remainder is what is left in the clicked slot (`None` empties it).
 
 Inside `menu_clicked`, `ItemPlace::MenuSlot` can take from and give to the clicking
 player's inventory and hotbar slots as well as the menu's own storage. Inserts fill

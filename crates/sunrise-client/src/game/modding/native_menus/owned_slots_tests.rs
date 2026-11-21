@@ -17,9 +17,17 @@ use sunrise_protocol::packets::play::{
 
 thread_local! {
     static SCRIPTED_CLICK: std::cell::Cell<Option<Flow>> = const { std::cell::Cell::new(None) };
-    static WINDOW_REQUEST: std::cell::Cell<Option<(MenuKey, bool)>> = const { std::cell::Cell::new(None) };
+    static WINDOW_REQUEST: std::cell::Cell<Option<WindowAction>> = const { std::cell::Cell::new(None) };
     static CLOSE_NOTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LOCK_FIRST_SLOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[derive(Clone, Copy)]
+enum WindowAction {
+    CloseNative,
+    CloseHandle,
+    ReplaceNative(MenuReplace),
+    ReplaceMod(MenuKey),
 }
 
 struct Part;
@@ -46,34 +54,29 @@ impl MenuPart for Part {
     }
 
     fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut MenuClickedEvent<'_>) -> Flow {
-        if let Some((key, by_handle)) = WINDOW_REQUEST.get() {
-            let title = mod_api::Text::literal("Would replace the current menu");
-            assert_eq!(
-                host.open_menu(
-                    event.uuid,
-                    1,
-                    title.clone(),
-                    Vec::new(),
-                    MenuReplace::InPlace
-                ),
-                Ok(None)
-            );
+        if let Some(action) = WINDOW_REQUEST.get() {
             let player = host.player(event.uuid).unwrap();
-            assert_eq!(
-                player.open_mod_menu(host, mod_api::ModMenuOpen::new(key, title)),
-                Err(mod_api::OpenMenuError::ClickInProgress)
-            );
-            if by_handle {
-                let menu = player.container_menu(host).unwrap();
-                assert!(menu.close_container(host));
-            } else {
-                host.close_menu(event.uuid);
+            let title = mod_api::Text::literal("Replacement");
+            match action {
+                WindowAction::CloseNative => host.close_menu(event.uuid),
+                WindowAction::CloseHandle => {
+                    assert!(player.container_menu(host).unwrap().close_container(host));
+                }
+                WindowAction::ReplaceNative(replace) => {
+                    assert!(
+                        host.open_menu(event.uuid, 1, title, Vec::new(), replace)
+                            .unwrap()
+                            .is_some()
+                    );
+                }
+                WindowAction::ReplaceMod(key) => {
+                    let mut request = mod_api::ModMenuOpen::new(key, title);
+                    request.replace = MenuReplace::CloseFirst;
+                    assert!(player.open_mod_menu(host, request).unwrap().is_some());
+                }
             }
-            assert!(
-                host.menu(event.uuid, event.window).is_some(),
-                "close is deferred"
-            );
-            return Flow::Cancel;
+            assert!(host.menu(event.uuid, event.window).is_none());
+            return Flow::Continue;
         }
         if let Some(flow) = SCRIPTED_CLICK.get() {
             return flow;
@@ -122,7 +125,7 @@ impl Hooks for Listener {
 
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent<'_>) {
         CLOSE_NOTICES.set(CLOSE_NOTICES.get() + 1);
-        if !self.return_contents {
+        if !self.return_contents || event.owned_slots.iter().all(Option::is_none) {
             return;
         }
         assert_eq!(event.opening_hand, Some(Hand::Off));
@@ -826,7 +829,7 @@ fn scoped_owned_clicks_replace_or_continue_each_input_mode() {
 
 #[test]
 #[ignore = "daily"]
-fn a_replaced_or_aborted_drag_step_keeps_the_existing_drag() {
+fn a_cancelled_drag_step_keeps_the_existing_drag() {
     use sunrise_client::lan::menu::input::QUICK_CRAFT;
     with_owned_menu(false, |game, rx, key| {
         let stack = |count| Some(ItemStack::new("minecraft:stone", count));
@@ -848,12 +851,6 @@ fn a_replaced_or_aborted_drag_step_keeps_the_existing_drag() {
             let g = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
             assert_eq!(g.native_menu, [None, None]);
             assert_eq!(g.carried, stack(6));
-            // An enclosing abort must discard this step and its publications as well.
-            let seal = game.transaction_open();
-            send_scoped_click(game, Flow::Continue, window, slot, step, QUICK_CRAFT);
-            assert!(sent(&rx).is_empty());
-            game.transaction_close(&seal, false);
-            assert!(sent(&rx).is_empty());
             send_scoped_click(game, Flow::Continue, window, slot, step, QUICK_CRAFT);
             sent(&rx);
         }
@@ -900,10 +897,16 @@ fn send_scoped_click(
 
 #[test]
 #[ignore = "daily"]
-fn a_click_refuses_opens_and_closes_only_on_commit() {
+fn a_click_can_close_or_replace_the_receiving_window_without_running_its_default() {
     with_owned_menu(true, |game, rx, key| {
-        for by_handle in [false, true] {
-            let (window, menu) = open(game, key);
+        for action in [
+            WindowAction::CloseNative,
+            WindowAction::CloseHandle,
+            WindowAction::ReplaceNative(MenuReplace::CloseFirst),
+            WindowAction::ReplaceNative(MenuReplace::InPlace),
+            WindowAction::ReplaceMod(key),
+        ] {
+            let (window, _) = open(game, key);
             let stored = ItemStack::new("minecraft:stick", 3);
             let carried = ItemStack::new("minecraft:dirt", 2);
             let hub = &mut game.lan.as_mut().unwrap().hub;
@@ -915,28 +918,19 @@ fn a_click_refuses_opens_and_closes_only_on_commit() {
             hub.resend_menu(1, window, &game.world);
             sent(&rx);
             CLOSE_NOTICES.set(0);
-            WINDOW_REQUEST.set(Some((key, by_handle)));
+            WINDOW_REQUEST.set(Some(action));
 
-            let seal = game.transaction_open();
-            click(game, window, 0);
-            assert_eq!(game.menu(123, window), Some(menu));
-            assert!(sent(&rx).is_empty());
-            game.transaction_close(&seal, false);
-            game.run_native_menu_events();
-            assert_eq!(game.menu(123, window), Some(menu));
-            let guest = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
-            assert_eq!(guest.native_menu, [None, Some(stored.clone())]);
-            assert_eq!(guest.carried, Some(carried.clone()));
-            assert!(guest.inventory.iter().all(Option::is_none));
-            assert!(sent(&rx).is_empty());
-            assert_eq!(CLOSE_NOTICES.get(), 0);
-
-            click(game, window, 0);
+            click(game, window, 1);
             WINDOW_REQUEST.set(None);
             assert!(game.menu(123, window).is_none());
             let guest = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
+            let replacement = matches!(
+                action,
+                WindowAction::ReplaceNative(_) | WindowAction::ReplaceMod(_)
+            );
+            assert_eq!(guest.menu.is_some(), replacement);
             assert!(guest.carried.is_none());
-            assert!(guest.native_menu.is_empty());
+            assert!(guest.native_menu.iter().all(Option::is_none));
             assert_eq!(
                 guest.inventory.iter().flatten().collect::<Vec<_>>(),
                 [&carried, &stored],
@@ -945,13 +939,29 @@ fn a_click_refuses_opens_and_closes_only_on_commit() {
             assert_eq!(CLOSE_NOTICES.get(), 1);
             let packets = sent(&rx);
             assert_eq!(
+                packets.iter().any(|p| matches!(p, C::OpenScreen(_))),
+                replacement
+            );
+            assert_eq!(
                 packets
                     .iter()
-                    .filter(|p| matches!(p, C::ContainerClose(p) if p.container == window))
+                    .filter(|p| matches!(p,
+                        C::ContainerClose(p) if p.container == window
+                    ))
                     .count(),
-                1
+                usize::from(!matches!(
+                    action,
+                    WindowAction::ReplaceNative(MenuReplace::InPlace)
+                ))
             );
-            assert!(!packets.iter().any(|p| matches!(p, C::OpenScreen(_))));
+            assert!(!packets.iter().any(|p| matches!(p,
+                C::ContainerSetContent(p) if p.container == window
+            )));
+            if replacement {
+                // The next fixture starts without this replacement window.
+                game.guest_close_menus_and_tell(1);
+                game.run_native_menu_events();
+            }
         }
     });
 }
