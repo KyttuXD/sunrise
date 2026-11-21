@@ -36,24 +36,27 @@ fn add_section_geometry(&self, _context: &RegistrationContext, event: &mut AddSe
 }
 ```
 
-Positions are in blocks from the section's lowest corner, each 0 to 16, UVs within the sprite (0 to 1), and the
-sprite a block atlas sprite's name. What a renderer adds to a section is taken whole or refused whole, with one log
-line: a corner or UV out of range or not a number, a sprite the atlas lacks, or a quad past a budget refuses all of
-it, and `context.add` answers false from then on; the section keeps its own blocks. A section's blocks and every
-renderer's quads share one budget, 262144 quads and 32 MiB of mesh data (`context.remaining()` says what is
-left), and the sections meshing at once share 128 MiB of added quads not yet in their meshes. A renderer that panics
-is asked no more. `context.level()` reads the section's chunk and its eight neighbours, as a block tint source's
-`level` does. The renderer runs on the meshing workers, so it keeps no mutable state and gets no `Host`; it is asked for every
-section the client meshes, also one that holds only air, and returns quickly when it has nothing there. Its quads
-are shaded only by the colour and light it gives them. A section meshes again when its blocks change, when the
-resources reload, and when a mod calls `ClientHost::refresh_render_visibility` and the hidden blocks change."#]
+Positions are in blocks from the section's lowest corner, UVs are within the sprite, and the sprite is a block
+atlas sprite's name. Matching vanilla's `BufferBuilder` and `TextureAtlas.getSprite`, any finite positions and UVs
+are accepted, and an unknown sprite falls back to `minecraft:missingno`. A quad with a non-finite position or UV,
+or one that would exceed vanilla's `BufferBuilder.MAX_VERTEX_COUNT` (16,777,215 vertices per render pass), is
+rejected individually with a warning; `context.add` returns `false` for that quad without discarding earlier
+accepted quads or muting later calls. A renderer that panics rolls back only its own quads for that section, logs
+an error and shows an error toast naming the mod, and is disabled for the session; the section's blocks and other
+renderers are unaffected. `context.level()` reads the section's chunk and its eight neighbours, as a block tint
+source's `level` does. The renderer runs on the meshing workers, so it keeps no mutable state and gets no `Host`;
+it is asked for every section the client meshes, also one that holds only air, and returns quickly when it has
+nothing there. Its quads are shaded only by the colour and light it gives them. A section meshes again when its
+blocks change, when the resources reload, and when a mod calls `ClientHost::refresh_render_visibility` and the
+hidden blocks change."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",
         side = "client",
         contract = "listen",
         context = "registration",
-        neoforge = "AddSectionGeometryEvent"
+        neoforge = "AddSectionGeometryEvent",
+        version = 2
     )]
     fn add_section_geometry(renderers: &mut dyn mod_api::SectionGeometryRenderers);
 }

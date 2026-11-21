@@ -373,7 +373,10 @@ impl Arena {
         encoder: &mut wgpu::CommandEncoder,
         vertices: u64,
     ) -> Option<(u32, u64)> {
-        let len = Self::span(vertices).min(self.page_limit);
+        let len = Self::span(vertices);
+        if len > self.page_limit {
+            return None;
+        }
         if let Some(found) = self.alloc_existing(len) {
             return Some(found);
         }
@@ -430,7 +433,10 @@ impl Arena {
     /// A range of `vertices` in a page that exists already and is not being
     /// emptied: never grows the arena.
     pub fn alloc_existing(&mut self, vertices: u64) -> Option<(u32, u64)> {
-        let len = Self::span(vertices).min(self.page_limit);
+        let len = Self::span(vertices);
+        if len > self.page_limit {
+            return None;
+        }
         let closing = self.closing;
         self.pages
             .iter_mut()
@@ -441,7 +447,10 @@ impl Arena {
     /// `alloc_existing` for a mesh moved off the closing page: only pages in
     /// video memory, so compaction never pushes terrain into system memory.
     pub fn alloc_moved(&mut self, vertices: u64) -> Option<(u32, u64)> {
-        let len = Self::span(vertices).min(self.page_limit);
+        let len = Self::span(vertices);
+        if len > self.page_limit {
+            return None;
+        }
         let closing = self.closing;
         self.pages
             .iter_mut()

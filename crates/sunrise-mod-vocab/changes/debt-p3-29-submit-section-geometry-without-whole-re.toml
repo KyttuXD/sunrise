@@ -1,0 +1,14 @@
+ids = [
+  "hook:add_section_geometry",
+  "method:SectionGeometryContext::remaining",
+  "type:SectionQuad",
+  "handle:SectionGeometryRegistry::into_renderers",
+]
+why = '''Section geometry now submits through a checked section collector matching NeoForge's `AddSectionGeometryEvent` / `SectionCompiler` (`ClientHooks.addAdditionalGeometry`), vanilla's `BufferBuilder` (`MAX_VERTEX_COUNT = 16777215`), and `TextureAtlas.getSprite` missing-sprite fallback (`minecraft:missingno`). The synthetic 262,144-quad, 32 MiB per-section, and 128 MiB in-flight caps, the `0..=16` position and `0..=1` UV rejections, whole-renderer discard on an invalid quad, and sticky refusal muting are removed. Only non-finite coordinates or exceeding vanilla's per-pass vertex limit reject a quad, isolating that quad without discarding accepted geometry or muting future reports. A panic rolls back only that renderer's partial quads for the section, reports an error and toast naming the mod, and disables only that renderer for the session via `CallbackOwner`. `SectionQuad` drops `Wire` because quads are submitted in-process to the meshing collector. `add_section_geometry` is bumped to version 2 for this collector and failure contract.'''
+migrate = '''
+- Rebuild against `add_section_geometry` version 2.
+- Remove calls to `SectionGeometryContext::remaining()`; there is no synthetic quad budget.
+- Stop relying on `SectionQuad: Wire`; pass `SectionQuad` directly to `SectionGeometryContext::add`.
+- Out-of-section positions, out-of-`0..=1` UVs, and unknown sprite names (which fall back to `minecraft:missingno`) are now accepted. If `context.add` returns `false` (non-finite position/UV or vanilla's 16,777,215 per-pass vertex limit), earlier accepted quads remain and later valid quads can still succeed.
+- Callers of `SectionGeometryRegistry::into_renderers()` now receive `Vec<(Option<&'static str>, Arc<dyn SectionGeometry>)>` carrying the registering mod id alongside each renderer.
+'''

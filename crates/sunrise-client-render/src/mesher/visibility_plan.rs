@@ -25,8 +25,20 @@ const ALL: u8 = 0xFF;
 pub const ANSWER_BYTES: usize = 4096 + std::mem::size_of::<SectionAnswer>();
 /// The bytes a section's frozen [`SectionVisibilityPlan`] holds.
 pub const PLAN_BYTES: usize = P * P * P;
+/// The shared in-flight visibility pool ceiling, in bytes.
+pub(super) const MAX_IN_FLIGHT_BYTES: usize = 128 << 20;
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
-/// Bytes of visibility storage charged to the same shared in-flight pool as section geometry.
+fn reserve_in_flight(shared: &AtomicUsize, bytes: usize) -> bool {
+    shared
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+            held.checked_add(bytes)
+                .filter(|&after| after <= MAX_IN_FLIGHT_BYTES)
+        })
+        .is_ok()
+}
+
+/// Bytes of visibility storage charged to the visibility in-flight pool.
 /// The bytes are returned on drop, or split off into a longer-lived lease.
 #[derive(Debug)]
 pub struct Lease {
@@ -35,10 +47,10 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// Charges `bytes` to the workers' shared in-flight bytes, or `None` at the global limit: the
+    /// Charges `bytes` to the visibility in-flight pool, or `None` at the global limit: the
     /// caller waits for room.
     pub fn charge(bytes: usize) -> Option<Self> {
-        Self::charge_in(&super::mod_geometry::IN_FLIGHT, bytes)
+        Self::charge_in(&IN_FLIGHT, bytes)
     }
     /// Move part of a charge to another owner without competing for capacity again.
     pub(crate) fn split(&mut self, bytes: usize) -> Self {
@@ -49,7 +61,7 @@ impl Lease {
         }
     }
     pub(crate) fn charge_in(shared: &'static AtomicUsize, bytes: usize) -> Option<Self> {
-        super::mod_geometry::reserve_in_flight(shared, bytes).then(|| Self { shared, bytes })
+        reserve_in_flight(shared, bytes).then(|| Self { shared, bytes })
     }
 }
 
@@ -60,8 +72,7 @@ impl Drop for Lease {
 }
 
 /// Resident answers are charged to that pool too, but can never consume its transient headroom.
-pub(crate) const MAX_RESIDENT_VISIBILITY_BYTES: usize =
-    super::mod_geometry::MAX_IN_FLIGHT_BYTES * 3 / 4;
+pub(crate) const MAX_RESIDENT_VISIBILITY_BYTES: usize = MAX_IN_FLIGHT_BYTES * 3 / 4;
 
 /// What the mesher reads of a section's visibility, by padded cell index (`pi`).
 pub(super) trait CellMasks {

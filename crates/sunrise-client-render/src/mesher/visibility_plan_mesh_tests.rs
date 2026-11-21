@@ -76,7 +76,7 @@ fn mesh_region(
         part_tables: Default::default(),
     };
     let mut scratch = MeshScratch::default();
-    mesher.mesh_planned(region, 0, SectionMesh::default(), &mut scratch, plan, 0)
+    mesher.mesh_planned(region, 0, SectionMesh::default(), &mut scratch, plan)
 }
 
 fn quads(mesh: &SectionMesh) -> usize {
@@ -155,8 +155,10 @@ fn hide_terrain_composes_with_state_visibility_and_section_geometry() {
     }
     let mut f = fixture();
     let geometry = Arc::new(Geometry::default());
-    f.tables.section_geometry =
-        Arc::new([super::super::mod_geometry::Renderer::new(geometry.clone())]);
+    f.tables.section_geometry = Arc::new([super::super::mod_geometry::Renderer::new(
+        Some("visibility_test"),
+        geometry.clone(),
+    )]);
     let mut chunk = stone(&f, &[[1, 0, 1]]);
     let chest = state(&f, "minecraft:chest");
     let barrel = state(&f, "minecraft:barrel");
@@ -378,7 +380,7 @@ fn without_a_plan_meshes_are_byte_identical() {
     };
     let mut scratch = MeshScratch::default();
     let before = mesher.mesh_reusing(&region, 0, SectionMesh::default(), &mut scratch);
-    let none = mesher.mesh_planned(&region, 0, SectionMesh::default(), &mut scratch, None, 0);
+    let none = mesher.mesh_planned(&region, 0, SectionMesh::default(), &mut scratch, None);
     let keep_all = SectionVisibilityPlan {
         hide_terrain: false,
         cells: vec![ALL; P * P * P].into_boxed_slice(),
@@ -389,7 +391,6 @@ fn without_a_plan_meshes_are_byte_identical() {
         SectionMesh::default(),
         &mut scratch,
         Some(&keep_all),
-        0,
     );
     for other in [&none, &kept] {
         assert_eq!(

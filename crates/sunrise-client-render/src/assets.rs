@@ -438,6 +438,9 @@ impl RenderAssets {
             sprites.insert(&format!("minecraft:block/destroy_stage_{stage}"))?;
             sprites.insert(&format!("minecraft:block/destroy_oit_stage_{stage}"))?;
         }
+        // Vanilla `TextureAtlas.upload` always registers `MissingTextureAtlasSprite.getLocation()`
+        // so `TextureAtlas.getSprite` can fall back to it for unknown sprite ids.
+        sprites.insert_in_blocks("minecraft:missingno")?;
         let fusion = if draws {
             let _step = crate::spans::startup::step("core.fusion");
             crate::fusion::FusionTextures::load(

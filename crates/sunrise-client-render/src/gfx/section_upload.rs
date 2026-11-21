@@ -58,14 +58,23 @@ impl Renderer {
         }
     }
     pub(super) fn upload_mesh(&mut self, mesh: &SectionMesh) -> Option<SectionGpu> {
-        let solid = (mesh.solid.len() / 4) as u32;
-        let translucent = (mesh.translucent.len() / 4) as u32;
-        if solid + translucent == 0 {
+        let solid = u32::try_from(mesh.solid.len() / 4).ok()?;
+        let translucent = u32::try_from(mesh.translucent.len() / 4).ok()?;
+        if solid.checked_add(translucent)? == 0 {
             return None;
         }
         let max = solid.max(translucent);
         if max > self.index_quads {
-            self.index_quads = max.next_power_of_two();
+            let max_index_quads =
+                self.device.limits().max_buffer_size / (6 * size_of::<u32>() as u64);
+            if u64::from(max) > max_index_quads {
+                log::warn!(
+                    "Sunrise: section mesh with {max} quads exceeds GPU index buffer limit ({max_index_quads} quads); skipping upload"
+                );
+                return None;
+            }
+            let cap = max_index_quads.min(u64::from(u32::MAX)) as u32;
+            self.index_quads = max.checked_next_power_of_two().map_or(cap, |n| n.min(cap));
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let encoder = self.section_copies.get_or_insert_with(|| {
