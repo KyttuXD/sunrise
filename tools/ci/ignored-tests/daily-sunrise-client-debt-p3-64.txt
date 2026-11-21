@@ -1,1 +1,3 @@
-sunrise-client game::remote::recipe_properties::client_logging_out_tests::client_player_logging_out_fires_once_before_teardown_and_handles_no_player_transitions lib daily resources
+sunrise-client game::remote::recipe_properties::client_logging_out_tests::cancel_and_handshake_failures_do_not_log_out_but_configuration_disconnects_do lib daily child-process
+sunrise-client game::remote::recipe_properties::client_logging_out_tests::client_player_logging_out_fires_once_before_teardown_and_handles_no_player_transitions lib daily child-process
+sunrise-client game::remote::recipe_properties::client_logging_out_tests::quitting_from_the_title_logs_out_once lib daily child-process

@@ -8,9 +8,10 @@ mod tests;
 impl Game<'_> {
     /// Minecraft.disconnect's `ClientPlayerNetworkEvent.LoggingOut`: on
     /// leaving a world, starting a new world or server connection, and
-    /// quitting the game from one. Fires before teardown with the live local
-    /// player handle and game mode when present, or `(None, None)` on
-    /// no-player transitions; once per connection, whichever way out runs first.
+    /// quitting the game, including from the title. Fires before teardown with
+    /// the live local player handle and game mode when present, or `(None, None)`
+    /// when the disconnect has no player. Abandoning a connection attempt is
+    /// not a disconnect here.
     pub(in crate::game) fn client_logging_out(&mut self) {
         if !self.options.is_client_start() {
             return;

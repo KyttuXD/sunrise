@@ -343,7 +343,8 @@ impl Game<'_> {
         };
         if sunrise_client::ui::hovered(self.cursor, x, y, 200.0, 20.0) {
             self.audio.play_button_click();
-            self.leave_server(None)?;
+            // Cancel closes the attempt without calling Minecraft.disconnect again.
+            self.finish_leave_server(None)?;
         }
         Ok(())
     }

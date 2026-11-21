@@ -2,6 +2,16 @@
 
 Call `host.disconnect(reason)` through `ClientHost` to leave the joined server or world at the end of the frame, outside hooks. Pass `Some(Text)` to show a disconnect reason or `None` for the normal leave flow. The disconnect screen renders the reason in the player's language, like other translatable text: a translatable component shows its translated text and a plain-text reason is unchanged. The call returns `Result<(), DisconnectError>`: `Unavailable` means no world is joined, it is closing, or a save is pending, and `Text` reports an invalid reason (a malformed or too-deep component is refused by that name and nothing changes). A pending request belongs to its current world epoch and cannot leave a later world. Server code continues to use the separate player disconnect operation.
 
+## Observe client logout
+
+Implement `Hooks::client_player_logging_out` to run before client disconnect
+teardown. If `event.player` is `Some`, its `PlayerRef` is still live for host
+queries during the callback and `event.game_mode` contains its `GameMode`. Both
+are `None` on a no-player disconnect, such as quitting from the title, starting
+a server connection, or losing the connection during configuration. Canceling
+an attempt or failing the login handshake does not fire another event. Changing
+dimension or entering server reconfiguration is not a logout.
+
 ## Holding outgoing play packets
 
 Call `host.hold_packets()` to start an ordered hold and receive its opaque `HoldId`.

@@ -4,9 +4,11 @@ pub trait Hooks {
     /// Before client disconnect teardown (`Minecraft.disconnect`, NeoForge's
     /// `ClientPlayerNetworkEvent.LoggingOut`). Fires once per actual client
     /// disconnect before the client level, handles, or session are torn down,
-    /// including no-player disconnect transitions where both `player` and
-    /// `game_mode` are `None`. Does not fire on a dimension change or
-    /// reconfiguration. Client-side.
+    /// including quitting from the title, starting a connection, or losing a
+    /// connection during configuration. Both `player` and `game_mode` are
+    /// `None` when there is no client player. Canceling a connection attempt,
+    /// a login handshake failure, a dimension change, and entering
+    /// reconfiguration do not fire the hook. Client-side.
     #[hook(
         version = 2,
         dispatch = "flat",

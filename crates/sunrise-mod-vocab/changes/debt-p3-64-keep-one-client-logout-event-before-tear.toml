@@ -3,6 +3,8 @@ ids = [
     "method:Hooks::client_disconnecting",
     "type:ClientDisconnectingEvent",
     "hook:client_player_logging_out",
+    "method:Hooks::client_player_logging_out",
+    "type:ClientPlayerLoggingOutEvent",
     "hook:client_player_logging_out.player_id",
     "hook:client_player_logging_out.uuid",
     "hook:client_player_logging_out.player",
@@ -12,5 +14,5 @@ ids = [
     "type:ClientPlayerLoggingOutEvent.player",
     "type:ClientPlayerLoggingOutEvent.game_mode",
 ]
-why = "Keep one client logout hook (`client_player_logging_out`, version 2) matching vanilla 26.3 `Minecraft.disconnect` and NeoForge `ClientHooks.firePlayerLogout` / `ClientPlayerNetworkEvent.LoggingOut`, and delete the duplicate `client_disconnecting` hook that fired again late during session cleanup. `client_player_logging_out` now runs once per actual client disconnect before teardown (including no-player transitions) and carries optional live `PlayerRef` and `GameMode` handles instead of raw entity ID and UUID integers."
-migrate = "Move any `Hooks::client_disconnecting` listener to `Hooks::client_player_logging_out` (version 2) and update `client_player_logging_out` listeners to read `event.player: Option<PlayerRef>` and `event.game_mode: Option<GameMode>` instead of `event.player_id` and `event.uuid` (`event.player` is still live for host queries during the callback, and both fields are `None` on no-player disconnect transitions)."
+why = "Keep one client logout hook (`client_player_logging_out`, version 2) at vanilla 26.3 `Minecraft.disconnect`, where NeoForge `ClientHooks.firePlayerLogout` posts `ClientPlayerNetworkEvent.LoggingOut`. Delete `client_disconnecting`, which fired later during cleanup. The remaining hook sees a live player and game mode when present. It also runs at no-player disconnects, such as `Minecraft.exitWorldAndClose`, `ConnectScreen.startConnecting`, and `ClientCommonPacketListenerImpl.onDisconnect` during configuration. `ConnectScreen` Cancel and `ClientHandshakePacketListenerImpl.onDisconnect` only end the attempt, so they do not fire it again."
+migrate = "Replace `fn client_disconnecting(&self, host: &dyn ClientHost, event: &mut ClientDisconnectingEvent)` with `fn client_player_logging_out(&self, host: &mut dyn ClientHost, event: &mut ClientPlayerLoggingOutEvent)`. If you already implement `client_player_logging_out`, keep just that listener. Read `event.player: Option<PlayerRef>` and `event.game_mode: Option<GameMode>`. Replace reads of `event.player_id` and `event.uuid` with `event.player.map(|player| player.entity().id())` and `event.player.map(|player| player.uuid())`, respectively. The player handle is live for host queries during the callback. Both fields are `None` on no-player disconnects; do not expect an extra event for a connection attempt that is canceled or fails before configuration."

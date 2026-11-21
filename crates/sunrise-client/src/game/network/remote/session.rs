@@ -604,7 +604,7 @@ impl Game<'_> {
         self.finish_leave_server(reason)
     }
 
-    /// Tear down the client's server session after `client_logging_out` has already run.
+    /// Tear down a connection after logout, or abandon an attempt that never reached logout.
     pub(in crate::game) fn finish_leave_server(&mut self, reason: Option<Text>) -> Result<()> {
         self.finish_perf();
         // The one boundary every network session passes when it closes here: the player leaving,
