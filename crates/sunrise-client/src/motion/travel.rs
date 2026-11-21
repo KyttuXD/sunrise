@@ -227,7 +227,7 @@ mod tests {
     impl Hooks for Decide {
         fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
             if let Some(velocity) = self.1 {
-                *event.velocity = velocity;
+                let _ = event.motion.set_velocity(velocity);
             }
             self.0
         }
