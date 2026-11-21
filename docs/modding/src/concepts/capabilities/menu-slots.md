@@ -334,7 +334,7 @@ refuse writes.
 ## A mod's chest menu
 
 `host.open_menu(uuid, rows, title, items, replace)` opens a chest menu (`generic_9x1` to `generic_9x6`) for a player
-in place of the menu they have open and returns its window id; `menu_clicked` and `menu_closed` name it too. Its items
+in place of the menu they have open and returns its window id; `menu_clicked` and `player_container_close` name it too. Its items
 change in place: `host.menu(uuid, window)` is its `MenuRef` while the player still has that window open (None for
 another window, a closed menu or a player who left), and a write to `ItemPlace::MenuSlot { menu, slot }` in a
 transaction is sent with the next tick's container sync, one `ContainerSetSlot` per changed slot, as vanilla's
@@ -388,11 +388,16 @@ Ordinary clicks move items up to the slot cap on both sides. To make a filter sl
 read the cursor, insert a copy without extracting from it, and return `Flow::Cancel`. The server sends the
 committed menu and cursor regardless of whether their item IDs and counts match the prediction.
 
-The storage is never saved. `menu_closed` v2 sees its final `owned_slots` in slot order and the supplied
-`opening_hand`, if any. The old window and its handles are already stale. Unlike vanilla's `clearContainer`,
-the game does not return or drop those values automatically. A part that wants real inputs returned must
-return them using the server Host. A listener can instead write a filter selection to the held item. Check
-that the player and item are still available before writing; do not give filter copies back as real items.
+The storage is never saved. Implement `MenuPart::menu_removed` on the part registered for your menu
+type to get its final `owned_slots` in slot order, and the captured `opening_hand`, if supplied. The old
+window and its slot handles are already stale. The game does not return or drop these values automatically:
+return real inputs through the server Host, or write a filter selection back to the item that opened the menu.
+Use `event.player` only when it is `Some`; the owner still receives the detached values and `event.uuid`
+when the player is gone. Check what is currently held before writing, and do not give filter copies back
+as real items. An outstanding transaction settles before the owner sees the detached values.
+
+Use `Hooks::player_container_close` only to observe a server container close. It provides the live
+`PlayerRef` and a read-only `ClosingMenu` for that window, not the owner's slots or opening hand.
 The cursor's ordinary close behavior is unchanged.
 
 ## Slots backed by a held item or an entity's handler

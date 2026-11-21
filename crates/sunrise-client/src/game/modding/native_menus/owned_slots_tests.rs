@@ -5,9 +5,10 @@ use crate::game::{
     native_entity_refs::tests::with_game,
 };
 use mod_api::{
-    Flow, Hand, Hooks, HostTransaction, ItemPlace, ItemResource, MenuClickedEvent, MenuClosedEvent,
-    MenuItemsRefusal, MenuKey, MenuPart, MenuRef, MenuReplace, MenuSlotBackRefusal,
-    MenuSlotBacking, MenuSlotPlace, MenuStillValidEvent, ModEntry, Mods, Registrar, ServerHost,
+    Flow, Hand, Hooks, HostTransaction, ItemPlace, ItemResource, MenuClickedEvent,
+    MenuItemsRefusal, MenuKey, MenuPart, MenuRef, MenuRemovedEvent, MenuReplace,
+    MenuSlotBackRefusal, MenuSlotBacking, MenuSlotPlace, MenuStillValidEvent, ModEntry, Mods,
+    PlayerContainerCloseEvent, Registrar, ServerHost,
 };
 use std::sync::mpsc;
 use sunrise_client::{items::ItemStack, lan::Out};
@@ -18,13 +19,44 @@ use sunrise_protocol::packets::play::{
 thread_local! {
     static SCRIPTED_CLICK: std::cell::Cell<Option<Flow>> = const { std::cell::Cell::new(None) };
     static WINDOW_REQUEST: std::cell::Cell<Option<(MenuKey, bool)>> = const { std::cell::Cell::new(None) };
+    static LAST_DETACH: std::cell::Cell<Option<(bool, Option<Hand>, u32)>> = const { std::cell::Cell::new(None) };
+    static REMOVALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static CLOSE_NOTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LOCK_FIRST_SLOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-struct Part;
+struct Part {
+    return_contents: bool,
+}
+
 #[mod_api::sunrise_part]
 impl MenuPart for Part {
+    fn menu_removed(&self, host: &mut dyn ServerHost, event: &mut MenuRemovedEvent<'_>) {
+        REMOVALS.set(REMOVALS.get() + 1);
+        LAST_DETACH.set(Some((
+            event.player.is_some(),
+            event.opening_hand,
+            event
+                .owned_slots
+                .get(1)
+                .and_then(Option::as_ref)
+                .map_or(0, |stack| stack.count()),
+        )));
+        if !self.return_contents {
+            return;
+        }
+        assert_eq!(event.opening_hand, Some(Hand::Off));
+        assert!(host.menu(event.uuid, event.window).is_none());
+        let Some(player) = event.player else { return };
+        host.transaction(|host, _| {
+            for stack in event.owned_slots.iter().flatten() {
+                assert!(player.give_stack(host, stack.clone()).unwrap().is_none());
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    }
+
     fn menu_still_valid(&self, _: &dyn mod_api::LoopContext, event: &mut MenuStillValidEvent<'_>) {
         if let Some(item) = event.opening_item {
             assert_eq!(item.hand, Hand::Off);
@@ -103,7 +135,12 @@ struct Listener {
 #[mod_api::__subscriptions]
 impl Hooks for Listener {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-        r.menu_part(MOD_MENU, Part);
+        r.menu_part(
+            MOD_MENU,
+            Part {
+                return_contents: self.return_contents,
+            },
+        );
         r.register_menu_screen(
             MOD_MENU,
             std::sync::Arc::new(
@@ -120,21 +157,14 @@ impl Hooks for Listener {
         .unwrap();
     }
 
-    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent<'_>) {
+    fn player_container_close(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut PlayerContainerCloseEvent<'_>,
+    ) {
+        assert_eq!(event.player.uuid(), 123);
+        assert_eq!(event.menu.kind, Some(MOD_MENU));
         CLOSE_NOTICES.set(CLOSE_NOTICES.get() + 1);
-        if !self.return_contents {
-            return;
-        }
-        assert_eq!(event.opening_hand, Some(Hand::Off));
-        assert!(host.menu(event.uuid, event.window).is_none());
-        let player = host.player(event.uuid).unwrap();
-        host.transaction(|host, _| {
-            for stack in event.owned_slots.iter().flatten() {
-                assert!(player.give_stack(host, stack.clone()).unwrap().is_none());
-            }
-            Ok::<_, ()>(())
-        })
-        .unwrap();
     }
 }
 
@@ -586,8 +616,13 @@ fn closing_discards_owned_slots_unless_the_listener_returns_their_contents() {
                 Ok::<_, ()>(())
             })
             .unwrap();
+            REMOVALS.set(0);
+            CLOSE_NOTICES.set(0);
             game.lan_guest_packet(1, S::ContainerClose(ContainerClose { container: window }));
+            assert_eq!(REMOVALS.get(), 1, "removed runs during the ordinary close");
+            assert_eq!(CLOSE_NOTICES.get(), 1, "only one general close is heard");
             game.run_native_menu_events();
+            assert_eq!(REMOVALS.get(), 1);
             assert_eq!(menu.slot(game, 1), None);
             let guest = &game.lan.as_ref().unwrap().hub.guests[0];
             assert_eq!(
@@ -608,6 +643,35 @@ fn closing_discards_owned_slots_unless_the_listener_returns_their_contents() {
             assert_eq!(reopened.slot(game, 1), Some(None));
         });
     }
+}
+
+#[test]
+#[ignore = "daily"]
+fn removal_reaches_the_owner_without_a_live_player_or_general_close_event() {
+    with_owned_menu(true, |game, _, key| {
+        let (_, menu) = open(game, key);
+        let stick = ItemStack::new("minecraft:stick", 3).try_into_api().unwrap();
+        game.transaction(|host, tx| {
+            let place = ItemPlace::MenuSlot { menu, slot: 1 };
+            assert_eq!(place.insert(host, tx, &ItemResource::of(&stick), 3), 3);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+
+        REMOVALS.set(0);
+        CLOSE_NOTICES.set(0);
+        let hub = &mut game.lan.as_mut().unwrap().hub;
+        hub.close_container(1);
+        hub.guests.remove(0);
+        game.run_native_menu_events();
+        assert_eq!(REMOVALS.get(), 1, "cleanup still reaches the part");
+        assert_eq!(LAST_DETACH.take(), Some((false, Some(Hand::Off), 3)));
+        assert_eq!(CLOSE_NOTICES.get(), 0, "there is no live player close");
+        assert!(
+            game.dropped.is_empty(),
+            "cleanup does not spawn filter contents"
+        );
+    });
 }
 
 #[test]

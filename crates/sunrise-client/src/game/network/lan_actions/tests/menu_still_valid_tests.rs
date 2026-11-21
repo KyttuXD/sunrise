@@ -394,7 +394,7 @@ fn a_blockless_mod_menu_closes_when_its_part_answers_false() {
                             .hub
                             .native_menu_events
                             .iter()
-                            .any(|event| matches!(event, NativeMenuEvent::Closed { window: closed, .. } if *closed == window))
+                            .any(|event| matches!(event, NativeMenuEvent::Removed(removed) if removed.window == window))
                     );
                 });
             },

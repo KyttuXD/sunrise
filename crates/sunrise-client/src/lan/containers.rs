@@ -2,7 +2,7 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
+    menu::{self, Menu, NativeMenuEvent, RemovedNativeMenu, Rules, Slots, View},
 };
 use crate::{
     containers::{BlockEntity, ModContainerInsertRule},
@@ -660,11 +660,11 @@ impl Hub {
         &mut self,
         i: usize,
         window: i32,
-    ) -> Option<(Option<ItemStack>, Option<NativeMenuEvent>)> {
+    ) -> Option<(Option<ItemStack>, Option<RemovedNativeMenu>)> {
         self.guests.update(i, |g| {
             let menu = g.menu.take_if(|m| m.window == window)?;
             let carried = g.close_menu_cursor(menu.window);
-            let closed = menu.native_closed(g.uuid, g.menu_generation, &mut g.native_menu);
+            let closed = menu.removed(g);
             Some((carried, closed))
         })
     }
@@ -687,7 +687,8 @@ impl Hub {
                     item,
                 });
         }
-        self.native_menu_events.extend(closed);
+        self.native_menu_events
+            .extend(closed.map(NativeMenuEvent::Removed));
     }
 
     pub(super) fn close_container_for(&mut self, i: usize) {
@@ -717,7 +718,8 @@ impl Hub {
     pub fn container_closed(&mut self, conn: u32, window: i32) -> Option<ItemStack> {
         let i = self.guests.connection_index(conn)?;
         let (carried, closed) = self.take_hub_menu(i, window)?;
-        self.native_menu_events.extend(closed);
+        self.native_menu_events
+            .extend(closed.map(NativeMenuEvent::Removed));
         carried
     }
 

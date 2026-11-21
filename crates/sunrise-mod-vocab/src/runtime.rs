@@ -449,6 +449,28 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Run a generated observer without letting a panic interrupt the remaining dispatch.
+pub(crate) fn run_isolated_listener(
+    hook: generated::HookId,
+    operation: &'static str,
+    contained: bool,
+    call: impl FnOnce(),
+) {
+    let id = crate::content::crash::current_native_mod().expect("entered listener");
+    if poisoned(hook, id) {
+        return;
+    }
+    match crate::callback_owner::contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => refusal.report_each(),
+        Err(message) => {
+            poison(hook, id);
+            log::error!("mod {id} callback {operation} panicked and was disabled: {message}");
+            crate::callback_owner::record_callback_panic(id, "hook", operation, message);
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,

@@ -2289,8 +2289,8 @@ impl Game<'_> {
                         self.native_guest_left(&guest);
                         continue;
                     }
-                    // The menu they had open closes, in the level they were in
-                    // (`ServerPlayer.disconnect` -> `doCloseContainer`).
+                    // Settle the leaving player's menu in their level. This teardown is not
+                    // ServerPlayer.doCloseContainer and does not post its event.
                     if guest.placed {
                         let back = self.dim;
                         let theirs = super::Dim::from_id(&guest.dimension);
@@ -2312,6 +2312,13 @@ impl Game<'_> {
                         if let Err(e) = self.enter_level(back) {
                             log::error!("could not reopen {}: {e}", back.id());
                         }
+                    }
+                    // If their level could not be entered, the record still owns its native
+                    // storage. The owning part can release it without a live player.
+                    if let Some(menu) = guest.menu.take()
+                        && let Some(removed) = menu.removed(&mut guest)
+                    {
+                        self.finish_native_menu_removal(removed);
                     }
                     self.lan_crafting_left(&mut guest);
                     if guest.placed {

@@ -1074,6 +1074,11 @@ pub(super) fn emit<'a>(
             "report"
         };
         let run = |expression: &str| {
+            if hook.isolate && contract == Contract::Listen {
+                return format!(
+                    "super::runtime::run_isolated_listener(HookId::{hook_id}, \"{name}\", contained, || {expression})"
+                );
+            }
             format!(
                 "match super::runtime::refusable(contained, || {expression}) {{ Ok(answer) => answer, Err(refusal) => {{ {restore_statement}{clear_batch}refusal.{report}(); {refused_value} }} }}"
             )
@@ -1347,11 +1352,12 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
-            format!("{early_return} let contained = super::runtime::outside_world();")
-        } else {
-            early_return
-        };
+        let early_return =
+            if body.contains("refusable(") || (hook.isolate && contract == Contract::Listen) {
+                format!("{early_return} let contained = super::runtime::outside_world();")
+            } else {
+                early_return
+            };
         let unpack = if !uses_carrier {
             String::new()
         } else {

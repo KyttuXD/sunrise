@@ -516,6 +516,7 @@ impl Hook {
         // stops dispatch (#2414); an answered collector has no output until its listener returns.
         let isolate = api.isolate.unwrap_or(false);
         if isolate
+            && api.contract != Contract::Listen
             && (scope.is_some()
                 || !(api.contract == Contract::Cancel
                     || api.contract == Contract::Collect && answered_by_mod))
@@ -523,7 +524,7 @@ impl Hook {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
                 error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
+                    "isolate is for a listener, a global cancel hook, or a global collect hook answered by mod"
                         .into(),
             });
         }

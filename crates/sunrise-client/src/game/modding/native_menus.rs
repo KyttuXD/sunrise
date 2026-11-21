@@ -1,6 +1,6 @@
 //! Blockless server menus for native mods: vanilla chest displays or declared mod menus.
 //! Owned slots run ordinary clicks; display slots move nothing by default. Menu parts can
-//! replace a click, and a close listener receives any detached owned contents.
+//! replace a click or settle detached owned contents during removal.
 use super::api_values::TryIntoEngine;
 use super::{Game, lan::LanHost, lan_menus::GuestMenus};
 use mod_api::__private::game::*;
@@ -9,7 +9,7 @@ use sunrise_client::{
     items::ItemStack,
     lan::{
         data::component_nbt,
-        menu::{Menu, NativeMenuEvent, Slots},
+        menu::{Menu, NativeMenuEvent, RemovedNativeMenu, Slots},
     },
     text::Text,
 };
@@ -268,7 +268,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// Closes the player's native menu (a `native_menu_closed` follows). An active click
+    /// Closes the player's native menu. An active click
     /// stages the close for its current window and sends it only once the transaction commits.
     pub(super) fn close_menu(&mut self, uuid: u128) {
         if let Some(conn) = self.native_conn(uuid)
@@ -289,6 +289,7 @@ type ContainerPos = (i32, i32, i32);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct HeardMenu {
     window: i32,
+    generation: u64,
     /// The menu type's name; a mount's inventory has none in vanilla.
     menu: String,
     /// The block the menu is of.
@@ -390,20 +391,23 @@ impl Game<'_> {
                     })
                 })
             });
+        let Some(guest) = host.hub.guest(conn) else {
+            return;
+        };
         let menu = HeardMenu {
             window,
+            generation: guest.menu_generation,
             menu: menu.to_owned(),
             pos,
             openers,
         };
         host.menus.entry(conn).or_default().menu_heard = Some(menu.clone());
-        self.player_menu_changed(conn, menu, true);
+        self.player_menu_changed(conn, menu, true, true);
     }
 
-    /// `conn`'s tracked menu closes with the guest's state in place
-    /// (`ServerPlayer.doCloseContainer`). Close listeners are checked independently
-    /// of open listeners.
-    pub(super) fn player_menu_closing(&mut self, conn: u32) {
+    /// Finish an opened menu's removal; only a doCloseContainer path posts the
+    /// NeoForge event. The disconnect path still runs local cleanup and opener accounting.
+    pub(super) fn player_menu_closing(&mut self, conn: u32, notify: bool) {
         let heard = self
             .lan
             .as_mut()
@@ -413,17 +417,32 @@ impl Game<'_> {
                 p.menu_heard.take()
             });
         if let Some(old) = heard {
-            self.player_menu_changed(conn, old, false);
+            if self.transactions.is_empty()
+                && let Some(removed) = self.lan.as_mut().and_then(|host| {
+                    let queue = &mut host.hub.native_menu_events;
+                    let index = queue.iter().position(|event| {
+                        matches!(event, NativeMenuEvent::Removed(removed)
+                            if removed.conn == conn && removed.generation == old.generation)
+                    })?;
+                    let NativeMenuEvent::Removed(removed) = queue.remove(index) else {
+                        unreachable!("the removal was selected above");
+                    };
+                    Some(removed)
+                })
+            {
+                self.finish_native_menu_removal(removed);
+            }
+            self.player_menu_changed(conn, old, false, notify);
         }
     }
 
-    fn player_menu_changed(&mut self, conn: u32, menu: HeardMenu, open: bool) {
+    fn player_menu_changed(&mut self, conn: u32, menu: HeardMenu, open: bool, notify: bool) {
         let hook = if open {
             mod_api::HookId::PlayerContainerOpen
         } else {
             mod_api::HookId::PlayerContainerClose
         };
-        let heard = mod_api::__private::listened(hook);
+        let heard = notify && mod_api::__private::listened(hook);
         let openers = menu
             .openers
             .map(|opener| opener.filter(|&(pos, _)| self.mod_menu_at(pos).is_some()));
@@ -434,25 +453,65 @@ impl Game<'_> {
             return;
         };
         let uuid = guest.uuid;
-        let name = heard.then(|| guest.name.clone());
+        let name = (heard && open).then(|| guest.name.clone());
         let dimension = self.dim.id();
         self.player_hook(conn, move |g| {
             for (pos, generation) in openers.into_iter().flatten() {
                 g.mod_container_player_opener_for(pos, open, Some(generation));
             }
             if let Some(name) = name {
-                if open {
-                    let handle = g
-                        .player(uuid)
-                        .and_then(|player| g.player_container_menu(player));
-                    g.native_player_container_open(
-                        uuid, &name, dimension, &menu.menu, menu.pos, handle,
-                    );
-                } else {
-                    g.native_player_container_close(uuid, &name, dimension, &menu.menu, menu.pos);
-                }
+                let handle = g
+                    .player(uuid)
+                    .and_then(|player| g.player_container_menu(player));
+                g.native_player_container_open(
+                    uuid, &name, dimension, &menu.menu, menu.pos, handle,
+                );
+            } else if heard && let Some(player) = g.player(uuid) {
+                let kind = (menu.menu != MOUNT_MENU).then_some(menu.menu.as_str());
+                g.native_player_container_close(player, closing_menu(menu.window, kind, menu.pos));
             }
         });
+    }
+
+    /// Complete AbstractContainerMenu.removed for a blockless menu. Storage is
+    /// already detached, so the owner can run even after the connection is gone.
+    pub(super) fn finish_native_menu_removal(&mut self, removed: RemovedNativeMenu) {
+        self.menu_places_closed(removed.conn, removed.generation);
+        let Some(menu) = removed.menu.as_deref() else {
+            return;
+        };
+        if !mod_api::__private::menu_listens(mod_api::HookId::MenuRemoved, menu) {
+            return;
+        }
+        use super::api_values::TryIntoApi;
+        let owned_slots: Vec<_> = removed
+            .owned_slots
+            .iter()
+            .map(|slot| {
+                let stack = slot.as_ref()?;
+                match stack.try_into_api() {
+                    Ok(stack) => Some(stack),
+                    Err(error) => {
+                        log::error!("menu {menu} removed with an unavailable stack: {error:?}");
+                        None
+                    }
+                }
+            })
+            .collect();
+        let player = self
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guest(removed.conn))
+            .filter(|guest| guest.uuid == removed.uuid)
+            .and_then(|guest| self.player(guest.uuid));
+        self.native_menu_removed(
+            menu,
+            player,
+            removed.uuid,
+            removed.window,
+            removed.opening_hand,
+            &owned_slots,
+        );
     }
 
     /// Runs a player hook with the guest's state in place, or as it is when
@@ -486,23 +545,7 @@ impl Game<'_> {
                         self.lan_place_back(gi, vec![item]);
                     }
                 }
-                NativeMenuEvent::Closed {
-                    uuid,
-                    window,
-                    opening_hand,
-                    owned_slots,
-                    ..
-                } => {
-                    self.menu_places_closed(uuid, window);
-                    if mod_api::__private::listened(mod_api::HookId::MenuClosed) {
-                        use super::api_values::TryIntoApi;
-                        let owned_slots: Vec<_> = owned_slots
-                            .iter()
-                            .map(|slot| slot.as_ref().and_then(|stack| stack.try_into_api().ok()))
-                            .collect();
-                        self.native_menu_closed(uuid, window, opening_hand, &owned_slots);
-                    }
-                }
+                NativeMenuEvent::Removed(removed) => self.finish_native_menu_removal(removed),
                 // A write to a backed menu's storage (#3385): its slots looked at again.
                 NativeMenuEvent::PlacesChanged { uuid, window } => {
                     self.menu_places_changed(uuid, window)
@@ -721,7 +764,7 @@ mod tests {
                 self.0
                     .lock()
                     .unwrap()
-                    .push(format!("close {}", event.menu_type));
+                    .push(format!("close {}", event.menu.kind.unwrap()));
             }
         }
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -854,13 +897,26 @@ mod tests {
             }
             fn player_container_close(
                 &self,
-                _host: &mut dyn ServerHost,
+                host: &mut dyn ServerHost,
                 event: &mut PlayerContainerCloseEvent<'_>,
             ) {
-                self.events
-                    .lock()
-                    .unwrap()
-                    .push((false, event.menu_type.to_string()));
+                assert_eq!(host.player(123), Some(event.player));
+                assert_eq!(
+                    event.menu.container_id,
+                    if event.menu.kind == Some("minecraft:generic_9x2") {
+                        2
+                    } else {
+                        1
+                    }
+                );
+                self.events.lock().unwrap().push((
+                    false,
+                    event
+                        .menu
+                        .kind
+                        .unwrap_or("sunrise:mount_inventory")
+                        .to_owned(),
+                ));
             }
         }
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1439,17 +1495,7 @@ mod tests {
                 vec![stone]
             );
             assert_eq!(g.menu.as_ref().map(|m| (m.window, m.size)), Some((2, 18)));
-            assert!(
-                matches!(
-                    game.lan.as_ref().unwrap().hub.native_menu_events.as_slice(),
-                    [NativeMenuEvent::Closed {
-                        uuid: 123,
-                        window: 1,
-                        ..
-                    }]
-                ),
-                "the old menu closed on the server"
-            );
+            assert!(game.lan.as_ref().unwrap().hub.native_menu_events.is_empty());
 
             // The old window's click and close land on nothing.
             game.lan.as_mut().unwrap().hub.native_menu_events.clear();
@@ -1581,7 +1627,7 @@ mod tests {
                 HEARD
                     .lock()
                     .unwrap()
-                    .push(format!("close {}", event.menu_type));
+                    .push(format!("close {}", event.menu.kind.unwrap()));
             }
         }
         let heard = || std::mem::take(&mut *HEARD.lock().unwrap());
@@ -1687,17 +1733,7 @@ mod tests {
                 vec![stone]
             );
             assert_eq!(g.menu.as_ref().map(|m| (m.window, m.size)), Some((2, 9)));
-            assert!(
-                matches!(
-                    game.lan.as_ref().unwrap().hub.native_menu_events.as_slice(),
-                    [NativeMenuEvent::Closed {
-                        uuid: 123,
-                        window: 1,
-                        ..
-                    }]
-                ),
-                "the old menu closed on the server"
-            );
+            assert!(game.lan.as_ref().unwrap().hub.native_menu_events.is_empty());
 
             // Both notifications were delivered inline, without a second close.
             assert!(heard().is_empty());

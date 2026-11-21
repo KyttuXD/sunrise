@@ -2057,15 +2057,11 @@ impl Game<'_> {
             use sunrise_client::lan::menu::NativeMenuEvent;
             if !level.native_menu_slots.is_empty() {
                 for event in &mut host.hub.native_menu_events {
-                    if let NativeMenuEvent::Closed {
-                        generation,
-                        owned_slots,
-                        ..
-                    } = event
-                        && !owned_slots.is_empty()
-                        && let Some(before) = level.native_menu_slots.remove(generation)
+                    if let NativeMenuEvent::Removed(removed) = event
+                        && !removed.owned_slots.is_empty()
+                        && let Some(before) = level.native_menu_slots.remove(&removed.generation)
                     {
-                        *owned_slots = before;
+                        removed.owned_slots = before;
                     }
                 }
             }

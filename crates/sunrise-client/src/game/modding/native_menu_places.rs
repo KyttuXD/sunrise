@@ -24,8 +24,9 @@ use sunrise_client::lan::{
 /// The places backing one guest's open mod menu.
 #[derive(Clone)]
 pub(in crate::game) struct MenuSlotPlaces {
-    /// The menu's window id: the places end with that window.
+    /// The menu's window id and generation: places end with this exact opening.
     window: i32,
+    generation: u64,
     /// What container slot `n` shows; slots past these stay the mods' own.
     places: Vec<MenuSlotPlace>,
     /// The hotbar slot holding a main-hand `HeldItem` place's stack, which takes no click.
@@ -152,6 +153,7 @@ impl Game<'_> {
             .map_or(0, |old| old.places.len());
         *entry = (count > 0).then(|| MenuSlotPlaces {
             window,
+            generation: menu.fields().generation,
             places,
             locked,
             held,
@@ -368,17 +370,13 @@ impl Game<'_> {
         }
     }
 
-    /// The menu `window` closed (`NativeMenuEvent::Closed`): its places end with it. Its
+    /// The menu `window` closed (`NativeMenuEvent::Removed`): its places end with it. Its
     /// mirrored slots went with the menu (`native_menu` is cleared on close).
-    pub(super) fn menu_places_closed(&mut self, uuid: u128, window: i32) {
-        if let Some(conn) = self.native_conn(uuid)
-            && self
-                .lan
-                .as_ref()
-                .and_then(|lan| lan.menus.get(&conn)?.slot_places.as_ref())
-                .is_some_and(|backed| backed.window == window)
-        {
-            self.forget_menu_places(conn);
+    pub(super) fn menu_places_closed(&mut self, conn: u32, generation: u64) {
+        if let Some(menus) = self.lan.as_mut().and_then(|lan| lan.menus.get_mut(&conn)) {
+            menus
+                .slot_places
+                .take_if(|backed| backed.generation == generation);
         }
     }
 

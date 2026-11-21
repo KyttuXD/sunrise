@@ -156,28 +156,25 @@ impl Menu {
         self.mod_type?.owned_slots.as_deref()
     }
 
-    /// Detached transient values and provenance, for the existing close notice. The old
-    /// native storage is emptied even for a menu that did not declare owned slots.
-    pub(super) fn native_closed(
-        &self,
-        uuid: u128,
-        generation: u64,
-        native_menu: &mut Vec<Option<ItemStack>>,
-    ) -> Option<NativeMenuEvent> {
+    /// `AbstractContainerMenu.removed`: detach blockless storage. The game can run
+    /// the owner part when it regains the hub and any outstanding write has settled.
+    pub fn removed(self, guest: &mut Guest) -> Option<RemovedNativeMenu> {
         if self.slots != Slots::Native {
             return None;
         }
         let owned_slots = if self.owned_slots().is_some() {
-            std::mem::take(native_menu)
+            std::mem::take(&mut guest.native_menu)
         } else {
-            native_menu.clear();
+            guest.native_menu.clear();
             Vec::new()
         };
-        Some(NativeMenuEvent::Closed {
-            uuid,
+        Some(RemovedNativeMenu {
+            conn: guest.conn,
+            uuid: guest.uuid,
             window: self.window,
-            generation,
-            opening_hand: self.opening_item.as_ref().map(|(hand, _)| *hand),
+            generation: guest.menu_generation,
+            menu: self.mod_type.map(|_| self.registry_id),
+            opening_hand: self.opening_item.map(|(hand, _)| hand),
             owned_slots,
         })
     }
@@ -260,19 +257,23 @@ impl Menu {
 pub enum NativeMenuEvent {
     /// The cursor of a menu the hub closed itself, to be returned to its player.
     ReturnCarried { conn: u32, item: ItemStack },
-    /// The menu closed: by the player, by the server, another opened, or
-    /// the player left.
-    Closed {
-        uuid: u128,
-        window: i32,
-        /// The window instance, for rolling back writes made before this pending close.
-        generation: u64,
-        opening_hand: Option<Hand>,
-        owned_slots: Vec<Option<ItemStack>>,
-    },
+    /// Finish the owning menu's local removal, not a player close notice.
+    Removed(RemovedNativeMenu),
     /// The storage a mod backed the menu's slots with was written (the game's notice): its
     /// slots are looked at again once the write is done.
     PlacesChanged { uuid: u128, window: i32 },
+}
+
+/// Native storage detached by `Menu::removed`, tied to that opening, not the next one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemovedNativeMenu {
+    pub conn: u32,
+    pub uuid: u128,
+    pub window: i32,
+    pub generation: u64,
+    pub menu: Option<String>,
+    pub opening_hand: Option<Hand>,
+    pub owned_slots: Vec<Option<ItemStack>>,
 }
 
 /// The y of the key a chest minecart's or chest boat's items are kept under

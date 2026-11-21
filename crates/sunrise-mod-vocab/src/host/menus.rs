@@ -27,8 +27,7 @@ pub trait MenusServerHost {
     ) -> Result<Option<i32>, StackWriteError>;
     /// Side: server.
     /// The menu `open_menu` opened that the player has open as window
-    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_closed`
-    /// give). Its slots are written as `ItemPlace::MenuSlot` in a
+    /// `window` (the window id `open_menu` returns and `menu_clicked` gives). Its slots are written as `ItemPlace::MenuSlot` in a
     /// transaction, and the client is sent each changed slot with the next
     /// tick's container sync (`AbstractContainerMenu.broadcastChanges`), as
     /// for any open menu. None for another window, a menu the game opened, or
@@ -36,7 +35,7 @@ pub trait MenusServerHost {
     #[access(WorldOnly)]
     fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef>;
     /// Side: server.
-    /// Closes the player's native menu (a `menu_closed` follows). During an active menu click,
+    /// Closes the player's native menu and fires `player_container_close`. During an active menu click,
     /// the close waits for the transaction to commit; an abort leaves the window open.
     #[access(WorldOnly)]
     fn close_menu(&mut self, uuid: u128);

@@ -540,7 +540,7 @@ impl Game<'_> {
         self.lan_station_closed(conn, None);
         self.lan_mount_closed(conn, None);
         // `PlayerContainerEvent.Close`, after the menu's `removed`.
-        self.player_menu_closing(conn);
+        self.player_menu_closing(conn, removal == MenuRemoval::Live);
         retired_window
     }
 

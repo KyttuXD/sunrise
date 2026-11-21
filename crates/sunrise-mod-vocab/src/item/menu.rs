@@ -43,6 +43,21 @@ pub enum SwapWith {
     Offhand,
 }
 
+/// The server menu whose `removed` has just run. This view names the exact closing
+/// window, including menus that do not expose a live slot handle. It cannot be used
+/// to mutate a removed menu or accidentally act on its replacement.
+// no wire: scoped to the in-process close callback.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ClosingMenu<'a> {
+    /// The closing window's protocol container id.
+    pub container_id: i32,
+    /// The menu type's registry name, or `None` for a mount inventory with no type.
+    pub kind: Option<&'a str>,
+    /// The backing block, if the menu has one.
+    pub position: Option<[i32; 3]>,
+}
+
 /// Whether `open_menu` or `PlayerRef::open_mod_menu` first sends the client a close for the menu
 /// it replaces, as a Java `MenuProvider` chooses (`shouldTriggerClientSideContainerClosingOnOpen`).
 /// Either way the old menu closes on the server, its cursor stack going back to the player's

@@ -1,0 +1,13 @@
+ids = [
+    "hook:menu_closed", "method:Hooks::menu_closed", "type:MenuClosedEvent",
+    "hook:menu_closed.uuid", "hook:menu_closed.window", "hook:menu_closed.opening_hand", "hook:menu_closed.owned_slots",
+    "type:MenuClosedEvent.uuid", "type:MenuClosedEvent.window", "type:MenuClosedEvent.opening_hand", "type:MenuClosedEvent.owned_slots",
+    "hook:player_container_close", "method:Hooks::player_container_close", "type:PlayerContainerCloseEvent",
+    "hook:player_container_close.player", "hook:player_container_close.name", "hook:player_container_close.dimension",
+    "hook:player_container_close.menu_type", "hook:player_container_close.pos", "hook:player_container_close.menu",
+    "type:PlayerContainerCloseEvent.player", "type:PlayerContainerCloseEvent.name", "type:PlayerContainerCloseEvent.dimension",
+    "type:PlayerContainerCloseEvent.menu_type", "type:PlayerContainerCloseEvent.pos", "type:PlayerContainerCloseEvent.menu",
+    "hook:menu_removed", "method:MenuPart::menu_removed", "type:MenuRemovedEvent", "type:ClosingMenu",
+]
+why = "NeoForge PlayerContainerEvent.Close in ServerPlayer.doCloseContainer observes the closing player and container after vanilla AbstractContainerMenu.removed and inventory synchronization. The duplicate global menu_closed exposed private transient storage. Move that storage and the captured opening hand to the owning menu's removed path, which still runs on teardown without a player. Vanilla PlayerList.remove does not run doCloseContainer when a player disconnects."
+migrate = "For notifications, implement only Hooks::player_container_close(&self, host: &mut dyn ServerHost, event: &mut PlayerContainerCloseEvent<'_>). Read the UUID via event.player.uuid(), replace event.name with event.player.name(host) and event.dimension with event.player.dimension(host) (these live reads return Option; dimension is an Identifier). Replace event.menu_type with event.menu.kind (None for a mount without a MenuType), event.pos with event.menu.position, and a separate window lookup with event.menu.container_id. For ownership cleanup move Hooks::menu_closed to MenuPart::menu_removed(&self, host: &mut dyn ServerHost, event: &mut MenuRemovedEvent<'_>), registered with registrar.menu_part for your blockless menu type. Use event.owned_slots and event.opening_hand as before; event.uuid and event.window identify the retired instance, and event.player supplies a PlayerRef only while the original player is accessible. Perform disconnect cleanup in the part, not in the global close listener."

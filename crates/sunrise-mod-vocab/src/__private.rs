@@ -346,6 +346,18 @@ pub mod game {
             generation,
         }
     }
+    /// Lend the identity of the server menu whose removal just finished.
+    pub fn closing_menu(
+        id: i32,
+        kind: Option<&str>,
+        position: Option<[i32; 3]>,
+    ) -> ClosingMenu<'_> {
+        ClosingMenu {
+            container_id: id,
+            kind,
+            position,
+        }
+    }
     /// A player handle the game names.
     pub fn player_ref(entity: EntityRef, uuid: u128) -> PlayerRef {
         PlayerRef { entity, uuid }
