@@ -1525,7 +1525,6 @@ sunrise-client game::native_hooks::level_tick_tests::tests::server_hook_resolves
 sunrise-client game::native_hooks::living_death_post::tests::living_death_post_fires_once_after_each_finished_death lib daily resources
 sunrise-client game::native_hooks::living_death_post::tests::living_death_post_hears_a_player_death_after_the_message_and_loot lib daily resources
 sunrise-client game::native_hooks::math::tests::game_host_math_profile_matches_platform_and_is_stable lib daily resources
-sunrise-client game::native_hooks::mod_block_entity_payload_tests::replacing_mod_block_entity_payload_keeps_its_type_and_saved_identity lib daily resources
 sunrise-client game::native_hooks::mod_mismatch::tests::a_resolved_missing_mod_is_not_asked_about lib daily resources
 sunrise-client game::native_hooks::mod_mismatch::tests::existing_lists_fire_on_client_and_dedicated_even_without_differences lib daily resources
 sunrise-client game::native_hooks::on_block_placed_by_tests::block_items_notify_after_setup_and_before_consumption lib daily resources
@@ -2056,7 +2055,7 @@ sunrise-client game::pad::parity_tests::pad_number_actions_select_the_hotbar_as_
 sunrise-client game::pad::parity_tests::pad_smooth_camera_binding_toggles_the_cinematic_camera lib daily resources
 sunrise-client game::pad::parity_tests::readers_of_the_movement_keys_see_the_stick lib daily resources
 sunrise-client game::pad::parity_tests::the_mouse_letting_go_leaves_what_the_pad_holds_and_back lib daily resources
-sunrise-client game::pad::parity_tests::the_pads_attack_and_use_reach_what_the_mouse_tells_mods lib daily resources
+sunrise-client game::pad::parity_tests::the_pads_attack_and_use_reach_the_vanilla_key_mappings lib daily resources
 sunrise-client game::pandas::nested_spawn_tests::lifted_mob_callback_keeps_nested_spawns_until_the_next_pass lib daily resources
 sunrise-client game::pandas::pickup_tests::a_panda_that_takes_a_thrown_item_credits_the_thrower lib daily resources
 sunrise-client game::part_shearing::tests::entity_parts_decide_and_perform_a_dispensers_shearing lib daily resources

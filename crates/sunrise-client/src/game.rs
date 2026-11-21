@@ -12462,7 +12462,6 @@ impl Game<'_> {
                                 self.physical_buttons.remove(&button);
                                 return Ok(());
                             }
-                            self.extras_mouse(button, pressed);
                             if pressed
                                 && self.settings.keys.get("key.smoothCamera")
                                     == sunrise_client::keybinds::mouse_name(button)

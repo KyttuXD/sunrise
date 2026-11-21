@@ -30,61 +30,6 @@ impl Game<'_> {
         let _ = self.process_level_events();
         changed
     }
-    /// The item entities of the server level `dimension` whose box meets
-    /// the box `min`..`max`, in the level's order: vanilla's
-    /// `Level.getEntitiesOfClass(ItemEntity.class, box, ENTITY_STILL_ALIVE)`, as a
-    /// hopper's `getItemsAtAndAbove` asks for its block and the one above
-    /// (`[x, y, z]`..`[x + 1, y + 2, z + 1]`). Empty for a level not in place
-    /// (as `native_set_block`) and on a client of a server.
-    pub(in crate::game) fn native_item_entities(
-        &self,
-        dimension: &str,
-        min: [f64; 3],
-        max: [f64; 3],
-    ) -> Vec<NativeItemEntity> {
-        if (self.serving.is_none() && self.options.dedicated.is_none())
-            || dimension != self.dim.id()
-        {
-            return Vec::new();
-        }
-        self.dropped
-            .iter()
-            .filter(|e| e.stack.count > 0 && box_meets(&e.bounds(), min, max))
-            .map(|e| NativeItemEntity {
-                id: e.id,
-                position: [e.position.x, e.position.y, e.position.z],
-                stack: e.stack.clone(),
-                // The helper exposes an unsigned delay; keep its projection.
-                pickup_delay: e.pickup_delay.clamp(0, i64::from(u32::MAX)) as u32,
-            })
-            .collect()
-    }
-    /// Runs `change` on the mod block entity at `pos` (a generator charging
-    /// the machine beside it) and returns what it returns; none for any
-    /// other block entity, and for the one ticking now, which is out of the
-    /// world. Afterwards, as its `setChanged` would, its chunk is saved next
-    /// time and, when its items changed, comparators read it again.
-    pub(in crate::game) fn native_with_mod_block_entity<R>(
-        &mut self,
-        pos: [i32; 3],
-        change: impl FnOnce(&mut EngineBlockEntity) -> R,
-    ) -> Option<R> {
-        let key = (pos[0], pos[1], pos[2]);
-        let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
-            return None;
-        };
-        if m.id().is_empty() {
-            return None;
-        }
-        let items = m.items.clone();
-        let out = change(m);
-        let moved = m.items != items;
-        self.world.modified.insert((key.0 >> 4, key.2 >> 4));
-        if moved {
-            self.container_changed(key);
-        }
-        Some(out)
-    }
     /// This `Game` is the window's, not a server's.
     pub(in crate::game) fn native_window(&self) -> bool {
         self.options.execution_role == ExecutionRole::Client

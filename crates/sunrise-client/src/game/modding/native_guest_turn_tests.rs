@@ -632,15 +632,12 @@ fn another_guests_menu_and_push_work_during_a_turn() {
     });
 }
 
-/// Native services can reach B during A's turn without exposing displaced
-/// inventories or changing ordinary command resolution during nested turns.
+/// Native services can reach B during A's turn without changing ordinary
+/// command resolution during nested turns.
 #[test]
 #[ignore = "daily"]
 fn another_guests_services_work_during_a_turn() {
-    use super::{
-        commands::Target,
-        native_inventories::NativeInventoryKind::{Ender, Player},
-    };
+    use super::commands::Target;
     use mod_api::{CriterionContext, CriterionTest, CriterionTestError, TriggerCriterionError};
     use sunrise_client::{advancements as adv, command::args::Selector, items::ItemStack};
 
@@ -676,13 +673,6 @@ fn another_guests_services_work_during_a_turn() {
         game.lan.as_mut().unwrap().hub.guests.update_all(|guest| {
             guest.advancements_loaded = true;
         });
-        let stone = ItemStack::new("minecraft:stone", 4);
-        game.lan
-            .as_mut()
-            .unwrap()
-            .hub
-            .update_guest(13, |guest| guest.inventory[0] = Some(stone.clone()))
-            .unwrap();
         let a = game.player(12).unwrap();
         let b = game.player(13).unwrap();
         game.as_guest(12, |game| {
@@ -693,18 +683,6 @@ fn another_guests_services_work_during_a_turn() {
                     ..Default::default()
                 }),
                 [Target::Player]
-            );
-            assert!(game.native_inventory(12, Player).is_err());
-            assert_eq!(
-                game.native_inventory(13, Player).unwrap().slots[0],
-                Some(stone.clone())
-            );
-            game.native_move_stack((13, Player, 0), &stone, (13, Ender))
-                .unwrap();
-            assert_eq!(game.native_inventory(13, Player).unwrap().slots[0], None);
-            assert_eq!(
-                game.native_inventory(13, Ender).unwrap().slots[0],
-                Some(stone.clone())
             );
             assert_eq!(
                 a.trigger_criterion(game, &vanilla_trigger, Arc::new(Accept)),
@@ -729,8 +707,6 @@ fn another_guests_services_work_during_a_turn() {
                 Some(ItemStack::new("minecraft:apple", 1))
             );
             game.as_guest(13, |game| {
-                assert!(game.native_inventory(12, Player).is_err());
-                assert!(game.native_inventory(13, Player).is_err());
                 assert_eq!(
                     a.trigger_criterion(game, &trigger, Arc::new(Accept)),
                     Err(TriggerCriterionError::PlayerUnavailable)
@@ -783,7 +759,6 @@ fn another_guests_services_work_during_a_turn() {
         );
         let b = host.hub.guest(13).unwrap();
         assert!(b.advancements.has("turns:probe", "seen"));
-        assert_eq!(b.ender_items[0], Some(stone));
         assert_eq!(b.inventory[0], Some(ItemStack::new("minecraft:diamond", 4)));
     });
 }
@@ -1738,7 +1713,6 @@ fn run_command_checks_the_line_at_the_level_given() {
 #[test]
 #[ignore = "daily"]
 fn run_command_runs_as_the_entity_from_where_it_is() {
-    use super::native_inventories::NativeInventoryKind::Player;
     use mod_api::PermissionLevel::Gamemasters;
     use sunrise_client::items::ItemStack;
 
@@ -1746,10 +1720,18 @@ fn run_command_runs_as_the_entity_from_where_it_is() {
         game.build_registries();
         let a = game.player(12).unwrap().entity();
         let b = game.player(13).unwrap().entity();
-        let holds = |game: &super::Game<'_>, uuid: u128, item: &str| {
+        let holds = |game: &super::Game<'_>, conn: u32, item: &str| {
             let stack = ItemStack::new(item, 1);
-            let slots = game.native_inventory(uuid, Player).unwrap().slots;
-            slots.iter().flatten().any(|s| *s == stack)
+            game.lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .guest(conn)
+                .unwrap()
+                .inventory
+                .iter()
+                .flatten()
+                .any(|s| *s == stack)
         };
         let stand = summon_stand(game);
         let guest = |game: &super::Game<'_>, conn: u32| {
@@ -1838,7 +1820,6 @@ fn run_command_answers_false_for_a_bad_line_or_a_stale_handle() {
 #[test]
 #[ignore = "daily"]
 fn run_command_refuses_a_player_whose_level_is_parked() {
-    use super::native_inventories::NativeInventoryKind::Player;
     use mod_api::PermissionLevel::Owners;
     use sunrise_client::{gamerules::vanilla::SEND_COMMAND_FEEDBACK, items::ItemStack};
 
@@ -1855,8 +1836,16 @@ fn run_command_refuses_a_player_whose_level_is_parked() {
         };
         let has_stick = |game: &super::Game<'_>| {
             let stick = ItemStack::new("minecraft:stick", 1);
-            let slots = game.native_inventory(13, Player).unwrap().slots;
-            slots.iter().flatten().any(|s| *s == stick)
+            game.lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .guest(13)
+                .unwrap()
+                .inventory
+                .iter()
+                .flatten()
+                .any(|s| *s == stick)
         };
         assert!(game.ui.rules.bool_at(SEND_COMMAND_FEEDBACK));
 

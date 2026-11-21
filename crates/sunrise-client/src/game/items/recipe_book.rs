@@ -510,7 +510,8 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
-    /// Every entry of the book, in its order (`native_recipes`).
+    /// Every entry of the book, in its order.
+    #[cfg(test)]
     pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
         self.ensure_book();
         self.recipe_ui

@@ -4178,10 +4178,14 @@ impl Game<'_> {
         if !self.native_window() || at.iter().any(|v| !v.is_finite()) {
             return;
         }
-        let Some(p) = self.native_player() else {
+        let Some(position) = self.player.as_ref().map(|player| player.position) else {
             return;
         };
-        if (at[0] - p.x).powi(2) + (at[1] - p.y).powi(2) + (at[2] - p.z).powi(2) > 1024.0 {
+        if (at[0] - position.x).powi(2)
+            + (at[1] - position.y).powi(2)
+            + (at[2] - position.z).powi(2)
+            > 1024.0
+        {
             return;
         }
         let kind = if soul {

@@ -638,14 +638,6 @@ impl Game<'_> {
             Route::Held => Ok(()),
             Route::Mouse(button) => {
                 let playing = self.title.is_none() && self.screen == Screen::Playing;
-                // What the window path tells mods and the click counters. Pick block isn't one
-                // they count.
-                if playing
-                    && matches!(button, MouseButton::Left | MouseButton::Right)
-                    && (down || !self.mouse_mapping_held_elsewhere(button, Source::Pad))
-                {
-                    self.extras_mouse(button, down);
-                }
                 if !down || playing {
                     self.mouse_mapping(button, down, Source::Pad)?;
                 }
