@@ -206,7 +206,7 @@ fn native_console_delivers_all_source_feedback_in_order() {
                 let (send, receive) = std::sync::mpsc::channel();
                 assert!(!Commands::run_command_with_feedback(
                     game,
-                    "/feedback_probe",
+                    "/execute positioned 0 64 0 run feedback_probe",
                     send
                 ));
                 let mut output = receive.try_iter();
@@ -225,10 +225,12 @@ fn native_console_delivers_all_source_feedback_in_order() {
                 let Some(Ok(CommandFeedback::Failure(error))) = output.next() else {
                     panic!("a failed command must deliver its error after earlier successes");
                 };
-                assert!(
-                    matches!(error.style.color.as_deref(), Some("red" | "#FF5555")),
-                    "the error keeps its red style"
-                );
+                assert_eq!(error.style.color.as_deref(), Some("red"));
+                assert!(matches!(
+                    error.children.as_slice(),
+                    [message] if matches!(&message.content, TextContent::Translatable { key, .. }
+                        if key == "command.unknown.command")
+                ));
                 assert_eq!(
                     output.next(),
                     None,
@@ -382,6 +384,49 @@ fn native_console_dispatches_direct_commands_in_the_world_spawn_dimension() {
     });
 }
 
+#[test]
+#[ignore = "daily"]
+fn native_console_receives_test_reset_messages_in_source_order() {
+    use sunrise_client::chunk::Chunk;
+    use sunrise_core::position::ChunkPos;
+
+    with_guests(|game| {
+        game.build_registries();
+        game.level.world_spawn = Some([8, 64, 8]);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(Commands::run_command(
+            game,
+            "setblock 8 64 8 test_instance_block"
+        ));
+        game.test_instance_mut((8, 64, 8)).unwrap().data.test =
+            Some("minecraft:always_pass".into());
+
+        let (send, receive) = std::sync::mpsc::channel();
+        assert!(Commands::run_command_with_feedback(
+            game,
+            "test resetclosest",
+            send
+        ));
+        let lines: Vec<_> = receive.try_iter().collect();
+        assert!(
+            matches!(
+                lines.as_slice(),
+                [Ok(CommandFeedback::System(reset)), Ok(CommandFeedback::Success(summary))]
+                    if matches!(&reset.content, TextContent::Translatable { key, .. }
+                        if key == "test_instance_block.reset_success")
+                        && matches!(&summary.content, TextContent::Translatable { key, .. }
+                            if key == "commands.test.reset.success")
+            ),
+            "{lines:?}"
+        );
+    });
+}
+
 struct FailingGameTests;
 
 impl mod_api::GameTestFunction for FailingGameTests {
@@ -478,10 +523,7 @@ fn native_console_keeps_the_source_attached_until_delayed_test_feedback_arrives(
                 let Ok(Ok(CommandFeedback::Failure(required))) = receive.try_recv() else {
                     panic!("missing required failure");
                 };
-                assert!(matches!(
-                    required.style.color.as_deref(),
-                    Some("red" | "#FF5555")
-                ));
+                assert_eq!(required.style.color.as_deref(), Some("red"));
                 check_key(&required.children[0], "commands.test.summary.failed");
                 let Ok(Ok(CommandFeedback::System(optional))) = receive.try_recv() else {
                     panic!("missing optional failure");

@@ -304,8 +304,8 @@ impl Game<'_> {
         let mut count = 0;
         for pos in self.finder_positions(finder) {
             if self.test_info_at(pos, Retry::none()).is_some() {
-                // resetGameTestInfo: `TestInstanceBlockEntity.resetTest`.
-                self.reset_test(pos);
+                // TestCommand.resetGameTestInfo passes the command's system-message sink.
+                self.reset_test(pos, Self::command_system_message);
                 count += 1;
             }
         }

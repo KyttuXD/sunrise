@@ -196,7 +196,8 @@ pub enum CommandFeedback {
     Success(crate::Text),
     /// Feedback sent by `CommandSourceStack.sendFailure`, including its error style.
     Failure(crate::Text),
-    /// A direct `CommandSourceStack.sendSystemMessage`, not gated as success feedback.
+    /// A system message sent directly to the source, not gated as success feedback.
+    /// For example, a non-player source receives the outgoing confirmation of a whisper.
     System(crate::Text),
 }
 

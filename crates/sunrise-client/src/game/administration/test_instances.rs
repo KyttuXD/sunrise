@@ -356,7 +356,7 @@ impl Game<'_> {
                 b.data = data;
             }
             match action {
-                RESET => self.reset_test(pos),
+                RESET => self.reset_test(pos, Self::system_message),
                 SAVE => {
                     self.save_test(pos);
                 }
@@ -447,13 +447,14 @@ impl Game<'_> {
         }
     }
 
-    /// `resetTest`.
-    pub(super) fn reset_test(&mut self, pos: Pos) {
+    /// `TestInstanceBlockEntity.resetTest`: tell the caller through its message sink.
+    pub(super) fn reset_test(&mut self, pos: Pos, output: fn(&mut Self, Text)) {
         self.remove_test_barriers(pos);
         self.clear_error_markers(pos);
         if self.place_test_structure(pos) {
             let name = self.test_name(pos);
-            self.system_message(
+            output(
+                self,
                 Text::translate("test_instance_block.reset_success", &[name])
                     .with_color(text::GREEN),
             );
