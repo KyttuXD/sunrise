@@ -179,6 +179,14 @@ impl<W: EntityMovementWorld<Error = io::Error>> EntityMovementWorld for EntityCo
         }
         Ok(shapes)
     }
+    fn has_entity_collision(&mut self, entity: EntityIdentity, bounds: Aabb) -> io::Result<bool> {
+        if self.blocks.has_entity_collision(entity, bounds)? {
+            return Ok(true);
+        }
+        // Match entity_collisions' candidate bounds, without materializing box shapes.
+        let bounds = bounds.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
+        Ok(self.entities.iter().any(|&aabb| aabb.intersects(bounds)))
+    }
     /// `WorldBorder.isInsideCloseToBorder`: an entity inside the border and
     /// near it collides with its walls.
     fn movement_border(

@@ -246,12 +246,14 @@ impl PlayerMotion {
 pub fn local_crouching(
     flying: bool,
     swimming: bool,
+    passenger: bool,
     shifting: bool,
     sleeping: bool,
     mut can_fit: impl FnMut(Pose) -> Result<bool>,
 ) -> Result<bool> {
     Ok(!flying
         && !swimming
+        && !passenger
         && can_fit(Pose::Crouching)?
         && (shifting || (!sleeping && !can_fit(Pose::Standing)?)))
 }
@@ -296,6 +298,7 @@ impl MotionWorld<'_, '_, '_> {
         self.player.local_crouching = local_crouching(
             self.player.flying,
             self.player.swimming,
+            self.player.is_passenger,
             self.player.shift_key_down,
             self.player.sleeping,
             |pose| self.can_fit_pose(pose),

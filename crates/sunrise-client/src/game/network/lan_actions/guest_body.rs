@@ -83,30 +83,25 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
 impl Game<'_> {
     /// ServerPlayer.doTick's pose update, including the Swimming prerequisite for spectators.
     fn server_guest_pose_tick(&mut self, id: u32, riding: bool) {
-        let entities = self.entity_collisions(Mover::Player);
-        let listens = mod_api::__private::listened(mod_api::HookId::EntitySize);
         let Some(player) = self.player.as_mut() else {
             return;
         };
-        let side = game_side!(self);
-        let mut motion = motion_world!(self, side, player);
-        motion.entities = &entities;
-        let result = if listens {
-            let ready = if riding {
-                motion.passenger_base_tick()
-            } else {
-                motion.player.count_down_server_spin();
-                motion.player.refresh_attributes()
-            };
-            ready.and_then(|()| {
-                self.refresh_player_size(id);
-                self.update_player_pose_with_sizes(id, &entities, riding)
-            })
-        } else if riding {
-            motion.passenger_pose_tick()
+        let ready = if riding {
+            let side = game_side!(self);
+            motion_world!(self, side, player).passenger_base_tick()
         } else {
-            motion.server_player_pose_tick()
+            player.count_down_server_spin();
+            player.refresh_attributes()
         };
+        let result = ready.and_then(|()| {
+            self.refresh_player_size(id);
+            let mut entities = std::mem::take(&mut self.tick_scratch.player_pose_solids);
+            self.fill_entity_collisions(Mover::Player, &mut entities);
+            let result = self.update_player_pose_with_sizes(id, &entities, riding);
+            entities.clear();
+            self.tick_scratch.player_pose_solids = entities;
+            result
+        });
         if let Err(error) = result {
             log::warn!("Could not resolve the pose of server player {id}: {error}");
         }

@@ -2,7 +2,7 @@
 //! bots"): a mod that drives a server player itself (a fake client sending its own moves) asks
 //! where the player's movement code would take them in one tick, and which block shapes are in
 //! a box. Nothing runs unless a mod calls it, and neither changes the player or the level.
-use super::{Game, glide_wear, shield, worn_boots};
+use super::{Game, entity_sizes::GamePlayerTick, glide_wear, shield, worn_boots};
 use mod_api::{PlayerInput, SimulatedMove};
 use std::io;
 use std::ops::ControlFlow;
@@ -107,88 +107,20 @@ impl Game<'_> {
         let entities = self.entity_collisions(super::collision_source::Mover::PlayerAt {
             feet_y: body.position.y,
         });
-        if mod_api::__private::listened(mod_api::HookId::EntitySize) {
-            let id = player.entity().id();
-            let result = (|| -> sunrise_client::Result<()> {
-                {
-                    let side = game_side!(self);
-                    MotionWorld {
-                        side: &side,
-                        entities: &entities,
-                        player: &mut body,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        tag_items: Some(world_items!(self)),
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        block_registries: Some(&self.pack.block_registries),
-                    }
-                    .begin_local_tick()?;
-                }
-                self.update_body_local_crouching(id, &mut body, &entities)?;
-                let previous = {
-                    let side = game_side!(self);
-                    MotionWorld {
-                        side: &side,
-                        entities: &entities,
-                        player: &mut body,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        tag_items: Some(world_items!(self)),
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        block_registries: Some(&self.pack.block_registries),
-                    }
-                    .travel_replayed_tick(keys, sprinting)?
-                };
-                self.update_body_pose(id, &mut body, &entities, false)?;
-                {
-                    let side = game_side!(self);
-                    MotionWorld {
-                        side: &side,
-                        entities: &entities,
-                        player: &mut body,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        tag_items: Some(world_items!(self)),
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        block_registries: Some(&self.pack.block_registries),
-                    }
-                    .finish_local_tick(previous)
-                }
-            })();
-            if let Err(error) = result {
-                log::warn!("Could not simulate movement for player {id}: {error}");
-                return None;
-            }
-        } else {
-            let side = game_side!(self);
-            MotionWorld {
-                side: &side,
+        let id = player.entity().id();
+        if let Err(error) = MotionWorld::replay_local_tick(
+            &mut GamePlayerTick {
+                game: self,
+                id,
                 entities: &entities,
-                player: &mut body,
-                scene: &mut self.world,
-                assets: &self.pack.assets,
-                collision_binding: self.collision,
-                resources: self.motion,
-                health: &self.health_resources,
-                tag_items: Some(world_items!(self)),
-                loop_context: &self.loop_context,
-                damage_hooks: &self.damage_hooks,
-                block_registries: Some(&self.pack.block_registries),
-            }
-            .replayed_tick(keys, sprinting)
-            .ok()?;
+                sections: None,
+                prediction: Some(&mut body),
+            },
+            keys,
+            sprinting,
+        ) {
+            log::warn!("Could not simulate movement for player {id}: {error}");
+            return None;
         }
         let (p, v) = (body.position, body.velocity);
         let mut result = SimulatedMove::default();

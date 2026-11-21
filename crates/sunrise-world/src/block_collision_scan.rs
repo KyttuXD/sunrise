@@ -71,7 +71,6 @@ pub trait BlockCollisionWorld {
 #[derive(Debug)]
 pub enum CollisionScanError<E> {
     InvalidBounds,
-    TooLarge,
     VisitBudget,
     World(E),
     Shape(ShapeError),
@@ -80,9 +79,6 @@ impl<E: std::fmt::Display> std::fmt::Display for CollisionScanError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidBounds => f.write_str("collision scan bounds must be finite"),
-            Self::TooLarge => {
-                f.write_str("collision scan exceeds the positive Java-int cursor domain")
-            }
             Self::VisitBudget => f.write_str("collision scan candidate budget exhausted"),
             Self::World(error) => error.fmt(f),
             Self::Shape(error) => error.fmt(f),
@@ -97,20 +93,14 @@ pub struct BlockCollisionHit {
     pub shape: VoxelShape,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum CellError {
-    InvalidBounds,
-    TooLarge,
-}
-
-/// The cursor a scan of `bounds` walks: its padded start, the box's extents in
-/// cells and the cell count. `new` and [`scan_cells`] share it, so a caller
-/// that sizes a budget from a box counts exactly what the scan will visit.
-fn cells(bounds: Aabb) -> Result<(BlockPos, [i32; 3], usize), CellError> {
+/// The padded start, extents, and end index from `BlockCollisions` and `Cursor3D`.
+/// Java's end is a signed int tested for equality, so its bit pattern is the number of
+/// advances even when the product wraps. A wrapped zero ends without visiting any cells.
+fn cells(bounds: Aabb) -> Option<(BlockPos, [i32; 3], usize)> {
     let min = bounds.min_position();
     let max = bounds.max_position();
     if !min.is_finite() || !max.is_finite() {
-        return Err(CellError::InvalidBounds);
+        return None;
     }
     let start = BlockPos::containing(Vec3::new(min.x - 1.0e-7, min.y - 1.0e-7, min.z - 1.0e-7))
         .offset(-1, -1, -1);
@@ -121,22 +111,13 @@ fn cells(bounds: Aabb) -> Result<(BlockPos, [i32; 3], usize), CellError> {
         end.y.wrapping_sub(start.y).wrapping_add(1),
         end.z.wrapping_sub(start.z).wrapping_add(1),
     ];
-    if sizes.iter().any(|size| *size <= 0) {
-        return Err(CellError::TooLarge);
-    }
-    let count = sizes
-        .into_iter()
-        .try_fold(1u64, |n, size| {
-            n.checked_mul(size as u64).filter(|n| *n <= i32::MAX as u64)
-        })
-        .ok_or(CellError::TooLarge)? as usize;
-    Ok((start, sizes, count))
+    let count = sizes.into_iter().fold(1_i32, i32::wrapping_mul) as u32 as usize;
+    Some((start, sizes, count))
 }
 
-/// The cells a scan of `bounds` visits, or `None` for a box `new` refuses
-/// (`InvalidBounds`, `TooLarge`): the most a budget can usefully be.
+/// How many cells the vanilla cursor visits, or `None` for non-finite bounds.
 pub fn scan_cells(bounds: Aabb) -> Option<usize> {
-    cells(bounds).ok().map(|(_, _, count)| count)
+    cells(bounds).map(|(_, _, count)| count)
 }
 
 /// Sections whose facts a scan remembers: 2 x 2 columns by two
@@ -196,10 +177,11 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     /// A boolean collision query does not need translated full-cube geometry.
     presence_only: bool,
     start: BlockPos,
-    sizes: [usize; 3],
+    sizes: [i32; 3],
     index: usize,
-    /// The cell at `index`, relative to `start` (x fastest, then y, then z).
-    cursor: [usize; 3],
+    /// In the ordinary positive domain the relative position advances without division.
+    cursor: [i32; 3],
+    dense: bool,
     count: usize,
     budget: usize,
     /// The last cell's chunk and its section's facts: the cells of a row in one chunk share
@@ -218,8 +200,7 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     failed: bool,
 }
 impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
-    /// Finite bounds and a positive-Java-int candidate volume are supported.
-    /// Budget counts every cursor cell, including skipped corners. After an error
+    /// Budget counts every vanilla cursor cell, including skipped corners. After an error
     /// iteration terminates; already performed queries are not rolled back.
     pub fn new(
         world: &'w mut W,
@@ -228,10 +209,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
         only_suffocating: bool,
         candidate_budget: usize,
     ) -> Result<Self, CollisionScanError<W::Error>> {
-        let (start, sizes, count) = cells(bounds).map_err(|error| match error {
-            CellError::InvalidBounds => CollisionScanError::InvalidBounds,
-            CellError::TooLarge => CollisionScanError::TooLarge,
-        })?;
+        let (start, sizes, count) = cells(bounds).ok_or(CollisionScanError::InvalidBounds)?;
         let missing_stays = world.missing_chunks_stay_missing();
         Ok(Self {
             world,
@@ -241,9 +219,10 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             only_suffocating,
             presence_only: false,
             start,
-            sizes: sizes.map(|s| s as usize),
+            sizes,
             index: 0,
             cursor: [0; 3],
+            dense: count <= i32::MAX as usize && sizes.into_iter().all(|s| s > 0),
             count,
             budget: candidate_budget,
             here: None,
@@ -272,10 +251,13 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
 
     /// The cells after the current one (cell `x` of its row, block x `block_x`) that are in the
     /// same row and chunk, never more than the budget has left: what can be passed at once.
-    fn rest_in_chunk(&self, x: usize, block_x: i32) -> usize {
-        (self.sizes[0] - 1 - x)
+    fn rest_in_chunk(&self, x: i32, block_x: i32) -> usize {
+        if !self.dense {
+            return 0;
+        }
+        ((self.sizes[0] - 1 - x) as usize)
             .min(15 - (block_x & 15) as usize)
-            .min(self.budget.saturating_sub(self.index))
+            .min(self.budget.min(self.count).saturating_sub(self.index))
     }
 
     /// The chunk and section facts of a cell in another chunk or section than the last one's;
@@ -361,7 +343,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
         }
         let [width, height, _] = self.sizes;
         self.index += n;
-        self.cursor[0] += n;
+        self.cursor[0] += n as i32;
         if self.cursor[0] == width {
             self.cursor[0] = 0;
             self.cursor[1] += 1;
@@ -378,27 +360,35 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 return Err(CollisionScanError::VisitBudget);
             }
             let [width, height, depth] = self.sizes;
-            let relative = self.cursor;
-            self.index += 1;
-            self.cursor[0] += 1;
-            if self.cursor[0] == width {
-                self.cursor[0] = 0;
-                self.cursor[1] += 1;
-                if self.cursor[1] == height {
-                    self.cursor[1] = 0;
-                    self.cursor[2] += 1;
-                }
-            }
+            let relative = if self.dense {
+                let relative = self.cursor;
+                self.skip(1);
+                relative
+            } else {
+                // Cursor3D.advance uses signed division and remainder, including after index
+                // wraps negative. A zero width or height would give count zero and not enter.
+                let index = self.index as i32;
+                let slice = index.wrapping_div(width);
+                self.index += 1;
+                [
+                    index.wrapping_rem(width),
+                    slice.wrapping_rem(height),
+                    slice.wrapping_div(height),
+                ]
+            };
             // How many of the cell's three coordinates lie on the box's outer layer.
-            let kind = usize::from(relative[0] == 0 || relative[0] == width - 1)
-                + usize::from(relative[1] == 0 || relative[1] == height - 1)
-                + usize::from(relative[2] == 0 || relative[2] == depth - 1);
+            let edge = [
+                width.wrapping_sub(1),
+                height.wrapping_sub(1),
+                depth.wrapping_sub(1),
+            ];
+            let kind = usize::from(relative[0] == 0 || relative[0] == edge[0])
+                + usize::from(relative[1] == 0 || relative[1] == edge[1])
+                + usize::from(relative[2] == 0 || relative[2] == edge[2]);
             if kind == 3 {
                 continue;
             }
-            let p = self
-                .start
-                .offset(relative[0] as i32, relative[1] as i32, relative[2] as i32);
+            let p = self.start.offset(relative[0], relative[1], relative[2]);
             let chunk_position = p.chunk();
             let section_y = p.y >> 4;
             let (chunk, facts) = match self.here {
@@ -439,9 +429,9 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 // at once (never beyond the budget, which still ends the
                 // scan where it would have).
                 if relative[1] == 0
-                    || relative[1] == height - 1
+                    || relative[1] == edge[1]
                     || relative[2] == 0
-                    || relative[2] == depth - 1
+                    || relative[2] == edge[2]
                 {
                     let rest = self.rest_in_chunk(relative[0], p.x);
                     self.skip(rest);

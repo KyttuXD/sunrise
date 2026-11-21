@@ -146,6 +146,15 @@ The one generic function you can target is a [published loop's body](3-loops.md#
 
 The tool plans against what the patch library compiles. The mod builder gives it the build's cfg set (the target's options and the features the prebuilt game was built with), and it drops the items, statements, fields, variants, parameters and match arms under an inactive `cfg` and expands `cfg_attr`. A function with an inner `#[cfg(test)] fn helper()` or a `#[cfg(feature = "x")]` statement takes its mixins like any other. The features are the game crate's: a `feature` predicate is decided only in the game crate's own functions. In a function of a crate below it (`sunrise_world`, say) it stays undecided, since that crate's resolved features are not the game's, and is refused. `unix`, `target_os` and the other options hold for every crate. The tool decides only what the signed build vouches for: `feature` in the game crate (from the game's feature list), `test` (the patch library is not a test build, so it is off), and the target facts that follow from the validated target (`target_os`, `target_family`, `unix`, `windows`, `target_arch`, `target_pointer_width`, `target_endian`, `target_env`, `target_vendor`, `target_abi`), read from the printed set and compared on their full values. Everything that depends on compiler flags (`debug_assertions`, `overflow_checks`, `panic`, `target_feature`, `relocation_model`, `sanitize*`, `doc`, `miri`) or on the original build's build script (any custom name) is undecided in both directions, listed or not. A `cfg` the set cannot decide (`version(..)`, `accessible(..)`, an expression-level attribute, a `feature` outside the game crate, a flag-dependent or custom name) is refused with `E_UNSUPPORTED_CFG`. This reduces the source inside a function the route already lets a row target; a function that carries a `cfg` or `cfg_attr` of its own is still not replaceable, active or not.
 
+## Replacing the controlled local player tick
+
+`sunrise_client_lib::motion::MotionWorld<'_, '_, '_>::controlled_simulation_tick_with_sprint_window`
+now takes `tick: &mut dyn LocalPlayerTick`, not a `MotionWorld` receiver. Bind `tick` instead
+of `self`. Use `tick.with_motion` for
+changes to movement state, and let that borrow end before calling `tick.update_local_crouching()`
+or `tick.update_player_pose()`. Those calls need the owning level to resolve the actual pose
+checks. This is the walking tick entry point with or without an `entity_size` listener.
+
 ## Replacing the global fluid picker
 
 The world generator's fluid picker (the sea and the lava below it) has two targets in `sunrise_world`:

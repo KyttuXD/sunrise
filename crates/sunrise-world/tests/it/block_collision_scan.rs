@@ -79,7 +79,7 @@ fn budgets_include_skipped_corners_and_errors_fuse_iteration() {
 }
 
 #[test]
-fn invalid_or_excessive_domains_fail_before_world_queries() {
+fn non_finite_bounds_fail_before_world_queries() {
     let mut world = FailedChunk { calls: 0 };
     for coordinate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let bounds = Aabb::new(Vec3::ZERO, Vec3::new(coordinate, 1.0, 1.0));
@@ -94,17 +94,24 @@ fn invalid_or_excessive_domains_fail_before_world_queries() {
             Err(CollisionScanError::InvalidBounds)
         ));
     }
-    let bounds = Aabb::new(Vec3::ZERO, Vec3::new(100000.0, 100000.0, 100000.0));
-    assert!(matches!(
-        BlockCollisionScan::new(
+    assert_eq!(world.calls, 0);
+}
+
+#[test]
+fn an_end_index_wrapping_to_zero_visits_no_cells() {
+    let mut world = FailedChunk { calls: 0 };
+    // The padded cursor has 65536 × 65536 × 4 cells. In Java its end index is zero.
+    let bounds = Aabb::new(Vec3::ZERO, Vec3::new(65532.0, 65532.0, 0.5));
+    assert!(
+        !BlockCollisionScan::any_collision(
             &mut world,
             CollisionContext::empty(false),
             bounds,
             false,
-            1000
-        ),
-        Err(CollisionScanError::TooLarge)
-    ));
+            usize::MAX,
+        )
+        .unwrap()
+    );
     assert_eq!(world.calls, 0);
 }
 

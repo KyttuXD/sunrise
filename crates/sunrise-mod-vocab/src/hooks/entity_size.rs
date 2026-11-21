@@ -11,9 +11,10 @@ pub trait Hooks {
     /// edits. The current-pose answer holds while the entity keeps that pose and vanilla size;
     /// the next change asks again, starting from vanilla's. Changing the width or height leaves
     /// the eye height as it is: set it too. Any finite non-negative answer (including zero) is
-    /// accepted with no synthetic upper cap; non-finite or negative components are logged and
-    /// ignored, keeping vanilla's dimensions. `host` reads the side that asks; the entity may be
-    /// new, so read only what you need of it.
+    /// accepted without an upper cap. If a listener proposes a negative or non-finite component,
+    /// that proposal is logged and refused; later listeners still see the preceding size. A panic
+    /// discards that listener's proposal, reports the mod and disables its size callback for the
+    /// session. `host` reads the side that asks; a new entity may not have joined the level yet.
     ///
     /// A mob is asked on the server at construction and when its pose or vanilla dimensions
     /// refresh. A player is asked on demand only
@@ -36,6 +37,8 @@ pub trait Hooks {
         version = 3,
         contract = "collect",
         out = "size",
+        isolate = true,
+        collect_validator = "crate::entity::types::validate_size",
         host = "read",
         target = "sunrise_client::game::native_hooks::entity_size::NativeHookHost<'_>::native_entity_size",
         neoforge = "EntityEvent.Size",

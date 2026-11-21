@@ -1,4 +1,5 @@
 use super::*;
+use crate::game::entity_sizes::GamePlayerTick;
 
 impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
@@ -849,10 +850,8 @@ impl Game<'_> {
         if self.player.is_none() {
             return Ok(None);
         }
-        let local_entity_id = self.remote.as_ref().map(|remote| remote.entity_id as u32);
-        if let Some(id) = local_entity_id {
-            self.refresh_player_size(id);
-        }
+        let local_entity_id = self.own_entity_id() as u32;
+        self.refresh_player_size(local_entity_id);
         // The LevelLoadingScreen takes the input until the level is ready.
         let loading = self
             .remote
@@ -925,9 +924,7 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         self.sync_player_body();
-        if let Some(id) = local_entity_id {
-            self.refresh_player_size(id);
-        }
+        self.refresh_player_size(local_entity_id);
         // LivingEntity.tickDeath: the local player counts its deathTime once
         // per client tick while dead (the camera's death roll and zoom).
         if self.screen == Screen::Dead {
@@ -972,88 +969,17 @@ impl Game<'_> {
                     );
                 }
             }
-            if let Some(id) = local_entity_id
-                .filter(|_| mod_api::__private::listened(mod_api::HookId::EntitySize))
-            {
-                if let Some(player) = self.player.as_mut() {
-                    let side = game_side!(self);
-                    MotionWorld {
-                        side: &side,
-                        entities: &entity_collisions,
-                        player,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        tag_items: None,
-                        block_registries: None,
-                    }
-                    .begin_local_tick()?;
-                }
-                self.update_local_crouching_with_sizes(id, &entity_collisions)?;
-                let previous = if let Some(player) = self.player.as_mut() {
-                    let side = game_side!(self);
-                    let _sections =
-                        section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-                    MotionWorld {
-                        side: &side,
-                        entities: &entity_collisions,
-                        player,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        tag_items: None,
-                        block_registries: None,
-                    }
-                    .travel_local_tick_with_sprint_window(keys, sprint_window)?
-                } else {
-                    return Ok(None);
-                };
-                self.update_player_pose_with_sizes(id, &entity_collisions, false)?;
-                if let Some(player) = self.player.as_mut() {
-                    let side = game_side!(self);
-                    MotionWorld {
-                        side: &side,
-                        entities: &entity_collisions,
-                        player,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        tag_items: None,
-                        block_registries: None,
-                    }
-                    .finish_local_tick(previous)?;
-                }
-            } else if let Some(player) = self.player.as_mut() {
-                let side = game_side!(self);
-                let _sections = section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-                MotionWorld {
-                    side: &side,
+            MotionWorld::controlled_simulation_tick_with_sprint_window(
+                &mut GamePlayerTick {
+                    game: self,
+                    id: local_entity_id,
                     entities: &entity_collisions,
-                    player,
-                    scene: &mut self.world,
-                    assets: &self.pack.assets,
-                    collision_binding: self.collision,
-                    resources: self.motion,
-                    health: &self.health_resources,
-                    loop_context: &self.loop_context,
-                    damage_hooks: &self.damage_hooks,
-                    tag_items: None,
-                    block_registries: None,
-                }
-                .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
-            }
+                    sections: section_scope,
+                    prediction: None,
+                },
+                keys,
+                sprint_window,
+            )?;
             // LocalPlayer.aiStep's makeJump adds a key press to this tick's input.
             if let Some(player) = self.player.as_ref() {
                 packet_keys.jump |= player.was_auto_jump;
@@ -1066,97 +992,34 @@ impl Game<'_> {
                 player.health.advance_clock();
             }
             if riding && !dead {
-                if let Some(id) = local_entity_id
-                    .filter(|_| mod_api::__private::listened(mod_api::HookId::EntitySize))
-                {
-                    let seat = if let Some(player) = self.player.as_mut() {
-                        player.client_side = true;
-                        let seat = player.position;
-                        if let Some(from) = old_seat {
-                            player.position = from;
-                        }
-                        let side = game_side!(self);
-                        let _sections =
-                            section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-                        MotionWorld {
-                            side: &side,
-                            entities: &entity_collisions,
-                            player,
-                            scene: &mut self.world,
-                            assets: &self.pack.assets,
-                            collision_binding: self.collision,
-                            resources: self.motion,
-                            health: &self.health_resources,
-                            loop_context: &self.loop_context,
-                            damage_hooks: &self.damage_hooks,
-                            tag_items: None,
-                            block_registries: None,
-                        }
-                        .rider_travel_before_pose(keys.direction())?;
-                        seat
-                    } else {
-                        return Ok(None);
-                    };
-                    self.update_player_pose_with_sizes(id, &entity_collisions, true)?;
-                    if let Some(player) = self.player.as_mut() {
-                        let side = game_side!(self);
-                        let _sections =
-                            section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-                        let mut passenger = MotionWorld {
-                            side: &side,
-                            entities: &entity_collisions,
-                            player,
-                            scene: &mut self.world,
-                            assets: &self.pack.assets,
-                            collision_binding: self.collision,
-                            resources: self.motion,
-                            health: &self.health_resources,
-                            loop_context: &self.loop_context,
-                            damage_hooks: &self.damage_hooks,
-                            tag_items: None,
-                            block_registries: None,
-                        };
-                        sunrise_world::entity_move::EntityMoveWorld::set_position(
-                            &mut passenger,
-                            seat,
-                        )?;
-                        // LivingEntity.aiStep: a passenger freezes in powder snow too, and the
-                        // frostbite overlay shows it (#8156).
-                        passenger.passenger_block_effects_tick()?;
-                    }
-                } else if let Some(player) = self.player.as_mut() {
-                    let side = game_side!(self);
-                    let _sections =
-                        section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-                    player.client_side = true;
-                    let mut passenger = MotionWorld {
-                        side: &side,
-                        entities: &entity_collisions,
-                        player,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        tag_items: None,
-                        block_registries: None,
-                    };
-                    // The rider moves from its old seat; the new one is its place after.
-                    let seat = passenger.player.position;
-                    if let Some(from) = old_seat {
-                        passenger.player.position = from;
-                    }
-                    passenger.rider_tick(keys.direction())?;
-                    sunrise_world::entity_move::EntityMoveWorld::set_position(
-                        &mut passenger,
-                        seat,
-                    )?;
-                    // LivingEntity.aiStep: a passenger freezes in powder snow too, and the
-                    // frostbite overlay shows it (#8156).
-                    passenger.passenger_block_effects_tick()?;
+                let Some(player) = self.player.as_mut() else {
+                    return Ok(None);
+                };
+                player.client_side = true;
+                // The rider moves from its old seat; the new one is its place after.
+                let seat = player.position;
+                if let Some(from) = old_seat {
+                    player.position = from;
                 }
+                let mut tick = GamePlayerTick {
+                    game: self,
+                    id: local_entity_id,
+                    entities: &entity_collisions,
+                    sections: section_scope,
+                    prediction: None,
+                };
+                use sunrise_client::motion::LocalPlayerTick;
+                tick.with_motion(&mut |world| world.rider_travel_before_pose(keys.direction()))?;
+                tick.game.update_player_pose_with_sizes(
+                    local_entity_id,
+                    &entity_collisions,
+                    true,
+                )?;
+                tick.with_motion(&mut |world| {
+                    sunrise_world::entity_move::EntityMoveWorld::set_position(world, seat)?;
+                    // A passenger freezes in powder snow too (`LivingEntity.aiStep`).
+                    world.passenger_block_effects_tick()
+                })?;
             }
         }
         let Some(player) = self.player.as_mut() else {

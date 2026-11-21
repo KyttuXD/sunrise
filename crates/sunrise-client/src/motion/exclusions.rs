@@ -30,8 +30,8 @@ pub fn no_player_collision_read(
             entity: player_collision_identity(player),
             context,
             bounds,
-            // CollisionGetter.noBlockCollision has no visit cutoff. The scan still checks
-            // whether its bounds can be represented by vanilla's integer cursor.
+            // CollisionGetter.noBlockCollision has no visit cutoff; BlockCollisions
+            // walks the padded box with Java's signed Cursor3D arithmetic.
             candidate_budget: usize::MAX,
         },
     )?)

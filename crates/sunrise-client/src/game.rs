@@ -3163,10 +3163,8 @@ impl ResizeState {
     }
 }
 
-/// Temporary block-contact collections rebuilt on every server tick. Keeping
-/// their backing storage on `Game` avoids reallocating them while the world is
-/// ticking; the wrapper around `tick_blocks` restores the scratch even when a
-/// phase returns an error.
+/// Temporary collision and block-contact collections. Keeping their backing storage on
+/// `Game` avoids reallocating them while the world is ticking.
 #[derive(Default)]
 struct TickScratch {
     ticking: Vec<(i32, i32)>,
@@ -3177,6 +3175,7 @@ struct TickScratch {
     sensing: Vec<BlockPos>,
     rest: Vec<BlockPos>,
     later: Vec<BlockPos>,
+    player_pose_solids: Vec<Aabb>,
 }
 
 struct Game<'a> {

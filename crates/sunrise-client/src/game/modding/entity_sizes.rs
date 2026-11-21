@@ -7,16 +7,18 @@
 //! The current answer is kept only while its pose and vanilla size hold. It is installed
 //! before resize relocation and before travel; non-current pose fits resolve separately.
 
-use super::Game;
+use super::{Game, entity_sections::PlayerSectionScope};
 use mod_api::{EntityRef, Pose};
-use sunrise_client::motion::{PlayerMotion, no_player_collision_read};
+use sunrise_client::motion::{
+    LocalPlayerTick, MotionWorld, PlayerMotion, no_player_collision_read,
+};
 use sunrise_client::pose::{Dimensions, Pose as MotionPose, SizeAnswer};
 use sunrise_core::geometry::{Aabb, Vec3};
 
 impl Game<'_> {
     /// Ask `entity_size` for `entity` in `pose` with vanilla dimensions `vanilla` and prior size
-    /// `old`. Skips event construction when no mod subscribes. Valid finite non-negative answers
-    /// are accepted without a synthetic upper cap; invalid answers are reported and keep vanilla.
+    /// `old`. Skips event construction when no mod subscribes. Dispatch validates each listener's
+    /// proposal before the next listener or an engine consumer sees it.
     fn ask_entity_size_with_old(
         &self,
         host: &dyn mod_api::Host,
@@ -32,19 +34,10 @@ impl Game<'_> {
         let mut size = vanilla;
         super::native_hooks::NativeHookHost { host }
             .native_entity_size(entity, pose, old, &mut size);
-        // Accept any finite non-negative dimensions (matching vanilla `EntityDimensions` and
-        // NeoForge `EntityEvent.Size`, with no synthetic upper cap). Reject non-finite or
-        // negative values loudly rather than silently reverting or poisoning AABBs.
-        let valid = size.iter().all(|v| v.is_finite() && *v >= 0.0);
-        if !valid {
-            log::warn!(
-                "entity_size: ignoring invalid dimensions {size:?} for entity {id} in pose {pose:?}; keeping vanilla {vanilla:?}"
-            );
-        }
         Some(SizeAnswer {
             pose,
             vanilla,
-            size: (valid && size != vanilla).then_some(size),
+            size: (size.map(f32::to_bits) != vanilla.map(f32::to_bits)).then_some(size),
         })
     }
 
@@ -161,6 +154,7 @@ impl Game<'_> {
         sunrise_client::pose::local_crouching(
             body.flying,
             body.swimming,
+            body.is_passenger,
             body.shift_key_down,
             body.sleeping,
             |pose| {
@@ -324,8 +318,76 @@ impl Game<'_> {
     }
 }
 
+/// The local player's real tick or a detached server prediction. The motion phase lends
+/// fields to client-lib; between phases, dimension queries get the full owning Host.
+pub(in crate::game) struct GamePlayerTick<'g, 'a, 's> {
+    pub game: &'g mut Game<'a>,
+    pub id: u32,
+    pub entities: &'s [Aabb],
+    pub sections: Option<PlayerSectionScope>,
+    pub prediction: Option<&'s mut PlayerMotion>,
+}
+
+impl LocalPlayerTick for GamePlayerTick<'_, '_, '_> {
+    fn with_motion(
+        &mut self,
+        phase: &mut dyn FnMut(&mut MotionWorld<'_, '_, '_>) -> sunrise_client::Result<()>,
+    ) -> sunrise_client::Result<()> {
+        let game = &mut *self.game;
+        let server = game.is_logical_server();
+        let side = game_side!(game);
+        let player = self
+            .prediction
+            .as_deref_mut()
+            .or(game.player.as_mut())
+            .ok_or_else(|| std::io::Error::other("motion tick without its player"))?;
+        let _sections = self
+            .sections
+            .map(|scope| scope.begin(&mut game.native_lifecycle));
+        phase(&mut MotionWorld {
+            side: &side,
+            entities: self.entities,
+            player,
+            scene: &mut game.world,
+            assets: &game.pack.assets,
+            collision_binding: game.collision,
+            resources: game.motion,
+            health: &game.health_resources,
+            tag_items: server.then(|| world_items!(game)),
+            loop_context: &game.loop_context,
+            damage_hooks: &game.damage_hooks,
+            block_registries: server.then_some(&game.pack.block_registries),
+        })
+    }
+
+    fn update_local_crouching(&mut self) -> sunrise_client::Result<()> {
+        if let Some(body) = self.prediction.as_deref_mut() {
+            self.game
+                .update_body_local_crouching(self.id, body, self.entities)
+        } else {
+            self.game
+                .update_local_crouching_with_sizes(self.id, self.entities)
+        }
+    }
+
+    fn update_player_pose(&mut self) -> sunrise_client::Result<()> {
+        if let Some(body) = self.prediction.as_deref_mut() {
+            if let Some(answer) = self.game.resolve_current_body_size(self.id, body, None) {
+                Game::apply_body_size(body, answer);
+            }
+            self.game
+                .update_body_pose(self.id, body, self.entities, false)
+        } else {
+            self.game.refresh_player_size(self.id);
+            self.game
+                .update_player_pose_with_sizes(self.id, self.entities, false)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::GamePlayerTick;
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{EntitySizeEvent, Hooks, Host, Pose};
     use std::sync::{Arc, Mutex};
@@ -687,6 +749,59 @@ mod tests {
                 })
             });
         }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_replaceable_local_tick_only_resolves_reached_pose_checks() {
+        use sunrise_client::{
+            motion::{MotionWorld, PlayerMotion},
+            pose::Pose as MotionPose,
+            sprint::Keys,
+        };
+        use sunrise_core::geometry::Vec3;
+
+        let poses = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![mod_api::ModEntry::new(
+            "short_crouch",
+            Box::new(ShortCrouch(poses.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                let mut body = PlayerMotion::new(game.motion, Vec3::new(1.5, 64.0, 1.5)).unwrap();
+                body.client_side = true;
+                body.shift_key_down = true;
+                game.player = Some(body);
+                game.refresh_player_size(1);
+                poses.lock().unwrap().clear();
+                MotionWorld::controlled_simulation_tick_with_sprint_window(
+                    &mut GamePlayerTick {
+                        game,
+                        id: 1,
+                        entities: &[],
+                        sections: None,
+                        prediction: None,
+                    },
+                    Keys {
+                        shift: true,
+                        ..Keys::default()
+                    },
+                    7,
+                )
+                .unwrap();
+                // Old shift skips Standing during aiStep. Player.tick tests Swimming and then the
+                // desired Crouching pose, which is still non-current until that check succeeds.
+                assert_eq!(
+                    poses.lock().unwrap().as_slice(),
+                    &[Pose::Crouching, Pose::Swimming, Pose::Crouching]
+                );
+                let body = game.player.as_ref().unwrap();
+                assert!(body.local_crouching);
+                assert_eq!(body.pose, MotionPose::Crouching);
+                assert_eq!(body.dimensions.height, 0.8);
+            })
+        });
     }
 
     #[test]

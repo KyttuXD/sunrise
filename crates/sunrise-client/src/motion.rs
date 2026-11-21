@@ -1001,6 +1001,34 @@ pub struct MotionWorld<'p, 'w, 'r> {
     /// The cached block parser table, when available to level hooks.
     pub block_registries: Option<&'w crate::command::args::Registries>,
 }
+/// The owner of a local player tick. Lend motion only for a phase: pose queries between
+/// phases can use the owning level and player as a read-only mod Host.
+pub trait LocalPlayerTick {
+    fn with_motion(
+        &mut self,
+        phase: &mut dyn FnMut(&mut MotionWorld<'_, '_, '_>) -> Result<()>,
+    ) -> Result<()>;
+    fn update_local_crouching(&mut self) -> Result<()>;
+    fn update_player_pose(&mut self) -> Result<()>;
+}
+
+impl LocalPlayerTick for MotionWorld<'_, '_, '_> {
+    fn with_motion(
+        &mut self,
+        phase: &mut dyn FnMut(&mut MotionWorld<'_, '_, '_>) -> Result<()>,
+    ) -> Result<()> {
+        phase(self)
+    }
+
+    fn update_local_crouching(&mut self) -> Result<()> {
+        MotionWorld::update_local_crouching(self)
+    }
+
+    fn update_player_pose(&mut self) -> Result<()> {
+        MotionWorld::update_player_pose(self)
+    }
+}
+
 enum TickInput {
     Living([f32; 3]),
     PreparedLocal { direction: [f32; 2], jumping: bool },
@@ -1253,40 +1281,6 @@ impl MotionWorld<'_, '_, '_> {
         self.update_player_pose()?;
         self.finish_local_tick(previous)
     }
-    /// Base tick before `LocalPlayer.aiStep`'s crouching fit check (`Entity.baseTick` fluids).
-    pub fn begin_local_tick(&mut self) -> Result<()> {
-        self.player.health.advance_clock();
-        self.fluid_base_tick()
-    }
-    /// Input, sprint, movement, fire and dirty-attribute refresh between `update_local_crouching`
-    /// and `update_player_pose`. Returns the pre-move position for `finish_local_tick`.
-    pub fn travel_local_tick_with_sprint_window(
-        &mut self,
-        keys: crate::sprint::Keys,
-        sprint_window: i32,
-    ) -> Result<Vec3> {
-        self.travel_local_tick(keys, |player, keys| {
-            player.sprint_input_tick_with_window(keys, sprint_window)
-        })
-    }
-    /// Same as `travel_local_tick_with_sprint_window` for a replayed tick with fixed sprinting,
-    /// suppressing mod movement-event notices (`replaying = true`) during travel.
-    pub fn travel_replayed_tick(
-        &mut self,
-        keys: crate::sprint::Keys,
-        sprinting: bool,
-    ) -> Result<Vec3> {
-        self.player.replaying = true;
-        let result = self.travel_local_tick(keys, |player, _| {
-            if player.sprinting == sprinting {
-                Ok(())
-            } else {
-                player.set_sprinting(sprinting)
-            }
-        });
-        self.player.replaying = false;
-        result
-    }
     fn travel_local_tick(
         &mut self,
         keys: crate::sprint::Keys,
@@ -1321,7 +1315,7 @@ impl MotionWorld<'_, '_, '_> {
         Ok(previous)
     }
     /// Movement statistics and hunger after `update_player_pose`.
-    pub fn finish_local_tick(&mut self, previous: Vec3) -> Result<()> {
+    fn finish_local_tick(&mut self, previous: Vec3) -> Result<()> {
         // The resident scene accepts the resolved local movement directly.
         // Vanilla dispatches this separately from travel, on packet acceptance.
         self.check_movement_statistics(previous.vector_to(self.player.position))?;
@@ -1340,48 +1334,66 @@ impl MotionWorld<'_, '_, '_> {
         )
     }
     pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
-        self.controlled_simulation_tick_with_sprint_window(keys, 7)
+        Self::controlled_simulation_tick_with_sprint_window(self, keys, 7)
     }
-    /// Local simulation with the configured double-tap sprint window.
+    /// Local simulation with the configured double-tap sprint window. A native replacement
+    /// can lend `tick`'s motion state for a phase without holding it over a pose query.
     #[sunrise_mod_api_macros::replaceable]
     pub fn controlled_simulation_tick_with_sprint_window(
-        &mut self,
+        tick: &mut dyn LocalPlayerTick,
         keys: crate::sprint::Keys,
         sprint_window: i32,
     ) -> Result<()> {
-        self.local_tick(keys, |player, keys| {
+        Self::local_tick(tick, keys, |player, keys| {
             player.sprint_input_tick_with_window(keys, sprint_window)
         })
     }
-    /// A client's tick played again: the client's own keys, and the sprinting it said it had
-    /// (its ServerboundPlayerCommandPacket comes before the tick's move). It tells the mods nothing
-    /// of what it did (`living_jump`, `living_fall`, `player_flyable_fall`: `replaying`), but
-    /// their answers to what the movement asks (a bounce's restitution, a block's friction) count.
-    pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
-        self.player.replaying = true;
-        let result = self.local_tick(keys, |player, _| {
+    /// A client's tick played again: movement notices are suppressed (`replaying`), but
+    /// answers to movement queries (restitution, friction, candidate size) still count.
+    pub fn replay_local_tick(
+        tick: &mut dyn LocalPlayerTick,
+        keys: crate::sprint::Keys,
+        sprinting: bool,
+    ) -> Result<()> {
+        tick.with_motion(&mut |world| {
+            world.player.replaying = true;
+            Ok(())
+        })?;
+        let result = Self::local_tick(tick, keys, |player, _| {
             if player.sprinting == sprinting {
                 Ok(())
             } else {
                 player.set_sprinting(sprinting)
             }
         });
-        self.player.replaying = false;
+        tick.with_motion(&mut |world| {
+            world.player.replaying = false;
+            Ok(())
+        })?;
         result
     }
-    /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the
-    /// sprint phase.
+    pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
+        Self::replay_local_tick(self, keys, sprinting)
+    }
+    /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the sprint phase.
     fn local_tick(
-        &mut self,
+        tick: &mut dyn LocalPlayerTick,
         keys: crate::sprint::Keys,
-        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
+        sprint: impl Fn(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
     ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
-        self.begin_local_tick()?;
-        self.update_local_crouching()?;
-        let previous = self.travel_local_tick(keys, sprint)?;
-        self.update_player_pose()?;
-        self.finish_local_tick(previous)
+        tick.with_motion(&mut |world| {
+            world.player.health.advance_clock();
+            world.fluid_base_tick()
+        })?;
+        tick.update_local_crouching()?;
+        let mut previous = Vec3::ZERO;
+        tick.with_motion(&mut |world| {
+            previous = world.travel_local_tick(keys, &sprint)?;
+            Ok(())
+        })?;
+        tick.update_player_pose()?;
+        tick.with_motion(&mut |world| world.finish_local_tick(previous))
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)

@@ -43,8 +43,13 @@ impl Game<'_> {
     /// The boxes of the solid entities for `mover`, in the order its inputs are read.
     pub(in crate::game) fn entity_collisions(&self, mover: Mover<'_>) -> Vec<Aabb> {
         let mut boxes = Vec::new();
-        self.each_solid(mover, |c, _| boxes.push(c.bounds));
+        self.fill_entity_collisions(mover, &mut boxes);
         boxes
+    }
+
+    pub(in crate::game) fn fill_entity_collisions(&self, mover: Mover<'_>, boxes: &mut Vec<Aabb>) {
+        boxes.clear();
+        self.each_solid(mover, |candidate, _| boxes.push(candidate.bounds));
     }
 
     /// Fills `out` with the entities that can be solid to a player as `Entity.canBeCollidedWith`

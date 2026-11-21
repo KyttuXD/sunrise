@@ -168,6 +168,13 @@ impl<W: EntityMovementWorld> EntityMovementWorld for Excluding<'_, W> {
     ) -> Result<Vec<VoxelShape>, Self::Error> {
         self.world.entity_collisions(entity, bounds)
     }
+    fn has_entity_collision(
+        &mut self,
+        entity: EntityIdentity,
+        bounds: Aabb,
+    ) -> Result<bool, Self::Error> {
+        self.world.has_entity_collision(entity, bounds)
+    }
     fn movement_border(
         &mut self,
         entity: EntityIdentity,

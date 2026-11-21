@@ -4,3 +4,4 @@ sunrise-client game::entity_sizes::tests::a_large_candidate_checks_the_entire_bo
 sunrise-client game::entity_sizes::tests::guest_pose_fit_respects_solid_entities_and_ticking_spectators lib daily resources
 sunrise-client game::entity_sizes::tests::a_goat_uses_its_new_answer_before_resize_relocation lib daily resources
 sunrise-client game::entity_sizes::tests::prediction_uses_entity_size_without_committing_the_pose lib daily resources
+sunrise-client game::entity_sizes::tests::the_replaceable_local_tick_only_resolves_reached_pose_checks lib daily resources

@@ -199,6 +199,8 @@ is reused, and inactive poses are never precomputed. Non-standard desired poses
 path. Answer using the event's pose, not the entity's current pose: a candidate need not
 become the actual pose. When no mod subscribes, no event is constructed or dispatched.
 
-Any finite non-negative dimensions (including zero) are accepted with no synthetic upper
-limit; non-finite or negative values are reported via a warning log and keep vanilla's
-dimensions.
+Any finite non-negative dimensions (including zero) are accepted without an upper limit.
+A negative or non-finite proposal is reported with the proposing mod's name and leaves the
+preceding size in place. A panic discards only that mod's proposal and disables its size
+callback for the session; the game reports it in the log and error toast. Other listeners
+still run, in mod order.

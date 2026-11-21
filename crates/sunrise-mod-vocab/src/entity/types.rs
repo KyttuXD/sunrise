@@ -1733,6 +1733,18 @@ pub(crate) fn refused_travel_output(
     Ok(())
 }
 
+/// Validate only the listener's proposal, not dimensions already supplied by the engine.
+pub(crate) fn validate_size(mod_id: &str, previous: &[f32; 3], proposed: &mut [f32; 3]) {
+    if proposed.iter().zip(previous).any(|(&value, &old)| {
+        value.to_bits() != old.to_bits() && (!value.is_finite() || value < 0.0)
+    }) {
+        log::warn!(
+            "mod {mod_id}: entity_size dimensions {proposed:?} refused; expected finite non-negative components"
+        );
+        *proposed = *previous;
+    }
+}
+
 /// How a declared attribute's modifier lines read on item tooltips: NeoForge's
 /// `RangedAttribute`, `PercentageAttribute` and `BooleanAttribute`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

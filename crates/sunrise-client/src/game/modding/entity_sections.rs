@@ -34,7 +34,7 @@
 pub(super) mod observer_cache;
 #[path = "entity_sections/player.rs"]
 mod player;
-pub(super) use player::PlayerSectionObserver;
+pub(super) use player::{PlayerSectionObserver, PlayerSectionScope};
 
 use super::Game;
 use crate::mobs::living::section_writes::PositionWrite;

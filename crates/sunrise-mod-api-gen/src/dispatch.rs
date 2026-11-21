@@ -121,6 +121,10 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_edit = hook
+            .isolate
+            .then_some(hook.collect_validator.as_deref())
+            .flatten();
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -546,6 +550,8 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
+            } else if isolated_edit.is_some() && Some(name.as_str()) == out {
+                inits.push(format!("{name}: &mut __proposed"));
             } else if hook.event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
@@ -946,7 +952,10 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener
+            || isolated_collect
+            || isolated_edit.is_some()
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -1255,6 +1264,16 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_edit.is_some() => {
+                let validator = isolated_edit.unwrap();
+                let output = out.unwrap();
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); let mut __proposed = *{output}; {local_event} if super::runtime::isolated_edit(HookId::{hook_id}, mod_id, \"{name}\", || {mod_item}.{name}({invoke})) {{ {validator}(mod_id, {output}, &mut __proposed); *{output} = __proposed; }} }} }}"
+                    ),
+                )
+            }
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.

@@ -24,6 +24,14 @@ pub trait EntityMovementWorld {
         entity: EntityIdentity,
         bounds: Aabb,
     ) -> Result<Vec<VoxelShape>, Self::Error>;
+    /// Boolean `CollisionGetter.noCollision` only needs an entity's presence, not its shape.
+    fn has_entity_collision(
+        &mut self,
+        entity: EntityIdentity,
+        bounds: Aabb,
+    ) -> Result<bool, Self::Error> {
+        Ok(!self.entity_collisions(entity, bounds)?.is_empty())
+    }
     /// Obtain the border, check isInsideCloseToBorder and fetch its shape only
     /// when applicable. Called before block iteration for each collision query.
     fn movement_border(
@@ -167,10 +175,9 @@ where
     )? {
         return Ok(false);
     }
-    if !world
-        .entity_collisions(request.entity, request.bounds)
+    if world
+        .has_entity_collision(request.entity, request.bounds)
         .map_err(CollisionScanError::World)?
-        .is_empty()
     {
         return Ok(false);
     }
