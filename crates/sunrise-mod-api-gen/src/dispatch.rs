@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolate_each = hook.isolate && !isolated_collect && contract != Contract::Cancel;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +506,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && !isolate_each
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -982,7 +987,7 @@ pub(super) fn emit<'a>(
                     "super::runtime::entered_matching(HookId::{hook_id}, \"{name}\", {allow_subscriber})"
                 )
             }
-            None if answered || hook.collect_validator.is_some() => {
+            None if answered || hook.collect_validator.is_some() || isolate_each => {
                 format!("super::entered_with_id(HookId::{hook_id}, \"{name}\")")
             }
             None => format!("super::entered(HookId::{hook_id}, \"{name}\")"),
@@ -1035,6 +1040,8 @@ pub(super) fn emit<'a>(
         }
         let snapshot_statement = if snaps.is_empty() {
             String::new()
+        } else if isolate_each {
+            format!("let {saved} = ({},); ", snaps.join(", "))
         } else {
             // A snapshot that only copies is no work to defer: `then_some`.
             let (then, arm) = if !snaps.iter().any(|snap| snap.starts_with("ToOwned")) {
@@ -1049,6 +1056,8 @@ pub(super) fn emit<'a>(
         };
         let restore_statement = if snaps.is_empty() {
             String::new()
+        } else if isolate_each {
+            restores.join(" ")
         } else {
             format!(
                 "if let Some({saved}) = {snapshot} {{ {} }} ",
@@ -1074,9 +1083,15 @@ pub(super) fn emit<'a>(
             "report"
         };
         let run = |expression: &str| {
-            format!(
-                "match super::runtime::refusable(contained, || {expression}) {{ Ok(answer) => answer, Err(refusal) => {{ {restore_statement}{clear_batch}refusal.{report}(); {refused_value} }} }}"
-            )
+            if isolate_each {
+                format!(
+                    "match super::runtime::isolate_listener(HookId::{hook_id}, mod_id, \"{name}\", || {expression}) {{ Some(answer) => answer, None => {{ {restore_statement}{refused_value} }} }}"
+                )
+            } else {
+                format!(
+                    "match super::runtime::refusable(contained, || {expression}) {{ Ok(answer) => answer, Err(refusal) => {{ {restore_statement}{clear_batch}refusal.{report}(); {refused_value} }} }}"
+                )
+            }
         };
         // One callee's call: a mod's, or a scoped hook's part's.
         let call = |callee: &str, exit: &str| {
@@ -1097,10 +1112,15 @@ pub(super) fn emit<'a>(
                     "if let Some({replacement}) = {answer_call} {{ *{o} = Some(Answered {{ answer: {replacement}, mod_id }}); {exit}; }}",
                     o = out.unwrap()
                 ),
-                Contract::Replace => format!(
-                    "if let Some({replacement}) = {answer_call} {{ *{o} = Some({replacement}); {exit}; }}",
-                    o = out.unwrap()
-                ),
+                Contract::Replace => {
+                    let validate = hook.output_validator.as_ref().map_or_else(String::new, |check| {
+                        format!("if let Err(reason) = {check}(&{replacement}) {{ log::warn!(\"mod {{mod_id}} hook {name} refused: {{reason}}\"); continue; }}")
+                    });
+                    format!(
+                        "if let Some({replacement}) = {answer_call} {{ {validate} *{o} = Some({replacement}); {exit}; }}",
+                        o = out.unwrap()
+                    )
+                }
                 Contract::Collect if answered => format!(
                     "{plain_call}; {o}.extend({event}.{o}.drain(..).map(|answer| Answered {{ answer, mod_id }}));",
                     o = out.unwrap()
@@ -1118,10 +1138,15 @@ pub(super) fn emit<'a>(
                 "{local_event} {snapshot_statement}{invocation} {local_write_back} {stack_after}"
             )
         };
-        let binding = if answered || hook.collect_validator.is_some() {
+        let binding = if answered || hook.collect_validator.is_some() || isolate_each {
             format!("(mod_id, {mod_item})")
         } else {
             mod_item.clone()
+        };
+        let skip_poisoned = if isolate_each {
+            format!("if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }}")
+        } else {
+            String::new()
         };
         // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
         // **requested** outputs — not one an earlier listener had proposed — is skipped by this
@@ -1280,7 +1305,10 @@ pub(super) fn emit<'a>(
             ),
             None => (
                 String::new(),
-                format!("for {binding} in {each} {{ {} }}", call(&mod_item, "break")),
+                format!(
+                    "for {binding} in {each} {{ {skip_poisoned} {} }}",
+                    call(&mod_item, "break")
+                ),
             ),
             Some((_, lookup)) => (
                 // The parts are looked up first: the key may be moved into the event. A worldgen
@@ -1317,6 +1345,11 @@ pub(super) fn emit<'a>(
                     format!(
                         "'dispatch_parts: {{ for {part_item} in super::entered_parts(&{part_list}[..{inert_owner}.unwrap_or({part_list}.len())], \"{name}\") {{ {} }} if {inert_owner}.is_some() {{ {inert} }} }}",
                         call(&part_item, "break 'dispatch_parts"),
+                    )
+                } else if isolate_each {
+                    format!(
+                        "for (mod_id, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ {skip_poisoned} {} }}",
+                        call(&part_item, "break"),
                     )
                 } else {
                     format!(

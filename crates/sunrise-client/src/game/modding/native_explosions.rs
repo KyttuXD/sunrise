@@ -17,15 +17,10 @@ use sunrise_client::{
     mobs::{NamedDamage, Who},
 };
 
-/// Whether `native_explode` takes this centre and radius. Vanilla bounds
-/// neither: any finite radius goes, one of 0 or below finding no blocks. A
-/// blast's 1352 rays are fixed; its cost is in the blocks they find (their
-/// steps grow with the radius, the distinct positions roughly with its cube).
-fn blast_ok(center: [f64; 3], radius: f32) -> bool {
-    center
-        .into_iter()
-        .all(|v| v.is_finite() && v.abs() <= 30_000_000.0)
-        && radius.is_finite()
+/// A blast needs finite coordinates and radius for ray and entity queries. `ServerExplosion`
+/// checks individual ray positions, not the centre's bounds or chunk residency.
+pub(super) fn blast_ok(center: [f64; 3], radius: f32) -> bool {
+    center.into_iter().all(f64::is_finite) && radius.is_finite()
 }
 
 /// A particle type a blast takes by id: one vanilla has that needs no options
@@ -58,8 +53,8 @@ impl Game<'_> {
     /// above solid blocks, and everyone near hears and sees it. `source` is
     /// the exploding entity, already resolved; `settings` the damage type,
     /// calculator, particles and sound. Refused, with nothing done, on a
-    /// client's copy of the world, for a chunk that isn't loaded, a centre or
-    /// radius that isn't finite, or settings `native_blast_settings` refuses.
+    /// client's copy of the world, for a centre or radius that isn't finite,
+    /// or settings `native_blast_settings` refuses.
     /// A blast inside `native_explosion_detonate` starts that hook again.
     pub(super) fn native_explode(
         &mut self,
@@ -70,18 +65,11 @@ impl Game<'_> {
         interaction: ExplosionInteraction,
         settings: ExplosionSettings,
     ) -> Result<(), ExplodeError> {
-        if self.serving.is_none() && self.options.dedicated.is_none() {
+        if !self.is_logical_server() {
             return Err(ExplodeError::Unavailable);
         }
         if !blast_ok(center, radius) {
             return Err(ExplodeError::InvalidBlast);
-        }
-        let chunk = (
-            (center[0].floor() as i32) >> 4,
-            (center[2].floor() as i32) >> 4,
-        );
-        if !self.world.chunks.contains_key(&chunk) {
-            return Err(ExplodeError::Unavailable);
         }
         let settings = self.native_blast_settings(settings)?;
         let id = source.map(|(id, _)| id);
@@ -411,7 +399,7 @@ mod tests {
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::NAN));
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::INFINITY));
         assert!(!blast_ok([f64::INFINITY, 64.0, 0.5], 4.0));
-        assert!(!blast_ok([0.5, 64.0, 4.0e7], 4.0));
+        assert!(blast_ok([0.5, 64.0, 4.0e7], 4.0));
     }
 
     #[test]

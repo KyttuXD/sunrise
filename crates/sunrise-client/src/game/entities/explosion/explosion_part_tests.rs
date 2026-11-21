@@ -467,12 +467,12 @@ fn block_parts_answer_explosion_resistance() {
         explode(game, None);
         game.combat.blast_resistance_cap = None;
         assert_eq!(game.world.block(2, 65, 3), game.world.air);
-        // A negative or non-finite answer is refused for the block's own value.
+        // Non-finite answers are refused. Finite negatives reach the calculator.
         let pos = [2, 65, 3];
         for (answer, expected) in [
             (1200.0, Some(1200.0)),
             (0.0, Some(0.0)),
-            (-1.0, None),
+            (-1.0, Some(-1.0)),
             (f32::NAN, None),
             (f32::INFINITY, None),
             (f32::NEG_INFINITY, None),

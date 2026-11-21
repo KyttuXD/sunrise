@@ -567,6 +567,14 @@ pub enum ExplosionInteraction {
     Trigger,
 }
 
+pub(crate) fn validate_explosion_resistance(resistance: &f32) -> Result<(), &'static str> {
+    if resistance.is_finite() {
+        Ok(())
+    } else {
+        Err("non-finite block resistance")
+    }
+}
+
 /// The resistance a blast meets in one cell (`ExplosionDamageCalculator.getBlockExplosionResistance`),
 /// as [`LevelRef::explosion_resistance`](crate::LevelRef::explosion_resistance) reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -609,11 +617,6 @@ pub enum ResistanceCells {
     },
 }
 
-impl ResistanceCells {
-    /// The most cells one batched read covers; a larger one is refused.
-    pub const MAX: u64 = 262_144;
-}
-
 /// Why a batched explosion resistance read was refused, with nothing read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -621,8 +624,8 @@ impl ResistanceCells {
 pub enum ResistanceCellsError {
     /// A box whose `max` is below its `min` on some axis, or columns whose `max_y` is below `min_y`.
     Inverted,
-    /// More cells than [`ResistanceCells::MAX`]: this many.
-    TooMany(u64),
+    /// The result cannot be represented or allocated as a vector on this host.
+    Capacity,
     /// A host without a game.
     NoGame,
 }
@@ -639,19 +642,12 @@ impl crate::NoBackend for ResistanceCellsError {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ExplosionDestroyError {
-    /// More positions than [`ExplosionDestroyError::MAX_POSITIONS`]: this many.
-    TooMany(u64),
     /// A stale level, or one not in place; a stale source or one in another level; a client.
     Unavailable,
-    /// A centre or radius that isn't finite, or a negative radius.
+    /// A centre or radius that isn't finite.
     InvalidBlast,
     /// A host without a game.
     NoGame,
-}
-
-impl ExplosionDestroyError {
-    /// The most positions one call takes.
-    pub const MAX_POSITIONS: u64 = 65_536;
 }
 
 impl crate::NoBackend for ExplosionDestroyError {

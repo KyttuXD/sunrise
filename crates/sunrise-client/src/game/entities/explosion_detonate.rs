@@ -165,6 +165,58 @@ mod tests {
         fn explosion_detonate(&self, _: &mut dyn ServerHost, _: &mut ExplosionDetonateEvent<'_>) {}
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn a_panicking_detonate_listener_cannot_remove_other_targets() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Panics(Arc<AtomicUsize>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Panics {
+            fn explosion_detonate(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut ExplosionDetonateEvent<'_>,
+            ) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                event.blocks.clear();
+                panic!("detonate test panic");
+            }
+        }
+        struct Adds;
+        #[mod_api::__subscriptions]
+        impl Hooks for Adds {
+            fn explosion_detonate(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut ExplosionDetonateEvent<'_>,
+            ) {
+                event.blocks.push([1, 1, 1]);
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mods: mod_api::Mods = vec![
+            mod_api::ModEntry::new("panics", Box::new(Panics(calls.clone()))),
+            mod_api::ModEntry::new("adds", Box::new(Adds)),
+        ]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                for _ in 0..2 {
+                    let mut blocks = vec![[0, 0, 0]];
+                    game.native_explosion_detonate(
+                        "minecraft:overworld",
+                        [0.0; 3],
+                        &mut blocks,
+                        &mut Vec::new(),
+                    );
+                    assert_eq!(blocks, [[0, 0, 0], [1, 1, 1]]);
+                }
+            });
+        });
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
     const SPARED: u32 = 901;
     const FAR: u32 = 905;
 

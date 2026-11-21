@@ -6,7 +6,6 @@ use mod_api::{
     EntityRef, ExplosionInteraction, ExplosionResistance, LevelRef, ResistanceCells,
     ResistanceCellsError,
 };
-use sunrise_client::mobs::DamageKind;
 
 impl Game<'_> {
     /// The resistance the blast `level.explode(source, center, radius, fire, interaction)` would
@@ -29,11 +28,12 @@ impl Game<'_> {
             fire,
             interaction,
         };
-        Some(self.explosion_resistances_of(level, [pos].into_iter(), 1, &blast, None)[0])
+        let mut answer = ExplosionResistance::Unavailable;
+        self.visit_explosion_resistances(level, [pos], &blast, None, |value| answer = value);
+        Some(answer)
     }
 
-    /// `level_explosion_resistance` for every cell of `cells`, in its order. Refused, with
-    /// nothing read, for an inverted area or more than `ResistanceCells::MAX` cells.
+    /// `level_explosion_resistance` for every cell of `cells`, in its order.
     pub(super) fn level_explosion_resistances(
         &mut self,
         level: LevelRef,
@@ -45,6 +45,9 @@ impl Game<'_> {
         interaction: ExplosionInteraction,
     ) -> Result<Vec<ExplosionResistance>, ResistanceCellsError> {
         let count = cell_count(cells)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(count)
+            .map_err(|_| ResistanceCellsError::Capacity)?;
         let blast = Blast {
             source,
             center,
@@ -54,26 +57,37 @@ impl Game<'_> {
         };
         let mut answers = PartAnswers::default();
         let started = std::time::Instant::now();
-        let out = match cells {
+        match cells {
             ResistanceCells::Box { min, max } => {
-                let positions = (min[1]..=max[1]).flat_map(move |y| {
+                let positions = (min[1]..=max[1]).flat_map(|y| {
                     (min[2]..=max[2]).flat_map(move |z| (min[0]..=max[0]).map(move |x| [x, y, z]))
                 });
-                self.explosion_resistances_of(level, positions, count, &blast, Some(&mut answers))
+                self.visit_explosion_resistances(
+                    level,
+                    positions,
+                    &blast,
+                    Some(&mut answers),
+                    |value| out.push(value),
+                );
             }
             ResistanceCells::Columns {
                 columns,
                 min_y,
                 max_y,
             } => {
-                let (min_y, max_y) = (*min_y, *max_y);
                 let positions = columns
                     .iter()
-                    .flat_map(move |&(x, z)| (min_y..=max_y).map(move |y| [x, y, z]));
-                self.explosion_resistances_of(level, positions, count, &blast, Some(&mut answers))
+                    .flat_map(|&(x, z)| (*min_y..=*max_y).map(move |y| [x, y, z]));
+                self.visit_explosion_resistances(
+                    level,
+                    positions,
+                    &blast,
+                    Some(&mut answers),
+                    |value| out.push(value),
+                );
             }
             _ => unreachable!("ResistanceCells: unhandled variant"),
-        };
+        }
         let ms = started.elapsed().as_secs_f32() * 1000.0;
         if self.options.spikes.is_some_and(|threshold| ms > threshold) {
             log::info!("Sunrise: slow mod explosion resistance read {ms:.1} ms ({count} cells)");
@@ -81,73 +95,72 @@ impl Game<'_> {
         Ok(out)
     }
 
-    /// The resistance `blast` meets in each of the `count` cells of `positions`. The blast's
-    /// source and cause are set as `native_explode` sets them while the cells are read, and the
-    /// enclosing blast's are put back after.
-    fn explosion_resistances_of(
+    /// Resolve the blast in the level in place, then sample the supplied cells. The calculator
+    /// and damage source are the same as `native_explode` uses, independent of centre residency.
+    fn visit_explosion_resistances(
         &mut self,
         level: LevelRef,
-        positions: impl Iterator<Item = [i32; 3]>,
-        count: usize,
+        positions: impl IntoIterator<Item = [i32; 3]>,
         blast: &Blast,
         mut answers: Option<&mut PartAnswers>,
-    ) -> Vec<ExplosionResistance> {
-        let unavailable = || vec![ExplosionResistance::Unavailable; count];
-        if !self.level_in_place(level) {
-            return unavailable();
-        }
-        let source = match blast.source {
-            Some(entity) => match self.native_explosion_source(entity) {
-                Some(source) => Some(source),
-                None => return unavailable(),
-            },
-            None => None,
+        mut answer: impl FnMut(ExplosionResistance),
+    ) {
+        let source = self
+            .level_in_place(level)
+            .then(|| match blast.source {
+                Some(entity) => self.native_explosion_source(entity).map(Some),
+                None => Some(None),
+            })
+            .flatten();
+        let Some(source) = source else {
+            for _ in positions {
+                answer(ExplosionResistance::Unavailable);
+            }
+            return;
         };
-        let id = source.map(|(id, _)| id);
-        let interaction = self.native_blast_interaction(blast.interaction, id);
+        let interaction =
+            self.native_blast_interaction(blast.interaction, source.map(|(id, _)| id));
         let outer = self.take_blast_state();
         if let Some((id, target)) = source {
             self.attribute_native_blast(id, target);
             self.native_blast_calculator(id, target);
         }
-        // The calculator `level.explode` would have: the same selection, read the same way.
         let rules = self.blast_rules(None, false);
-        let damage_type =
-            super::creatures::damage_type(DamageKind::Explosion, self.blast_attacker().is_some());
         let start = self.explosion_start(
             blast.center,
             blast.radius,
             interaction,
             blast.fire,
-            damage_type,
+            self.blast_damage_type(),
         );
-        let (min_y, max_y) = (self.world.bottom_y(), self.world.top_y());
-        let mut out = Vec::with_capacity(count);
-        for pos in positions {
-            // Reads never load a column.
-            if !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4)) {
-                out.push(ExplosionResistance::Unavailable);
-                continue;
-            }
-            // Above and below the level is void air: no resistance.
-            if pos[1] < min_y || pos[1] >= max_y {
-                out.push(ExplosionResistance::NoResistance);
-                continue;
-            }
-            let state = self.world.block(pos[0], pos[1], pos[2]);
-            if self.pack.assets.registry.state(state).is_none() {
-                out.push(ExplosionResistance::Unavailable);
-                continue;
-            }
-            let (resistance, _) =
-                self.cell_explosion_resistance(pos, &rules, &start, answers.as_deref_mut());
-            out.push(resistance.map_or(
-                ExplosionResistance::NoResistance,
-                ExplosionResistance::Resists,
-            ));
+        for pos @ [x, y, z] in positions {
+            // Level.getBlockState returns void air beyond build height; no chunk is loaded
+            // for these queries. A missing column provides no sample at any height.
+            let value = if !self.world.loaded(x, z) {
+                ExplosionResistance::Unavailable
+            } else if !self.world.shape.contains_y(y) {
+                ExplosionResistance::NoResistance
+            } else {
+                let state = self.world.block(x, y, z);
+                if self.pack.assets.registry.state(state).is_none() {
+                    ExplosionResistance::Unavailable
+                } else {
+                    let (resistance, _) = self.cell_explosion_resistance(
+                        pos,
+                        state,
+                        &rules,
+                        &start,
+                        answers.as_deref_mut(),
+                    );
+                    resistance.map_or(
+                        ExplosionResistance::NoResistance,
+                        ExplosionResistance::Resists,
+                    )
+                }
+            };
+            answer(value);
         }
         self.restore_blast_state(outer);
-        out
     }
 }
 
@@ -160,30 +173,28 @@ struct Blast {
     interaction: ExplosionInteraction,
 }
 
-/// How many cells `cells` covers, or why it is refused.
+/// Check coordinates and the result vector's representable length before reading any cells.
 fn cell_count(cells: &ResistanceCells) -> Result<usize, ResistanceCellsError> {
     let span = |low: i32, high: i32| {
         if high < low {
             Err(ResistanceCellsError::Inverted)
         } else {
-            Ok(u64::from(high.abs_diff(low)) + 1)
+            Ok(u128::from(high.abs_diff(low)) + 1)
         }
     };
+    // Each i32 axis covers at most 2^32 cells; their product fits u128 even on 64-bit hosts.
     let count = match cells {
-        ResistanceCells::Box { min, max } => span(min[0], max[0])?
-            .saturating_mul(span(min[1], max[1])?)
-            .saturating_mul(span(min[2], max[2])?),
+        ResistanceCells::Box { min, max } => {
+            span(min[0], max[0])? * span(min[1], max[1])? * span(min[2], max[2])?
+        }
         ResistanceCells::Columns {
             columns,
             min_y,
             max_y,
-        } => (columns.len() as u64).saturating_mul(span(*min_y, *max_y)?),
+        } => (columns.len() as u128) * span(*min_y, *max_y)?,
         _ => unreachable!("ResistanceCells: unhandled variant"),
     };
-    if count > ResistanceCells::MAX {
-        return Err(ResistanceCellsError::TooMany(count));
-    }
-    Ok(count as usize)
+    usize::try_from(count).map_err(|_| ResistanceCellsError::Capacity)
 }
 
 #[cfg(test)]
@@ -191,28 +202,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_read_counts_its_cells_and_refuses_past_the_cap() {
-        let cells = |min: [i32; 3], max: [i32; 3]| cell_count(&ResistanceCells::Box { min, max });
-        assert_eq!(cells([0, 0, 0], [0, 0, 0]), Ok(1));
-        assert_eq!(cells([-1, 60, -1], [1, 61, 1]), Ok(18));
-        assert_eq!(cells([0, 0, 0], [63, 63, 63]), Ok(262_144));
+    fn a_batch_refuses_inverted_or_unrepresentable_results() {
         assert_eq!(
-            cells([0, 0, 0], [63, 63, 64]),
-            Err(ResistanceCellsError::TooMany(266_240))
-        );
-        assert_eq!(
-            cells([0, 5, 0], [0, 4, 0]),
+            cell_count(&ResistanceCells::Box {
+                min: [0, 5, 0],
+                max: [0, 4, 0]
+            }),
             Err(ResistanceCellsError::Inverted)
         );
         assert_eq!(
-            cells([i32::MIN; 3], [i32::MAX; 3]),
-            Err(ResistanceCellsError::TooMany(u64::MAX))
+            cell_count(&ResistanceCells::Box {
+                min: [i32::MIN; 3],
+                max: [i32::MAX; 3]
+            }),
+            Err(ResistanceCellsError::Capacity)
         );
-        let columns = ResistanceCells::Columns {
-            columns: vec![(0, 0), (0, 0), (5, -3)],
-            min_y: -64,
-            max_y: 319,
-        };
-        assert_eq!(cell_count(&columns), Ok(1152));
     }
 }

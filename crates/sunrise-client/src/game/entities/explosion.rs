@@ -672,11 +672,11 @@ impl Game<'_> {
     pub(super) fn cell_explosion_resistance(
         &mut self,
         pos: [i32; 3],
+        state: BlockStateId,
         rules: &BlastRules,
         explosion: &ExplosionStart<'_>,
         answers: Option<&mut PartAnswers>,
     ) -> (Option<f32>, bool) {
-        let state = self.world.block(pos[0], pos[1], pos[2]);
         let f = self.res.facts().get(state);
         if let Some(step) = self.blast_calculator_step(&f.name) {
             return step;
@@ -804,8 +804,9 @@ impl Game<'_> {
                         let (taken, spared, again) = match last {
                             Some((at, taken, spared)) if at == pos => (taken, spared, true),
                             _ => {
-                                let (resistance, spared) =
-                                    self.cell_explosion_resistance(pos, &rules, explosion, None);
+                                let state = self.world.block(pos[0], pos[1], pos[2]);
+                                let (resistance, spared) = self
+                                    .cell_explosion_resistance(pos, state, &rules, explosion, None);
                                 let taken = resistance.map_or(0.0, |r| (r + 0.3) * 0.3);
                                 last = Some((pos, taken, spared));
                                 (taken, spared, false)
@@ -1943,6 +1944,7 @@ impl Game<'_> {
         if fire {
             for &pos in targets.iter() {
                 if self.world.random.next_int_bound(3).unwrap_or(1) == 0
+                    && self.world.is_loaded_at(pos[0], pos[1], pos[2])
                     && self
                         .res
                         .facts()
@@ -1972,6 +1974,11 @@ impl Game<'_> {
         explosion: &ExplosionStart<'_>,
         dropped: &mut ExplosionDrops,
     ) -> Result<bool> {
+        // Detonate may supply positions that were not reached by the rays. Resolve the
+        // cell at its turn: only a resident, buildable cell can be changed.
+        if !self.world.is_loaded_at(pos[0], pos[1], pos[2]) {
+            return Ok(false);
+        }
         let state = self.world.block(pos[0], pos[1], pos[2]);
         if self.res.facts().is_air(state) {
             return Ok(false);

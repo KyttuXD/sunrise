@@ -1,0 +1,2 @@
+sunrise-client game::explosion_detonate::tests::a_panicking_detonate_listener_cannot_remove_other_targets lib daily resources
+sunrise-client game::native_explosion_destroy_tests::a_full_blast_detonates_from_an_unloaded_centre lib daily resources

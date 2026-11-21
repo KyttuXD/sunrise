@@ -449,6 +449,28 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Run one attributed listener, reporting phase refusals every time and poisoning only panics.
+pub(crate) fn isolate_listener<T>(
+    hook: generated::HookId,
+    mod_id: &'static str,
+    name: &'static str,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    use crate::{callback_owner, world::phase_refusal};
+    match callback_owner::contain_unwind(|| phase_refusal::contain_refusal(mod_id, call)) {
+        Ok(Ok(answer)) => Some(answer),
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            None
+        }
+        Err(message) => {
+            poison(hook, mod_id);
+            callback_owner::report_callback_panic(mod_id, "hook", name, message);
+            None
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,
@@ -463,6 +485,13 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
 ) -> impl Iterator<Item = &'a P> {
+    entered_parts_with_id(parts, hook).map(|(_, part)| part)
+}
+
+pub(crate) fn entered_parts_with_id<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a P)> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -478,7 +507,7 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            &*attached.part
+            (attached.mod_id, &*attached.part)
         })
 }
 

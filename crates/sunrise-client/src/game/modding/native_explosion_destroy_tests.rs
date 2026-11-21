@@ -39,7 +39,7 @@ fn destroy(
     game: &mut Game<'_>,
     positions: &[[i32; 3]],
     blast: Blast,
-    expected: Result<u32, ExplosionDestroyError>,
+    expected: Result<usize, ExplosionDestroyError>,
 ) {
     let level = game.level("minecraft:overworld").unwrap();
     assert_eq!(
@@ -97,6 +97,7 @@ impl mod_api::Hooks for Watch {
         if self.edit.load(Ordering::Relaxed) {
             event.blocks.retain(|p| *p != [1, 80, 1]);
             event.blocks.push([3, 80, 3]);
+            event.blocks.reverse();
         }
     }
 }
@@ -208,17 +209,20 @@ fn a_part_hears_its_block_exploded_once() {
 
 #[test]
 #[ignore = "daily"]
-fn a_detonate_listener_spares_a_position_and_adds_none() {
+fn a_detonate_listener_removes_adds_and_reorders_real_block_targets() {
     with_watch(|game, watch| {
         for p in [[1, 80, 1], [2, 80, 1], [3, 80, 3]] {
-            set(game, p, "stone");
+            set(game, p, "dirt");
         }
         watch.edit.store(true, Ordering::Relaxed);
+        // Java Random seed 7: nextInt(2) is 1, so the edited order survives the shuffle.
+        game.world.random.set_seed(7);
         let positions = [[1, 80, 1], [2, 80, 1]];
-        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
-        assert_eq!(name(game, [1, 80, 1]), "minecraft:stone", "spared");
+        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(2));
+        assert_eq!(name(game, [1, 80, 1]), "minecraft:dirt", "spared");
         assert_eq!(name(game, [2, 80, 1]), "minecraft:air");
-        assert_eq!(name(game, [3, 80, 3]), "minecraft:stone", "added, ignored");
+        assert_eq!(name(game, [3, 80, 3]), "minecraft:air", "added");
+        assert_eq!(*watch.exploded.lock().unwrap(), [[3, 80, 3], [2, 80, 1]]);
     });
 }
 
@@ -296,7 +300,7 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
 fn an_unloaded_position_is_skipped_and_not_counted() {
     with_watch(|game, _| {
         set(game, [1, 80, 1], "stone");
-        let positions = [[1, 80, 1], [100, 80, 100]];
+        let positions = [[1, 80, 1], [100, 80, 100], [1, i32::MIN, 1]];
         destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
         assert_eq!(name(game, [1, 80, 1]), "minecraft:air");
         assert!(!game.world.chunks.contains_key(&(6, 6)), "never loaded");
@@ -305,18 +309,38 @@ fn an_unloaded_position_is_skipped_and_not_counted() {
 
 #[test]
 #[ignore = "daily"]
-fn more_positions_than_the_cap_are_refused_with_nothing_changed() {
+fn a_large_input_list_reaches_the_block_phase() {
     with_watch(|game, watch| {
         set(game, [1, 80, 1], "stone");
         let positions = vec![[1, 80, 1]; 65_537];
-        destroy(
-            game,
-            &positions,
-            blast(ExplosionInteraction::Block),
-            Err(ExplosionDestroyError::TooMany(65_537)),
+        destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
+        assert_eq!(name(game, [1, 80, 1]), "minecraft:air");
+        assert_eq!(*watch.detonated.lock().unwrap(), [vec![[1, 80, 1]]]);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_full_blast_detonates_from_an_unloaded_centre() {
+    with_watch(|game, watch| {
+        set(game, [3, 80, 3], "stone");
+        watch.edit.store(true, Ordering::Relaxed);
+        let level = game.level("minecraft:overworld").unwrap();
+        assert_eq!(
+            level.explode(
+                game,
+                None,
+                [100.5, 80.5, 100.5],
+                1.0,
+                false,
+                ExplosionInteraction::Block,
+                mod_api::ExplosionSettings::default(),
+            ),
+            Ok(())
         );
-        assert_eq!(name(game, [1, 80, 1]), "minecraft:stone");
-        assert!(watch.detonated.lock().unwrap().is_empty());
+        assert_eq!(watch.detonated.lock().unwrap().len(), 1);
+        assert_eq!(name(game, [3, 80, 3]), "minecraft:air");
+        assert!(!game.world.loaded(100, 100));
     });
 }
 

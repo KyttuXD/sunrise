@@ -47,7 +47,7 @@ ticks, though a listener can separately change the riding graph.
 
 ## Explosion membership
 
-`explosion_detonate` version 2 exposes mutable `blocks` and `entities` lists
+`explosion_detonate` exposes mutable `blocks` and `entities` lists
 before an explosion applies its effects. The initial entity query excludes the
 exploding source. Remove entries to spare them, or add live handles to make them
 eligible; additions still obey normal distance, exposure and immunity checks.
@@ -57,9 +57,12 @@ can explicitly add a valid source handle back; per-kind immunity still applies.
 The final list controls membership, not global effect ordering. Its order is
 used for ordinary storage targets. Crystals/dragon and players retain their
 earlier separate passes, while frames and other decorations run last in storage
-order. Block positions are shuffled before destruction. An empty entity list
-spares direct entity effects, not indirect consequences of destroying support
-blocks. With no subscriber the game does not build a target list.
+order. The block phase consumes the edited list, including positions added to
+it, after shuffling it with the level's random. Cells must be resident and
+inside build height to change. An empty entity list spares direct entity
+effects, not indirect consequences of destroying support blocks. With no
+subscriber the game does not build an entity list for the hook. A panic
+leaves earlier edits in place and disables just that mod's detonate callback.
 
 ## Liquid containers
 

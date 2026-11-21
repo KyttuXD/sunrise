@@ -71,11 +71,13 @@ otherwise ready groups join in vanilla order.
 `explosion_resistance(level, event)` answers `Some(resistance)` to replace the
 block's own explosion resistance against `event.explosion`, as a ray of the
 blast enters the block. The ray's next steps in the same block reuse the
-answer, so keep it a pure function of the event. A fluid in the cell still
-raises the value to 100, and the overrides vanilla applies afterwards keep
-winning: a respawn anchor's water cell, a TNT minecart's rails and the blocks
-under them (never asked) and a dangerous wither skull's 0.8 cap. A negative or
-non-finite answer is refused with a warning and the block's own value is used.
+answer, so keep it a pure function of the event. The calculator combines the
+block answer with the fluid's resistance, taking the greater of the two: a
+finite negative answer becomes 0 with empty fluid and 100 with water or lava.
+Vanilla's later overrides still apply: a respawn anchor's water cell, a TNT
+minecart's rails and the blocks under them (never asked), and a dangerous
+wither skull's 0.8 cap. Non-finite answers are reported and skipped; another
+part may answer before the block's static value is used.
 
 `can_drop_from_explosion(level, event)` answers whether a destroyed block drops.
 `Some(false)` skips its loot and its `spawnAfterBreak` (an infested block's
@@ -90,8 +92,9 @@ Unsubscribed blocks build no callback context. A native `exp_drop` panic
 unwinds before the engine applies its answer. A native
 `on_block_exploded` panic is contained and reported as
 `on_block_exploded callback failed: {error}`; block removal continues. A panic
-in `explosion_resistance` or `can_drop_from_explosion` is contained the same
-way, and vanilla's answer is used.
+in `explosion_resistance` is reported and disables that mod's resistance
+callback for the session. Other parts can still answer. A panic in
+`can_drop_from_explosion` is contained and vanilla's answer is used.
 
 ## Setting off an explosion
 
@@ -140,7 +143,9 @@ radius; their steps grow with the radius and the distinct positions they find
 roughly with its cube, so a big blast costs what it finds (a ray of a radius-48
 blast takes up to about 280 steps). A radius of 0 or below finds no blocks and
 hurts no one, but `explosion_start` still hears it and players still see it;
-`explosion_detonate` only runs from a radius of 0.00001.
+`explosion_detonate` only runs from a radius of 0.00001. A centre outside the
+world or in a chunk that isn't loaded is not by itself a refusal. Individual
+cells are checked by the ray and block phases.
 
 ### Damage type, calculator and effects
 
@@ -157,15 +162,15 @@ Every `ExplosionSettings` field left `None` is vanilla's own choice.
 
 The calculator's fields:
 
-- `explodes_blocks`: false finds no blocks, so nothing breaks, burns or reaches
-  `explosion_detonate`'s block list.
+- `explodes_blocks`: false makes the rays find no blocks. `explosion_detonate`
+  starts with an empty block list but can add positions.
 - `damages_entities`: false leaves every entity's health alone (decorations and
   end crystals too); they are still pushed. The damage is the default formula.
 - `knockback_multiplier`: how hard entities are pushed, 1 when `None`. A flying
   player (the ability, not creative mode) is pushed 0. An entity neither damaged
   nor pushed (`damages_entities` false and a multiplier of exactly 0) is not
   checked for exposure.
-- `immune_blocks`: a block tag whose blocks never break. **When given it
+- `immune_blocks`: a block tag whose blocks the rays do not break. **When given it
   replaces the resistance rule entirely**: its blocks resist 3,600,000 and every
   other cell resists nothing, obsidian and fluids included, and no part's
   `explosion_resistance` is asked. Leave it `None` to keep the usual rule, with
@@ -196,8 +201,8 @@ total, past 2,147,483,647 is refused.
 
 | `ExplodeError` | When |
 | --- | --- |
-| `Unavailable` | A client, a parked level or a stale handle, a `source` that is stale, names no entity or is a player in another level, a centre in a chunk that isn't loaded |
-| `InvalidBlast` | A centre outside the world or not finite, a radius or knockback multiplier that isn't finite |
+| `Unavailable` | A client, a parked level or a stale handle, or a `source` that is stale, names no entity or is a player in another level |
+| `InvalidBlast` | A centre coordinate, radius or knockback multiplier that isn't finite |
 | `UnknownDamageType` | A damage type that isn't registered |
 | `UnknownBlockTag` | An `immune_blocks` that names no block tag |
 | `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |
@@ -226,7 +231,8 @@ its rays use. The answer is typed, because no resistance is not a resistance of
 | `NoResistance` | Air with no fluid, or void air above and below the level |
 | `Unavailable` | A stale level or `source`, a chunk that isn't loaded, or a state the game doesn't know |
 
-A read never loads a chunk. The blast's calculator is the one `explode` gives
+A read never loads a chunk. The centre describes the blast to parts; it need
+not be loaded or near the cell being read. The blast's calculator is the one `explode` gives
 the same source, chosen once for both: as vanilla's
 `EntityBasedExplosionDamageCalculator` asks the source itself,
 
@@ -249,9 +255,10 @@ interaction)` reads many cells in one call, one answer a cell in the order
 | `Box { min, max }` | Every cell, both corners included: x fastest, then z, then y |
 | `Columns { columns, min_y, max_y }` | Each column in the order given, from `min_y` up to `max_y` |
 
-A read of more than `ResistanceCells::MAX` (262,144) cells, or of an inverted
-area, is refused with `ResistanceCellsError` and reads nothing. It runs on the
-server tick, so read a big area in pieces. A block's parts are asked once a
+An inverted area returns `ResistanceCellsError::Inverted`; a result vector
+that cannot be represented or allocated returns `ResistanceCellsError::Capacity`.
+Neither reads any cells. Reads run synchronously on the server tick, so use
+pieces to spread the work of big areas. A block's parts are asked once a
 cell, unless every part on the block that answers `explosion_resistance`
 declares its answer pure:
 
@@ -287,10 +294,10 @@ call that does this.
 
 Each call is one explosion to the hooks. `explosion_start` hears it first and
 may cancel it: then nothing breaks and the answer is 0. For a radius of at
-least 0.00001, `explosion_detonate` hears the positions as its block list, in
-the order given, a repeated one once. A listener may
-only take positions out (spare them): one it adds is ignored. Then the block
-step runs as a blast's does, in vanilla's order:
+least 0.00001, `explosion_detonate` hears the positions as its initial block
+list, in the order given, a repeated one once. Listeners may remove, add or
+reorder positions. The edited list goes into the block step; entities are not
+processed by this helper. The block step runs in vanilla's order:
 
 1. The positions are shuffled with the level's random.
 2. Each block is hit: air is skipped; `can_drop_from_explosion` decides the
@@ -310,13 +317,11 @@ step runs as a blast's does, in vanilla's order:
 `None` breaks nothing else, and `Trigger` only works the blocks it may. The
 causing entity and the damage type come from `source` as for `explode`.
 
-Unlike vanilla's rays, a position in a chunk that isn't loaded is skipped,
-never loaded and not counted, and so is one outside the level's height. The
-answer is the number of blocks destroyed: those that were not air when their
-turn came. `Err(ExplosionDestroyError)`, with nothing changed and no hook told,
-for more than 65,536 positions (`ExplosionDestroyError::MAX_POSITIONS`), a
-stale level or `source`, or a centre or radius that isn't finite or a negative
-radius.
+The block step skips cells outside build height or in chunks that aren't
+loaded. It does not load terrain. The result is the number of non-air blocks
+hit, as a `usize`. A stale or unavailable level or `source`, or a non-finite
+centre or radius, returns `ExplosionDestroyError` before any hook or change.
+There is no list-length cap and no requirement that the centre be loaded.
 
 ## Entities that destroy blocks
 

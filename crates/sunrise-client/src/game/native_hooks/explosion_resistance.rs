@@ -16,9 +16,8 @@ impl GameLevel<'_> {
 }
 
 impl Game<'_> {
-    /// The resistance the parts of `state` at `pos` give it against `explosion`, in place of
-    /// its static one, on a logical server. A negative or non-finite answer is refused and a
-    /// panicking part contained, both with a warning: None keeps the static value.
+    /// The first finite resistance an attached part supplies, in place of the static one.
+    /// Dispatch handles refusals and isolates panics per listener.
     pub(in crate::game) fn part_explosion_resistance(
         &mut self,
         pos: [i32; 3],
@@ -35,20 +34,9 @@ impl Game<'_> {
         }
         let mut resistance = None;
         let pos = BlockPos::new(pos[0], pos[1], pos[2]);
-        if let Err(error) = sunrise_client::crash::contain(|| {
-            self.with_level(|_, level, _| {
-                level.native_explosion_resistance(pos, state, explosion, &mut resistance);
-            });
-        }) {
-            log::warn!("explosion_resistance callback failed: {error}");
-            return None;
-        }
-        match resistance {
-            Some(value) if !(value.is_finite() && value >= 0.0) => {
-                log::warn!("explosion_resistance refused {value}; using the block's own");
-                None
-            }
-            answer => answer,
-        }
+        self.with_level(|_, level, _| {
+            level.native_explosion_resistance(pos, state, explosion, &mut resistance);
+        });
+        resistance
     }
 }

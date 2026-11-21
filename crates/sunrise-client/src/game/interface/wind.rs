@@ -824,7 +824,9 @@ impl Game<'_> {
             return Ok(());
         }
         for &pos in targets.iter() {
-            self.wind_trigger_block(pos)?;
+            if self.world.is_loaded_at(pos[0], pos[1], pos[2]) {
+                self.wind_trigger_block(pos)?;
+            }
         }
         Ok(())
     }

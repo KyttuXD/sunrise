@@ -20,7 +20,7 @@ use sunrise_core::position::ChunkPos;
 /// The one position where [`Spot`] answers.
 const SPOT: [i32; 3] = [6, 80, 1];
 
-/// Dirt's part: 5000 at [`SPOT`] only, counting the asks.
+/// Dirt's part: 5000 at [`SPOT`] and -1 in the next block, counting the asks.
 #[derive(Clone, Default)]
 struct Spot(Arc<AtomicI32>);
 #[mod_api::sunrise_part]
@@ -31,7 +31,11 @@ impl BlockPart for Spot {
         event: &mut ExplosionResistanceEvent<'_>,
     ) -> Option<f32> {
         self.0.fetch_add(1, Ordering::Relaxed);
-        ([event.pos.x, event.pos.y, event.pos.z] == SPOT).then_some(5000.0)
+        match [event.pos.x, event.pos.y, event.pos.z] {
+            SPOT => Some(5000.0),
+            [7, 80, 1] => Some(-1.0),
+            _ => None,
+        }
     }
 }
 /// Oak planks' part: 7 everywhere, declared pure, counting the asks.
@@ -178,7 +182,7 @@ fn a_block_state_reads_the_resistance_its_block_declares() {
             .into_iter()
             .map(|state| game.block_states().explosion_resistance(state.unwrap()))
             .collect();
-        // Dirt's part answers 5000 at one position; the state's own value stays 0.5.
+        // Dirt's part answers by position; the state's own value stays 0.5.
         assert_eq!(
             got,
             [
@@ -215,7 +219,7 @@ fn a_cell_reads_what_a_blast_meets_there() {
                 Resists(100.0),
                 NoResistance,
                 Resists(5000.0),
-                Resists(0.5),
+                Resists(0.0), // max(-1, 0) for dirt with no fluid
                 Resists(42.0),
             ]
         );
@@ -253,7 +257,7 @@ fn a_batched_read_answers_each_cell_in_order() {
             Resists(100.0),
             NoResistance,
             Resists(5000.0),
-            Resists(0.5),
+            Resists(0.0),
             Resists(42.0),
         ];
         expected.extend([Resists(7.0); 4]);
@@ -279,19 +283,15 @@ fn a_batched_read_answers_each_cell_in_order() {
             ]
         );
         assert!(!game.world.chunks.contains_key(&(6, 6)));
-        let too_many = ResistanceCells::Box {
+        let large = ResistanceCells::Box {
             min: [0, 0, 0],
             max: [63, 63, 64],
         };
-        assert_eq!(
-            reads(game, &too_many, None),
-            Err(ResistanceCellsError::TooMany(266_240))
-        );
-        assert_eq!(
-            parts.pure.0.load(Ordering::Relaxed),
-            1,
-            "refused, nothing read"
-        );
+        let out = reads(game, &large, None).unwrap();
+        assert_eq!(out.len(), 266_240);
+        assert_eq!(out.first(), Some(&NoResistance));
+        assert_eq!(out.last(), Some(&Unavailable));
+        assert_eq!(parts.pure.0.load(Ordering::Relaxed), 1);
     });
 }
 

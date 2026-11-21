@@ -1,0 +1,26 @@
+ids = [
+    "hook:explosion_detonate",
+    "hook:explosion_resistance",
+    "method:BlockPart::explosion_resistance",
+    "handle:LevelRef::explode",
+    "handle:LevelRef::explosion_resistance",
+    "handle:LevelRef::explosion_resistances",
+    "handle:LevelRef::explosion_destroy_blocks",
+    "type:ExplodeError",
+    "type:ExplosionCalculator",
+    "type:ResistanceCells",
+    "type:ResistanceCellsError",
+    "type:ExplosionDestroyError",
+]
+why = "NeoForge's ExplosionEvent.Detonate and its ServerExplosion.hurtEntities(List) patch use the edited lists directly. Vanilla ServerExplosion.calculateExplodedPositions, interactWithBlocks and createFire check the cells they reach, without admitting the blast by its centre chunk; the block phase uses Level.isLoaded's residency and build-height checks. Vanilla ExplosionDamageCalculator.getBlockExplosionResistance and its NeoForge patch combine the chosen block answer with the fluid answer before applying source-specific overrides. Fixed batch caps and filtering additions out of the block-only blast hid these contracts. Isolating panics preserves the previous listeners' edits and answers."
+migrate = """
+Keep `Hooks::explosion_detonate(host, event)` and edit `event.blocks` directly. `push`, `retain` and reordering now affect `LevelRef::explosion_destroy_blocks` as they do a full blast; shuffle still happens after your edits. Do not make a second block write for a position you added. An empty ray result (`ExplosionCalculator::explodes_blocks = false`) or ray immunity does not prevent a listener from adding a position. A panicking listener loses only its own edits and is disabled for the session.
+
+Keep `BlockPart::explosion_resistance(level, event)`. Return `None` for no override; do not use a negative number as a sentinel. A finite negative answer replaces the static block value before the max with the fluid's value. A non-finite answer is reported and skipped each time; a panic disables that mod's resistance callback for the session. Later parts can still answer.
+
+Keep `level.explode(host, source, center, radius, fire, interaction, settings)`. Do not treat `ExplodeError::Unavailable` as an instruction to load the centre chunk, or `InvalidBlast` as a world-bounds check. The centre's bounds and residency do not admit or refuse the blast. `level.explosion_resistance` samples the supplied cell regardless of the described centre's residency.
+
+Remove uses of `ResistanceCells::MAX` and matches on `ResistanceCellsError::TooMany(_)`. `level.explosion_resistances(host, &cells, ...)` takes the same box or columns and returns the same ordered results; handle `ResistanceCellsError::Capacity` if the result vector cannot fit or be allocated. `Inverted` still means the query axes must be corrected.
+
+Remove uses of `ExplosionDestroyError::MAX_POSITIONS` and matches on `ExplosionDestroyError::TooMany(_)`. Keep `level.explosion_destroy_blocks(host, &positions, ...)`; store the success count as `usize` instead of `u32`. A finite negative radius no longer returns `InvalidBlast`; like other radii below the detonate threshold, it skips Detonate. The block phase still refuses to change unloaded or out-of-height cells.
+"""
