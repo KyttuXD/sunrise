@@ -7,15 +7,14 @@ ids = [
   "method:Hooks::adjust_player_turn",
   "type:AdjustPlayerTurnEvent",
   "hook:compute_fov_modifier",
-  "method:Hooks::compute_fov_modifier",
-  "type:ComputeFovModifierEvent",
+  "hook:compute_fov_modifier.effect_scale",
+  "type:ComputeFovModifierEvent.effect_scale",
   "hook:compute_fov",
-  "method:Hooks::compute_fov",
-  "type:ComputeFovEvent",
-  "type:FovProjection",
+  "hook:compute_fov.projection",
+  "hook:compute_fov.scoping",
+  "type:ComputeFovEvent.projection",
+  "type:ComputeFovEvent.scoping",
   "hook:calculate_player_turn",
-  "method:Hooks::calculate_player_turn",
-  "type:CalculatePlayerTurnEvent",
 ]
 why = """
 The dedicated Zoom hook combined mod-owned input, easing, projection and turn policy, with artificial caps. Vanilla Camera.tickFov uses the actual viewpoint player or a neutral target for a non-player. It eases and clamps the modifier to 0.1..=1.5. NeoForge fires ComputeFovModifierEvent at the interpolated return of AbstractClientPlayer.getFieldOfViewModifier; the first-person spyglass returns 0.1 earlier and bypasses that event. Camera.update calculates the world then hand angles, and NeoForge fires ViewportEvent.ComputeFov at the common end of Camera.modifyFovBasedOnDeathOrFluid. Culling, terrain and overlays use the extracted world angle rather than dispatching again. Camera.createProjectionMatrixForCulling uses the larger of that angle and the FOV option. Vanilla MouseHandler.turnPlayer and NeoForge CalculatePlayerTurnEvent concern mouse options, not controller input. AdjustPlayerTurnEvent fits the device-neutral boundary at vanilla Entity.turn, just before input deltas become degrees and vanilla applies pitch and vehicle constraints. NeoForge RegisterKeyMappingsEvent and vanilla KeyMapping.isDown supply held input. Each camera/turn listener's accepted edits flow to the next; a refusal is reported each time, while a panic is logged, shows a named error toast, and disables only that callback for the session.
