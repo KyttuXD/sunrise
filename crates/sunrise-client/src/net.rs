@@ -588,10 +588,12 @@ impl Session {
     /// the game thread, among its other packets.
     pub fn send_far_terrain(&self) {
         for data in self.far.requests() {
-            self.send(play::Serverbound::CustomPayload(cfg::CustomPayload {
+            if let Err(error) = self.send(play::Serverbound::CustomPayload(cfg::CustomPayload {
                 channel: crate::lod_net::CHANNEL.into(),
                 data,
-            }));
+            })) {
+                log::warn!("far terrain request refused: {error:?}");
+            }
         }
     }
     /// The far terrain made with [`Self::far_terrain`] ends: its samplers
@@ -2962,14 +2964,19 @@ mod tests {
                 data: vec![0x83; size],
             })
         };
-        session.send(payload(32_767));
+        session.send(payload(32_767)).unwrap();
         let (id, bytes) = server.recv().unwrap();
         assert_eq!(
             play::Serverbound::decode(id, &bytes).unwrap(),
             payload(32_767)
         );
-        session.send(payload(32_768));
-        session.send(play::Serverbound::ClientTickEnd(Empty));
+        assert!(matches!(
+            session.send(payload(32_768)),
+            Err(mod_api::SendPacketError::EncodeFailed { .. })
+        ));
+        session
+            .send(play::Serverbound::ClientTickEnd(Empty))
+            .unwrap();
         let (id, bytes) = server.recv().unwrap();
         assert_eq!(
             play::Serverbound::decode(id, &bytes).unwrap(),
@@ -3029,7 +3036,10 @@ mod tests {
             play::Serverbound::ConfigurationAcknowledged(Empty)
         );
         // The game thread still ticks the old level: nothing of it goes out.
-        session.send(tick_end.clone());
+        assert_eq!(
+            session.send(tick_end.clone()),
+            Err(mod_api::SendPacketError::NotInPlay)
+        );
         server
             .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
             .unwrap();
@@ -3039,7 +3049,7 @@ mod tests {
             cfg::Serverbound::FinishConfiguration(Empty)
         );
         // Back in play, the game's packets flow again.
-        session.send(tick_end.clone());
+        session.send(tick_end.clone()).unwrap();
         let (id, body) = server.recv().unwrap();
         assert_eq!(play::Serverbound::decode(id, &body).unwrap(), tick_end);
         drop(session);

@@ -4,6 +4,13 @@ use super::Game;
 mod packet_hold;
 use mod_api::{SendPacketError, ServerboundPlayPacket};
 use std::collections::HashMap;
+
+pub(in crate::game) enum PlaySend {
+    Admitted,
+    Cancelled,
+    Refused,
+}
+
 #[derive(Default)]
 pub(super) struct NativeNet {
     pub(super) holds: std::cell::RefCell<packet_hold::Holds>,

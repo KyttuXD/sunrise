@@ -161,7 +161,7 @@ fn terminal_disconnect_drains_even_when_last_handle_drops() {
     queue.transition_protocol(Phase::Play, &[4]).unwrap();
     let pending = queue.prepare_packet(vec![3, 33], 7, None).unwrap();
     queue.send(&[1, 11]).unwrap();
-    queue.disconnect(vec![2, 22]);
+    queue.disconnect(Some(vec![2, 22]));
     assert_eq!(pending.try_publish(), Err(SendPacketError::NotConnected));
     assert!(queue.send(&[3]).is_err());
     drop(queue);
@@ -169,6 +169,42 @@ fn terminal_disconnect_drains_even_when_last_handle_drops() {
     assert_eq!(peer.recv().unwrap(), (1, vec![11]));
     assert_eq!(peer.recv().unwrap(), (2, vec![22]));
     assert!(peer.recv().is_err());
+}
+
+#[test]
+fn control_and_protocol_ack_pass_a_full_unpublished_play_window() {
+    let (a, b) = Pipe::pair();
+    let (_, physical) = Connection::local(a).split();
+    let queue = QueuedWriter::new(physical).unwrap();
+    let mut peer = Connection::local(b);
+    peer.reader
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    queue.transition_protocol(Phase::Play, &[4]).unwrap();
+    assert_eq!(peer.recv().unwrap(), (4, vec![]));
+
+    // Spend the entire window on a packet the game actor still owns. No jobs
+    // are waiting for the transport and the peer is reading each message.
+    let window = CAPACITY - PUBLICATION_OVERHEAD - byte_channel::message_overhead::<WriteJob>();
+    let held = queue.prepare_packet(vec![5; window], 7, None).unwrap();
+    assert_eq!(
+        queue.prepare_packet(vec![5], 7, None).err(),
+        Some(SendPacketError::Backpressure)
+    );
+    queue.send(&[6, 66]).unwrap();
+    assert_eq!(peer.recv().unwrap(), (6, vec![66]));
+
+    queue
+        .transition_protocol(Phase::Configuration, &[7])
+        .unwrap();
+    assert_eq!(peer.recv().unwrap(), (7, vec![]));
+    queue.transition_protocol(Phase::Play, &[8]).unwrap();
+    assert_eq!(peer.recv().unwrap(), (8, vec![]));
+    // The old token is still live on the actor; credit was returned by the transition.
+    let fresh = queue.prepare_packet(vec![9, 99], 7, None).unwrap();
+    assert_eq!(held.try_publish(), Err(SendPacketError::NotInPlay));
+    fresh.try_publish().unwrap();
+    assert_eq!(peer.recv().unwrap(), (9, vec![99]));
 }
 
 /// Every packet the peer reads until a closing sentinel (id 0x7e), as (id, payload).

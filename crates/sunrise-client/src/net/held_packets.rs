@@ -1,13 +1,23 @@
 //! Checked publication for the client actor's ordered hold queue.
 use super::*;
+use mod_api::SendPacketError;
+
 impl Session {
-    /// Send a play packet; silently dropped once the connection is gone,
-    /// and while the server has the connection back in configuration (a
-    /// proxy switching servers). Vanilla's `handleConfigurationStart` clears
-    /// the level before it acknowledges, so no play packet follows the
-    /// acknowledgement; one that did would reach the server as a
-    /// configuration packet, and Velocity drops such a client.
-    pub fn send(&self, packet: play::Serverbound) {
+    /// Queue a play packet, reporting admission rather than delivery. No play
+    /// packets enter the writer in configuration (`handleConfigurationStart`).
+    pub fn send(&self, packet: play::Serverbound) -> Result<(), SendPacketError> {
+        let body = self.encode_engine_play(packet)?;
+        let writer = self.writer.lock().unwrap();
+        if self.configuring.load(Ordering::Relaxed) {
+            return Err(SendPacketError::NotInPlay);
+        }
+        writer
+            .as_ref()
+            .ok_or(SendPacketError::NotConnected)?
+            .send_engine_play(body)
+    }
+
+    fn encode_engine_play(&self, packet: play::Serverbound) -> Result<Vec<u8>, SendPacketError> {
         if self.debug
             && !matches!(
                 packet,
@@ -18,27 +28,19 @@ impl Session {
         {
             eprintln!("[net] -> {packet:?}");
         }
-        let body = match packet.try_encode() {
-            Ok(body) => body,
-            Err(error) => {
-                eprintln!("[net] send refused: {error}");
-                return;
-            }
-        };
-        let mut writer = self.writer.lock().unwrap();
-        if self.configuring.load(Ordering::Relaxed) {
-            return;
-        }
-        if let Some(w) = writer.as_mut()
-            && w.send(&body).is_err()
-        {
-            w.shutdown();
-        }
+        packet
+            .try_encode()
+            .map_err(|error| SendPacketError::EncodeFailed {
+                message: error.to_string(),
+            })
     }
 
     /// Physical connection and play incarnation; changes even after Play/CFG/Play.
     pub fn hold_incarnation(&self) -> Option<(u64, u64)> {
         let writer = self.writer.lock().unwrap();
+        if self.configuring.load(Ordering::Relaxed) {
+            return None;
+        }
         writer
             .as_ref()?
             .play_incarnation()
@@ -48,20 +50,27 @@ impl Session {
     pub fn prepare_held_play(
         &self,
         packet: play::Serverbound,
-        generation: u64,
-    ) -> std::result::Result<PreparedPacket, mod_api::SendPacketError> {
-        use mod_api::SendPacketError;
-        let body = packet
-            .try_encode()
-            .map_err(|error| SendPacketError::EncodeFailed {
-                message: error.to_string(),
-            })?;
+        incarnation: (u64, u64),
+    ) -> Result<PreparedPacket, SendPacketError> {
+        let (serial, generation) = incarnation;
+        if serial != self.serial() {
+            return Err(SendPacketError::NotConnected);
+        }
+        let body = self.encode_engine_play(packet)?;
         let writer = self.writer.lock().unwrap();
+        if self.configuring.load(Ordering::Relaxed) {
+            return Err(SendPacketError::NotInPlay);
+        }
         let writer = writer.as_ref().ok_or(SendPacketError::NotConnected)?;
-        let prepared = writer.prepare_packet(body, self.serial(), Some(generation));
-        if matches!(prepared, Err(SendPacketError::Backpressure)) {
-            // The same terminal writer-pressure policy as Session::send for engine packets.
-            writer.shutdown();
+        let prepared = writer.prepare_packet(body, serial, Some(generation));
+        match &prepared {
+            // Match the ordinary writer's terminal behavior: pressure closes immediately,
+            // while a framing error follows the packets already published to the FIFO.
+            Err(SendPacketError::Backpressure) => writer.shutdown(),
+            Err(SendPacketError::FrameTooLarge { .. } | SendPacketError::EncodeFailed { .. }) => {
+                writer.disconnect(None);
+            }
+            _ => {}
         }
         prepared
     }

@@ -2,7 +2,7 @@
 //! tells the server, and the server's all-relative zero position packet leaves it where it
 //! is with its velocity, and stops its mining.
 use super::tests::connect_menu_test;
-use crate::game::native_entity_refs::tests::with_client_game;
+use crate::game::native_entity_refs::tests::{run_fresh_cases, with_client_game};
 use mod_api::{PassageCrossError, PassageCrossRefusal, PassageId};
 use std::sync::Arc;
 use sunrise_client::chunk::Chunk;
@@ -219,6 +219,72 @@ fn a_window_refuses_what_it_cannot_cross_and_keeps_the_servers_refusal() {
         assert_eq!(player.position, Vec3::new(0.5, 65.0, 8.25));
         assert_eq!(game.cross_passage(PassageId::from_raw(1)), Ok(()));
         assert_eq!(game.last_passage_refusal(), None);
+    });
+}
+
+/// Writer refusal must not authorize a local move or a pending crossing.
+#[test]
+#[ignore = "daily"]
+fn a_crossing_refused_by_the_writer_does_not_predict_a_move() {
+    use mod_api::{
+        HoldError, Identifier, SendPacketError, ServerboundPlayPacket, content::crash::ModCall,
+    };
+    use sunrise_core::vanilla_bytes::Writer;
+
+    if run_fresh_cases(
+        "game::remote::passage_cross_tests::a_crossing_refused_by_the_writer_does_not_predict_a_move",
+        "SUNRISE_PASSAGE_WRITER_REFUSAL_CHILD",
+        &["pressure"],
+    ) {
+        return;
+    }
+    mod_platform::__private::initialize().unwrap();
+    with_client_game(|game| {
+        let (mut reader, _server) = scene(game, [0.5, 65.0, 8.25]);
+        game.remote.as_mut().unwrap().joined = true;
+        let _mod = mod_platform::content::crash::enter_native_mod(ModCall {
+            id: "holder",
+            hook: "client_tick",
+            part: None,
+        });
+        let hold = game.hold_packets().unwrap();
+        let mut data = Writer::new();
+        data.string("example:unrelated");
+        data.bytes(&vec![0x59; sunrise_protocol::packets::custom_payload::SERVERBOUND_LIMIT]);
+        // Fill the writer with large packets, then use small ones to leave too
+        // little credit for the crossing request itself.
+        for packet in [
+            ServerboundPlayPacket::new(
+                Identifier::parse("minecraft:custom_payload").unwrap(),
+                data.data,
+            ),
+            ServerboundPlayPacket::new(Identifier::parse("minecraft:pong").unwrap(), vec![0; 4]),
+        ] {
+            assert!((0..600).any(|_| {
+                match game.send_packet(packet.clone()) {
+                    Ok(()) => false,
+                    Err(SendPacketError::Backpressure) => true,
+                    Err(error) => panic!("unexpected refusal: {error:?}"),
+                }
+            }));
+        }
+        game.player.as_mut().unwrap().velocity = Vec3::new(0.0, -0.0784, 0.25);
+        game.previous_position = Vec3::new(0.5, 65.0, 8.0);
+        // First refused by held admission; then refused by the now closed writer.
+        for _ in 0..2 {
+            assert_eq!(
+                game.cross_passage(PassageId::from_raw(1)),
+                Err(PassageCrossError::SendFailed)
+            );
+            let player = game.player.as_ref().unwrap();
+            assert_eq!(player.position, Vec3::new(0.5, 65.0, 8.25));
+            assert_eq!(player.velocity, Vec3::new(0.0, -0.0784, 0.25));
+            assert_eq!(game.previous_position, Vec3::new(0.5, 65.0, 8.0));
+            assert_eq!(game.yaw, 0.0);
+            assert_eq!(game.passages.crossing, None);
+        }
+        assert_eq!(game.release_held(hold), Err(HoldError::Unknown));
+        assert!(sent(&mut reader).is_empty());
     });
 }
 

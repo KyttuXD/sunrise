@@ -1,5 +1,5 @@
 //! Mod-owned barriers over one ordered queue for the current physical play incarnation.
-use super::Game;
+use super::{Game, PlaySend};
 use mod_api::{HoldError, HoldId, SendPacketError, content::crash::current_native_mod};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -170,33 +170,36 @@ impl Game<'_> {
         }
     }
 
-    /// `Connection.send` for the game's play packets: a mod may cancel one
-    /// (`client_packet_send`), and the server never hears of it. True when not cancelled.
-    pub(in crate::game) fn send_play(&self, packet: S) -> bool {
+    /// Run `client_packet_send`, then admit an uncancelled play packet to the
+    /// hold queue or the writer. Admission does not promise delivery.
+    pub(in crate::game) fn send_play(&self, packet: S) -> PlaySend {
         let Some(remote) = &self.remote else {
-            return false;
+            return PlaySend::Refused;
         };
         if self.client_packet_send_canceled(&packet) {
-            return false;
+            return PlaySend::Cancelled;
         }
         let mut holds = self.native_net.holds.borrow_mut();
-        if !holds.active.is_empty() {
-            holds.sync(self.hold_incarnation());
-            if !holds.active.is_empty()
-                && let Some((_, generation)) = holds.incarnation
-            {
-                match remote.session.prepare_held_play(packet, generation) {
-                    Ok(packet) => holds.queue(packet),
-                    Err(error) => {
-                        log::warn!("held play packet refused: {error:?}");
-                        holds.sync(self.hold_incarnation());
-                    }
+        let result = if !holds.active.is_empty()
+            && let Some(incarnation) = holds.incarnation
+        {
+            remote
+                .session
+                .prepare_held_play(packet, incarnation)
+                .map(|packet| holds.queue(packet))
+        } else {
+            remote.session.send(packet)
+        };
+        match result {
+            Ok(()) => PlaySend::Admitted,
+            Err(error) => {
+                log::warn!("play packet refused: {error:?}");
+                if !holds.active.is_empty() {
+                    holds.sync(self.hold_incarnation());
                 }
-                return true;
+                PlaySend::Refused
             }
         }
-        remote.session.send(packet);
-        true
     }
 }
 

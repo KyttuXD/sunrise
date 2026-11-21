@@ -122,8 +122,9 @@ pub trait PlayersClientHost {
     /// ([`Self::last_passage_refusal`] says why). One crossing at a time: the next waits
     /// for the server's answer. Refused, with nothing moved or sent, when not connected to
     /// a server, with no player, while riding, for a passage the window does not hold, when
-    /// the feet are more than 20 blocks from the opening, and when a mod's
-    /// `client_packet_send` cancels the crossing's payload.
+    /// the feet are more than 20 blocks from the opening, when a mod's
+    /// `client_packet_send` cancels the request (`Cancelled`), or when the
+    /// request cannot be queued (`SendFailed`). Neither send failure waits for an answer.
     #[access(WorldOnly)]
     fn cross_passage(&mut self, passage: PassageId) -> Result<(), PassageCrossError>;
     /// Side: client.

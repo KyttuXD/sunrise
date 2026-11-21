@@ -5,6 +5,8 @@
 //! metadata is not included, but both allocated bytes and node count are bounded.
 //! Values held before sending or after ordinary receiving are outside the budget.
 //! Owned receiving transfers the original charge to a lease retained by the consumer.
+//! Control submissions may ignore unpublished revocable credit, but use the same
+//! FIFO and count normal permits, published values and receive leases as usual.
 use std::collections::LinkedList;
 use std::sync::mpsc::{RecvError, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -44,6 +46,13 @@ pub enum ReserveError {
 pub struct Permit<T> {
     shared: Arc<Shared<T>>,
     charge: usize,
+    revocation_epoch: Option<Arc<()>>,
+}
+
+enum Reservation {
+    Shared,
+    Revocable,
+    BypassRevocable,
 }
 
 /// A dequeued value whose original charge stays reserved until its lease drops.
@@ -73,6 +82,8 @@ impl<T> Drop for ReceiveLease<T> {
 
 struct State<T> {
     pending_bytes: usize,
+    revocable_bytes: usize,
+    revocation_epoch: Arc<()>,
     held_bytes: usize,
     queue: LinkedList<(T, usize)>,
     stats: Stats,
@@ -110,6 +121,8 @@ pub fn channel<T>(capacity: usize) -> Result<(Sender<T>, Receiver<T>), InvalidCa
         capacity,
         state: Mutex::new(State {
             pending_bytes: 0,
+            revocable_bytes: 0,
+            revocation_epoch: Arc::new(()),
             held_bytes: 0,
             queue: LinkedList::new(),
             stats: Stats {
@@ -129,7 +142,25 @@ impl<T> Sender<T> {
     /// Never waits for capacity. Overflowing charges are refused as full.
     /// `owned_bytes` must cover all heap storage retained by `value`.
     pub fn try_send(&self, value: T, owned_bytes: usize) -> Result<(), TrySendError<T>> {
-        match self.reserve(owned_bytes) {
+        self.try_send_with(value, owned_bytes, Reservation::Shared)
+    }
+    /// Publish control traffic into the same FIFO, testing its charge against all
+    /// existing credit except unpublished revocable permits. Published traffic,
+    /// ordinary permits and receive leases still count against capacity.
+    pub fn try_send_bypassing_revocable(
+        &self,
+        value: T,
+        owned_bytes: usize,
+    ) -> Result<(), TrySendError<T>> {
+        self.try_send_with(value, owned_bytes, Reservation::BypassRevocable)
+    }
+    fn try_send_with(
+        &self,
+        value: T,
+        owned_bytes: usize,
+        reservation: Reservation,
+    ) -> Result<(), TrySendError<T>> {
+        match self.reserve_with(owned_bytes, reservation) {
             Ok(permit) => permit.publish(value).map_err(TrySendError::Disconnected),
             Err(ReserveError::Full) => Err(TrySendError::Full(value)),
             Err(ReserveError::Disconnected) => Err(TrySendError::Disconnected(value)),
@@ -138,6 +169,28 @@ impl<T> Sender<T> {
     /// Charges owned heap bytes plus inline value and node overhead immediately.
     /// Never waits for capacity. The future value must fit this declared charge.
     pub fn reserve(&self, owned_bytes: usize) -> Result<Permit<T>, ReserveError> {
+        self.reserve_with(owned_bytes, Reservation::Shared)
+    }
+    /// Reserve ordinary credit that can be revoked as a group before publication.
+    pub fn reserve_revocable(&self, owned_bytes: usize) -> Result<Permit<T>, ReserveError> {
+        self.reserve_with(owned_bytes, Reservation::Revocable)
+    }
+    /// Refund all unpublished revocable permits and invalidate their publication.
+    /// Already published jobs, ordinary permits and receive leases are untouched.
+    pub fn revoke_reservations(&self) {
+        let mut state = self.0.lock();
+        let bytes = std::mem::take(&mut state.revocable_bytes);
+        if bytes != 0 {
+            state.pending_bytes -= bytes;
+            state.stats.reserved_bytes -= bytes;
+            state.revocation_epoch = Arc::new(());
+        }
+    }
+    fn reserve_with(
+        &self,
+        owned_bytes: usize,
+        reservation: Reservation,
+    ) -> Result<Permit<T>, ReserveError> {
         let mut state = self.0.lock();
         if !state.receiver_alive {
             return Err(ReserveError::Disconnected);
@@ -145,9 +198,23 @@ impl<T> Sender<T> {
         let charge = owned_bytes
             .checked_add(message_overhead::<T>())
             .ok_or(ReserveError::Full)?;
-        if charge > self.0.capacity - state.stats.reserved_bytes {
+        let used = match reservation {
+            Reservation::BypassRevocable => state.stats.reserved_bytes - state.revocable_bytes,
+            _ => state.stats.reserved_bytes,
+        };
+        // Control traffic may briefly use credit alongside a full window of revocable
+        // permits. Ordinary admissions then wait for credit in the original window.
+        if charge > self.0.capacity.saturating_sub(used)
+            || state.stats.reserved_bytes.checked_add(charge).is_none()
+        {
             return Err(ReserveError::Full);
         }
+        let revocation_epoch = if matches!(reservation, Reservation::Revocable) {
+            state.revocable_bytes += charge;
+            Some(state.revocation_epoch.clone())
+        } else {
+            None
+        };
         state.pending_bytes += charge;
         state.stats.reserved_bytes += charge;
         state.stats.peak_reserved_bytes = state
@@ -157,6 +224,7 @@ impl<T> Sender<T> {
         Ok(Permit {
             shared: self.0.clone(),
             charge,
+            revocation_epoch,
         })
     }
     pub fn stats(&self) -> Stats {
@@ -164,27 +232,42 @@ impl<T> Sender<T> {
     }
 }
 impl<T> Permit<T> {
-    /// Publishes exactly once without charging again. On closure returns ownership.
+    /// Publishes exactly once without charging again. On closure or revocation returns ownership.
     pub fn publish(mut self, value: T) -> Result<(), T> {
         let mut state = self.shared.lock();
-        if !state.receiver_alive || state.senders == 0 {
+        if !self.is_pending(&state) {
             return Err(value);
         }
         state.queue.push_back((value, self.charge));
         state.pending_bytes -= self.charge;
+        if self.revocation_epoch.is_some() {
+            state.revocable_bytes -= self.charge;
+        }
         state.stats.queued_items += 1;
         self.charge = 0;
         drop(state);
         self.shared.ready.notify_one();
         Ok(())
     }
+    fn is_pending(&self, state: &State<T>) -> bool {
+        self.charge != 0
+            && state.receiver_alive
+            && state.senders != 0
+            && self
+                .revocation_epoch
+                .as_ref()
+                .is_none_or(|epoch| Arc::ptr_eq(epoch, &state.revocation_epoch))
+    }
 }
 impl<T> Drop for Permit<T> {
     fn drop(&mut self) {
         let mut state = self.shared.lock();
-        if state.receiver_alive && state.senders != 0 {
+        if self.is_pending(&state) {
             state.pending_bytes -= self.charge;
             state.stats.reserved_bytes -= self.charge;
+            if self.revocation_epoch.is_some() {
+                state.revocable_bytes -= self.charge;
+            }
         }
     }
 }
@@ -202,6 +285,7 @@ impl<T> Drop for Sender<T> {
         if closed {
             state.stats.reserved_bytes -= state.pending_bytes;
             state.pending_bytes = 0;
+            state.revocable_bytes = 0;
         }
         drop(state);
         if closed {
@@ -312,6 +396,7 @@ impl<T> Drop for Receiver<T> {
             let mut state = self.0.lock();
             state.receiver_alive = false;
             state.pending_bytes = 0;
+            state.revocable_bytes = 0;
             state.stats.reserved_bytes = state.held_bytes;
             state.stats.queued_items = 0;
             std::mem::take(&mut state.queue)
@@ -325,6 +410,35 @@ impl<T> Drop for Receiver<T> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn only_unpublished_revocable_credit_is_bypassed_and_refunded() {
+        let charge = message_overhead::<u8>();
+        let (tx, rx) = channel::<u8>(2 * charge).unwrap();
+        let ordinary = tx.reserve(0).unwrap();
+        let revoked = tx.reserve_revocable(0).unwrap();
+        assert_eq!(tx.try_send(1, 0), Err(TrySendError::Full(1)));
+        tx.try_send_bypassing_revocable(2, 0).unwrap();
+        assert_eq!(
+            tx.try_send_bypassing_revocable(3, 0),
+            Err(TrySendError::Full(3))
+        );
+
+        tx.revoke_reservations();
+        assert_eq!(tx.stats().reserved_bytes, 2 * charge);
+        assert_eq!(rx.try_recv(), Ok(2));
+        tx.reserve_revocable(0).unwrap().publish(4).unwrap();
+        assert_eq!(revoked.publish(5), Err(5));
+        tx.revoke_reservations();
+        assert_eq!(
+            tx.try_send_bypassing_revocable(6, 0),
+            Err(TrySendError::Full(6))
+        );
+        assert_eq!(rx.try_recv(), Ok(4));
+        ordinary.publish(7).unwrap();
+        assert_eq!(rx.try_recv(), Ok(7));
+        assert_eq!(tx.stats().reserved_bytes, 0);
+    }
 
     #[test]
     fn owned_dequeue_keeps_credit_until_lease_drop() {

@@ -57,8 +57,9 @@ pub trait NetworkClientHost {
     /// physical play connection. It covers subsequent uncancelled engine play sends
     /// and mod packets committed while it is active. Holds can overlap. A pending
     /// packet retains its ordinary writer credit; pressure never releases a hold.
-    /// Network-thread replies (keep-alives, chunk batch acknowledgements, cookies)
-    /// bypass holds. Disconnect, protocol changes and aborted travel invalidate the id.
+    /// Protocol replies (including keep-alives, chunk acknowledgements, cookies and
+    /// resource-pack answers) bypass holds and are not blocked by unpublished hold
+    /// credit alone. Disconnect, protocol changes and aborted travel invalidate the ID.
     #[access(WorldOnly)]
     fn hold_packets(&mut self) -> Result<HoldId, HoldError>;
     /// Side: client. Ends only this mod's hold. Publishes the newly unblocked prefix

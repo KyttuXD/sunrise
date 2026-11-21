@@ -170,6 +170,8 @@ pub enum PassageCrossError {
     },
     /// A mod's `client_packet_send` cancelled the crossing's payload to the server.
     Cancelled,
+    /// The request was not admitted to the hold queue or writer. No crossing is pending.
+    SendFailed,
 }
 
 impl crate::NoBackend for PassageCrossError {

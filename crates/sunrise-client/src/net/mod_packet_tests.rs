@@ -152,6 +152,48 @@ fn generic_reservations_refuse_pressure_before_publication_and_cancel_refunds() 
     assert_eq!(payload.data, bytes);
 }
 #[test]
+#[ignore = "daily"]
+fn held_engine_frame_refusal_closes_after_published_writes() {
+    use std::net::{TcpListener, TcpStream};
+    use sunrise_protocol::{frame::MAX_FRAME, payload_negotiation::Phase};
+
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let (_, physical) = Connection::from_stream(client).unwrap().split();
+    let writer = QueuedWriter::new(physical).unwrap();
+    let mut peer = Connection::from_stream(server).unwrap();
+    peer.reader
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    writer.transition_protocol(Phase::Play, &[3]).unwrap();
+    assert_eq!(peer.recv().unwrap(), (3, vec![]));
+    let session = Session::replay("held framing refusal");
+    *session.writer.lock().unwrap() = Some(writer);
+    let incarnation = session.hold_incarnation().unwrap();
+    session
+        .send(play::Serverbound::Pong(cfg::Ping { id: 42 }))
+        .unwrap();
+
+    // The test packet passes the typed boundary but cannot fit the TCP frame.
+    let packet = play::Serverbound::Unknown(4, vec![0; MAX_FRAME]);
+    assert!(matches!(
+        session.prepare_held_play(packet, incarnation),
+        Err(SendPacketError::FrameTooLarge { size, limit })
+            if size == MAX_FRAME as u64 + 1 && limit == MAX_FRAME as u64
+    ));
+    assert_eq!(session.hold_incarnation(), None);
+    assert_eq!(
+        peer.recv().unwrap(),
+        (
+            sunrise_protocol::ids::play::serverbound::PONG,
+            vec![0, 0, 0, 42]
+        )
+    );
+    assert_eq!(peer.recv(), Err(sunrise_protocol::Error::end_of_stream()));
+}
+
+#[test]
 fn generic_prepared_packet_cannot_cross_a_configuration_round_trip() {
     use sunrise_protocol::payload_negotiation::Phase;
     let (session, mut peer) = connected();

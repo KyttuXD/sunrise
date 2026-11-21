@@ -21,7 +21,7 @@ const PUBLICATION_OVERHEAD: usize = 512;
 enum WriteJob {
     Packet(Vec<u8>),
     Contents(Vec<u8>),
-    Disconnect(Vec<u8>),
+    Disconnect(Option<Vec<u8>>),
     /// A `Droppable` send is waiting: the thread frames what it has room for.
     Droppable,
 }
@@ -137,6 +137,11 @@ impl QueuedWriter {
             .0
             .checked_add(1)
             .ok_or_else(|| Error::new("network phase incarnation exhausted"))?;
+        // The actor can still own old-play packets, including a root transaction
+        // not yet committed. Invalidate their credit before admitting the ACK.
+        if let Some(sender) = self.sender.lock().unwrap().as_ref() {
+            sender.revoke_reservations();
+        }
         self.send(ack)?;
         *phase = (generation, protocol);
         Ok(())
@@ -154,19 +159,21 @@ impl QueuedWriter {
         {
             return Err(SendPacketError::NotInPlay);
         }
-        let payload = self.prepare_contents(body).map_err(|error| match error {
-            PrepareFailure::Closed => SendPacketError::NotConnected,
-            PrepareFailure::Full => SendPacketError::Backpressure,
-            PrepareFailure::Encode(error) => match error.frame_limit() {
-                Some(detail) => SendPacketError::FrameTooLarge {
-                    size: detail.size as u64,
-                    limit: detail.limit as u64,
+        let payload = self
+            .prepare_contents(body, true)
+            .map_err(|error| match error {
+                PrepareFailure::Closed => SendPacketError::NotConnected,
+                PrepareFailure::Full => SendPacketError::Backpressure,
+                PrepareFailure::Encode(error) => match error.frame_limit() {
+                    Some(detail) => SendPacketError::FrameTooLarge {
+                        size: detail.size as u64,
+                        limit: detail.limit as u64,
+                    },
+                    None => SendPacketError::EncodeFailed {
+                        message: error.to_string(),
+                    },
                 },
-                None => SendPacketError::EncodeFailed {
-                    message: error.to_string(),
-                },
-            },
-        })?;
+            })?;
         Ok(PreparedPacket {
             writer: Arc::downgrade(&self.0),
             incarnation: (session_serial, generation),
@@ -199,16 +206,19 @@ impl QueuedWriter {
                         let bytes = match &job {
                             WriteJob::Packet(b)
                             | WriteJob::Contents(b)
-                            | WriteJob::Disconnect(b) => b.len(),
-                            WriteJob::Droppable => 0,
+                            | WriteJob::Disconnect(Some(b)) => b.len(),
+                            WriteJob::Disconnect(None) | WriteJob::Droppable => 0,
                         };
                         writing[0].fetch_add(1, Ordering::Relaxed);
                         writing[2].store(bytes, Ordering::Relaxed);
                         writing[3].store(1, Ordering::Relaxed);
                     }
                     let mut result = match job {
-                        WriteJob::Packet(body) | WriteJob::Disconnect(body) => writer.send(&body),
+                        WriteJob::Packet(body) | WriteJob::Disconnect(Some(body)) => {
+                            writer.send(&body)
+                        }
                         WriteJob::Contents(contents) => writer.send_contents(&contents),
+                        WriteJob::Disconnect(None) => Ok(()),
                         WriteJob::Droppable => {
                             woken.store(false, Ordering::Release);
                             Ok(())
@@ -313,33 +323,63 @@ impl QueuedWriter {
         }
         self.sender.lock().unwrap().take();
     }
+    /// Direct protocol replies bypass unpublished play credit, but still join the
+    /// same FIFO and observe backpressure from the writer's actual backlog.
     pub(crate) fn send(&self, body: &[u8]) -> Result<()> {
-        if !self.alive.load(Ordering::Acquire) {
-            return Err(Error::new("client writer disconnected"));
+        self.enqueue(body.to_vec(), true).map_err(|error| {
+            Error::new(if error == SendPacketError::Backpressure {
+                "client writer backpressure"
+            } else {
+                "client writer disconnected"
+            })
+        })
+    }
+    pub(crate) fn send_engine_play(
+        &self,
+        body: Vec<u8>,
+    ) -> std::result::Result<(), SendPacketError> {
+        let result = self.enqueue(body, false);
+        if result.is_err() && !self.is_terminal() {
+            self.shutdown();
         }
-        let owned = body.to_vec();
-        let capacity = owned.capacity();
+        result
+    }
+    fn enqueue(
+        &self,
+        body: Vec<u8>,
+        bypass_revocable: bool,
+    ) -> std::result::Result<(), SendPacketError> {
+        let capacity = body.capacity();
         let sender = self.sender.lock().unwrap();
-        let Some(sender) = sender.as_ref() else {
-            return Err(Error::new("writer retired"));
+        if !self.alive.load(Ordering::Acquire) {
+            return Err(SendPacketError::NotConnected);
+        }
+        let sender = sender.as_ref().ok_or(SendPacketError::NotConnected)?;
+        let job = WriteJob::Packet(body);
+        let result = if bypass_revocable {
+            sender.try_send_bypassing_revocable(job, capacity)
+        } else {
+            sender.try_send(job, capacity)
         };
-        match sender.try_send(WriteJob::Packet(owned), capacity) {
+        match result {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
                 self.alive.store(false, Ordering::Release);
                 self.closer.close();
-                Err(Error::new("client writer backpressure"))
+                Err(SendPacketError::Backpressure)
             }
-            Err(TrySendError::Disconnected(_)) => Err(Error::new("client writer disconnected")),
+            Err(TrySendError::Disconnected(_)) => Err(SendPacketError::NotConnected),
         }
     }
-    pub(crate) fn disconnect(&self, body: Vec<u8>) {
+    /// Drain preceding writes and close. A locally refused frame has no body to send.
+    pub(crate) fn disconnect(&self, body: Option<Vec<u8>>) {
         let mut sender = self.sender.lock().unwrap();
         self.terminal.store(true, Ordering::Release);
         let Some(queue) = sender.take() else {
             return;
         };
-        let bytes = body.capacity();
+        queue.revoke_reservations();
+        let bytes = body.as_ref().map_or(0, Vec::capacity);
         if queue.try_send(WriteJob::Disconnect(body), bytes).is_err() {
             self.closer.close();
         }
@@ -349,7 +389,7 @@ impl QueuedWriter {
         body: Vec<u8>,
         id: &PayloadId,
     ) -> std::result::Result<PreparedPayload, PayloadSendError> {
-        self.prepare_contents(body)
+        self.prepare_contents(body, false)
             .map_err(|failure| match failure {
                 PrepareFailure::Closed => PayloadSendError::Disconnected,
                 PrepareFailure::Full => PayloadSendError::Backpressure,
@@ -373,6 +413,7 @@ impl QueuedWriter {
     fn prepare_contents(
         &self,
         body: Vec<u8>,
+        revocable: bool,
     ) -> std::result::Result<PreparedPayload, PrepareFailure> {
         if !self.alive.load(Ordering::Acquire) {
             return Err(PrepareFailure::Closed);
@@ -381,30 +422,24 @@ impl QueuedWriter {
             .framing
             .contents_owned(body)
             .map_err(PrepareFailure::Encode)?;
-        self.prepare_job(WriteJob::Contents(contents))
-    }
-    fn prepare_job(&self, job: WriteJob) -> std::result::Result<PreparedPayload, PrepareFailure> {
+        let capacity = contents.capacity().saturating_add(PUBLICATION_OVERHEAD);
+        let sender = self.sender.lock().unwrap();
         if !self.alive.load(Ordering::Acquire) {
             return Err(PrepareFailure::Closed);
         }
-        let capacity = match &job {
-            WriteJob::Packet(bytes) | WriteJob::Contents(bytes) | WriteJob::Disconnect(bytes) => {
-                bytes.capacity()
-            }
-            WriteJob::Droppable => 0,
-        };
-        let sender = self.sender.lock().unwrap();
-        let permit = sender
-            .as_ref()
-            .ok_or(PrepareFailure::Closed)?
-            .reserve(capacity.saturating_add(PUBLICATION_OVERHEAD))
-            .map_err(|error| match error {
-                ReserveError::Full => PrepareFailure::Full,
-                ReserveError::Disconnected => PrepareFailure::Closed,
-            })?;
+        let sender = sender.as_ref().ok_or(PrepareFailure::Closed)?;
+        let permit = if revocable {
+            sender.reserve_revocable(capacity)
+        } else {
+            sender.reserve(capacity)
+        }
+        .map_err(|error| match error {
+            ReserveError::Full => PrepareFailure::Full,
+            ReserveError::Disconnected => PrepareFailure::Closed,
+        })?;
         Ok(PreparedPayload {
             permit,
-            job,
+            job: WriteJob::Contents(contents),
             alive: self.alive.clone(),
         })
     }

@@ -16,8 +16,9 @@ pub trait Hooks {
 
 - `cross_passage(passage)` (client) moves the window's player through a passage its server told it of (feet, last
   tick's place, velocity, look, turned) and sends `sunrise:passage_cross` (the number, the feet before). Refused with
-  nothing moved or sent as a `PassageCrossError`; a payload a mod's `client_packet_send` cancels is `Cancelled`. `last_passage_refusal()` (client) is the server's
-  `PassageCrossRefusal` of the last crossing, until the next.
+  nothing moved or sent as a `PassageCrossError`. A veto from `client_packet_send` is `Cancelled`; a request
+  that cannot be queued is `SendFailed`. `last_passage_refusal()` (client) is the server's `PassageCrossRefusal`
+  of the last crossing, until the next.
 - On the server the move to where it crossed from is checked as any move; the crossing then holds the guest's
   other packets until the game has decided it from its own `from`. The game checks eligibility, the passage, the
   20-block reach and the opening's and destination's chunks, fires `player_passage_cross`, checks all of it again,

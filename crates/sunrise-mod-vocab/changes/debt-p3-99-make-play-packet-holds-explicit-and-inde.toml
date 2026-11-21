@@ -1,9 +1,21 @@
 ids = [
     "behaviour:play_packet_holds",
+    "method:prelude::NetworkClientHost::send_packet",
+    "method:prelude::NetworkClientHost::hold_packets",
+    "method:prelude::NetworkClientHost::release_held",
+    "method:prelude::NetworkClientHost::drop_held",
+    "type:ServerboundPlayPacket",
+    "type:HoldId",
     "type:HoldError",
     "type:HoldError.NoOwner",
+    "type:HoldError.NoWorld",
+    "type:HoldError.Unknown",
     "type:HoldError.WrongOwner",
     "type:HoldError.Limit",
+    "type:HoldError.Send",
+    "method:prelude::PlayersClientHost::cross_passage",
+    "type:PassageCrossError",
+    "type:PassageCrossError.SendFailed",
 ]
-why = "The global hold introduced in de94789afa9f kept engine and mod packets ordered, but a second holder was refused and an invented size limit silently flushed the first. Sunrise now gives holds to individual mods and retains the writer's real send credit. The FIFO and close rules follow vanilla Connection.send, flushQueue and disconnect. NeoForge's Connection patch and IClientCommonPacketListenerExtension.send/disconnect do not add play holds."
-migrate = "Keep using host.hold_packets() to obtain a HoldId, but store it in the starting mod and end it from that mod: host.release_held(id) or host.drop_held(id). Do not interpret a second hold as an error. Replace HoldError::Limit handling with handling SendPacketError::Backpressure at host.send_packet(packet); there is no overflow flush or sticky error to clear. A live ID from another mod returns WrongOwner; a call without a native owner returns NoOwner; expired IDs return Unknown in an allowed Host phase. An unavailable Host phase returns NoWorld instead of unwinding. Release returns the count newly queued to the writer, which can be zero with another hold active. Drop discards packets covered by that hold, including overlapping packets, without ending other holds. Read HoldError::Send { sent, error } as the queued prefix and its transport failure, not as a count of packets delivered to the server."
+why = "The global hold introduced in de94789afa9f kept engine and mod packets ordered, but a second holder was refused and an invented size limit silently flushed the first. Sunrise now gives holds to individual mods and retains the writer's real send credit. The FIFO and close rules follow vanilla Connection.send, flushQueue, exceptionCaught and disconnect. ClientPacketListener.handleConfigurationStart sends the acknowledgement before switching the outbound protocol; the writer revokes unpublished old-play credit first so the game actor cannot hold up that reply. Keep-alive, cookie, chunk and pack replies remain on the direct path (ClientCommonPacketListenerImpl.handleKeepAlive, handleRequestCookie and handleResourcePackPush; ClientPacketListener.handleChunkBatchFinished). NeoForge's Connection patch and ClientCommonPacketListenerImpl.send do not add a hold to these routes. Passages and holds are Sunrise-only: a rejected send cannot start local passage prediction."
+migrate = "Keep using host.hold_packets() to obtain a HoldId, but store it in the starting mod and end it from that mod: host.release_held(id) or host.drop_held(id). Do not interpret a second hold as an error. Replace HoldError::Limit handling with handling SendPacketError::Backpressure at host.send_packet(packet); there is no overflow flush or sticky error to clear. A live ID from another mod returns WrongOwner; a call without a native owner returns NoOwner; expired IDs return Unknown in an allowed Host phase. An unavailable Host phase returns NoWorld instead of unwinding. Release returns the count newly queued to the writer, which can be zero with another hold active. Drop discards packets covered by that hold, including overlapping packets, without ending other holds. Read HoldError::Send { sent, error } as the queued prefix and its transport failure, not as a count of packets delivered to the server. No call change is needed for control replies. Match host.cross_passage(id) returning Err(PassageCrossError::SendFailed) as a refusal with no movement and no pending crossing; Err(Cancelled) still means a mod vetoed the request. Only Ok(()) predicts the move."

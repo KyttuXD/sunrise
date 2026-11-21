@@ -36,8 +36,9 @@ impl ConfigSender {
     }
     pub fn disconnect(&self, reason: sunrise_core::nbt::Tag) {
         self.transport.close();
-        self.writer
-            .disconnect(cfg::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
+        self.writer.disconnect(Some(
+            cfg::Clientbound::Disconnect(cfg::Disconnect { reason }).encode(),
+        ));
     }
 }
 

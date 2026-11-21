@@ -1,1 +1,2 @@
 sunrise-client game::native_net::packet_hold::tests::held_mod_packets_keep_real_writer_credit_until_drop lib daily resources
+sunrise-client game::remote::passage_cross_tests::a_crossing_refused_by_the_writer_does_not_predict_a_move lib daily resources

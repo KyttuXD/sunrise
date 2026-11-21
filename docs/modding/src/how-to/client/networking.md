@@ -26,6 +26,9 @@ would discard packet 2 without discarding packet 1 or ending A's hold. Neither o
 Held packets retain ordinary transport credit. There is no separate hold limit and no automatic
 flush. A `send_packet` can return `SendPacketError::Backpressure` if the physical writer has no
 credit; an engine send hitting the writer's terminal pressure path still closes the connection.
+Excluded replies use the same writer, but unpublished held packets alone do not count against
+those replies. The writer cancels unpublished old-play reservations before queuing the configuration
+acknowledgement, without waiting for the game thread or sending any held packet.
 If publication fails while releasing a prefix, `HoldError::Send { sent, error }` reports the number
 already queued and the transport error; the rest of that prefix is discarded.
 

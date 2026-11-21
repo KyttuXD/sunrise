@@ -125,7 +125,10 @@ fn physical_hold_orders_engine_and_mod_packets_and_bypasses_network_keepalive() 
         };
         let _first_mod = enter_native_mod(call("first"));
         let first = game.hold_packets().unwrap();
-        assert!(game.send_play(S::Pong(Ping { id: 1 })));
+        assert!(matches!(
+            game.send_play(S::Pong(Ping { id: 1 })),
+            PlaySend::Admitted
+        ));
 
         let second;
         {
@@ -138,7 +141,10 @@ fn physical_hold_orders_engine_and_mod_packets_and_bypasses_network_keepalive() 
             game.send_packet(ServerboundPlayPacket::new(pong.clone(), vec![0, 0, 0, 2]))
                 .unwrap();
             // Invocation order is not commit order: the engine send joins first.
-            assert!(game.send_play(S::Pong(Ping { id: 3 })));
+            assert!(matches!(
+                game.send_play(S::Pong(Ping { id: 3 })),
+                PlaySend::Admitted
+            ));
             game.transaction_close(&transaction, true);
             let aborted = game.transaction_open();
             game.send_packet(ServerboundPlayPacket::new(pong, vec![0, 0, 0, 4]))
@@ -161,7 +167,10 @@ fn physical_hold_orders_engine_and_mod_packets_and_bypasses_network_keepalive() 
                 vec![0, 0, 0, 1]
             )
         );
-        assert!(game.send_play(S::Pong(Ping { id: 5 })));
+        assert!(matches!(
+            game.send_play(S::Pong(Ping { id: 5 })),
+            PlaySend::Admitted
+        ));
         {
             let _second_mod = enter_native_mod(call("second"));
             assert_eq!(game.release_held(second), Ok(3));
@@ -256,14 +265,14 @@ fn generation_change_after_a_drops_b_and_invalidates_the_hold() {
     for id in [65, 66] {
         holds.queue(
             session
-                .prepare_held_play(S::Pong(Ping { id }), incarnation.1)
+                .prepare_held_play(S::Pong(Ping { id }), incarnation)
                 .unwrap(),
         );
     }
     let second = holds.start("second").unwrap();
     holds.queue(
         session
-            .prepare_held_play(S::Pong(Ping { id: 67 }), incarnation.1)
+            .prepare_held_play(S::Pong(Ping { id: 67 }), incarnation)
             .unwrap(),
     );
     let mut published = 0;

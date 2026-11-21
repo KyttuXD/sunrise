@@ -4,7 +4,7 @@
 //! `lan/hub/passage_cross.rs`), finds the passage, asks the mods (`player_passage_cross`),
 //! works out where the player comes out itself and follows with a position packet that
 //! changes nothing, or puts the player back.
-use super::Game;
+use super::{Game, native_net::PlaySend};
 use mod_api::{
     Passage, PassageCrossError as Error, PassageCrossRefusal as Refusal, PassageId, PassageTurn,
     Vec3,
@@ -72,8 +72,8 @@ fn chunk_of(point: [f64; 3]) -> (i32, i32) {
 impl Game<'_> {
     /// `ClientHost::cross_passage`: the window's player comes out of `passage` with its
     /// feet, its last tick's place, its velocity and its look carried through, and the
-    /// server is told the passage and where the feet were; a payload a mod cancels moves
-    /// nothing. Until the server's position packet, the next crossing waits.
+    /// server is told the passage and where the feet were. Nothing moves if the
+    /// request is cancelled or cannot be queued. The next crossing waits for the server.
     pub(super) fn cross_passage(&mut self, passage: PassageId) -> Result<(), Error> {
         if self.remote.is_none() {
             return Err(Error::Unavailable);
@@ -99,7 +99,7 @@ impl Game<'_> {
         if !within_reach(&p, from) {
             return Err(Error::TooFar { limit: REACH });
         }
-        // Sent first: a mod's `client_packet_send` may cancel it, and then nothing moves.
+        // Admit the request before predicting the move or waiting for an answer.
         let data = encode_cross(&Cross {
             id: passage.raw(),
             from,
@@ -108,9 +108,13 @@ impl Game<'_> {
             channel: CROSS_CHANNEL.into(),
             data,
         });
-        if !self.send_play(payload) {
-            self.native_net.holds.borrow_mut().clear();
-            return Err(Error::Cancelled);
+        match self.send_play(payload) {
+            PlaySend::Admitted => {}
+            PlaySend::Cancelled => {
+                self.native_net.holds.borrow_mut().clear();
+                return Err(Error::Cancelled);
+            }
+            PlaySend::Refused => return Err(Error::SendFailed),
         }
         // The send hook's listeners only read the host: the player is still there.
         let player = self.player.as_mut().expect("checked above");
