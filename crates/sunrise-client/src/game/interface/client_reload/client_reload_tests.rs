@@ -885,9 +885,18 @@ fn client_completion_reads_published_resources_without_world_access() {
             _: &mut ClientResourcesReloadedEvent,
         ) {
             assert!(
-                host.block_sprites(&[host.block_state_id("minecraft:stone").unwrap()])[0].is_some()
+                host.visit_block_sprites(
+                    host.block_state_id("minecraft:stone").unwrap(),
+                    &mut |_, _| {}
+                )
+                .unwrap()
+                .is_some()
             );
-            assert!(host.texture_sprites(&["minecraft:block/stone"])[0].is_some());
+            assert!(
+                host.texture_sprite("minecraft:block/stone")
+                    .unwrap()
+                    .is_some()
+            );
             let version = host.block_sprites_version();
             let refused =
                 catch_unwind(AssertUnwindSafe(|| host.level("minecraft:overworld"))).unwrap_err();

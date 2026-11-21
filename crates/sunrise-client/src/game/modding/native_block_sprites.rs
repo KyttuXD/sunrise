@@ -168,7 +168,10 @@ mod texture_atlas_stitched_tests {
             kept.atlases.push(event.atlas);
             match event.atlas {
                 TextureAtlas::Blocks => {
-                    kept.stone = host.texture_sprites(&["minecraft:block/stone"])[0];
+                    kept.stone = host
+                        .texture_sprite("minecraft:block/stone")
+                        .unwrap()
+                        .map(|view| view.sprite);
                 }
                 TextureAtlas::Gui => {
                     kept.slot = host.gui_sprite(&id("container/slot"));
@@ -248,7 +251,10 @@ mod texture_atlas_stitched_tests {
             let mut marker = self.0.lock().unwrap();
             match event.atlas {
                 TextureAtlas::Blocks => {
-                    marker.block = host.texture_sprites(&["marker:block/own"])[0];
+                    marker.block = host
+                        .texture_sprite("marker:block/own")
+                        .unwrap()
+                        .map(|view| view.sprite);
                 }
                 TextureAtlas::Gui => marker.gui = host.gui_sprite(&id("marker:own")),
                 _ => {}
