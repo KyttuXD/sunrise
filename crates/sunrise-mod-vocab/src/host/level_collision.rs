@@ -30,10 +30,20 @@ pub trait LevelCollisionBackend {
         kind: BlockShapeKind,
     ) -> Option<Vec<[f64; 6]>>;
     /// Side: both.
-    /// Clip an empty-context ray against collider or outline shapes, without fluids.
-    /// None on failed reads, dynamic shapes, invalid rays or traversal limits, and for a ray
-    /// that enters a column the level doesn't hold. On a client, the level it shows or a
-    /// viewed one (`host.level`), each through its own world.
+    /// Clip an empty-context ray from `from` to `to` against collider or outline shapes,
+    /// without fluids or the world border (`BlockGetter.clip` /
+    /// `BlockGetter.clipWithInteractionOverride`, not `CollisionGetter.clipIncludingBorder`).
+    /// No traversal cell cap or entity reach limit is applied.
+    ///
+    /// Reads the named resident world without loading chunks: on a client (including a viewed
+    /// level from `host.level`), missing columns read as empty chunks
+    /// (`ClientChunkCache.getChunk(..., true)`); on a server (including a parked level), the
+    /// immutable resident view reads empty outside resident data
+    /// (`PathNavigationRegion.getBlockState`/`getChunk`). Cells outside build height read as
+    /// air. Collider mode uses the full collision registry and context shapes; outline mode
+    /// returns `None` when a block has dynamic outline geometry without an outline
+    /// implementation. Also returns `None` for a stale or unavailable level, non-finite
+    /// endpoints, or a shape query error.
     #[access(WorldOnly)]
     fn level_clip(
         &self,
@@ -77,10 +87,12 @@ pub trait LevelCollisionBackend {
         visit: &mut dyn FnMut(&VoxelShape) -> std::ops::ControlFlow<()>,
     ) -> Option<std::ops::ControlFlow<()>>;
     /// Side: server.
-    /// Whether nothing solid lies on the segment `from`..`to`, as
-    /// `LivingEntity.hasLineOfSight` clips between two eyes (`ClipContext.Block.COLLIDER`,
-    /// `ClipContext.Fluid.NONE`): `clip`'s miss. Fluids, entities and the border don't block it.
-    /// None as for `clip`.
+    /// Whether nothing solid lies on the segment `from`..`to`: delegates to
+    /// [`LevelRef::clip`] with `ClipBlock::Collider` and `ClipFluid::None`, returning
+    /// `hit.miss`. This two-position empty-context query has no 128-block entity distance
+    /// check (unlike `LivingEntity.hasLineOfSight(Entity)`). Fluids, entities and the world
+    /// border do not block it; missing chunks and out-of-height cells read as air without
+    /// loading chunks. Returns `None` under the same conditions as `clip`.
     #[access(WorldOnly)]
     fn level_line_of_sight(&self, level: LevelRef, from: [f64; 3], to: [f64; 3]) -> Option<bool>;
     /// Side: both.

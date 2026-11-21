@@ -1124,22 +1124,26 @@ pub enum ClipFluid {
     None,
 }
 
-/// Result of a block ray, including the vanilla miss result.
+/// Result of a block ray (`BlockGetter.clip`), including the vanilla miss result
+/// (`BlockHitResult.miss`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct ClipHit {
-    /// Whether the ray hit nothing; the other fields are then the vanilla miss values.
+    /// Whether the ray hit nothing. On a miss, `location` is the ray's end point, `block` is
+    /// its floored block coordinates, `face` is the nearest direction toward `from - to`, and
+    /// `inside` is `false`.
     pub miss: bool,
-    /// The hit block's position.
+    /// The hit block's position, or the floored end point on a miss.
     pub block: [i32; 3],
-    /// The face the ray entered.
+    /// The face the ray entered (or the nearest direction toward `from - to` on a miss).
     pub face: BlockFace,
-    /// The exact hit point in blocks.
+    /// The exact hit point in blocks, or the ray's end point on a miss.
     pub location: [f64; 3],
-    /// Whether the ray started inside the block.
+    /// Whether the ray started inside the block (`false` on a miss).
     pub inside: bool,
-    /// Whether the hit is the world border.
+    /// Whether the hit is the world border (`false` for `LevelRef::clip`, which follows
+    /// `BlockGetter.clip`, not `CollisionGetter.clipIncludingBorder`).
     pub world_border: bool,
 }
 

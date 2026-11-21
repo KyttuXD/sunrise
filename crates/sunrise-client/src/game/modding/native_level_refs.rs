@@ -803,8 +803,9 @@ impl Game<'_> {
         self.after_commit(super::transactions::After::Capabilities((x, y, z)));
         true
     }
-    /// `LivingEntity.hasLineOfSight`'s clip between two points (collider shapes, no fluids):
-    /// whether it misses. None as for `level_clip`.
+    /// Two-position empty-context collider segment clip (`level_clip` with `ClipBlock::Collider`
+    /// and `ClipFluid::None`): whether it misses, with no `LivingEntity.hasLineOfSight(Entity)`
+    /// 128-block entity admission check. None as for `level_clip`.
     pub(super) fn level_line_of_sight(
         &self,
         level: LevelRef,

@@ -138,9 +138,10 @@ open. Its block reads read the viewed level's own world, never the player's: `bl
 `block_property`, `clip`, [`visit_block_collisions`](particles-and-movement-queries.md#bot-movement-and-block-collisions),
 `has_collisions`, and the fluid reads built on `block_state` (`fluid_shape`, `fluid_height`,
 `fluid_height_for_camera`, `fluid_can_be_replaced_with`). So a mod can aim a ray or collide a box
-through a portal. These reads never load a column. Block reads and `clip` return `None` for a column
-the client doesn't hold; `visit_block_collisions` and `has_collisions` skip missing columns and
-keep scanning the loaded ones.
+through a portal. These reads never load a column. Direct block reads return `None` for a column
+the client doesn't hold; `clip` reads missing columns and out-of-height cells as air
+(`ClientChunkCache.getChunk(..., true)`), and `visit_block_collisions` and `has_collisions` skip
+missing columns and keep scanning the loaded ones.
 
 The handle is `None` while the server has the level closed. If the server closes the level and opens it
 again within the same client level, the old handle reads again. A login, a reconfiguration or a respawn

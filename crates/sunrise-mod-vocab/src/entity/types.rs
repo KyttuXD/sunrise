@@ -1028,8 +1028,6 @@ pub enum CollisionExclusionsError {
     Stale,
     /// The entity is not a player: only players keep collision exclusions.
     NotAPlayer,
-    /// More than 64 boxes.
-    TooMany,
     /// A coordinate that is NaN or infinite.
     NotFinite,
     /// A box whose minimum is above its maximum on an axis.

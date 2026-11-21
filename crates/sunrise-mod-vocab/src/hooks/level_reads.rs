@@ -48,8 +48,9 @@ random-ticks the position as `tickChunk` does, lava's fluid tick included. Both 
 level random and send their level events exactly as the normal ticks do; neither reads or changes
 the tick queue, which `schedule_block_tick` fills.
 
-`can_see_sky(host, pos)` is `canSeeSky`: full sky light. `line_of_sight(host, from, to)` is the
-clip `LivingEntity.hasLineOfSight` makes between two eyes, collider shapes and no fluids.
+`can_see_sky(host, pos)` is `canSeeSky`: full sky light. `line_of_sight(host, from, to)` delegates
+to `clip` with `ClipBlock::Collider` and `ClipFluid::None` (with no 128-block entity distance
+check) and reports whether the segment misses.
 `lightning_target(host, pos)` is `findLightningTargetAround`: a rod, else a living entity under
 open sky near the column picked with the level random, else the column's top. It strikes nothing.
 Environment attributes are not here: Sunrise has no general server-side attribute table to read."#]

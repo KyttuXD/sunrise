@@ -851,10 +851,13 @@ impl Game<'_> {
         )
     }
 
-    /// Clip an empty-context ray against collider or outline shapes, without fluids, in the
-    /// world `native_level_view_world` reads. None on failed reads, dynamic shapes (unless
-    /// the block's entity published its shapes, which stand over them), invalid rays or
-    /// traversal limits.
+    /// Clip an empty-context ray against collider or outline shapes, without fluids or the
+    /// world border (`BlockGetter.clip` / `BlockGetter.clipWithInteractionOverride`), in the
+    /// resident world `native_level_view_world` reads, with no traversal cell cap. Out-of-height
+    /// cells and missing columns read as air without loading chunks. Collider mode uses
+    /// `SceneCollisions`'s full registry/context shapes; outline mode returns None when dynamic
+    /// outline geometry has no implementation. Also None for unavailable levels, non-finite
+    /// endpoints or shape query errors.
     pub(super) fn level_clip(
         &self,
         level: LevelRef,
@@ -899,7 +902,7 @@ impl Game<'_> {
             Vec3::new(to[0], to[1], to[2]),
             mode,
             fluid,
-            Some(4096),
+            None,
         )
         .ok()?;
         let h = result.hit;
@@ -4189,7 +4192,7 @@ pub(super) mod tests {
 
     #[test]
     #[ignore = "daily"]
-    fn level_clip_reads_parked_world_and_refuses_unloaded() {
+    fn level_clip_reads_parked_world_and_empty_missing_columns() {
         use mod_api::{BlockFace as Face, ClipBlock as Block, ClipFluid as Fluid};
         use std::sync::Arc;
         use sunrise_client::chunk::Chunk;
@@ -4215,17 +4218,113 @@ pub(super) mod tests {
                 assert_eq!(hit.location, [1.0, 64.5, 0.5]);
                 assert!(!hit.inside && !hit.world_border);
             }
-            assert!(
-                level
+            let chunks_before_gap = game.world.chunks.len();
+            // Crossing into a missing column returns vanilla's end-derived miss without loading it.
+            let missing_miss = level
+                .clip(
+                    game,
+                    [15.5, 64.5, 0.5],
+                    [17.5, 64.5, 0.5],
+                    Block::Collider,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(missing_miss.miss);
+            assert_eq!(missing_miss.block, [17, 64, 0]);
+            assert_eq!(missing_miss.face, Face::West);
+            assert_eq!(missing_miss.location, [17.5, 64.5, 0.5]);
+            assert!(!missing_miss.inside && !missing_miss.world_border);
+            // Out-of-height segments read as air (world.air), never as an error.
+            let above_miss = level
+                .clip(
+                    game,
+                    [0.5, 325.5, 0.5],
+                    [2.5, 325.5, 0.5],
+                    Block::Collider,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(above_miss.miss);
+            assert_eq!(above_miss.block, [2, 325, 0]);
+            assert_eq!(above_miss.face, Face::West);
+            assert_eq!(above_miss.location, [2.5, 325.5, 0.5]);
+            let below_miss = level
+                .clip(
+                    game,
+                    [0.5, -70.5, 0.5],
+                    [0.5, -66.5, 0.5],
+                    Block::Outline,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(below_miss.miss);
+            assert_eq!(below_miss.block, [0, -67, 0]);
+            assert_eq!(below_miss.face, Face::Down);
+            assert_eq!(below_miss.location, [0.5, -66.5, 0.5]);
+            assert!(!game.world.chunks.contains_key(&(1, 0)));
+            assert_eq!(game.world.chunks.len(), chunks_before_gap);
+            // A straight ray crossing missing columns hits a known block beyond 4096 cells,
+            // with world chunks left untouched.
+            game.world
+                .chunks
+                .insert((300, 0), Arc::new(Chunk::empty(300, 0)));
+            game.world.set(4805, 64, 0, stone).unwrap();
+            let chunks_with_far = game.world.chunks.len();
+            for mode in [Block::Collider, Block::Outline] {
+                let far_hit = level
                     .clip(
                         game,
                         [15.5, 64.5, 0.5],
-                        [17.5, 64.5, 0.5],
-                        Block::Collider,
-                        Fluid::None
+                        [4810.5, 64.5, 0.5],
+                        mode,
+                        Fluid::None,
                     )
-                    .is_none()
+                    .unwrap();
+                assert!(!far_hit.miss);
+                assert_eq!(far_hit.block, [4805, 64, 0]);
+                assert_eq!(far_hit.face, Face::West);
+                assert_eq!(far_hit.location, [4805.0, 64.5, 0.5]);
+                assert!(!far_hit.inside && !far_hit.world_border);
+            }
+            // Independent opposite hit face and a miss beyond 4096.
+            let east_hit = level
+                .clip(
+                    game,
+                    [4810.5, 64.5, 0.5],
+                    [4800.5, 64.5, 0.5],
+                    Block::Collider,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(!east_hit.miss);
+            assert_eq!(east_hit.block, [4805, 64, 0]);
+            assert_eq!(east_hit.face, Face::East);
+            assert_eq!(east_hit.location, [4806.0, 64.5, 0.5]);
+            let far_miss = level
+                .clip(
+                    game,
+                    [15.5, 65.5, 0.5],
+                    [4810.5, 65.5, 0.5],
+                    Block::Collider,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(far_miss.miss);
+            assert_eq!(far_miss.block, [4810, 65, 0]);
+            assert_eq!(far_miss.face, Face::West);
+            assert_eq!(far_miss.location, [4810.5, 65.5, 0.5]);
+            assert!(!far_miss.inside && !far_miss.world_border);
+            // `line_of_sight` delegates to the same segment clip with no 128-block entity cap.
+            assert_eq!(
+                level.line_of_sight(game, [15.5, 64.5, 0.5], [4810.5, 64.5, 0.5]),
+                Some(false)
             );
+            assert_eq!(
+                level.line_of_sight(game, [15.5, 65.5, 0.5], [4810.5, 65.5, 0.5]),
+                Some(true)
+            );
+            assert!(!game.world.chunks.contains_key(&(1, 0)));
+            assert_eq!(game.world.chunks.len(), chunks_with_far);
             let miss = level
                 .clip(
                     game,
@@ -4236,6 +4335,9 @@ pub(super) mod tests {
                 )
                 .unwrap();
             assert!(miss.miss);
+            assert_eq!(miss.block, [2, 67, 0]);
+            assert_eq!(miss.face, Face::West);
+            assert_eq!(miss.location, [2.5, 67.5, 0.5]);
             let inside = level
                 .clip(
                     game,
@@ -4285,6 +4387,40 @@ pub(super) mod tests {
                     .unwrap()
                     .is_empty()
             );
+            // Dynamic collision shapes (bamboo) work on the collider branch; outline reports
+            // an actual unsupported error instead of fabricating a miss.
+            let bamboo = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:bamboo")
+                .unwrap();
+            game.world.set(1, 64, 2, bamboo).unwrap();
+            let bx = 1.3833333402872086;
+            let bz = 2.3166666701436043;
+            let bamboo_hit = level
+                .clip(
+                    game,
+                    [bx, 66.0, bz],
+                    [bx, 62.0, bz],
+                    Block::Collider,
+                    Fluid::None,
+                )
+                .unwrap();
+            assert!(!bamboo_hit.miss);
+            assert_eq!(bamboo_hit.block, [1, 64, 2]);
+            assert_eq!(bamboo_hit.face, Face::Up);
+            assert_eq!(bamboo_hit.location, [bx, 65.0, bz]);
+            assert_eq!(
+                level.clip(
+                    game,
+                    [bx, 66.0, bz],
+                    [bx, 62.0, bz],
+                    Block::Outline,
+                    Fluid::None,
+                ),
+                None
+            );
             let plant = game
                 .pack
                 .assets
@@ -4333,6 +4469,19 @@ pub(super) mod tests {
                     .unwrap()
                     .block,
                 [1, 64, 0]
+            );
+            assert_eq!(
+                level
+                    .clip(
+                        game,
+                        [15.5, 64.5, 0.5],
+                        [4810.5, 64.5, 0.5],
+                        Block::Collider,
+                        Fluid::None,
+                    )
+                    .unwrap()
+                    .block,
+                [4805, 64, 0]
             );
         });
     }

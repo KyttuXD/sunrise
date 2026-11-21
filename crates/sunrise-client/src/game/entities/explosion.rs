@@ -155,14 +155,18 @@ pub(super) struct ExplosionCause {
     pub species: Option<sunrise_client::mobs::Species>,
 }
 
-/// `Level.clip` with `ClipContext.Block.COLLIDER`, no fluids and the
-/// collision context of the entity whose exposure is measured.
+/// Outline and interaction shape tables for [`ColliderRays`] when clipping with
+/// `RayBlockMode::Outline` or `BlockGetter.clipWithInteractionOverride`.
 pub(super) struct ClipData<'a, 'r> {
     pub facts: &'a sunrise_client::blocks::BlockFacts,
     pub behaviours: &'a sunrise_world::level::Behaviours,
     pub tables: &'a sunrise_client::mesher::MeshTables,
     pub registry: &'r sunrise_world::registry::BlockRegistry,
 }
+/// `BlockGetter.clip` over a resident [`World`](sunrise_client::world::World):
+/// out-of-height cells and missing columns read as `world.air` without loading
+/// chunks (`ClientChunkCache.getChunk(..., true)` on clients and viewed worlds,
+/// and `PathNavigationRegion.getBlockState`/`getChunk` on immutable server views).
 pub(super) struct ColliderRays<'a, 'r> {
     pub scene: SceneCollisions<'a, 'r>,
     pub context: CollisionContext<'static>,
@@ -174,13 +178,14 @@ impl RayWorld for ColliderRays<'_, '_> {
     type Fluid = ();
     fn block_state(&mut self, p: BlockPos) -> io::Result<BlockStateId> {
         let world = self.scene.world;
-        if self.clip_data.is_some()
-            && (!(world.bottom_y()..world.top_y()).contains(&p.y)
-                || !world.chunks.contains_key(&(p.x >> 4, p.z >> 4)))
-        {
-            return Err(io::Error::other("ray entered an unloaded block"));
+        if !world.shape.contains_y(p.y) {
+            return Ok(world.air);
         }
-        Ok(world.block(p.x, p.y, p.z))
+        Ok(world
+            .chunks
+            .get(&(p.x >> 4, p.z >> 4))
+            .filter(|chunk| chunk.section_index(p.y).is_some())
+            .map_or(world.air, |chunk| chunk.block(p.x & 15, p.y, p.z & 15)))
     }
     fn fluid_state(&mut self, _: BlockPos) -> io::Result<()> {
         Ok(())
@@ -191,54 +196,53 @@ impl RayWorld for ColliderRays<'_, '_> {
         p: BlockPos,
         mode: RayBlockMode,
     ) -> io::Result<VoxelShape> {
-        if let Some(data) = &self.clip_data {
+        if mode == RayBlockMode::Outline {
+            let Some(data) = &self.clip_data else {
+                return Err(io::Error::other("outline ray shape unavailable"));
+            };
             // A block entity's published shapes stand over the declared ones, a
             // dynamic template's included (#1666): the collider below reads them
             // through the binding, the outline here.
             let at = [p.x, p.y, p.z];
-            let published = sunrise_client::collisions::published_outline(
+            let facts = data.facts.get(state);
+            let offset = super::perspective::outline_offset(
+                data.tables,
+                state,
+                p.x,
+                p.z,
+                facts.outline_offset,
+            );
+            let offset = Vec3::new(offset[0], offset[1], offset[2]);
+            if let Some(shape) = sunrise_client::collisions::published_outline(
                 self.scene.world,
                 self.scene.binding,
                 state,
                 at,
-            );
-            if published.is_none() && data.behaviours.data(state).dynamic_shape {
-                return Err(io::Error::other("dynamic ray shape unsupported"));
-            }
-            if mode == RayBlockMode::Outline {
-                let facts = data.facts.get(state);
-                let offset = super::perspective::outline_offset(
-                    data.tables,
-                    state,
-                    p.x,
-                    p.z,
-                    facts.outline_offset,
-                );
-                let offset = Vec3::new(offset[0], offset[1], offset[2]);
-                if let Some(shape) = published {
-                    return Ok(if offset == Vec3::ZERO {
-                        shape.clone()
-                    } else {
-                        shape.moved(offset)
-                    });
-                }
-                let cached = self.scene.binding.cached_shapes();
-                if let Some(shape) = cached.context_outline_shape(state, self.context.entity_kind())
-                {
-                    return Ok(cached.positioned_shape(
-                        state,
-                        sunrise_world::collision::ShapeChannel::ContextOutline,
-                        at,
-                        shape,
-                    ));
-                }
-                let shape = super::perspective::ray_shape_from_boxes(&facts.outline)?;
+            ) {
                 return Ok(if offset == Vec3::ZERO {
-                    shape
+                    shape.clone()
                 } else {
                     shape.moved(offset)
                 });
             }
+            let cached = self.scene.binding.cached_shapes();
+            if let Some(shape) = cached.context_outline_shape(state, self.context.entity_kind()) {
+                return Ok(cached.positioned_shape(
+                    state,
+                    sunrise_world::collision::ShapeChannel::ContextOutline,
+                    at,
+                    shape,
+                ));
+            }
+            if data.behaviours.data(state).dynamic_shape {
+                return Err(io::Error::other("dynamic outline shape unsupported"));
+            }
+            let shape = super::perspective::ray_shape_from_boxes(&facts.outline)?;
+            return Ok(if offset == Vec3::ZERO {
+                shape
+            } else {
+                shape.moved(offset)
+            });
         }
         let binding = self.scene.binding;
         binding
