@@ -2889,6 +2889,7 @@ pub(super) mod initial_history_tests {
             camera: glam::DVec3::new(0.5, 100.0, 0.5),
             yaw: 0.0,
             pitch: 10.0,
+            roll: 0.0,
             fov_degrees: 85.0,
             bob: glam::Mat4::IDENTITY,
             spin: glam::Mat4::IDENTITY,
