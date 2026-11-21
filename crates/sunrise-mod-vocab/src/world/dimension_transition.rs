@@ -5,22 +5,21 @@ use crate::{
     RegisterDimensionTransitionScreenEvent,
 };
 
-/// Resolved travel keys shared by registration and the client lookup table.
+/// Travel keys staged as identifiers and published as dimension slots.
+#[doc(hidden)]
 // no wire: engine-side keys for process-local factories.
 #[derive(PartialEq, Eq, Hash)]
-pub enum TransitionKey {
-    Incoming(DimensionKey),
-    Outgoing(DimensionKey),
-    Conditional {
-        to: DimensionKey,
-        from: DimensionKey,
-    },
+pub enum TransitionKey<K> {
+    Incoming(K),
+    Outgoing(K),
+    Conditional { to: K, from: K },
 }
 
 /// A factory accepted by the scoped registrar, ready to publish without revalidation.
+#[doc(hidden)]
 // no wire: owns a process-local factory.
 pub struct RegisteredTransitionScreen {
-    pub key: TransitionKey,
+    key: TransitionKey<Identifier>,
     pub owner: &'static str,
     pub screen: DimensionTransitionScreen,
 }
@@ -37,18 +36,19 @@ impl RegisteredTransitionScreen {
         owner: &'static str,
         screen: DimensionTransitionScreen,
     ) -> bool {
-        let resolve = |id: &str| {
-            Identifier::parse_namespaced(id).map(|_| crate::__private::dimension_key(id))
-        };
         let id = screen.screen();
         if !Identifier::parse_namespaced(id).is_some_and(|id| id.namespace() != "minecraft") {
             log::warn!("[{owner}] Invalid dimension transition screen id: {id}");
         } else {
             let key = match screen.transition() {
-                DimensionTransition::Incoming(to) => resolve(to).map(TransitionKey::Incoming),
-                DimensionTransition::Outgoing(from) => resolve(from).map(TransitionKey::Outgoing),
-                DimensionTransition::Conditional { to, from } => resolve(to)
-                    .zip(resolve(from))
+                DimensionTransition::Incoming(to) => {
+                    Identifier::parse_namespaced(to).map(TransitionKey::Incoming)
+                }
+                DimensionTransition::Outgoing(from) => {
+                    Identifier::parse_namespaced(from).map(TransitionKey::Outgoing)
+                }
+                DimensionTransition::Conditional { to, from } => Identifier::parse_namespaced(to)
+                    .zip(Identifier::parse_namespaced(from))
                     .map(|(to, from)| TransitionKey::Conditional { to, from }),
             };
             if let Some(key) = key {
@@ -64,17 +64,35 @@ impl RegisteredTransitionScreen {
         crate::runtime::discard_registration(REGISTRATION, Some(owner), screen);
         false
     }
+
+    /// Resolve validated keys when publishing successful registrations to the client table.
+    pub fn into_resolved(
+        self,
+    ) -> (
+        TransitionKey<DimensionKey>,
+        (&'static str, DimensionTransitionScreen),
+    ) {
+        let resolve =
+            |id: Identifier| crate::content::registry_keys::dimension_key(&id.to_string());
+        let key = match self.key {
+            TransitionKey::Incoming(to) => TransitionKey::Incoming(resolve(to)),
+            TransitionKey::Outgoing(from) => TransitionKey::Outgoing(resolve(from)),
+            TransitionKey::Conditional { to, from } => TransitionKey::Conditional {
+                to: resolve(to),
+                from: resolve(from),
+            },
+        };
+        (key, (self.owner, self.screen))
+    }
 }
 
 impl RegisterDimensionTransitionScreenEvent<'_> {
     /// Stage a factory for this travel key. Returns `false` for an invalid ID or an
     /// occupied key, including one staged earlier in this callback; the first wins.
     /// `true` accepts the factory into this callback's batch. A panic or phase refusal
-    /// discards that batch without reserving its keys for later listeners.
+    /// discards that batch without publishing dimension keys or reserving them for later listeners.
     pub fn register(&mut self, screen: DimensionTransitionScreen) -> bool {
-        let owner =
-            crate::content::crash::current_native_mod().expect("registration listener is marked");
-        RegisteredTransitionScreen::register(self.screens, owner, screen)
+        RegisteredTransitionScreen::register(self.screens, self.mod_id, screen)
     }
 }
 
@@ -252,78 +270,6 @@ mod dimension_transition_tests {
                 },
             ));
         }
-    }
-
-    #[test]
-    fn transition_registration_reports_duplicates_and_releases_refused_keys() {
-        use crate::__private::{LoadAccess, ModPhase, PhaseOwner, check_access};
-        use std::sync::{Arc, Mutex};
-
-        struct Probe {
-            results: Arc<Mutex<Vec<bool>>>,
-            keys: &'static [&'static str],
-            refuse: bool,
-        }
-        #[crate::__subscriptions]
-        impl Hooks for Probe {
-            fn register_dimension_transition_screen(
-                &self,
-                _: &RegistrationContext,
-                event: &mut RegisterDimensionTransitionScreenEvent<'_>,
-            ) {
-                for &key in self.keys {
-                    let accepted = event.register(DimensionTransitionScreen::new(
-                        "example:loading".into(),
-                        DimensionTransition::Incoming(key.into()),
-                        |_, _| Box::new(|_: &dyn ClientHost, _, _, _: &mut dyn DrawContext| {}),
-                    ));
-                    self.results.lock().unwrap().push(accepted);
-                }
-                if self.refuse {
-                    check_access("transition_world_only", LoadAccess::WorldOnly);
-                }
-            }
-        }
-
-        let results = Arc::new(Mutex::new(Vec::new()));
-        const LISTENERS: [(&str, &[&str], bool); 3] = [
-            ("first", &["example:a", "example:a"], false),
-            ("refused", &["example:a", "example:b"], true),
-            ("last", &["example:a", "example:b"], false),
-        ];
-        let mods = LISTENERS
-            .into_iter()
-            .map(|(id, keys, refuse)| {
-                ModEntry::new(
-                    id,
-                    Box::new(Probe {
-                        results: results.clone(),
-                        keys,
-                        refuse,
-                    }),
-                )
-            })
-            .collect::<Vec<_>>()
-            .into();
-        testing::with_dispatch(mods, || {
-            let _phase = PhaseOwner::scope(ModPhase::Registration);
-            let mut screens = Vec::new();
-            dispatch_register_dimension_transition_screen(
-                &RegistrationContext::new(),
-                &mut screens,
-            );
-            assert_eq!(
-                *results.lock().unwrap(),
-                [true, false, false, true, false, true]
-            );
-            assert_eq!(
-                screens
-                    .iter()
-                    .map(|screen| screen.owner)
-                    .collect::<Vec<_>>(),
-                ["first", "last"]
-            );
-        });
     }
 
     #[test]

@@ -440,6 +440,14 @@ pub(super) fn emit<'a>(
         let mut lifetimes = EventLifetimes::default();
         let mut fields = String::new();
         let mut inits = Vec::new();
+        // A listener-local custom registrar can use the dispatch entry's identity
+        // without relying on the optional diagnostic backend's current mod.
+        if hook.event_per_listener
+            && matches!(registration_append, Some((RegistrationAppend::Custom, _)))
+        {
+            fields.push_str("pub(super) mod_id: &'static str,\n");
+            inits.push(format!("mod_id: {listener_id}"));
+        }
         let mut write_back = String::new();
         // Fields restored to the last accepted values on a listener failure, each with whether
         // the event holds it behind a `&mut`.

@@ -343,6 +343,92 @@ fn panicking_registration_discards_owned_renderers_even_if_cleanup_panics() {
 }
 
 #[test]
+fn transition_registration_reports_duplicates_and_releases_refused_keys() {
+    use crate::__private::{game::RegistrationContextNew, registry_entry_key_slot};
+
+    const REFUSED_ONLY: &str = "example:refused_transition_only";
+    struct Probe {
+        results: Arc<Mutex<Vec<bool>>>,
+        keys: &'static [&'static str],
+        refuse: bool,
+    }
+    #[crate::__subscriptions]
+    impl Hooks for Probe {
+        fn register_dimension_transition_screen(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterDimensionTransitionScreenEvent<'_>,
+        ) {
+            for &key in self.keys {
+                let accepted = event.register(DimensionTransitionScreen::new(
+                    "example:loading".into(),
+                    DimensionTransition::Incoming(key.into()),
+                    |_, _| Box::new(|_: &dyn ClientHost, _, _, _: &mut dyn DrawContext| {}),
+                ));
+                self.results.lock().unwrap().push(accepted);
+            }
+            if self.refuse {
+                check_access("transition_world_only", LoadAccess::WorldOnly);
+            }
+        }
+    }
+
+    let results = Arc::new(Mutex::new(Vec::new()));
+    const LISTENERS: [(&str, &[&str], bool); 3] = [
+        (
+            "first",
+            &["minecraft:overworld", "minecraft:overworld"],
+            false,
+        ),
+        (
+            "refused",
+            &["minecraft:overworld", "minecraft:the_nether", REFUSED_ONLY],
+            true,
+        ),
+        (
+            "last",
+            &["minecraft:overworld", "minecraft:the_nether"],
+            false,
+        ),
+    ];
+    let mods = LISTENERS
+        .into_iter()
+        .map(|(id, keys, refuse)| {
+            ModEntry::new(
+                id,
+                Box::new(Probe {
+                    results: results.clone(),
+                    keys,
+                    refuse,
+                }),
+            )
+        })
+        .collect::<Vec<_>>()
+        .into();
+    testing::with_mods(mods, || {
+        let _phase = PhaseOwner::scope(ModPhase::Registration);
+        let refused = RegistryEntry::new(
+            Identifier::parse("minecraft:dimension").unwrap(),
+            Identifier::parse(REFUSED_ONLY).unwrap(),
+        );
+        let mut screens = Vec::new();
+        dispatch_register_dimension_transition_screen(&RegistrationContext::new(), &mut screens);
+        assert_eq!(
+            *results.lock().unwrap(),
+            [true, false, false, true, true, false, true]
+        );
+        assert_eq!(
+            screens
+                .iter()
+                .map(|screen| screen.owner)
+                .collect::<Vec<_>>(),
+            ["first", "last"]
+        );
+        assert_eq!(registry_entry_key_slot(&refused), None);
+    });
+}
+
+#[test]
 fn command_registrars_keep_earlier_usages_and_discard_a_refused_batch() {
     struct Commands(&'static str, bool);
     #[crate::__subscriptions]

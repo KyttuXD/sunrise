@@ -23,7 +23,7 @@ type Registration = (&'static str, DimensionTransitionScreen);
 
 /// Registrations resolved once at load; lookups never build dimension names.
 #[derive(Default)]
-struct TransitionScreens(HashMap<TransitionKey, Registration>);
+struct TransitionScreens(HashMap<TransitionKey<DimensionKey>, Registration>);
 
 static SCREENS: OnceLock<TransitionScreens> = OnceLock::new();
 
@@ -32,7 +32,7 @@ impl TransitionScreens {
         Self(
             registrations
                 .into_iter()
-                .map(|r| (r.key, (r.owner, r.screen)))
+                .map(RegisteredTransitionScreen::into_resolved)
                 .collect(),
         )
     }
@@ -53,16 +53,18 @@ impl TransitionScreens {
 
 /// Publish the client registrations once at startup.
 pub fn register(registrations: Vec<RegisteredTransitionScreen>) {
-    if let Err(TransitionScreens(screens)) = SCREENS.set(TransitionScreens::new(registrations)) {
+    let mut pending = Some(registrations);
+    SCREENS.get_or_init(|| TransitionScreens::new(pending.take().expect("first publication")));
+    if let Some(rejected) = pending {
         log::warn!("Dimension transition screens already registered; keeping the first table");
-        for (owner, screen) in screens.into_values() {
+        for entry in rejected {
             discard_registration(
                 (
                     HookId::RegisterDimensionTransitionScreen,
                     "register_dimension_transition_screen",
                 ),
-                Some(owner),
-                screen,
+                Some(entry.owner),
+                entry.screen,
             );
         }
     }
@@ -114,11 +116,13 @@ mod tests {
         )
     }
     fn screens_from(entries: impl IntoIterator<Item = Registration>) -> TransitionScreens {
-        let mut registrations = Vec::new();
-        for (owner, screen) in entries {
-            RegisteredTransitionScreen::register(&mut registrations, owner, screen);
-        }
-        TransitionScreens::new(registrations)
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let mut registrations = Vec::new();
+            for (owner, screen) in entries {
+                RegisteredTransitionScreen::register(&mut registrations, owner, screen);
+            }
+            TransitionScreens::new(registrations)
+        })
     }
 
     fn chosen(screens: &TransitionScreens, to: &str, from: &str) -> Option<u32> {

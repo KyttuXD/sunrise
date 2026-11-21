@@ -12,11 +12,11 @@ pub trait Hooks {
 
 Pass `DimensionTransitionScreen::new(id, transition, factory)` to `event.register(screen)`.
 Use `DimensionTransition::Incoming(to)`, `Outgoing(from)` or `Conditional { to, from }`
-with namespaced dimension IDs. The client resolves those IDs at registration and rejects
-invalid registrations and screen IDs in the `minecraft` namespace. A screen ID is for
-validation and diagnostics, not draw dispatch. `register` reports `false` for invalid or
-occupied keys, including a key already staged by this listener. A failed listener releases
-all its staged keys.
+with namespaced dimension IDs. The client validates them during registration and resolves
+keys only when publishing factories from successful listeners. It rejects invalid registrations
+and screen IDs in the `minecraft` namespace. A screen ID is for validation and diagnostics,
+not draw dispatch. `register` reports `false` for invalid or occupied keys, including a key
+already staged by this listener. A failed listener does not publish any keys.
 
 On a matching trip, the client calls the selected factory once as the registering mod and
 keeps its presentation until the loading screen closes. An existing loading screen (including
@@ -32,6 +32,7 @@ readiness, timeout and closing."#]
         contract = "collect",
         out = "screens",
         registration_append = "custom",
+        event_per_listener = true,
         context = "registration",
         neoforge = "RegisterDimensionTransitionScreenEvent",
         version = 3

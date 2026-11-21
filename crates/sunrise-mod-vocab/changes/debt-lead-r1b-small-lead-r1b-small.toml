@@ -4,13 +4,11 @@ ids = [
     "hook:register_commands.commands",
     "type:RegisterCommandsEvent",
     "type:RegisterCommandsEvent.commands",
-    "method:Hooks::register_commands",
     "handle:RegisterCommandsEvent::register",
     "hook:register_client_commands",
     "hook:register_client_commands.commands",
     "type:RegisterClientCommandsEvent",
     "type:RegisterClientCommandsEvent.commands",
-    "method:Hooks::register_client_commands",
     "handle:RegisterClientCommandsEvent::register",
     "hook:instantiate_block_state_definition",
     "type:InstantiateBlockStateDefinitionEvent",
@@ -63,7 +61,7 @@ ids = [
     "type:RegisterSpriteSourcesEvent.sources",
     "handle:RegisterSpriteSourcesEvent::register",
 ]
-why = "ItemStorage now distinguishes a caller-requested stop from exhaustion without reading any more entries, preserving the short-circuit sided traversal of vanilla 26.3 HopperBlockEntity.suckInItems and NeoForge ResourceHandlerUtil.extractFirst. Registration now uses methods on the event rather than editable answer lists, following NeoForge RegisterEvent.register, RegisterBlockStateModels.registerDefinition and RegisterDebugRenderersEvent.register. Commands still register during vanilla Commands construction and ClientPacketListener.handleCommands, using scoped registration like NeoForge RegisterCommandsEvent.getDispatcher and RegisterClientCommandsEvent.getDispatcher. NeoForge RegisterPresetEditorsEvent.register replaces the earlier editor and logs the mod, RegisterBlockStateModels.registerDefinition replaces the binding in vanilla ExtraCodecs.LateBoundIdMapper, and RegisterDimensionTransitionScreenEvent reports occupied keys immediately while vanilla LevelLoadingScreen.update keeps the active presentation. Vanilla 26.3 BuiltInRegistries.bootStrap populates before freezing and DebugRenderer.refreshRendererList rebuilds the renderer list; Sunrise keeps the same registration moments, dispatch order and validates entries before they are published. Sunrise discards a failed listener's pending registrations so neither partial work nor a panicking entry destructor can stop later listeners. Rejected and retired owned registrations are disposed of under their owner; a destructor panic is logged and queued for a toast without disabling the registration listener."
+why = "ItemStorage now distinguishes a caller-requested stop from exhaustion without reading any more entries, preserving the short-circuit sided traversal of vanilla 26.3 HopperBlockEntity.suckInItems and NeoForge ResourceHandlerUtil.extractFirst. Registration now uses methods on the event rather than editable answer lists, following NeoForge RegisterEvent.register, RegisterBlockStateModels.registerDefinition and RegisterDebugRenderersEvent.register. Commands still register during vanilla Commands construction and ClientPacketListener.handleCommands, using scoped registration like NeoForge RegisterCommandsEvent.getDispatcher and RegisterClientCommandsEvent.getDispatcher. NeoForge RegisterPresetEditorsEvent.register replaces the earlier editor and logs the mod, and RegisterBlockStateModels.registerDefinition replaces the binding in vanilla ExtraCodecs.LateBoundIdMapper. Like NeoForge RegisterDimensionTransitionScreenEvent.registerIncomingEffect, registerOutgoingEffect and registerConditionalEffect, Sunrise detects an occupied dimension key without creating a registry entry; it assigns dimension slots only when publishing successful registrations. Vanilla LevelLoadingScreen.update still keeps the active presentation. Vanilla 26.3 BuiltInRegistries.bootStrap populates before freezing and DebugRenderer.refreshRendererList rebuilds the renderer list; Sunrise keeps the same registration moments, dispatch order and validates entries before they are published. Sunrise discards a failed listener's pending registrations so neither partial work nor a panicking entry destructor can stop later listeners. Rejected and retired owned registrations are disposed of under their owner; a destructor panic is logged and queued for an error toast without disabling the registration listener."
 migrate = """
 ItemStorage::visit_entries(host, visitor) returns Result<std::ops::ControlFlow<()>, StorageError> instead of Result<(), StorageError>. Match Ok(ControlFlow::Break(())) for a visitor-requested stop, Ok(ControlFlow::Continue(())) for exhaustion, and Err(error) for a failed read. To handle only read errors, use `let _ = storage.visit_entries(host, visitor)?;`. In a provider, return Ok(flow) immediately when visitor(kind, amount) returns Break, and Ok(ControlFlow::Continue(())) on exhaustion. The visitor's signature is unchanged.
 
@@ -72,7 +70,7 @@ In each listed registration hook replace `event.<field>.push(value)` with `event
 - `register_block_state_models`: `definitions`, a namespaced type ID as `String` (version 2). A later successful registration replaces the binding. In `instantiate_block_state_definition` (version 2), continue to match `event.definition_type` and append your picks to `event.models`, but first register every type you answer at startup: the hook is called only for the currently bound mod, named by `event.mod_id`.
 - `register_debug_entries`: `entries`, a `DebugEntry` (version 3).
 - `register_debug_renderers`: `renderers`, a `DebugRenderer` (version 3).
-- `register_dimension_transition_screen`: use `let accepted = event.register(screen)` instead of `event.screens.push(screen)` (version 3). `accepted` is `false` for invalid IDs or an occupied key (including an earlier call in this listener), and `true` for a staged factory. A failed listener still discards its whole batch.
+- `register_dimension_transition_screen`: use `let accepted = event.register(screen)` instead of `event.screens.push(screen)` (version 3). `accepted` is `false` for invalid IDs or an occupied key (including an earlier call in this listener), and `true` for a staged factory. Dimension keys are resolved when successful registrations are published, not by `event.register`. A failed listener discards its whole batch without reserving any keys.
 - `register_item_models`: `models`, a node type ID as `String` (version 2).
 - `register_item_tint_sources`: `sources`, a tint source ID as `String` (version 2).
 - `register_json_animation_types`: `types`, a `JsonAnimationType::Target(id)` or `JsonAnimationType::Interpolation(id)` (version 2).

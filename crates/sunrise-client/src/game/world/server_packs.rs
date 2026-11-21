@@ -530,11 +530,10 @@ impl Game<'_> {
         }
     }
 
-    /// Queued hook-listener panics from any thread, each shown once per
-    /// `(hook, mod)` as a red-titled system toast. Enqueued directly on the
-    /// client toast queue rather than through `toast_add` so a mod cannot veto
-    /// or rewrite its own failure notice; headless servers log the error and do
-    /// not drain the client queue.
+    /// Per-report error toasts for panics in hook listeners and registration cleanup
+    /// on any thread. Enqueued directly on the client toast queue rather than through
+    /// `toast_add` so a mod cannot veto or rewrite its own failure notice; headless
+    /// servers log the error and do not drain the client queue.
     fn add_hook_panic_toasts(&mut self) {
         if self.serving.is_some() || self.options.dedicated.is_some() {
             return;

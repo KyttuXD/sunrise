@@ -62,9 +62,10 @@ At client startup, `Hooks::register_dimension_transition_screen` gives you `even
 Pass a `DimensionTransitionScreen` for each trip you want to cover.
 `Conditional { to, from }` wins over `Incoming(to)`, then `Outgoing(from)`. The first valid
 registration for each key wins. `register` returns `false` for invalid IDs or an occupied key,
-including one already staged by your listener. If the listener panics or is refused, none of
-its staged factories reserve a key. Use a namespaced, non-`minecraft` screen ID for diagnostics;
-nothing looks it up during drawing.
+including one already staged by your listener. The client resolves dimension keys only when it
+publishes successful listeners' factories. If your listener panics or is refused, its factories
+are discarded and do not reserve keys for later listeners. Use a namespaced, non-`minecraft`
+screen ID for diagnostics; nothing looks it up during drawing.
 
 ```rust,ignore
 use mod_api::{
