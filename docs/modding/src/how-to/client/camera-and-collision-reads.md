@@ -135,11 +135,12 @@ A server can open other levels for a client to view besides the one the player i
 as Immersive Portals' `ClientWorldLoader` keeps a `ClientLevel` per dimension). On a client,
 `host.level("minecraft:the_nether")` also returns a handle for each such level while the server keeps it
 open. Its block reads read the viewed level's own world, never the player's: `block_state`, `block`,
-`block_property`, `clip`, `collision_boxes`, `has_collisions`, and the fluid reads built on
-`block_state` (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`, `fluid_can_be_replaced_with`).
-So a mod can aim a ray or collide a box through a portal. They never write and never load a column: a
-column the client doesn't hold is `None`, for a collision box as soon as its walk reaches one. `clip`
-keeps its traversal limit and `collision_boxes` its cell cap.
+`block_property`, `clip`, [`visit_block_collisions`](particles-and-movement-queries.md#bot-movement-and-block-collisions),
+`has_collisions`, and the fluid reads built on `block_state` (`fluid_shape`, `fluid_height`,
+`fluid_height_for_camera`, `fluid_can_be_replaced_with`). So a mod can aim a ray or collide a box
+through a portal. These reads never load a column. Block reads and `clip` return `None` for a column
+the client doesn't hold; `visit_block_collisions` and `has_collisions` skip missing columns and
+keep scanning the loaded ones.
 
 The handle is `None` while the server has the level closed. If the server closes the level and opens it
 again within the same client level, the old handle reads again. A login, a reconfiguration or a respawn

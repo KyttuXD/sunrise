@@ -768,7 +768,13 @@ fn level_queries_take_their_hosts(
     let _: Option<f32> = level.fluid_height_for_camera(read, [0, 64, 0]);
     let _: Option<bool> =
         level.fluid_can_be_replaced_with(read, [0, 64, 0], FluidKey(0), Direction::Down);
-    let _: Option<bool> = level.has_collisions(read, [0.0, 64.0, 0.0, 1.0, 65.0, 1.0]);
+    let bounds = [0.0, 64.0, 0.0, 1.0, 65.0, 1.0];
+    let _: Option<core::ops::ControlFlow<()>> =
+        level.visit_block_collisions(read, bounds, &mut |shape: &VoxelShape| {
+            let _: Option<[f64; 6]> = shape.boxes().next();
+            core::ops::ControlFlow::Break(())
+        });
+    let _: Option<bool> = level.has_collisions(read, bounds);
     let _: Option<Vec<EntityRayHit>> =
         level.ray_trace_entities(read, [0.0; 3], [8.0, 0.0, 0.0], 0.3, Some(shooter));
     let _: Result<Option<EntityRayHit>, LevelReadError> = level.ray_trace_nearest_entity(

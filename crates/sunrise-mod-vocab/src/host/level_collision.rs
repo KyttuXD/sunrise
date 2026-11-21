@@ -56,11 +56,26 @@ pub trait LevelCollisionBackend {
         support: SupportType,
     ) -> Option<bool>;
     /// Side: both.
-    /// World-space block collision boxes under an empty collision context, without entities or border. Refuses a stale or nonresident level and invalid or overlarge boxes.
-    /// On a client, the level it shows or a viewed one (`host.level`), each through its own
-    /// world; None where the walk reaches a column the client doesn't hold.
+    /// Visit intersecting block collision shapes in `CollisionGetter.getBlockCollisions`
+    /// order, with an empty collision context, without entities or the world border.
+    /// `aabb` is `[min_x, min_y, min_z, max_x, max_y, max_z]`. Each borrowed shape is
+    /// in world coordinates and is not clipped to `aabb`. Clone it only if it must outlive
+    /// the callback.
+    ///
+    /// Reads the named world, including a parked server level or a viewed client level.
+    /// Skips missing chunks without loading them. `Some(Continue(()))` means the scan
+    /// finished, including when empty; `Some(Break(()))` stops at the visitor's first
+    /// break with no further reads. `None` means invalid bounds (including ones outside
+    /// vanilla `Cursor3D`'s positive signed-int domain), unavailable world access (such as
+    /// a stale handle), or a query error. On a query error, earlier visits stand.
     #[access(WorldOnly)]
-    fn level_collision_boxes(&self, level: LevelRef, aabb: [f64; 6]) -> Option<Vec<[f64; 6]>>;
+    #[decline_unavailable]
+    fn level_visit_block_collisions(
+        &self,
+        level: LevelRef,
+        aabb: [f64; 6],
+        visit: &mut dyn FnMut(&VoxelShape) -> std::ops::ControlFlow<()>,
+    ) -> Option<std::ops::ControlFlow<()>>;
     /// Side: server.
     /// Whether nothing solid lies on the segment `from`..`to`, as
     /// `LivingEntity.hasLineOfSight` clips between two eyes (`ClipContext.Block.COLLIDER`,
@@ -69,10 +84,12 @@ pub trait LevelCollisionBackend {
     #[access(WorldOnly)]
     fn level_line_of_sight(&self, level: LevelRef, from: [f64; 3], to: [f64; 3]) -> Option<bool>;
     /// Side: both.
-    /// Whether any block collision shape shares volume with `aabb` (`[min_x, min_y, min_z, max_x,
-    /// max_y, max_z]`): the block half of `CollisionGetter.noCollision(aabb)`, negated. The same
-    /// walk and limits as `collision_boxes`, stopping at the first shape it finds; entities and
-    /// the world border are not counted. None as for `collision_boxes`.
+    /// Whether the block collision walk finds a shape for `aabb` (`[min_x, min_y, min_z,
+    /// max_x, max_y, max_z]`): `CollisionGetter.noBlockCollision(null, aabb)`, negated.
+    /// Like [`LevelRef::visit_block_collisions`], it skips missing chunks, ignores entities
+    /// and the world border, and returns `None` for unavailable levels, invalid bounds or
+    /// query errors. Stops at the first hit without lending or collecting geometry.
     #[access(WorldOnly)]
+    #[decline_unavailable]
     fn level_has_collisions(&self, level: LevelRef, aabb: [f64; 6]) -> Option<bool>;
 }

@@ -1,15 +1,15 @@
 //! A client mod's reads of the levels the server opened for viewing (#3981, gap 10), as Immersive
 //! Portals' `ClientWorldLoader.getWorld(dim)` hands out the far `ClientLevel`: on a client,
 //! `host.level(dim)` also names each level the server keeps open on `sunrise:levels`, and
-//! `block_state`, `clip`, `collision_boxes` and `has_collisions` read its world (`viewed_worlds`),
-//! as do the reads built on `level_block_state`: `block`, `block_property` and the both-sided
-//! fluid reads (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
-//! `fluid_can_be_replaced_with`). A read never writes and never loads a column: a column the
-//! world does not hold is None. The handle answers None from the server's close of the level,
-//! and from a Login, a Respawn or a new configuration phase, which drop every viewed world. A
-//! `LevelRef` names a level and the client level's epoch, not one open of the view: a close and
-//! a later open within the same epoch make the old handle read again, while a Login, a
-//! reconfiguration or a Respawn into another level starts a new epoch, so the old handle stays
+//! `block_state`, `clip`, `visit_block_collisions` and `has_collisions` read its world
+//! (`viewed_worlds`), as do the reads built on `level_block_state`: `block`, `block_property`
+//! and the both-sided fluid reads (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
+//! `fluid_can_be_replaced_with`). A read never writes and never loads a column: block and ray
+//! reads return None for missing columns; the collision scan skips them. The handle answers
+//! None after the server closes the level or a Login, Respawn or new configuration phase drops
+//! every viewed world. A `LevelRef` names a level and the client level's epoch, not one open of
+//! the view. A close and a later open within the same epoch make the old handle read again. A
+//! Login, reconfiguration or Respawn into another level starts a new epoch, so the old handle stays
 //! stale and a mod asks `host.level` again (a same-level Respawn keeps the epoch). Writes,
 //! server-only reads, the other reads and the entity reads (until step 9d) refuse it.
 use super::Game;
@@ -62,8 +62,8 @@ impl Game<'_> {
         renderer.set_world_view_own_level(own_level);
         Some(renderer.camera_frustum(camera, fov_degrees, yaw, pitch, bob, depth_far))
     }
-    /// The world `block_state` and `clip` read: on a server an open level, in place or parked
-    /// (`native_level_world`), on a client `client_view_world`.
+    /// The world block, ray and collision queries read: on a server an open level, in place
+    /// or parked (`native_level_world`), on a client `client_view_world`.
     pub(super) fn native_level_view_world(&self, level: LevelRef) -> Option<&World> {
         if self.is_logical_server() {
             self.native_level_world(level)
@@ -85,6 +85,7 @@ mod tests {
         BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipFluid, Host, LevelReadError,
         LevelRef, LevelWriteError,
     };
+    use std::ops::ControlFlow;
     use sunrise_protocol::packets::play::{self, Clientbound as C};
     use sunrise_world::registry::BlockStateId;
 
@@ -167,27 +168,62 @@ mod tests {
         }
     }
 
-    /// The viewed level's collision boxes are its own: none in the pocket the player's own
-    /// level fills with stone, the stone's box where the player's level is air.
+    fn collect_collision_boxes(
+        game: &Game<'_>,
+        level: LevelRef,
+        bounds: [f64; 6],
+    ) -> Vec<[f64; 6]> {
+        let mut boxes = Vec::new();
+        let result = level.visit_block_collisions(game, bounds, &mut |shape| {
+            boxes.extend(shape.boxes());
+            ControlFlow::Continue(())
+        });
+        assert_eq!(result, Some(ControlFlow::Continue(())));
+        boxes
+    }
+
+    /// The viewed level's collision shapes are its own: none in the pocket the player's own
+    /// level fills with stone, the stone's full cube where the player's level is air.
     #[test]
     #[ignore = "daily"]
     fn collision_boxes_read_the_viewed_world() {
         let mut resources = None;
         let mut game = client(&mut resources);
         let (own, viewed) = viewing(&mut game);
-        let pocket = [3.0, 70.0, 5.0, 4.0, 71.0, 6.0];
-        assert_eq!(viewed.collision_boxes(&game, pocket), Some(vec![]));
+        let pocket = [3.25, 70.25, 5.25, 3.75, 70.75, 5.75];
+        assert!(collect_collision_boxes(&game, viewed, pocket).is_empty());
         assert_eq!(viewed.has_collisions(&game, pocket), Some(false));
-        assert_eq!(own.collision_boxes(&game, pocket), Some(vec![pocket]));
+        assert_eq!(
+            collect_collision_boxes(&game, own, pocket),
+            [[3.0, 70.0, 5.0, 4.0, 71.0, 6.0]]
+        );
         assert_eq!(own.has_collisions(&game, pocket), Some(true));
-        let top = [8.0, 79.0, 8.0, 9.0, 80.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, top), Some(vec![top]));
+        let top = [8.25, 79.25, 8.25, 8.75, 79.75, 8.75];
+        let cube = [8.0, 79.0, 8.0, 9.0, 80.0, 9.0];
+        assert_eq!(collect_collision_boxes(&game, viewed, top), [cube]);
         assert_eq!(viewed.has_collisions(&game, top), Some(true));
-        assert_eq!(own.collision_boxes(&game, top), Some(vec![]));
+        assert!(collect_collision_boxes(&game, own, top).is_empty());
         assert_eq!(own.has_collisions(&game, top), Some(false));
+
+        // More than a million cursor cells, mostly after the first hit along z.
+        // An early hit exercises the removed cap without walking those cells.
+        let long = [8.25, 79.25, 8.25, 8.75, 79.75, 120_000.75];
+        let mut visits = 0;
+        assert_eq!(
+            viewed.visit_block_collisions(&game, long, &mut |shape| {
+                visits += 1;
+                let mut boxes = shape.boxes();
+                assert_eq!(boxes.next(), Some(cube));
+                assert_eq!(boxes.next(), None);
+                ControlFlow::Break(())
+            }),
+            Some(ControlFlow::Break(()))
+        );
+        assert_eq!(visits, 1);
+        assert_eq!(viewed.has_collisions(&game, long), Some(true));
     }
 
-    /// A column the viewed world does not hold answers None, and reading it loads nothing.
+    /// Missing columns refuse direct reads but don't end the block collision scan.
     #[test]
     #[ignore = "daily"]
     fn a_column_the_viewed_world_does_not_hold_is_none() {
@@ -207,13 +243,20 @@ mod tests {
         };
         assert!(ray(15.5).unwrap().miss);
         assert_eq!(ray(24.5), None);
-        let inside = [8.0, 85.0, 8.0, 9.0, 86.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, inside), Some(vec![]));
-        let across = [15.0, 85.0, 8.0, 17.0, 86.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, across), None);
-        assert_eq!(viewed.has_collisions(&game, across), None);
+        let across = [15.25, 85.25, 8.25, 32.75, 85.75, 8.75];
+        assert!(collect_collision_boxes(&game, viewed, across).is_empty());
+        assert_eq!(viewed.has_collisions(&game, across), Some(false));
+
+        game.handle_packet(run(1, &[layered(2, 0, 0), set([32, 85, 8], 1)]))
+            .unwrap();
+        assert_eq!(
+            collect_collision_boxes(&game, viewed, across),
+            [[32.0, 85.0, 8.0, 33.0, 86.0, 9.0]]
+        );
+        assert_eq!(viewed.has_collisions(&game, across), Some(true));
         let world = &game.remote.as_ref().unwrap().viewed.get(1).unwrap().world;
-        assert_eq!(world.chunks.len(), 1);
+        assert!(!world.chunks.contains_key(&(1, 0)));
+        assert_eq!(world.chunks.len(), 2);
     }
 
     /// Writes, server-only reads and the entity reads refuse a viewed level, which keeps its
@@ -244,11 +287,23 @@ mod tests {
         let mut resources = None;
         let mut game = client(&mut resources);
         let (_, viewed) = viewing(&mut game);
+        let bounds = [8.0, 79.0, 8.0, 9.0, 80.0, 9.0];
+        let mut unexpected_visit =
+            |_: &mod_api::VoxelShape| -> ControlFlow<()> { panic!("world access is unavailable") };
+        {
+            use mod_api::__private::{ModPhase, PhaseOwner};
+            let _setup = PhaseOwner::scope(ModPhase::Setup);
+            assert_eq!(
+                viewed.visit_block_collisions(&game, bounds, &mut unexpected_visit),
+                None
+            );
+            assert_eq!(viewed.has_collisions(&game, bounds), None);
+        }
         game.handle_packet(close(1)).unwrap();
         assert_eq!(game.level(NETHER), None);
         assert_eq!(state(&game, viewed, [3, 71, 5]), None);
         assert_eq!(
-            viewed.collision_boxes(&game, [8.0, 79.0, 8.0, 9.0, 80.0, 9.0]),
+            viewed.visit_block_collisions(&game, bounds, &mut unexpected_visit),
             None
         );
         game.handle_packet(open(1, NETHER)).unwrap();
@@ -282,6 +337,10 @@ mod tests {
         game.handle_packet(open(1, NETHER)).unwrap();
         game.handle_packet(run(1, &[column(0, 0)])).unwrap();
         assert_eq!(state(&game, viewed, [3, 71, 5]), None);
+        assert_eq!(
+            viewed.visit_block_collisions(&game, bounds, &mut unexpected_visit),
+            None
+        );
         let reopened = game.level(NETHER).unwrap();
         assert_eq!(state(&game, reopened, [3, 71, 5]), Some(1));
     }

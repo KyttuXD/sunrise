@@ -1,0 +1,32 @@
+ids = [
+    "handle:LevelRef::collision_boxes",
+    "handle:LevelRef::visit_block_collisions",
+    "type:VoxelShape",
+    "handle:VoxelShape::empty",
+    "handle:VoxelShape::try_from_boxes",
+    "handle:VoxelShape::is_empty",
+    "handle:VoxelShape::boxes",
+    "type:VoxelShapeError",
+    "type:VoxelShapeError.InvalidBounds",
+    "type:VoxelShapeError.Unrepresentable",
+]
+why = "The old query allocated a flat box list, capped scans at a million cells and refused scans crossing missing client chunks. Vanilla (unchanged by NeoForge here) lazily yields unclipped world-space shapes in CollisionGetter.getBlockCollisions and BlockCollisions.computeNext, skipping chunks that Level.getChunkForCollisions cannot get without loading. Both reads now use that cursor (whose domain comes from vanilla Cursor3D) in the named level. The boolean read follows CollisionGetter.noBlockCollision, stopping at the first hit. Shapes.box, Shapes.create and Shapes.or define the new immutable voxel geometry."
+migrate = '''
+Replace `let boxes = level.collision_boxes(host, bounds)?;` with:
+
+```rust,ignore
+use std::ops::ControlFlow;
+
+let mut boxes = Vec::new();
+level.visit_block_collisions(host, bounds, &mut |shape| {
+    boxes.extend(shape.boxes());
+    ControlFlow::Continue(())
+})?;
+```
+
+When you do not need a list, consume `shape.boxes()` in the visitor or work with the `&VoxelShape` directly. Clone the shape to keep it after the visitor. Return `ControlFlow::Break(())` to stop the scan; it returns `Some(Break(()))`. `Some(Continue(()))` means completion, even for no hits. `None` still means a refused query, not an empty scan; if you collect, discard any partial result on `None`.
+
+`level.has_collisions(host, bounds)` keeps its signature and checks only for the first hit. Both methods now read parked server levels and skip missing chunks on either side without loading them. Do not interpret `Some(false)` or a completed empty visit as proof that every chunk was loaded. Neither method counts entities or the world border.
+
+To build your own immutable shape, use `VoxelShape::try_from_boxes(&boxes)`, with finite ordered `[min_x, min_y, min_z, max_x, max_y, max_z]` coordinates, or `VoxelShape::empty()` for no geometry. Handle `VoxelShapeError::InvalidBounds` for invalid coordinates and `VoxelShapeError::Unrepresentable` for an unrepresentable union. `is_empty()` reports no occupied volume; `boxes()` yields the occupied boxes without allocating a list.
+'''

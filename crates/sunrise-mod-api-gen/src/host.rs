@@ -512,8 +512,7 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
 /// Generate every area impl explicitly. Full-path calls plus a hard recursion lint
 /// refuse a missing inherent implementation instead of inheriting a trait default.
 pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
-    // The gated methods with neither a typed refusal nor an optional callback:
-    // a refused call unwinds out of them (#3123).
+    // A gated method without a typed refusal or #[decline_unavailable] unwinds on refusal (#3123).
     let mut unwinding = std::collections::BTreeSet::new();
     let refusals = refusal_errors(root)?;
     let mut code = String::from(
@@ -657,8 +656,12 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         .iter()
                         .any(|attr| attr.path().is_ident("decline_unavailable"));
                     let access = if decline {
+                        let refusal = match &entry.sig.output {
+                            syn::ReturnType::Default => "return;",
+                            syn::ReturnType::Type(_, _) => "return None;", // host_area requires Option
+                        };
                         format!(
-                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return; }}"
+                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ {refusal} }}"
                         )
                     } else if let Some(error) = refusal_shaped(&entry.sig.output, &refusals) {
                         let error = error.to_token_stream();
@@ -752,9 +755,9 @@ fn refusal_shaped<'a>(
 /// only shrinks: `tools/ci/check_unwinding_methods.py` refuses a line added since the base.
 const UNWINDING_METHODS: &str = "crates/sunrise-mod-api-gen/unwinding-methods.txt";
 
-/// Without a typed refusal or a callback it can decline to invoke, a gated method can only
-/// refuse a wrong-phase call by unwinding. A new one is refused unless it is listed; a listed
-/// one that has gained a refusal or is gone must leave the list.
+/// A gated method without a typed refusal or `#[decline_unavailable]` can only refuse a
+/// wrong-phase call by unwinding. A listed method that gains a refusal or is removed must
+/// leave the list.
 fn check_unwinding(
     root: &Path,
     unwinding: &std::collections::BTreeSet<String>,

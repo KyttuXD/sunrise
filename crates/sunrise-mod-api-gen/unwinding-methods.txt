@@ -522,8 +522,6 @@ level_collision::level_block_face_sturdy
 level_collision::level_block_floor_height
 level_collision::level_block_shape
 level_collision::level_clip
-level_collision::level_collision_boxes
-level_collision::level_has_collisions
 level_collision::level_line_of_sight
 level_datapacks::level_datapack_entries
 level_datapacks::level_datapack_read

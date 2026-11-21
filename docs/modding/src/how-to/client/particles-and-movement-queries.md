@@ -101,11 +101,36 @@ horizontal-collision and sprinting results. It refuses stale or inaccessible pla
 dead players, spectators, riders and invalid numeric input. A supplied velocity is
 input to the prediction, not a write to the player.
 
-`LevelRef::collision_boxes` reads block collision boxes within a finite, ordered
-axis-aligned box. It excludes entity and border collisions. A refused level or a
-query covering more than 1,000,000 cells returns `None`; a valid query with no
-collisions returns `Some` containing an empty vector. Keep queries bounded rather
-than scanning a whole level each tick.
+`LevelRef::visit_block_collisions` lends each intersecting block's `&VoxelShape`
+in vanilla scan order, without clipping the shape to your query box. It reads
+loaded chunks only, skipping missing ones, and ignores entities and the world
+border. The query works on an open server level (including a parked one) or the
+client's own or viewed level. If you only need to know whether there is a hit,
+use `level.has_collisions(host, bounds)`.
+
+```rust,ignore
+use std::ops::ControlFlow;
+
+let bounds = [10.25, 64.25, 20.25, 10.75, 65.0, 20.75];
+let mut first = None;
+let outcome = level.visit_block_collisions(host, bounds, &mut |shape| {
+    first = Some(shape.clone());
+    ControlFlow::Break(())
+});
+if let (Some(ControlFlow::Break(())), Some(shape)) = (outcome, first) {
+    for [x0, y0, z0, x1, y1, z1] in shape.boxes() {
+        // These are the occupied boxes of the full shape, in world coordinates.
+    }
+}
+```
+
+Return `ControlFlow::Continue(())` to visit more shapes. `Some(Continue(()))` means
+completion, including no hits; `Some(Break(()))` means no further blocks were read.
+An unavailable level, invalid bounds or a query error returns `None`. Clone a shape
+only if you need it after the callback; `shape.boxes()` borrows it and allocates no
+list. For a shape of your own, use `VoxelShape::try_from_boxes(&boxes)`: it unions
+finite, ordered boxes and returns an error for invalid geometry or an
+unrepresentable result.
 
 `LevelRef::block_shape(host, state, pos, kind)` reads an explicit `BlockState`'s
 outline or collision boxes with an empty context at a position in that level.

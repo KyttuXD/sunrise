@@ -3,6 +3,7 @@
 use crate::game::Game;
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
 use mod_api::*;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
 
@@ -141,6 +142,19 @@ fn each_level_answers_with_its_own_published_shape() {
             game.level_block_shape(overworld, state, pos, BlockShapeKind::Collision),
             Some(vec![HALF])
         );
+        let bounds = [2.25, 64.125, 2.25, 2.75, 64.375, 2.75];
+        for (level, top) in [(nether, 64.25), (overworld, 64.5)] {
+            let mut boxes = Vec::new();
+            assert_eq!(
+                level.visit_block_collisions(game, bounds, &mut |shape| {
+                    boxes.extend(shape.boxes());
+                    ControlFlow::Continue(())
+                }),
+                Some(ControlFlow::Continue(()))
+            );
+            assert_eq!(boxes, [[2.0, 64.0, 2.0, 3.0, top, 3.0]]);
+            assert_eq!(level.has_collisions(game, bounds), Some(true));
+        }
     });
 }
 
@@ -200,10 +214,15 @@ fn collision_selection_and_support_read_the_published_shape() {
         )
         .unwrap();
         assert_eq!(66.0 + moved.y, 64.5, "it lands on the published top");
+        let mut boxes = Vec::new();
         assert_eq!(
-            game.level_collision_boxes(level, [2.0, 64.0, 2.0, 3.0, 65.0, 3.0]),
-            Some(vec![[2.0, 64.0, 2.0, 3.0, 64.5, 3.0]])
+            level.visit_block_collisions(game, [2.0, 64.0, 2.0, 3.0, 65.0, 3.0], &mut |shape| {
+                boxes.extend(shape.boxes());
+                ControlFlow::Continue(())
+            }),
+            Some(ControlFlow::Continue(()))
         );
+        assert_eq!(boxes, [[2.0, 64.0, 2.0, 3.0, 64.5, 3.0]]);
         let down = |game: &Game<'_>, blocks| {
             game.level_clip(
                 level,

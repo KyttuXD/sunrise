@@ -32,3 +32,4 @@ pub(crate) mod prepared_drops;
 pub(crate) mod rail_shape;
 pub(crate) mod types;
 pub(crate) mod unresolved_fluid;
+pub(crate) mod voxel_shape;

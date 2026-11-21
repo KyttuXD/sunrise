@@ -71,9 +71,10 @@ machine that turns an input into a table's roll. The context is the one `/loot â
 `loot_drops` event. None for a table that isn't there.
 
 `fluid_shape(host, pos)` is `FluidState.getShape`: no box for no fluid, else one block-local box
-up to the fluid's height, a full block under the same fluid. `has_collisions(host, aabb)` asks
-whether any block collision shape is in a box, with `collision_boxes`'s walk and limits and
-without building the list; entities and the world border are not part of it.
+up to the fluid's height, a full block under the same fluid. `visit_block_collisions(host, aabb,
+&mut visit)` lends the full world-space shape of each intersecting block in vanilla collision
+order. `has_collisions(host, aabb)` checks for the first hit without collecting geometry.
+Both skip missing chunks and ignore entities and the world border.
 
 Use `ray_trace_nearest_entity(host, from, to, margin, exclude, &mut accept)` if you
 only need one hit. It calls `accept` once per geometric hit in `visit_entities_in` order,

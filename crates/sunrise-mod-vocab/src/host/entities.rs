@@ -25,7 +25,7 @@ pub trait EntitiesHost {
     /// the level it shows, whatever the server calls it, and each level the
     /// server opened for viewing (`sunrise:levels`) while that view is open. A
     /// viewed level's handle answers its block reads from its own world:
-    /// `block_state`, `block`, `block_property`, `clip`, `collision_boxes`,
+    /// `block_state`, `block`, `block_property`, `clip`, `visit_block_collisions`,
     /// `has_collisions`, and the fluid reads built on `block_state`
     /// (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
     /// `fluid_can_be_replaced_with`). Its other reads, its entity reads and
