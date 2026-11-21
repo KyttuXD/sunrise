@@ -121,6 +121,8 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_part_collect =
+            hook.scope.is_some() && hook.isolate && contract == Contract::Collect;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +507,13 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                let isolated_surface =
+                    isolated_part_collect && out == Some(name.as_str()) && surfaces.contains(name);
+                if hook.isolate
+                    && !isolated_surface
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -590,6 +598,15 @@ pub(super) fn emit<'a>(
         if inert_signal {
             dispatch_params.push("inert: &mut bool".into());
         }
+        if isolated_part_collect
+            && (!hook.event_per_listener
+                || rollback.len() != 1
+                || !surfaces.iter().any(|field| Some(field.as_str()) == out))
+        {
+            return Err(format!(
+                "{name}: an isolated scoped collector only lends one output surface"
+            ));
+        }
         let (generics, elided) = match (lifetimes.a, lifetimes.b) {
             (_, true) => ("<'a, 'b>", "<'_, '_>"),
             (true, false) => ("<'a>", "<'_>"),
@@ -597,6 +614,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if isolated_part_collect {
+            "// no wire: this event lends an in-process output surface.\n"
         } else {
             ""
         };
@@ -1317,6 +1336,10 @@ pub(super) fn emit<'a>(
                     format!(
                         "'dispatch_parts: {{ for {part_item} in super::entered_parts(&{part_list}[..{inert_owner}.unwrap_or({part_list}.len())], \"{name}\") {{ {} }} if {inert_owner}.is_some() {{ {inert} }} }}",
                         call(&part_item, "break 'dispatch_parts"),
+                    )
+                } else if isolated_part_collect {
+                    format!(
+                        "for (mod_id, {part_item}) in super::runtime::entered_isolated_parts({part_list}, HookId::{hook_id}, \"{name}\") {{ {local_event} super::runtime::run_isolated_listener(HookId::{hook_id}, mod_id, \"{name}\", || super::runtime::refusable(contained, || {part_item}.{name}({invoke}))); }}"
                     )
                 } else {
                     format!(

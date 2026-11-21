@@ -8,25 +8,27 @@ level, position, block state and `include_data`, true when a creative player pic
 
 `BlockPart::break_progress_positions(host, event)` supplies extra positions for a
 client crack, with a mutable `ClientHost`. The event identifies the client `level`,
-original `pos`, cracked `state` and `progress` (0 through 9). Append positions to
-`event.positions`, which starts empty. The original position is drawn separately.
-For example, a multi-block can add its other three cells so all four show the same
-crack stage. NeoForge has no counterpart to this vanilla
-`LevelRenderer.destroyBlockProgress` moment.
+original `pos`, cracked `state` and `progress` (0 through 9). Call
+`(event.add_position)(pos)` for each extra position in the supplied level. The
+original position is already included. For example, a four-block structure can
+submit its other three cells so they all show the same crack stage. NeoForge has
+no counterpart to this vanilla `ClientLevel.destroyBlockProgress` moment.
 
 The part runs only on the cracked state's subscribed block, when a crack is set
 or changes stage/position, for both local prediction and other players' cracks.
 Repeated updates at the same stage refresh the remote crack's expiry without
 asking again. Rendering reads the stored answer, never your callback. Clearing
-the crack, closing/resetting the client level or expiring a remote crack after
-400 ticks removes its extras too. Local extras disappear with local mining.
+the crack, closing or resetting the client level, or reaching the remote crack's
+expiry (`ClientLevel.removeBlockBreakingProgress`) removes the extra positions too.
+Local extras disappear with local mining.
 
-These are **display bounds**, not interaction limits: at most 64 distinct extras,
-each within Euclidean distance 8 blocks of the original position. `BlockPos`
-coordinates refer to the supplied level. The original position, duplicates,
-out-of-range values and extras past the limit are dropped with a debug log,
-never a panic. Existing render-distance and block-overlay eligibility filters
-still apply. Overlapping cracks use the highest stage for each cell. The callback
+The renderer applies the same camera-distance and block-overlay eligibility
+checks to the original position and every extra position. Repeated submissions
+and overlapping cracks draw one overlay per cell, using the highest stage.
+Submitted positions stay with that stage even if the part later fails in the
+same call. A panic disables this mod's crack-position callbacks for the session,
+logs the error, and shows a toast naming the mod. Other parts still run. A
+refusal is reported each time without disabling the callback. The callback
 changes neither break speed nor which blocks break, and never runs on a server.
 
 ## Random display ticks

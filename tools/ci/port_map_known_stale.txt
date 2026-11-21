@@ -17,7 +17,6 @@ tools/port_map/classes-05.tsv	PersistentEntitySectionManager.addWorldGenChunkEnt
 tools/port_map/classes-08.tsv	MapIndex.getNextMapId	crates/sunrise-client/src/game/blocks/maps/mod.rs::Game::next_map_id
 tools/port_map/client-001.tsv	ClientExplosionTracker.addParticle	crates/sunrise-client-render/src/particles.rs::ParticleEngine::tick_explosions_with
 tools/port_map/client-001.tsv	ClientExplosionTracker.track	crates/sunrise-client-render/src/particles.rs::ParticleEngine::track_explosion
-tools/port_map/client-001.tsv	ClientLevel.destroyBlockProgress	crates/sunrise-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress
 tools/port_map/client-001.tsv	ClientLevel.removeBlockBreakingProgress	crates/sunrise-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress
 tools/port_map/client-001.tsv	ClientLevel.removeProgress	crates/sunrise-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress
 tools/port_map/client-001.tsv	ClientLevel.setBlock	crates/sunrise-client/src/game/network/remote/mod.rs::Game::set_block
@@ -82,7 +81,6 @@ tools/port_map/client2-002.tsv	SubmitNodeStorage.drainPhases	crates/sunrise-clie
 tools/port_map/client2-002.tsv	ViewArea.releaseAllBuffers	crates/sunrise-client-render/src/gfx.rs::Renderer::clear_sections
 tools/port_map/client2-002.tsv	WorldBorderRenderer.renderOit	crates/sunrise-client-render/src/gfx.rs::Renderer::draw_frame
 tools/port_map/client2-003.tsv	FeatureRenderDispatcher.renderAllFeatures	crates/sunrise-client-render/src/gfx.rs::Renderer::draw_frame
-tools/port_map/client2-003.tsv	LevelExtractor.extractBlockDestroyAnimation	crates/sunrise-client/src/game.rs::Game::destroy_block_progress
 tools/port_map/client2-003.tsv	LevelExtractor.setLevel	crates/sunrise-client/src/game/render_settings.rs::Game::all_sections_changed
 tools/port_map/client2-003.tsv	SectionRenderDispatcher.RenderSection.addSectionBuffersToUberBuffer	crates/sunrise-client-render/src/gfx.rs::Renderer::upload_mesh
 tools/port_map/client2-003.tsv	SectionRenderDispatcher.RenderSection.checkSectionMesh	crates/sunrise-client-render/src/gfx.rs::Renderer::upload
@@ -137,7 +135,6 @@ tools/port_map/client2-019.tsv	SelectWorldScreen.createFooterButtons	crates/sunr
 tools/port_map/client2-019.tsv	SelectWorldScreen.init	crates/sunrise-client/src/title.rs::Title::buttons
 tools/port_map/client2-019.tsv	SelectWorldScreen.updateButtonStatus	crates/sunrise-client/src/title.rs::Title::buttons
 tools/port_map/final-001.tsv	ServerStatsCounter.toJson	crates/sunrise-client/src/game/interface/stats.rs::Stats::write
-tools/port_map/game-001.tsv	BlockDestructionProgress.compareTo	crates/sunrise-client/src/game/frame_geometry.rs::Game::cracks
 tools/port_map/game-001.tsv	ChunkHolder.broadcastBlockEntity	crates/sunrise-client/src/lan/hub.rs::Hub::broadcast_block_changes
 tools/port_map/game-001.tsv	ChunkHolder.hasChangesToBroadcast	crates/sunrise-client/src/lan/hub.rs::Hub::broadcast_block_changes
 tools/port_map/game-001.tsv	ChunkMap.getPlayers	crates/sunrise-client/src/lan/hub.rs::Hub::broadcast_block_changes

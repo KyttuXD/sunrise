@@ -175,11 +175,10 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global cancel hook, or a global collect hook answered by mod, whose dispatch runs every
-    /// listener inside `catch_unwind`: one that unwinds is switched off for this hook for the
-    /// session. A cancel hook rolls outputs back to the requested values and stops (#2414).
-    /// A collector receives at most one returned value per registration, and later listeners
-    /// still run after a failure.
+    /// Run each listener inside a panic boundary: a mod that unwinds is switched off for this
+    /// hook for the session. A global cancel hook rolls outputs back and stops (#2414).
+    /// A global answered collector takes one returned value per listener; a scoped collector
+    /// lends an output surface. Other listeners still run after a collector fails.
     pub isolate: bool,
     /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
     /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
@@ -512,19 +511,16 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
-        // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
         let isolate = api.isolate.unwrap_or(false);
-        if isolate
-            && (scope.is_some()
-                || !(api.contract == Contract::Cancel
-                    || api.contract == Contract::Collect && answered_by_mod))
-        {
+        let can_isolate = if scope.is_some() {
+            api.contract == Contract::Collect && entry.event_per_listener && entry.inert.is_none()
+        } else {
+            api.contract == Contract::Cancel || api.contract == Contract::Collect && answered_by_mod
+        };
+        if isolate && !can_isolate {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
+                error: "isolate requires a global cancel hook, a global collect hook answered by mod, or a scoped collect hook with event_per_listener and no inert answer".into(),
             });
         }
         if let Some(validator) = &api.output_validator

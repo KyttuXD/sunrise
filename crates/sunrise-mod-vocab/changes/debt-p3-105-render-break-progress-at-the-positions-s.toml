@@ -1,0 +1,9 @@
+ids = [
+    "hook:break_progress_positions",
+    "hook:break_progress_positions.positions",
+    "hook:break_progress_positions.add_position",
+    "type:BreakProgressPositionsEvent.positions",
+    "type:BreakProgressPositionsEvent.add_position",
+]
+why = "dbbced0a60a stored replies with the crack so callbacks run at stage updates, not during rendering. Version 2 keeps that timing but drops the eight-block radius around the cracked block and the 64-position trim: submit positions one at a time and let normal rendering decide what draws. Vanilla ClientLevel.destroyBlockProgress and ClientLevel.removeBlockBreakingProgress govern the crack's lifetime; LevelExtractor.extractBlockDestroyAnimation uses the 32-block camera distance and the highest stage at each position, as ordered by BlockDestructionProgress.compareTo. NeoForge's ClientLevel and LevelExtractor patches do not change either method. Sunrise isolates panics to the mod's callback for the session, logs and toasts the error, and reports each ordinary refusal without disabling the callback."
+migrate = "Keep the same BlockPart::break_progress_positions(host, event) method and call (event.add_position)(pos) instead of event.positions.push(pos). Replace event.positions.extend(positions) with a loop calling (event.add_position)(pos) once per BlockPos. To filter or change your answer, do so before submission: there is no editable reply list, and submissions made before a failure still belong to that stage. The original position is included automatically; normal culling and overlay checks apply to every position, and overlapping cracks draw the highest live stage."

@@ -80,15 +80,12 @@ mod tests {
         BlockPart, BlockPos, BreakProgressPositionsEvent, ClientHost, Hooks, ModEntry, Registrar,
         RegistrationContext,
     };
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
+    use std::sync::{Arc, Mutex};
     use sunrise_client::chunk::Chunk;
 
     struct ExtraPositions {
         calls: Arc<Mutex<Vec<u8>>>,
-        invalid: Arc<AtomicBool>,
+        extra: Vec<[i32; 3]>,
         reenter: bool,
     }
     #[mod_api::sunrise_part]
@@ -114,33 +111,21 @@ mod tests {
                     i32::from(event.progress),
                 ));
             }
-            event.positions.extend([
+            for position in [
                 BlockPos::new(p.x + 1, p.y, p.z),
                 BlockPos::new(p.x, p.y, p.z + 1),
                 BlockPos::new(p.x + 1, p.y, p.z + 1),
-            ]);
-            if self.invalid.load(Ordering::Relaxed) {
-                event.positions.extend([
-                    p,
-                    BlockPos::new(p.x + 1, p.y, p.z),
-                    BlockPos::new(p.x + 8, p.y, p.z),
-                    BlockPos::new(p.x + 9, p.y, p.z),
-                    BlockPos::new(p.x + 8, p.y + 8, p.z),
-                    BlockPos::new(i32::MIN, i32::MAX, i32::MIN),
-                ]);
-                for x in -7..=7 {
-                    for z in -7..=7 {
-                        if x * x + z * z <= 64 {
-                            event.positions.push(BlockPos::new(p.x + x, p.y, p.z + z));
-                        }
-                    }
-                }
+            ] {
+                (event.add_position)(position);
+            }
+            for &[x, y, z] in &self.extra {
+                (event.add_position)(BlockPos::new(x, y, z));
             }
         }
     }
     struct Register {
         calls: Arc<Mutex<Vec<u8>>>,
-        invalid: Arc<AtomicBool>,
+        extra: Vec<[i32; 3]>,
         reenter: bool,
     }
     #[mod_api::__subscriptions]
@@ -151,7 +136,7 @@ mod tests {
                 key,
                 ExtraPositions {
                     calls: self.calls.clone(),
-                    invalid: self.invalid.clone(),
+                    extra: self.extra.clone(),
                     reenter: self.reenter,
                 },
             );
@@ -160,14 +145,13 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
-    fn crack_positions_are_scoped_stored_bounded_and_cleared_for_both_sources() {
+    fn crack_positions_are_scoped_stored_and_cleared_for_both_sources() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let invalid = Arc::new(AtomicBool::new(false));
         let mods = vec![ModEntry::new(
             "cracks",
             Box::new(Register {
                 calls: calls.clone(),
-                invalid: invalid.clone(),
+                extra: Vec::new(),
                 reenter: false,
             }),
         )]
@@ -204,11 +188,11 @@ mod tests {
                 assert!(rendered.iter().all(|(_, uv)| *uv == [sprite.u0, sprite.v0]));
                 let mut expected = four.map(|p| (p, 2)).to_vec();
                 expected.sort_unstable();
-                let mut drawn = game.crack_stages();
+                let mut drawn = game.crack_stages(camera);
                 drawn.sort_unstable();
                 assert_eq!(drawn, expected);
                 for _ in 0..3 {
-                    assert_eq!(game.crack_stages().len(), 4);
+                    assert_eq!(game.crack_stages(camera).len(), 4);
                 }
                 game.destroy_block_progress(10, pos, 2);
                 assert_eq!(
@@ -217,7 +201,11 @@ mod tests {
                     "frames and unchanged stages never redispatch"
                 );
                 game.destroy_block_progress(10, pos, 7);
-                assert!(game.crack_stages().iter().all(|(_, stage)| *stage == 7));
+                assert!(
+                    game.crack_stages(camera)
+                        .iter()
+                        .all(|(_, stage)| *stage == 7)
+                );
                 let rendered = game.cracks(camera);
                 assert_eq!(rendered.len(), 4);
                 let sprite = &game.gui.atlas.sprites["block/destroy_stage_7"];
@@ -225,7 +213,7 @@ mod tests {
                 assert_eq!(*calls.lock().unwrap(), [2, 7]);
                 for clear in [-1, 10] {
                     game.destroy_block_progress(10, pos, clear);
-                    assert!(game.crack_stages().is_empty());
+                    assert!(game.crack_stages(camera).is_empty());
                 }
                 let mining = |progress| {
                     Some(Mining {
@@ -238,46 +226,36 @@ mod tests {
                 };
                 game.set_client_mining(mining(0.35));
                 assert_eq!(
-                    game.crack_stages().len(),
+                    game.crack_stages(camera).len(),
                     4,
                     "local prediction includes the extras"
                 );
                 assert_eq!(game.cracks(camera).len(), 4);
-                assert!(game.crack_stages().iter().all(|(_, stage)| *stage == 3));
+                assert!(
+                    game.crack_stages(camera)
+                        .iter()
+                        .all(|(_, stage)| *stage == 3)
+                );
                 game.set_client_mining(mining(0.39));
                 assert_eq!(*calls.lock().unwrap(), [2, 7, 3]);
                 game.set_client_mining(mining(0.45));
-                assert!(game.crack_stages().iter().all(|(_, stage)| *stage == 4));
+                assert!(
+                    game.crack_stages(camera)
+                        .iter()
+                        .all(|(_, stage)| *stage == 4)
+                );
                 game.set_client_mining(None);
-                assert!(game.crack_stages().is_empty());
+                assert!(game.crack_stages(camera).is_empty());
                 game.world.set(9, 64, 4, dirt).unwrap();
                 game.destroy_block_progress(11, [9, 64, 4], 1);
-                assert_eq!(game.crack_stages(), [([9, 64, 4], 1)]);
+                assert_eq!(game.crack_stages(camera), [([9, 64, 4], 1)]);
                 assert_eq!(
                     *calls.lock().unwrap(),
                     [2, 7, 3, 4],
                     "an unsubscribed state is not dispatched"
                 );
                 game.destroy_block_progress(11, [9, 64, 4], -1);
-                invalid.store(true, Ordering::Relaxed);
                 game.destroy_block_progress(10, pos, 5);
-                let drawn = game.crack_stages();
-                assert_eq!(drawn.len(), 65, "base plus at most 64 display extras");
-                assert_eq!(
-                    drawn
-                        .iter()
-                        .map(|c| c.0)
-                        .collect::<std::collections::HashSet<_>>()
-                        .len(),
-                    65
-                );
-                assert!(
-                    drawn.contains(&([12, 64, 4], 5)),
-                    "eight-block boundary is included"
-                );
-                assert!(!drawn.iter().any(|(p, _)| {
-                    [[13, 64, 4], [12, 72, 4], [i32::MIN, i32::MAX, i32::MIN]].contains(p)
-                }));
                 game.world.game_time += 100;
                 let calls_before = calls.lock().unwrap().len();
                 game.destroy_block_progress(10, pos, 5);
@@ -296,8 +274,163 @@ mod tests {
                 game.reset_client_world(0);
                 assert!(game.destroying.is_empty());
                 assert!(game.mining.is_none());
-                assert!(game.crack_stages().is_empty());
+                assert!(game.crack_stages(camera).is_empty());
             })
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn supplied_cracks_follow_camera_culling_and_keep_the_highest_live_stage() {
+        let origin = [4, 64, 4];
+        let distant = [40, 64, 4];
+        // 72 distinct extras in view, including cells more than eight blocks from the origin.
+        let patch = (5..=13).flat_map(|x| (4..=11).map(move |z| [x, 64, z]));
+        let expected = [origin, [4, 64, 5]]
+            .into_iter()
+            .chain(patch)
+            .collect::<Vec<_>>();
+        let mods = vec![ModEntry::new(
+            "wide-cracks",
+            Box::new(Register {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                extra: expected
+                    .iter()
+                    .copied()
+                    .chain([origin, distant, [i32::MIN, i32::MAX, i32::MIN]])
+                    .collect(),
+                reenter: false,
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _server = logged_client(game);
+                for cx in [0, 2] {
+                    game.world
+                        .chunks
+                        .insert((cx, 0), Arc::new(Chunk::empty(cx, 0)));
+                }
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                for &[x, y, z] in expected.iter().chain([&distant]) {
+                    game.world.set(x, y, z, stone).unwrap();
+                }
+                game.settings.improved_transparency = false;
+                let camera = glam::DVec3::new(4.5, 64.5, 4.5);
+                game.destroy_block_progress(1, origin, 6);
+                game.destroy_block_progress(2, origin, 3);
+                for (breaker, stage) in [(1, 6), (2, 3)] {
+                    let rendered = game.cracks(camera);
+                    let mut drawn: Vec<_> = rendered.iter().map(|(pos, _)| *pos).collect();
+                    drawn.sort_unstable();
+                    assert_eq!(drawn, expected);
+                    let sprite = &game.gui.atlas.sprites[&format!("block/destroy_stage_{stage}")];
+                    let uv = [sprite.u0, sprite.v0];
+                    assert!(rendered.iter().all(|(_, actual)| *actual == uv));
+                    let moved_camera = glam::DVec3::new(40.5, 64.5, 4.5);
+                    assert!(game.cracks(moved_camera).contains(&(distant, uv)));
+                    game.destroy_block_progress(breaker, origin, -1);
+                }
+                assert!(game.cracks(camera).is_empty());
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn crack_part_panic_disables_only_the_faulting_mod_callback() {
+        // The error toast queue is process-wide; run only this test in the child.
+        const CHILD: &str = "SUNRISE_CRACK_PART_PANIC_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "game::client_cracks::tests::crack_part_panic_disables_only_the_faulting_mod_callback",
+                    "--include-ignored",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        struct FaultingPart;
+        #[mod_api::sunrise_part]
+        impl BlockPart for FaultingPart {
+            fn break_progress_positions(
+                &self,
+                _: &mut dyn ClientHost,
+                event: &mut BreakProgressPositionsEvent<'_>,
+            ) {
+                (event.add_position)(BlockPos::new(16, 64, 4));
+                panic!("fixture crack panic");
+            }
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for FaultingPart {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                let key = r.block_key("minecraft:stone");
+                r.block_part(key, FaultingPart);
+            }
+        }
+
+        let healthy = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![
+            ModEntry::new("faulting-crack", Box::new(FaultingPart)),
+            ModEntry::new(
+                "healthy-crack",
+                Box::new(Register {
+                    calls: healthy.clone(),
+                    extra: Vec::new(),
+                    reenter: false,
+                }),
+            ),
+        ]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _server = logged_client(game);
+                for cx in [0, 1] {
+                    game.world
+                        .chunks
+                        .insert((cx, 0), Arc::new(Chunk::empty(cx, 0)));
+                }
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                let origin = [4, 64, 4];
+                let submitted = [16, 64, 4];
+                for [x, y, z] in [origin, submitted] {
+                    game.world.set(x, y, z, stone).unwrap();
+                }
+                let camera = glam::DVec3::new(4.5, 64.5, 4.5);
+                game.destroy_block_progress(1, origin, 3);
+                assert!(game.crack_stages(camera).contains(&(submitted, 3)));
+                game.destroy_block_progress(1, origin, 4);
+                assert!(
+                    !game
+                        .crack_stages(camera)
+                        .iter()
+                        .any(|(pos, _)| *pos == submitted)
+                );
+                assert_eq!(*healthy.lock().unwrap(), [3, 4]);
+
+                let notices = mod_api::__private::game::take_callback_panic_notices();
+                assert_eq!(notices.len(), 1);
+                assert_eq!(notices[0].mod_id, "faulting-crack");
+                assert_eq!(notices[0].operation, "break_progress_positions");
+                assert!(notices[0].message.contains("fixture crack panic"));
+            });
         });
     }
 
@@ -309,7 +442,7 @@ mod tests {
             "reentrant-cracks",
             Box::new(Register {
                 calls: calls.clone(),
-                invalid: Arc::new(AtomicBool::new(false)),
+                extra: Vec::new(),
                 reenter: true,
             }),
         )]

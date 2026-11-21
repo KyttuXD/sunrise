@@ -172,6 +172,10 @@ pub fn isolated_failures() -> u64 {
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     let (entered, trapped) = LISTENER_SERIAL.get();
     LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    disable_panicking_listener(hook, id);
+}
+
+fn disable_panicking_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -182,6 +186,29 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     installed
         .poison_free
         .store(false, std::sync::atomic::Ordering::Release);
+}
+
+/// Run one listener, reporting each refusal and disabling this callback only after a panic.
+/// The return value reports completion for callers that publish outputs after dispatch.
+pub(crate) fn run_isolated_listener(
+    hook: generated::HookId,
+    id: &'static str,
+    name: &'static str,
+    call: impl FnOnce() -> Result<(), crate::world::phase_refusal::PhaseRefusal>,
+) -> bool {
+    match crate::callback_owner::contain_unwind(call) {
+        Ok(Ok(())) => true,
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            false
+        }
+        Err(message) => {
+            // This listener owns no action to roll back, so do not signal a cancel-hook failure.
+            disable_panicking_listener(hook, id);
+            crate::callback_owner::report_callback_panic(id, "hook", name, message);
+            false
+        }
+    }
 }
 
 /// Whether `id`'s listener of `hook` is poisoned for the session.
@@ -463,13 +490,29 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
 ) -> impl Iterator<Item = &'a P> {
+    entered_part_entries(parts, hook, |_| true).map(|attached| &*attached.part)
+}
+
+pub(crate) fn entered_isolated_parts<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook_id: generated::HookId,
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a P)> {
+    entered_part_entries(parts, hook, move |mod_id| !poisoned(hook_id, mod_id))
+        .map(|attached| (attached.mod_id, &*attached.part))
+}
+
+fn entered_part_entries<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+    allow: impl Fn(&str) -> bool + 'a,
+) -> impl Iterator<Item = &'a Attached<P>> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
         .iter()
-        .filter(|attached| mod_index_on(attached.mod_index))
-        .map(move |attached| {
-            // The last part's mark goes first, as in `Entered`.
+        .filter(move |attached| mod_index_on(attached.mod_index) && allow(attached.mod_id))
+        .inspect(move |attached| {
             scope.replace(
                 &mut guard,
                 crate::content::crash::ModCall {
@@ -478,7 +521,6 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            &*attached.part
         })
 }
 

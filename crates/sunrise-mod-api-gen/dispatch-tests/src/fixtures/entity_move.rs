@@ -190,5 +190,36 @@ mod root {
                     })
             })
         }
+
+        pub(super) fn entered_isolated_parts<'a, P: ?Sized>(
+            parts: &'a [&'a P],
+            hook_id: super::HookId,
+            hook: &'static str,
+        ) -> impl Iterator<Item = (&'static str, &'a P)> {
+            // The shared fixture stores bare part references without owning-mod metadata.
+            const OWNER: &str = "fixture-part";
+            super::entered_parts(parts, hook)
+                .filter(move |_| !poisoned(hook_id, OWNER))
+                .map(|part| (OWNER, part))
+        }
+
+        pub(super) fn run_isolated_listener(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            call: impl FnOnce() -> Result<(), Refusal>,
+        ) -> bool {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+                Ok(Ok(())) => true,
+                Ok(Err(refusal)) => {
+                    refusal.report_each();
+                    false
+                }
+                Err(_) => {
+                    poison(hook, id);
+                    false
+                }
+            }
+        }
     }
 }

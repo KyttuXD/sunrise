@@ -94,7 +94,7 @@ impl Game<'_> {
         self.level_event_at(id, pos, direction as i32);
     }
 
-    /// `LevelRenderer.destroyBlockProgress`: any stage outside 0..10 clears the breaker.
+    /// `ClientLevel.destroyBlockProgress`: any stage outside 0..10 clears the breaker.
     pub(crate) fn destroy_block_progress(&mut self, breaker: i32, pos: [i32; 3], progress: i32) {
         self.expire_client_cracks();
         if (0..10).contains(&progress) {

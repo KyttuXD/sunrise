@@ -17,7 +17,9 @@ commit and aborting sends nothing. This is distinct from
 `level.set_client_break_progress(client_host, breaker, pos, stage)`, which draws
 only in the local client's view and requires `&mut dyn ClientHost`, not a server
 host. Local cracks expire after 400 ticks without an update and clear when the
-client changes levels or disconnects.
+client changes levels or disconnects. A block part can [submit extra positions
+for the same crack](../../concepts/parts/block-parts.md#breaking-crack-display); those
+positions share its stage and lifetime.
 
 ## Read tool speed
 

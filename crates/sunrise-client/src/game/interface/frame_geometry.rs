@@ -5,12 +5,17 @@ use super::*;
 use sunrise_client::gfx::CelestialBody;
 
 impl Game<'_> {
-    /// Stored local and remote display positions, keeping the furthest stage on each cell.
-    pub(super) fn crack_stages(&self) -> Vec<([i32; 3], u32)> {
-        let mut stages: Vec<([i32; 3], u32)> = Vec::new();
-        let mut add = |pos: [i32; 3], stage: u32| match stages.iter_mut().find(|c| c.0 == pos) {
-            Some(c) => c.1 = c.1.max(stage),
-            None => stages.push((pos, stage)),
+    /// `LevelExtractor.extractBlockDestroyAnimation`: visit stored local and remote
+    /// positions within 32 blocks of the camera, keeping the highest stage per cell
+    /// (`BlockDestructionProgress.compareTo`).
+    pub(super) fn crack_stages(&self, camera: glam::DVec3) -> Vec<([i32; 3], u32)> {
+        let mut stages = Vec::new();
+        let mut add = |pos: [i32; 3], stage: u32| {
+            let center =
+                glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])) + 0.5;
+            if (center - camera).length_squared() <= 1024.0 {
+                stages.push((pos, stage));
+            }
         };
         if let Some(m) = &self.mining
             && let Some(stage) = m.stage()
@@ -31,21 +36,17 @@ impl Game<'_> {
                 }
             }
         }
+        // Sort and group positions without scanning the growing list on each insertion.
+        stages.sort_unstable_by_key(|&(pos, stage)| (pos, std::cmp::Reverse(stage)));
+        stages.dedup_by_key(|(pos, _)| *pos);
         stages
     }
 
-    /// `renderBlockDestroyAnimation`: eligible cells within 32 blocks of the camera,
-    /// with each stage sprite's atlas origin. No hook is asked during extraction.
+    /// Overlay-eligible cells with each stage sprite's atlas origin. No hook is asked during extraction.
     pub(super) fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
         let names = crack_stage_names(self.settings.improved_transparency);
-        self.crack_stages()
+        self.crack_stages(camera)
             .into_iter()
-            .filter(|(pos, _)| {
-                let d = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
-                    + 0.5
-                    - camera;
-                d.length_squared() <= 1024.0
-            })
             .filter(|(pos, _)| {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res.facts().get(state).destroy_overlay
