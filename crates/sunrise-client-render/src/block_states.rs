@@ -1,10 +1,8 @@
 //! Every block state's facts and looks by its id, for a client mod drawing blocks or a map off the main thread
 //! (`native_block_states`; docs/native-mods.md): what the game knows of each state, what its model draws on each side
-//! and the texture behind each of those sprites. A copy, so the game's own tables can change shape under it.
-use crate::{
-    block_sprites::{BlockSprites, Lookup, SpriteRef},
-    streaming::WorkerContext,
-};
+//! and the texture behind each of those sprites. This owns a reference to its resource generation.
+use crate::{block_sprites::Lookup, streaming::WorkerContext};
+use mod_api::{BlockSpriteInfo, FaceSprite, SpriteRef};
 use std::{collections::HashMap, sync::Arc};
 use sunrise_items::blocks::{BlockFacts, MAP_COLORS, RenderShape};
 use sunrise_world::{
@@ -119,20 +117,20 @@ impl BlockStates {
             .map(|(i, facts)| (BlockStateId(i as u32), facts))
     }
 
-    /// What `state` draws on each side, as `native_block_sprites` says for a block by name; none for an id past the
-    /// last state.
-    pub fn sprites(&self, state: BlockStateId) -> Option<BlockSprites> {
-        self.get(state)?;
-        Some(Lookup::new(&self.context, self.split, &self.textures).state(state))
+    /// Lend what `state` draws on each side without retaining the faces.
+    pub fn visit_sprites<'a>(
+        &'a self,
+        state: BlockStateId,
+        visit: &mut dyn FnMut(mod_api::Direction, FaceSprite<'a>),
+    ) -> Option<BlockSpriteInfo> {
+        Lookup::new(&self.context, self.split, &self.textures).visit_state(state, visit)
     }
 
-    /// The texture `sprite` shows, by the name `native_texture_sprites` takes (`block/grass_block_top`; a mod's with
-    /// its namespace, `mymod:block/gear`).
+    /// The texture `sprite` shows, by the name drawing helpers take (`block/grass_block_top`;
+    /// a mod's with its namespace, `mymod:block/gear`). None for a different resource generation.
     pub fn texture(&self, sprite: SpriteRef) -> Option<&str> {
-        let layer = sprite
-            .array
-            .checked_mul(self.split)?
-            .checked_add(sprite.layer)?;
+        let (array, layer) = sprite.location(self.context.render.generation)?;
+        let layer = array.checked_mul(self.split)?.checked_add(layer)?;
         self.textures.get(&layer).map(String::as_str)
     }
 }
@@ -145,7 +143,6 @@ mod tests {
         mesher::MeshTables,
     };
     use std::{path::PathBuf, sync::OnceLock};
-    use sunrise_assets::model::Direction;
     use sunrise_world::fluid::FluidKind;
 
     /// Far fewer layers to an array than a GPU takes, so most sprites lie past array 0.
@@ -232,17 +229,19 @@ mod tests {
     fn a_face_names_its_texture() {
         let states = states();
         let id = parse_state(states.context.assets.registry, "grass_block").unwrap();
-        let grass = states.sprites(id).unwrap();
-        let top = grass.sides[Direction::Up as usize][0].sprite;
-        assert_eq!(states.texture(top), Some("block/grass_block_top"));
-        let north = &grass.sides[Direction::North as usize];
+        let mut top = None;
+        let mut north = Vec::new();
+        states
+            .visit_sprites(id, &mut |direction, face| match direction {
+                mod_api::Direction::Up => top = states.texture(face.sprite),
+                mod_api::Direction::North => north.push(states.texture(face.sprite).unwrap()),
+                _ => {}
+            })
+            .unwrap();
+        assert_eq!(top, Some("block/grass_block_top"));
         assert_eq!(
-            states.texture(north[0].sprite),
-            Some("block/grass_block_side")
-        );
-        assert_eq!(
-            states.texture(north[1].sprite),
-            Some("block/grass_block_side_overlay")
+            north,
+            ["block/grass_block_side", "block/grass_block_side_overlay"]
         );
     }
 }

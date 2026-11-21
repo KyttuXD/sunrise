@@ -714,7 +714,8 @@ impl StateModels {
         let mut models = Vec::new();
         self.each_seeded(state, seed, |(variant, model)| {
             models.push((variant, model))
-        })?;
+        })?
+        .ok_or("unbound gallery block state")?;
         Ok(models)
     }
     /// The models a block draws at `position`, into `out` (cleared first):
@@ -730,20 +731,24 @@ impl StateModels {
             out.push(&self.baked[*model as usize].1);
             return Ok(());
         }
-        self.each_seeded(state, position_seed(position), |(_, model)| out.push(model))
+        self.each_seeded(state, position_seed(position), |(_, model)| out.push(model))?
+            .ok_or_else(|| "unbound gallery block state".into())
     }
-    fn each_seeded<'a>(
+    /// Visit the selected models without collecting them. An unbound state has no selection.
+    pub(crate) fn each_seeded<'a>(
         &'a self,
         state: BlockStateId,
         seed: i64,
         mut f: impl FnMut(&'a (Variant, BakedModel)),
-    ) -> Result<()> {
-        let (choice, selected) = self.state(state).ok_or("unbound gallery block state")?;
+    ) -> Result<Option<()>> {
+        let Some((choice, selected)) = self.state(state) else {
+            return Ok(None);
+        };
         let mut random = LegacyRandom::new(seed);
         self.choices[*choice].for_each(selected, &mut random, |&model| {
             f(&self.baked[model as usize]);
         })?;
-        Ok(())
+        Ok(Some(()))
     }
     fn state(&self, state: BlockStateId) -> Option<&(usize, SelectedModels)> {
         self.states.get(state.0 as usize)?.as_ref()

@@ -62,7 +62,7 @@ impl BakedQuadSource for BakedModel {
     }
 }
 
-fn direction(face: FaceDirection) -> Direction {
+pub(crate) fn direction(face: FaceDirection) -> Direction {
     match face {
         FaceDirection::Down => Direction::Down,
         FaceDirection::Up => Direction::Up,

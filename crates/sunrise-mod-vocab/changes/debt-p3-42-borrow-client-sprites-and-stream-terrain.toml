@@ -1,0 +1,24 @@
+ids = [
+    "method:prelude::ClientRenderClientHost::block_sprites",
+    "method:prelude::ClientRenderClientHost::texture_sprites",
+    "method:prelude::ClientRenderClientHost::visit_block_sprites",
+    "method:prelude::ClientRenderClientHost::texture_sprite",
+    "type:BlockSprites",
+    "type:BlockSprites.sides",
+    "type:BlockSprites.particle",
+    "type:BlockSprites.cube",
+    "type:BlockSpriteInfo",
+    "type:FaceSprite",
+    "type:FaceSprite.texture",
+    "type:SpriteRef",
+    "type:SpriteRef.array",
+    "type:SpriteRef.layer",
+    "handle:SpriteRef::location",
+    "type:TextureSprite",
+]
+why = "Vanilla 26.3 TextureAtlas.getSprite and BlockStateModel.collectParts / particleMaterial read the published atlas and baked model directly; NeoForge TextureAtlasStitchedEvent.getAtlas exposes the newly published atlas. Native Sunrise mods can now borrow names from those resources and visit side faces without collecting or copying them. Sunrise still reports a missing lookup as None rather than substituting a missing-texture sprite. Saved sprite locations are checked against the resource generation before use."
+migrate = '''
+- Replace `host.block_sprites(&states)` with one `host.visit_block_sprites(state, &mut |side, face| { /* use side and face here */ })?` per resolved `BlockState`. Replace `BlockSprites.sides[side]` with the visitor, filtering by `side` as needed. The return is `Option<BlockSpriteInfo>` with `particle` and `cube`; `None` means the state is unknown and the visitor did not run. A known state can have no side faces. Read `face.texture` directly as `&str` and use `face.quad_on(side, from, to)` as before. If you name the face type explicitly, use `FaceSprite<'_>`; copy just the values or names you need after the borrow.
+- Replace `host.texture_sprites(&names)` with calls to `host.texture_sprite(name)?`, passing namespaced atlas ids (`minecraft:block/stone`, not `block/stone`). The return is `Option<TextureSprite<'_>>`. Read the borrowed id as `view.name` and retain `view.sprite`, not the view itself. Both reads return `Err(LevelReadError::Unavailable)` when published resources are unavailable.
+- Replace `(sprite.array, sprite.layer)` with `sprite.location(host.block_sprites_version())`; if it returns `None`, the sprite came from a previous atlas generation. Read the current version in the host callback and refresh retained sprite refs in `texture_atlas_stitched` for `TextureAtlas::Blocks`. A failed reload does not invalidate refs. `animated` and `cutout` are unchanged. `SpriteRef` and `FaceSprite<'_>` no longer implement `Wire`; encode separate data of your own (e.g. a namespaced id) if you need to persist a sprite identity, and look it up in the current atlas.
+'''

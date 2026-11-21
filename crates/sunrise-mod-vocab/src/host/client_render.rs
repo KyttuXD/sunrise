@@ -129,7 +129,7 @@ pub trait ClientRenderClientHost {
     fn biome_tint(&self, pos: [i32; 3], resolver: ColorResolver) -> Result<u32, LevelReadError>;
     /// Side: client.
     /// For a client mod drawing a block's faces itself (a copycat drawing its material's, from
-    /// `block_sprites`): the 0xRRGGBB colour a face of `state` with tint index `tint_index`
+    /// `visit_block_sprites`): the 0xRRGGBB colour a face of `state` with tint index `tint_index`
     /// (`FaceSprite::tint_index`) is multiplied by at `pos`, as the chunk mesher tints it there
     /// (biome blend included). Grass, foliage and water use the client's current biome colours,
     /// including updates from [`Self::refresh_biome_colors`]. A face's own tint source or a pack
@@ -140,24 +140,34 @@ pub trait ClientRenderClientHost {
     fn block_tint_color(&self, state: BlockState, tint_index: i32, pos: [i32; 3]) -> Option<u32>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// For a client mod: what each resolved block state draws on its six sides, preserving
-    /// its properties without reparsing names. Resolve states once at load. Each face's sprite (array and
-    /// layer, as `WorldDrawn::block_sprites` cuts them) and its texture by the name `cube` and `quad` take,
-    /// where it lies on the side, how its texture runs across it (`FaceSprite::quad_on` draws it on another
-    /// block's box, turned as its model turns it), its tint source and index (`block_tint_color`) and
-    /// whether it is cut out, translucent or animated; its particle sprite; whether it is a plain
-    /// cube. None for a block the game does not know. The model is the state's first random variant. API
-    /// 380.
+    /// Lends a resolved block state's side faces in model order, without collecting them or
+    /// copying their texture names. Off-axis faces are omitted; a fluid lends its still texture
+    /// on each side. Returns the particle sprite and cube classification, or `Ok(None)` for an
+    /// unknown state without calling the visitor. A known state can have no side faces.
+    /// Use [`FaceSprite::quad_on`] to draw a face on another block's box. A face and its name
+    /// borrow the published resources; keep only the [`SpriteRef`] for later atlas use.
     #[access(PublishedResources)]
-    fn block_sprites(&self, blocks: &[BlockState]) -> Vec<Option<BlockSprites>>;
+    #[forward_api_inputs]
+    fn visit_block_sprites<'a>(
+        &'a self,
+        state: BlockState,
+        visit: &mut dyn FnMut(Direction, FaceSprite<'a>),
+    ) -> Result<Option<BlockSpriteInfo>, LevelReadError>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// For a client mod: each texture's sprite by name (`minecraft:block/stone`, `block/stone`) in the blocks
-    /// atlas, none for one it lacks. The blocks atlas holds the sprites block models name and every sprite a
-    /// mod's sprite source made in it, though no model names it; a sprite only the items atlas lists is not
-    /// in it. API 380.
+    /// Lends the sprite named by the namespaced atlas id (`minecraft:block/stone`, `mymod:panel`).
+    /// Returns `Ok(None)` for a missing sprite. The blocks atlas also holds entries published by
+    /// sprite sources, even when unused by models; sprites exclusive to the items atlas are absent.
+    /// Keep the [`SpriteRef`] rather than the borrowed atlas entry across callbacks.
+    ///
+    /// ```compile_fail
+    /// # use mod_api::{ClientHost, TextureSprite};
+    /// fn escape(host: &dyn ClientHost) -> TextureSprite<'static> {
+    ///     host.texture_sprite("minecraft:block/stone").unwrap().unwrap()
+    /// }
+    /// ```
     #[access(PublishedResources)]
-    fn texture_sprites(&self, textures: &[&str]) -> Vec<Option<SpriteRef>>;
+    fn texture_sprite(&self, name: &str) -> Result<Option<TextureSprite<'_>>, LevelReadError>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
     /// For a client mod: where GUI sprite `sprite` lies in the GUI atlas and its size, none for one the atlas lacks
@@ -169,8 +179,8 @@ pub trait ClientRenderClientHost {
     fn gui_sprite(&self, sprite: &Identifier) -> Option<AtlasRegion>;
     /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// For a client mod: changes each time the resources load (a resource pack turned on or off can move every
-    /// sprite): ask `native_block_sprites` again then. API 380.
+    /// The current published generation for [`SpriteRef::location`]. It changes on each
+    /// successful resource load; reacquire sprites in `texture_atlas_stitched`.
     #[access(PublishedResources)]
     fn block_sprites_version(&self) -> u64;
 }

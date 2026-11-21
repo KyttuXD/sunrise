@@ -69,7 +69,7 @@ pub struct WorldDrawn<'a> {
     /// Quad indices (0 1 2 0 2 3 for each 4 vertices), for as many quads as `entities` holds.
     pub quad_indices: &'a wgpu::Buffer,
     /// The block textures the terrain samples, for drawing blocks with the player's own
-    /// textures (`block_sprites` says where a block's are).
+    /// textures (`ClientHost::visit_block_sprites` lends a block's side faces).
     pub block_sprites: BlockSpriteArrays<'a>,
 }
 

@@ -1,39 +1,35 @@
 //! Where blocks' textures are in the block sprite arrays, for a client mod drawing blocks with the player's own
 //! textures (resource packs included) in its own pass: with `WorldDrawn::block_sprites`, the arrays themselves.
 use super::Game;
-use mod_api::{AtlasRegion, ColorResolver, Identifier, LevelReadError};
-use sunrise_client::block_sprites::{BlockSprites, Lookup, SpriteRef};
+use mod_api::{
+    AtlasRegion, BlockSpriteInfo, BlockState, ColorResolver, Direction, FaceSprite, Identifier,
+    LevelReadError, TextureSprite,
+};
+use sunrise_client::block_sprites::Lookup;
 use sunrise_client::chunk::Chunk;
 use sunrise_world::registry::BlockStateId;
 
 impl Game<'_> {
-    /// For a client mod: what each block (`minecraft:grass_block`, `oak_log[axis=x]`; properties left out take the
-    /// block's default) draws on each of its six sides, as the mesher bakes its model: each face's sprite (array and
-    /// layer, as `WorldDrawn::block_sprites` cuts them), where it lies on the side, how its texture runs across it,
-    /// its tint source and whether it is cut out, translucent or animated; its particle sprite; whether it is a plain
-    /// cube. None for a block the game does not know. The model is the state's first random variant. API
-    /// 380.
-    pub(super) fn block_sprites(
-        &self,
-        blocks: &[sunrise_world::registry::BlockStateId],
-    ) -> Vec<Option<BlockSprites>> {
-        let lookup = self.native_sprite_lookup();
-        blocks
-            .iter()
-            .map(|state| {
-                self.pack.context.assets.registry.state(*state)?;
-                Some(lookup.state(*state))
-            })
-            .collect()
+    /// Lend a resolved state's baked side sprites and return its particle and cube metadata.
+    pub(super) fn visit_block_sprites<'a>(
+        &'a self,
+        state: BlockState,
+        visit: &mut dyn FnMut(Direction, FaceSprite<'a>),
+    ) -> Result<Option<BlockSpriteInfo>, LevelReadError> {
+        let index =
+            super::api_values::block_state::current().map_err(|_| LevelReadError::Unavailable)?;
+        let Ok(state) = index.to_engine(state) else {
+            return Ok(None);
+        };
+        Ok(self.native_sprite_lookup().visit_state(state, visit))
     }
-    /// For a client mod: each texture's sprite by name (`minecraft:block/stone`, `block/stone`), none for one no
-    /// model uses. API 380.
-    pub(super) fn texture_sprites(&self, textures: &[&str]) -> Vec<Option<SpriteRef>> {
-        let lookup = self.native_sprite_lookup();
-        textures
-            .iter()
-            .map(|texture| lookup.texture(texture))
-            .collect()
+
+    /// Lend the named sprite from the published blocks atlas.
+    pub(super) fn texture_sprite(
+        &self,
+        name: &str,
+    ) -> Result<Option<TextureSprite<'_>>, LevelReadError> {
+        Ok(self.native_sprite_lookup().texture(name))
     }
     /// `ClientLevel.getBlockTint(pos, resolver)`, without consulting block or fluid tint sources.
     pub(super) fn biome_tint(
@@ -112,7 +108,7 @@ impl Game<'_> {
     }
 
     /// For a client mod: changes each time the resources load (a resource pack turned on or off can move every
-    /// sprite): ask `block_sprites` again then. API 380.
+    /// sprite): visit block sprites again in the newly published generation.
     pub(super) fn block_sprites_version(&self) -> u64 {
         self.pack.context.render.generation
     }
@@ -402,16 +398,18 @@ mod texture_atlas_stitched_tests {
             super::super::native_entity_refs::tests::with_client_game(|game| {
                 // The first load, as `run` fires it before `client_setup`.
                 game.texture_atlases_stitched();
-                {
+                let old_stone = {
                     let kept = kept.lock().unwrap();
                     assert_eq!(kept.atlases, [TextureAtlas::Blocks, TextureAtlas::Gui]);
-                    assert!(kept.stone.is_some(), "stone is in the block arrays");
+                    let stone = kept.stone.expect("stone is in the block arrays");
+                    assert!(stone.location(game.block_sprites_version()).is_some());
                     let slot = kept.slot.expect("the slot sprite is in the GUI atlas");
                     assert_eq!(slot.size, [18, 18], "the slot's own pixels");
                     let [u0, v0, u1, v1] = slot.uv;
                     assert!(0.0 <= u0 && u0 < u1 && u1 <= 1.0, "{:?}", slot.uv);
                     assert!(0.0 <= v0 && v0 < v1 && v1 <= 1.0, "{:?}", slot.uv);
-                }
+                    stone
+                };
                 // A mod's namespace is part of the name; one the atlas lacks is none.
                 assert_eq!(game.gui_sprite(&id("mymod:container/slot")), None);
                 assert_eq!(game.gui_sprite(&id("gui/no_such_sprite")), None);
@@ -430,6 +428,9 @@ mod texture_atlas_stitched_tests {
                 }
                 let kept = kept.lock().unwrap();
                 assert_eq!(kept.atlases, [TextureAtlas::Blocks, TextureAtlas::Gui]);
+                let generation = game.block_sprites_version();
+                assert_eq!(old_stone.location(generation), None, "old atlas is stale");
+                assert!(kept.stone.unwrap().location(generation).is_some());
                 assert_eq!(
                     kept.slot.map(|s| s.size),
                     Some([18, 18]),
@@ -440,20 +441,15 @@ mod texture_atlas_stitched_tests {
     }
 }
 
-/// `FaceSprite::quad_on`, the copycat side of `block_sprites`.
+/// `FaceSprite::quad_on`, the copycat side of `visit_block_sprites`.
 #[cfg(test)]
 mod quad_on_tests {
     use sunrise_core::geometry::Direction;
 
-    fn face(uv: [f32; 6]) -> mod_api::FaceSprite {
+    fn face(uv: [f32; 6]) -> mod_api::FaceSprite<'static> {
         mod_api::FaceSprite {
-            sprite: mod_api::SpriteRef {
-                array: 0,
-                layer: 0,
-                animated: false,
-                cutout: false,
-            },
-            texture: "block/oak_log".into(),
+            sprite: mod_api::__private::built::sprite_ref(1, 0, 0, false, false),
+            texture: "block/oak_log",
             rect: [0.0, 0.0, 1.0, 1.0],
             inset: 0.0,
             uv,
@@ -644,7 +640,7 @@ mod biome_tint_tests {
 #[cfg(test)]
 mod block_tint_color_tests {
     /// A grass block's tinted face takes a colour where it stands, and so does water's face
-    /// (tint index 0, as `block_sprites` reports it); stone has no tint, and an untinted
+    /// (tint index 0, as `visit_block_sprites` reports it); stone has no tint, and an untinted
     /// face (-1) none either.
     #[test]
     #[ignore = "daily"]

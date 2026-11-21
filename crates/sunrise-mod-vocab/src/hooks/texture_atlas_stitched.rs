@@ -5,9 +5,10 @@ pub trait Hooks {
     /// once per atlas, the blocks' first and then the GUI's, on the first load before
     /// `client_setup` and after every successful resource reload (F3+T, a pack turned on or off, a
     /// server's pack) before `client_resources_reloaded`; a reload that fails fires nothing. Look
-    /// the sprites a mod draws up here, once, and keep what it finds until the next stitch of that
-    /// atlas: `texture_sprites` for [`TextureAtlas::Blocks`], `gui_sprite` for
-    /// [`TextureAtlas::Gui`]. Never look them up by name every frame. Client-side.
+    /// the sprites a mod draws up here, once. For [`TextureAtlas::Blocks`], use
+    /// `ClientHost::texture_sprite` and keep its `SpriteRef`, not the borrowed atlas entry.
+    /// For [`TextureAtlas::Gui`], use `gui_sprite` and keep its `AtlasRegion` until the next
+    /// stitch. Never look them up by name every frame. Client-side.
     #[hook(
         dispatch = "flat",
         side = "client",

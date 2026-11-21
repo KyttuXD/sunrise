@@ -99,7 +99,7 @@ impl FluidData {
         ] {
             if let Some((still, tint, _)) = crate::block_sprites::fluid_faces(block) {
                 let appearance = FluidAppearance {
-                    still: format!("minecraft:{still}"),
+                    still: still.to_owned(),
                     // Lava's model has no tint source: `FluidContentsTint` answers -1.
                     tint: if matches!(tint, Some(crate::mesher::TintSource::Water)) {
                         WATER_ITEM_TINT

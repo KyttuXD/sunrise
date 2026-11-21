@@ -1,15 +1,18 @@
 //! Where a block's textures are in the block sprite arrays, side by side, for drawing the block
 //! somewhere the mesher does not: a native mod's own pass drawing blocks as voxels
-//! (`block_sprites`, `WorldDrawn::block_sprites`; docs/modding/src/how-to/native-mods.md). The answer is the
+//! (`visit_block_sprites`, `WorldDrawn::block_sprites`; docs/modding/src/how-to/native-mods.md). The answer is the
 //! model's own faces, as the mesher bakes them: each face's sprite (its array and layer), where on
 //! the block's side it lies and how its texture runs across it, and its tint source.
 //!
 //! Each sprite is a whole layer of a square texture array (`sprites::Sprites`), so a face's UVs run
 //! 0 to 1 within its layer; the renderer's split (`Renderer::sprite_split`) layers to an array.
-use crate::{mesher::TintSource, models::catalog::BakedFace, streaming::WorkerContext};
-pub use mod_api::block::block_sprites::{BlockSprites, FaceSprite, SpriteRef};
+use crate::{
+    baked_model_views::direction, mesher::TintSource, models::catalog::BakedFace,
+    streaming::WorkerContext,
+};
+use mod_api::{__private::built, BlockSpriteInfo, FaceSprite, SpriteRef, TextureSprite};
 use sunrise_assets::model::Direction;
-use sunrise_core::position::BlockPos;
+use sunrise_core::{position::BlockPos, random::position_seed};
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
 /// The two axes a side's `rect` and `uv` count along, as indices into (x, y, z): down and up across x then z; north
@@ -62,9 +65,9 @@ pub fn parse_state(registry: &BlockRegistry, text: &str) -> Option<BlockStateId>
 pub fn fluid_faces(block: &str) -> Option<(&'static str, Option<TintSource>, bool)> {
     match block {
         "minecraft:water" | "minecraft:bubble_column" => {
-            Some(("block/water_still", Some(TintSource::Water), true))
+            Some(("minecraft:block/water_still", Some(TintSource::Water), true))
         }
-        "minecraft:lava" => Some(("block/lava_still", None, false)),
+        "minecraft:lava" => Some(("minecraft:block/lava_still", None, false)),
         _ => None,
     }
 }
@@ -101,106 +104,93 @@ impl<'a> Lookup<'a> {
         }
     }
     /// The sprite at `layer` of all the layers.
-    pub fn sprite(&self, layer: u32) -> SpriteRef {
+    fn sprite(&self, layer: u32) -> SpriteRef {
         let render = &self.context.render;
-        SpriteRef {
-            array: layer / self.split,
-            layer: layer % self.split,
-            animated: render.animations.iter().any(|a| a.layer == layer),
-            cutout: render
+        built::sprite_ref(
+            render.generation,
+            layer / self.split,
+            layer % self.split,
+            render.animations.iter().any(|a| a.layer == layer),
+            render
                 .sprite_mips
                 .get(layer as usize)
                 .is_some_and(|m| m.has_transparent),
-        }
+        )
     }
 
-    /// A texture by name (`minecraft:block/stone`, `block/stone`); none for one no model uses (the arrays hold only
-    /// the textures models and the game's own drawing name).
-    pub fn texture(&self, name: &str) -> Option<SpriteRef> {
-        let layers = &self.context.render.sprite_layers;
-        let layer = layers
-            .get(name)
-            .or_else(|| layers.get(&format!("minecraft:{name}")))?;
-        Some(self.sprite(*layer))
+    /// Lend a texture by its namespaced atlas id; none if the atlas lacks it.
+    pub fn texture(&self, name: &str) -> Option<TextureSprite<'a>> {
+        let (name, &layer) = self.context.render.sprite_layers.get_key_value(name)?;
+        Some(TextureSprite {
+            name,
+            sprite: self.sprite(layer),
+        })
     }
 
-    /// What block `name` (`minecraft:oak_log[axis=x]`; properties left out take the default) draws on each side;
-    /// none for a block the game does not know.
-    pub fn block(&self, name: &str) -> Option<BlockSprites> {
-        let state = parse_state(self.context.assets.registry, name)?;
-        Some(self.state(state))
-    }
-
-    /// What `state` draws on each side. A fluid has its still texture on all six; a block drawn only as a block
-    /// entity (a chest, a sign) or not at all (air) has empty sides, and its particle sprite if any.
-    pub fn state(&self, state: BlockStateId) -> BlockSprites {
-        let render = &self.context.render;
-        let catalog = &render.model_catalog;
-        let mut sides: [Vec<FaceSprite>; 6] = Default::default();
-        let block = self
-            .context
-            .assets
-            .registry
-            .state(state)
-            .map_or("", |s| s.name.as_str());
-        let fluid = fluid_faces(block);
-        if let Some((texture, tint, translucent)) = fluid {
-            let sprite = self.texture(texture);
-            if let Some(sprite) = sprite {
-                for side in &mut sides {
-                    side.push(FaceSprite {
-                        sprite,
-                        texture: texture.to_owned(),
-                        tint_index: if tint.is_some() { 0 } else { -1 },
-                        rect: [0.0, 0.0, 1.0, 1.0],
-                        inset: 0.0,
-                        uv: [0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
-                        tint,
-                        translucent,
-                    });
+    /// Lend what `state` draws on its sides. A fluid has its still texture on all six; a block drawn
+    /// only as a block entity or not at all has no side faces, and its particle sprite if any.
+    pub fn visit_state(
+        &self,
+        state: BlockStateId,
+        visit: &mut dyn FnMut(mod_api::Direction, FaceSprite<'a>),
+    ) -> Option<BlockSpriteInfo> {
+        let block = self.context.assets.registry.state(state)?;
+        if let Some((texture, tint, translucent)) = fluid_faces(&block.name) {
+            let particle = self.texture(texture).map(|view| view.sprite);
+            if let Some(sprite) = particle {
+                let face = FaceSprite {
+                    sprite,
+                    texture: texture.strip_prefix("minecraft:").unwrap_or(texture),
+                    tint_index: if tint.is_some() { 0 } else { -1 },
+                    rect: [0.0, 0.0, 1.0, 1.0],
+                    inset: 0.0,
+                    uv: [0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                    tint,
+                    translucent,
+                };
+                for side in mod_api::Direction::ALL {
+                    visit(side, face);
                 }
             }
-            return BlockSprites {
-                sides,
-                particle: sprite,
-                cube: sprite.is_some(),
-            };
+            return Some(BlockSpriteInfo {
+                particle,
+                cube: particle.is_some(),
+            });
         }
-        let models = catalog
-            .collect(state, BlockPos::new(0, 0, 0))
-            .unwrap_or_default();
-        let mut all = 0;
-        for face in models.iter().flat_map(|(_, m)| &m.faces) {
-            all += 1;
-            let Some((side, sprite)) = self.face(state, face) else {
-                continue;
-            };
-            sides[side as usize].push(sprite);
-        }
+
+        let catalog = &self.context.render.model_catalog;
+        let mut first_layer = None;
+        let mut sides = [false; 6];
+        let mut whole = true;
+        // Match the original model selection at the block origin, including multipart order.
+        let _ = catalog.each_seeded(
+            state,
+            position_seed(BlockPos::new(0, 0, 0)),
+            |(_, model)| {
+                for face in &model.faces {
+                    first_layer.get_or_insert(face.layer);
+                    let Some((side, face)) = self.face(state, face) else {
+                        whole = false;
+                        continue;
+                    };
+                    whole &= face.rect == [0.0, 0.0, 1.0, 1.0] && face.inset == 0.0;
+                    sides[side as usize] = true;
+                    visit(direction(side), face);
+                }
+            },
+        );
         let particle = catalog
             .particle(state)
-            .or_else(|| {
-                models
-                    .iter()
-                    .flat_map(|(_, m)| &m.faces)
-                    .map(|f| f.layer)
-                    .next()
-            })
+            .or(first_layer)
             .map(|layer| self.sprite(layer));
-        // a cube: every side has a whole face at its plane (and perhaps overlays laid on it), and the model has no
-        // other faces
-        let whole = |f: &FaceSprite| f.rect == [0.0, 0.0, 1.0, 1.0] && f.inset == 0.0;
-        let cube = all == sides.iter().map(Vec::len).sum::<usize>()
-            && sides.iter().all(|s| !s.is_empty() && s.iter().all(whole));
-        BlockSprites {
-            sides,
+        Some(BlockSpriteInfo {
             particle,
-            cube,
-        }
+            cube: whole && sides.into_iter().all(|side| side),
+        })
     }
 
     /// A model face as it lies on its side; none when it does not lie flat on one.
-    fn face(&self, state: BlockStateId, face: &BakedFace) -> Option<(Direction, FaceSprite)> {
+    fn face(&self, state: BlockStateId, face: &BakedFace) -> Option<(Direction, FaceSprite<'a>)> {
         let q = &face.quad;
         let side = q.facing;
         let (normal, plane) = side_plane(side);
@@ -226,7 +216,7 @@ impl<'a> Lookup<'a> {
             side,
             FaceSprite {
                 sprite: self.sprite(face.layer),
-                texture: self.names.get(&face.layer).cloned().unwrap_or_default(),
+                texture: self.names.get(&face.layer).map_or("", String::as_str),
                 tint_index: q.tint_index,
                 rect: [a0, b0, a1, b1].map(snap),
                 inset: snap((depth - plane).abs()),
@@ -332,41 +322,60 @@ mod tests {
         let whole = [0.0, 0.0, 1.0, 1.0];
         let upright = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
 
-        let stone = lookup.block("minecraft:stone").unwrap();
+        type Sides<'a> = [Vec<FaceSprite<'a>>; 6];
+        let query = |name: &str| {
+            let state = parse_state(context.assets.registry, name)?;
+            let mut sides: Sides<'_> = Default::default();
+            let info = lookup.visit_state(state, &mut |direction, face| {
+                sides[direction as usize].push(face);
+            })?;
+            Some((info, sides))
+        };
+        let (stone, sides) = query("minecraft:stone").unwrap();
         assert!(stone.cube);
-        let top = &stone.sides[Direction::Up as usize][0];
+        let top = &sides[Direction::Up as usize][0];
+        let (array, layer) = top.sprite.location(context.render.generation).unwrap();
         assert_eq!(
-            (top.rect, top.inset, top.tint, top.sprite.array),
+            (top.rect, top.inset, top.tint, array),
             (whole, 0.0, None, 0)
         );
+        assert_eq!(
+            layer,
+            context.render.sprite_layers["minecraft:block/stone"] % 2048
+        );
         // By the name the drawing helpers take, untinted.
-        assert_eq!((top.texture.as_str(), top.tint_index), ("block/stone", -1));
-        assert_eq!(lookup.texture("minecraft:block/stone"), Some(top.sprite));
-        assert_eq!(lookup.texture("block/stone"), Some(top.sprite));
+        assert_eq!((top.texture, top.tint_index), ("block/stone", -1));
+        let named = lookup.texture("minecraft:block/stone").unwrap();
+        assert_eq!(named.name, "minecraft:block/stone");
+        assert_eq!(named.sprite, top.sprite);
+        assert!(lookup.texture("mymod:block/nonexistent").is_none());
         assert!(!top.sprite.animated && !top.sprite.cutout);
 
-        let grass = lookup.block("grass_block").unwrap();
+        let (grass, sides) = query("grass_block").unwrap();
         assert!(grass.cube);
         assert_eq!(
-            grass.sides[Direction::Up as usize][0].tint,
+            sides[Direction::Up as usize][0].tint,
             Some(TintSource::Grass)
         );
-        assert_eq!(grass.sides[Direction::Down as usize][0].tint, None);
-        let side = &grass.sides[Direction::North as usize];
+        assert_eq!(sides[Direction::Down as usize][0].tint, None);
+        let side = &sides[Direction::North as usize];
         assert_eq!(side.len(), 2, "the side and its overlay");
         assert_eq!(
             (side[0].tint, side[1].tint),
             (None, Some(TintSource::Grass))
         );
         assert_eq!(
-            lookup.texture("block/grass_block_side_overlay"),
-            Some(side[1].sprite)
+            lookup
+                .texture("minecraft:block/grass_block_side_overlay")
+                .unwrap()
+                .sprite,
+            side[1].sprite
         );
 
         // seen from outside, a side's texture runs from its top left: on the north side (looking south, east on
         // the left) u falls with x and v with y; on top, u and v run with x and z (stone's first variant is turned)
-        let planks = lookup.block("oak_planks").unwrap();
-        let uv = |b: &BlockSprites, d: Direction| b.sides[d as usize][0].uv;
+        let (_, planks) = query("oak_planks").unwrap();
+        let uv = |sides: &Sides<'_>, d: Direction| sides[d as usize][0].uv;
         let north = uv(&planks, Direction::North);
         assert_eq!(north, [1.0, 1.0, -1.0, 0.0, 0.0, -1.0]);
         assert_eq!(uv(&planks, Direction::Up), upright);
@@ -379,55 +388,52 @@ mod tests {
             [0.0, 1.0, 1.0, 0.0, 0.0, -1.0]
         );
         // an upright log's side runs as stone's; on its side (axis x) the texture is turned a quarter
-        let log = lookup.block("oak_log").unwrap();
-        let log_x = lookup.block("minecraft:oak_log[axis=x]").unwrap();
-        assert_eq!(log.sides[Direction::North as usize][0].uv, north);
-        let turned = log_x.sides[Direction::North as usize][0].uv;
+        let (_, log) = query("oak_log").unwrap();
+        let (_, log_x) = query("minecraft:oak_log[axis=x]").unwrap();
+        assert_eq!(log[Direction::North as usize][0].uv, north);
+        let turned = log_x[Direction::North as usize][0].uv;
         assert_eq!(
             (turned[2], turned[5]),
             (0.0, 0.0),
             "u runs along y, v along x: {turned:?}"
         );
         assert_eq!(
-            log_x.sides[Direction::West as usize][0].sprite,
-            log.sides[Direction::Up as usize][0].sprite,
+            log_x[Direction::West as usize][0].sprite,
+            log[Direction::Up as usize][0].sprite,
             "its end faces west"
         );
 
-        let leaves = lookup.block("oak_leaves").unwrap();
-        let leaf = &leaves.sides[Direction::Up as usize][0];
+        let (_, leaves) = query("oak_leaves").unwrap();
+        let leaf = &leaves[Direction::Up as usize][0];
         assert!(leaf.sprite.cutout);
         assert_eq!(leaf.tint, Some(TintSource::Foliage));
-        assert_eq!(
-            (leaf.texture.as_str(), leaf.tint_index),
-            ("block/oak_leaves", 0)
-        );
+        assert_eq!((leaf.texture, leaf.tint_index), ("block/oak_leaves", 0));
         assert!(matches!(
-            lookup.block("spruce_leaves").unwrap().sides[0][0].tint,
+            query("spruce_leaves").unwrap().1[0][0].tint,
             Some(TintSource::Fixed(0x61_9961))
         ));
 
-        let water = lookup.block("water").unwrap();
-        let w = &water.sides[Direction::Up as usize][0];
+        let (_, water) = query("water").unwrap();
+        let w = &water[Direction::Up as usize][0];
         assert!(w.sprite.animated && w.translucent);
         assert_eq!(w.tint, Some(TintSource::Water));
         assert_eq!(w.texture, "block/water_still");
 
-        let slab = lookup.block("stone_slab").unwrap();
+        let (slab, sides) = query("stone_slab").unwrap();
         assert!(!slab.cube);
-        assert_eq!(slab.sides[Direction::Up as usize][0].inset, 0.5);
+        assert_eq!(sides[Direction::Up as usize][0].inset, 0.5);
         assert_eq!(
-            slab.sides[Direction::North as usize][0].rect,
+            sides[Direction::North as usize][0].rect,
             [0.0, 0.0, 1.0, 0.5]
         );
 
-        let flower = lookup.block("dandelion").unwrap();
-        assert!(!flower.cube && flower.sides.iter().all(Vec::is_empty));
+        let (flower, sides) = query("dandelion").unwrap();
+        assert!(!flower.cube && sides.iter().all(Vec::is_empty));
         assert!(flower.particle.is_some_and(|p| p.cutout));
 
-        assert_eq!(lookup.block("minecraft:no_such_block"), None);
-        assert_eq!(lookup.block("stone[no_such=1]"), None);
-        assert!(lookup.block("air").unwrap().sides.iter().all(Vec::is_empty));
+        assert_eq!(query("minecraft:no_such_block"), None);
+        assert_eq!(query("stone[no_such=1]"), None);
+        assert!(query("air").unwrap().1.iter().all(Vec::is_empty));
         Ok(())
     }
 }

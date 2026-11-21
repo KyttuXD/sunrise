@@ -270,6 +270,22 @@ pub mod built {
     pub fn instance_group_ref(generation: u64, slot: u32) -> crate::InstanceGroupRef {
         crate::InstanceGroupRef::from_parts(generation, slot).expect("published group generation")
     }
+    /// Wrap a location in the published block sprite arrays.
+    pub fn sprite_ref(
+        generation: u64,
+        array: u32,
+        layer: u32,
+        animated: bool,
+        cutout: bool,
+    ) -> crate::SpriteRef {
+        crate::SpriteRef {
+            generation,
+            array,
+            layer,
+            animated,
+            cutout,
+        }
+    }
     /// Wrap a slot in the model store's published generation.
     pub fn model_ref(generation: u64, slot: u32) -> crate::ModelRef {
         crate::ModelRef(generation, slot)

@@ -1,29 +1,52 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
-/// A sprite: its array (0 for every vanilla texture on most GPUs; past the first array's layers in
-/// 1 to 7) and its layer in that array.
+/// A sprite's location in one published generation of the block texture arrays. Keep this
+/// value across callbacks, not the borrowed view it came from. A successful resource reload
+/// invalidates it; a refused reload does not.
+// no wire: a location in the client's current texture arrays is local to that resource generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// exhaustive: only the engine issues locations, which have private fields.
 pub struct SpriteRef {
-    pub array: u32,
-    pub layer: u32,
+    pub(crate) generation: u64,
+    pub(crate) array: u32,
+    pub(crate) layer: u32,
     /// It animates (water, lava, fire, sea lanterns...): the arrays always hold the frame being shown.
     pub animated: bool,
     /// Some of its pixels are clear (alpha 0): leaves, glass, flowers. Draw those as holes.
     pub cutout: bool,
 }
+
+impl SpriteRef {
+    /// The `(array, layer)` in the supplied published generation, or `None` for a stale sprite.
+    /// Use the current generation from `ClientHost::block_sprites_version`.
+    pub fn location(self, generation: u64) -> Option<(u32, u32)> {
+        (self.generation == generation).then_some((self.array, self.layer))
+    }
+}
+
+/// One named texture borrowed from the published blocks atlas.
+// no wire: the name is borrowed from the live native atlas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: the engine constructs it with a literal; mods only read it.
+pub struct TextureSprite<'a> {
+    /// The namespaced atlas id, such as `minecraft:block/stone`.
+    pub name: &'a str,
+    /// The location to keep if the mod needs to draw the sprite later.
+    pub sprite: SpriteRef,
+}
+
 /// One face of a block's model on one of its sides.
-#[derive(Clone, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct FaceSprite {
+// no wire: the texture name is borrowed from the published client resources.
+#[derive(Clone, Copy, Debug, PartialEq)]
+// exhaustive: the engine constructs it with a literal; mods only read it.
+pub struct FaceSprite<'a> {
+    /// The face's location in the block texture arrays.
     pub sprite: SpriteRef,
     /// Its texture by the name `BlockEntityDrawContext::cube` and `quad` take (`block/oak_log`: vanilla's
     /// without its namespace, a mod's with it), to draw the face elsewhere: a copycat block drawing its
     /// material's faces on its own shape, with `uv` for the face's turn.
-    pub texture: String,
+    pub texture: &'a str,
     /// Where the face lies on the side, in the side's two axes (`side_axes`), from 0 to 1 across the block:
     /// `[a0, b0, a1, b1]`. `[0, 0, 1, 1]` for a whole face.
     pub rect: [f32; 4],
@@ -41,7 +64,7 @@ pub struct FaceSprite {
     /// It has partly clear pixels: drawn sorted and blended.
     pub translucent: bool,
 }
-impl FaceSprite {
+impl FaceSprite<'_> {
     /// This face drawn on side `side` of the box `from`..`to` (in blocks, 0 to 1 across a block) of
     /// another block, as a copycat draws its material: the corners and the UV rectangle (`[u0, v0, u1,
     /// v1]` in texels of 16 per side) to give `BlockEntityDrawContext::quad`, with [`FaceSprite::texture`]
@@ -112,18 +135,14 @@ impl FaceSprite {
     }
 }
 
-/// What a block draws on each side, in [`Direction::ALL`]'s order (down, up, north, south, west, east).
-#[derive(Clone, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct BlockSprites {
-    /// The faces on each side, in the model's order: the one drawn first first (a grass block's side: its dirt
-    /// and grass, then the grass overlay tinted over it). A side with none is empty. Faces that do not lie flat
-    /// on a side (a flower's crossed planes, a rotated element) are left out.
-    pub sides: [Vec<FaceSprite>; 6],
+/// Metadata returned after visiting a block's side faces with `ClientHost::visit_block_sprites`.
+// no wire: the particle sprite is local to the published blocks atlas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: the engine constructs it with a literal; mods only read it.
+pub struct BlockSpriteInfo {
     /// The model's particle sprite (what breaking it scatters, a flower's whole picture), if it has one.
     pub particle: Option<SpriteRef>,
-    /// The model is a plain cube: one whole face on each side, at its plane.
+    /// The model has at least one face on every side, and all faces are whole at the side's plane.
     pub cube: bool,
 }
 
@@ -134,7 +153,7 @@ pub struct BlockSprites {
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum TextureAtlas {
     /// The block sprite arrays: every texture a block model uses, one layer each. Look a sprite up
-    /// with `texture_sprites`, which answers a [`SpriteRef`].
+    /// with `ClientHost::texture_sprite`, which lends a [`TextureSprite`].
     Blocks,
     /// The GUI atlas: GUI sprites, particles and the item and block textures drawn flat. Look a
     /// sprite up with `gui_sprite`, which answers an [`AtlasRegion`].

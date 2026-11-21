@@ -104,7 +104,6 @@ client_options::graphics_options
 client_options::gui_options
 client_options::gui_scale
 client_options::input_options
-client_render::block_sprites
 client_render::block_sprites_version
 client_render::block_tint_color
 client_render::create_dynamic_texture
@@ -118,7 +117,6 @@ client_render::instance_group_write
 client_render::item_uses_block_light
 client_render::refresh_biome_colors
 client_render::refresh_render_visibility
-client_render::texture_sprites
 client_render::update_dynamic_texture
 client_text::text_split
 client_text::text_visual_order

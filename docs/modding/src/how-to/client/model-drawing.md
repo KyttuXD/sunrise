@@ -436,12 +436,21 @@ fixed setting; `set_light` returns subsequent draws to fixed light.
 
 ## Copycat faces
 
-Ask `block_sprites` for the material's side faces, then use each face's `texture` and
-`quad_on(side, from, to)` to draw it on your box. The result supplies outward-wound
-corners and a UV rectangle in texels, preserving the material's rotations and mirrors
-and cropping to your box. It returns `None` for a slanted or sheared texture mapping
-that cannot be represented by a rectangle; use another drawing route rather than
-substituting an upright texture.
+Call `host.visit_block_sprites(material, &mut |side, face| { … })`. This lends the
+material's side faces in model order; the return value gives the particle sprite and
+whether it is a cube, or `Ok(None)` for an unknown state. In the visitor, use the
+borrowed `face.texture` and `face.quad_on(side, from, to)` to draw the material on
+your box. This gives outward-wound corners and a UV rectangle in texels, preserving
+the material's rotations and mirrors and cropping to your box. It returns `None` for
+a slanted or sheared mapping that cannot be represented by a rectangle; use another
+drawing route rather than substituting an upright texture.
+
+For direct block-array drawing, keep a face's `SpriteRef`, not the face loan. Look up
+individual textures with `host.texture_sprite("minecraft:block/stone")?`; it gives
+`None` if the blocks atlas lacks that namespaced id. For a retained sprite call
+`sprite.location(current_generation)` with the current `host.block_sprites_version()`
+to get its array and layer. A successful reload makes old locations stale. Refresh
+retained sprites in `texture_atlas_stitched`.
 
 Multiply tinted faces by `block_tint_color(state, face.tint_index, pos)` at their world
 position. Untinted faces return `None`. Both block and fluid faces use the mesher's current
