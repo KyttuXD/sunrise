@@ -740,6 +740,8 @@ mod item_resource_property_tests {
 
             let stick = ItemStack::new("minecraft:stick", 1);
             assert!(game.item_resource_bar(&stick).is_none());
+            assert!(bundle_tooltip(items, &stick, 0.0, 0.0, 96.0, 1).is_none());
+            assert!(bundle::Contents::of_bundle(items, &stick).is_none());
             let mut red = ItemStack::new("minecraft:red_bundle", 1);
             assert!(game.item_bundle_slots(&red).is_none());
             red.data_mut().bundle_contents = vec![stone.clone()];

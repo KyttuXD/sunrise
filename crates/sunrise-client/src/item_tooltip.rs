@@ -459,10 +459,17 @@ pub fn rarity<'a>(stack: &ItemStack, default: &'a str) -> &'a str {
     sunrise_items::properties::ItemRarity::of(rarity, !stack.enchantments().is_empty()).as_str()
 }
 
-/// `BundleItem.getTooltipImage`: the contents grid of a bundle, or None when
-/// the stack is not one or `minecraft:tooltip_display` hides
-/// `minecraft:bundle_contents` - the image is that component's tooltip
-/// detail, so a display that hides the component hides the grid too.
+/// `BundleItem.getTooltipImage`: this item supplies the contents component
+/// as a tooltip image. The container screen uses this even while carrying a stack.
+pub fn has_bundle_tooltip(items: &Items, stack: &ItemStack) -> bool {
+    items.get(&stack.item).is_some_and(|info| {
+        info.bundle
+            && tooltip_display(stack).shows("minecraft:bundle_contents")
+            && crate::bundle::contents_of(stack, Some(info)).is_some()
+    })
+}
+
+/// Layout for the contents image supplied by `BundleItem.getTooltipImage`.
 pub fn bundle_tooltip(
     items: &Items,
     stack: &ItemStack,
@@ -471,10 +478,10 @@ pub fn bundle_tooltip(
     box_width: f32,
     description_lines: usize,
 ) -> Option<TooltipLayout> {
-    tooltip_display(stack)
-        .shows("minecraft:bundle_contents")
-        .then(|| crate::bundle::tooltip_layout(items, stack, x, y, box_width, description_lines))
-        .flatten()
+    if !has_bundle_tooltip(items, stack) {
+        return None;
+    }
+    crate::bundle::tooltip_layout(items, stack, x, y, box_width, description_lines)
 }
 
 fn is_beehive(path: &str) -> bool {
@@ -1799,7 +1806,15 @@ mod tests {
     /// with it. The draw path asks for the grid through the same function.
     #[test]
     fn a_bundle_contents_grid_follows_the_tooltip_display() {
-        let items = Items::for_tests(Default::default());
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("data/minecraft/loot_table")).unwrap();
+        std::fs::write(
+            root.path().join("items.json"),
+            r#"{"minecraft:bundle":{"minecraft:bundle_contents":[]},"minecraft:stone":{}}"#,
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let items = Items::catalog(root.path(), &PackOverlay::NONE, &defaults).unwrap();
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
         bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 3)];
         assert!(bundle_tooltip(&items, &bundle, 0.0, 0.0, 96.0, 2).is_some());

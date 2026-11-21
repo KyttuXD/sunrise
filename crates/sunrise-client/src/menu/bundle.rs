@@ -25,7 +25,7 @@ impl Menu {
         let Some(mut contents) = self
             .carried
             .as_ref()
-            .and_then(|c| Contents::of(env.items, c))
+            .and_then(|c| Contents::of_bundle(env.items, c))
         else {
             return false;
         };
@@ -72,7 +72,7 @@ impl Menu {
         let Some(mut bundle) = self.slot(s).cloned() else {
             return false;
         };
-        let Some(mut contents) = Contents::of(env.items, &bundle) else {
+        let Some(mut contents) = Contents::of_bundle(env.items, &bundle) else {
             return false;
         };
         let allowed = self.allow_modification(env, s);

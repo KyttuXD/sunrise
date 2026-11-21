@@ -16,7 +16,7 @@ pub trait Hooks {
     /// the host's own editing of a sign on a LAN or single-player world
     /// (the editor writes into their world directly), and the sign changes
     /// that are no edit of the text (dyeing, glow ink, waxing, `/data`,
-    /// `/setblock`, or a mod using `BlockEntityRef::replace_data`).
+    /// or `/setblock`).
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_sign_changed",
         dispatch = "api_carrier",

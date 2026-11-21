@@ -43,8 +43,8 @@ BlockItem.onDestroyed	port	crates/sunrise-client/src/entities.rs::ItemEntity::hu
 BoatItem.getBoat	port	crates/sunrise-client/src/game/entities/boats/mod.rs::Game::place_boat	boat placed at the hit point with the item's stack config
 BucketItem.playEmptySound	port	crates/sunrise-world/src/level/buckets.rs::Sim::empty_sound
 BundleItem.getWeightSafe	port	crates/sunrise-items/src/bundle.rs::Contents::weight_fraction	float fraction; vanilla compares an exact Fraction
-BundleItem.getBarWidth	port	crates/sunrise-items/src/bundle.rs::Contents::bar
-BundleItem.getBarColor	port	crates/sunrise-items/src/bundle.rs::Contents::bar
+BundleItem.getBarWidth	port	crates/sunrise-items/src/bundle.rs::stack_bar
+BundleItem.getBarColor	port	crates/sunrise-items/src/bundle.rs::stack_bar
 BundleItem.removeOneItemFromBundle	port	crates/sunrise-items/src/bundle.rs::Contents::remove_one
 BundleItem.getTooltipImage	port	crates/sunrise-client/src/item_tooltip.rs::bundle_tooltip	the contents grid, hidden when `minecraft:tooltip_display` hides `minecraft:bundle_contents` (or the whole tooltip); the geometry is `bundle.rs::tooltip_layout`
 BundleItem.onDestroyed	port	crates/sunrise-client/src/entities.rs::ItemEntity::hurt	the damage that empties an item's health makes the bundle's contents item entities where it lay (`bundle::destroyed`)

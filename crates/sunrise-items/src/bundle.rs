@@ -227,7 +227,18 @@ impl Contents {
     }
     /// The effective contents; None when the stack lacks a bundle contents component.
     pub fn of(items: &Items, stack: &ItemStack) -> Option<Self> {
-        let inside = contents_of(stack, items.get(&stack.item))?;
+        Self::from_stack(items, stack, items.get(&stack.item))
+    }
+
+    /// The contents for `ItemStack.overrideStackedOnOther` and `overrideOtherStackedOnMe`.
+    /// These dispatch to `BundleItem`, not to any item with a bundle-contents component.
+    pub fn of_bundle(items: &Items, stack: &ItemStack) -> Option<Self> {
+        let info = items.get(&stack.item).filter(|info| info.bundle)?;
+        Self::from_stack(items, stack, Some(info))
+    }
+
+    fn from_stack(items: &Items, stack: &ItemStack, info: Option<&ItemInfo>) -> Option<Self> {
+        let inside = contents_of(stack, info)?;
         let weight = contents_weight(items, inside, None);
         let selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
         Some(Self {

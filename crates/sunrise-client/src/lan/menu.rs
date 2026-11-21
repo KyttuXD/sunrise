@@ -1322,7 +1322,7 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
     let context = view.loop_context;
     let other = view.get(i);
     if let Some(mut carried) = view.guest.carried.clone()
-        && let Some(mut contents) = Contents::of(items, &carried)
+        && let Some(mut contents) = Contents::of_bundle(items, &carried)
         && other.is_some() != right
     {
         match other {
@@ -1372,7 +1372,7 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
     let Some(mut bundle) = other else {
         return false;
     };
-    let Some(mut contents) = Contents::of(items, &bundle) else {
+    let Some(mut contents) = Contents::of_bundle(items, &bundle) else {
         return false;
     };
     // `Slot.allowModification`: `mayPickup` and `mayPlace` of the stack it

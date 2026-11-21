@@ -1505,7 +1505,7 @@ impl Game<'_> {
     /// the host's own editing of a sign on a LAN or single-player world
     /// (the editor writes into their world directly), and the sign changes
     /// that are no edit of the text (dyeing, glow ink, waxing, `/data`,
-    /// `/setblock`, or a mod using `BlockEntityRef::replace_data`).
+    /// or `/setblock`).
     pub(in crate::game) fn native_sign_changed(
         &mut self,
         call: mod_api::__private::SignChangedCall<'_>,

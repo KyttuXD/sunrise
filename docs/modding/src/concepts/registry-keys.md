@@ -237,7 +237,7 @@ Use API-owned values rather than importing engine or package-loader types.
 
 | Value | Contract |
 | --- | --- |
-| `TooltipDisplay::for_stack` | Takes an API `ItemStack`; its effective tooltip component includes vanilla's implicit defaults. |
+| `TooltipDisplay::for_stack` | Reads the tooltip display component carried by an API `ItemStack`. In the `item_tooltip` hook, use the display view supplied with the callback. |
 | `LootContext`, `LootStack` | Own their facts. Candidate items use `ItemKey`; counts are signed. Ordered `Option<Tag>` patches preserve removals and NBT types; names are `Text` trees. Writeback is atomic. |
 | `ItemBar`, `ItemRarity` | Describe item resource properties. `resource.bar(host)` reads the effective stack components, including item defaults, before client drawing hooks. |
 | `Side` | Package metadata: `Client` or `Both`, not the executing logical `HostSide`. |
