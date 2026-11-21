@@ -202,7 +202,8 @@ retain them. The result is baked quads, not a mod-defined baked object.
 A copy whose colour alpha is below `0xFF` draws every quad in the translucent material described below.
 A model with translucent faces otherwise keeps its per-quad routing: only those faces take the translucent
 material. Copies with a colour other than white, hidden faces, a model with translucent faces or a block state model are baked on the CPU
-instead of drawn as GPU instances; the 16,384-copy budget bounds that cost.
+instead of drawn as GPU instances. CPU copies and retained groups submit complete valid quads
+individually within the device's shared frame buffers.
 `overlay` (the hurt tint) has no effect on a copy on the translucent or block state model route, including any
 opaque faces it holds. `color` (the whole baked block model, multiplied at draw time) and `hidden_faces` (a
 cull mask the caller supplies) are Sunrise's options for mod copies.
@@ -251,9 +252,10 @@ draw.terrain_model(self.belt, options)?;
   renderer sorts the quads of all translucent models far to near each frame, as vanilla's
   `sortOnUpload` does, so submission order does not matter.
 - A stale or unknown handle returns `ModelError` without appending geometry. Otherwise quads are
-  submitted individually up to the vertex-index buffer limit: missing sprites (including a missing
-  shift target) fall back to `minecraft:missingno`, and quads with an unsupported render type or
-  non-finite positions or UVs are skipped individually rather than refusing the whole model.
+  submitted individually within the shared vertex and index buffers. Unshifted faces keep their
+  baked sprite layers. Only a shift target is looked up in the blocks atlas; a missing target uses
+  `minecraft:missingno`. Invalid positions, UVs and materials affect only that quad, as does an
+  unrepresentable normal on a quad whose shader consumes it.
 
 ## Persistent groups
 
@@ -325,8 +327,9 @@ draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options
   and depth-writing. They draw with the block entities, before the level's translucent terrain,
   under shader packs too.
 - A stack of 0, an empty or unresolved fluid, or reversed or non-finite bounds draws nothing.
-  Valid quads are submitted individually up to the vertex-index buffer limit without artificial
-  coordinate or quad caps.
+  Whole-block tile cuts and UV fractions are computed before rounding the posed corners to the
+  vertex format. Unrepresentable tiles are skipped and complete quads are submitted within the
+  shared vertex and index buffers.
 
 ## Before and after a living entity draws
 

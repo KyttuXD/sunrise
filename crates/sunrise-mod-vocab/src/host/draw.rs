@@ -462,9 +462,10 @@ pub trait BlockEntityDrawContext {
     /// shading (independent of light), one sprite drawn as another with moved UVs, a UV
     /// shrink, and a `0xRRGGBB` tint on quads with a tint index. What a machine's belts,
     /// shafts and casings draw with. A stale generation or absent slot returns [`ModelError`]
-    /// without appending geometry; otherwise quads are submitted individually (missing sprites
-    /// fall back to `minecraft:missingno`, an unmatched `uv_shift` is a no-op, and invalid
-    /// primitives are skipped individually).
+    /// without appending geometry. Otherwise valid quads are submitted individually within the
+    /// frame's vertex and index space. Unshifted faces keep their baked sprite; a missing shift
+    /// target uses the blocks atlas's missing sprite, and an unmatched source changes nothing.
+    /// Only a quad that needs an unrepresentable transformed normal is skipped for that normal.
     fn terrain_model(
         &mut self,
         model: ModelRef,
@@ -531,8 +532,8 @@ pub trait BlockEntityDrawContext {
     /// rises to the fluid's `light_level` (15 for lava). No face is shaded by direction. Faces are sorted far to
     /// near, alpha blended, culled from behind and write depth, drawn with the block entities
     /// before the level's translucent terrain. An empty or unresolved stack, or reversed or
-    /// non-finite bounds, draws nothing; valid quads are submitted individually up to the
-    /// vertex-index buffer limit.
+    /// non-finite bounds, draws nothing. The pose is applied before rounding tile corners to the
+    /// vertex format. Valid complete quads are submitted within the frame's vertex and index space.
     fn fluid_box(&mut self, stack: &FluidStack, bounds: [f32; 6], options: FluidBoxOptions) {
         unimplemented!("BlockEntityDrawContext::draw_fluid_box")
     }
@@ -561,7 +562,8 @@ pub trait WorldDrawContext {
     /// Draw a retained group once per view, with per-view culling and the batch route rules.
     /// Repeated submissions in one view are ignored. Only visible copies consume its budget.
     /// The shared limit is 16,384 visible copies and 16,384 groups per view. Refusal is atomic.
-    /// Shader packs and overlays use the same CPU path as transient model batches.
+    /// Shader packs and overlays use the same CPU path as transient model batches: admitted
+    /// copies contribute complete valid quads within the shared frame buffers.
     /// Retired or foreign groups return [`GroupError::Stale`], even if drawn earlier this view.
     fn draw_instance_group(&mut self, group: InstanceGroupRef) -> Result<(), GroupError> {
         unimplemented!("WorldDrawContext::draw_instance_group")
@@ -628,7 +630,8 @@ pub trait WorldDrawContext {
     /// with a translucent face, is drawn in the sorted translucent material vanilla uses for a
     /// translucent block outside the terrain (`translucent_moving_block`: alpha blended, depth
     /// tested, depth written, back faces culled), their quads sorted far to near each frame as
-    /// vanilla's `sortOnUpload` does.
+    /// vanilla's `sortOnUpload` does. CPU copies submit valid quads individually within the
+    /// frame's vertex and index space; copy admission itself does not reserve those buffers.
     /// Tint is `0xAARRGGBB` and light is [`LightCoords`]: both stay in
     /// vanilla's space, and the engine converts them to the frame. A tint's alpha
     /// multiplies only faces that have a tint index, the same as vanilla's model

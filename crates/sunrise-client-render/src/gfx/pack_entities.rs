@@ -619,7 +619,14 @@ impl PackEntities {
         let have_vertices = self.vertices.size() / vertex_size;
         let have_slots = self.slots.size() / self.stride;
         if need_vertices > have_vertices {
-            self.vertices = Self::vertex_buffer(device, need_vertices.next_power_of_two());
+            let limits = device.limits();
+            let buffer_bytes = limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size);
+            self.vertices = Self::vertex_buffer(
+                device,
+                super::draw_frame::entity_buffer_vertices(need_vertices, buffer_bytes),
+            );
         }
         if need_vertices * 4 > self.previous_index.size() {
             self.previous_index = Self::index_buffer(device, need_vertices.next_power_of_two());

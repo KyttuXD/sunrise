@@ -396,10 +396,7 @@ impl Game<'_> {
             surface.track_entity_local_light_pose();
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            submit(&mut GameBlockEntityDrawContext {
-                game: self,
-                surface: &mut surface,
-            })
+            submit(&mut GameBlockEntityDrawContext::new(self, &mut surface))
         }))
         .unwrap_or_else(|_| Err("it panicked".into()));
         let Err(error) = result else {

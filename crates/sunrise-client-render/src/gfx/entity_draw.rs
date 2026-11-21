@@ -203,6 +203,41 @@ impl Renderer {
         self.prepared_draws.extend_from_slice(draws);
     }
 
+    /// Byte limit of the entity stream, including its whole-buffer storage binding for skinning.
+    pub(super) fn entity_vertex_buffer_limit(&self) -> u64 {
+        let limits = self.device.limits();
+        if self.entity_skin.is_some()
+            || self
+                .pack_post
+                .as_ref()
+                .and_then(|(_, post)| post.as_ref())
+                .is_some_and(|post| post.has_entities())
+        {
+            limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size)
+        } else {
+            limits.max_buffer_size
+        }
+    }
+
+    pub fn entity_quad_capacity(&self) -> EntityQuadCapacity {
+        EntityQuadCapacity::from_buffer_sizes(
+            self.entity_vertex_buffer_limit(),
+            self.device.limits().max_buffer_size,
+        )
+    }
+
+    /// The hand can appear in both the real frame and the generated frame.
+    pub fn entity_hand_reservation(&self, vertices: usize) -> usize {
+        vertices
+            * if self.frame_gen.on && !(self.frame_gen.paused || self.frame_gen.refused) {
+                2
+            } else {
+                1
+            }
+    }
+
     /// How many of `incoming` copies still fit after `already` are staged.
     pub fn prepared_instance_room(&self, already: u64, incoming: usize) -> usize {
         prepared_model::prepared_instance_room_for(

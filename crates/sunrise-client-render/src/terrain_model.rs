@@ -112,30 +112,82 @@ pub fn multiply_draw_color(color: u32, draw: u32) -> u32 {
     crate::hud_layout::multiply(color, crate::hud_layout::abgr(draw))
 }
 
-/// Emit each valid quad of `faces` individually without a preflight rollback scan.
-/// Missing sprites fall back to `minecraft:missingno` when present in `sprite` (matching vanilla
-/// `TextureAtlas.getSprite`), an unmatched `uv_shift.source_sprite` is a no-op, and invalid
-/// primitives (unsupported render types, non-finite coordinates or UVs, or unrepresentable sprite
-/// layers above `u16::MAX`) are skipped individually. Returning `false` from `emit` stops further
-/// emission (for example at a buffer limit).
+/// `PoseStack.Pose` carries a separate normal matrix. Rebuilding it from positions loses
+/// information when, for example, a uniform zero scale leaves the normal matrix unchanged.
+#[derive(Clone, Copy)]
+pub struct NormalPose {
+    matrix: Mat3,
+    trusted: bool,
+}
+
+impl NormalPose {
+    pub const IDENTITY: Self = Self {
+        matrix: Mat3::IDENTITY,
+        trusted: true,
+    };
+
+    /// An arbitrary matrix supplied as a whole, like `PoseStack.Pose.mulPose`.
+    pub fn from_affine(pose: Mat4) -> Self {
+        let basis = Mat3::from_mat4(pose);
+        if basis == Mat3::IDENTITY {
+            return Self::IDENTITY;
+        }
+        let det = basis.determinant();
+        Self {
+            matrix: if det.is_finite() && det != 0.0 {
+                basis.inverse().transpose()
+            } else {
+                Mat3::ZERO
+            },
+            trusted: false,
+        }
+    }
+
+    pub fn rotate(&mut self, by: glam::Quat) {
+        self.matrix *= Mat3::from_quat(by);
+    }
+
+    pub fn scale(&mut self, by: Vec3) {
+        let abs = by.abs();
+        if abs.x == abs.y && abs.y == abs.z {
+            if by.min_element() < 0.0 {
+                self.matrix *= Mat3::from_diagonal(by.signum());
+            }
+        } else {
+            self.matrix *= Mat3::from_diagonal(by.recip());
+            self.trusted = false;
+        }
+    }
+
+    pub fn transform(self, normal: Vec3) -> Option<Vec3> {
+        let transformed = self.matrix * normal;
+        if self.trusted {
+            (transformed.is_finite() && transformed != Vec3::ZERO).then_some(transformed)
+        } else {
+            transformed.try_normalize()
+        }
+    }
+}
+
+/// Forward each face's baked sprite layer and submit valid quads independently. Only explicit UV
+/// shifts look up a sprite name, in the blocks atlas, where a missing target uses the atlas's
+/// missing sprite (`TextureAtlas.getSprite`). Returning `false` from `emit` stops submission.
 pub fn draw_model(
     faces: &[BakedFace],
     pose: Mat4,
+    normal_pose: NormalPose,
     light: u32,
     options: NativeModelRenderOptions<'_>,
     sprite: impl Fn(&str) -> Option<u32>,
     mut emit: impl FnMut([Vertex; 4]) -> bool,
 ) {
     if !pose.is_finite() {
+        log::warn!("Terrain model: the draw pose is not representable");
         return;
     }
-    let normal_pose = Mat3::from_mat4(pose).inverse().transpose();
-    let normal_pose = normal_pose.is_finite().then_some(normal_pose);
-    let mut missing_layer: Option<Option<u32>> = None;
+    let mut invalid = 0usize;
     let shift = options.uv_shift.map(|shift| {
-        let target = sprite(shift.target_sprite)
-            .or_else(|| *missing_layer.get_or_insert_with(|| sprite("minecraft:missingno")))
-            .filter(|&l| l <= u16::MAX.into());
+        let target = sprite(shift.target_sprite).or_else(|| sprite("minecraft:missingno"));
         (target, shift)
     });
     let faded = options.color >> 24 != 0xff;
@@ -149,12 +201,10 @@ pub fn draw_model(
         }
         let quad = &face.quad;
         let Some(route) = route(face, options.material, faded) else {
+            invalid += 1;
             continue;
         };
         let mut uv = quad.uv;
-        if uv.iter().flatten().any(|v| !v.is_finite()) {
-            continue;
-        }
         if options.uv_shrink_ratio != 0.0 {
             let center = std::array::from_fn::<_, 2, _>(|i| {
                 let min = uv.iter().map(|p| p[i]).fold(f32::INFINITY, f32::min);
@@ -168,6 +218,7 @@ pub fn draw_model(
         let shifted = shift.filter(|(_, s)| same_sprite(&quad.material.sprite, s.source_sprite));
         let layer = if let Some((target, shift)) = shifted {
             let Some(target) = target else {
+                invalid += 1;
                 continue;
             };
             for p in &mut uv {
@@ -175,21 +226,18 @@ pub fn draw_model(
             }
             target
         } else {
-            let Some(layer) = sprite(&quad.material.sprite)
-                .or_else(|| *missing_layer.get_or_insert_with(|| sprite("minecraft:missingno")))
-                .filter(|&l| l <= u16::MAX.into())
-            else {
-                continue;
-            };
-            layer
+            face.layer
         };
-        if uv.iter().flatten().any(|v| !v.is_finite()) {
+        // The terrain-model vertex packs the whole texture-array layer into the upper 16 bits.
+        if u16::try_from(layer).is_err() || uv.iter().flatten().any(|v| !v.is_finite()) {
+            invalid += 1;
             continue;
         }
         let positions = quad
             .positions
             .map(|p| pose.transform_point3(Vec3::from_array(p)));
         if positions.iter().any(|p| !p.is_finite()) {
+            invalid += 1;
             continue;
         }
         let shaded = match options.shade {
@@ -197,22 +245,19 @@ pub fn draw_model(
             NativeModelShade::Off => false,
             NativeModelShade::Entity => true,
         };
-        let normal = if shaded {
-            let n = if let Some(normal_pose) = normal_pose {
-                let p = quad.positions.map(Vec3::from_array);
-                let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
-                // Baked model normals are signed bytes before the instance's normal matrix.
-                // Keep the transformed normal as floats; quantizing it again changes rotated faces.
-                let n = n.map(|v| ((v * 127.0) as i8) as f32 / 127.0);
-                (normal_pose * n).normalize_or_zero()
-            } else {
-                // Singular/flattened pose: derive the transformed face normal directly;
-                // degenerate faces stay unshaded (Vec3::ZERO) rather than refusing the draw.
-                (positions[1] - positions[0])
-                    .cross(positions[2] - positions[0])
-                    .normalize_or_zero()
+        let normal = if shaded && matches!(route, Route::Terrain(_)) {
+            let p = quad.positions.map(Vec3::from_array);
+            let Some(n) = (p[1] - p[0]).cross(p[2] - p[0]).try_normalize() else {
+                invalid += 1;
+                continue;
             };
-            if n.is_finite() { n } else { Vec3::ZERO }
+            // Local normals use the baked signed-byte precision, but the pose's result is float.
+            let n = n.map(|v| ((v * 127.0) as i8) as f32 / 127.0);
+            let Some(n) = normal_pose.transform(n) else {
+                invalid += 1;
+                continue;
+            };
+            n
         } else {
             Vec3::ZERO
         };
@@ -263,8 +308,13 @@ pub fn draw_model(
             }
         };
         if !emit(quad_vertices) {
-            return;
+            break;
         }
+    }
+    if invalid != 0 {
+        log::warn!(
+            "Terrain model: skipped {invalid} quads with invalid material, position, UV or normal"
+        );
     }
 }
 

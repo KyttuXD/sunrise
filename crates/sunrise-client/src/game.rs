@@ -429,8 +429,6 @@ mod dragon_boss_bar_name_tests;
 #[cfg(test)]
 #[path = "game/mobs/dragon_fireball_motion_tests.rs"]
 mod dragon_fireball_motion_tests;
-#[path = "game/modding/draw_boundary.rs"]
-mod draw_boundary;
 #[cfg(test)]
 #[path = "game/items/dropped_by_player_tests.rs"]
 mod dropped_by_player_tests;
@@ -11204,6 +11202,16 @@ impl Game<'_> {
             self.polytone_gpu_particles(camera, alpha);
         }
         let mut world_geometry = self.world_geometry.take().expect("view storage");
+        if let Some(renderer) = &self.renderer {
+            let skin = self.skin_frame.get_mut();
+            let reserved = skin.vertices as usize
+                + skin.outline_vertices as usize
+                + additive.len()
+                + self.see_through_vertices.len()
+                + self.shadow_only_vertices.get_mut().len()
+                + renderer.entity_hand_reservation(hand.len());
+            world_geometry.set_entity_capacity(renderer.entity_quad_capacity().after(reserved));
+        }
         self.fill_world_geometry(
             title,
             camera.to_array(),

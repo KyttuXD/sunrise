@@ -26,7 +26,7 @@ fn face() -> BakedFace {
 }
 fn sprite(name: &str) -> Option<u32> {
     match name {
-        "test:source" => Some(7),
+        "test:source" => Some(19), // A named blocks-atlas layer distinct from the baked layer.
         "test:target" => Some(11),
         "minecraft:missingno" => Some(1),
         _ => None,
@@ -34,14 +34,22 @@ fn sprite(name: &str) -> Option<u32> {
 }
 fn draw(faces: &[BakedFace], pose: Mat4, options: NativeModelRenderOptions<'_>) -> Vec<Vertex> {
     let mut output = Vec::new();
-    draw_model(faces, pose, 0xf0f0, options, sprite, |quad| {
-        output.extend_from_slice(&quad);
-        true
-    });
+    draw_model(
+        faces,
+        pose,
+        NormalPose::from_affine(pose),
+        0xf0f0,
+        options,
+        sprite,
+        |quad| {
+            output.extend_from_slice(&quad);
+            true
+        },
+    );
     output
 }
 #[test]
-fn unsupported_material_skips_only_that_quad_and_missing_sprite_uses_missingno() {
+fn a_rejected_quad_leaves_its_neighbors_with_their_baked_layers() {
     let first = face();
     let mut second = face();
     second.quad.render_type = Some(RenderType::Unsupported);
@@ -59,28 +67,19 @@ fn unsupported_material_skips_only_that_quad_and_missing_sprite_uses_missingno()
         },
     );
     assert_eq!(output.len(), 8);
-    // A missing sprite falls back to `minecraft:missingno` (layer 1) rather than refusing the model.
+    // An unshifted face keeps its actual baked layer even when the blocks atlas has a
+    // different layer with the same name, or has no entry at all.
     faces[1].quad.render_type = None;
-    faces[1].quad.material.sprite = "test:missing".into();
+    faces[1].quad.material.sprite = "test:items_only".into();
+    faces[1].layer = 23;
     let output = draw(&faces, Mat4::IDENTITY, Default::default());
     assert_eq!(output.len(), 8);
     assert_eq!(output[0].layer >> 16, 7);
-    assert_eq!(output[4].layer >> 16, 1);
-    // Without even a fallback sprite, only the missing quad is skipped.
-    let mut partial = Vec::new();
-    draw_model(
-        &faces,
-        Mat4::IDENTITY,
-        0xf0f0,
-        Default::default(),
-        |name| (name == "test:source").then_some(7),
-        |quad| {
-            partial.extend_from_slice(&quad);
-            true
-        },
-    );
-    assert_eq!(partial.len(), 4);
-    assert_eq!(partial[0].layer >> 16, 7);
+    assert_eq!(output[4].layer >> 16, 23);
+    faces[0].layer = u32::from(u16::MAX) + 1;
+    let output = draw(&faces, Mat4::IDENTITY, Default::default());
+    assert_eq!(output.len(), 4);
+    assert_eq!(output[0].layer >> 16, 23);
 }
 #[test]
 fn exact_sprite_shift_and_unmatched_shift_noop_and_missing_target_fallback() {
@@ -159,7 +158,7 @@ fn transformed_slope_normal_stays_float_and_fullbright_keeps_shading() {
         [1.0, 1.0, 1.0],
         [1.0, 0.0, 0.0],
     ];
-    let pose = Mat4::from_rotation_y(0.372) * Mat4::from_scale(Vec3::new(-2.0, 3.0, 1.0));
+    let pose = Mat4::from_scale(Vec3::new(-2.0, 2.0, 1.0));
     let output = draw(&[face], pose, Default::default());
     assert_eq!(output.len(), 4);
     let normal = Vec3::new(
@@ -167,16 +166,15 @@ fn transformed_slope_normal_stays_float_and_fullbright_keeps_shading() {
         output[0].glint_uv[1],
         f32::from_ne_bytes(output[0].normal.map(|v| v as u8)),
     );
-    assert!((normal.length() - 1.0).abs() < 1e-6);
-    assert!((normal.y - 0.31622776).abs() < 1e-6);
-    assert!((normal.x + 0.3448316).abs() < 1e-5, "{normal:?}");
+    let baked = 89.0 / 127.0;
+    assert_eq!(normal, Vec3::new(0.0, baked * 0.5, -baked).normalize());
     assert_eq!(output[0].light, 0xf0f0);
     assert_eq!(output[0].color, u32::MAX);
     // Float payload, not a second signed-byte normal quantization.
     assert_ne!(normal.y, (normal.y * 127.0) as i8 as f32 / 127.0);
 }
 #[test]
-fn flattened_pose_and_unclamped_shrink_render_while_non_finite_quads_are_isolated() {
+fn non_finite_uvs_are_isolated_and_finite_shrink_is_unclamped() {
     // Non-finite shrink ratio produces non-finite UVs, so affected quads are skipped.
     let output = draw(
         &[face()],
@@ -197,19 +195,12 @@ fn flattened_pose_and_unclamped_shrink_render_while_non_finite_quads_are_isolate
         },
     );
     assert_eq!(output.len(), 4);
-    // A flattened/singular pose still renders with finite normals instead of refusing the model.
-    let output = draw(
-        &[face()],
-        Mat4::from_scale(Vec3::new(1.0, 0.0, 1.0)),
-        Default::default(),
-    );
-    assert_eq!(output.len(), 4);
-    assert!(output.iter().all(|v| v.pos.iter().all(|c| c.is_finite())));
     // Returning false from emit stops after the first quad.
     let mut emitted = 0usize;
     draw_model(
         &[face(), face()],
         Mat4::IDENTITY,
+        NormalPose::IDENTITY,
         0xf0f0,
         Default::default(),
         sprite,
@@ -222,6 +213,37 @@ fn flattened_pose_and_unclamped_shrink_render_while_non_finite_quads_are_isolate
 }
 
 #[test]
+fn only_a_route_that_consumes_a_failed_normal_is_skipped() {
+    let mut unlit = face();
+    unlit.quad.shade = false;
+    let mut translucent = face();
+    translucent.quad.render_type = Some(RenderType::Translucent);
+    let mut normal_pose = NormalPose::IDENTITY;
+    let scale = Vec3::new(1.0, 1.0, 0.0);
+    normal_pose.scale(scale);
+    let mut output = Vec::new();
+    draw_model(
+        &[face(), unlit, translucent],
+        Mat4::from_scale(scale),
+        normal_pose,
+        0xf0f0,
+        Default::default(),
+        sprite,
+        |quad| {
+            output.push(quad[0].layer & 0xffff);
+            true
+        },
+    );
+    assert_eq!(
+        output,
+        [
+            gfx::TERRAIN_MODEL_SOLID_OVERLAY,
+            gfx::TERRAIN_MODEL_TRANSLUCENT_OVERLAY
+        ]
+    );
+}
+
+#[test]
 fn a_deduplicated_array_layer_is_not_the_same_named_source_sprite() {
     let mut alias = face();
     alias.quad.material.sprite = "test:alias".into();
@@ -229,6 +251,7 @@ fn a_deduplicated_array_layer_is_not_the_same_named_source_sprite() {
     draw_model(
         &[face(), alias],
         Mat4::IDENTITY,
+        NormalPose::IDENTITY,
         0xf0f0,
         NativeModelRenderOptions {
             uv_shift: Some(NativeModelUvShift {

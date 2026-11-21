@@ -1,4 +1,5 @@
 //! Fixed-capacity output for a view's custom geometry; the GPU consumer owns drawing.
+use crate::gfx::EntityQuadCapacity;
 use crate::gfx::mod_pipelines::{self, PipelineRun, PipelineVertex};
 use crate::gfx::world_primitives::{Batch, DEFAULT_CAPACITY as CAPACITY, STAGES};
 use crate::{gizmos, mesher::Vertex};
@@ -67,6 +68,7 @@ pub struct WorldGeometry {
     groups: std::collections::HashSet<mod_api::InstanceGroupRef>,
     accepted_models: u32,
     model_cut: u32,
+    entity_capacity: EntityQuadCapacity,
     /// The stage lines and quads go to now (`RenderLevelStage::ALL`'s index).
     stage: usize,
     /// Where each stage before `stage` ended (`Batch::stage_ends`).
@@ -90,6 +92,7 @@ impl Default for WorldGeometry {
             groups: std::collections::HashSet::with_capacity(INSTANCE_CAPACITY as usize),
             accepted_models: 0,
             model_cut: 0,
+            entity_capacity: EntityQuadCapacity::FORMAT_ONLY,
             stage: 0,
             stage_ends: [[0; 4]; STAGES - 1],
         }
@@ -133,6 +136,13 @@ impl WorldGeometry {
     /// Entity-stream cut used by directly staged instances in this view.
     pub fn set_model_cut(&mut self, cut: u32) {
         self.model_cut = cut;
+    }
+    /// Room for this view's CPU copies after reserving the other frame buffers.
+    pub fn set_entity_capacity(&mut self, capacity: EntityQuadCapacity) {
+        self.entity_capacity = capacity;
+    }
+    pub fn take_entity_capacity(&mut self) -> EntityQuadCapacity {
+        std::mem::replace(&mut self.entity_capacity, EntityQuadCapacity::FORMAT_ONLY)
     }
     pub fn model_cut(&self) -> u32 {
         self.model_cut

@@ -7,10 +7,10 @@ use mod_api::{
     DrawError, InstanceError, ModelInstance, ModelRef, NameTagOptions, PipelineDrawError,
     PipelineQuad, RenderLevelStage, RenderPipelineRef, WorldDrawUsage, WorldLine, WorldQuad,
 };
-use sunrise_client::mesher::Vertex;
 use sunrise_client::screen_effects::{CameraQuads, sampling};
 use sunrise_client::terrain_model;
 use sunrise_client::world_geometry::{self, ModelBatch, WorldGeometry};
+use sunrise_client::{gfx::QuadRefusal, mesher::Vertex};
 
 impl Game<'_> {
     /// A camera-space quad in solid `argb`, of the atlas's white texel.
@@ -76,6 +76,7 @@ impl Game<'_> {
             [(white.u0 + white.u1) * 0.5, (white.v0 + white.v1) * 0.5],
         );
         if title {
+            draw.take_entity_capacity();
             return;
         }
         draw.set_model_cut(entities.len() as u32);
@@ -344,6 +345,25 @@ impl Game<'_> {
         camera: DVec3,
         entities: &mut Vec<Vertex>,
     ) {
+        let capacity = draw
+            .take_entity_capacity()
+            .after(draw.labels().iter().map(|v| v.len()).sum());
+        let mut full = false;
+        let mut invalid = 0usize;
+        let submit =
+            |entities: &mut Vec<Vertex>, quad, full: &mut bool, invalid: &mut usize| match capacity
+                .submit(entities, quad)
+            {
+                Ok(()) => true,
+                Err(QuadRefusal::Invalid) => {
+                    *invalid += 1;
+                    true
+                }
+                Err(QuadRefusal::Full) => {
+                    *full = true;
+                    false
+                }
+            };
         let mut run_overlay = None;
         let mut materials = std::mem::take(&mut self.model_copy_order);
         materials.clear();
@@ -364,34 +384,35 @@ impl Game<'_> {
                 run_overlay = Some(copy.overlay);
                 self.mark_model_copies(start);
             }
-            let shown = || {
+            let shift = (DVec3::from(copy.origin) - camera).as_vec3();
+            super::minecarts::emit_model_quads(
                 faces
                     .iter()
                     .filter(|face| !face.hidden_by(copy.hidden_faces))
-            };
-            super::minecarts::emit_model_faces(
-                shown().copied().map(|face| (face, copy.light)),
+                    .copied()
+                    .map(|face| (face, copy.light)),
                 world_geometry::row_major_3x4(copy.transform),
                 true,
                 |index| (index >= 0).then_some(copy.tint & 0xFF_FFFF),
-                entities,
-            );
-            let shift = (DVec3::from(copy.origin) - camera).as_vec3();
-            let (quads, _) = entities[start..].as_chunks_mut::<4>();
-            for quad in quads {
-                for vertex in quad.iter_mut() {
-                    vertex.pos = (Vec3::from(vertex.pos) + shift).to_array();
-                    vertex.layer = copy.overlay;
-                    if copy.color != u32::MAX {
-                        vertex.color = terrain_model::multiply_draw_color(vertex.color, copy.color);
+                |face, mut quad| {
+                    for vertex in &mut quad {
+                        vertex.pos = (Vec3::from(vertex.pos) + shift).to_array();
+                        vertex.layer = copy.overlay;
+                        if copy.color != u32::MAX {
+                            vertex.color =
+                                terrain_model::multiply_draw_color(vertex.color, copy.color);
+                        }
                     }
-                }
+                    super::minecarts::scale_tint_alpha(&mut quad, [&face], copy.tint);
+                    submit(entities, quad, &mut full, &mut invalid)
+                },
+            );
+            if full {
+                break;
             }
-            super::minecarts::scale_tint_alpha(&mut entities[start..], shown(), copy.tint);
         }
-        if !materials.is_empty() {
+        if !full && !materials.is_empty() {
             self.mark_model_copies(entities.len());
-            let layers = &self.pack.render.sprite_layers;
             for &index in &materials {
                 let copy = draw.copy(index as usize);
                 let Some(faces) = self.model_faces(copy.slot) else {
@@ -419,31 +440,24 @@ impl Game<'_> {
                 terrain_model::draw_model(
                     faces,
                     pose,
+                    terrain_model::NormalPose::from_affine(pose),
                     copy.light,
                     options,
-                    |name| {
-                        layers
-                            .get(name)
-                            .or_else(|| layers.get(name.strip_prefix("minecraft:")?))
-                            .copied()
-                    },
-                    |quad| {
-                        if !super::draw_boundary::quad_allowed(
-                            quad.map(|v| v.pos),
-                            quad.map(|v| v.uv),
-                            entities.len(),
-                            super::draw_boundary::MAX_DRAW_VERTICES,
-                        ) {
-                            return entities
-                                .len()
-                                .checked_add(4)
-                                .is_some_and(|end| end <= super::draw_boundary::MAX_DRAW_VERTICES);
-                        }
-                        entities.extend_from_slice(&quad);
-                        true
-                    },
+                    |_| None, // Copies have no UV shift; their faces already name their layer.
+                    |quad| submit(entities, quad, &mut full, &mut invalid),
                 );
+                if full {
+                    break;
+                }
             }
+        }
+        if full {
+            log::warn!("World model copies: remaining quads do not fit the scoped entity buffers");
+        }
+        if invalid != 0 {
+            log::warn!(
+                "World model copies: skipped {invalid} quads with invalid vertex coordinates or UVs"
+            );
         }
         self.model_copy_order = materials;
         draw.clear_copies();
@@ -610,6 +624,24 @@ mod tests {
             assert!(entities.len() < faces * 8, "the hidden faces are absent");
             // Vertex colours are ABGR: white times `half_red` (`0xFF80FFFF`) on every face.
             assert!(entities.iter().all(|v| v.color == 0xFFFF_FF80));
+
+            // One already-generated entity quad leaves exactly one copy quad in a small batch.
+            let mut small = entities[..4].to_vec();
+            let capacity = sunrise_client::gfx::EntityQuadCapacity::from_buffer_sizes(
+                (12 * size_of::<Vertex>()) as u64,
+                (17 * size_of::<u32>()) as u64,
+            );
+            draw.set_entity_capacity(capacity);
+            context(game, &mut draw)
+                .draw_model_instances(
+                    model,
+                    &[ModelInstance::at([9.0, 70.0, 0.0], u32::MAX).with_color(half_red)],
+                )
+                .unwrap();
+            game.commit_model_instances(&mut draw, camera, &mut small);
+            assert_eq!(small.len(), 8);
+            assert!(small[..4].iter().all(|v| (3.0..=4.0).contains(&v.pos[0])));
+            assert!(small[4..].iter().all(|v| (9.0..=10.0).contains(&v.pos[0])));
         });
     }
 

@@ -4,6 +4,7 @@
 use super::{Game, native_block_entity_draw::BlockEntityDraw};
 use mod_api::{ModelError, ModelRef, TerrainMaterial, TerrainModelOptions, TerrainShade};
 use sunrise_client::{
+    gfx::QuadRefusal,
     models::catalog::BakedFace,
     terrain_model::{
         NativeModelMaterial, NativeModelRenderOptions, NativeModelShade, NativeModelUvShift,
@@ -30,18 +31,11 @@ impl Game<'_> {
             .instance_slot(fields.slot)
             .and_then(|_| self.model_faces(fields.slot))
             .ok_or(ModelError::UnknownModel)?;
-        let layers = &self.pack.render.sprite_layers;
         draw_terrain_model(
             draw,
             faces,
-            |name| {
-                layers
-                    .get(name)
-                    .or_else(|| layers.get(name.strip_prefix("minecraft:")?))
-                    .copied()
-            },
+            |name| self.pack.render.block_sprite_layer(name),
             options,
-            super::draw_boundary::MAX_DRAW_VERTICES,
         );
         Ok(())
     }
@@ -76,38 +70,34 @@ fn engine_options(options: TerrainModelOptions<'_>) -> NativeModelRenderOptions<
     }
 }
 
-/// Appends each valid quad of `faces` under `draw`'s pose up to `vertex_limit`.
+/// Appends each valid quad of `faces` under the scoped draw's pose.
 fn draw_terrain_model(
     draw: &mut BlockEntityDraw,
     faces: &[BakedFace],
     sprite_layer: impl Fn(&str) -> Option<u32>,
     options: TerrainModelOptions<'_>,
-    vertex_limit: usize,
 ) {
     let pose = draw.pose();
+    let normal_pose = draw.normal_pose();
     let light = draw.element_ambient();
-    let vertices = draw.vertices_mut();
-    let start = vertices.len();
+    let start = draw.vertex_count();
     draw_model(
         faces,
         pose,
+        normal_pose,
         light,
         engine_options(options),
         sprite_layer,
-        |quad| {
-            if !super::draw_boundary::quad_allowed(
-                quad.map(|v| v.pos),
-                quad.map(|v| v.uv),
-                vertices.len(),
-                vertex_limit,
-            ) {
-                return vertices
-                    .len()
-                    .checked_add(4)
-                    .is_some_and(|end| end <= vertex_limit);
+        |quad| match draw.submit_quad(quad) {
+            Err(QuadRefusal::Full) => {
+                log::warn!("Terrain model: remaining quads do not fit the scoped entity buffers");
+                false
             }
-            vertices.extend_from_slice(&quad);
-            true
+            Err(QuadRefusal::Invalid) => {
+                log::warn!("Terrain model: skipped a quad with invalid vertex coordinates or UVs");
+                true
+            }
+            Ok(()) => true,
         },
     );
     draw.lit_since(start, BlockEntityDraw::cell_centre, draw.light() & 0xffff);
@@ -125,7 +115,7 @@ mod tests {
     use sunrise_client::{
         block_entity_render::diffuse_lights,
         gfx::{
-            TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY,
+            EntityQuadCapacity, TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY,
             TERRAIN_MODEL_SOLID_OVERLAY,
         },
         mesher::Vertex,
@@ -160,17 +150,13 @@ mod tests {
 
     /// Full bright, a block east of the camera.
     fn drawn(faces: &[BakedFace], options: TerrainModelOptions<'_>) -> Vec<Vertex> {
-        drawn_with_limit(
-            faces,
-            options,
-            super::super::draw_boundary::MAX_DRAW_VERTICES,
-        )
+        drawn_with_limit(faces, options, EntityQuadCapacity::FORMAT_ONLY)
     }
 
     fn drawn_with_limit(
         faces: &[BakedFace],
         options: TerrainModelOptions<'_>,
-        vertex_limit: usize,
+        capacity: EntityQuadCapacity,
     ) -> Vec<Vertex> {
         let mut draw = BlockEntityDraw::posed(
             0.0,
@@ -181,7 +167,8 @@ mod tests {
             diffuse_lights(false),
             Vec::new(),
         );
-        draw_terrain_model(&mut draw, faces, sprite, options, vertex_limit);
+        draw.set_quad_capacity(capacity);
+        draw_terrain_model(&mut draw, faces, sprite, options);
         draw.into_vertices()
     }
 
@@ -336,7 +323,10 @@ mod tests {
         let vertices = drawn_with_limit(
             &[face(None, -1), face(None, -1), face(None, -1)],
             TerrainModelOptions::default(),
-            10,
+            EntityQuadCapacity::from_buffer_sizes(
+                (12 * size_of::<Vertex>()) as u64,
+                (17 * size_of::<u32>()) as u64,
+            ),
         );
         assert_eq!(vertices.len(), 8);
     }

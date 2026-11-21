@@ -691,13 +691,11 @@ fn the_quads_drawn_on_the_cpu_fit_the_device() {
     assert!(pollster::block_on(scope.pop()).is_none());
 }
 
-/// The entity buffer grows to a power of two, but never past what the device's buffers hold
-/// unless the frame's vertices need it.
+/// The entity buffer rounds up only when the rounded allocation fits the device.
 #[test]
 fn the_entity_buffer_grows_within_the_device() {
     let vertex = std::mem::size_of::<crate::mesher::Vertex>() as u64;
     let grow = super::super::draw_frame::entity_buffer_vertices;
     assert_eq!(grow(5, 1 << 30), 8);
     assert_eq!(grow(1000, 1000 * vertex), 1000, "not 1024");
-    assert_eq!(grow(1100, 1000 * vertex), 1100, "the frame's own");
 }

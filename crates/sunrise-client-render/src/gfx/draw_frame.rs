@@ -1346,6 +1346,7 @@ impl Renderer {
                 .as_ref()
                 .and_then(|(_, post)| post.as_ref())
                 .is_some_and(|post| post.skins_entities());
+        let entity_capacity = self.entity_quad_capacity();
         // While a shader pack draws entities, the runs of `entity_spans` its programs draw are
         // left out of Sunrise's own entity draw.
         let mut entities = frame.entities;
@@ -1354,6 +1355,28 @@ impl Renderer {
             && let Some((_, Some(post))) = &mut self.pack_post
             && post.has_entities()
         {
+            // Native terrain never goes to the pack's storage buffer. Check the remaining
+            // geometry (including its posed prefix) before asking the pack to allocate it.
+            let posed = if pack_skin {
+                skin.map_or(0, |s| s.vertices as usize)
+            } else {
+                0
+            };
+            let pack_room = entity_capacity.room(posed);
+            if frame.entities.len() > pack_room
+                && frame
+                    .entities
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|q| !is_native_terrain(q[0].layer))
+                    .count()
+                    > pack_room / 4
+            {
+                return Err(
+                    "Shader pack entity quads exceed the device's frame buffer limits".into(),
+                );
+            }
             pack_entities = true;
             post.prepare_entities(
                 &self.device,
@@ -1368,6 +1391,26 @@ impl Renderer {
             );
             entities = &self.pack_entity_rest;
         }
+        // The posed vertices, outlines and all CPU draw sources share one vertex buffer.
+        let posed = if pack_skin {
+            0
+        } else {
+            skin.map_or(0, |s| s.vertices)
+        };
+        let outlined = skin.map_or(0, |s| s.outline_vertices);
+        let reserved = posed as usize
+            + outlined as usize
+            + frame.additive.len()
+            + frame.hand.len() * if fg { 2 } else { 1 }
+            + frame.see_through.len()
+            + frame.shadow_only.len();
+        if reserved > entity_capacity.room(0) {
+            return Err("Entity frame sources exceed the device's frame buffer limits".into());
+        }
+        let fitted = entity_capacity
+            .after(reserved)
+            .fit_terrain(entities)
+            .ok_or("Non-scoped entity quads exceed the device's frame buffer limits")?;
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
         // path.
         let oit_on = self.improved_transparency
@@ -1394,7 +1437,7 @@ impl Renderer {
             native_cutout_mipped_quads,
             native_translucent_quads,
         ] = self.entity_batch.update(
-            entities,
+            &fitted,
             frame.additive,
             frame.hand,
             frame.see_through,
@@ -1402,11 +1445,6 @@ impl Renderer {
         );
         self.entity_batch.append_shadow_only(frame.shadow_only);
         // The posed models' vertices come first: the ordinary entities' draw takes them in.
-        let posed = if pack_skin {
-            0
-        } else {
-            skin.map_or(0, |s| s.vertices)
-        };
         let entity_quads = entity_quads + posed / 4;
         let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads = entity_quads
@@ -1546,11 +1584,10 @@ impl Renderer {
         // Glowing entities' silhouettes posed on the GPU go last, past every
         // material (the outline pass draws them from there).
         let outline_base = posed + all_entities.len() as u32;
-        let outlined = skin.map_or(0, |s| s.outline_vertices);
         let entity_vertices = u64::from(outline_base) + u64::from(outlined);
         if entity_vertices > self.entity_capacity {
             self.entity_capacity =
-                entity_buffer_vertices(entity_vertices, self.device.limits().max_buffer_size);
+                entity_buffer_vertices(entity_vertices, self.entity_vertex_buffer_limit());
             self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Entity vertices"),
                 size: self.entity_capacity * std::mem::size_of::<Vertex>() as u64,
@@ -1816,7 +1853,12 @@ impl Renderer {
                 .max(frame.glowing.len() as u32 / 4)
                 .max(outlined / 4);
         if max_quads > self.index_quads {
-            self.index_quads = max_quads.next_power_of_two();
+            let limit = (self.device.limits().max_buffer_size / (6 * size_of::<u32>() as u64))
+                .min(u64::from(u32::MAX / 6)) as u32;
+            if max_quads > limit {
+                return Err("Frame quads exceed the device's index buffer limit".into());
+            }
+            self.index_quads = max_quads.next_power_of_two().min(limit);
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         if let Some(b) = &frame.border {
@@ -3559,8 +3601,9 @@ fn mark_layers(active: &mut [u64], layers: &[u16]) {
 }
 
 /// The vertices the entity buffer grows to for a frame of `vertices`: the next power of two,
-/// but no more than a buffer of `max_buffer_size` bytes holds unless the frame itself needs it.
+/// but no more than a buffer of `max_buffer_size` bytes holds. The draw lists have already been
+/// fitted to that limit before growth.
 pub(super) fn entity_buffer_vertices(vertices: u64, max_buffer_size: u64) -> u64 {
     let most = max_buffer_size / std::mem::size_of::<Vertex>() as u64;
-    vertices.next_power_of_two().min(most).max(vertices)
+    vertices.next_power_of_two().min(most)
 }

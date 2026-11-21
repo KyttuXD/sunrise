@@ -1,11 +1,10 @@
 //! Still-fluid boxes under a block entity's pose (`BlockEntityDrawContext::fluid_box`), drawn
 //! with their own sorted translucent material (`FLUID_OVERLAY`).
 use super::{Game, native_block_entity_draw::BlockEntityDraw};
-use glam::Vec3;
 use mod_api::{FluidBoxOptions, FluidStack};
 use sunrise_client::{
     fluid_render::{NativeFluidRenderOptions, fluid_box, fluid_light},
-    gfx::FLUID_OVERLAY,
+    gfx::{FLUID_OVERLAY, QuadRefusal},
     mesher::Vertex,
 };
 
@@ -40,20 +39,12 @@ impl Game<'_> {
         ) else {
             return;
         };
-        draw_fluid_box(
-            draw,
-            look,
-            stack,
-            bounds,
-            options,
-            super::draw_boundary::MAX_DRAW_VERTICES,
-        );
+        draw_fluid_box(draw, look, bounds, options);
     }
 
     /// The look of `key`, once per resource generation: water and lava keep their own sprite,
     /// tint and light, any other fluid reads its look (`data/<mod>/sunrise/fluid/`).
     fn resolve_fluid_look(&self, key: mod_api::FluidKey) -> Option<FluidBoxLook> {
-        let layers = &self.pack.render.sprite_layers;
         let id = mod_api::__private::fluid_id(key)?;
         let luminosity = super::native_block_tables::BlockTables::new(&self.res, &self.pack)
             .fluid_type_properties(key)
@@ -62,12 +53,7 @@ impl Game<'_> {
             id,
             sunrise_client::mod_content::fluid_look(id).as_ref(),
             luminosity,
-            |sprite| {
-                layers
-                    .get(sprite)
-                    .or_else(|| layers.get(sprite.strip_prefix("minecraft:")?))
-                    .copied()
-            },
+            |sprite| self.pack.render.block_sprite_layer(sprite),
         )
     }
 }
@@ -75,7 +61,7 @@ impl Game<'_> {
 /// The look of fluid `id`, whose declared look is `look` and whose block light is `luminosity`:
 /// vanilla's water and lava by their own sprites and tints, any other fluid by its look (a look
 /// with no sprite draws its tint flat, and a registered fluid with no look falls back to
-/// `minecraft:missingno`, matching vanilla `FluidStateModelSet.missingModel`). A missing sprite
+/// `minecraft:missingno`, matching vanilla `FluidStateModelSet.get`). A missing sprite
 /// falls back to `minecraft:missingno` (matching `TextureAtlas.getSprite`). Returns `None` for
 /// `minecraft:empty` or if neither the sprite nor `minecraft:missingno` is loaded.
 fn fluid_box_look(
@@ -112,58 +98,48 @@ fn draw_fluid_box(
         tint,
         luminosity,
     }: FluidBoxLook,
-    stack: &FluidStack,
     bounds: [f32; 6],
     options: FluidBoxOptions,
-    vertex_limit: usize,
 ) {
-    if stack.amount == 0 {
-        return;
-    }
     let pose = draw.pose();
-    if !pose.is_finite() {
-        return;
-    }
     let light = fluid_light(draw.light(), luminosity);
     let argb = options.argb.unwrap_or(tint);
     // The vertex colour is ABGR.
     let color = (argb & 0xFF00_FF00) | ((argb >> 16) & 0xFF) | ((argb & 0xFF) << 16);
     let options = NativeFluidRenderOptions {
-        argb: options.argb,
         render_bottom: options.render_bottom,
         uv_shrink_ratio: options.uv_shrink_ratio,
     };
-    let vertices = draw.vertices_mut();
-    fluid_box(bounds, options, |quad| {
-        let corners = quad.map(|v| pose.transform_point3(Vec3::from_array(v.pos)).to_array());
-        let uvs = quad.map(|v| v.uv);
-        if !super::draw_boundary::quad_allowed(corners, uvs, vertices.len(), vertex_limit) {
-            return vertices
-                .len()
-                .checked_add(4)
-                .is_some_and(|end| end <= vertex_limit);
+    fluid_box(bounds, pose, options, |quad| {
+        match draw.submit_quad(quad.map(|v| Vertex {
+            pos: v.pos,
+            uv: v.uv,
+            layer: FLUID_OVERLAY,
+            color,
+            light,
+            // The TRANSLUCENT shader does not use normals for lighting.
+            normal: [0; 4],
+            glint_uv: [layer as f32, 0.0],
+        })) {
+            Err(QuadRefusal::Full) => {
+                log::warn!("Fluid box: remaining quads do not fit the scoped entity buffers");
+                false
+            }
+            Err(QuadRefusal::Invalid) => {
+                log::warn!("Fluid box: skipped a quad with invalid vertex coordinates or UVs");
+                true
+            }
+            Ok(()) => true,
         }
-        for (pos, uv) in corners.into_iter().zip(uvs) {
-            vertices.push(Vertex {
-                pos,
-                uv,
-                layer: FLUID_OVERLAY,
-                color,
-                light,
-                // The source TRANSLUCENT shader does not use normals for lighting.
-                normal: [0; 4],
-                glint_uv: [layer as f32, 0.0],
-            });
-        }
-        true
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Mat4;
+    use glam::{Mat4, Vec3};
     use sunrise_client::block_entity_render::diffuse_lights;
+    use sunrise_client::gfx::EntityQuadCapacity;
 
     fn stack(fluid: &str, amount: u32) -> FluidStack {
         mod_platform::__private::part_tests::game_thread();
@@ -185,21 +161,16 @@ mod tests {
 
     fn drawn(stack: &FluidStack, bounds: [f32; 6], options: FluidBoxOptions) -> Vec<Vertex> {
         let mut draw = frame();
-        if let Some(look) = look(stack, None, |sprite| {
-            Some(if sprite == "minecraft:missingno" {
-                1
-            } else {
-                7
+        if stack.amount != 0
+            && let Some(look) = look(stack, None, |sprite| {
+                Some(if sprite == "minecraft:missingno" {
+                    1
+                } else {
+                    7
+                })
             })
-        }) {
-            draw_fluid_box(
-                &mut draw,
-                look,
-                stack,
-                bounds,
-                options,
-                super::super::draw_boundary::MAX_DRAW_VERTICES,
-            );
+        {
+            draw_fluid_box(&mut draw, look, bounds, options);
         }
         draw.into_vertices()
     }
@@ -321,17 +292,20 @@ mod tests {
         );
         assert_eq!(vertices.len(), 6 * 4);
 
-        // Hitting the vertex-index limit stops cleanly at whole quads without partial vertices.
+        // An earlier source uses one quad; the byte limits leave only one more complete quad.
         let mut draw = frame();
+        draw.set_quad_capacity(EntityQuadCapacity::from_buffer_sizes(
+            (10 * size_of::<Vertex>()) as u64,
+            (18 * size_of::<u32>()) as u64,
+        ));
         let look = look(&stack("minecraft:water", 1000), None, |_| Some(7)).unwrap();
         draw_fluid_box(
             &mut draw,
             look,
-            &stack("minecraft:water", 1000),
-            [0.0, 0.0, 0.0, 10.0, 1.0, 10.0],
-            options,
-            10,
+            [0.0, 0.0, 0.0, 0.5, 0.0, 0.5],
+            FluidBoxOptions::new(false, 0.0),
         );
+        draw_fluid_box(&mut draw, look, [0.0, 0.0, 0.0, 10.0, 1.0, 10.0], options);
         assert_eq!(draw.into_vertices().len(), 8);
     }
 
@@ -354,14 +328,15 @@ mod tests {
         };
         let drawn_with = |stack: &FluidStack, options| {
             let mut draw = frame();
-            let look = fluid_box_look("test:potion", Some(&honey), 15, layers).unwrap();
+            let look = look(stack, Some(&honey), layers).unwrap();
             draw_fluid_box(
                 &mut draw,
-                look,
-                stack,
+                FluidBoxLook {
+                    luminosity: 15,
+                    ..look
+                },
                 [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
                 options,
-                super::super::draw_boundary::MAX_DRAW_VERTICES,
             );
             draw.into_vertices()
         };

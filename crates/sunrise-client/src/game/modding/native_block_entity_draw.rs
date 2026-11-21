@@ -18,11 +18,12 @@ use sunrise_client::{
     block_entity_render::{TEXT_OVER_OUTLINE, diffuse, diffuse_lights, vertex_light},
     containers::{BlockEntity, ModRevision},
     fast_hash::FxHashMap,
-    gfx::Cull,
+    gfx::{Cull, EntityQuadCapacity, QuadRefusal},
     hud::Rect,
     items::ItemStack,
     mesher::Vertex,
     mobs::model_layers,
+    terrain_model::NormalPose,
     text::Text,
 };
 use sunrise_world::registry::BlockStateId;
@@ -306,12 +307,15 @@ pub struct BlockEntityDraw {
     /// The block drawn, for `native_draw_item`'s owner.
     block: [i32; 3],
     pose: Mat4,
+    normal_pose: NormalPose,
     /// World entity draws track the local translation separately from their camera-relative
     /// render pose. The affine pose's basis is the same in both spaces.
     local_light_translation: Option<DVec3>,
-    parent_poses: Vec<(Mat4, Option<DVec3>)>,
+    parent_poses: Vec<(Mat4, NormalPose, Option<DVec3>)>,
     lights: (Vec3, Vec3),
     vertices: Vec<Vertex>,
+    quad_capacity: EntityQuadCapacity,
+    submission_full: bool,
     kept: bool,
     /// Where each turning part starts in `vertices` (`spin`), and where the
     /// parts standing still start again (`still`, none).
@@ -398,7 +402,8 @@ impl PlacementLight<'_> {
         for e in elements {
             let centre = light_turn.map_or(e.centre, |m| m.transform_point3(e.centre));
             let ambient = self.level.sample(centre).unwrap_or(e.ambient);
-            let span = &mut vertices[e.start - start..e.end - start];
+            let end = (e.end - start).min(vertices.len());
+            let span = &mut vertices[e.start - start..end];
             LitElement::apply_light(span, ambient);
             if turn.is_none()
                 && let LightPass::Fresh(Some(kept)) = &mut self.pass
@@ -493,7 +498,13 @@ fn place_geometry(
 ) {
     let mut start = 0;
     let mut spin: Option<Spin> = None;
-    for (end, next_spin) in spins.iter().copied().chain([(vertices.len(), None)]) {
+    let len = vertices.len();
+    for (end, next_spin) in spins
+        .iter()
+        .copied()
+        .take_while(|(end, _)| *end <= len)
+        .chain([(len, None)])
+    {
         let span = &mut vertices[start..end];
         if !span.is_empty() {
             let turn = spin.map(|s| s.turn(time));
@@ -547,10 +558,13 @@ impl BlockEntityDraw {
             light,
             block,
             pose,
+            normal_pose: NormalPose::from_affine(pose),
             local_light_translation: None,
             parent_poses: Vec::new(),
             lights,
             vertices,
+            quad_capacity: EntityQuadCapacity::FORMAT_ONLY,
+            submission_full: false,
             kept: false,
             spins: Vec::new(),
             level_lit: false,
@@ -672,7 +686,8 @@ impl BlockEntityDraw {
     }
 
     fn finish_light(&mut self, level: Option<&LevelLight<'_>>) {
-        super::draw_boundary::truncate(&mut self.vertices, super::draw_boundary::MAX_DRAW_VERTICES);
+        self.vertices
+            .truncate(EntityQuadCapacity::FORMAT_ONLY.room(0));
         for e in &self.lit {
             let end = e.end.min(self.vertices.len());
             if e.start >= end {
@@ -690,12 +705,13 @@ impl BlockEntityDraw {
     /// `PoseStack.pushPose`: `pop` comes back to the pose as it is now.
     fn push(&mut self) {
         self.parent_poses
-            .push((self.pose, self.local_light_translation));
+            .push((self.pose, self.normal_pose, self.local_light_translation));
     }
     /// `PoseStack.popPose`; the block's own pose is never popped.
     fn pop(&mut self) {
-        if let Some((pose, light_translation)) = self.parent_poses.pop() {
+        if let Some((pose, normal_pose, light_translation)) = self.parent_poses.pop() {
             self.pose = pose;
+            self.normal_pose = normal_pose;
             self.local_light_translation = light_translation;
         }
     }
@@ -709,15 +725,19 @@ impl BlockEntityDraw {
     fn rotate_about(&mut self, axis: [f32; 3], degrees: f32, pivot: [f32; 3]) {
         let axis = Vec3::from_array(axis).normalize_or(Vec3::Y);
         let pivot = Vec3::from_array(pivot);
+        let rotation = Quat::from_axis_angle(axis, degrees.to_radians());
         self.apply(
             Mat4::from_translation(pivot)
-                * Mat4::from_quat(Quat::from_axis_angle(axis, degrees.to_radians()))
+                * Mat4::from_quat(rotation)
                 * Mat4::from_translation(-pivot),
         );
+        self.normal_pose.rotate(rotation);
     }
     /// Scales what is drawn next by `by` about the pose's origin.
     fn scale(&mut self, by: [f32; 3]) {
-        self.apply(Mat4::from_scale(Vec3::from_array(by)));
+        let scale = Vec3::from_array(by);
+        self.apply(Mat4::from_scale(scale));
+        self.normal_pose.scale(scale);
     }
     /// Keeps what this call drew: the block is drawn the same again, with
     /// neither `native_block_entity_submit` nor
@@ -812,8 +832,19 @@ impl BlockEntityDraw {
     pub(super) fn pose(&self) -> Mat4 {
         self.pose
     }
-    pub(super) fn vertices_mut(&mut self) -> &mut Vec<Vertex> {
-        &mut self.vertices
+    pub(super) fn normal_pose(&self) -> NormalPose {
+        self.normal_pose
+    }
+    pub(super) fn vertex_count(&self) -> usize {
+        self.vertices.len()
+    }
+    pub(in crate::game) fn set_quad_capacity(&mut self, capacity: EntityQuadCapacity) {
+        self.quad_capacity = capacity;
+    }
+    pub(super) fn submit_quad(&mut self, quad: [Vertex; 4]) -> Result<(), QuadRefusal> {
+        let result = self.quad_capacity.submit(&mut self.vertices, quad);
+        self.submission_full |= result == Err(QuadRefusal::Full);
+        result
     }
     /// The light the helpers draw with (`native_draw_light`).
     pub(super) fn light(&self) -> u32 {
@@ -846,14 +877,6 @@ impl BlockEntityDraw {
     ) {
         let pose = self.pose();
         let at = corners.map(|c| pose.transform_point3(Vec3::from_array(c)));
-        if !super::draw_boundary::quad_allowed(
-            at.map(|p| p.to_array()),
-            uv,
-            self.vertices.len(),
-            super::draw_boundary::MAX_DRAW_VERTICES,
-        ) {
-            return;
-        }
         let normal = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
         let normal = if normal == Vec3::ZERO {
             (at[2] - at[1]).cross(at[3] - at[1]).normalize_or(Vec3::Y)
@@ -870,20 +893,18 @@ impl BlockEntityDraw {
         } else {
             (shaded(tint, diffuse(normal, self.lights)), [0; 4])
         };
-        for (p, uv) in at.into_iter().zip(uv) {
-            self.vertices.push(Vertex {
-                pos: p.to_array(),
-                uv: [
-                    sprite.u0 + (sprite.u1 - sprite.u0) * uv[0],
-                    sprite.v0 + (sprite.v1 - sprite.v0) * uv[1],
-                ],
-                layer: 0,
-                color,
-                light,
-                normal,
-                glint_uv: [0.0, 0.0],
-            });
-        }
+        let _ = self.submit_quad(std::array::from_fn(|i| Vertex {
+            pos: at[i].to_array(),
+            uv: [
+                sprite.u0 + (sprite.u1 - sprite.u0) * uv[i][0],
+                sprite.v0 + (sprite.v1 - sprite.v0) * uv[i][1],
+            ],
+            layer: 0,
+            color,
+            light,
+            normal,
+            glint_uv: [0.0; 2],
+        }));
     }
 
     fn model(&mut self, faces: &[super::minecarts::PreparedModelFace], tint: u32) {
@@ -1024,13 +1045,20 @@ impl KeptGeometry {
         let start = draw.vertices.len();
         if let Some(entry) = self.get(pos, key, revision, draw.game_time) {
             if visible(entry.bounds, start) {
+                let count = entry.vertices.len().min(draw.quad_capacity.room(start));
+                let admitted = &entry.vertices[..count];
+                if count < entry.vertices.len() {
+                    log::warn!(
+                        "Block entity at {pos:?}: kept quads do not fit the current frame buffers"
+                    );
+                }
                 if entry.spins.is_empty() {
-                    draw.vertices.extend(entry.vertices.iter().map(|v| Vertex {
+                    draw.vertices.extend(admitted.iter().map(|v| Vertex {
                         pos: (Vec3::from_array(v.pos) + origin).to_array(),
                         ..*v
                     }));
                 } else {
-                    draw.vertices.extend_from_slice(&entry.vertices);
+                    draw.vertices.extend_from_slice(admitted);
                     place_geometry(
                         &mut draw.vertices[start..],
                         &entry.spins,
@@ -1052,9 +1080,11 @@ impl KeptGeometry {
         }
         draw.block = pos;
         draw.pose = Mat4::IDENTITY;
+        draw.normal_pose = NormalPose::IDENTITY;
         draw.parent_poses.clear();
         draw.light = key.light;
         draw.kept = false;
+        draw.submission_full = false;
         draw.spins.clear();
         draw.level_lit = false;
         draw.lit.clear();
@@ -1069,7 +1099,7 @@ impl KeptGeometry {
             e.end -= start;
         }
         let vertices = &mut draw.vertices[start..];
-        let (spins, lit, cached) = if draw.kept {
+        let (spins, lit, cached) = if draw.kept && !draw.submission_full {
             // Keep the intrinsic floors, not the sampled light written into the frame.
             let entry = self.keep(
                 pos,
@@ -1168,10 +1198,13 @@ impl Game<'_> {
             light: 0,
             block: [0; 3],
             pose: Mat4::IDENTITY,
+            normal_pose: NormalPose::IDENTITY,
             local_light_translation: None,
             parent_poses: Vec::new(),
             lights: diffuse_lights(self.nether_lighting()),
             vertices: std::mem::take(out),
+            quad_capacity: self.scoped_quad_capacity(),
+            submission_full: false,
             kept: false,
             spins: Vec::new(),
             level_lit: false,
@@ -1248,6 +1281,14 @@ impl Game<'_> {
             );
         }
         *out = draw.vertices;
+    }
+
+    pub(in crate::game) fn scoped_quad_capacity(&self) -> EntityQuadCapacity {
+        self.renderer
+            .as_ref()
+            .map_or(EntityQuadCapacity::FORMAT_ONLY, |r| {
+                r.entity_quad_capacity()
+            })
     }
 
     pub(super) fn prepared_copy_room(&self, already: u64, incoming: usize) -> Option<usize> {
@@ -1462,24 +1503,17 @@ impl Game<'_> {
                 pose.transform_point3(Vec3::new(v.pos[0], v.pos[1], v.depth + lift))
                     .to_array()
             });
-            if !super::draw_boundary::quad_allowed(
-                at,
-                corners.map(|v| v.uv),
-                draw.vertices.len(),
-                super::draw_boundary::MAX_DRAW_VERTICES,
-            ) {
-                continue;
-            }
-            for (pos, v) in at.into_iter().zip(corners) {
-                draw.vertices.push(Vertex {
-                    pos,
-                    uv: v.uv,
-                    layer: 0,
-                    color: v.color,
-                    light,
-                    normal: [0; 4],
-                    glint_uv: [0.0, 0.0],
-                });
+            if draw.submit_quad(std::array::from_fn(|i| Vertex {
+                pos: at[i],
+                uv: corners[i].uv,
+                layer: 0,
+                color: corners[i].color,
+                light,
+                normal: [0; 4],
+                glint_uv: [0.0; 2],
+            })) == Err(QuadRefusal::Full)
+            {
+                break;
             }
         }
         width.ceil()
@@ -1822,10 +1856,13 @@ mod tests {
             light: 0xF0F0,
             block: [0; 3],
             pose: Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            normal_pose: NormalPose::IDENTITY,
             local_light_translation: None,
             parent_poses: Vec::new(),
             lights: diffuse_lights(false),
             vertices: Vec::new(),
+            quad_capacity: EntityQuadCapacity::FORMAT_ONLY,
+            submission_full: false,
             kept: false,
             spins: Vec::new(),
             level_lit: false,
@@ -1833,6 +1870,18 @@ mod tests {
             prepared: false,
             records: Vec::new(),
         }
+    }
+
+    #[test]
+    fn normal_pose_survives_uniform_scale_and_is_restored_by_pop() {
+        let mut draw = draw();
+        draw.scale([0.0; 3]);
+        assert_eq!(draw.normal_pose().transform(Vec3::Z), Some(Vec3::Z));
+        draw.push();
+        draw.scale([1.0, 0.0, 1.0]);
+        assert_eq!(draw.normal_pose().transform(Vec3::Z), None);
+        draw.pop();
+        assert_eq!(draw.normal_pose().transform(Vec3::Z), Some(Vec3::Z));
     }
 
     fn sprite() -> Rect {

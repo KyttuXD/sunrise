@@ -1,6 +1,86 @@
 //! Stable entity material grouping with renderer-owned, reusable CPU scratch.
 use super::Vertex;
 
+/// Space for whole quads in the entity stream. The same vertex and u32 index formats are used
+/// by the scope's CPU writer and by the renderer when it packs the frame's draw lists.
+#[derive(Clone, Copy, Debug)]
+pub struct EntityQuadCapacity(usize);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum QuadRefusal {
+    Invalid,
+    Full,
+}
+
+impl EntityQuadCapacity {
+    pub fn from_buffer_sizes(vertex_bytes: u64, index_bytes: u64) -> Self {
+        let quads = (vertex_bytes / (4 * size_of::<Vertex>() as u64))
+            .min(index_bytes / (6 * size_of::<u32>() as u64))
+            .min(u64::from(u32::MAX / 6)) // draw_indexed's index range
+            .min(i32::MAX as u64 / 4); // draw_indexed's signed base vertex
+        Self((quads * 4) as usize)
+    }
+
+    /// CPU-only draws have the format's address range, but no device allocation.
+    pub const FORMAT_ONLY: Self = Self((i32::MAX as usize / 4) * 4);
+
+    pub fn after(self, reserved: usize) -> Self {
+        Self(self.room(reserved))
+    }
+
+    pub fn room(self, used: usize) -> usize {
+        self.0.saturating_sub(used) / 4 * 4
+    }
+
+    pub fn submit(self, out: &mut Vec<Vertex>, quad: [Vertex; 4]) -> Result<(), QuadRefusal> {
+        if self.room(out.len()) == 0 {
+            return Err(QuadRefusal::Full);
+        }
+        if !quad
+            .iter()
+            .all(|v| v.pos.into_iter().chain(v.uv).all(f32::is_finite))
+        {
+            return Err(QuadRefusal::Invalid);
+        }
+        out.extend_from_slice(&quad);
+        Ok(())
+    }
+
+    /// Native terrain contributions share the buffer with all the other entity draws. When the
+    /// completed frame needs the space, retain the other sources and take only the scoped quads
+    /// that fit, in submission order. The ordinary material's offsets do not change.
+    pub(super) fn fit_terrain(self, entities: &[Vertex]) -> Option<std::borrow::Cow<'_, [Vertex]>> {
+        if entities.len() <= self.0 {
+            return Some(std::borrow::Cow::Borrowed(entities));
+        }
+        let quads = entities.as_chunks::<4>().0;
+        let ordinary = quads
+            .iter()
+            .filter(|q| !is_native_terrain(q[0].layer))
+            .count()
+            * 4;
+        if ordinary > self.0 {
+            return None;
+        }
+        let mut remaining = self.room(ordinary) / 4;
+        let mut fitted = Vec::with_capacity(self.0);
+        for quad in quads {
+            if is_native_terrain(quad[0].layer) {
+                if remaining == 0 {
+                    continue;
+                }
+                remaining -= 1;
+            }
+            fitted.extend_from_slice(quad);
+        }
+        log::warn!(
+            "Entity draw: {} scoped terrain quads do not fit the frame buffers",
+            quads.len() - fitted.len() / 4
+        );
+        Some(std::borrow::Cow::Owned(fitted))
+    }
+}
+
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
 /// ordinary entities, world text drawn with a depth bias (35,
 /// `RenderPipelines.TEXT_POLYGON_OFFSET`), breaking cracks (11), translucent
@@ -632,6 +712,44 @@ mod tests {
                 glint_uv: [0.0, 0.0],
             })
             .collect()
+    }
+
+    #[test]
+    fn scoped_quads_share_buffer_space_with_other_frame_sources() {
+        let vertex_bytes = (4 * size_of::<Vertex>()) as u64;
+        let index_bytes = (6 * size_of::<u32>()) as u64;
+        let capacity = EntityQuadCapacity::from_buffer_sizes(5 * vertex_bytes, 4 * index_bytes);
+        let mut source = geometry(1, false);
+        let ordinary: [Vertex; 4] = source.as_slice().try_into().unwrap();
+        let first = ordinary.map(|v| Vertex {
+            layer: FLUID_OVERLAY,
+            ..v
+        });
+        let last = ordinary.map(|v| Vertex {
+            layer: TERRAIN_MODEL_SOLID_OVERLAY,
+            ..v
+        });
+        let bad = first.map(|v| Vertex {
+            uv: [f32::NAN, 0.0],
+            ..v
+        });
+        assert_eq!(capacity.submit(&mut source, bad), Err(QuadRefusal::Invalid));
+        assert_eq!(source.len(), 4);
+        capacity.submit(&mut source, first).unwrap();
+        capacity.submit(&mut source, last).unwrap();
+        capacity.submit(&mut source, ordinary).unwrap();
+        assert_eq!(capacity.submit(&mut source, last), Err(QuadRefusal::Full));
+        // A separate frame source uses one quad; ordinary quads stay ahead of scoped overflow.
+        let fitted = capacity.after(4).fit_terrain(&source).unwrap();
+        assert_eq!(
+            fitted
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|q| q[0].layer)
+                .collect::<Vec<_>>(),
+            [0, FLUID_OVERLAY, 0]
+        );
     }
 
     fn equivalent(

@@ -248,6 +248,7 @@ impl<'a, 'g> GameBlockEntityDrawContext<'a, 'g> {
         game: &'a Game<'g>,
         surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw,
     ) -> Self {
+        surface.set_quad_capacity(game.scoped_quad_capacity());
         Self { game, surface }
     }
 }

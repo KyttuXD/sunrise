@@ -117,6 +117,14 @@ pub struct RenderAssets {
     pub generation: u64,
 }
 impl RenderAssets {
+    /// A sprite named explicitly in the blocks atlas (not a baked model material).
+    pub fn block_sprite_layer(&self, name: &str) -> Option<u32> {
+        self.sprite_layers
+            .get(name)
+            .or_else(|| self.sprite_layers.get(name.strip_prefix("minecraft:")?))
+            .copied()
+    }
+
     /// Resolve a registered standalone model in this published store.
     pub fn model(
         &self,

@@ -3115,6 +3115,20 @@ pub(super) fn emit_model_faces(
     tint: impl Fn(i32) -> Option<u32>,
     out: &mut Vec<Vertex>,
 ) {
+    emit_model_quads(faces, m, diffuse, tint, |_, quad| {
+        out.extend_from_slice(&quad);
+        true
+    });
+}
+
+/// Emit prepared entity-atlas faces without first building an unbounded temporary vertex span.
+pub(super) fn emit_model_quads(
+    faces: impl IntoIterator<Item = (PreparedModelFace, u32)>,
+    m: glam::Mat4,
+    diffuse: bool,
+    tint: impl Fn(i32) -> Option<u32>,
+    mut emit: impl FnMut(PreparedModelFace, [Vertex; 4]) -> bool,
+) {
     use sunrise_assets::model::Direction as D;
     let mut normals = sunrise_client::item_render::FaceNormals::new(m);
     for (quad, light) in faces {
@@ -3148,19 +3162,21 @@ pub(super) fn emit_model_faces(
         } else {
             light
         };
-        for k in 0..4 {
-            let uv = quad.uv[k];
-            out.push(Vertex {
+        if !emit(
+            quad,
+            std::array::from_fn(|k| Vertex {
                 normal,
                 pos: m
                     .transform_point3(glam::Vec3::from_array(quad.positions[k]))
                     .to_array(),
-                uv,
+                uv: quad.uv[k],
                 layer: 0,
                 color,
                 light,
                 glint_uv: [0.0, 0.0],
-            });
+            }),
+        ) {
+            break;
         }
     }
 }
