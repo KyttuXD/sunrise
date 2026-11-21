@@ -6617,7 +6617,7 @@ fn item_references_resolve_against_other_packages_registered_content() {
     let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-item")).unwrap_err();
     assert_eq!(
         error.to_string(),
-        "addon:planter: crafting_remainder \"provider:handle\" is not an item"
+        "items.json: addon:planter: crafting_remainder \"provider:handle\" is not an item"
     );
     mods[1].content.blocks.clear();
     let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-block")).unwrap_err();
