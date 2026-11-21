@@ -1,3 +1,13 @@
-ids = ["hook:pickup_xp"]
-why = "Match NeoForge PlayerXpEvent.PickupXp and vanilla ExperienceOrb.playerTouch (plus ExperienceOrb.addAdditionalSaveData and ExperienceOrb.readAdditionalSaveData). pickup_xp (bumped from version 1 to 2) previously documented a 1..=i32::MAX clamp on value while enforcing a count.max(1) floor in guest_orbs and copying a pre-call snapshot back by stale index. Edited value and count now apply directly to the live orb located by join identity so direct orb writes and removals survive: value keeps vanilla's signed int semantics (zero and negative values repair nothing and award no XP, and surviving orbs persist Value as a signed short), count is no longer floored to 1 (setting count to 0 discards the orb without awarding XP or setting the 2-tick delay), and pickup runs in vanilla ExperienceOrb.playerTouch order (takeXpDelay = 2, take, Mending/XP for positive value, then decrement count and discard at 0). Orb NBT loading validates Count against ExtraCodecs.POSITIVE_INT (1..=i32::MAX, else 1)."
-migrate = "Rebuild listeners of `Hooks::pickup_xp` against version 2. Do not rely on `event.value <= 0` being clamped to 1 (it awards 0 XP and repairs nothing while preserving the signed value on surviving orbs) or on `event.count = 0` being floored to 1 and still awarding a pickup (setting `event.count = 0` now discards the orb without awarding XP or setting the 2-tick pickup delay; set `event.count = 1` to take the final pickup and discard)."
+ids = [
+    "hook:pickup_xp",
+    "hook:pickup_xp.orb",
+    "hook:pickup_xp.value",
+    "hook:pickup_xp.count",
+    "method:Hooks::pickup_xp",
+    "type:PickupXpEvent",
+    "type:PickupXpEvent.orb",
+    "type:PickupXpEvent.value",
+    "type:PickupXpEvent.count",
+]
+why = "NeoForge PlayerXpEvent.PickupXp.getOrb exposes the same live orb to every listener. Sunrise used to pass separate value and count outputs that could disagree with the orb itself. Version 2 gives listeners the live ExperienceOrbRef. Vanilla ExperienceOrb.playerTouch starts the delay and takes the orb only after the veto, passes its signed value to Mending, awards positive remaining XP, and then decrements the count and discards at zero. EnchantmentHelper.modifyDurabilityToRepairFromXp clamps negative repair results to zero, not the value passed to the enchantment. ExperienceOrb.readAdditionalSaveData decodes Count through ExtraCodecs.POSITIVE_INT after Number.intValue, and reads Value through TagValueInput.getShortOr. A surviving orb saves Value as a signed short and Count as a signed int, as in ExperienceOrb.addAdditionalSaveData."
+migrate = "Rebuild Hooks::pickup_xp against version 2. Replace reads of event.value and event.count with event.orb.value(host) and event.orb.count(host). Replace assignments with event.orb.set_value(host, value) and event.orb.set_count(host, count); handle their Result. The count writer returns ExperienceOrbWriteError::InvalidCount for 0 or a value above i32::MAX without changing the orb. For the old numeric event.orb use event.orb.entity().id(). Writes are immediately visible to later listeners. Flow::Cancel stops the pickup and its delay, not a listener's writes. To discard instead of taking, call event.orb.entity().discard(host) and return Flow::Cancel."

@@ -302,48 +302,30 @@ impl Game<'_> {
         let listened = (self.serving.is_some() || self.options.dedicated.is_some())
             && mod_api::__private::listened(mod_api::HookId::PickupXp);
         if listened {
-            let mut value = self.orbs[index].value;
-            let mut count = self.orbs[index].count;
-            let (before_value, before_count) = (value, count);
+            let Some(epoch) = self.native_lifecycle.epoch() else {
+                log::error!("pickup_xp: no open server level for orb {orb_id}");
+                return;
+            };
+            let orb = mod_api::ExperienceOrbRef::new(mod_api::EntityRef::new(epoch, orb_id));
             let mut canceled = false;
             let dimension = self.dim.id();
             let called = self.as_guest(conn, |game| {
                 let player = game.native_acting_id();
-                game.native_pickup_xp(
-                    player,
-                    dimension,
-                    orb_id,
-                    &mut value,
-                    &mut count,
-                    &mut canceled,
-                );
+                game.native_pickup_xp(player, dimension, orb, &mut canceled);
             });
             if called.is_none() || canceled {
                 return;
             }
-            let Some(at_index) = self.orbs.locate(join) else {
-                return;
-            };
-            if value != before_value {
-                self.orbs[at_index].value = value;
-            }
-            if count != before_count {
-                self.orbs[at_index].count = count;
-            }
         }
+        // A listener can remove or move entities. Resolve the orb's join identity,
+        // not its former index.
         let Some(index) = self.orbs.locate(join) else {
             return;
         };
-        let (orb_value, orb_count, orb_pos) = {
-            let orb = &self.orbs[index];
-            (orb.value, orb.count, orb.position)
-        };
-        if orb_count == 0 {
-            self.remove_orb(index);
-            return;
-        }
-        // ExperienceOrb.playerTouch: delay, take, repair/award positive value,
-        // then decrement count and discard at zero.
+        let orb = &self.orbs[index];
+        let (orb_value, orb_pos) = (orb.value, orb.position);
+        // ExperienceOrb.playerTouch: delay, take, repair, award positive remaining
+        // experience, then decrement count and discard at zero.
         if let Some(host) = self.lan.as_mut() {
             host.play.entry(conn).or_default().xp_delay = 2;
         }
@@ -360,20 +342,16 @@ impl Game<'_> {
             0.1,
             pitch,
         );
-        if orb_value > 0 {
-            let value = orb_value as u32;
-            self.as_guest(conn, |game| {
-                let rest = game.mending(value);
-                if rest > 0 {
-                    game.give_experience_points(rest.min(i32::MAX as u32) as i32);
-                }
-            });
-        }
+        self.as_guest(conn, |game| {
+            let rest = game.mending(orb_value);
+            if rest > 0 {
+                game.give_experience_points(rest);
+            }
+        });
         if let Some(index) = self.orbs.locate(join) {
-            if self.orbs[index].count <= 1 {
+            self.orbs[index].count -= 1;
+            if self.orbs[index].count == 0 {
                 self.remove_orb(index);
-            } else {
-                self.orbs[index].count -= 1;
             }
         }
     }

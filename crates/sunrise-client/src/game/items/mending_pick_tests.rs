@@ -23,7 +23,7 @@ fn table(id: &str, slots: &[&str], effect: bool) -> Enchantments {
         .unwrap()
 }
 
-fn repair(id: &str, chest: bool, table: &Enchantments) -> (u32, u32) {
+fn repair(id: &str, chest: bool, table: &Enchantments) -> (u32, i32) {
     mod_platform::testing::with_mods(Default::default(), || {
         let mut result = None;
         crate::game::native_entity_refs::tests::with_game(|game| {

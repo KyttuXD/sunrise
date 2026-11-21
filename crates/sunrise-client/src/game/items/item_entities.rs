@@ -710,7 +710,7 @@ impl Game<'_> {
                     // ExperienceOrb.playerTouch: one orb every 2 ticks; a
                     // merged orb gives its value once per count.
                     self.xp_delay = 2;
-                    gained += o.points();
+                    gained = o.points() as i32;
                     taken.push(o.clone());
                     o.count -= 1;
                     return o.count > 0;
@@ -741,7 +741,7 @@ impl Game<'_> {
             );
         }
         if gained > 0 {
-            self.give_experience_points(gained as i32);
+            self.give_experience_points(gained);
         }
     }
 
