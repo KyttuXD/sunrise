@@ -687,6 +687,16 @@ mod item_resource_property_tests {
                 game.item_bundle_slots(&inner),
                 Some(vec![Some(stone.clone())])
             );
+            let half = ItemStack::new("minecraft:stone", 16);
+            let (taken, rest) = game.item_bundle_extract(&inner, 0, 16).unwrap();
+            assert_eq!(taken, Some(half.clone()));
+            assert_eq!(
+                game.item_bundle_slots(&rest),
+                Some(vec![Some(half.clone())])
+            );
+            let (taken, rest) = game.item_bundle_extract(&rest, 0, 16).unwrap();
+            assert_eq!(taken, Some(half));
+            assert_eq!(game.item_bundle_slots(&rest), Some(Vec::new()));
 
             let mut outer = ItemStack::new("minecraft:bundle", 1);
             outer.data_mut().bundle_contents = vec![inner.clone()];
