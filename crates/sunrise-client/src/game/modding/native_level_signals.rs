@@ -272,9 +272,6 @@ impl LevelHost for ReadLevel<'_, '_> {
     fn height(&self) -> i32 {
         self.game.world.shape.height
     }
-    fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-        super::native_world_read::block_in_tag(block, tag)
-    }
     fn tags(&self) -> &dyn mod_api::Tags {
         self
     }
@@ -288,13 +285,6 @@ impl LevelHost for ReadLevel<'_, '_> {
     fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
         self.game
             .state_fluid_state(state.try_into_engine(&()).ok()?)
-    }
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        Some(super::native_world_read::fluid_in_tag(
-            self.game.items(),
-            fluid,
-            tag,
-        ))
     }
     fn state_with_property(
         &self,

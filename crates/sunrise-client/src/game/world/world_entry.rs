@@ -806,7 +806,6 @@ impl Game<'_> {
         }
         let registry = self.pack.assets.registry;
         let block_tags = &items.block_tags;
-        let tags = self.block_tag_sets(items);
         let parts = mod_api::__private::prepare_parts(
             block_tags,
             &items.item_tags,
@@ -834,7 +833,6 @@ impl Game<'_> {
         Ok(PreparedParts {
             cauldrons,
             block_states,
-            tags,
             parts,
         })
     }
@@ -939,7 +937,6 @@ impl Game<'_> {
             );
         }
         api_values::install_block_states(&self.tick, prepared.block_states);
-        native_world_read::install_block_tags(prepared.tags);
         api_values::install_resolved_parts(&self.tick, prepared.parts);
         self.mark_collision_shape_states();
         self.resolve_block_paths();

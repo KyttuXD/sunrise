@@ -118,6 +118,18 @@ impl crate::Tags for FakeRegistries {
         Self::resolved_item_id(item)?;
         Some(false)
     }
+    fn block_in_tag(&self, block: crate::BlockKey, _: crate::TagKey) -> Option<bool> {
+        crate::parts::installed()?
+            .resolved_blocks
+            .get()?
+            .names
+            .id(block.0)?;
+        Some(false)
+    }
+    fn fluid_in_tag(&self, fluid: crate::FluidKey, _: crate::TagKey) -> Option<bool> {
+        crate::parts::resolved_fluids().get()?.id(fluid.0)?;
+        Some(false)
+    }
     fn items(&self, _: crate::TagKey) -> crate::TagMembers<crate::ItemKey> {
         if crate::parts::installed()
             .and_then(|parts| parts.resolved_items.get())

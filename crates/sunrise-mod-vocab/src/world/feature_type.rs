@@ -20,7 +20,7 @@
 //! Feature types run on the worldgen workers.
 use crate::world::datapack_registry::{DatapackEntry, DatapackField};
 use crate::world::structure_type::HeightmapType;
-use crate::{BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, RandomSource};
+use crate::{BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, RandomSource, TagKey};
 use std::sync::Arc;
 use sunrise_core::nbt::Compound;
 
@@ -100,8 +100,9 @@ pub trait FeatureContext {
     /// read.
     fn block(&mut self, pos: [i32; 3]) -> Option<BlockState>;
     /// `BlockState.is(tag)` of the block at `pos`: whether it is in block tag `tag`
-    /// (`minecraft:leaves`), or `None` where the level can't be read.
-    fn block_in_tag(&mut self, pos: [i32; 3], tag: &str) -> Option<bool>;
+    /// (resolved once at registration via [`Registrar::tag_key`](crate::TagsRegistrar::tag_key)),
+    /// or `None` where the level can't be read or the tag key is unavailable.
+    fn block_in_tag(&mut self, pos: [i32; 3], tag: TagKey) -> Option<bool>;
     /// `LevelWriter.setBlock(pos, state, flags)`, as `Feature.setBlock` (flags
     /// `BlockUpdateFlags::NEIGHBORS | CLIENTS`) and the tree features (`| KNOWN_SHAPE`) call it:
     /// whether it will be written.

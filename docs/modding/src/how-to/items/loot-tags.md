@@ -5,8 +5,10 @@ Registered `ModLootFunction` and `ModLootCondition` codecs read
 snapshots. This is a read-only view of the merged tags used by the current loot
 evaluator. The context supplies only its snapshot, tags and selected random.
 
-Resolve an `Identifier` with `context.tags().key(&id)`, retain the resulting `TagKey`,
-and call `is_in_tag(item, tag)` for item membership. The `items(tag)`, `blocks(tag)`
+Resolve an `Identifier` with `context.tags().key(&id)` (or `Registrar::tag_key` at registration),
+retain the resulting `TagKey`, and call `is_in_tag(item, tag)`, `block_in_tag(block, tag)` or
+`fluid_in_tag(fluid, tag)` (or `key.is_in_tag(context.tags(), tag)` on keys and states) for
+membership. The `items(tag)`, `blocks(tag)`
 and `fluids(tag)` methods return `TagMembers::Missing` if a tag is absent,
 `TagMembers::Members(keys)` for a loaded tag's ordered members (possibly empty),
 or `TagMembers::Unavailable` if a required key mapping is not available. There is

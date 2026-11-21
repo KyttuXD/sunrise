@@ -238,12 +238,11 @@ and `is_loaded(pos)` (`Level.isLoaded`: inside the build height and in a loaded 
 (`LevelReader.enabledFeatures`, a shared `FeatureFlags` with the world's effective flags). An omitted
 flag list in the save means `minecraft:vanilla`, not an empty set. These queries do not allocate.
 None of them loads a chunk. Light can be available outside the build height or where no chunk is
-resident, so check `is_loaded` first when you need a resident block. `LevelHost` also answers
-tag and fluid questions without a `Host`: `block_in_tag(block_key, tag)`, `fluid_state(pos)`
+resident, so check `is_loaded` first when you need a resident block. `LevelHost` also answers tag and fluid questions without a `Host`: `tags()`, `fluid_state(pos)`
 (`getFluidState`, `None` where the block read is),
-`state_fluid_state(state)` and `fluid_in_tag(fluid_name, tag)`. Fluid reads return `FluidState` with a
-`FluidKey`, amount, falling flag and engine-derived source flag; `is_empty()` and `is_source()` report
-those states without a registry lookup. `block_state_id(name)` parses a block and properties, and `block_state_default(block)` gives a block's default state, as on `Host`; both return `None` for invalid input or unavailable context. For tag reads, use `Host::tags()`: resolve a `TagKey` with `Tags::key`, then call `Tags::is_in_tag` for item membership or `Tags::items`, `Tags::blocks` or `Tags::fluids` for ordered member lists. The list methods return `TagMembers::Missing` for an absent tag and `TagMembers::Members(keys)` for a loaded tag, even if `keys` is empty. They return `TagMembers::Unavailable` until that registry's authoritative tags have been applied or if a member key cannot be resolved. On clients `tags_updated` announces the applied server tags; the query never substitutes local resource-pack tags.
+and `state_fluid_state(state)`. Fluid reads return `FluidState` with a
+`FluidKey`, amount, falling flag and engine-derived source flag; `is_empty()`, `is_source()` and
+`is_in_tag(tags, tag)` query those states without a registry lookup. `block_state_id(name)` parses a block and properties, and `block_state_default(block)` gives a block's default state, as on `Host`; both return `None` for invalid input or unavailable context. For tag reads on either `Host` or `LevelHost`, use `tags()`: resolve a `TagKey` once through `Registrar::tag_key` or `Tags::key`, then call `is_in_tag(tags, tag)` on a `BlockKey`, `BlockState`, `FluidKey`, `FluidState` or `ItemKey` (or `Tags::block_in_tag`, `Tags::fluid_in_tag`, `Tags::is_in_tag`), or `Tags::items`, `Tags::blocks` or `Tags::fluids` for ordered member lists. The list methods return `TagMembers::Missing` for an absent tag and `TagMembers::Members(keys)` for a loaded tag, even if `keys` is empty. They return `TagMembers::Unavailable` until that registry's authoritative tags have been applied or if a member key cannot be resolved. On clients `tags_updated` announces the applied server tags; the query never substitutes local resource-pack tags.
 `default_components_bound` precedes `tags_updated` after item defaults are published and readable.
 Both notices carry `TagsUpdateCause`: `ServerDataLoad { reload }` for the server's initial data
 load or reload, and `ClientPacketReceived { integrated_server }` for a client's applied tags.
@@ -309,8 +308,8 @@ and `collision_shape` alike.
 A signal read never asks `state_for_placement` or `can_survive`, so it cannot re-enter the hook it was read in.
 On a client (its placement prediction and its own shape updates ask `state_for_placement`, `can_survive`,
 `may_place_on` and `can_sustain_plant` too) these reads answer from the client's loaded copy of the level, and the
-reads above that refuse clients return `None`, as do `block_in_tag` and `fluid_in_tag`. `tags()` still returns a
-service: `Tags::key` can resolve a key, but `is_in_tag` returns `None` and `items`, `fluids` and `blocks` return
+reads above that refuse clients return `None`. `tags()` still returns a
+service: `Tags::key` can resolve a key, but `is_in_tag`, `block_in_tag` and `fluid_in_tag` return `None` and `items`, `fluids` and `blocks` return
 `TagMembers::Unavailable` in this view. `BlockEntityPartState::state_in` gives its default there. Never answer from those as if
 they were the server's: a client's own shape update that refuses a block removes it on that client.
 `LevelTicksHost`'s signal reads moved here and now return `Option`.

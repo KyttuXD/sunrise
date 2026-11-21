@@ -43,6 +43,12 @@ impl ItemKey {
     pub fn registry_id(self, host: &dyn Host) -> Option<u32> {
         crate::backend_of(host)?.item_registry_id(self)
     }
+    /// Whether this item is in `tag` (`ItemStack.is(TagKey)`), over `tags`'s current
+    /// authoritative snapshot. An unknown tag is `Some(false)`; unavailable tags or mappings
+    /// return `None`.
+    pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
+        tags.is_in_tag(self, tag)
+    }
 }
 
 /// A menu type (`minecraft:generic_9x3`) in the built-in menu registry, in

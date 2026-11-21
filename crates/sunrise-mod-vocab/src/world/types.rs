@@ -49,6 +49,15 @@ pub struct IntGameRuleKey(pub(crate) u32);
 // exhaustive: only the registration table creates keys
 pub struct FluidKey(pub(crate) u32);
 
+impl FluidKey {
+    /// Whether this fluid is in `tag` (`FluidState.is(TagKey)`), over `tags`'s current
+    /// authoritative snapshot. An unknown tag is `Some(false)`; unavailable tags or mappings
+    /// return `None`.
+    pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
+        tags.fluid_in_tag(self, tag)
+    }
+}
+
 /// Sampling parameters for `LevelRef::find_closest_biome`, in blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -161,6 +170,12 @@ impl FluidState {
     /// Whether the engine identifies this state as a source.
     pub fn is_source(self) -> bool {
         self.source
+    }
+    /// Whether this state's fluid is in `tag` (`FluidState.is(TagKey)`), delegating through
+    /// `self.fluid`. An unknown tag is `Some(false)`; unavailable tags or mappings return
+    /// `None`.
+    pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
+        self.fluid.is_in_tag(tags, tag)
     }
     /// Match carried vanilla properties locally. Unknown names or noncanonical values
     /// do not match. Validate against `host.fluid_states()` separately for indexed errors.
@@ -1557,11 +1572,6 @@ pub trait LevelHost {
     fn height(&self) -> i32 {
         unimplemented!("LevelHost::height")
     }
-    /// `BlockState.is(TagKey)`: numeric membership of the resolved block in the merged block tag.
-    /// Unknown tags return false; unavailable authoritative tags or block mappings return None.
-    fn block_in_tag(&self, _block: BlockKey, _tag: &str) -> Option<bool> {
-        unimplemented!("LevelHost::block_in_tag")
-    }
     /// The merged-tag service for this level's owning-thread context: a frame resource, whose
     /// methods are the imports.
     fn tags(&self) -> &dyn Tags {
@@ -1576,10 +1586,6 @@ pub trait LevelHost {
     /// for an id no state has.
     fn state_fluid_state(&self, _state: BlockState) -> Option<FluidState> {
         unimplemented!("LevelHost::state_fluid_state")
-    }
-    /// `FluidState.is(TagKey)`: whether the fluid registry name is in the merged fluid tag, as `block_in_tag` reads.
-    fn fluid_in_tag(&self, _fluid: &str, _tag: &str) -> Option<bool> {
-        unimplemented!("LevelHost::fluid_in_tag")
     }
     /// `BlockState.setValue`, through `native_state_with_property`; None if invalid.
     fn state_with_property(

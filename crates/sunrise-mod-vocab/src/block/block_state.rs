@@ -1,5 +1,5 @@
 //! Process-local block values, independent of the game's numeric registry.
-use crate::{BlockKey, BlockMetadata, BlockStateError, StateConstraint};
+use crate::{BlockKey, BlockMetadata, BlockStateError, StateConstraint, TagKey, Tags};
 
 /// A copyable block key and local state ordinal. Persist canonical names and properties, not this value.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -16,6 +16,12 @@ impl BlockState {
     /// Its process-local ordinal, not the game's numeric state identifier.
     pub const fn ordinal(self) -> u16 {
         self.state
+    }
+    /// Whether this state's block is in `tag` (`BlockBehaviour.BlockStateBase.is(TagKey)`),
+    /// delegating through [`Self::block`]. An unknown tag is `Some(false)`; unavailable tags
+    /// or mappings return `None`.
+    pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
+        self.block().is_in_tag(tags, tag)
     }
     /// Borrow the serialized property value from the supplied immutable metadata. For a known
     /// state with no such property, return `Ok(None)`.

@@ -92,7 +92,8 @@ Tint callbacks receive immutable block metadata explicitly, without a `Host`.
 Local state ordinals retain their meaning when world numeric state IDs are reordered.
 
 Use `host.block_state_default(key)` for a block's default state and
-`host.block_in_tag(key, tag)` for membership in a string tag name. On a restricted
+`key.is_in_tag(host.tags(), tag)` (or `state.is_in_tag(host.tags(), tag)`) for membership in a
+resolved `TagKey`. On a restricted
 level host, `schedule_block_tick(pos, key, delay)` also takes a `BlockKey`.
 
 `host.block_states().states_of(key)` returns `Option<BlockStateRange>` in local ordinal order.
@@ -393,9 +394,13 @@ A bare name uses the `minecraft` namespace; an invalid name refuses the mod at l
 `tags.key(&identifier)` resolves the same key from a validated identifier. Naming a tag does
 not require it to have any members. Item, block and fluid tags share one name table; the
 membership method chooses the registry. Reload replaces membership, not key identity.
-`tags.is_in_tag(item_key, tag_key)` tests merged item membership. It returns `Some(false)`
-for either an absent tag or a loaded empty tag. Use `tags.items(tag_key)`,
-`tags.blocks(tag_key)` or `tags.fluids(tag_key)` to tell them apart. Each returns a
+`tags.is_in_tag(item_key, tag_key)`, `tags.block_in_tag(block_key, tag_key)` and
+`tags.fluid_in_tag(fluid_key, tag_key)` (also exposed as `is_in_tag(tags, tag_key)` on
+`ItemKey`, `BlockKey`, `BlockState`, `FluidKey` and `FluidState`) test merged membership without
+allocating an ordered list. Each returns `Some(false)`
+for either an absent tag or a loaded empty tag, and `None` until that registry's authoritative
+tags and key mapping are available. Use `tags.items(tag_key)`,
+`tags.blocks(tag_key)` or `tags.fluids(tag_key)` to tell absent and empty tags apart. Each returns a
 `TagMembers<K>` for the registry's key type:
 
 - `Missing`: no tag with this name was bound. An unresolved required entry, including a

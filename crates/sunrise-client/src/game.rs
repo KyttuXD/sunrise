@@ -2992,7 +2992,6 @@ struct WorldTables {
 
 struct PreparedParts {
     block_states: Arc<api_values::block_state::Index>,
-    tags: HashMap<String, HashSet<mod_api::BlockKey>>,
     parts: Option<mod_api::Parts>,
     cauldrons: Arc<cauldron_interactions::Table>,
 }

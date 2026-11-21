@@ -204,12 +204,13 @@ pub mod features {
     use mod_api::{
         BlockKey, BlockState, BlockUpdateFlags, DatapackField, DatapackFieldKind, DatapackValue,
         FeatureContext, FeatureError, FeatureType, Hooks, Registrar, RegistrationContext,
-        StateConstraint,
+        StateConstraint, TagKey,
     };
 
     /// A pillar of logs on dirt or grass: `{"type": "mymod:pillar", "height": 4}`.
     struct Pillar {
         log: BlockKey,
+        dirt: TagKey,
     }
 
     impl FeatureType for Pillar {
@@ -223,7 +224,7 @@ pub mod features {
                 return Err(FeatureError("height was not decoded".into()));
             };
             let below = [origin[0], origin[1] - 1, origin[2]];
-            if context.block_in_tag(below, "minecraft:dirt") != Some(true) {
+            if context.block_in_tag(below, self.dirt) != Some(true) {
                 return Ok(false);
             }
             let state = BlockState::of(
@@ -254,12 +255,13 @@ pub mod features {
     impl Hooks for FeatureMod {
         fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
             let log = registrar.block_key("minecraft:oak_log");
+            let dirt = registrar.tag_key("minecraft:dirt");
             let config = vec![DatapackField::with_default(
                 "height",
                 DatapackFieldKind::Int { min: 1, max: 32 },
                 DatapackValue::Int(4),
             )];
-            registrar.register_feature_type("pillar", config, Pillar { log });
+            registrar.register_feature_type("pillar", config, Pillar { log, dirt });
         }
     }
     // ANCHOR_END: feature

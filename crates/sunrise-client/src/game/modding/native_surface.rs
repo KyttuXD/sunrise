@@ -217,11 +217,6 @@ impl LevelHost for FrictionView<'_> {
         self.0.world.shape.height
     }
 
-    fn block_in_tag(&self, block: BlockKey, tag: &str) -> Option<bool> {
-        self.0.side.tag_items()?;
-        super::native_world_read::block_in_tag(block, tag)
-    }
-
     fn block_entity(&self, [x, y, z]: [i32; 3]) -> Option<BlockEntityRef> {
         self.0
             .side
@@ -247,14 +242,6 @@ impl LevelHost for FrictionView<'_> {
 
     fn state_fluid_state(&self, state: BlockState) -> Option<FluidState> {
         self.state_fluid(state.try_into_engine(&()).ok()?)
-    }
-
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        Some(super::native_world_read::fluid_in_tag(
-            self.0.side.tag_items()?,
-            fluid,
-            tag,
-        ))
     }
 
     fn state_with_property(&self, state: BlockState, key: &str, value: &str) -> Option<BlockState> {
@@ -894,16 +881,26 @@ mod tests {
             });
             // A tagged block, an untagged one and a fluid tag answer as the game's own host does.
             let stone = mod_platform::__private::part_tests::block_key("stone");
-            assert_eq!(view.block_in_tag(stone, "base_stone_overworld"), Some(true));
+            let water = mod_api::__private::fluid_key("minecraft:water").unwrap();
+            let base_stone = view
+                .tags()
+                .key(&mod_api::Identifier::parse("base_stone_overworld").unwrap())
+                .unwrap();
+            let climbable = view
+                .tags()
+                .key(&mod_api::Identifier::parse("minecraft:climbable").unwrap())
+                .unwrap();
+            let water_tag = view
+                .tags()
+                .key(&mod_api::Identifier::parse("minecraft:water").unwrap())
+                .unwrap();
+            assert_eq!(stone.is_in_tag(view.tags(), base_stone), Some(true));
             assert_eq!(
-                view.block_in_tag(stone, "base_stone_overworld"),
-                game.block_in_tag(stone, "base_stone_overworld")
+                stone.is_in_tag(view.tags(), base_stone),
+                stone.is_in_tag(&*game, base_stone)
             );
-            assert_eq!(view.block_in_tag(stone, "minecraft:climbable"), Some(false));
-            assert_eq!(
-                view.fluid_in_tag("minecraft:water", "minecraft:water"),
-                Some(true)
-            );
+            assert_eq!(stone.is_in_tag(view.tags(), climbable), Some(false));
+            assert_eq!(water.is_in_tag(view.tags(), water_tag), Some(true));
             // A resident block entity has the handle of this side's level; an empty position none.
             let level = game.level_ref(game.native_lifecycle.epoch().unwrap(), game.dim.key());
             let found = view.block_entity([3, 64, 3]).unwrap();

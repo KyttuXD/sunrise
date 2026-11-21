@@ -3,7 +3,7 @@
 use super::native_worldgen::WorkerResources;
 use mod_api::{
     BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, DatapackEntry, DatapackField,
-    FeatureContext, FeatureType, HeightmapType, RandomSource,
+    FeatureContext, FeatureType, HeightmapType, RandomSource, TagKey,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -90,8 +90,8 @@ impl FeatureContext for Placing<'_> {
         let state = self.target.block(pos)?;
         self.worker.index.to_api(state).ok()
     }
-    fn block_in_tag(&mut self, pos: [i32; 3], tag: &str) -> Option<bool> {
-        self.target.block_in_tag(pos, tag)
+    fn block_in_tag(&mut self, pos: [i32; 3], tag: TagKey) -> Option<bool> {
+        mod_api::__private::with_tag_name(tag, |name| self.target.block_in_tag(pos, name?))
     }
     fn set_block(&mut self, pos: [i32; 3], state: BlockState, flags: BlockUpdateFlags) -> bool {
         let Ok(state) = self.worker.index.to_engine(state) else {

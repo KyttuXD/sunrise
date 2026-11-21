@@ -79,7 +79,7 @@ the modifiers before you drew from.
 |---|---|
 | `config` | The configured feature's decoded settings |
 | `random` | The caller's `RandomSource`: `next_int`, `next_int_bound`, `next_long`, `next_float`, `next_double`, `next_boolean`, `next_gaussian` |
-| `block`, `block_in_tag` | Read blocks and block tags, your own staged writes included |
+| `block`, `block_in_tag` | Read blocks and test block membership in a registered `TagKey`, your own staged writes included |
 | `height` | Heightmap heights, as the level has them before this call's writes |
 | `set_block` | Write a `BlockState` with `BlockUpdateFlags`; `Feature.setBlock` uses `NEIGHBORS \| CLIENTS` |
 | `block_entity` | Give a block you placed in this call its block entity's saved NBT |

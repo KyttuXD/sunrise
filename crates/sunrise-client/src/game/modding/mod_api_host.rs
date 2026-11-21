@@ -450,10 +450,8 @@ impl mod_api::LevelHost for FireOddsLevel<'_> {
         fn state_string(state: mod_api::BlockState) -> Option<String>;
         fn min_y() -> i32;
         fn height() -> i32;
-        fn block_in_tag(block: mod_api::BlockKey, tag: &str) -> Option<bool>;
         fn tags() -> &dyn mod_api::Tags;
         fn state_fluid_state(state: mod_api::BlockState) -> Option<mod_api::FluidState>;
-        fn fluid_in_tag(fluid: &str, tag: &str) -> Option<bool>;
         fn state_with_property(state: mod_api::BlockState, key: &str, value: &str) -> Option<mod_api::BlockState>;
         fn brightness(layer: mod_api::LightLayer, pos: [i32; 3]) -> i32;
         fn raw_brightness(pos: [i32; 3], sky_darken: i32) -> i32;
@@ -670,12 +668,6 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
     fn height(&self) -> i32 {
         self.world.shape.height
     }
-    fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-        if !self.native_authoritative {
-            return None;
-        }
-        super::native_world_read::block_in_tag(block, tag)
-    }
     fn tags(&self) -> &dyn mod_api::Tags {
         self
     }
@@ -708,10 +700,6 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
             self.world.block(x, y, z),
             pos,
         ))
-    }
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        self.native_authoritative
-            .then(|| super::native_world_read::fluid_in_tag(self.items, fluid, tag))
     }
     fn state_with_property(
         &self,
@@ -821,19 +809,8 @@ impl mod_api::LevelHost for super::native_hooks::HitLevel<'_> {
         self.0.block_registries()?;
         super::api_values::default_state(block)?.try_into_api().ok()
     }
-    fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-        self.0.tags()?;
-        super::native_world_read::block_in_tag(block, tag)
-    }
     fn tags(&self) -> &dyn mod_api::Tags {
         self
-    }
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        Some(super::native_world_read::fluid_in_tag(
-            self.0.tags()?,
-            fluid,
-            tag,
-        ))
     }
     fn block_state(&self, pos: [i32; 3]) -> Option<mod_api::BlockState> {
         self.0.block(pos).try_into_api().ok()
@@ -1097,9 +1074,6 @@ impl<
     fn height(&self) -> i32 {
         mod_api::LevelHost::height(&*self.level)
     }
-    fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-        mod_api::LevelHost::block_in_tag(&*self.level, block, tag)
-    }
     fn tags(&self) -> &dyn mod_api::Tags {
         mod_api::LevelHost::tags(&*self.level)
     }
@@ -1111,9 +1085,6 @@ impl<
     }
     fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
         mod_api::LevelHost::state_fluid_state(&*self.level, state)
-    }
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        mod_api::LevelHost::fluid_in_tag(&*self.level, fluid, tag)
     }
     fn state_with_property(
         &self,
