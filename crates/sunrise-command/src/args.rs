@@ -1,7 +1,7 @@
 //! Argument types (Brigadier's and Minecraft's `ArgumentType`s): parsing with
 //! the vanilla error messages and completion suggestions.
 use super::{CmdResult, CommandError, Context, Reader, SuggestionsBuilder};
-use std::{fmt, sync::Arc};
+use std::{borrow::Cow, fmt, sync::Arc};
 use sunrise_client_core::text::Text;
 
 pub use sunrise_client_core::registries::{
@@ -146,6 +146,22 @@ impl Resource {
     }
 }
 
+/// The registry key carried by a registry-backed command argument.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegistryId(Cow<'static, str>);
+
+impl RegistryId {
+    /// Wraps a trusted static registry name without validation or allocation.
+    pub const fn from_static(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
+
+    /// The registry name used for lookups.
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ArgType {
     Bool,
@@ -187,13 +203,13 @@ pub enum ArgType {
     /// answers from the mods' own suggestions.
     Identifier,
     /// ResourceArgument over a registry (the element must exist).
-    Res(&'static str),
+    Res(RegistryId),
     /// ResourceKeyArgument (checked when the command runs).
-    ResKey(&'static str),
+    ResKey(RegistryId),
     /// ResourceOrTagArgument (elements and tags must exist).
-    ResOrTag(&'static str),
+    ResOrTag(RegistryId),
     /// ResourceOrTagKeyArgument.
-    ResOrTagKey(&'static str),
+    ResOrTagKey(RegistryId),
     /// StringRepresentableArgument-like: one of the names, with the error key.
     StrEnum(&'static [&'static str], &'static str),
     /// HexColorArgument.
@@ -259,9 +275,9 @@ pub enum ArgType {
     /// SlotSourceArgument: a slot range name, or a slot source id or inline value.
     SlotSource,
     /// ResourceOrIdArgument over a registry: an id or an inline SNBT value.
-    ResourceOrId(&'static str),
+    ResourceOrId(RegistryId),
     /// ResourceSelectorArgument: a `*`/`?` pattern over a registry's ids.
-    ResourceSelector(&'static str),
+    ResourceSelector(RegistryId),
     /// A registered argument type: the mod's parser and suggestions.
     Custom(CustomArgument),
 }
@@ -1372,11 +1388,12 @@ impl ArgType {
                 Arg::Resource(id)
             }
             ArgType::Res(registry) => {
+                let registry = registry.as_str();
                 let id = read_identifier(reader)?;
                 if !reg.ids(registry).contains(&id) {
                     return Err(CommandError::tr_at(
                         "argument.resource.not_found",
-                        &[&id, registry],
+                        &[&id, &registry],
                         reader,
                     ));
                 }
@@ -1384,6 +1401,7 @@ impl ArgType {
             }
             ArgType::ResKey(_) => Arg::Resource(read_identifier(reader)?),
             ArgType::ResOrTag(registry) | ArgType::ResOrTagKey(registry) => {
+                let registry = registry.as_str();
                 let key_only = matches!(self, ArgType::ResOrTagKey(_));
                 if reader.can_read() && reader.peek() == '#' {
                     let cursor = reader.cursor;
@@ -1398,7 +1416,7 @@ impl ArgType {
                     if !key_only && !reg.tags(registry).contains(&id) {
                         let e = CommandError::tr_at(
                             "argument.resource_tag.not_found",
-                            &[&id, registry],
+                            &[&id, &registry],
                             reader,
                         );
                         reader.cursor = cursor;
@@ -1410,7 +1428,7 @@ impl ArgType {
                     if !key_only && !reg.ids(registry).contains(&id) {
                         return Err(CommandError::tr_at(
                             "argument.resource.not_found",
-                            &[&id, registry],
+                            &[&id, &registry],
                             reader,
                         ));
                     }
@@ -1426,6 +1444,7 @@ impl ArgType {
                 Arg::Str(name.to_owned())
             }
             ArgType::ResourceSelector(registry) => {
+                let registry = registry.as_str();
                 let start = reader.cursor;
                 while reader.can_read() && {
                     let c = reader.peek();
@@ -1442,7 +1461,7 @@ impl ArgType {
                 if select_resources(reg.ids(registry), &pattern).is_empty() {
                     return Err(CommandError::tr_at(
                         "argument.resource_selector.not_found",
-                        &[&pattern, registry],
+                        &[&pattern, &registry],
                         reader,
                     ));
                 }
@@ -1785,7 +1804,7 @@ impl ArgType {
                 }
             }
             ArgType::ResourceOrId(registry) => {
-                super::codec::resource_or_id(reader, reg, registry)?;
+                super::codec::resource_or_id(reader, reg, registry.as_str())?;
                 Arg::Resource(reader.string[start..reader.cursor].to_owned())
             }
             ArgType::NbtPath => {
@@ -1864,21 +1883,23 @@ impl ArgType {
             ArgType::BlockPredicate => super::block::suggest(builder, reg, true),
             ArgType::Resource(kind) => suggest_resources(builder, reg.ids(kind.registry()), ""),
             ArgType::Res(registry) | ArgType::ResKey(registry) => {
+                let registry = registry.as_str();
                 // RecipeCommand filters its keys to learnable recipes.
-                if *registry == "minecraft:recipe" && !reg.learnable_recipes.is_empty() {
+                if registry == "minecraft:recipe" && !reg.learnable_recipes.is_empty() {
                     suggest_resources(builder, &reg.learnable_recipes, "")
                 } else {
                     suggest_resources(builder, reg.ids(registry), "")
                 }
             }
             ArgType::ResOrTag(registry) | ArgType::ResOrTagKey(registry) => {
+                let registry = registry.as_str();
                 suggest_resources(builder, reg.tags(registry), "#");
                 suggest_resources(builder, reg.ids(registry), "");
             }
             ArgType::StrEnum(values, _) => builder.suggest_matching(values.iter().copied()),
             ArgType::HexColor => builder.suggest_matching(["F00", "FF0000"]),
             ArgType::ResourceSelector(registry) => {
-                suggest_resources(builder, reg.ids(registry), "")
+                suggest_resources(builder, reg.ids(registry.as_str()), "")
             }
             ArgType::GameProfile => {
                 let players = reg.players.clone();
@@ -2000,7 +2021,9 @@ impl ArgType {
                 builder.add(sub);
                 suggest_resources(builder, reg.ids("minecraft:slot_source"), "");
             }
-            ArgType::ResourceOrId(registry) => suggest_resources(builder, reg.ids(registry), ""),
+            ArgType::ResourceOrId(registry) => {
+                suggest_resources(builder, reg.ids(registry.as_str()), "")
+            }
             ArgType::TeamColor => {
                 builder.suggest_matching(sunrise_client_core::scoreboard::team_colors())
             }

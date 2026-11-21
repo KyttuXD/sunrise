@@ -9,7 +9,7 @@ use std::{
 };
 use sunrise_client::command::{
     CommandError, Dispatcher, MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TOOLTIP, NodeKind, Range, Reader,
-    args::Coordinates, snbt,
+    RegistryId, args::Coordinates, snbt,
 };
 
 /// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`
@@ -77,8 +77,8 @@ pub(super) fn resource_parser(name: &str) -> Result<(&'static str, Value), Strin
     Ok(("minecraft:resource_key", json!({ "registry": registry })))
 }
 
-/// A registry name a usage named, kept for the game's life (`ArgType::Res` holds
-/// `&'static str`), each name once. Its own set, apart from the interner the network fills from
+/// A registry name a usage named, borrowed by `ArgType::Res` and kept for the
+/// game's life, each name once. Its own set, apart from the interner the network fills from
 /// received trees, so neither spends the other's budget.
 fn registry(name: &str) -> Result<&'static str, String> {
     static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
@@ -354,9 +354,9 @@ fn provider_suggestions(
 pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgType {
     if node["parser"] == "minecraft:resource_key" {
         let registry = node["properties"]["registry"].as_str().unwrap_or_default();
-        return ArgType::Res(
+        return ArgType::Res(RegistryId::from_static(
             self::registry(registry).expect("native command tree names validated registries"),
-        );
+        ));
     }
     if let Some(id) = node["custom_argument"].as_str() {
         let argument = arguments

@@ -26,7 +26,7 @@ mod vanilla_order;
 pub use args::{
     Arg, ArgType, CustomArgument, CustomArgumentKind, CustomCompletionAction, CustomSuggestion,
     MAX_PROVIDER_SUGGESTIONS, MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TOOLTIP, ParsedArgument,
-    Registries, modify_custom_completions,
+    Registries, RegistryId, modify_custom_completions,
 };
 use std::{
     collections::HashMap,
