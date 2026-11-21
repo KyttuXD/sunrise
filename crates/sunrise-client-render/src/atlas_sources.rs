@@ -884,12 +884,11 @@ impl Materials {
     }
     /// The materials of `listing`, a listing of `source`.
     pub fn over(listing: Arc<Listing>, source: &crate::resource_source::ResourceSource) -> Self {
-        Self {
-            listing,
-            defined: ["blocks", "items"]
-                .iter()
-                .any(|atlas| source.contains(&format!("assets/minecraft/atlases/{atlas}.json"))),
-        }
+        let defined = ["blocks", "items"].iter().any(|atlas| {
+            listing.defines(&format!("minecraft:{atlas}"))
+                || source.contains(&format!("assets/minecraft/atlases/{atlas}.json"))
+        });
+        Self { listing, defined }
     }
     /// The listing the materials come from: every atlas.
     pub fn listing(&self) -> &Listing {
