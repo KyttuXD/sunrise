@@ -146,8 +146,9 @@ pub struct State {
     /// Stacks taken from brewing stand bottle slots, for
     /// `PlayerBrewedPotionEvent`.
     pub brewed_potion_takes: Vec<ItemStack>,
-    /// Set by a server caller when a mod listens: every nonzero
-    /// `FurnaceResultSlot.checkTakeAchievements` then goes to `item_smelted`.
+    /// Set when a mod listens: on either side, every
+    /// `FurnaceResultSlot.checkTakeAchievements` with a nonzero `removeCount`
+    /// then goes to `item_smelted`.
     pub item_smelted_hook: bool,
     /// `FurnaceResultSlot.checkTakeAchievements` ran on the server side, so
     /// the furnace must award its used recipes and pop experience

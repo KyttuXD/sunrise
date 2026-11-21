@@ -4,6 +4,7 @@ ids = [
     "method:Hooks::furnace_extract",
     "type:FurnaceExtractEvent",
     "hook:item_smelted",
+    "method:Hooks::item_smelted",
     "hook:item_smelted.player",
     "hook:item_smelted.player_entity_id",
     "hook:item_smelted.stack",
@@ -11,5 +12,5 @@ ids = [
     "type:ItemSmeltedEvent.player_entity_id",
     "type:ItemSmeltedEvent.stack",
 ]
-why = "Keep one furnace result-take event matching vanilla FurnaceResultSlot.checkTakeAchievements and NeoForge PlayerEvent.ItemSmeltedEvent: remove the duplicate furnace_extract hook and update item_smelted to carry a live PlayerRef, a non-optional ItemStackView<'_>, and a nonzero amount_removed after AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience."
-migrate = "Move furnace_extract listeners to item_smelted. Read event.player as a PlayerRef (use event.player.uuid(), event.player.entity().id(), or host methods like event.player.name(host)), read event.stack as an ItemStackView<'_> (event.stack.item(), event.stack.count(), event.stack.project()), and rely on item_smelted firing once per nonzero removeCount after furnace recipe experience is awarded."
+why = "NeoForge EventHooks.firePlayerSmeltedEvent posts once for nonzero removeCount at FurnaceResultSlot.checkTakeAchievements, including client prediction through MultiPlayerGameMode.handleContainerInput. Only the server runs AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience, before posting the event. Keep that single event with a live player and borrowed stack; remove the duplicate furnace_extract hook."
+migrate = "Replace Hooks::furnace_extract with Hooks::item_smelted(&self, host: HostSide<'_>, event: &mut ItemSmeltedEvent<'_>). Existing item_smelted listeners also change their host parameter from &mut dyn ServerHost to HostSide<'_>; match HostSide::Server(host) if you only want authoritative takes. The old player UUID is event.player.uuid(), the old player_entity_id is event.player.entity().id(), and the old furnace_extract name is event.player.name(host) on the server. Replace the old item id with host.item_key_id(event.stack.item()) after matching the host side. The old count is event.amount_removed, not event.stack.count() (which is the pre-move stack size for a shift-click). The stack is now a non-optional ItemStackView<'_>; call event.stack.project() for an owned stack. The old pos has no replacement on this event. Hotbar swaps and the zero-removed callback after a shift-click no longer notify these listeners."

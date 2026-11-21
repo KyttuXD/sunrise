@@ -1,20 +1,22 @@
 //! The `item_smelted` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// `FurnaceResultSlot.checkTakeAchievements` ran for a server player at a
-    /// furnace, blast furnace or smoker's result slot with a nonzero
-    /// `removeCount` (NeoForge `PlayerEvent.ItemSmeltedEvent`): `player` is
-    /// the live player handle, `stack` lends the stack vanilla passed there
-    /// (`getSmelting`), and `amount_removed` is `removeCount`
-    /// (`getAmountRemoved`). Fires after the furnace awards its used recipes
-    /// and pops experience (`AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`).
-    /// A pickup or throw passes the taken stack and its count; a shift-click
-    /// fires once with the pre-move stack and the count moved (`onQuickCraft`);
-    /// a hotbar swap has `removeCount == 0` so it awards experience without
-    /// firing `item_smelted`. Server-side.
+    /// `FurnaceResultSlot.checkTakeAchievements` ran at a furnace, blast
+    /// furnace or smoker's result slot with a nonzero `removeCount`
+    /// (NeoForge `PlayerEvent.ItemSmeltedEvent`). `player` is the live player
+    /// handle on the side that processed the click; `stack` lends the stack
+    /// passed to the callback (`getSmelting`), and `amount_removed` is
+    /// `removeCount` (`getAmountRemoved`).
+    ///
+    /// Fires during client prediction and on the server after
+    /// `AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`.
+    /// Pickup and throw pass the taken stack and its count. Shift-click
+    /// fires once with the pre-move stack and the count moved (`onQuickCraft`).
+    /// A hotbar swap has `removeCount == 0`, so it can award recipes and
+    /// experience on the server without firing this event.
     #[hook(
         dispatch = "api_carrier",
-        side = "server",
+        side = "both",
         contract = "listen",
         neoforge = "PlayerEvent.ItemSmeltedEvent",
         cancellable = false,

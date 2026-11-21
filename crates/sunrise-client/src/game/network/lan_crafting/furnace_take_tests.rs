@@ -49,11 +49,10 @@ impl mod_api::Hooks for FurnaceProbe {
         ));
     }
 
-    fn item_smelted(
-        &self,
-        host: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::ItemSmeltedEvent<'_>,
-    ) {
+    fn item_smelted(&self, host: mod_api::HostSide<'_>, event: &mut mod_api::ItemSmeltedEvent<'_>) {
+        let mod_api::HostSide::Server(host) = host else {
+            return;
+        };
         let xp_seen: i64 = host
             .experience_orbs("minecraft:overworld", [0.0, 60.0, 0.0], [10.0, 70.0, 10.0])
             .iter()
@@ -226,15 +225,21 @@ fn quick_move_fires_item_smelted_once_and_swap_awards_xp_without_event() {
             assert!(recipes_used_empty(game));
 
             // Hotbar swap has removeCount == 0: awards XP/recipes without firing item_smelted.
-            let orbs_before = game.orbs.len();
+            let orb_xp = |game: &Game<'_>| -> i64 {
+                game.orbs
+                    .iter()
+                    .map(|orb| i64::from(orb.value) * i64::from(orb.count))
+                    .sum()
+            };
+            let xp_before = orb_xp(game);
             let window = smelt_two_and_open(game);
             game.lan_guest_packet(12, click_result(window, 1, input::SWAP));
 
             assert!(recorded.lock().unwrap().item_smelted.is_empty());
             assert!(recipes_used_empty(game));
             assert!(
-                game.orbs.len() > orbs_before,
-                "hotbar swap must still spawn furnace experience orbs"
+                matches!(orb_xp(game) - xp_before, 1 | 2),
+                "two iron smelts award 1 or 2 XP, including XP merged into existing orbs"
             );
             assert_eq!(
                 game.lan.as_ref().unwrap().hub.guests[0].inventory[1],

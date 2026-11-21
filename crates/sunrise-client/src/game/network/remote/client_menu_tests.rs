@@ -2,6 +2,86 @@ use super::*;
 
 #[test]
 #[ignore = "daily"]
+fn predicted_furnace_result_takes_notify_the_local_player() {
+    use crate::game::native_entity_refs::tests::with_client_game;
+    use mod_api::{HostSide, ItemSmeltedEvent, PlayerRef};
+    use std::sync::{Arc, Mutex};
+    use sunrise_client::menu::Input;
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::{
+        item::Stack,
+        packets::play::{self, Clientbound as C},
+    };
+
+    type Take = (PlayerRef, Option<String>, u32, u32);
+    struct Probe(Arc<Mutex<Vec<Take>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Probe {
+        fn item_smelted(&self, host: HostSide<'_>, event: &mut ItemSmeltedEvent<'_>) {
+            let HostSide::Client(host) = host else {
+                return;
+            };
+            assert_eq!(host.local_player(), Some(event.player));
+            self.0.lock().unwrap().push((
+                event.player,
+                host.item_key_id(event.stack.item()).map(str::to_owned),
+                event.stack.count(),
+                event.amount_removed,
+            ));
+        }
+    }
+
+    let takes = Arc::new(Mutex::new(Vec::new()));
+    let probe = mod_api::ModEntry::new("furnace_client_probe", Box::new(Probe(takes.clone())));
+    mod_platform::testing::with_mods(vec![probe].into(), || {
+        with_client_game(|game| {
+            let (_reader, _writer) = connect_menu_test(game);
+            spawn_menu_test(game);
+            let player = game.local_player().unwrap();
+            let menu = game
+                .remote
+                .as_ref()
+                .unwrap()
+                .builtin
+                .get("minecraft:menu")
+                .unwrap()
+                .id("minecraft:furnace")
+                .unwrap();
+            game.handle_packet(C::OpenScreen(play::OpenScreen {
+                container: 7,
+                menu,
+                title: Tag::String("Furnace".into()),
+            }))
+            .unwrap();
+            let iron = game.item_id("minecraft:iron_ingot");
+            let dirt = game.item_id("minecraft:dirt");
+            let mut items = vec![Some(Stack::new(dirt, 64)); 39];
+            items[0..2].fill(None);
+            items[2] = Some(Stack::new(iron, 64));
+            items[3] = Some(Stack::new(iron, 62));
+            game.handle_packet(C::ContainerSetContent(play::ContainerSetContent {
+                container: 7,
+                state: 12,
+                items,
+                carried: None,
+            }))
+            .unwrap();
+
+            assert!(game.remote_menu_ops(&[(Some(302), 0, Input::QuickMove)]));
+            assert!(game.remote_menu_ops(&[(Some(302), 1, Input::Pickup)]));
+            assert_eq!(
+                takes.lock().unwrap().as_slice(),
+                &[
+                    (player, Some("minecraft:iron_ingot".into()), 64, 2),
+                    (player, Some("minecraft:iron_ingot".into()), 31, 31),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn inventory_repair_does_not_replace_an_open_menus_predicted_cursor() {
     use crate::game::native_entity_refs::tests::with_game;
     use sunrise_core::nbt::Tag;

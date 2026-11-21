@@ -2117,20 +2117,17 @@ impl Menu {
         self.state.containers[RESULT][0] = result;
     }
 
-    /// `FurnaceResultSlot.checkTakeAchievements`: on the server side, always
-    /// records that the furnace must award used recipes and pop experience
-    /// (`AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`), and
-    /// when `removeCount != 0` and a mod listens, keeps the non-empty stack
-    /// and `removeCount` for `ItemSmeltedEvent` (matching NeoForge's
-    /// `FurnaceResultSlot.java.patch`); `removeCount` starts again.
+    /// `FurnaceResultSlot.checkTakeAchievements`: the server awards the
+    /// used recipes and pops experience. On either side, NeoForge posts
+    /// `ItemSmeltedEvent` for a nonzero `removeCount` before resetting it.
     fn furnace_take(&mut self, env: &Env, carried: &ItemStack) {
         self.touch();
         let removed = std::mem::take(&mut self.state.output_removed);
         if env.loop_context.side() == LoopSide::Server {
             self.state.furnace_awarded = true;
-            if self.state.item_smelted_hook && removed != 0 && carried.count > 0 {
-                self.state.item_smelted.push((carried.clone(), removed));
-            }
+        }
+        if self.state.item_smelted_hook && removed != 0 {
+            self.state.item_smelted.push((carried.clone(), removed));
         }
     }
 
@@ -3522,7 +3519,7 @@ pub(crate) mod tests {
     /// `removeCount` with a non-empty stack when a mod listens (so shift-click
     /// fires once from `onQuickCraft`, never a second time with 0 from
     /// `onTake`, and hotbar swap awards XP without firing `item_smelted`).
-    /// Client-side prediction records neither.
+    /// Client-side prediction records the same event, but not the award.
     #[test]
     fn a_furnace_take_keeps_what_check_take_achievements_passes() {
         bare_env(|env| {
@@ -3591,16 +3588,23 @@ pub(crate) mod tests {
             assert!(menu.item_smelted.is_empty());
         });
 
-        // Client-side prediction records neither award nor event.
+        // The same result-slot callbacks run when the client predicts a click.
         bare_env_in(
             &crate::test_resources::loop_context(LoopSide::Client),
             |env| {
-                let mut menu = Menu::new(Kind::Furnace("smelting"));
-                menu.item_smelted_hook = true;
-                menu.set_slot(env, 2, stack("iron_ingot", 64));
-                menu.click(env, 2, 0, Input::Pickup).unwrap();
-                assert!(!menu.furnace_awarded);
-                assert!(menu.item_smelted.is_empty());
+                for input in [Input::Pickup, Input::QuickMove, Input::Swap] {
+                    let mut menu = Menu::new(Kind::Furnace("smelting"));
+                    menu.on_client = true;
+                    menu.item_smelted_hook = true;
+                    menu.set_slot(env, 2, stack("iron_ingot", 64));
+                    menu.click(env, 2, 0, input).unwrap();
+                    assert!(!menu.furnace_awarded);
+                    if input == Input::Swap {
+                        assert!(menu.item_smelted.is_empty());
+                    } else {
+                        assert_eq!(menu.item_smelted, [(stack("iron_ingot", 64).unwrap(), 64)]);
+                    }
+                }
             },
         );
     }

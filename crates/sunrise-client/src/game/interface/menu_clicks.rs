@@ -435,6 +435,9 @@ impl Game<'_> {
         menu.set_registry_id(menu_id);
         menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
+        menu.item_smelted_hook = matches!(kind, Kind::Furnace(_))
+            && self.remote.is_some()
+            && mod_api::__private::listened(mod_api::HookId::ItemSmelted);
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
         }
@@ -597,12 +600,6 @@ impl Game<'_> {
             // Attached after the slots were set: setting them is not a click.
             menu.merchant = session.map(|(s, _)| s);
         }
-        // `FurnaceResultSlot.checkTakeAchievements` pays out on what left the output slot.
-        let furnace_before = if matches!(kind, Kind::Furnace(_)) {
-            menu.slot(2).cloned().map_or(0, |s| s.count)
-        } else {
-            0
-        };
         if anvil_open && self.remote.is_some() {
             // The AnvilScreen listens while the click is predicted (its slotChanged).
             menu.anvil.seen_input = before[0].clone();
@@ -628,12 +625,6 @@ impl Game<'_> {
             self.merchant_sync_out(s);
         }
         let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
-        // Only a furnace has a result slot to compare: an enchanting table has two slots.
-        let furnace_after = if matches!(kind, Kind::Furnace(_)) {
-            after[2].as_ref().map_or(0, |s| s.count)
-        } else {
-            0
-        };
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
@@ -681,8 +672,7 @@ impl Game<'_> {
             for stack in &brewed {
                 self.trigger_brewed_potion(stack);
             }
-            if furnace_before > furnace_after
-                && self.remote.is_none()
+            if menu.furnace_awarded
                 && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
             {
                 let at = [p.position.x, p.position.y, p.position.z];
@@ -696,6 +686,15 @@ impl Game<'_> {
             // slot has already given it up.
             for stack in dropped {
                 self.remote_creative_throw(stack);
+            }
+        }
+        // The ClientLevel has no furnace recipe award, but the predicted click
+        // posts the same nonzero takes before sending the click to the server.
+        if !menu.item_smelted.is_empty() {
+            if let Some(player) = self.local_player() {
+                self.publish_item_smelted(player, &menu.item_smelted);
+            } else {
+                log::warn!("item_smelted: the clicking local player is no longer live");
             }
         }
         if kind == Kind::Loom {

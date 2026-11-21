@@ -310,7 +310,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`living_get_projectile(player, name, entity, kind, weapon, projectile)`**: the ammunition `LivingEntity.getProjectile(weapon)` returns (NeoForge's `LivingGetProjectileEvent`). Every mod gets the event with `projectile` set to the vanilla ammunition (the stack found in the hands or inventory, a mob's held projectile or a new arrow, a creative player's default arrow, or empty) and may change or empty it. It is asked on the bow's start and release, the crossbow's start and draw, the client's prediction of those starts, a skeleton's or illusioner's shot, and a pillager's or piglin's crossbow load (`entity` and `kind` name the mob, `player` is empty); a mob's arrow takes the replaced arrow's item and effect, a mob's crossbow also fires a replaced firework rocket, and an emptied stack leaves its crossbow uncharged and silent. A replaced stack is not taken from the inventory: the hook owns it.
 - **`projectile_launch(player, name, entity, kind)`**: a projectile was added to the server level. `kind` is its entity type; `player` and `name` identify a player launcher, and are `None` and empty for other sources.
 - **`entity_portal(dimension, entity, pos)`**: a server entity finished its portal wait and is beginning to leave through the portal block at `pos`. The destination follows the existing portal rules; the hook reports the transfer without changing it.
-- **`item_smelted(player, stack, amount_removed)`**: a server player took furnace, blast furnace or smoker output with a nonzero `removeCount` (`FurnaceResultSlot.checkTakeAchievements`, NeoForge `PlayerEvent.ItemSmeltedEvent`), after the furnace awarded its used recipes and popped experience. `player` is the live player handle and `stack` lends the stack vanilla passed there (`ItemStackView<'_>`).
+- **`item_smelted(player, stack, amount_removed)`**: a player took furnace, blast furnace or smoker output with a nonzero `removeCount` (`FurnaceResultSlot.checkTakeAchievements`, NeoForge `PlayerEvent.ItemSmeltedEvent`). Fires during client prediction and on the server after the furnace awards its used recipes and pops experience. `player` is the live player handle and `stack` lends the stack passed to the callback (`ItemStackView<'_>`); for a shift-click, `amount_removed` is the count moved, not the size of the original stack.
 - **`furnace_start_smelt(pos, item)`**: a furnace at `pos` begins cooking `item`, when its cooking timer first advances. Server-side.
 - **`brewing_complete(pos)`**: a brewing stand finished brewing at `pos`, after the bottle contents changed.
 - **`brewing_fuel(pos, fuel)`**: a brewing stand at `pos` consumed `fuel` and gained brewing fuel. Server-side.
@@ -2504,7 +2504,7 @@ registration path.
 
 - A furnace consumes `fuel` and begins burning at `pos` (`furnace_burn`).
 
-- A server player takes smelted output from a furnace, blast furnace or smoker with a nonzero `removeCount` (`item_smelted`), after the furnace awards its used recipes and pops experience.
+- A player takes smelted output from a furnace, blast furnace or smoker with a nonzero `removeCount` (`item_smelted`): during client prediction and on the server after the furnace awards its used recipes and pops experience.
 
 - A furnace finishes smelting `item` into `result` at `pos` (`furnace_smelt`).
 

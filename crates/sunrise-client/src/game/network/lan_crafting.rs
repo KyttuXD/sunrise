@@ -340,27 +340,15 @@ impl Game<'_> {
         if award_recipes {
             self.award_furnace_recipes(pos, at);
         }
-        if !smelted.is_empty()
-            && mod_api::__private::listened(mod_api::HookId::ItemSmelted)
-            && let Ok(entity_id) = u32::try_from(entity_id)
-        {
-            let player = mod_api::__private::game::player_ref(
-                mod_api::EntityRef::new(self.native_lifecycle.epoch(), entity_id),
-                uuid,
-            );
-            for (stack, amount_removed) in &smelted {
-                let Ok(metadata) = crate::game::api_values::stack_read_metadata(stack) else {
-                    continue;
-                };
-                let project =
-                    |metadata| crate::game::api_values::project_stack(stack, metadata).ok();
-                let stack = mod_api::ItemStackView::resident(metadata, &project);
-                self.native_item_smelted(mod_api::__private::ItemSmeltedCall {
-                    player,
-                    stack,
-                    amount_removed: *amount_removed,
-                });
-            }
+        if !smelted.is_empty() {
+            let Some(entity) = u32::try_from(entity_id).ok().and_then(|id| self.entity(id)) else {
+                log::warn!(
+                    "item_smelted: clicking player {uuid:032x} (entity {entity_id}) is no longer live"
+                );
+                return;
+            };
+            let player = mod_api::__private::game::player_ref(entity, uuid);
+            self.publish_item_smelted(player, &smelted);
         }
     }
 
