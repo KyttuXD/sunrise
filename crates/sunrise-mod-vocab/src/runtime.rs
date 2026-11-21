@@ -55,6 +55,8 @@ pub(crate) struct Installed {
     pub(crate) disabled: Box<[std::sync::atomic::AtomicBool]>,
     /// One installed owner per mod for delayed tasks, independent of its other callbacks.
     pub(crate) scheduled_tasks: Box<[crate::callback_owner::CallbackOwner]>,
+    /// One installed owner per mod for deferred landing/bounce callbacks, independent of its other callbacks.
+    pub(crate) landing_callbacks: Box<[crate::callback_owner::CallbackOwner]>,
     mod_id_owners: std::collections::HashMap<&'static str, usize>,
     content_owners: OnceLock<std::collections::HashMap<Box<str>, Option<usize>>>,
     disabled_count: std::sync::atomic::AtomicUsize,
@@ -100,6 +102,11 @@ impl Installed {
             .enumerate()
             .map(|(index, entry)| crate::callback_owner::CallbackOwner::for_index(entry.id, index))
             .collect();
+        let landing_callbacks = mods
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| crate::callback_owner::CallbackOwner::for_index(entry.id, index))
+            .collect();
         let mod_id_owners = mods
             .iter()
             .enumerate()
@@ -115,6 +122,7 @@ impl Installed {
             subscribers,
             disabled,
             scheduled_tasks,
+            landing_callbacks,
             mod_id_owners,
             content_owners: OnceLock::new(),
             disabled_count: std::sync::atomic::AtomicUsize::new(0),

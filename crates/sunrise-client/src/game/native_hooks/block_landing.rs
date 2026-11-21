@@ -1,116 +1,310 @@
 use super::*;
 
 impl HitLevel<'_> {
-    /// `Block.fallOn`: entity `entity` of type `kind` landed on `state` at `pos` after falling
+    /// `Block.fallOn`: lends a scoped `LandingEntity` on `state` at `pos` after falling
     /// `distance` blocks. Writable distance and multiplier feed `causeFallDamage` before
-    /// sounds and hurt. A zero multiplier prevents both. A creative or
-    /// fall-immune entity keeps its immunity. Players and mobs
-    /// land here; dropped items also land with zero multiplier. Generated dispatch stages
-    /// every requested API LandingWrite before committing the fall inputs or the engine write
-    /// queue; an invalid state refuses the whole callback's output.
+    /// sounds and hurt. A zero multiplier prevents both. A creative or fall-immune entity
+    /// keeps its immunity. Players, mobs and dropped items land here (items with zero
+    /// multiplier). Deferred server-host work queued with `FallOnEvent::after_landing`
+    /// runs once the entity batch finishes.
     pub(in crate::game) fn native_fall_on(&mut self, call: super::fire::FallOnCall<'_>) {
         self.fire_fall_on(call);
     }
-    /// `Block.bounceOn`: entity `entity` of type `kind` bounced off `state` at `pos` and fell
-    /// `fall_distance` blocks. `movement` is the movement the bounce leaves it, before
-    /// vanilla sets it: change it to change what the entity keeps. Players and mobs bounce
-    /// here; dropped items and the other entities do not yet.
+    /// `Block.bounceOn`: lends a scoped `LandingEntity` bouncing off `state` at `pos`
+    /// after falling `fall_distance` blocks. `movement` is the movement the bounce leaves
+    /// it, before vanilla sets it: change it to change what the entity keeps. Deferred
+    /// server-host work queued with `BounceOnEvent::after_bounce` runs once the entity
+    /// batch finishes. Players and mobs bounce here; dropped items and the other entities
+    /// do not yet.
     pub(in crate::game) fn native_bounce_on(&mut self, call: super::fire::BounceOnCall<'_>) {
         self.fire_bounce_on(call);
     }
 }
 
 #[cfg(test)]
-mod landing_crossing_tests {
+mod landing_tests {
     use super::*;
     use crate::game::api_values::TryIntoApi;
-    use mod_api::{BlockPart, FallOnEvent, Hooks, LevelRandomHost, ModEntry, Registrar};
+    use mod_api::{
+        BlockPart, BounceOnEvent, FallOnEvent, Hooks, LandingEntity, LandingEntityAccess,
+        LevelRandomHost, ModEntry, Registrar,
+    };
     use std::sync::{Arc, Mutex};
 
+    struct TestEntity {
+        id: i32,
+        kind: &'static str,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        fall_distance: f64,
+        on_ground: bool,
+        crouching: bool,
+        suppressing_bounce: bool,
+        dimensions: [f32; 2],
+    }
+
+    impl LandingEntityAccess for TestEntity {
+        fn id(&self) -> i32 {
+            self.id
+        }
+        fn kind(&self) -> &str {
+            self.kind
+        }
+        fn position(&self) -> [f64; 3] {
+            self.position
+        }
+        fn velocity(&self) -> [f64; 3] {
+            self.velocity
+        }
+        fn fall_distance(&self) -> f64 {
+            self.fall_distance
+        }
+        fn on_ground(&self) -> bool {
+            self.on_ground
+        }
+        fn is_crouching(&self) -> bool {
+            self.crouching
+        }
+        fn is_suppressing_bounce(&self) -> bool {
+            self.suppressing_bounce
+        }
+        fn dimensions(&self) -> [f32; 2] {
+            self.dimensions
+        }
+        fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+            self.velocity = velocity;
+            true
+        }
+        fn reset_fall_distance(&mut self) {
+            self.fall_distance = 0.0;
+        }
+    }
+
     #[derive(Clone, Default)]
-    struct LandingPart(Arc<Mutex<Option<(mod_api::BlockState, bool)>>>);
+    struct LandingPart {
+        target: Arc<Mutex<Option<(mod_api::BlockState, mod_api::BlockState)>>>,
+        observed: Arc<Mutex<Vec<String>>>,
+    }
+
     #[mod_api::sunrise_part]
     impl BlockPart for LandingPart {
         fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
-            let (state, invalid) = self.0.lock().unwrap().unwrap();
-            event.distance = 99.0;
-            event.damage_multiplier = 2.0;
-            event.request(mod_api::LandingWrite::SetBlock(state));
-            if invalid {
-                event.request(mod_api::LandingWrite::SetBlock(
-                    mod_api::__private::block_state_from_ordinal(state.block(), u16::MAX),
-                ));
-            }
+            let (first, second) = self.target.lock().unwrap().unwrap();
+            assert_eq!(event.entity.id(), 7);
+            assert_eq!(event.entity.kind(), "minecraft:player");
+            assert_eq!(event.entity.block_position(), [1, 65, 1]);
+            assert!(event.entity.is_crouching());
+            assert!(event.entity.is_suppressing_bounce());
+            assert_eq!(event.entity.dimensions(), [0.6, 1.5]);
+            assert!(!event.entity.set_velocity([f64::NAN, 0.0, 0.0]));
+            assert!(event.entity.set_velocity([0.25, 0.5, -0.25]));
+            event.entity.reset_fall_distance();
+            event.distance = 12.0;
+            event.damage_multiplier = 0.5;
+            let pos = [event.pos.x, event.pos.y, event.pos.z];
+            let dim = event.dimension.to_owned();
+            let observed = self.observed.clone();
+            event.after_landing(move |host| {
+                let level = host.level(&dim).unwrap();
+                let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+                let _ = level.set_block(host, pos, first, flags);
+                observed.lock().unwrap().push("first".into());
+            });
+            let dim2 = event.dimension.to_owned();
+            let observed2 = self.observed.clone();
+            event.after_landing(move |host| {
+                let level = host.level(&dim2).unwrap();
+                // No unchanged-block replay gate: this callback sees `first` set by the
+                // preceding callback and performs its own local check.
+                if level.block_state(host, pos) == Some(first) {
+                    let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+                    let _ = level.set_block(host, pos, second, flags);
+                    observed2.lock().unwrap().push("second".into());
+                }
+            });
+        }
+
+        fn bounce_on(&self, _: &mut dyn LevelRandomHost, event: &mut BounceOnEvent<'_>) {
+            assert_eq!(event.entity.id(), 7);
+            assert!(!event.entity.is_suppressing_bounce());
+            event.movement[1] = 0.75;
+            let observed = self.observed.clone();
+            event.after_bounce(move |_host| {
+                observed.lock().unwrap().push("bounced".into());
+            });
         }
     }
+
     struct LandingMod(LandingPart);
     #[mod_api::__subscriptions]
     impl Hooks for LandingMod {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-            let stone = r.block_key("minecraft:stone");
-            r.block_part(stone, self.0.clone());
+            let farmland = r.block_key("minecraft:farmland");
+            r.block_part(farmland, self.0.clone());
         }
     }
 
+    #[derive(Clone)]
+    struct PanickingPart;
+    #[mod_api::sunrise_part]
+    impl BlockPart for PanickingPart {
+        fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+            event.after_landing(|_host| panic!("landing callback boom"));
+        }
+    }
+
+    struct PanickingMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for PanickingMod {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            let farmland = r.block_key("minecraft:farmland");
+            r.block_part(farmland, PanickingPart);
+        }
+    }
+
+    /// `fall_on` and `bounce_on` lend the scoped falling entity directly and queue owned
+    /// native callbacks that run in order at batch end without an unchanged-block gate;
+    /// a panicking mod's deferred callback is disabled for the session and reported via
+    /// the callback panic notice queue without blocking other mods.
     #[test]
     #[ignore = "daily"]
-    fn landing_crossing_refuses_invalid_writes_and_sibling_damage() {
+    fn fall_on_and_bounce_on_lend_entity_and_contain_deferred_panics() {
         let part = LandingPart::default();
-        let mods: mod_api::Mods = vec![ModEntry::new(
-            "landing_atomic",
-            Box::new(LandingMod(part.clone())),
-        )]
+        let mods: mod_api::Mods = vec![
+            ModEntry::new("bad_landing", Box::new(PanickingMod)),
+            ModEntry::new("good_landing", Box::new(LandingMod(part.clone()))),
+        ]
         .into();
         crate::game::api_values::install_parts(&mods).unwrap();
         mod_platform::testing::with_mods(mods, || {
             crate::game::native_entity_refs::tests::with_game(|game| {
-                let stone = game
-                    .pack
-                    .assets
-                    .registry
-                    .default_state("minecraft:stone")
-                    .unwrap();
-                let state = stone.try_into_api().unwrap();
-                let original =
-                    vec![sunrise_world::level::LandingWrite::DestroyBlock { drop: false }];
-                for invalid in [false, true] {
-                    *part.0.lock().unwrap() = Some((state, invalid));
-                    let mut distance = 5.0;
-                    let mut multiplier = 1.0;
-                    let mut writes = original.clone();
-                    let mut level = sunrise_client::health::TestLevel::new(0);
-                    HitLevel(level.level()).native_fall_on(super::super::fire::FallOnCall {
-                        dimension: "minecraft:overworld",
-                        entity: 1,
-                        kind: "minecraft:player",
-                        state: stone,
-                        pos: BlockPos::new(1, 64, 1),
-                        distance: &mut distance,
-                        damage_multiplier: &mut multiplier,
-                        writes: &mut writes,
-                    });
-                    if invalid {
-                        assert_eq!(
-                            (distance, multiplier),
-                            (5.0, 1.0),
-                            "invalid write must not commit sibling inputs"
-                        );
-                        assert_eq!(writes, original, "valid prefix must not reach engine queue");
-                    } else {
-                        assert_eq!(
-                            (distance, multiplier),
-                            (99.0, 2.0),
-                            "the real registered callback fired"
-                        );
-                        assert_eq!(
-                            writes,
-                            vec![
-                                original[0],
-                                sunrise_world::level::LandingWrite::SetBlock(stone)
-                            ]
-                        );
-                    }
-                }
+                game.options.dedicated = Some(Vec::new());
+                let state = |name| game.pack.assets.registry.default_state(name).unwrap();
+                let (farmland, stone, dirt) = (
+                    state("minecraft:farmland"),
+                    state("minecraft:stone"),
+                    state("minecraft:dirt"),
+                );
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                );
+                game.world.set(1, 64, 1, farmland).unwrap();
+                *part.target.lock().unwrap() =
+                    Some((stone.try_into_api().unwrap(), dirt.try_into_api().unwrap()));
+
+                let mut entity = TestEntity {
+                    id: 7,
+                    kind: "minecraft:player",
+                    position: [1.5, 65.0, 1.5],
+                    velocity: [0.0, -0.8, 0.0],
+                    fall_distance: 5.0,
+                    on_ground: true,
+                    crouching: true,
+                    suppressing_bounce: true,
+                    dimensions: [0.6, 1.5],
+                };
+                let mut distance = 5.0;
+                let mut multiplier = 1.0;
+                let mut deferred = Vec::new();
+                let mut level = sunrise_client::health::TestLevel::new(0);
+                HitLevel(level.level()).native_fall_on(super::super::fire::FallOnCall {
+                    dimension: "minecraft:overworld",
+                    entity: LandingEntity::new(&mut entity),
+                    state: farmland,
+                    pos: BlockPos::new(1, 64, 1),
+                    distance: &mut distance,
+                    damage_multiplier: &mut multiplier,
+                    deferred: mod_api::__private::LandingDeferred::new(&mut deferred),
+                });
+                assert_eq!((distance, multiplier), (12.0, 0.5));
+                assert_eq!(entity.velocity, [0.25, 0.5, -0.25]);
+                assert_eq!(entity.fall_distance, 0.0);
+                assert_eq!(game.world.block(1, 64, 1), farmland, "deferred until drain");
+
+                let _ = mod_api::__private::game::take_callback_panic_notices();
+                sunrise_client::block_contact::defer_landing(deferred);
+                game.drain_entity_inside();
+
+                let notices = mod_api::__private::game::take_callback_panic_notices();
+                assert!(
+                    notices
+                        .iter()
+                        .any(|n| n.mod_id == "bad_landing" && n.kind == "block landing"),
+                    "panicking deferred landing callback must queue an error notice: {notices:?}"
+                );
+                assert_eq!(
+                    game.world.block(1, 64, 1),
+                    dirt,
+                    "good mod's ordered deferred callbacks ran even after bad_landing panicked"
+                );
+                assert_eq!(
+                    *part.observed.lock().unwrap(),
+                    vec!["first".to_owned(), "second".to_owned()]
+                );
+
+                // A second landing from bad_landing stays disabled (no second panic notice),
+                // while good_landing still runs.
+                game.world.set(1, 64, 1, farmland).unwrap();
+                let mut entity_second = TestEntity {
+                    id: 7,
+                    kind: "minecraft:player",
+                    position: [1.5, 65.0, 1.5],
+                    velocity: [0.0, -0.8, 0.0],
+                    fall_distance: 5.0,
+                    on_ground: true,
+                    crouching: true,
+                    suppressing_bounce: true,
+                    dimensions: [0.6, 1.5],
+                };
+                let mut distance2 = 5.0;
+                let mut multiplier2 = 1.0;
+                let mut deferred2 = Vec::new();
+                HitLevel(level.level()).native_fall_on(super::super::fire::FallOnCall {
+                    dimension: "minecraft:overworld",
+                    entity: LandingEntity::new(&mut entity_second),
+                    state: farmland,
+                    pos: BlockPos::new(1, 64, 1),
+                    distance: &mut distance2,
+                    damage_multiplier: &mut multiplier2,
+                    deferred: mod_api::__private::LandingDeferred::new(&mut deferred2),
+                });
+                sunrise_client::block_contact::defer_landing(deferred2);
+                game.drain_entity_inside();
+                assert!(
+                    mod_api::__private::game::take_callback_panic_notices().is_empty(),
+                    "disabled bad_landing callback must not fire or report a second panic"
+                );
+                assert_eq!(game.world.block(1, 64, 1), dirt);
+
+                let mut entity_bounce = TestEntity {
+                    suppressing_bounce: false,
+                    ..entity_second
+                };
+                let mut movement = [0.0, 0.4, 0.0];
+                let mut bounce_deferred = Vec::new();
+                HitLevel(level.level()).native_bounce_on(super::super::fire::BounceOnCall {
+                    dimension: "minecraft:overworld",
+                    entity: LandingEntity::new(&mut entity_bounce),
+                    state: farmland,
+                    pos: BlockPos::new(1, 64, 1),
+                    fall_distance: 4.0,
+                    movement: &mut movement,
+                    deferred: mod_api::__private::LandingDeferred::new(&mut bounce_deferred),
+                });
+                assert_eq!(movement, [0.0, 0.75, 0.0]);
+                sunrise_client::block_contact::defer_landing(bounce_deferred);
+                game.drain_entity_inside();
+                assert_eq!(
+                    *part.observed.lock().unwrap(),
+                    vec![
+                        "first".to_owned(),
+                        "second".to_owned(),
+                        "first".to_owned(),
+                        "second".to_owned(),
+                        "bounced".to_owned(),
+                    ]
+                );
             });
         });
     }

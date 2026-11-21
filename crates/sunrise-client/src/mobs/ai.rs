@@ -99,8 +99,8 @@ mod inside_walk_tests {
             pass_listens: |_| false,
             fall_listens: |_| false,
             bounce_listens: |_| false,
-            fall_on: |_, _, _, _, _, _| {},
-            bounce_on: |_, _, _, _, _| {},
+            fall_on: |_, _, _, _, _, _, _, _| {},
+            bounce_on: |_, _, _, _, _, _, _, _| {},
             // The production binding's own shape: the whole callback staged,
             // a panic contained with it.
             inside_fire: |_level,

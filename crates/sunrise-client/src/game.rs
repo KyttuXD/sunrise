@@ -5150,11 +5150,17 @@ impl Game<'_> {
             _ => {}
         }
     }
-    /// `Block.fallOn` for item `id`, which fell `distance` onto the block at `on`
-    /// (`Entity.checkFallDamage`): a mod block's `fall_on` Part hears it, through the same
-    /// `block_contact::fall` as a player's and a mob's landing. An item takes no fall damage.
-    /// Nothing is lent or built unless a Part of that block listens.
-    fn item_fall_on(&mut self, id: u32, on: sunrise_core::position::BlockPos, distance: f64) {
+    /// `Block.fallOn` for dropped `item`, which fell `distance` onto the block at `on`
+    /// (`Entity.checkFallDamage`): a mod block's `fall_on` Part hears it with a scoped
+    /// `LandingEntity`, through the same `block_contact::fall` as a player's and a mob's
+    /// landing. An item takes no fall damage. Nothing is lent or built unless a Part of
+    /// that block listens.
+    fn item_fall_on(
+        &mut self,
+        item: &mut ItemEntity,
+        on: sunrise_core::position::BlockPos,
+        distance: f64,
+    ) {
         let state = self.world.block(on.x, on.y, on.z);
         if !sunrise_client::block_contact::fall_listens(state) {
             return;
@@ -5173,13 +5179,15 @@ impl Game<'_> {
                 &self.damage_hooks,
             )
             .with_effects(crate::game::entity::hit_effects_of!(self, None));
-            let contact = sunrise_client::block_contact::Contact {
-                entity: id as i32,
-                kind: "minecraft:item",
+            let mut entity = sunrise_client::landing::ItemLandingEntity(item);
+            let _ = sunrise_client::block_contact::fall(
+                &mut level,
+                &mut entity,
                 state,
-                position: on,
-            };
-            let _ = sunrise_client::block_contact::fall(&mut level, contact, distance, 0.0);
+                on,
+                distance,
+                0.0,
+            );
         }));
         lent.give_back(&mut self.world);
         if let Err(payload) = result {

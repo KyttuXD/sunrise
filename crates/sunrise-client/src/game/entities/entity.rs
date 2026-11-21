@@ -986,7 +986,7 @@ impl Game<'_> {
             self.vehicle_fall_reset(fall, from, moved)
         });
         if !client && let Some((on, distance)) = step.landed() {
-            self.item_fall_on(item.id, on, distance);
+            self.item_fall_on(item, on, distance);
         }
         if !client {
             // `Entity.applyEffectsFromBlocks`' checkInsideBlocks, at the batch.

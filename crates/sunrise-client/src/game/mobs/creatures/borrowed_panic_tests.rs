@@ -131,7 +131,8 @@ impl mod_api::BlockPart for GoalPart {
         host: &mut dyn mod_api::LevelRandomHost,
         event: &mut mod_api::FallOnEvent<'_>,
     ) {
-        self.0.progress(Family::Landing, event.entity == 72, host);
+        self.0
+            .progress(Family::Landing, event.entity.id() == 72, host);
     }
 }
 #[mod_api::sunrise_part]

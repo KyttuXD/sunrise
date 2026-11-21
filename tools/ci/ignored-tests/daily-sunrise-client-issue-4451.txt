@@ -1457,7 +1457,7 @@ sunrise-client game::native_hooks::block_entity_on_load_routes_tests::tests::blo
 sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_entity_on_load_client_instance_reads_received_fields lib daily resources
 sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_entity_on_load_saved_data_placement_rewrite_and_reload lib daily child-process
 sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_entity_on_load_without_listener_preserves_data_and_never_queues lib daily resources
-sunrise-client game::native_hooks::block_landing::landing_crossing_tests::landing_crossing_refuses_invalid_writes_and_sibling_damage lib daily resources
+sunrise-client game::native_hooks::block_landing::landing_tests::fall_on_and_bounce_on_lend_entity_and_contain_deferred_panics lib daily resources
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen lib daily resources
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::entering_inventory_requests_catalogue_for_preinstalled_bound_screen lib daily resources
 sunrise-client game::native_hooks::camera_type::camera_type_tests::a_client_mod_picks_the_camera_type_f5_cycles_to lib daily resources
@@ -1489,7 +1489,7 @@ sunrise-client game::native_hooks::enchanted_block_loot::tests::a_listener_sets_
 sunrise-client game::native_hooks::enchantment_and_lang_tests::a_trait_mod_measures_text_through_its_draw_context lib daily resources
 sunrise-client game::native_hooks::enchantment_and_lang_tests::enchantment_registry_returns_records_and_unknown_cost lib daily resources
 sunrise-client game::native_hooks::enchantment_and_lang_tests::translate_gives_the_text_of_a_defined_key_and_none_otherwise lib daily resources
-sunrise-client game::native_hooks::entity_inside::entity_inside_tests::landing_writes_apply_at_the_batch_end lib daily resources
+sunrise-client game::native_hooks::entity_inside::entity_inside_tests::deferred_landing_callbacks_apply_at_the_batch_end lib daily resources
 sunrise-client game::native_hooks::entity_inside::sweep_tests::a_killing_write_stops_the_flush lib daily resources
 sunrise-client game::native_hooks::entity_inside::sweep_tests::a_killing_write_stops_the_items_flush lib daily resources
 sunrise-client game::native_hooks::entity_inside::sweep_tests::a_panicking_part_leaves_the_arrow_list_whole lib daily resources

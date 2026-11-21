@@ -231,6 +231,27 @@ impl CallbackOwner {
         }
     }
 
+    /// Run a deferred landing or bounce callback using its installed owner's shared state.
+    /// A refusal is reported each time without disabling the callback; a panic disables
+    /// this mod's deferred landing callbacks for the session, logs loudly and queues an
+    /// error toast notice.
+    pub fn call_landing_callback<H: crate::ServerHost>(
+        id: &'static str,
+        host: &mut H,
+        invoke: impl FnOnce(&mut H),
+    ) -> Result<(), String> {
+        let state = crate::runtime::installed().and_then(|installed| {
+            installed
+                .by_id
+                .get(id)
+                .map(|&i| &installed.landing_callbacks[i])
+        });
+        match state {
+            Some(owner) => owner.call("block landing", "fall_on", || invoke(host)),
+            None => Self::for_mod(id).call("block landing", "fall_on", || invoke(host)),
+        }
+    }
+
     /// Bind a callback owner by mod id, resolving its installed slot when present.
     pub fn for_mod(id: &'static str) -> Self {
         Self {

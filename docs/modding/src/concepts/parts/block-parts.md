@@ -149,25 +149,38 @@ template block writes still call the rotation Part at their placed world positio
 | Mirroring | Stays the game's: vanilla's table, or the template's for a mod block. |
 | Panics | A panicking part is contained with a warning, and the game's state is placed. |
 
-## Landing writes
+## Landing and bounce callbacks
 
-`BlockPart::fall_on` runs at vanilla's landing moment on a read-only level random host.
-Hook version 2 exposes writable `event.distance` and `event.damage_multiplier`, not calculated
+`BlockPart::fall_on` (hook version 3, `Block.fallOn`) and `BlockPart::bounce_on`
+(hook version 2, `Block.bounceOn`) run synchronously inside the entity's move on a
+read-only `LevelRandomHost` (reads blocks, draws the level's live random stream in
+vanilla's order, and accesses attachments).
+
+Both events lend the falling or bouncing entity directly as `event.entity: LandingEntity<'_>`,
+exposing its id, type kind, position, block position, velocity, fall distance, ground state,
+`is_crouching()`, `is_suppressing_bounce()` (matching `Entity.isSuppressingBounce` /
+`Entity.isShiftKeyDown` as checked by `SlimeBlock.fallOn`), and bounding-box dimensions,
+plus direct `set_velocity` (rejecting non-finite components) and `reset_fall_distance`.
+
+`fall_on` exposes writable `event.distance` and `event.damage_multiplier`, not calculated
 damage. Vanilla blocks supply their own pair: hay uses 0.2, beds 0.5, slime 0,
 and pointed dripstone adds 2.5 to distance and uses 2.0. Other blocks start at 1.0.
 The engine applies `floor((distance + 1e-6 - safe_fall_distance) * damage_multiplier * fall_damage_multiplier_attribute)`.
 The safe fall distance attribute defaults to 3: halving distance is not halving damage.
 A zero multiplier or distance within the safe fall means no damage or generic fall sounds.
 Creative and fall-immune entities and items keep their immunity regardless of edits.
+`bounce_on` fires only when an entity bounced, just before vanilla sets its velocity,
+with writable `event.movement: &mut [f64; 3]`.
 
-Request a deferred write with `event.request(LandingWrite::SetBlock(state))`, where `state`
-is an API `BlockState`, or `LandingWrite::DestroyBlock { drop }`. The game checks the
-complete write batch before queuing it. An invalid block key or ordinal refuses that
-callback's writes and other outputs, including distance and multiplier; it never applies a valid prefix.
-After the entity batch ticks, writes apply in request order if the block still matches
-its original landed state. That guard runs once, so a first write can change the state
-without suppressing the next write. SetBlock notifies neighbors and clients; DestroyBlock
-preserves the requested resource-drop flag.
+For work that requires `&mut dyn ServerHost` (setting or destroying blocks such as
+farmland trampling or turtle eggs breaking, playing sounds, or firing game events),
+queue an owned native callback with `event.after_landing(move |host| { ... })` or
+`event.after_bounce(move |host| { ... })`. Queued callbacks run in FIFO order once the
+entity batch ends, with no engine-side unchanged-block replay gate: inspect
+`level.block_state(host, pos)` locally inside the callback when the action depends on
+the block still matching. A panic inside a deferred callback disables that mod's
+deferred landing callbacks for the session and reports an error notice; a phase refusal
+is reported each time without disabling the mod.
 
 ## Storage changes
 

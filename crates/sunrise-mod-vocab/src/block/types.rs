@@ -370,10 +370,30 @@ pub struct BlockClick<'a> {
 }
 
 impl FallOnEvent<'_> {
-    /// Ask for a write at the block the entity landed on. It is applied once the entity's
-    /// batch has ticked, in the order asked, if the block is still the state it landed on.
-    pub fn request(&mut self, write: LandingWrite) {
-        self.writes.push(write);
+    /// Queue an owned native callback to run with `&mut dyn ServerHost` once the current
+    /// entity batch finishes (for block changes, sounds, game events or entity writes
+    /// that cannot borrow the full server host mid-batch).
+    ///
+    /// Callbacks run in the order queued with no engine-side unchanged-block replay gate:
+    /// inspect `level.block_state(host, pos)` inside the callback if the action depends on
+    /// the landed block still matching. A panic disables this mod's deferred landing
+    /// callbacks for the session; a phase refusal is reported each time without disabling
+    /// them.
+    pub fn after_landing(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
+        self.deferred.push(action);
+    }
+}
+
+impl BounceOnEvent<'_> {
+    /// Queue an owned native callback to run with `&mut dyn ServerHost` once the current
+    /// entity batch finishes (for sounds, block changes or entity writes that cannot
+    /// borrow the full server host mid-batch).
+    ///
+    /// Callbacks run in the order queued with no engine-side unchanged-block replay gate.
+    /// A panic disables this mod's deferred landing callbacks for the session; a phase
+    /// refusal is reported each time without disabling them.
+    pub fn after_bounce(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
+        self.deferred.push(action);
     }
 }
 

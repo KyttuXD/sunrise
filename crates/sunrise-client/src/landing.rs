@@ -27,6 +27,94 @@ use sunrise_world::{
     registry::BlockStateId,
 };
 
+/// Scoped `LandingEntityAccess` adapter over a live `PlayerMotion`.
+pub(crate) struct PlayerLandingEntity<'a>(pub(crate) &'a mut crate::motion::PlayerMotion);
+
+impl mod_api::LandingEntityAccess for PlayerLandingEntity<'_> {
+    fn id(&self) -> i32 {
+        self.0.entity_id
+    }
+    fn kind(&self) -> &str {
+        "minecraft:player"
+    }
+    fn position(&self) -> [f64; 3] {
+        [self.0.position.x, self.0.position.y, self.0.position.z]
+    }
+    fn velocity(&self) -> [f64; 3] {
+        [self.0.velocity.x, self.0.velocity.y, self.0.velocity.z]
+    }
+    fn fall_distance(&self) -> f64 {
+        self.0.fall_distance
+    }
+    fn on_ground(&self) -> bool {
+        self.0.ground.on_ground
+    }
+    fn is_crouching(&self) -> bool {
+        self.0.pose == crate::pose::Pose::Crouching
+    }
+    fn is_suppressing_bounce(&self) -> bool {
+        self.0.shift_key_down
+    }
+    fn dimensions(&self) -> [f32; 2] {
+        [self.0.dimensions.width, self.0.dimensions.height]
+    }
+    fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+        if !velocity.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        true
+    }
+    fn reset_fall_distance(&mut self) {
+        self.0.fall_distance = 0.0;
+    }
+}
+
+/// Scoped `LandingEntityAccess` adapter over a live dropped `ItemEntity`.
+pub struct ItemLandingEntity<'a>(pub &'a mut crate::entities::ItemEntity);
+
+impl mod_api::LandingEntityAccess for ItemLandingEntity<'_> {
+    fn id(&self) -> i32 {
+        self.0.id as i32
+    }
+    fn kind(&self) -> &str {
+        "minecraft:item"
+    }
+    fn position(&self) -> [f64; 3] {
+        [self.0.position.x, self.0.position.y, self.0.position.z]
+    }
+    fn velocity(&self) -> [f64; 3] {
+        [self.0.velocity.x, self.0.velocity.y, self.0.velocity.z]
+    }
+    fn fall_distance(&self) -> f64 {
+        self.0.fall_distance
+    }
+    fn on_ground(&self) -> bool {
+        self.0.on_ground
+    }
+    fn is_crouching(&self) -> bool {
+        false
+    }
+    fn is_suppressing_bounce(&self) -> bool {
+        false
+    }
+    fn dimensions(&self) -> [f32; 2] {
+        let size = crate::entities::ItemEntity::WIDTH as f32;
+        [size, size]
+    }
+    fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+        if !velocity.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        self.0.needs_sync = true;
+        true
+    }
+    fn reset_fall_distance(&mut self) {
+        self.0.fall_distance = 0.0;
+    }
+}
+
 /// A living entity is about to handle a fall (`LivingFallEvent`). Mods may
 /// change the distance and damage multiplier, or cancel fall handling.
 #[inline(never)]
@@ -300,6 +388,7 @@ impl MotionWorld<'_, '_, '_> {
         distance: f64,
         multiplier: f32,
     ) -> (f64, f32) {
+        let mut entity = PlayerLandingEntity(self.player);
         crate::block_contact::fall(
             &mut crate::health::DamageLevel::of(
                 &mut *self.scene,
@@ -308,12 +397,9 @@ impl MotionWorld<'_, '_, '_> {
                 self.block_registries,
                 self.damage_hooks,
             ),
-            crate::block_contact::Contact {
-                entity: self.player.entity_id,
-                kind: "minecraft:player",
-                state,
-                position,
-            },
+            &mut entity,
+            state,
+            position,
             distance,
             multiplier,
         )

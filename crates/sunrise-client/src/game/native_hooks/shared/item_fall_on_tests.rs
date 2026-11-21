@@ -11,13 +11,19 @@ struct Lands(Arc<Mutex<Vec<(i32, String, BlockPos, f64, f32)>>>);
 impl BlockPart for Lands {
     fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
         self.0.lock().unwrap().push((
-            event.entity,
-            event.kind.to_owned(),
+            event.entity.id(),
+            event.entity.kind().to_owned(),
             event.pos,
             event.distance,
             event.damage_multiplier,
         ));
-        event.request(mod_api::LandingWrite::DestroyBlock { drop: false });
+        let dim = event.dimension.to_owned();
+        let at = [event.pos.x, event.pos.y, event.pos.z];
+        event.after_landing(move |host| {
+            if let Some(level) = host.level(&dim) {
+                let _ = level.destroy_block(host, at, false, None, false);
+            }
+        });
     }
 }
 struct Mod(Lands);
@@ -51,7 +57,13 @@ impl BlockPart for LoanPart {
         LOAN_VALUE
             .set(host.attachments(), mod_api::Holder::Level, 73)
             .unwrap();
-        event.request(mod_api::LandingWrite::DestroyBlock { drop: false });
+        let dim = event.dimension.to_owned();
+        let at = [event.pos.x, event.pos.y, event.pos.z];
+        event.after_landing(move |host| {
+            if let Some(level) = host.level(&dim) {
+                let _ = level.destroy_block(host, at, false, None, false);
+            }
+        });
         std::panic::panic_any(self.0.clone());
     }
 }
@@ -104,12 +116,39 @@ fn item_fall_on_returns_progressed_level_loan_after_part_panic() {
                     .set(&mut game.world.attachments, mod_api::Holder::Level, 11)
                     .unwrap();
                 game.world.attachment_syncs.insert(mod_api::Holder::Level);
+                let mut item = sunrise_client::entities::ItemEntity {
+                    attachment_lifetime: Default::default(),
+                    fall_distance: 5.0,
+                    random: sunrise_core::random::LegacyRandom::new(0),
+                    rotation: [0.0, 0.0],
+                    join: Default::default(),
+                    no_gravity: false,
+                    id: 42,
+                    thrower: None,
+                    target: None,
+                    stack: ItemStack::new("minecraft:apple", 1),
+                    health: 5,
+                    fire_ticks: 0,
+                    position: sunrise_core::geometry::Vec3::new(1.5, 65.0, 1.5),
+                    previous: sunrise_core::geometry::Vec3::new(1.5, 70.0, 1.5),
+                    velocity: sunrise_core::geometry::Vec3::ZERO,
+                    on_ground: true,
+                    vertical_collision: true,
+                    horizontal_collision: false,
+                    age: 0,
+                    pickup_delay: 0,
+                    bob_offset: 0.0,
+                    ticks: 1,
+                    needs_sync: false,
+                    stuck: sunrise_core::geometry::Vec3::ZERO,
+                    was_touching_water: false,
+                };
                 let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     sunrise_client::block_contact::in_level(
                         sunrise_client::parallel::TickThread::mint(),
                         Some(game.dim.id()),
                         || {
-                            game.item_fall_on(42, pos, 5.0);
+                            game.item_fall_on(&mut item, pos, 5.0);
                         },
                     );
                 }))

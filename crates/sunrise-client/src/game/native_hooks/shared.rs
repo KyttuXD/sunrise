@@ -1537,74 +1537,66 @@ impl Game<'_> {
         };
         Some(LivingRef::new(EntityRef::new(epoch, id)))
     }
-    /// Deliver what the batch just ticked recorded, in order: `minecart_pass`
-    /// to the parts, and the writes a landing or a mid-walk `entity_inside`
-    /// contact asked for to the level. A write is skipped when the block at
-    /// its position is no longer the state it touched, as vanilla never sees
-    /// a stale one. The parts' own `entity_inside` contacts fire mid-walk now,
-    /// on the shared inside sweep, not here.
+    /// Deliver what the batch just ticked recorded, in order: owned deferred landing/bounce
+    /// callbacks, `minecart_pass` to the parts, and the writes a mid-walk `entity_inside`
+    /// contact asked for to the level. Deferred landing callbacks run against `&mut dyn ServerHost`
+    /// with no engine-side unchanged-block replay gate; each callback performs any state checks
+    /// it needs locally. The parts' own `entity_inside` contacts fire mid-walk now, on the shared
+    /// inside sweep, not here.
     pub(super) fn drain_entity_inside(&mut self) {
         for contact in sunrise_client::block_contact::take_pending() {
-            let (state, pos) = match &contact {
-                Pending::Landed(landed) => (landed.state, landed.position),
-                Pending::MinecartPass(pass) => (pass.state, pass.position),
-                Pending::InsideWritten(written) => (written.state, written.position),
-            };
-            let Some(level) = self.level(self.dim.id()) else {
-                continue;
-            };
-            if self.level_block_state(level, [pos.x, pos.y, pos.z]) != Some(state) {
-                continue;
-            }
             match contact {
+                Pending::LandingDeferred(action) => {
+                    if let Some(mod_id) = action.owner() {
+                        let _ = mod_api::__private::game::CallbackOwner::call_landing_callback(
+                            mod_id,
+                            self,
+                            |game| action.run(game),
+                        );
+                    } else {
+                        action.run(self);
+                    }
+                }
                 Pending::MinecartPass(pass) => {
+                    let Some(level) = self.level(self.dim.id()) else {
+                        continue;
+                    };
+                    if self.level_block_state(
+                        level,
+                        [pass.position.x, pass.position.y, pass.position.z],
+                    ) != Some(pass.state)
+                    {
+                        continue;
+                    }
                     if let Some(entity) = u32::try_from(pass.entity)
                         .ok()
                         .and_then(|id| self.entity(id))
                     {
-                        self.native_minecart_pass(state, pos, entity);
-                    }
-                }
-                Pending::Landed(landed) => {
-                    for write in landed.writes {
-                        self.apply_landing_write(level, pos, write);
+                        self.native_minecart_pass(pass.state, pass.position, entity);
                     }
                 }
                 // The mid-walk contacts' own level writes, guarded on the touched
-                // state above, as a landing's are.
+                // state, as vanilla never sees a stale one.
                 Pending::InsideWritten(written) => {
+                    let Some(level) = self.level(self.dim.id()) else {
+                        continue;
+                    };
+                    if self.level_block_state(
+                        level,
+                        [written.position.x, written.position.y, written.position.z],
+                    ) != Some(written.state)
+                    {
+                        continue;
+                    }
                     for write in written.writes {
-                        self.apply_inside_write(level, pos, write);
+                        self.apply_inside_write(level, written.position, write);
                     }
                 }
             }
         }
     }
-
-    /// Apply one already-validated engine write, at the block the entity landed on.
-    /// The original-state guard runs once before the ordered batch, not between writes.
-    fn apply_landing_write(
-        &mut self,
-        level: mod_api::LevelRef,
-        pos: BlockPos,
-        write: sunrise_world::level::LandingWrite,
-    ) {
-        let at = [pos.x, pos.y, pos.z];
-        match write {
-            // `Level.setBlockAndUpdate`: flag 3, the neighbours and the clients.
-            sunrise_world::level::LandingWrite::SetBlock(state) => {
-                let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
-                let _ = self.level_set_block(level, at, state, flags);
-            }
-            sunrise_world::level::LandingWrite::DestroyBlock { drop } => {
-                self.level_destroy_block(level, at, drop, None, false);
-            }
-            // A write a later API adds that this game does not know is not applied.
-            _ => {}
-        }
-    }
-    /// A write an `entity_inside` part asked for, applied as a landing write is: at the
-    /// touched block, once the entity's batch has ticked.
+    /// A write an `entity_inside` part asked for, applied at the touched block once the
+    /// entity's batch has ticked.
     fn apply_inside_write(
         &mut self,
         level: mod_api::LevelRef,
@@ -1946,31 +1938,30 @@ pub(super) const BLOCK_CONTACT_HOOKS: sunrise_client::block_contact::Hooks =
                 }
             }
         },
-        fall_on: |dimension, level, c, distance, damage_multiplier, writes| {
+        fall_on: |dimension, level, entity, state, pos, distance, damage_multiplier, deferred| {
             HitLevel(level.reborrow()).native_fall_on(
                 crate::game::native_hooks::fire::FallOnCall {
                     dimension,
-                    entity: c.entity,
-                    kind: c.kind,
-                    state: c.state,
-                    pos: c.position,
+                    entity: mod_api::LandingEntity::new(entity),
+                    state,
+                    pos,
                     distance,
                     damage_multiplier,
-                    writes,
+                    deferred: mod_api::__private::LandingDeferred::new(deferred),
                 },
             );
         },
-        bounce_on: |dimension, level, c, fall_distance, movement| {
+        bounce_on: |dimension, level, entity, state, pos, fall_distance, movement, deferred| {
             let mut answer = [movement.x, movement.y, movement.z];
             HitLevel(level.reborrow()).native_bounce_on(
                 crate::game::native_hooks::fire::BounceOnCall {
                     dimension,
-                    entity: c.entity,
-                    kind: c.kind,
-                    state: c.state,
-                    pos: c.position,
+                    entity: mod_api::LandingEntity::new(entity),
+                    state,
+                    pos,
                     fall_distance,
                     movement: &mut answer,
+                    deferred: mod_api::__private::LandingDeferred::new(deferred),
                 },
             );
             *movement = sunrise_core::geometry::Vec3::new(answer[0], answer[1], answer[2]);

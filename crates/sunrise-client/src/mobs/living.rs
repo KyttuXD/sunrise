@@ -1457,6 +1457,7 @@ impl Mob {
             LandingEntityKind::Living
         };
         let distance = self.fall_distance;
+        let mut mod_fall_pending = crate::block_contact::fall_listens(state);
         let result = w.landing.fall_on_until_trample(
             &mut super::landing::MobLanding {
                 mob: self,
@@ -1464,6 +1465,7 @@ impl Mob {
                 level,
                 events,
                 pos,
+                mod_fall_pending: &mut mod_fall_pending,
             },
             state,
             BlockPos::new(pos[0], pos[1], pos[2]),
@@ -1473,7 +1475,14 @@ impl Mob {
         );
         // A block outside the landing registry falls back to the plain fall.
         match result {
-            Ok(outcome) => outcome,
+            Ok(None) => {
+                if mod_fall_pending {
+                    // Some landing rules (slime, powder snow) never call causeFallDamage.
+                    self.mod_block_fall(level, Some((w, pos)), distance, 0.0);
+                }
+                None
+            }
+            Ok(Some(trample)) => Some(trample),
             Err(_) => {
                 self.cause_fall_damage_at(
                     w.loop_context,
@@ -1499,34 +1508,29 @@ impl Mob {
         trample: FarmlandTrample,
     ) {
         let p = trample.position;
+        let mut mod_fall_pending = crate::block_contact::fall_listens(trample.state);
         let _ = trample.finish_fall(&mut super::landing::MobLanding {
             mob: self,
             w,
             level,
             events,
             pos: [p.x, p.y, p.z],
+            mod_fall_pending: &mut mod_fall_pending,
         });
         self.fall_distance = 0.0;
     }
     fn mod_block_fall(
-        &self,
+        &mut self,
         level: &mut DamageLevel<'_>,
         contact: Option<(&MobWorld, [i32; 3])>,
         distance: f64,
         multiplier: f32,
     ) -> (f64, f32) {
         contact.map_or((distance, multiplier), |(w, p)| {
-            crate::block_contact::fall(
-                level,
-                crate::block_contact::Contact {
-                    entity: self.id as i32,
-                    kind: &self.kind.id,
-                    state: w.world.block(p[0], p[1], p[2]),
-                    position: sunrise_core::position::BlockPos::new(p[0], p[1], p[2]),
-                },
-                distance,
-                multiplier,
-            )
+            let state = w.world.block(p[0], p[1], p[2]);
+            let position = sunrise_core::position::BlockPos::new(p[0], p[1], p[2]);
+            let mut entity = super::landing::MobLandingEntity(self);
+            crate::block_contact::fall(level, &mut entity, state, position, distance, multiplier)
         })
     }
     /// `LivingEntity.causeFallDamage`: a fall of `distance` blocks at `modifier`
@@ -2539,14 +2543,12 @@ impl RestitutionWorld for MobRestitution<'_, '_, '_> {
         fall_distance: f64,
         movement: Vec3,
     ) -> Result<Vec3, ()> {
+        let mut entity = super::landing::MobLandingEntity(self.mob);
         Ok(crate::block_contact::bounce(
             self.level,
-            crate::block_contact::Contact {
-                entity: self.mob.id as i32,
-                kind: &self.mob.kind.id,
-                state,
-                position,
-            },
+            &mut entity,
+            state,
+            position,
             fall_distance,
             movement,
         ))

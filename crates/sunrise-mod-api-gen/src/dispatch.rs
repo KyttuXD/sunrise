@@ -497,7 +497,11 @@ pub(super) fn emit<'a>(
             let (field, scalar) = lifetimes.field(&field_ty);
             let task_registration =
                 event_type == "RegisterConfigurationTasksEvent" && name == "registration";
-            if scalar || task_registration {
+            let deferred_landing = matches!(
+                (event_type.as_str(), name.as_str()),
+                ("FallOnEvent" | "BounceOnEvent", "deferred")
+            );
+            if scalar || task_registration || deferred_landing {
                 rollback.push((name.clone(), false));
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
@@ -523,6 +527,7 @@ pub(super) fn emit<'a>(
                 Some((RegistrationAppend::Register, _)) => "",
                 Some((RegistrationAppend::Custom, _)) => "pub(super)",
                 None if task_registration
+                    || deferred_landing
                     || matches!(
                         (event_type.as_str(), name.as_str()),
                         ("ApplyEffectTickEvent", "changes")
@@ -1004,7 +1009,10 @@ pub(super) fn emit<'a>(
                 continue;
             }
             let index = snaps.len();
-            if event_type == "RegisterConfigurationTasksEvent" && field == "registration" {
+            if (event_type == "RegisterConfigurationTasksEvent" && field == "registration")
+                || (matches!(event_type.as_str(), "FallOnEvent" | "BounceOnEvent")
+                    && field == "deferred")
+            {
                 snaps.push(format!("{event}.{field}.checkpoint()"));
                 restores.push(format!("{event}.{field}.rollback({saved}.{index});"));
                 continue;
@@ -1434,8 +1442,6 @@ fn engine_types(ty: &mut Type, carrier: bool) {
                 } else {
                     syn::parse_quote!(BlockStateId)
                 }
-            } else if path.path.is_ident("LandingWrite") {
-                syn::parse_quote!(sunrise_world::level::LandingWrite)
             } else if path.path.is_ident("InsideWrite") {
                 syn::parse_quote!(sunrise_world::level::InsideWrite)
             } else {
@@ -1491,7 +1497,7 @@ fn stack_crossing_routed(
         "LootContext",
         "ParticleOptions",
     ];
-    const BLOCK_VALUES: &[&str] = &["BlockState", "LandingWrite", "InsideWrite"];
+    const BLOCK_VALUES: &[&str] = &["BlockState", "InsideWrite"];
     const INFALLIBLE_VALUES: &[&str] = &["GuiDraw", "Text"];
     let parameters = args.iter().chain(output).collect::<Vec<_>>();
     if !parameters.iter().any(|(_, ty)| {
@@ -1862,7 +1868,7 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
     #[ignore = "daily"]
     fn per_block_routing_runtime_and_mutants() {
         let state: Type = syn::parse_quote!(BlockState);
-        let writes: Type = syn::parse_quote!(&mut Vec<LandingWrite>);
+        let writes: Type = syn::parse_quote!(&mut Vec<InsideWrite>);
         let crossing = stack_crossing_routed(
             &[
                 ("state".into(), &state),
@@ -2079,13 +2085,13 @@ fn main() {
     }
 
     #[test]
-    fn landing_writes_are_checked_and_staged_with_siblings() {
-        let writes: Type = syn::parse_quote!(&mut Vec<LandingWrite>);
+    fn inside_writes_are_checked_and_staged_with_siblings() {
+        let writes: Type = syn::parse_quote!(&mut Vec<InsideWrite>);
         let sibling: Type = syn::parse_quote!(&mut bool);
         let crossing = stack_crossing(
             &[("sibling".into(), &sibling), ("writes".into(), &writes)],
             None,
-            "BlockLanding",
+            "EntityInside",
             false,
             &Default::default(),
         )

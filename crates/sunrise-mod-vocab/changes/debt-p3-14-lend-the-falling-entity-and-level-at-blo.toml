@@ -1,0 +1,29 @@
+ids = [
+    "hook:fall_on",
+    "hook:fall_on.entity",
+    "hook:fall_on.kind",
+    "hook:fall_on.writes",
+    "hook:fall_on.deferred",
+    "hook:bounce_on",
+    "hook:bounce_on.entity",
+    "hook:bounce_on.kind",
+    "hook:bounce_on.deferred",
+    "method:BlockPart::fall_on",
+    "method:BlockPart::bounce_on",
+    "type:FallOnEvent.entity",
+    "type:FallOnEvent.kind",
+    "type:FallOnEvent.writes",
+    "type:BounceOnEvent.entity",
+    "type:BounceOnEvent.kind",
+    "type:LandingWrite",
+    "type:LandingEntity",
+    "handle:FallOnEvent::request",
+    "handle:FallOnEvent::after_landing",
+    "handle:BounceOnEvent::after_bounce",
+]
+why = """
+Retires `LandingWrite` and its encoded command batch, sibling rollback, and engine-side unchanged-block replay gate. Vanilla `Block.fallOn(Level, BlockState, BlockPos, Entity, double)` and its overrides (`HayBlock`, `HoneyBlock`, `SlimeBlock`, `PowderSnowBlock`, `PointedDripstoneBlock`, `FarmlandBlock`, `TurtleEggBlock`) and `Block.bounceOn(Level, BlockState, BlockPos, Entity, double)` (`ShelfMushroomBlock`) receive the live `Entity` directly so overrides can inspect `Entity.isSuppressingBounce()` / `isShiftKeyDown()`, `isCrouching()`, `getBbWidth()`/`getBbHeight()`, position, velocity, and fall distance, and adjust entity motion directly (`Entity.setDeltaMovement`, `Entity.resetFallDistance`). NeoForge's `IBlockExtension.getBounceRestitution` only returns a restitution factor and has no separate landing write batch. Lending a scoped `LandingEntity` at both `fall_on` and `bounce_on` gives mods direct access to the falling/bouncing entity (players, mobs, and dropped items) alongside the admissible synchronous level operations (`LevelRandomHost`), while replacing the closed `LandingWrite` reply program with owned native callbacks (`FallOnEvent::after_landing` and `BounceOnEvent::after_bounce`) that run against `&mut dyn ServerHost` once the entity batch finishes, with local state checks owned by each callback and per-mod panic containment via `CallbackOwner`.
+"""
+migrate = """
+`BlockPart::fall_on` bumps to `hook_version = 3` and `BlockPart::bounce_on` bumps to `hook_version = 2`. Replace reads of `event.entity` (formerly `i32`) and `event.kind` (formerly `&str`) with `event.entity.id()` and `event.entity.kind()` on the lent `LandingEntity<'_>`, which also provides `position()`, `block_position()`, `velocity()`, `fall_distance()`, `on_ground()`, `is_crouching()`, `is_suppressing_bounce()`, `dimensions()`, `set_velocity(...)`, and `reset_fall_distance()`. Replace `event.request(LandingWrite::SetBlock(state))` and `event.request(LandingWrite::DestroyBlock { drop })` with `event.after_landing(move |host| { ... })` (and `event.after_bounce(move |host| { ... })` in `bounce_on`), calling `host.level(dimension)` and `level.set_block` or `level.destroy_block` directly; if the action should only apply when the landed block is still unchanged, check `level.block_state(host, pos) == Some(expected)` inside the callback.
+"""

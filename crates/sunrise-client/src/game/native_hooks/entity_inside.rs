@@ -22,14 +22,14 @@ impl HitLevel<'_> {
 mod entity_inside_tests {
     use super::*;
 
-    /// Landing writes reach the level at the batch end, in the order asked, and only
-    /// where the block is still the state landed on.
+    /// Deferred landing callbacks run at the batch end, in queue order, with full
+    /// `ServerHost` access and local checks owned by the callbacks themselves.
     #[test]
     #[ignore = "daily"]
-    fn landing_writes_apply_at_the_batch_end() {
-        use crate::game::api_values::{TryIntoApi, TryIntoEngine};
-        use sunrise_client::block_contact::{landed, take_pending};
-        use sunrise_world::level::LandingWrite;
+    fn deferred_landing_callbacks_apply_at_the_batch_end() {
+        use crate::game::api_values::TryIntoApi;
+        use mod_api::__private::game::DeferredLandingAction;
+        use sunrise_client::block_contact::{defer_landing, take_pending};
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             let state = |name| game.pack.assets.registry.default_state(name).unwrap();
@@ -39,6 +39,8 @@ mod entity_inside_tests {
                 state("minecraft:stone"),
                 state("minecraft:air"),
             );
+            let (api_dirt, api_stone) =
+                (dirt.try_into_api().unwrap(), stone.try_into_api().unwrap());
             game.world.chunks.insert(
                 (0, 0),
                 std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
@@ -49,30 +51,50 @@ mod entity_inside_tests {
             game.world.set(4, 64, 1, dirt).unwrap();
             game.world.set(5, 64, 1, dirt).unwrap();
             let drops_before = game.dropped.len();
-            let at = |x| BlockPos::new(x, 64, 1);
-            let requested = vec![
-                mod_api::LandingWrite::SetBlock(stone.try_into_api().unwrap()),
-                mod_api::LandingWrite::SetBlock(dirt.try_into_api().unwrap()),
-            ];
-            // Exercise the same complete-batch boundary as generated dispatch before
-            // entering the engine queue, then prove its ordered writes reach the world.
-            let staged = requested.try_into_engine(&*game).unwrap();
-            landed(farmland, at(1), staged);
-            landed(dirt, at(4), vec![LandingWrite::DestroyBlock { drop: true }]);
-            landed(
-                dirt,
-                at(5),
-                vec![LandingWrite::DestroyBlock { drop: false }],
-            );
-            // The block changed after the landing: dropped.
-            landed(stone, at(2), vec![LandingWrite::SetBlock(dirt)]);
-            landed(
-                stone,
-                at(3),
-                vec![LandingWrite::DestroyBlock { drop: false }],
-            );
-            // Nothing asked: nothing kept.
-            landed(farmland, at(1), Vec::new());
+            let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+            let dim = game.dim.id();
+            defer_landing(vec![
+                DeferredLandingAction::new(
+                    None,
+                    Box::new(move |host| {
+                        let level = host.level(dim).unwrap();
+                        let _ = level.set_block(host, [1, 64, 1], api_stone, flags);
+                        let _ = level.set_block(host, [1, 64, 1], api_dirt, flags);
+                    }),
+                ),
+                DeferredLandingAction::new(
+                    None,
+                    Box::new(move |host| {
+                        let level = host.level(dim).unwrap();
+                        let _ = level.destroy_block(host, [4, 64, 1], true, None, false);
+                    }),
+                ),
+                DeferredLandingAction::new(
+                    None,
+                    Box::new(move |host| {
+                        let level = host.level(dim).unwrap();
+                        let _ = level.destroy_block(host, [5, 64, 1], false, None, false);
+                    }),
+                ),
+                // Local check inside the callback: block at (2, 64, 1) is farmland, not stone.
+                DeferredLandingAction::new(
+                    None,
+                    Box::new(move |host| {
+                        let level = host.level(dim).unwrap();
+                        if level.block_state(host, [2, 64, 1]) == Some(api_stone) {
+                            let _ = level.set_block(host, [2, 64, 1], api_dirt, flags);
+                        }
+                    }),
+                ),
+                DeferredLandingAction::new(
+                    None,
+                    Box::new(move |host| {
+                        let level = host.level(dim).unwrap();
+                        let _ = level.destroy_block(host, [3, 64, 1], false, None, false);
+                    }),
+                ),
+            ]);
+            defer_landing(Vec::new());
             assert_eq!(
                 game.world.block(1, 64, 1),
                 farmland,
@@ -98,7 +120,7 @@ mod entity_inside_tests {
                 "resources came from drop=true, not the neighboring drop=false block"
             );
             // Both writes reach the clients (`setBlockAndUpdate` and `destroyBlock` are
-            // flag 3); the dropped one sends nothing.
+            // flag 3); the skipped one sends nothing.
             let log = game.world.block_log.take().unwrap();
             assert!(log.contains(&(1, 64, 1)), "the set block is sent: {log:?}");
             assert!(
@@ -107,7 +129,7 @@ mod entity_inside_tests {
             );
             assert!(
                 !log.contains(&(2, 64, 1)),
-                "the dropped write sends nothing"
+                "the skipped write sends nothing"
             );
             assert!(take_pending().is_empty());
         });

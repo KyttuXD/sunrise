@@ -2592,6 +2592,7 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
                 sunrise_world::block_landing::LandingEntityKind::Player,
             )
             .map_err(|e| e.to_string())?;
+        let mut entity = crate::landing::PlayerLandingEntity(self.player);
         Ok(crate::block_contact::bounce(
             &mut crate::health::DamageLevel::of(
                 &mut *self.scene,
@@ -2600,12 +2601,9 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
                 self.block_registries,
                 self.damage_hooks,
             ),
-            crate::block_contact::Contact {
-                entity: self.player.entity_id,
-                kind: "minecraft:player",
-                state,
-                position,
-            },
+            &mut entity,
+            state,
+            position,
             fall_distance,
             movement,
         ))
