@@ -6523,7 +6523,7 @@ impl Game<'_> {
             || !self
                 .res
                 .items()
-                .can_destroy_block(self.held(), self.creative)
+                .can_destroy_block(self.held(), self.instabuild())
             || self.block_action_restricted(pos)
             || (game_master_block && !self.can_use_game_master_blocks());
         let mut exp_to_drop = None;
@@ -6531,8 +6531,7 @@ impl Game<'_> {
         // NeoForge lets listeners undo the item's pre-cancellation, but destroyBlock still
         // enforces game-master permissions and game-mode restrictions after the event.
         if canceled
-            || self.player_break_was_superseded()
-            || self.res.behaviours().is_air(self.world.block(x, y, z))
+            || !self.player_break_has_subject(pos)
             || (game_master_block && !self.can_use_game_master_blocks())
             || self.block_action_restricted(pos)
         {
@@ -6543,7 +6542,7 @@ impl Game<'_> {
         let held = self.held().cloned();
         let key = (pos[0], pos[1], pos[2]);
         self.unpack_loot(container_loot::LootTarget::Block(key), None);
-        if self.player_break_was_superseded() {
+        if !self.player_break_has_subject(pos) {
             return Ok(false);
         }
         self.input_feedback(sunrise_client::input_source::Feedback::BlockBroken);

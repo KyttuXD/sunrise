@@ -2,6 +2,7 @@
 //! (`Block.popResource` for a broken block), the destroy-progress cracks shown to everyone, and a
 //! bundle dropping its content.
 use super::*;
+use sunrise_client::mobs::Who;
 use sunrise_core::nbt::Compound;
 
 pub(super) struct PlayerBreakAttempt {
@@ -50,29 +51,46 @@ impl Game<'_> {
         pos: [i32; 3],
         collect: Option<&mut Vec<ItemStack>>,
     ) -> Result<bool> {
-        struct ActiveBreak<'g, 'a>(&'g mut Game<'a>);
+        struct ActiveBreak<'g, 'a> {
+            game: &'g mut Game<'a>,
+            hand: Hand,
+            actor: Option<Who>,
+        }
         impl Drop for ActiveBreak<'_, '_> {
             fn drop(&mut self) {
-                self.0.active_player_breaks.pop();
+                self.game.hand = self.hand;
+                self.game.sculk.actor = self.actor;
+                self.game.active_player_breaks.pop();
             }
         }
 
-        self.with_player_actor(|game| {
-            game.active_player_breaks.push(PlayerBreakAttempt {
-                epoch: game.native_lifecycle.epoch(),
-                dim: game.dim,
-                pos,
-                superseded: false,
-            });
-            let active = ActiveBreak(game);
-            active.0.break_block_as_player(pos, collect)
-        })
+        self.active_player_breaks.push(PlayerBreakAttempt {
+            epoch: self.native_lifecycle.epoch(),
+            dim: self.dim,
+            pos,
+            superseded: false,
+        });
+        let hand = std::mem::replace(&mut self.hand, Hand::Main);
+        let actor = self.sculk.actor.replace(Who::Player);
+        let active = ActiveBreak {
+            game: self,
+            hand,
+            actor,
+        };
+        active.game.break_block_as_player(pos, collect)
     }
 
     pub(super) fn player_break_was_superseded(&self) -> bool {
         self.active_player_breaks
             .last()
             .is_some_and(|attempt| attempt.superseded)
+    }
+
+    /// Check after a callback that could have removed the block. A successful player removal
+    /// invalidates this attempt even if the position is not air afterwards.
+    pub(super) fn player_break_has_subject(&self, [x, y, z]: [i32; 3]) -> bool {
+        !self.player_break_was_superseded()
+            && !self.res.behaviours().is_air(self.world.block(x, y, z))
     }
 
     /// Record a successful removal before notifying mods. Track the removal, not its resulting

@@ -550,7 +550,7 @@ mod tests {
                         game.set_mode(mode);
                         game.inventory[game.selected] = tool;
                         place(game, name);
-                        assert!(game.break_block_as_player([7, 64, 4], None).unwrap());
+                        assert!(game.player_break_block([7, 64, 4], None).unwrap());
                         assert_eq!(count.load(Ordering::Relaxed), serials, "{mode:?}, {name}");
                     }
                     let seen = seen.lock().unwrap();

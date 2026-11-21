@@ -3,7 +3,6 @@
 //! drops and experience in `block_drops`.
 use super::Game;
 use mod_api::{BlockDropDestination, PlayerRef};
-use sunrise_client::first_person::Hand;
 
 impl Game<'_> {
     /// `ServerPlayerGameMode.destroyBlock` at `pos` as `player` breaks it. Inventory routing
@@ -26,9 +25,7 @@ impl Game<'_> {
             // Only this break owns these drops. Other breaks, including ones made by
             // callbacks, cannot inherit this destination, even if this call unwinds.
             let mut drops = (destination == BlockDropDestination::Inventory).then(Vec::new);
-            let result = game.with_hand(Hand::Main, |game| {
-                game.player_break_block(pos, drops.as_mut())
-            });
+            let result = game.player_break_block(pos, drops.as_mut());
             for stack in drops.into_iter().flatten() {
                 game.give_or_drop(stack);
             }
@@ -81,9 +78,12 @@ mod tests {
     use super::*;
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
-    use sunrise_client::{command::args::GameMode, items::ItemStack, motion::PlayerMotion};
+    use sunrise_client::{
+        command::args::GameMode, first_person::Hand, items::ItemStack,
+        lan::abilities::PlayerAbilities, motion::PlayerMotion,
+    };
     use sunrise_core::geometry::Vec3;
 
     /// A server's game with its own player in survival standing at the
@@ -288,6 +288,13 @@ mod tests {
             assert_eq!(block(game, command), "minecraft:command_block");
             game.inventory[game.selected] = Some(ItemStack::new("minecraft:diamond_sword", 1));
             assert!(!game.player_destroy_block(player, stone, BlockDropDestination::World));
+            game.set_mode(GameMode::Survival);
+            game.acting_abilities = Some(PlayerAbilities {
+                instabuild: true,
+                ..PlayerAbilities::default()
+            });
+            // Item.canDestroyBlock consults the ability, not the name of the game mode.
+            assert!(!player.destroy_block(game, stone, BlockDropDestination::World));
             assert_eq!(block(game, stone), "minecraft:stone");
             assert!(game.dropped.is_empty());
         });
@@ -307,7 +314,7 @@ mod tests {
             game.level.world_spawn = Some(pos);
             game.lan_acting_spawn_protection = Some(1);
             assert!(game.spawn_protects(1, game.dim.id(), pos));
-            assert!(game.player_destroy_block(player, pos, BlockDropDestination::World));
+            assert!(player.destroy_block(game, pos, BlockDropDestination::World));
             assert_eq!(block(game, pos), "minecraft:air");
         });
     }
@@ -607,6 +614,57 @@ mod tests {
                 assert_eq!(game.world.block(x, y, z), two_eggs);
                 assert_eq!(game.held().unwrap().damage, 1);
                 assert_eq!(game.stats.get("mined", "minecraft:turtle_egg"), 1);
+            });
+        });
+    }
+
+    struct RemoveDoorOnHarvest(Arc<AtomicUsize>);
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for RemoveDoorOnHarvest {
+        fn player_harvest_check(
+            &self,
+            host: mod_api::HostSide<'_>,
+            event: &mut mod_api::PlayerHarvestCheckEvent,
+        ) {
+            let mod_api::HostSide::Server(host) = host else {
+                return;
+            };
+            if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+                let player = host.players().acting_player().expect("the breaker acts");
+                let level = player.level(host).expect("the player's level");
+                assert!(level.remove_block(host, event.pos, false));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_door_removed_by_the_harvest_hook_is_not_queried_again() {
+        let queries = Arc::new(AtomicUsize::new(0));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "remove-door",
+            Box::new(RemoveDoorOnHarvest(Arc::clone(&queries))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let player = with_player(game, ItemStack::new("minecraft:diamond_axe", 1));
+                let pos = [6, 64, 4];
+                place(game, [6, 63, 4], "minecraft:stone");
+                place(game, pos, "minecraft:oak_door");
+                let door = game.world.block(6, 64, 4);
+                let upper = game.with_props(door, &[("half", "upper")]).unwrap();
+                game.world.set(6, 65, 4, upper).unwrap();
+
+                assert!(!player.destroy_block(game, pos, BlockDropDestination::Inventory));
+                assert_eq!(block(game, pos), "minecraft:air");
+                assert_eq!(queries.load(Ordering::Relaxed), 1);
+                assert_eq!(game.held().unwrap().damage, 0);
+                assert_eq!(carried(game, "minecraft:oak_door"), 0);
             });
         });
     }

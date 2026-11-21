@@ -45,15 +45,18 @@ impl Game<'_> {
                 !creative && correct_tool,
                 &mut destroyed,
             );
-        }
-        if self.player_break_was_superseded() {
-            return (false, state, false);
-        }
-        if let Some(removed) = destroyed {
-            if removed {
-                self.player_break_removed(pos, state, block_entity);
+            if self.player_break_was_superseded() {
+                return (false, state, false);
             }
-            return (removed, state, self.harvest_after_removal(pos, state));
+            if let Some(removed) = destroyed {
+                if removed {
+                    self.player_break_removed(pos, state, block_entity);
+                }
+                return (removed, state, self.harvest_after_removal(pos, state));
+            }
+            if !self.player_break_has_subject(pos) {
+                return (false, state, false);
+            }
         }
         let state = self.player_will_destroy(pos, state, facts, filled_hive);
         if !creative
@@ -65,7 +68,7 @@ impl Game<'_> {
         {
             correct_tool = self.acting_can_harvest(pos, state);
         }
-        if self.player_break_was_superseded() {
+        if !self.player_break_has_subject(pos) {
             return (false, state, false);
         }
         let removed = self.remove_block_as_player(pos, creative, correct_tool);
