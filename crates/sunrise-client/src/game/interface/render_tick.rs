@@ -621,7 +621,6 @@ impl Game<'_> {
         custom: &mut Option<ExtractedBlockScreenEffect>,
     ) -> bool {
         let pos = BlockPos::new(pos[0], pos[1], pos[2]);
-        let mut canceled = false;
         let mut renderer = BlockScreenEffectRendererSlot::new(effect);
         self.native_extract_block_screen_effect(
             effect,
@@ -629,9 +628,9 @@ impl Game<'_> {
             pos,
             partial_tick,
             player_partial_tick,
-            &mut canceled,
             &mut renderer,
         );
+        let keep_vanilla = !renderer.cancelled();
         *custom = renderer
             .into_renderer()
             .map(|renderer| ExtractedBlockScreenEffect {
@@ -639,7 +638,7 @@ impl Game<'_> {
                 pos,
                 renderer,
             });
-        !canceled
+        keep_vanilla
     }
     /// `Lightmap.getBrightness(getMaxLocalRawBrightness(eye))`.
     fn eye_brightness(&self, eye: [f64; 3]) -> f32 {

@@ -184,7 +184,8 @@ pub struct Hook {
     /// vector/scalar outputs in declaration order and naming the first refused one. A refused
     /// result, including its cancellation, rolls back; later listeners still run.
     pub output_validator: Option<String>,
-    /// Use the event's own `set_cancelled` method instead of exposing a mutable flag.
+    /// Borrow a typed cancellation output instead of generating a flag. The output provides
+    /// `cancelled()`, and the event provides `cancelled()` and `set_cancelled(bool)`.
     pub cancel_setter: bool,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
@@ -554,11 +555,15 @@ impl Hook {
         if api.cancel_setter
             && (api.contract != Contract::Cancel
                 || scope.is_some()
-                || api.output_validator.is_some())
+                || api.output_validator.is_some()
+                || !api
+                    .out
+                    .as_ref()
+                    .is_some_and(|out| entry.event_private.contains(out)))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name,
-                error: "cancel_setter requires a global cancel hook without output_validator"
+                error: "cancel_setter requires a global cancel hook with an #[event_private] output and no output_validator"
                     .into(),
             });
         }

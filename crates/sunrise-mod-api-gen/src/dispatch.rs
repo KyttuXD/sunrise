@@ -190,10 +190,10 @@ pub(super) fn emit<'a>(
             if reference.mutability.is_none() {
                 return Err(format!("output must be a mutable reference in {name}"));
             }
+            let is_bool =
+                matches!(reference.elem.as_ref(), Type::Path(path) if path.path.is_ident("bool"));
             match contract {
-                Contract::Cancel if reference.elem.to_token_stream().to_string() == "bool" => {
-                    " -> Flow".to_owned()
-                }
+                Contract::Cancel if is_bool != hook.cancel_setter => " -> Flow".to_owned(),
                 Contract::Replace if answered => {
                     let answer = answered_type(&reference.elem)
                         .ok_or_else(|| format!("{name}: output must be Option<Answered<T>>"))?;
@@ -458,10 +458,11 @@ pub(super) fn emit<'a>(
         let stack_after = stack_outputs.iter().map(|(output, _)| format!(
             "if *{event}.{output} != __previous_{output} {{ match __validate_{output}({event}.{output}) {{ Ok(()) => __previous_{output} = {event}.{output}.clone(), Err(error) => {{ *{event}.{output} = __previous_{output}.clone(); log::warn!(\"mod {{}} hook {name} output {output} refused: {{error:?}}\", super::content::crash::current_native_mod().unwrap_or(\"unknown\")); }} }} }}\n"
         )).collect::<String>();
-        let collected = output
-            .as_ref()
-            .filter(|_| contract == Contract::Collect && !single_answer_collect);
-        for (name, ty) in args.iter().chain(collected) {
+        // A typed cancellation output is borrowed by the event just like a collector's output.
+        let event_output = output.as_ref().filter(|_| {
+            hook.cancel_setter || (contract == Contract::Collect && !single_answer_collect)
+        });
+        for (name, ty) in args.iter().chain(event_output) {
             let mut owned_ty = (*ty).clone();
             struct OwnedLootContext;
             impl syn::visit_mut::VisitMut for OwnedLootContext {
@@ -598,30 +599,23 @@ pub(super) fn emit<'a>(
                 inits.push(name.clone());
             }
         }
-        if mod_cancel {
+        if mod_cancel && !hook.cancel_setter {
             if args.iter().any(|(arg, _)| arg == "cancelled") {
                 return Err(format!(
                     "{name}: a cancel hook's event has its own `cancelled` field"
                 ));
             }
-            if hook.cancel_setter {
-                fields.push_str("pub(super) cancelled: bool,\n");
+            fields.push_str("/// Whether the event is cancelled: by the game or an earlier listener, or by this one\n/// setting it. Only a listener that receives cancelled events (`#[listener(receive_cancelled)]`)\n/// sees `true`.\n");
+            if hook.output_validator.is_some() {
+                fields.push_str("/// An accepted cancellation cannot be cleared.\n");
             } else {
-                fields.push_str("/// Whether the event is cancelled: by the game or an earlier listener, or by this one\n/// setting it. Only a listener that receives cancelled events (`#[listener(receive_cancelled)]`)\n/// sees `true`.\n");
-                if hook.output_validator.is_some() {
-                    fields.push_str("/// An accepted cancellation cannot be cleared.\n");
-                } else {
-                    fields.push_str(
-                        "/// Setting it back to `false` lets the game's behaviour run.\n",
-                    );
-                }
-                fields.push_str("pub cancelled: bool,\n");
+                fields.push_str("/// Setting it back to `false` lets the game's behaviour run.\n");
             }
+            fields.push_str("pub cancelled: bool,\n");
             inits.push(format!("cancelled: *{}", cancel_out.unwrap()));
         }
-        if let Some((name, ty)) = output
-            .as_ref()
-            .filter(|_| contract != Contract::Collect || single_answer_collect)
+        if event_output.is_none()
+            && let Some((name, ty)) = &output
         {
             dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
         }
@@ -1106,7 +1100,7 @@ pub(super) fn emit<'a>(
             restores.push(format!("{event}.registration.rollback({saved}.{index});"));
         }
         let previous_cancel = snaps.len();
-        if mod_cancel {
+        if mod_cancel && !hook.cancel_setter {
             restores.push(format!("{event}.cancelled = {saved}.{previous_cancel};"));
             snaps.push(format!("{event}.cancelled"));
         }
@@ -1343,13 +1337,23 @@ pub(super) fn emit<'a>(
                     ),
                 )
             }
-            None if mod_cancel => (
-                String::new(),
-                format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {event}.cancelled && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {cancel_step} }} }} *{o} = {event}.cancelled;",
-                    o = cancel_out.unwrap()
-                ),
-            ),
+            None if mod_cancel => {
+                let (cancelled, commit) = if hook.cancel_setter {
+                    (format!("{event}.cancelled()"), String::new())
+                } else {
+                    let out = cancel_out.unwrap();
+                    (
+                        format!("{event}.cancelled"),
+                        format!(" *{out} = {event}.cancelled;"),
+                    )
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {cancelled} && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {cancel_step} }} }}{commit}"
+                    ),
+                )
+            }
             None => (
                 String::new(),
                 format!(
@@ -1414,10 +1418,17 @@ pub(super) fn emit<'a>(
             ),
         };
         let body = match contract {
-            _ if mod_cancel => format!(
-                "if *{o} && !super::receives_cancelled(HookId::{hook_id}) {{ return; }} {build} {calls} {write_back}",
-                o = cancel_out.unwrap()
-            ),
+            _ if mod_cancel => {
+                let out = cancel_out.unwrap();
+                let cancelled = if hook.cancel_setter {
+                    format!("{out}.cancelled()")
+                } else {
+                    format!("*{out}")
+                };
+                format!(
+                    "if {cancelled} && !super::receives_cancelled(HookId::{hook_id}) {{ return; }} {build} {calls} {write_back}"
+                )
+            }
             Contract::Cancel => format!(
                 "if *{o} {{ return; }} {lookup} {build} {calls} {write_back}",
                 o = out.unwrap()

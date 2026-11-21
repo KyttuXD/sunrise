@@ -154,9 +154,11 @@ which keeps advancing while the level is frozen.
 state, position, world partial tick, HUD visibility and a `CameraDrawContext`. Return `false` to prepend
 your quads to the vanilla overlay or `true` to skip just that overlay's vanilla quads. Returning `false`
 does not restore canceled block or water quads. Fire is different: setting cancellation with an empty
-renderer slot selects a built-in no-op, and `has_custom_renderer()` reports that selection. Clearing
-the fire slot afterward restores vanilla fire without uncanceling. To cancel and still draw vanilla fire,
-select a renderer that returns `false` instead of leaving the slot empty at cancellation.
+renderer slot selects a built-in no-op at the time of the write, and `has_custom_renderer()` reports that
+selection. Native replacements of `native_extract_block_screen_effect` also write through the slot
+with `renderer.set_cancelled(value)`. Clearing the fire slot afterward restores vanilla fire without
+uncanceling. To cancel and still draw vanilla fire, select a renderer that returns `false` instead of
+leaving the slot empty at cancellation.
 
 A failed submission drops its quads without changing the vanilla drawing decision. A panic names the
 mod in the log and client error toast. It disables the panicking extraction listener or, for a panic

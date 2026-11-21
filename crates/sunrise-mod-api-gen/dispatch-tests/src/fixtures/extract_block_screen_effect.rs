@@ -3,8 +3,12 @@ mod api {
     pub enum BlockScreenEffect {}
 
     impl super::ExtractBlockScreenEffectEvent<'_> {
+        pub fn cancelled(&self) -> bool {
+            self.renderer.cancelled()
+        }
+
         pub fn set_cancelled(&mut self, cancelled: bool) {
-            self.cancelled = cancelled;
+            self.renderer.set_cancelled(cancelled);
         }
     }
 }

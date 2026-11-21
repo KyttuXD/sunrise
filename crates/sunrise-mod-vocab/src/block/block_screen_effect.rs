@@ -111,36 +111,48 @@ impl ExtractBlockScreenEffectEvent<'_> {
 
     /// Whether cancellation is set, independently of the current renderer choice.
     pub fn cancelled(&self) -> bool {
-        self.cancelled
+        self.renderer.cancelled()
     }
 
     /// Set cancellation. As in NeoForge, setting either value on fire with no renderer
     /// selects a built-in no-op. Clear the choice afterward if you want vanilla fire to draw.
     /// Returning [`crate::Flow::Cancel`] is equivalent to setting `true` as the listener ends.
     pub fn set_cancelled(&mut self, cancelled: bool) {
-        self.cancelled = cancelled;
-        if self.renderer.effect == BlockScreenEffect::Fire && self.renderer.selected.is_none() {
-            self.renderer.selected = Some(SelectedBlockScreenEffectRenderer::NO_OP);
-        }
+        self.renderer.set_cancelled(cancelled);
     }
 }
 
-// no wire: this slot holds the choice for an in-process callback.
-/// The current choice for an overlay and the effect it actually belongs to.
+// no wire: this slot holds the outputs of an in-process callback.
+/// An overlay's extraction outputs, shared by the native hook and generated dispatch.
 #[doc(hidden)]
 #[derive(Clone)]
 // exhaustive: engine-only bookkeeping with private fields.
 pub struct BlockScreenEffectRendererSlot {
     effect: BlockScreenEffect,
+    cancelled: bool,
     selected: Option<SelectedBlockScreenEffectRenderer>,
 }
 
 impl BlockScreenEffectRendererSlot {
-    /// Start extraction with no renderer selected.
+    /// Start uncancelled with no renderer selected.
     pub fn new(effect: BlockScreenEffect) -> Self {
         Self {
             effect,
+            cancelled: false,
             selected: None,
+        }
+    }
+
+    /// The current cancellation flag, independent of the renderer choice.
+    pub fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    /// Set cancellation, selecting the built-in no-op immediately if fire's slot is empty.
+    pub fn set_cancelled(&mut self, cancelled: bool) {
+        self.cancelled = cancelled;
+        if self.effect == BlockScreenEffect::Fire && self.selected.is_none() {
+            self.selected = Some(SelectedBlockScreenEffectRenderer::NO_OP);
         }
     }
 
@@ -202,4 +214,57 @@ impl SelectedBlockScreenEffectRenderer {
             )
             .ok()
     }
+}
+
+#[cfg(test)]
+#[test]
+fn native_fire_cancellation_selects_a_no_op_that_later_listeners_can_clear() {
+    use crate::{
+        __private::block_state_from_ordinal,
+        BlockKey, Flow, Hooks, ModEntry, dispatch_extract_block_screen_effect,
+        testing::{FakeHost, with_dispatch},
+    };
+
+    struct ClearFire;
+    #[mod_api::__subscriptions]
+    impl Hooks for ClearFire {
+        #[listener(receive_cancelled)]
+        fn extract_block_screen_effect(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ExtractBlockScreenEffectEvent<'_>,
+        ) -> Flow {
+            assert!(event.cancelled());
+            assert!(event.has_custom_renderer());
+            event.clear_custom_renderer();
+            Flow::Continue
+        }
+    }
+
+    struct NoQuads;
+    impl CameraDrawContext for NoQuads {}
+
+    let effect = BlockScreenEffect::Fire;
+    let host = FakeHost::new();
+    let state = block_state_from_ordinal(BlockKey(0), 0);
+    let pos = BlockPos::new(0, 64, 0);
+    let mut slot = BlockScreenEffectRendererSlot::new(effect);
+    slot.set_cancelled(true); // The write a native replacement makes, without a listener event.
+    assert!(slot.cancelled());
+    let renderer = slot.clone().into_renderer().expect("native fire no-op");
+    let mut draw = NoQuads;
+    let render = block_screen_effect_render(effect, state, pos, 0.0, false, &mut draw);
+    assert_eq!(renderer.submit(&host, render), Some(true));
+
+    with_dispatch(
+        vec![ModEntry::new("clear_fire", Box::new(ClearFire))].into(),
+        || {
+            dispatch_extract_block_screen_effect(&host, effect, state, pos, 0.0, 0.0, &mut slot);
+        },
+    );
+    assert!(slot.cancelled());
+    assert!(
+        slot.into_renderer().is_none(),
+        "vanilla fire should draw again"
+    );
 }

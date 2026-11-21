@@ -4,6 +4,8 @@ use super::*;
 impl Game<'_> {
     /// `LevelExtractor.extractPlayerState`: let client listeners choose the overlay renderer
     /// using the overlay's state and position and the world and player interpolation values.
+    /// Native replacements set cancellation with `renderer.set_cancelled(value)`, so a write
+    /// to an empty fire slot selects the same no-op as it does in a generated listener.
     pub(in crate::game) fn native_extract_block_screen_effect(
         &self,
         effect: mod_api::BlockScreenEffect,
@@ -11,7 +13,6 @@ impl Game<'_> {
         pos: BlockPos,
         partial_tick: f32,
         player_partial_tick: f32,
-        canceled: &mut bool,
         renderer: &mut mod_api::__private::BlockScreenEffectRendererSlot,
     ) {
         self.fire_extract_block_screen_effect(
@@ -20,7 +21,6 @@ impl Game<'_> {
             pos,
             partial_tick,
             player_partial_tick,
-            canceled,
             renderer,
         );
     }

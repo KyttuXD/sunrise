@@ -1,0 +1,18 @@
+ids = [
+    "hook:extract_block_screen_effect",
+    "internal:method:sunrise_client::game::native_hooks::extract_block_screen_effect::Game<'_>::native_extract_block_screen_effect",
+]
+why = """
+Vanilla 26.3's LevelExtractor.extractPlayerState records whether the player is on fire for
+ScreenEffectRenderer.submit. NeoForge's ExtractBlockScreenEffectEvent.setCanceled leaves that flag
+alone and fills an empty fire renderer slot when cancellation is written. Native replacements and
+generated listeners now use the same setter. Fire is suppressed on an empty slot at the write,
+not by interpreting the final cancellation flag; a later listener can still clear the renderer.
+"""
+migrate = """
+In native_extract_block_screen_effect replacements, remove the canceled: &mut bool parameter and
+keep renderer: &mut mod_api::__private::BlockScreenEffectRendererSlot. Replace *canceled reads with
+renderer.cancelled() and *canceled = value with renderer.set_cancelled(value). If your replacement
+calls the original hook, remove canceled from the forwarded arguments as well. The generated
+Hooks::extract_block_screen_effect listener signature and event methods are unchanged.
+"""
