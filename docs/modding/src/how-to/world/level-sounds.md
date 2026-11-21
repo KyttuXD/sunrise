@@ -35,6 +35,8 @@ plays at the requested position; only a genuinely entity-bound sound
 every player in range hears it, except the player in `except`. Pass the player whose own client already played the
 sound for its action; pass `None` to play it to everyone. The game finds that player's connection itself. A fake
 player has no client, so it leaves no one out; a stale player handle queues nothing and the call returns `false`.
+Registered sound events are sent by ID; other valid namespaced event keys are sent by name, regardless of
+namespace. Queuing or delivering a packet does not mean the client has the resources to play that event.
 
 ## Engine playback and live parameters
 
@@ -67,8 +69,8 @@ fn viewed_level_sound(&self, _: &mut dyn ClientHost, e: &mut ViewedLevelSoundEve
 
 Left `None`, the sound is not played. Set, it plays at that position in the player's level as a
 sound packet of that level plays (no distance delay), with the volume and pitch the listeners left
-and the server's seed. A `play_at` that is not finite, or a volume or pitch that is not finite and at
-least 0, plays nothing. Which portal and how loud are the mod's to decide. Sounds of the player's own
+and the server's seed. A non-finite `play_at` is not a placement. The sound engine handles volume and pitch
+as it does for the player's own level; to suppress playback, leave or set `play_at` to `None`. Sounds of the player's own
 level never ask this hook. A sound bound to an entity of a viewed level comes with that entity's
 position there, is sent only while the client tracks the entity there, and plays at `play_at`
 without following it. With no listener a viewed sound costs one check.

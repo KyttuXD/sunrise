@@ -137,9 +137,12 @@ Vetoing a player's movement: the `player_move` hook hears each validated movemen
 ## Experience and abilities
 
 `player.give_experience_points(host, points)` takes a signed `i32`; use a negative value to remove
-points. The write never repairs an item: Mending stays at orb pickup. `set_total_experience` writes
-the signed total without moving the bar or changing the level. `set_abilities` stores both speeds
-exactly as supplied, independently of the game-mode flags.
+points. The signed amount after `player_xp_change` also changes the player's score. A level-up
+sound from a point or level grant plays in the receiving player's level. The write never repairs
+an item: Mending stays at orb pickup. `set_experience_points` sets the progress bar as
+`ServerPlayer.setExperiencePoints` does. `set_total_experience` writes the signed total without
+changing progress, level or score. `set_abilities` stores both speeds exactly as supplied,
+independently of the game-mode flags.
 
 ## Server sound writes
 

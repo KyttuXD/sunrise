@@ -791,10 +791,7 @@ impl Game<'_> {
         }
         let score = Text::translate(
             "deathScreen.score.value",
-            &[Text::colored(
-                self.experience.total.to_string(),
-                text::YELLOW,
-            )],
+            &[Text::colored(self.player_score.to_string(), text::YELLOW)],
         );
         let sw = atlas.font.width_text(&score);
         batch.text_styled(

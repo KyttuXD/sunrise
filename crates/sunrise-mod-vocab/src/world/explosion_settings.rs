@@ -35,8 +35,9 @@ pub struct ExplosionSettings {
     /// (scaling 0.5) and `minecraft:smoke`, one each. An empty list
     /// scatters none.
     pub block_particles: Option<Vec<ExplosionBlockParticle>>,
-    /// The sound event (`mymod:fuel_tank_burst`); `None` is
-    /// `minecraft:entity.generic.explode`.
+    /// The sound event's namespaced key (`mymod:fuel_tank_burst`); `None` is
+    /// `minecraft:entity.generic.explode`. Registered events are sent by ID, other valid keys
+    /// by name. A client without the event's resources does not play it.
     pub sound: Option<String>,
 }
 

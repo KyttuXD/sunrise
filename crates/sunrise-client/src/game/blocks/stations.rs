@@ -1119,13 +1119,25 @@ impl Game<'_> {
     }
     /// `Player.giveExperienceLevels`: all players near its feet hear the sound.
     pub(super) fn play_level_up(&mut self, amount: i32, level: i32) {
-        if let Some(volume) = self.level_up_sound.give_levels(amount, level) {
-            let at = self
-                .player
-                .as_ref()
-                .map(|p| [p.position.x, p.position.y, p.position.z]);
-            self.audio
-                .play("minecraft:entity.player.levelup", at, volume, 1.0);
+        let Some(volume) = self.level_up_sound.give_levels(amount, level) else {
+            return;
+        };
+        let event = "minecraft:entity.player.levelup";
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        if let (Some(host), Some(at)) = (self.lan.as_ref(), at) {
+            // A native write can borrow a guest's body without swapping in their level.
+            let dimension = self
+                .lan_acting
+                .and_then(|conn| host.hub.guest(conn))
+                .map_or(self.dim, |guest| super::Dim::from_id(&guest.dimension));
+            let sound = super::level_sounds::LevelSound::new(event, at, volume, 1.0)
+                .in_source(mod_api::SoundSource::Players);
+            let _ = self.queue_level_sound(dimension.id(), sound, None);
+        } else {
+            self.audio.play(event, at, volume, 1.0);
         }
     }
     /// Whether the result slot may be taken (`mayPickup`).

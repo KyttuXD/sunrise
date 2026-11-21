@@ -370,6 +370,75 @@ mod tests {
         game.lan_host(settings, net, config).unwrap();
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn experience_level_up_reaches_only_the_gaining_players_level() {
+        with_game(|game| {
+            host(game);
+            let overworld = game.dim;
+            let nether = crate::game::Dim::Nether;
+            game.enter_level(nether).unwrap();
+            game.enter_level(overworld).unwrap();
+
+            let at = [1.0, 64.0, 2.0];
+            let (mut target, rx_target) = guest(21, 21, at);
+            target.dimension = nether.id().into();
+            target.xp_level = 4;
+            let (mut nearby, rx_nearby) = guest(22, 22, at);
+            nearby.dimension = nether.id().into();
+            let (caller, rx_caller) = guest(23, 23, at);
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .guests
+                .extend([target, nearby, caller]);
+            game.as_guest(21, |game| {
+                for _ in 0..101 {
+                    game.level_up_sound.tick();
+                }
+            })
+            .unwrap();
+
+            let target = game.player(21).unwrap();
+            assert!(target.give_experience_points(game, 15));
+            assert_eq!(target.experience(game).unwrap().level, 5);
+            assert_eq!(game.dim, overworld);
+            game.lan_broadcast_effects();
+            game.flush_native_sounds();
+            let id = game
+                .lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .sync_data()
+                .id("minecraft:sound_event", "minecraft:entity.player.levelup")
+                .unwrap();
+
+            for rx in [&rx_target, &rx_nearby] {
+                let sounds: Vec<_> = packets(rx)
+                    .into_iter()
+                    .filter_map(|packet| match packet {
+                        Clientbound::Sound(sound) => Some(sound),
+                        _ => None,
+                    })
+                    .collect();
+                let [sound] = sounds.as_slice() else {
+                    panic!("expected one nether sound")
+                };
+                assert_eq!(sound.sound, (id, None));
+                assert_eq!((sound.x, sound.y, sound.z), (8, 512, 16));
+                assert_eq!((sound.volume, sound.pitch), (0.125, 1.0));
+                assert_eq!(sound.source, SoundSource::Players.index() as i32);
+            }
+            assert!(
+                !packets(&rx_caller)
+                    .iter()
+                    .any(|p| matches!(p, Clientbound::Sound(_)))
+            );
+        });
+    }
+
     /// Vanilla's `playSound(except, entity, ...)` sites ask
     /// `play_level_sound_at_entity` with their entity, at the end of the
     /// tick, in vanilla's source: a goat's ram (the mobs' `BoundSound`) and

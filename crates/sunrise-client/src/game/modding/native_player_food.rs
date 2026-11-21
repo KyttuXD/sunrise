@@ -226,6 +226,38 @@ mod tests {
             assert!(game.player_set_total_experience(player, i32::MIN));
             let xp = player.experience(game).unwrap();
             assert_eq!((xp.level, xp.progress, xp.total), (5, 0.5, i32::MIN));
+            assert_eq!(game.player_score, 0);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_score_uses_the_signed_hook_adjusted_grant() {
+        struct TakePoint;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for TakePoint {
+            fn player_xp_change(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::PlayerXpChangeEvent<'_>,
+            ) -> mod_api::Flow {
+                event.amount = -1;
+                mod_api::Flow::Continue
+            }
+        }
+        let mods = vec![mod_api::ModEntry::new("take-point", Box::new(TakePoint))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                let player = acting_player(game);
+                game.lan_acting_name = Some("ScoreProbe".into());
+                assert!(player.give_experience_points(game, 1));
+                assert_eq!(game.player_score, -1);
+                assert_eq!(game.experience.total, 0);
+
+                game.player_score = i32::MIN;
+                assert!(player.give_experience_points(game, 1));
+                assert_eq!(game.player_score, i32::MAX);
+            });
         });
     }
 

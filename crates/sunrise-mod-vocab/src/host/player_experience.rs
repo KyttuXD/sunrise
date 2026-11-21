@@ -44,7 +44,7 @@ pub trait PlayerExperienceBackendMut {
     fn player_set_experience_levels(&mut self, player: PlayerRef, levels: i32) -> bool;
     /// Side: server.
     /// Sets `Player.totalExperience`, the `total` that `PlayerRef::experience`
-    /// reports, keeping the level and the progress toward the next level.
+    /// reports, keeping the level, the progress toward the next level, and the player's score.
     /// Generated as `PlayerRef::set_total_experience`. A mod that moves
     /// experience between a player and a block sets the level and progress
     /// with `PlayerRef::set_experience_levels` and
@@ -54,13 +54,16 @@ pub trait PlayerExperienceBackendMut {
     fn player_set_total_experience(&mut self, player: PlayerRef, total: i32) -> bool;
     /// Side: server.
     /// `ServerPlayer.giveExperiencePoints`: adds signed points, or takes them when negative.
-    /// Mending runs only at orb pickup. Returns false for a stale or unavailable player.
+    /// The signed, hook-adjusted amount also changes the player's score; a level-up sound plays
+    /// in the player's own level. Mending runs only at orb pickup. Returns false for a stale or
+    /// unavailable player.
     #[access(WorldOnly)]
     fn player_give_experience_points(&mut self, player: PlayerRef, points: i32) -> bool;
     /// Side: server.
     /// `Player.giveExperienceLevels`: adds `levels`, or takes them off when
     /// negative, as the anvil and the enchanting table charge with. Below 0
-    /// the level, the total and the progress toward the next level are all 0.
+    /// the level, the total and the progress toward the next level are all 0. A level-up sound
+    /// plays in the player's own level; the player's score is unchanged.
     #[access(WorldOnly)]
     fn player_give_levels(&mut self, player: PlayerRef, levels: i32) -> bool;
 }

@@ -126,7 +126,7 @@ pub(super) struct DyingDrops<'a> {
     pub(super) recently_hit: bool,
 }
 
-/// A sound a native mod queued, sent when the host is free.
+/// A dimension-tagged level sound, sent when the host is free.
 pub(super) struct NativeSound {
     pub dimension: &'static str,
     pub sound: String,

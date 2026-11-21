@@ -151,6 +151,10 @@ impl Game<'_> {
                 .bool_at(sunrise_client::gamerules::vanilla::KEEP_INVENTORY)
                 || g.game_mode == SPECTATOR;
             xp.respawn(keep_inventory);
+            // ServerPlayer.restoreFrom also copies Score only if the inventory is kept.
+            if !keep_inventory {
+                g.score = 0;
+            }
             g.effects = Default::default();
             (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
             // PlayerEvent.Clone, at the end of `restoreFrom`: the data is copied,
@@ -441,9 +445,10 @@ impl Game<'_> {
             } else {
                 literal("")
             };
-            let Some(host) = self.lan.as_ref() else {
+            let Some(host) = self.lan.as_mut() else {
                 return;
             };
+            host.hub.guests.update(gi, |guest| guest.sync_score());
             host.hub.send_to(
                 conn,
                 &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),

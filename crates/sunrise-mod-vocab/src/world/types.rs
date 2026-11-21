@@ -1707,7 +1707,8 @@ pub trait HitHost: LevelRandomHost {
     /// `Level.playSound(null, entity, sound, source, volume, pitch)`: the same sound bound to
     /// `entity`, so it follows it, heard by every player within range of where the entity is now,
     /// the entity's own player too (it is not `EntityRef::play_sound`, which leaves that player
-    /// out and plays nothing for a silent mob). False for a handle the hit does not lend.
+    /// out and plays nothing for a silent mob). Uses the same event resolution and volume and
+    /// pitch as `play_sound_at`. False for a malformed key or a handle the hit does not lend.
     fn play_sound_from(
         &mut self,
         _entity: EntityRef,

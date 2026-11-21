@@ -1645,11 +1645,11 @@ mod hub_tests {
 
     /// The keys a vanilla server writes in every player's file, read with `javap` from the
     /// 26.3 server jar: `Player.addAdditionalSaveData` (Inventory, SelectedItemSlot,
-    /// EnderItems, XpLevel, XpP, XpTotal, XpSeed, abilities), `FoodData` (foodLevel,
+    /// EnderItems, XpLevel, XpP, XpTotal, XpSeed, Score, abilities), `FoodData` (foodLevel,
     /// foodSaturationLevel, foodExhaustionLevel, foodTickTimer), `ServerPlayer` (Dimension),
     /// `Entity.saveWithoutId` (Pos, Motion, Rotation, OnGround, Air, Fire) and
     /// `LivingEntity` (Health, AbsorptionAmount).
-    const VANILLA_PLAYER_KEYS: [&str; 21] = [
+    const VANILLA_PLAYER_KEYS: [&str; 22] = [
         "Inventory",
         "SelectedItemSlot",
         "EnderItems",
@@ -1657,6 +1657,7 @@ mod hub_tests {
         "XpP",
         "XpTotal",
         "XpSeed",
+        "Score",
         "abilities",
         "foodLevel",
         "foodSaturationLevel",

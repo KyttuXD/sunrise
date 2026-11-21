@@ -624,11 +624,10 @@ impl Game<'_> {
         });
     }
 
-    /// Native sounds wait until the server host is available. The sound packet uses the
-    /// registry ID when present, or carries the event inline by name.
-    /// Each is asked of the mods first (`play_level_sound_at_entity` when
-    /// bound to an entity, `_at_position` otherwise). One at a position also
-    /// goes wrapped to its level's viewers (`Hub::send_viewed_sound`).
+    /// Queued level sounds keep their dimension while the server switches levels. The
+    /// sound packet uses the registry ID when present, or carries the event inline by name.
+    /// Each is asked of the mods first (`play_level_sound_at_entity` when bound to an entity,
+    /// `_at_position` otherwise), and also goes wrapped to its level's viewers.
     pub(super) fn flush_native_sounds(&mut self) {
         if self.lan.is_none() {
             return;

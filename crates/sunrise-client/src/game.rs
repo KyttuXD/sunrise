@@ -3658,6 +3658,8 @@ struct Game<'a> {
     ticks_until_autosave: i64,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
+    /// `Player.DATA_SCORE_ID`, independent of `totalExperience`.
+    player_score: i32,
     orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
     xp_delay: u32,
     ordered: ordered_tick::OrderedTicks,
@@ -9009,6 +9011,7 @@ impl Game<'_> {
             progress: self.level.xp_progress,
             total: self.level.xp_total,
         };
+        self.player_score = self.level.player_score;
         self.restore_effects();
         self.mining = None;
         self.container = None;
@@ -9827,8 +9830,9 @@ impl Game<'_> {
         }
         self.tracked_special_box(id as i32)
     }
-    /// `Player.giveExperiencePoints`: `add_experience_levels` runs once for each
-    /// level gained or lost, and the mods hear of the level change once.
+    /// `Player.giveExperiencePoints`: the signed grant changes the score before the XP bar.
+    /// `add_experience_levels` runs once for each level gained or lost, and the mods hear
+    /// of the level change once.
     pub(super) fn give_experience_points(&mut self, points: i32) {
         if points == 0 {
             return;
@@ -9836,6 +9840,7 @@ impl Game<'_> {
         let Some(points) = self.xp_change(points) else {
             return;
         };
+        self.player_score = self.player_score.wrapping_add(points);
         let old_level = self.experience.level;
         self.experience.add_points(points);
         while self.experience.progress < 0.0 {
@@ -10316,6 +10321,7 @@ impl Game<'_> {
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
         level.xp_total = self.experience.total;
+        level.player_score = self.player_score;
         level.root_vehicle = vehicle.as_ref().map(|v| v.2).or(self.pending_vehicle);
         // The ride's tree, or none once the file's own came back.
         match vehicle {
@@ -13509,6 +13515,7 @@ impl<'a> Game<'a> {
             ticks_until_autosave: 6000,
             applied_modifiers: Vec::new(),
             experience: Experience::default(),
+            player_score: 0,
             orbs: Default::default(),
             xp_delay: 0,
             ordered: Default::default(),
