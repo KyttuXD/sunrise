@@ -147,10 +147,11 @@ pub trait Commands {
         )
     }
     /// Side: server.
-    /// Runs a console command and collects all its source messages as plain text, in order,
-    /// without truncation. For structured text and separate success and failure messages,
-    /// use [`Self::run_command_with_feedback`]. Both methods have the same execution result
-    /// and source routing. A command can fail after already sending success feedback.
+    /// Runs a console command and returns a snapshot of the source messages emitted before it
+    /// returns, as plain text in order and without truncation. Use
+    /// [`Self::run_command_with_feedback`] for structured messages, including any sent after the
+    /// call returns. Both methods have the same execution result and source routing. A command
+    /// can fail after already sending success feedback.
     fn run_command_with_output(&mut self, line: &str) -> CommandResult {
         crate::world::phase::unprovided(
             "Commands::run_command_with_output",
@@ -163,8 +164,12 @@ pub trait Commands {
     /// source's structured messages to `output` in order as they occur. Logs, player messages
     /// and operator broadcasts are not source feedback. Nested calls have their own output.
     /// Output is not truncated; the receiver decides what to keep or display. A component that
-    /// cannot be represented is sent as a `TextFormError` in its place. Dropping the receiver
-    /// stops delivery but does not interrupt the command.
+    /// cannot be represented is sent as a `TextFormError` in its place.
+    ///
+    /// A command can keep its source to send feedback on later ticks (for example, a test
+    /// summary). The game's sender stays alive until the last such use releases the source;
+    /// do not wait for the receiver to close on the server thread. Dropping the receiver stops
+    /// delivery but does not interrupt the command.
     ///
     /// Returns whether the command ran without failing. A blank line or no open server runs
     /// nothing and returns `false` without sending a message. Commands handled only by the

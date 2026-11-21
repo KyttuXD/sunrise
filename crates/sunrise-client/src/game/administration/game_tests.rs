@@ -192,7 +192,6 @@ pub(super) struct RunnerOptions {
     /// `trackAndStartRunner`'s source is the command's own, not the
     /// server's (`TestInstanceBlockEntity.runTest`).
     from_command: bool,
-    summary_source: Option<SummarySource>,
 }
 
 impl RunnerOptions {
@@ -204,7 +203,6 @@ impl RunnerOptions {
             grid_for_existing: false,
             grid,
             from_command,
-            summary_source: None,
         }
     }
 
@@ -218,7 +216,6 @@ impl RunnerOptions {
             grid_for_existing: true,
             grid: Some(grid),
             from_command: true,
-            summary_source: None,
         }
     }
 }
@@ -340,7 +337,7 @@ struct Runner {
 
 /// The command stack and its output source are different: `execute as`
 /// changes the actor, while the player who issued the command receives it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SummarySource {
     source: Source,
     recipient: Option<Target>,
@@ -411,19 +408,41 @@ enum Out {
     Source {
         context: SummarySource,
         text: Text,
-        broadcast: bool,
+        kind: SummaryKind,
     },
     Coordinates(SummarySource, Vec<Dim>),
 }
 
-fn summary_line(context: Option<SummarySource>, text: Text, broadcast: bool) -> Out {
+#[derive(Clone, Copy)]
+enum SummaryKind {
+    Success,
+    SuccessAndBroadcast,
+    Failure,
+    System,
+}
+
+impl SummaryKind {
+    fn deliver(self, game: &mut Game<'_>, text: Text) {
+        match self {
+            Self::Success => game.feedback_unbroadcast(text),
+            Self::SuccessAndBroadcast => game.feedback(text),
+            Self::Failure => game.command_failure(text),
+            Self::System => game.command_system_message(text),
+        }
+    }
+}
+
+fn summary_line(context: Option<&SummarySource>, text: Text, kind: SummaryKind) -> Out {
     match context {
         Some(context) => Out::Source {
-            context,
+            context: context.clone(),
             text,
-            broadcast,
+            kind,
         },
-        None => Out::Console { text, broadcast },
+        None => Out::Console {
+            text,
+            broadcast: matches!(kind, SummaryKind::SuccessAndBroadcast),
+        },
     }
 }
 
@@ -489,32 +508,6 @@ impl GameTests {
 }
 
 impl Game<'_> {
-    /// `TestCommand.trackAndStartRunner`: command summaries retain their
-    /// original source. Test-block actions and verify keep their existing path.
-    pub(super) fn track_and_start_command_runner(&mut self, infos: Vec<Info>, grid: Grid) {
-        let mut source = self
-            .command_source
-            .clone()
-            .unwrap_or_else(|| self.player_source());
-        let recipient = if self.console_broadcast.is_some() {
-            None
-        } else {
-            self.lan_acting
-                .map(Target::Guest)
-                .or_else(|| self.player.as_ref().map(|_| Target::Player))
-        };
-        if source.entity == Some(Target::Player)
-            && let Some(conn) = self.lan_acting
-        {
-            source.entity = Some(Target::Guest(conn));
-        }
-        let mut options = RunnerOptions::new(false, Some(grid), true);
-        // Block/cart output destinations retain the previous path; they are
-        // not player/console command-response recipients in this slice.
-        options.summary_source = (source.block.is_none() && source.cart.is_none())
-            .then_some(SummarySource { source, recipient });
-        self.track_and_start_batches(batch_infos(infos, 50), options);
-    }
     // ---- GameTestRunner / GameTestTicker ----
 
     /// `GameTestTicker.clear`: a pass in progress halts at its end.
@@ -547,8 +540,31 @@ impl Game<'_> {
         );
     }
 
-    /// `TestCommand.trackAndStartRunner` for batches already made.
+    /// `TestCommand.trackAndStartRunner`: retain the issuing source for command summaries.
     pub(super) fn track_and_start_batches(&mut self, batches: Vec<Batch>, options: RunnerOptions) {
+        let summary_source = if options.from_command {
+            let mut source = self
+                .command_source
+                .clone()
+                .unwrap_or_else(|| self.player_source());
+            let recipient = if source.native_console.is_some() || self.console_broadcast.is_some() {
+                None
+            } else {
+                self.lan_acting
+                    .map(Target::Guest)
+                    .or_else(|| self.player.as_ref().map(|_| Target::Player))
+            };
+            if source.entity == Some(Target::Player)
+                && let Some(conn) = self.lan_acting
+            {
+                source.entity = Some(Target::Guest(conn));
+            }
+            // Block/cart output destinations keep their existing console path.
+            (source.block.is_none() && source.cart.is_none())
+                .then_some(SummarySource { source, recipient })
+        } else {
+            None
+        };
         let tracked = batches
             .iter()
             .flat_map(|b| &b.infos)
@@ -573,7 +589,7 @@ impl Game<'_> {
             reports: Vec::new(),
             scheduled: Vec::new(),
             stopped: false,
-            summary_source: options.summary_source,
+            summary_source,
             summary_dimensions: Vec::new(),
         });
         // GameTestRunner.start runs the first batch inside the command.
@@ -666,10 +682,14 @@ impl Game<'_> {
         if self.game_tests.command_start {
             self.feedback(starting);
         } else {
-            self.game_tests.outbox.push(Out::Console {
-                text: starting,
-                broadcast: true,
-            });
+            self.game_tests.outbox.push(summary_line(
+                self.game_tests
+                    .runner
+                    .as_ref()
+                    .and_then(|r| r.summary_source.as_ref()),
+                starting,
+                SummaryKind::SuccessAndBroadcast,
+            ));
         }
         if let Some(runner) = self.game_tests.runner.as_mut() {
             runner.batch_pending = spawned.len();
@@ -694,6 +714,7 @@ impl Game<'_> {
         if runner.scheduled.is_empty() {
             runner.batches = Vec::new();
             runner.stopped = true;
+            runner.summary_source = None;
             return;
         }
         let scheduled = std::mem::take(&mut runner.scheduled);
@@ -1309,13 +1330,13 @@ impl Game<'_> {
             .count();
         let halt = runner.halt_on_error;
         if all_done {
-            let context = runner.summary_source;
+            let context = runner.summary_source.as_ref();
             let out = &mut self.game_tests.outbox;
             out.push(summary_line(
                 context,
                 Text::translate("commands.test.summary", &[number(total as i32)])
                     .with_color(text::WHITE),
-                true,
+                SummaryKind::SuccessAndBroadcast,
             ));
             if failed_required > 0 {
                 out.push(summary_line(
@@ -1323,16 +1344,15 @@ impl Game<'_> {
                     Text::translate(
                         "commands.test.summary.failed",
                         &[number(failed_required as i32)],
-                    )
-                    .with_color(text::RED),
-                    false,
+                    ),
+                    SummaryKind::Failure,
                 ));
             } else {
                 out.push(summary_line(
                     context,
                     Text::translate("commands.test.summary.all_required_passed", &[])
                         .with_color(text::GREEN),
-                    true,
+                    SummaryKind::SuccessAndBroadcast,
                 ));
             }
             if failed_optional > 0 {
@@ -1342,11 +1362,14 @@ impl Game<'_> {
                         "commands.test.summary.optional_failed",
                         &[number(failed_optional as i32)],
                     ),
-                    false,
+                    SummaryKind::System,
                 ));
             }
             if let Some(context) = context {
-                out.push(Out::Coordinates(context, runner.summary_dimensions.clone()));
+                out.push(Out::Coordinates(
+                    context.clone(),
+                    runner.summary_dimensions.clone(),
+                ));
             }
         }
         // FailedTestTracker.rememberFailedTest
@@ -1505,9 +1528,9 @@ impl Game<'_> {
                 Out::Source {
                     context,
                     text,
-                    broadcast,
+                    kind,
                 } => {
-                    self.test_source_output(context, text, broadcast);
+                    self.test_source_output(&context, text, kind);
                 }
                 Out::Coordinates(context, dimensions) => {
                     if let Some(Target::Guest(conn)) = context.recipient
@@ -1515,8 +1538,8 @@ impl Game<'_> {
                     {
                         continue;
                     }
-                    self.with_source(context.source, |g| {
-                        g.output_test_summary_coordinates(context, &dimensions)
+                    self.with_source(context.source.clone(), |g| {
+                        g.output_test_summary_coordinates(&context, &dimensions)
                     });
                 }
                 Out::Players(text) => {
@@ -1550,16 +1573,10 @@ impl Game<'_> {
 
     /// `TestSummaryDisplayer`: feedback uses the original issuer, without
     /// executing another command or invoking the command's result callbacks.
-    fn test_source_output(&mut self, context: SummarySource, text: Text, broadcast: bool) {
+    fn test_source_output(&mut self, context: &SummarySource, text: Text, kind: SummaryKind) {
         if let Some(recipient) = context.recipient {
             let delivered = self.for_player(recipient, |g| {
-                g.with_source(context.source, |g| {
-                    if broadcast {
-                        g.feedback(text);
-                    } else {
-                        g.feedback_unbroadcast(text);
-                    }
-                });
+                g.with_source(context.source.clone(), |g| kind.deliver(g, text));
             });
             if delivered.is_some() {
                 let issuer = match recipient {
@@ -1568,10 +1585,15 @@ impl Game<'_> {
                 };
                 self.send_admin_feedback(issuer);
             }
+        } else if context.source.native_console.is_some() {
+            let admins = std::mem::take(&mut self.admin_feedback);
+            self.with_source(context.source.clone(), |g| kind.deliver(g, text));
+            self.send_admin_feedback(None);
+            self.admin_feedback = admins;
         } else if !context.source.silent {
-            self.with_source(context.source, |g| {
+            self.with_source(context.source.clone(), |g| {
                 let previous = g.console_broadcast;
-                g.test_console_output(text, broadcast);
+                g.test_console_output(text, matches!(kind, SummaryKind::SuccessAndBroadcast));
                 g.console_broadcast = previous;
             });
         }
@@ -1580,7 +1602,7 @@ impl Game<'_> {
     /// `TestCommand.outputPlayerCoordinates` / `outputTestCoordinates` after
     /// the summary. Surface reads reuse the existing test-position helper,
     /// including its missing-chunk policy; this is not a new loading policy.
-    fn output_test_summary_coordinates(&mut self, context: SummarySource, dimensions: &[Dim]) {
+    fn output_test_summary_coordinates(&mut self, context: &SummarySource, dimensions: &[Dim]) {
         if let Some(Target::Guest(conn)) = context.recipient
             && self.command_guest(conn).is_none()
         {
@@ -1611,7 +1633,7 @@ impl Game<'_> {
                     rotation.map(|v| v.floor() as i32),
                     text::GOLD,
                 ),
-                false,
+                SummaryKind::Success,
             );
         }
         let pos = player
@@ -1635,7 +1657,7 @@ impl Game<'_> {
                     [0, 0],
                     text::YELLOW,
                 ),
-                false,
+                SummaryKind::Success,
             );
         }
     }

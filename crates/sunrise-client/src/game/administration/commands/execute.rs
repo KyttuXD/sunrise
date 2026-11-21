@@ -9,7 +9,7 @@ use sunrise_core::nbt::Tag;
 /// `CommandSourceStack` fields Sunrise models: the executing entity (None for
 /// the server), position, rotation, anchor, whether feedback is suppressed
 /// and the chain of `store` callbacks.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(in crate::game) struct Source {
     pub entity: Option<Target>,
     pub pos: [f64; 3],
@@ -27,10 +27,10 @@ pub(in crate::game) struct Source {
     pub origin_dimension: Dim,
     /// Whether a player submitted this source, unchanged by executor modifiers.
     pub origin_player: bool,
-    /// Whether the origin is the native console's output sink. Redirects keep this origin.
-    pub native_console: bool,
-    /// The dimension `execute in` named, if any: a server teleports its
-    /// players there (`TeleportCommand` into the source's level).
+    /// The native console's destination, if it issued this source. Redirects retain it.
+    pub native_console: Option<super::super::native_console::Output>,
+    /// An explicitly bound dimension, from the native console or `execute in`:
+    /// `TeleportCommand` takes its destination level from the source.
     pub level: Option<super::super::Dim>,
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
@@ -100,7 +100,7 @@ impl Game<'_> {
             dimension: self.dim,
             origin_dimension: self.dim,
             origin_player: self.player.is_some(),
-            native_console: false,
+            native_console: None,
             level: None,
             block: None,
             cart: None,
@@ -121,7 +121,7 @@ impl Game<'_> {
             dimension: level,
             origin_dimension: level,
             origin_player: false,
-            native_console: false,
+            native_console: None,
             level: None,
             block: None,
             cart: None,
@@ -237,8 +237,9 @@ impl Game<'_> {
         source: Source,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
+        let dimension = source.dimension;
         let previous = self.command_source.replace(source);
-        let back = self.enter_command_level(source.dimension);
+        let back = self.enter_command_level(dimension);
         let out = f(self);
         if let Some(back) = back {
             self.enter_command_level(back);
@@ -446,7 +447,8 @@ impl Game<'_> {
                         // silent and drops its source (`handleError` with
                         // `forked`); one that is not a `CommandSyntaxException`
                         // still reaches `Commands.performCommand`.
-                        let (keep, _) = match self.with_source(s, |g| g.condition(c, want)) {
+                        let (keep, _) = match self.with_source(s.clone(), |g| g.condition(c, want))
+                        {
                             Ok(v) => v,
                             Err(e) if !e.unexpected => continue,
                             Err(e) => return Err(e),
@@ -475,7 +477,7 @@ impl Game<'_> {
                     };
                     let mut next = Vec::new();
                     for s in sources {
-                        let new = self.with_source(s, |g| g.modify(word, c, s))?;
+                        let new = self.with_source(s.clone(), |g| g.modify(word, c, s))?;
                         if next.len() + new.len() >= fork_limit {
                             return fork_limit_reached(forked, fork_limit);
                         }
@@ -508,7 +510,7 @@ impl Game<'_> {
         let mut failure: Option<CommandError> = None;
         for s in sources {
             self.exec.callback = None;
-            let (keep, count) = match self.with_source(s, |g| g.condition(c, want)) {
+            let (keep, count) = match self.with_source(s.clone(), |g| g.condition(c, want)) {
                 Ok(v) => v,
                 Err(e) => {
                     self.deliver(s.store, false, 0);
@@ -532,8 +534,9 @@ impl Game<'_> {
                 } else {
                     Text::translate("commands.execute.conditional.pass", &[])
                 };
+                let store = s.store;
                 self.with_source(s, |g| g.feedback(message));
-                self.deliver(s.store, true, n);
+                self.deliver(store, true, n);
                 total += n;
             } else {
                 self.deliver(s.store, false, 0);
@@ -597,7 +600,7 @@ impl Game<'_> {
                 .into_iter()
                 .map(|t| Source {
                     entity: Some(t),
-                    ..s
+                    ..s.clone()
                 })
                 .collect(),
             "at" => targets(self)?
@@ -610,7 +613,7 @@ impl Game<'_> {
                         rot: self.target_rotation(t),
                         dimension: level,
                         level: (level != self.dim).then_some(level),
-                        ..s
+                        ..s.clone()
                     })
                 })
                 .collect(),
@@ -621,7 +624,7 @@ impl Game<'_> {
                     // resets it to the feet).
                     Some(Source {
                         pos: self.target_position(t)?,
-                        ..s
+                        ..s.clone()
                     })
                 })
                 .collect(),
@@ -653,7 +656,7 @@ impl Game<'_> {
                 .into_iter()
                 .map(|t| Source {
                     rot: self.target_rotation(t),
-                    ..s
+                    ..s.clone()
                 })
                 .collect(),
             "rotated" => {
@@ -674,7 +677,7 @@ impl Game<'_> {
                         } else {
                             p[1]
                         };
-                        Some(self.facing(s, [p[0], y, p[2]]))
+                        Some(self.facing(s.clone(), [p[0], y, p[2]]))
                     })
                     .collect()
             }
@@ -924,7 +927,7 @@ impl Game<'_> {
             .filter(|t| self.target_position(*t).is_some())
             .map(|t| Source {
                 entity: Some(t),
-                ..s
+                ..s.clone()
             })
             .collect()
     }

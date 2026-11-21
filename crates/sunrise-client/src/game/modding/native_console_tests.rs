@@ -241,6 +241,258 @@ fn native_console_delivers_all_source_feedback_in_order() {
                 assert_eq!(plain.feedback[0], long);
                 assert_eq!(plain.feedback[299], "line 299");
                 assert!(!plain.feedback[300].is_empty());
+
+                use sunrise_client::{
+                    lan::{Out, PlayerSender, data::component_nbt},
+                    scoreboard::{comp_text, tag_to_json},
+                };
+                use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
+                let guests = [12, 13].map(|conn| {
+                    let (send, receive) = std::sync::mpsc::channel();
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(conn, |guest| {
+                            guest.sender = PlayerSender::new(send, Arc::default());
+                        })
+                        .unwrap();
+                    (conn, receive)
+                });
+                let (send, receive) = std::sync::mpsc::channel();
+                assert!(Commands::run_command_with_feedback(
+                    game,
+                    "msg guest12 private hello",
+                    send
+                ));
+                let Ok(Ok(CommandFeedback::System(outgoing))) = receive.try_recv() else {
+                    panic!("the console should get an outgoing whisper confirmation");
+                };
+                let TextContent::Translatable { key, arguments, .. } = &outgoing.content else {
+                    panic!("the outgoing whisper should remain structured");
+                };
+                assert_eq!(key, "commands.message.display.outgoing");
+                let plain = |text| {
+                    sunrise_client_lib::api_text::to_engine(text)
+                        .unwrap()
+                        .plain()
+                };
+                assert_eq!(plain(&arguments[0]), "guest12");
+                assert_eq!(plain(&arguments[1]), "private hello");
+                assert_eq!(
+                    receive.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected)
+                );
+                let hub = &game.lan.as_ref().unwrap().hub;
+                let chat_type = hub
+                    .registry_id("minecraft:chat_type", "minecraft:msg_command_incoming")
+                    .unwrap();
+                for (conn, receive) in guests {
+                    hub.guest(conn).unwrap().sender.flush();
+                    let mut whispers = Vec::new();
+                    for packet in receive.try_iter() {
+                        let bodies = match packet {
+                            Out::Packet(body) => vec![body],
+                            Out::Packets(bodies) => bodies,
+                            Out::Disconnect(_) => panic!("guest disconnected"),
+                        };
+                        for body in bodies {
+                            let mut r = Reader::new(&body);
+                            let id = r.varint().unwrap();
+                            if let Clientbound::DisguisedChat(chat) =
+                                Clientbound::decode(id, r.rest()).unwrap()
+                            {
+                                whispers.push(chat);
+                            }
+                        }
+                    }
+                    if conn == 12 {
+                        assert_eq!(whispers.len(), 1);
+                        assert_eq!(whispers[0].chat_type.chat_type, chat_type);
+                        assert_eq!(
+                            whispers[0].chat_type.name,
+                            component_nbt(
+                                &sunrise_client::text::Text::literal("Server").component()
+                            )
+                        );
+                        assert_eq!(
+                            comp_text(&tag_to_json(&whispers[0].message)).plain(),
+                            "private hello"
+                        );
+                    } else {
+                        assert!(
+                            whispers.is_empty(),
+                            "only the target gets the incoming whisper"
+                        );
+                    }
+                }
+            })
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn native_console_dispatches_direct_commands_in_the_world_spawn_dimension() {
+    use super::Dim;
+    use sunrise_client::chunk::Chunk;
+    use sunrise_core::position::ChunkPos;
+
+    with_guests(|game| {
+        game.build_registries();
+        assert_eq!(game.world_spawn_level(), Dim::Overworld);
+        assert_eq!(game.dim, Dim::Overworld);
+        game.level.world_spawn = Some([5, 70, 5]);
+        let add_chunk = |game: &mut super::Game<'_>| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(ChunkPos::new(0, 0))
+                .unwrap();
+        };
+        add_chunk(game);
+        assert_eq!(game.enter_command_level(Dim::Nether), Some(Dim::Overworld));
+        add_chunk(game);
+        let before = game.world.block(5, 70, 5);
+        let (send, receive) = std::sync::mpsc::channel();
+        assert!(Commands::run_command_with_feedback(
+            game,
+            "setblock ~ ~ ~ stone",
+            send
+        ));
+        assert!(matches!(
+            receive.try_recv(),
+            Ok(Ok(CommandFeedback::Success(_)))
+        ));
+        assert_eq!(game.dim, Dim::Nether);
+        assert_eq!(game.world.block(5, 70, 5), before);
+        assert!(Commands::run_command_with_output(game, "setblock ~ ~ ~1 stone").success);
+        assert_eq!(game.dim, Dim::Nether);
+        assert_eq!(game.world.block(5, 70, 6), before);
+        assert_eq!(game.enter_command_level(Dim::Overworld), Some(Dim::Nether));
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap();
+        assert_eq!(game.world.block(5, 70, 5), stone);
+        assert_eq!(game.world.block(5, 70, 6), stone);
+    });
+}
+
+struct FailingGameTests;
+
+impl mod_api::GameTestFunction for FailingGameTests {
+    fn run(&self, _: &mut dyn ServerHost, _: &mod_api::GameTestContext) -> mod_api::GameTestResult {
+        mod_api::GameTestResult::Fail("expected failure".into())
+    }
+}
+
+#[mod_api::__subscriptions]
+impl Hooks for FailingGameTests {
+    fn register_game_tests(
+        &self,
+        _: &dyn mod_api::Host,
+        event: &mut mod_api::RegisterGameTestsEvent<'_>,
+    ) {
+        let function = "native_console_test:fail";
+        event
+            .functions
+            .register(function, Arc::new(FailingGameTests))
+            .unwrap();
+        for (id, required) in [
+            ("native_console_test:required", true),
+            ("native_console_test:optional", false),
+        ] {
+            let mut def =
+                mod_api::GameTestDefinition::new("minecraft:empty".into(), function.into());
+            def.required = required;
+            event.functions.register_test(id, def).unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn native_console_keeps_the_source_attached_until_delayed_test_feedback_arrives() {
+    use std::sync::mpsc::{TryRecvError, channel};
+    use sunrise_client::chunk::Chunk;
+
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new(
+            "native_console_test",
+            Box::new(FailingGameTests),
+        )]
+        .into(),
+        || {
+            with_guests(|game| {
+                game.build_registries();
+                game.snapshot_test_defs();
+                game.level.world_spawn = Some([8, 64, 8]);
+                for cx in -1..=2 {
+                    for cz in -1..=2 {
+                        game.world
+                            .chunks
+                            .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
+                    }
+                }
+                game.block_ticks
+                    .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                    .unwrap();
+                assert!(Commands::run_command(game, "fill 0 63 0 15 63 15 stone"));
+                let (send, receive) = channel();
+                assert!(Commands::run_command_with_feedback(
+                    game,
+                    "test run native_console_test:*",
+                    send
+                ));
+                let check_key = |text: &Text, expected| {
+                    assert!(
+                        matches!(&text.content, TextContent::Translatable { key, .. } if key == expected),
+                        "{text:?}"
+                    );
+                };
+                for key in ["commands.test.run.running", "commands.test.batch.starting"] {
+                    let Ok(Ok(CommandFeedback::Success(text))) = receive.try_recv() else {
+                        panic!("missing immediate success message {key}");
+                    };
+                    check_key(&text, key);
+                }
+                assert_eq!(
+                    receive.try_recv(),
+                    Err(TryRecvError::Empty),
+                    "the command returned, but the runner still owns the source"
+                );
+
+                // A different command's capture must not receive the deferred summary.
+                game.chat_capture = Some(Vec::new());
+                for _ in 0..8 {
+                    game.tick_game_tests();
+                }
+                let Ok(Ok(CommandFeedback::Success(summary))) = receive.try_recv() else {
+                    panic!("missing delayed summary");
+                };
+                check_key(&summary, "commands.test.summary");
+                let Ok(Ok(CommandFeedback::Failure(required))) = receive.try_recv() else {
+                    panic!("missing required failure");
+                };
+                assert!(matches!(
+                    required.style.color.as_deref(),
+                    Some("red" | "#FF5555")
+                ));
+                check_key(&required.children[0], "commands.test.summary.failed");
+                let Ok(Ok(CommandFeedback::System(optional))) = receive.try_recv() else {
+                    panic!("missing optional failure");
+                };
+                check_key(&optional, "commands.test.summary.optional_failed");
+                let Ok(Ok(CommandFeedback::Success(coordinates))) = receive.try_recv() else {
+                    panic!("missing test position");
+                };
+                check_key(&coordinates, "chat.square_brackets");
+                assert_eq!(receive.try_recv(), Err(TryRecvError::Disconnected));
+                assert!(game.chat_capture.take().unwrap().is_empty());
             })
         },
     );

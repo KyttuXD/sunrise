@@ -70,7 +70,11 @@ impl Game<'_> {
     /// The name of the server's own source: "Rcon" for a command an RCON client sent
     /// (`RconConsoleSource`), "Server" otherwise (`MinecraftServer.createCommandSourceStack`).
     pub(in crate::game) fn server_name(&self) -> Text {
-        Text::literal(if self.rcon_source { "Rcon" } else { "Server" })
+        Text::literal(if self.rcon_source && !self.native_console_source() {
+            "Rcon"
+        } else {
+            "Server"
+        })
     }
 
     /// `CommandSourceStack.getDisplayName`: the executing entity's name, the

@@ -73,8 +73,7 @@ impl Commands for Game<'_> {
             "run_command_with_feedback",
             mod_api::__private::LoadAccess::WorldOnly,
         );
-        self.run_console_command(line, Some(Output::Stream(output)))
-            .success
+        self.run_console_command(line, Output::Stream(output))
     }
 }
 impl Levels for Game<'_> {
