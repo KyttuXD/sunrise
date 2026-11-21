@@ -1246,14 +1246,13 @@ pub enum ServerTickPhase {
     },
 }
 
-/// Context for every world lifecycle phase.
-/// `authority` is the server role. LocalAuthoritative and RemoteClient never
-/// fire. `epoch` identifies the open attempt, including failed opens;
-/// the same epoch identifies its ready, final-close, or failed-close event.
-/// `tick` counts non-paused server ticks since the world opened.
+// no wire: lifecycle callbacks carry local server state, not saved or network data.
+/// Context for a world lifecycle or server tick phase on an integrated or dedicated server.
+/// `epoch` identifies the open attempt, including failed opens. `tick` counts
+/// non-paused server ticks since the world opened. Client level epochs do not
+/// produce a `LifecycleContext`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct LifecycleContext {
     /// The server role that fired the phase.
     pub authority: Authority,

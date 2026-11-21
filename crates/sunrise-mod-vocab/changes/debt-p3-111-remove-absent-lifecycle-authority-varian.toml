@@ -1,0 +1,33 @@
+ids = [
+    "type:Authority",
+    "type:Authority.LocalAuthoritative",
+    "type:Authority.RemoteClient",
+    "type:LifecycleContext",
+]
+why = """
+Vanilla's `MinecraftServer.tickServer` runs on the integrated or dedicated server. NeoForge posts
+`ServerTickEvent.Pre` and `.Post` there and calls `ServerLifecycleHooks` from `IntegratedServer.initServer`,
+`DedicatedServer.initServer` and `MinecraftServer.runServer`. Sunrise keeps its existing event sites.
+The in-frame server is gone, and a client level still needs an epoch for handles but never fires server
+lifecycle hooks. The legacy tick-only read introduced in c2670e7bd2b has no callers; the typed level
+handle reads loaded blocks without it. `Authority` and `LifecycleContext` are local hook data, so they
+no longer implement `Wire` rather than reusing the removed variants' tags for different roles.
+"""
+migrate = """
+Delete `Authority::LocalAuthoritative` and `Authority::RemoteClient` match arms. Use
+`Authority::IntegratedServer` for single-player or LAN servers and `Authority::DedicatedServer` for
+dedicated servers. Keep a wildcard arm because `Authority` is non-exhaustive. Listen to `client_tick_pre`
+or `client_tick_post` for client tick work, not `server_tick`.
+
+In native mixins, import `Authority`, `LifecycleContext`, `ServerTickPhase`, `TickId`, `WorldEpoch`
+and `WorldPhase` from `mod_api`, not `sunrise_client::game::native_lifecycle`.
+Replace `game.native_server_block(context, dimension, pos)` with
+`host.level(dimension).and_then(|level| level.block_state(host, pos))`, using the server hook's host
+(or `let host: &dyn mod_api::ServerHost = game` in a mixin). Handle `None` instead of
+`NativeBlockReadError`. For a property at that position, call `level.block_property(host, pos, key)`.
+
+Continue reading `event.context` in server hooks. If you used `Wire` to send it, define your own
+`#[derive(Wire)]` payload with the fields you send, such as a mod-owned server-role enum with
+`Integrated` and `Dedicated` variants and the `u64` tick number from `context.tick.get()`. Encode and
+decode that payload instead of `Authority` or `LifecycleContext`; the payload does not read the old bytes.
+"""

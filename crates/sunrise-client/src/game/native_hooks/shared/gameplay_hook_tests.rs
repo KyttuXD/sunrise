@@ -24,18 +24,6 @@ fn loot_table_load_stays_hookable() {
 }
 
 #[test]
-fn lifecycle_source_stays_hookable() {
-    let source = include_str!("../../modding/native_lifecycle.rs");
-    let code = source.split("#[cfg(test)]").next().unwrap_or_default();
-    for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
-        assert!(!line.contains("cfg"), "a cfg in lifecycle source: {line}");
-        for mac in ["!(", "![", "! {", "!{"] {
-            assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
-        }
-    }
-}
-
-#[test]
 fn the_damage_hook_names_the_source() {
     use super::{Attack, HurtSource, Hurting, hurt_server_args, mob_source};
     use sunrise_client::health::NO_ATTACK;
