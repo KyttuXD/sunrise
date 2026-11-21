@@ -148,7 +148,7 @@ impl EffectsRegistrar for PartRegistrar {
             ));
             return Err(MobEffectPartError::InvalidKey { effect: *effect });
         };
-        if id.starts_with("minecraft:") {
+        if Self::is_builtin("minecraft:mob_effect", &id) {
             return Err(MobEffectPartError::VanillaEffect { effect: *effect });
         }
         if self.attach_known(|parts| &mut parts.effects, kind, &id, part) {
@@ -173,36 +173,6 @@ impl EffectsRegistrar for PartRegistrar {
                 self.refused.push(error);
                 mod_vocab::__private::parts_installation::effect_key(u32::MAX)
             }
-        }
-    }
-}
-
-impl PartRegistrar {
-    /// Skip absent optional packages before unknown effect requests are resolved.
-    /// Actual declaration ownership is checked after content has loaded.
-    pub(crate) fn skip_absent_effect_parts(&mut self) {
-        let packages = crate::load_state::current_packages();
-        let dependencies = crate::load_state::effective_dependencies();
-        let mut ids: Vec<_> = self.parts.effects.keys().cloned().collect();
-        ids.sort_unstable();
-        for id in ids {
-            let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
-            if packages
-                .iter()
-                .any(|package| package.namespaces().any(|owned| owned == namespace))
-            {
-                continue;
-            }
-            self.parts.effects.get_mut(&id).unwrap().retain(|part| {
-                if part.mod_id != namespace
-                    && dependencies.kind(part.mod_id, namespace) == Some(crate::DependencyKind::Optional)
-                {
-                    self.registry_keys.borrow_mut().effects.withdraw(part.mod_id, &id);
-                    log::debug!("mod {} skipped {} on effect {id}: optional dependency {namespace} is absent", part.mod_id, part.type_name);
-                    return false;
-                }
-                true
-            });
         }
     }
 }

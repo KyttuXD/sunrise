@@ -102,15 +102,6 @@ impl Names {
         Ok(slot)
     }
 
-    /// Take back `mod_id`'s request for `id`, as when its only use was dropped. The slot keeps
-    /// its number and an id another mod requested stays requested; with no requester left,
-    /// resolution has nothing to refuse (and returns no value at that position).
-    pub fn withdraw(&mut self, mod_id: &'static str, id: &str) {
-        if let Some(&slot) = self.slots.get(id) {
-            self.entries[slot as usize].mods.retain(|m| *m != mod_id);
-        }
-    }
-
     pub fn id(&self, slot: u32) -> Option<&str> {
         self.entries
             .get(slot as usize)
@@ -287,8 +278,8 @@ pub fn dimension_id(slot: u32) -> Option<&'static str> {
 #[derive(Default)]
 pub struct Effects {
     pub names: Names,
-    /// Registry index per retained key slot; withdrawn absent requests keep an empty slot.
-    pub indices: Vec<Option<usize>>,
+    /// Registry index per key slot.
+    pub indices: Vec<usize>,
     pub keys: Vec<u32>,
 }
 
@@ -346,7 +337,7 @@ pub fn resolve_effects<'a>(
     let indices: Vec<_> = names
         .entries
         .iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let index = resolve(&entry.id);
             if index.is_none() {
                 errors.extend(entry.mods.iter().map(|&mod_id| {
@@ -364,9 +355,6 @@ pub fn resolve_effects<'a>(
     }
     let mut keys = vec![u32::MAX; all.len()];
     for (slot, &index) in indices.iter().enumerate() {
-        let Some(index) = index else {
-            continue;
-        };
         let Some(key) = keys.get_mut(index) else {
             return Err(vec![EffectResolutionError::InvalidIndex {
                 id: names.entries[slot].id.clone(),

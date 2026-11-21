@@ -84,6 +84,11 @@ where
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BlockEntityPartError {
+    /// The key was not issued by this installation's registration.
+    InvalidKey {
+        /// The invalid block entity type key.
+        kind: BlockEntityTypeKey,
+    },
     /// Vanilla entities do not expose a native Part's payload.
     VanillaType {
         /// The block entity type that was refused.
@@ -101,6 +106,7 @@ pub enum BlockEntityPartError {
 impl fmt::Display for BlockEntityPartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidKey { .. } => f.write_str("invalid block entity type key"),
             Self::VanillaType { kind } => write!(
                 f,
                 "cannot attach a native block entity Part to vanilla type {}",

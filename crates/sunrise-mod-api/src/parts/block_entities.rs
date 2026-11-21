@@ -2,79 +2,27 @@
 use super::*;
 
 impl PartRegistrar {
-    /// Attaches each declared type's parts to its blocks. A type is found by id whichever mod
-    /// declared it, but another mod's type requires a surviving dependency on its owner.
+    /// Expands Parts against every native declaration, regardless of who registered it.
     pub(crate) fn expand_block_entity_parts(&mut self) {
-        let packages = crate::load_state::current_packages();
-        let dependencies = crate::load_state::effective_dependencies();
         let mut ids: Vec<_> = self.parts.block_entity_kinds.keys().collect();
         ids.sort_unstable();
         for id in ids {
             let parts = &self.parts.block_entity_kinds[id];
-            let Some(&(owner, ref kind)) = self
+            let Some((_, kind)) = self
                 .block_entity_types
                 .iter()
                 .find(|(_, kind)| kind.id == **id)
             else {
-                let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
-                // The installed package owning the namespace; an absent one is known only by
-                // its id, which an optional dependency is matched against.
-                let package = packages
-                    .iter()
-                    .find(|package| package.namespaces().any(|owned| owned == namespace));
-                let dependency_id = package.map_or(namespace, |package| package.id());
-                let absent = package.is_none();
                 for part in parts {
-                    let dependency = dependencies.kind(part.mod_id, dependency_id);
-                    match dependency {
-                        Some(crate::DependencyKind::Optional) if absent => {
-                            log::debug!(
-                                "mod {} skipped {} on block entity type {id}: optional dependency {dependency_id} is absent",
-                                part.mod_id,
-                                part.type_name
-                            );
-                            // Its type key asked for a type that, with the dependency absent,
-                            // nobody declares: the request is not a load error, unless this mod
-                            // also keyed a capability provider on the type, which still needs it.
-                            let answers_capability = self.parts.capabilities.values().any(|by_type| {
-                                by_type.get(&**id).is_some_and(|providers| {
-                                    providers.iter().any(|provider| provider.mod_id == part.mod_id)
-                                })
-                            });
-                            if !answers_capability {
-                                self.registry_keys
-                                    .borrow_mut()
-                                    .block_entity_types
-                                    .withdraw(part.mod_id, id);
-                            }
-                        }
-                        Some(crate::DependencyKind::Required) => self.refused.push(format!(
-                            "mod {} attached {} to block entity type {id}, which its required dependency {dependency_id} does not declare",
-                            part.mod_id, part.type_name
-                        )),
-                        _ => self.refused.push(format!(
-                            "mod {} attached {} to undeclared native block entity type {id}",
-                            part.mod_id, part.type_name
-                        )),
-                    }
+                    self.refused.push(format!(
+                        "mod {} attached {} to unknown native block entity type {id}",
+                        part.mod_id, part.type_name
+                    ));
                 }
                 continue;
             };
-            let allowed: Vec<_> = parts
-                .iter()
-                .filter(|part| {
-                    let depends = dependencies.permits(part.mod_id, owner);
-                    if !depends {
-                        self.refused.push(format!(
-                            "mod {} attached {} to block entity type {id}, declared by package {owner}; declare {owner} as a dependency",
-                            part.mod_id, part.type_name
-                        ));
-                    }
-                    depends
-                })
-                .collect();
             for block in &kind.blocks {
-                for part in allowed.iter().copied() {
+                for part in parts {
                     let block_part: Arc<dyn BlockPart> = part.part.clone();
                     if insert_part(
                         &mut self.parts.blocks,
@@ -318,15 +266,26 @@ pub mod tests {
 
     #[test]
     pub(crate) fn a_vanilla_type_refuses_a_native_payload_part_at_registration() {
-        let mut r = super::PartRegistrar::new("test");
-        let kind = r.block_entity_type_key("minecraft:chest");
-        assert_eq!(
-            (&mut r as &mut dyn Registrar).block_entity_part(&kind, Press),
-            Err(BlockEntityPartError::VanillaType { kind }),
+        super::super::shared::tests::with_builtin_part_registry(
+            "minecraft:block_entity_type",
+            "minecraft:chest",
+            || {
+                let mut r = super::PartRegistrar::new("test");
+                let kind = r.block_entity_type_key("minecraft:chest");
+                assert_eq!(
+                    (&mut r as &mut dyn Registrar).block_entity_part(&kind, Press),
+                    Err(BlockEntityPartError::VanillaType { kind }),
+                );
+                let invalid = r.block_entity_type_key("Bad Id");
+                assert_eq!(
+                    (&mut r as &mut dyn Registrar).block_entity_part(&invalid, Press),
+                    Err(BlockEntityPartError::InvalidKey { kind: invalid }),
+                );
+                assert!(r.parts.block_entity_kinds.is_empty());
+                assert!(r.parts.blocks.is_empty());
+                assert!(r.parts.block_entities.is_empty());
+            },
         );
-        assert!(r.parts.block_entity_kinds.is_empty());
-        assert!(r.parts.blocks.is_empty());
-        assert!(r.parts.block_entities.is_empty());
     }
 
     #[test]
@@ -446,86 +405,33 @@ pub mod tests {
     }
 
     #[test]
-    pub(crate) fn a_part_attaches_to_a_type_its_dependency_declared() {
+    fn a_part_attaches_to_a_registered_type_without_a_dependency_row() {
+        // A forward reference resolves even when the declaring package runs later.
         let mods = [
-            ModEntry::new("owner", Box::new(Owner)),
             ModEntry::new("b", Box::new(Attaches(FromB))),
+            ModEntry::new("owner", Box::new(Owner)),
         ];
-        crate::load_state::with_test_package_inventory(
-            vec![
-                package("owner", Side::Both, &[]),
-                package("b", Side::Both, &["owner"]),
-            ],
-            || {
-                let (attached, refused) = attached_to_owner_block(&mods);
-                assert_eq!(refused, Vec::<String>::new());
-                assert_eq!(attached, ["b"]);
-                crate::load_state::with_test_dependencies(Default::default(), || {
-                    let (attached, refused) = attached_to_owner_block(&mods);
-                    assert!(attached.is_empty());
-                    assert_eq!(
-                        refused,
-                        [format!(
-                            "mod b attached {} to block entity type owner:press, declared by package owner; declare owner as a dependency",
-                            type_name::<FromB>()
-                        )]
-                    );
-                });
-            },
-        );
+        let (attached, refused) = attached_to_owner_block(&mods);
+        assert!(refused.is_empty(), "{refused:?}");
+        assert_eq!(attached, ["b"]);
     }
 
     #[test]
-    pub(crate) fn a_type_of_an_undeclared_package_is_refused_with_the_dependency_to_add() {
-        let mods = [
-            ModEntry::new("owner", Box::new(Owner)),
-            ModEntry::new("b", Box::new(Attaches(FromB))),
-        ];
-        // `owner` is installed, but `b` does not list it.
-        crate::load_state::with_test_package_inventory(
-            vec![
-                package("owner", Side::Both, &[]),
-                package("b", Side::Both, &[]),
-            ],
-            || {
-                let (attached, refused) = attached_to_owner_block(&mods);
-                assert!(attached.is_empty());
-                assert_eq!(
-                    refused,
-                    [format!(
-                        "mod b attached {} to block entity type owner:press, declared by package owner; declare owner as a dependency",
-                        type_name::<FromB>()
-                    )]
-                );
-            },
-        );
-    }
-
-    #[test]
-    pub(crate) fn a_type_declared_nowhere_is_refused_by_id_and_mod() {
+    fn a_missing_type_is_reported_even_with_an_optional_dependency_row() {
         let mods = [ModEntry::new("b", Box::new(Attaches(FromB)))];
-        crate::load_state::with_test_package_inventory(
-            vec![package("b", Side::Both, &["owner"])],
-            || {
-                let (attached, refused) = attached_to_owner_block(&mods);
-                assert!(attached.is_empty());
-                assert_eq!(
-                    refused,
-                    [format!(
-                        "mod b attached {} to block entity type owner:press, which its required dependency owner does not declare",
-                        type_name::<FromB>()
-                    )]
-                );
-            },
-        );
-        // No dependency on it at all: today's refusal.
-        let mods = [ModEntry::new("b", Box::new(Attaches(FromB)))];
-        crate::load_state::with_test_package_inventory(vec![package("b", Side::Both, &[])], || {
-            let (_, refused) = attached_to_owner_block(&mods);
+        let inventory = vec![package_of(
+            "b",
+            Side::Both,
+            &["owner"],
+            DependencyKind::Optional,
+        )];
+        crate::load_state::with_test_package_inventory(inventory, || {
+            let (attached, refused) = attached_to_owner_block(&mods);
+            assert!(attached.is_empty());
             assert_eq!(
                 refused,
                 [format!(
-                    "mod b attached {} to undeclared native block entity type owner:press",
+                    "mod b attached {} to unknown native block entity type owner:press",
                     type_name::<FromB>()
                 )]
             );
@@ -533,84 +439,26 @@ pub mod tests {
     }
 
     #[test]
-    pub(crate) fn an_absent_optional_dependency_loads_and_an_unknown_required_key_is_still_refused()
-    {
-        struct RequestsOnly;
-        impl Hooks for RequestsOnly {
-            fn subscribed(&self) -> &'static [Option<HookId>] {
-                &[]
-            }
-            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-                r.block_entity_type_key("owner:press");
-            }
-        }
-        let resolve = || {
-            let known = ["minecraft:chest"];
-            mod_vocab::__private::resolve_block_entity_types(known, |id| {
-                known.iter().position(|name| *name == id)
-            })
-        };
-        let optional = || {
-            vec![package_of(
-                "b",
-                Side::Both,
-                &["owner"],
-                DependencyKind::Optional,
-            )]
-        };
-        crate::load_state::with_test_package_inventory(optional(), || {
-            let mods = [ModEntry::new("b", Box::new(Attaches(FromB)))];
-            crate::__private::install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false)
-                .unwrap();
-            assert_eq!(resolve(), Ok(()));
-        });
-        // A capability provider keyed on the same absent type still needs it.
-        struct AnswersToo;
+    fn optional_integration_checks_the_package_id_before_requesting_the_type() {
+        struct Optional;
         #[mod_api::__subscriptions]
-        impl Hooks for AnswersToo {
+        impl Hooks for Optional {
             fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
-                Attaches(FromB).register(r, cx);
-                let press = r.block_entity_type_key("owner:press");
-                r.block_entity_capability(
-                    &crate::parts::capabilities::tests::CHEMICALS,
-                    &press,
-                    |_, at| Some(Box::new(crate::parts::capabilities::tests::ChemTank(at))),
-                );
+                if cx.mods().get("owner-lib").is_some() {
+                    Attaches(FromB).register(r, cx);
+                }
             }
         }
-        crate::load_state::with_test_package_inventory(optional(), || {
-            let mods = [ModEntry::new("b", Box::new(AnswersToo))];
-            crate::__private::install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false)
-                .unwrap();
-            assert_eq!(
-                resolve(),
-                Err(vec![
-                    "mod b requested unknown block entity type owner:press".to_owned()
-                ])
-            );
-        });
-        let mut packages = optional();
-        packages.push(package("c", Side::Both, &[]));
-        crate::load_state::with_test_package_inventory(packages, || {
-            let mods = [
-                ModEntry::new("b", Box::new(Attaches(FromB))),
-                ModEntry::new("c", Box::new(RequestsOnly)),
-            ];
-            crate::__private::install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false)
-                .unwrap();
-            assert_eq!(
-                resolve(),
-                Err(vec![
-                    "mod c requested unknown block entity type owner:press".to_owned()
-                ])
-            );
-        });
-    }
-
-    #[test]
-    pub(crate) fn a_required_dependency_owning_the_namespace_under_another_id_is_named_by_its_id() {
-        let mods = [ModEntry::new("b", Box::new(Attaches(FromB)))];
-        let lib = PackageInfo::new(
+        struct Provider;
+        #[mod_api::__subscriptions]
+        impl Hooks for Provider {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                r.block_entity_type("owner:press")
+                    .blocks(&["owner:block"])
+                    .build();
+            }
+        }
+        let provider = PackageInfo::new(
             "owner-lib".into(),
             "1".into(),
             PackageKind::Code,
@@ -618,49 +466,24 @@ pub mod tests {
             vec!["owner-lib".into(), "owner".into()],
             vec![],
         );
-        crate::load_state::with_test_package_inventory(
-            vec![lib, package("b", Side::Both, &["owner-lib"])],
-            || {
-                let (attached, refused) = attached_to_owner_block(&mods);
-                assert!(attached.is_empty());
-                assert_eq!(
-                    refused,
-                    [format!(
-                        "mod b attached {} to block entity type owner:press, which its required dependency owner-lib does not declare",
-                        type_name::<FromB>()
-                    )]
-                );
-            },
-        );
-    }
-
-    #[test]
-    pub(crate) fn an_optional_dependencys_type_attaches_when_present_and_is_skipped_when_absent() {
-        let optional = |installed: &[&str]| {
-            let mut packages = vec![package_of(
+        for present in [false, true] {
+            let mut inventory = vec![package_of(
                 "b",
                 Side::Both,
-                &["owner"],
+                &["owner-lib"],
                 DependencyKind::Optional,
             )];
-            packages.extend(installed.iter().map(|id| package(id, Side::Both, &[])));
-            packages
-        };
-        crate::load_state::with_test_package_inventory(optional(&["owner"]), || {
-            let mods = [
-                ModEntry::new("owner", Box::new(Owner)),
-                ModEntry::new("b", Box::new(Attaches(FromB))),
-            ];
-            let (attached, refused) = attached_to_owner_block(&mods);
-            assert_eq!(refused, Vec::<String>::new());
-            assert_eq!(attached, ["b"]);
-        });
-        crate::load_state::with_test_package_inventory(optional(&[]), || {
-            let mods = [ModEntry::new("b", Box::new(Attaches(FromB)))];
-            let (attached, refused) = attached_to_owner_block(&mods);
-            assert_eq!(refused, Vec::<String>::new());
-            assert!(attached.is_empty());
-        });
+            let mut mods = vec![ModEntry::new("b", Box::new(Optional))];
+            if present {
+                inventory.push(provider.clone());
+                mods.push(ModEntry::new("owner-lib", Box::new(Provider)));
+            }
+            crate::load_state::with_test_package_inventory(inventory, || {
+                let (attached, refused) = attached_to_owner_block(&mods);
+                assert!(refused.is_empty(), "{refused:?}");
+                assert_eq!(attached, if present { &["b"][..] } else { &[] });
+            });
+        }
     }
 
     #[test]
@@ -983,9 +806,11 @@ impl BlockEntitiesRegistrar for PartRegistrar {
             .borrow()
             .block_entity_types
             .id(mod_vocab::__private::parts_installation::block_entity_type_key_slot(*key))
-            .map(str::to_owned)
-            .unwrap_or_default();
-        if id.starts_with("minecraft:") {
+            .map(str::to_owned);
+        let Some(id) = id else {
+            return Err(crate::BlockEntityPartError::InvalidKey { kind: *key });
+        };
+        if Self::is_builtin("minecraft:block_entity_type", &id) {
             return Err(crate::BlockEntityPartError::VanillaType { kind: *key });
         }
         if self.attach_known(|p| &mut p.block_entity_kinds, kind, &id, part) {

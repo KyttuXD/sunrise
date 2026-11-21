@@ -32,25 +32,26 @@ To read the canonical name, use `kind.id(host)`, which borrows it as `Option<&st
 Use a type ID, not a block ID (`minecraft:shulker_box`, not `minecraft:red_shulker_box`).
 
 Lookup keys may answer capabilities for vanilla and native types. `block_entity_part` accepts only
-native types and returns `BlockEntityPartError::VanillaType { kind }` immediately for a vanilla key. Native
-Parts are expanded after every mod has registered, so a Part can target a type declared later.
+native types and returns `BlockEntityPartError::VanillaType { kind }` for a built-in type, or
+`InvalidKey { kind }` for an invalid key. Native Parts are expanded after every mod has registered,
+so a Part can target a type declared later.
 
 ## Attaching to another package's type
 
-A Part attaches by type id, whoever declared the type: `r.block_entity_type_key("owner:press")` then
-`r.block_entity_part(&press, MyPart)`. Only a package that lists the declaring package in its
-`[dependencies]` (required or optional) may do so, and that row must apply on the current
-installation side and survive instance overrides. Otherwise load is refused by name,
-even when that package is installed:
-`mod b attached <Part> to block entity type owner:press, declared by package owner; declare owner as a dependency`.
-A type that no package declares keeps the refusal `mod b attached <Part> to undeclared native block entity type owner:press`;
-when `b` lists the installed package that owns the type's namespace (its id or one of its manifest `namespaces`) as a
-required dependency, the refusal says that dependency does not declare it. If the type's namespace is
-the ID of an absent package, its Part and the associated key request are skipped only when an optional
-dependency row applies on the installation side and survives instance overrides. A capability
-provider using that key still requires the type. A present package must declare the requested type.
-This keeps resolution independent of what else is installed. Parts of several packages on one type run in
-dispatch order (`mod_index`, then registration order), the same on every load.
+A Part attaches by type ID, whoever declared the type: `r.block_entity_type_key("machines:press")`
+then `r.block_entity_part(&press, MyPart)`. An unguarded attachment to a missing native type refuses
+startup, naming the mod, Part and type, even if the manifest lists an optional dependency. To integrate
+with an optional package, check its package ID before requesting the key or registering a provider:
+
+```rust,ignore
+if context.mods().get("machine_library").is_some() {
+    let press = r.block_entity_type_key("machines:press");
+    r.block_entity_part(&press, MyPart)?;
+}
+```
+
+The package ID need not match the type's namespace. Parts of several packages on one type still run
+in dispatch order, then registration order.
 
 Declaring the type, `transform` and the type's initial data stay with the owner, and a vanilla type is still refused.
 Block entity types can only be declared by a package's code, not by content files.

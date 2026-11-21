@@ -692,7 +692,7 @@ the completed animation, use a [layer's or Post hook's final model](client/model
 { "template": "minecraft:stick", "arm_pose": "toot_horn" }
 ```
 
-An item can place a block by naming it with `block`, whether it is a vanilla block or a declared mod block:
+An item can place any registered block by naming it with `block`, including a block another package declares:
 
 ```json
 { "template": "minecraft:wheat_seeds", "block": "ruby:crop" }
@@ -722,9 +722,15 @@ round-trip through saved NBT; negative zero is not supported. A key such as
 
 `crafting_remainder` names what the item leaves in the crafting grid when a
 recipe uses it, as a milk bucket leaves a bucket (vanilla's
-`Item.Properties.craftRemainder`, not a data component): a vanilla item or
-one of the mod's own, refused at load otherwise. It holds on the crafting
-table, the inventory grid, the crafter and as furnace fuel (the last of the stack leaves it in
+`Item.Properties.craftRemainder`, not a data component). It can name any registered item except
+`minecraft:air`; omit the field for no remainder. `block` and `crafting_remainder` in a file take
+`namespace:path`, and Sunrise resolves both against the completed registries at startup. A missing
+target refuses loading with the declaring item, field and missing ID. If your pack needs another package
+to register that target, declare the package as required in `[dependencies]`; registry namespaces do not
+identify packages or set their load order. Native code can make the declaration conditional by checking
+`context.mods().get("package_id")` before submitting it.
+
+A crafting remainder works on the crafting table, the inventory grid, the crafter and as furnace fuel (the last of the stack leaves it in
 the fuel slot, a stack with more left drops it), not in a brewing stand. What the item leaves once eaten
 or drunk is the `minecraft:use_remainder` component instead:
 

@@ -886,10 +886,10 @@ pub struct Item {
     pub rarity: Option<Rarity>,
     /// A 26.3 data component patch over the template's: `!minecraft:<type>` removes one.
     pub components: BTreeMap<String, serde_json::Value>,
-    /// What it leaves in the crafting grid (`Item.Properties.craftRemainder`):
-    /// a vanilla item or one of the mod's own.
+    /// The registered item it leaves in the crafting grid (`Item.Properties.craftRemainder`).
+    /// Omit this field for no remainder; `minecraft:air` is not a stack.
     pub crafting_remainder: Option<String>,
-    /// The block placed by this item, if any.
+    /// The registered block placed by this item, if any.
     pub block: Option<String>,
     /// The arm pose a humanoid takes holding it, in place of vanilla's (`ArmPose`).
     pub arm_pose: Option<ArmPose>,
@@ -1215,6 +1215,7 @@ pub fn clash(a: (&str, &[String]), b: (&str, &[String])) -> Option<String> {
 
 impl Content {
     /// The content of the mod at `path` (a `.smod` or a mod folder).
+    /// Item references are validated as identifiers here and resolved against the game's registries at load.
     pub fn read(path: &Path, manifest: &Manifest) -> Result<Content, String> {
         let (source, sized) = if path.is_dir() {
             (Source::Dir(path.to_owned()), folder_files(path)?)
@@ -1288,9 +1289,8 @@ impl Content {
     /// Adds blocks and items a native mod declares in code (`native_blocks`,
     /// `native_items`), checked as declaration files are: ids in any of this
     /// mod's owned namespaces (its id and manifest `namespaces`) and declared once
-    /// with what it already has, a vanilla template, a crafting remainder
-    /// that is vanilla or this mod's. All or nothing: on an error nothing is
-    /// added.
+    /// with what it already has, a vanilla template, and well-formed item and block references.
+    /// The references resolve at game load. All or nothing: on an error nothing is added.
     pub fn declare(
         &mut self,
         blocks: &[Block],
@@ -1385,32 +1385,15 @@ impl Content {
         }
         sign_wall_refusals(&all_blocks)
             .for_each(|(id, reason)| refuse(DeclarationKind::Block, id, reason));
-        let mut valid_items = Vec::new();
         for (item, fields) in items {
             let id = item.id.as_str();
-            let result = fields.and_then(|()| {
+            if let Err(reason) = fields.and_then(|()| {
                 if !item_ids.insert(id) {
                     return Err("declared twice, or is also a block's item".into());
                 }
                 Ok(())
-            });
-            match result {
-                Ok(()) => valid_items.push(item),
-                Err(reason) => refuse(DeclarationKind::Item, id, reason),
-            }
-        }
-        for item in valid_items {
-            if let Some(rest) = &item.crafting_remainder
-                && (rest == "minecraft:air"
-                    || !vanilla_id(rest) && !item_ids.contains(rest.as_str()))
-            {
-                refuse(
-                    DeclarationKind::Item,
-                    &item.id,
-                    format!(
-                        "crafting_remainder {rest:?} is not a vanilla item (minecraft:...) or one of this mod's"
-                    ),
-                );
+            }) {
+                refuse(DeclarationKind::Item, id, reason);
             }
         }
         if !errors.is_empty() {
@@ -1902,12 +1885,17 @@ fn check_item(item: &Item) -> Result<(), String> {
     if item.max_stack_size.is_some_and(|n| !(1..=99).contains(&n)) {
         return Err("max_stack_size is 1 to 99".into());
     }
-    if let Some(block) = &item.block
-        && (!namespaced_id(block)
-            || block.split_once(':').map(|(ns, _)| ns) != item.id.split_once(':').map(|(ns, _)| ns)
-                && !vanilla_id(block))
-    {
-        return Err("block is a vanilla block or a block in this item's namespace".into());
+    if let Some(rest) = &item.crafting_remainder {
+        if !namespaced_id(rest) {
+            return Err(format!(
+                "crafting_remainder {rest:?} must be a namespaced item id"
+            ));
+        }
+        if rest == "minecraft:air" {
+            return Err(format!(
+                "crafting_remainder {rest:?} is no remainder (leave it out)"
+            ));
+        }
     }
     check_components(&item.components, &["max_stack_size", "rarity"])
 }
@@ -2595,7 +2583,7 @@ capabilities = ["registries"]
         };
         assert!(refused(&[], &[stack]).contains("max_stack_size"));
         let rest = Item {
-            crafting_remainder: Some("emerald:dust".into()),
+            crafting_remainder: Some("emerald:bad dust".into()),
             ..item("ruby:dust")
         };
         assert!(refused(&[block("ruby:pipe")], &[rest]).contains("crafting_remainder"));
@@ -4196,20 +4184,14 @@ capabilities = ["registries"]
             let e = refused(case, &[("data/ruby/sunrise/item/a.json", item.as_bytes())]);
             assert!(e.contains(why), "{case}: {e}");
         }
-        let glass = br#"{"template": "minecraft:glass", "item": false}"#;
         for (case, rest) in [
             ("bare-remainder", "bowl"),
-            ("missing-remainder", "ruby:bowl"),
-            ("other-mod-remainder", "jade:bowl"),
-            ("itemless-remainder", "ruby:glass"),
+            ("malformed-remainder", "jade:bad bowl"),
             ("air-remainder", "minecraft:air"),
         ] {
             let item =
                 format!(r#"{{"template": "minecraft:stick", "crafting_remainder": "{rest}"}}"#);
-            let files: &[(&str, &[u8])] = &[
-                ("data/ruby/sunrise/item/a.json", item.as_bytes()),
-                ("data/ruby/sunrise/block/glass.json", glass),
-            ];
+            let files: &[(&str, &[u8])] = &[("data/ruby/sunrise/item/a.json", item.as_bytes())];
             let e = refused(case, files);
             assert!(e.contains("crafting_remainder"), "{case}: {e}");
         }

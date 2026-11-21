@@ -132,7 +132,6 @@ pub fn main_with(
                 .filter(|&i| code_ids.contains(manifests[i].id.as_str()))
                 .map(|i| entries.remove(manifests[i].id.as_str()).unwrap())
                 .collect();
-            mod_api::__private::install_dependencies(order.effective);
             mod_api::__private::install(mods.into());
         },
         startup,
@@ -195,7 +194,6 @@ mod tests {
         fs::write(mods_dir.join(OVERRIDES), "[addon]\ndata='drop'\n").unwrap();
         let resolved = resolve_startup(&manifests, Side::Client, &root.0).unwrap();
         assert_eq!(resolved.order, [0]);
-        assert!(!resolved.effective.permits("addon", "data"));
 
         // If the executable actually includes the dependency's code, its package
         // is required before logical policy can be applied, even with the drop.

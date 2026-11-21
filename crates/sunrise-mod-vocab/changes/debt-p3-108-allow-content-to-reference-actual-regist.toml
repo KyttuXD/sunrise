@@ -1,0 +1,14 @@
+ids = [
+    "type:Item.crafting_remainder",
+    "type:Item.block",
+    "handle:Registrar::block_entity_part",
+    "handle:Registrar::block_entity_part_with_state",
+    "method:BlockEntitiesRegistrar::block_entity_type_key",
+    "method:BlockEntitiesRegistrar::attach_block_entity_part",
+    "type:BlockEntityPartError",
+    "handle:Registrar::mob_effect_part",
+    "method:EffectsRegistrar::effect_key",
+    "method:EffectsRegistrar::attach_mob_effect_part",
+]
+why = "Vanilla 26.3 BlockItem.<init> and Item.Properties.craftRemainder accept registered objects, not package or namespace owners (ItemStackTemplate.<init> still rejects air). NeoForge BlockEntityTypeAddBlocksEvent.modify and RegisterCapabilitiesEvent.registerBlockEntity extend registered types without checking their owners, and ModList.isLoaded lets an integration explicitly check for its optional package. Sunrise now resolves the targets without using registry namespaces to infer dependencies."
+migrate = "In item files, set block and crafting_remainder to the target's full registry ID, even across packages. In native Item drafts use Some(\"namespace:path\".into()) or a bare name for your own namespace; omit crafting_remainder instead of pointing it at minecraft:air. Missing registered targets now fail at load, not package parsing. Keep manifest dependencies wherever installation, version or load order really depends on another package. If you previously relied on automatic optional Part skipping, put both the key lookup and block_entity_part, block_entity_part_with_state or mob_effect_part call inside if context.mods().get(\"package_id\").is_some() in Hooks::register; use the package ID there and the actual registry ID in block_entity_type_key or effect_key. Unguarded missing keys now fail with the mod and target named. Handle BlockEntityPartError::InvalidKey separately from Duplicate; the existing built-in-type and built-in-effect refusals still apply to real built-in entries, not all keys in the minecraft namespace."

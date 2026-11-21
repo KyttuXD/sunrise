@@ -178,8 +178,6 @@ pub struct Resolution {
     pub order: Vec<usize>,
     /// What the load rules let through: a discouraged pair, an override applied.
     pub warnings: Vec<Notice>,
-    /// Direct logical dependency rows remaining after side and override filtering.
-    pub effective: mod_vocab::__private::EffectiveDependencies,
 }
 
 /// The dependency rows a standalone build can wire to the projects it was given.
@@ -388,7 +386,6 @@ fn resolve_all(
     }
     let mut edges = vec![Vec::new(); mods.len()];
     let mut warnings = Vec::new();
-    let mut effective = mod_vocab::__private::EffectiveDependencies::default();
     for (index, item) in mods.iter().enumerate() {
         if links && !item.code {
             continue;
@@ -408,12 +405,9 @@ fn resolve_all(
                         Override::Discourage => NoticeKind::OverrideDiscouraged,
                     },
                 });
-                // No validation, dispatch edge or Part permission remains. The
+                // No validation or dispatch edge remains. The
                 // physical resolution still enforces library requirements.
                 continue;
-            }
-            if !links {
-                effective.insert(item.id, &dep.id, dep.optional);
             }
             let Some(target) = target else {
                 if dep.optional {
@@ -541,11 +535,7 @@ fn resolve_all(
         done[next] = true;
         order.push(next);
     }
-    Ok(Resolution {
-        order,
-        warnings,
-        effective,
-    })
+    Ok(Resolution { order, warnings })
 }
 
 /// A target's staged Cargo package, or none for an absent optional mod.
@@ -1056,12 +1046,10 @@ mod tests {
             resolve_manifests(&[&dependent, &content], Side::Client, &Overrides::default())
                 .unwrap();
         assert_eq!(resolved.order, [1, 0]);
-        assert!(resolved.effective.permits("behaviour", "data"));
     }
 
     #[test]
-    fn permission_and_dispatch_use_the_same_filtered_rows() {
-        use mod_vocab::DependencyKind;
+    fn dispatch_uses_side_and_override_filtered_rows() {
         let dependent = manifest(
             "addon",
             "[dependencies]\nowner={version='^1',order='before'}\nabsent={version='*',optional=true}\nserver={version='^1',side='server'}\nnone={version='^1',order='none'}\n",
@@ -1072,28 +1060,11 @@ mod tests {
         let inputs = [&owner, &server, &dependent, &none];
         let resolution = resolve_manifests(&inputs, Side::Client, &Overrides::default()).unwrap();
         assert_eq!(resolution.order, [1, 3, 2, 0]);
-        assert_eq!(
-            resolution.effective.kind("addon", "owner"),
-            Some(DependencyKind::Required)
-        );
-        assert_eq!(
-            resolution.effective.kind("addon", "none"),
-            Some(DependencyKind::Required)
-        );
-        assert_eq!(
-            resolution.effective.kind("addon", "absent"),
-            Some(DependencyKind::Optional)
-        );
-        assert!(!resolution.effective.permits("addon", "server"));
-        assert!(!resolution.effective.permits("owner", "addon"));
-        assert!(!resolution.effective.permits("none", "addon"));
         for action in ["drop", "discourage"] {
             let overrides =
                 toml::from_str(&format!("[addon]\nowner='{action}'\nabsent='{action}'")).unwrap();
             let resolution = resolve_manifests(&inputs, Side::Client, &overrides).unwrap();
             assert_eq!(resolution.order, [0, 1, 3, 2]);
-            assert!(!resolution.effective.permits("addon", "owner"));
-            assert_eq!(resolution.effective.kind("addon", "absent"), None);
         }
     }
 

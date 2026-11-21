@@ -857,7 +857,6 @@ pub fn effect_index(key: EffectKey) -> Option<usize> {
         .indices
         .get(key.0 as usize)
         .copied()
-        .flatten()
 }
 
 /// Canonical name of a resolved effect slot, if present.

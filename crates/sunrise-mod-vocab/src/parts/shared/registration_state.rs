@@ -6,7 +6,6 @@ use super::*;
 pub(crate) struct Installed {
     /// Names this installation among all of the process's; never reused, unlike an address.
     pub(crate) epoch: u64,
-    pub(crate) dependencies: Arc<crate::__private::EffectiveDependencies>,
     pub(crate) effect_ticks: crate::parts::effects::ResolvedEffectTicks,
     pub(crate) menu_screen_factories:
         HashMap<String, HashMap<usize, crate::parts::menus::MenuScreenRegistration>>,

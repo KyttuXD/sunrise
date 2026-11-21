@@ -767,39 +767,6 @@ pub mod ingredient_parser;
 #[path = "__private/platform.rs"]
 pub mod platform;
 
-/// Side- and override-filtered ordinary dependency rows, in their original direction.
-/// Host-only: this is not the author-facing package inventory.
-// no wire: the host keeps this resolved graph for package and Part admission; it never crosses.
-#[derive(Clone, Debug, Default)]
-#[non_exhaustive]
-pub struct EffectiveDependencies(
-    std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::DependencyKind>>,
-);
-
-impl EffectiveDependencies {
-    /// Record a required or optional row from the resolver.
-    pub fn insert(&mut self, dependent: &str, target: &str, optional: bool) {
-        self.0.entry(dependent.into()).or_default().insert(
-            target.into(),
-            if optional {
-                crate::DependencyKind::Optional
-            } else {
-                crate::DependencyKind::Required
-            },
-        );
-    }
-
-    /// The surviving direct dependency, including an absent optional target.
-    pub fn kind(&self, dependent: &str, target: &str) -> Option<crate::DependencyKind> {
-        self.0.get(dependent)?.get(target).copied()
-    }
-
-    /// A Part's own package or a surviving direct dependency may own its key.
-    pub fn permits(&self, dependent: &str, owner: &str) -> bool {
-        dependent == owner || self.kind(dependent, owner).is_some()
-    }
-}
-
 include!(concat!(env!("OUT_DIR"), "/mod_api_exports_private.rs"));
 
 /// How many listeners this thread has entered. A scoped

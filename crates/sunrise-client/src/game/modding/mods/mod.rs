@@ -931,11 +931,6 @@ pub(super) fn content_overlay(
             return Err(DeclarationFailures::new(refusals).into());
         }
         admission?;
-        // A file item's remainder named a code-declared item that was refused: that mod
-        // alone is left out, not every content mod through the overlay's check.
-        for e in mod_content::drop_dangling_remainders(&mut mods) {
-            log::warn!("Sunrise: {e}");
-        }
     } else if !refusals.is_empty() {
         return Err(DeclarationFailures::new(refusals).into());
     }
@@ -1124,10 +1119,9 @@ pub(in crate::game) fn content_root(
         |id| sunrise_client_core::potions::effect(id).map(|def| def.index),
     )
     .map_err(|errors| errors.join("\n"))?;
-    mod_api::__private::validate_effect_part_owners(|id| {
+    mod_api::__private::freeze_effect_part_order(|id| {
         sunrise_client_core::potions::effect(id)?.owner
-    })
-    .map_err(|errors| errors.join("\n"))?;
+    });
     let behavior: serde_json::Value =
         sunrise_world::json_file::read(&overlay.root.prepared().join("block-behaviours.json"))?;
     let fluids = behavior["fluids"]

@@ -26,15 +26,13 @@ run by mod dispatch order, then registration order. All share the same holder sn
 This owner-first rule is specific to effects; it does not change package dispatch or
 the order of block entity Parts.
 
-A Part may attach to an effect declared by its own package or by an active required
-or optional dependency in its `[dependencies]`. An attachment without that
-dependency refuses loading, naming the effect, its declaring package and the dependency to add.
-If the effect's namespace is the ID of an absent package, its Part and key request are
-skipped only when an optional dependency row applies on the installation side and survives
-instance overrides. A present package must declare the requested effect; other unknown effects
-keep the normal unknown-key refusal.
+A Part may attach to any registered mod effect, regardless of which package declared it. If you
+integrate with an optional dependency, use `context.mods().get("package_id")` in `Hooks::register`
+and request the effect key and attach the Part only when the package is present. Use the package ID
+in that check, not the effect's namespace. An unguarded request for a missing effect always refuses
+startup with the requesting mod and effect ID, even if the manifest lists an optional dependency.
 
-Unresolved keys refuse with `MobEffectPartError::InvalidKey`; vanilla effects refuse
+Invalid keys refuse with `MobEffectPartError::InvalidKey`; built-in vanilla effects refuse
 immediately with `MobEffectPartError::VanillaEffect`; attaching the same concrete
 Part type twice returns `Duplicate`. A Part attached to several
 effects distinguishes them with `event.effect`. `on_effect_added` stays global;

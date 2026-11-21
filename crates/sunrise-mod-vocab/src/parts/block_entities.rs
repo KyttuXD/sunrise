@@ -154,16 +154,12 @@ impl dyn Registrar + '_ {
             blocks: Vec::new(),
         }
     }
-    /// Attach a Part to a native type, including one another mod declares later.
-    /// Vanilla keys are usable for capabilities, but not for native payload Parts.
+    /// Attach a Part to a registered native type, including one another mod declares later.
+    /// Built-in types are usable for capabilities, but not for native payload Parts.
     ///
-    /// A type declared by another package takes this package's Part only when its
-    /// `[dependencies]` row for the declaring package applies on this installation side and
-    /// survives instance overrides. Otherwise load is refused, naming the type, this package
-    /// and "declare <package> as a dependency". A type no package declares is refused too.
-    /// The Part is skipped only when the type's namespace is the id of an absent package
-    /// with a surviving, applicable optional dependency row. An absent package's other
-    /// namespaces are unknown; a present package must declare the type.
+    /// A missing type refuses startup, naming the mod, Part, and type. For optional
+    /// integrations, check [`RegistrationContext::mods`](crate::RegistrationContext::mods) for
+    /// the package ID before requesting the type key; the registry namespace need not match it.
     /// The Part's saved state is the key it declares (see [`Self::block_entity_part_with_state`]),
     /// which a package declares only in its own namespace, so it is saved under this package's id; it
     /// reaches the owner's state only through the owner's declared attachments. Declaring the type, its
@@ -239,7 +235,8 @@ pub trait BlockEntitiesRegistrar {
         key: crate::BlockEntityTypeKey,
         step: Arc<dyn crate::BlockEntityTransform>,
     );
-    /// Look up a vanilla or another mod's type. The final registry validates it at load.
+    /// Request a type by registry ID. A missing type in the complete registry refuses load.
+    /// Check package presence before requesting a key for an optional integration.
     fn block_entity_type_key(&mut self, id: &str) -> crate::BlockEntityTypeKey;
 
     /// Declare block entity type `path` in a namespace owned by this mod's manifest, held by `blocks`
@@ -250,7 +247,8 @@ pub trait BlockEntitiesRegistrar {
         blocks: Vec<String>,
     ) -> crate::BlockEntityTypeKey;
 
-    /// Attach `part`, of kind `kind`, to the mod block entity type `key`.
+    /// Attach `part`, of kind `kind`, to the native block entity type `key` regardless of who
+    /// declared it. Missing types refuse loading.
     fn attach_block_entity_part(
         &mut self,
         key: &crate::BlockEntityTypeKey,

@@ -4,7 +4,7 @@ type EffectTicks = HashMap<Box<str>, Vec<Attached<dyn MobEffectPart>>>;
 
 // no wire: the load-owned table contains process-local trait objects.
 // hidden: opaque resolution slot carried by the installation record.
-/// Parts subscribed to effect ticks, frozen after effect keys and owners resolve.
+/// Parts subscribed to effect ticks, frozen after effect keys resolve.
 #[doc(hidden)]
 #[derive(Default)]
 #[non_exhaustive]
@@ -17,11 +17,12 @@ pub(crate) fn resolved_effects() -> &'static OnceLock<sunrise_mod_runtime::regis
 
 /// Registrar operations for effects.
 pub trait EffectsRegistrar {
-    /// Request an effect by canonical registry id. All mods' declarations are checked at load.
+    /// Request an effect by registry ID. A missing effect in the complete registry refuses load.
+    /// Check package presence before requesting a key for an optional integration.
     fn effect_key(&mut self, id: &str) -> crate::EffectKey;
-    /// Attach tick behaviour to an effect declared by this package or an active dependency.
-    /// An absent package with an active optional dependency row skips its Parts; other unknown
-    /// effects refuse loading.
+    /// Attach tick behaviour to a registered mod effect regardless of its declaring package.
+    /// A requested effect missing from the registry refuses loading. For optional integrations,
+    /// check [`RegistrationContext::mods`](crate::RegistrationContext::mods) before requesting the key.
     fn attach_mob_effect_part(
         &mut self,
         effect: &crate::EffectKey,
@@ -54,10 +55,14 @@ pub enum MobEffectPartError {
 }
 
 impl dyn crate::Registrar + '_ {
-    /// Attach a Part to an effect declared by this package or an active dependency.
-    /// The declaring package's effect Parts run first. Other Parts execute in
-    /// dispatch order, then registration order. Each Part keeps its own cadence.
-    /// Vanilla effects refuse immediately.
+    /// Attach a Part to a registered mod effect, including one another mod declares later.
+    /// The declaring package's effect Parts run first. Other Parts execute in dispatch order,
+    /// then registration order. Each Part keeps its own cadence. Actual built-in effects
+    /// keep their vanilla tick behaviour and refuse immediately.
+    ///
+    /// A missing target is a load error. Optional integrations should check
+    /// [`RegistrationContext::mods`](crate::RegistrationContext::mods) for the package ID
+    /// before requesting the key; the effect's namespace need not match that ID.
     pub fn mob_effect_part<P: MobEffectPart>(
         &mut self,
         effect: &crate::EffectKey,
@@ -67,52 +72,26 @@ impl dyn crate::Registrar + '_ {
     }
 }
 
-/// Validate Part permissions against the actual effect owners and freeze tick order.
-/// Call after effect-key completion, so unknown effects retain their ordinary refusal.
-pub fn validate_effect_part_owners<'a>(
-    owner: impl Fn(&str) -> Option<&'a str>,
-) -> Result<(), Vec<String>> {
+/// Freeze tick order after effect-key completion. The declaring package affects ordering only.
+pub fn freeze_effect_part_order<'a>(owner: impl Fn(&str) -> Option<&'a str>) {
     let Some(installed) = installed() else {
-        return Ok(());
+        return;
     };
-    if installed.effect_ticks.0.get().is_some() {
-        return Ok(());
-    }
-    let mut ids: Vec<_> = installed.keys.effects.keys().collect();
-    ids.sort_unstable();
-    let mut refused = Vec::new();
-    let mut ticks = EffectTicks::new();
-    let subscribed = installed
-        .keys
-        .for_hook(HookId::ShouldApplyEffectTickThisTick);
-    for id in ids {
-        let parts = &installed.keys.effects[id];
-        if parts.is_empty() {
-            continue;
-        }
-        let Some(owner) = owner(id) else {
-            for part in parts {
-                refused.push(format!("mod {} requested unknown effect {id}", part.mod_id));
-            }
-            continue;
-        };
-        for part in parts {
-            if !installed.dependencies.permits(part.mod_id, owner) {
-                refused.push(format!("mod {} attached {} to effect {id}, declared by package {owner}; declare {owner} as a dependency", part.mod_id, part.type_name));
-            }
-        }
-        if let Some(parts) = subscribed.and_then(|table| table.effects.get(id)) {
-            let mut parts = parts.clone();
-            parts.sort_by_key(|part| (part.mod_id != owner, part.mod_index, part.order));
-            ticks.insert(id.clone(), parts);
-        }
-    }
-    if refused.is_empty() {
-        let _ = installed.effect_ticks.0.set(ticks);
-        Ok(())
-    } else {
-        Err(refused)
-    }
+    installed.effect_ticks.0.get_or_init(|| {
+        installed
+            .keys
+            .for_hook(HookId::ShouldApplyEffectTickThisTick)
+            .map_or_else(EffectTicks::new, |table| {
+                let mut ticks = table.effects.clone();
+                for (id, parts) in &mut ticks {
+                    let owner = owner(id);
+                    parts.sort_by_key(|part| {
+                        (Some(part.mod_id) != owner, part.mod_index, part.order)
+                    });
+                }
+                ticks
+            })
+    });
 }
 
 /// Run each effect Part's cadence and action as one pair, sharing the holder snapshots.

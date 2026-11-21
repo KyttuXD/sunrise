@@ -6524,53 +6524,108 @@ fn blocks_and_items_declared_in_code_get_ids() {
 }
 
 #[test]
-fn a_file_item_whose_remainder_was_refused_takes_only_its_mod_out() {
-    use sunrise_mod_package::content::Item;
-    let item = |id: &str, remainder: Option<&str>| Item {
-        id: id.into(),
-        template: "minecraft:diamond".into(),
-        crafting_remainder: remainder.map(str::to_owned),
-        ..Item::default()
-    };
-    let make = |id: &str, items: Vec<Item>| {
-        let mut content = Content::declared(id);
-        content.items = items;
+#[ignore = "daily"]
+fn item_references_resolve_against_other_packages_registered_content() {
+    use sunrise_mod_package::{Manifest, content::Item};
+
+    let base = prepared().expect("daily test requires prepared resources");
+    let scratch = std::env::temp_dir().join(format!(
+        "sunrise-cross-item-references-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    let addon = scratch.join("addon");
+    let declarations = addon.join("data/addon/sunrise/item");
+    fs::create_dir_all(&declarations).unwrap();
+    fs::write(
+        declarations.join("planter.json"),
+        r#"{"template":"minecraft:stick","block":"provider:crop","crafting_remainder":"provider:handle"}"#,
+    ).unwrap();
+    let manifest = Manifest::parse(
+        r#"
+        id = "addon"
+        name = "Planter"
+        version = "1.0.0"
+        api = "0.2"
+        side = "both"
+        capabilities = ["registries"]
+    "#,
+    )
+    .unwrap();
+    let mut addon = Content::read(&addon, &manifest).unwrap();
+    addon
+        .declare(
+            &[],
+            &[Item {
+                id: "addon:tool".into(),
+                template: "minecraft:stick".into(),
+                block: Some("provider:crop".into()),
+                crafting_remainder: Some("provider:handle".into()),
+                ..Item::default()
+            }],
+        )
+        .unwrap();
+    let mut provider = Content::declared("provider");
+    provider
+        .declare(
+            &[Block {
+                id: "provider:crop".into(),
+                template: "minecraft:glass".into(),
+                item: false,
+                ..Block::default()
+            }],
+            &[Item {
+                id: "provider:handle".into(),
+                template: "minecraft:bowl".into(),
+                ..Item::default()
+            }],
+        )
+        .unwrap();
+    let mut mods = [
         ContentMod {
-            id: id.into(),
-            content,
-            jars: Vec::new(),
-        }
-    };
-    let mut jar = make("jar", vec![item("jar:tool", Some("jar:jar"))]);
-    jar.content
-        .blocks
-        .push(sunrise_mod_package::content::Block {
-            id: "jar:jar".into(),
-            template: "minecraft:glass".into(),
-            item: true,
-            ..Default::default()
-        });
-    let mut mods = vec![
-        jar,
-        make(
-            "good",
-            vec![
-                item("good:tool", Some("good:wrench")),
-                item("good:wrench", None),
-            ],
-        ),
-        make("bad", vec![item("bad:tool", Some("bad:wrench"))]),
-        make(
-            "vanilla",
-            vec![item("vanilla:soup", Some("minecraft:bowl"))],
-        ),
+            id: "addon".into(),
+            content: addon,
+            jars: vec![],
+        },
+        ContentMod {
+            id: "provider".into(),
+            content: provider,
+            jars: vec![],
+        },
     ];
-    let dropped = drop_dangling_remainders(&mut mods);
-    assert_eq!(dropped.len(), 1, "{dropped:?}");
-    assert!(dropped[0].contains("bad"), "{dropped:?}");
-    let left: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
-    // A remainder that is the mod's own block item is kept too (`jar`).
-    assert_eq!(left, ["jar", "good", "vanilla"]);
+    let root = scratch.join("out");
+    build_fixture(&base, Path::new(""), &mods, &root).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let facts = BlockFacts::load(&root, assets.registry).unwrap();
+    let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+    let items = Items::load(
+        &root,
+        assets.registry,
+        &facts,
+        &PackOverlay::NONE,
+        &defaults,
+    )
+    .unwrap();
+    let crop = assets.registry.default_state("provider:crop").unwrap();
+    for id in ["addon:planter", "addon:tool"] {
+        let item = &items.items[id];
+        assert_eq!(item.block, Some(crop));
+        assert_eq!(item.crafting_remainder.as_deref(), Some("provider:handle"));
+    }
+
+    mods[1].content.items.clear();
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-item")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "addon:planter: crafting_remainder \"provider:handle\" is not an item"
+    );
+    mods[1].content.blocks.clear();
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-block")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "addon:planter: block \"provider:crop\" is not a block"
+    );
+    fs::remove_dir_all(&scratch).unwrap();
 }
 
 /// A sign's four forms come from its template, whatever the blocks are named,

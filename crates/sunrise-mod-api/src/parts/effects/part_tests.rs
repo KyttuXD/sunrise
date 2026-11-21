@@ -66,43 +66,7 @@ fn package(id: &str, dependency: Option<DependencyKind>) -> PackageInfo {
 }
 
 #[test]
-fn optional_effect_parts_skip_only_when_the_package_is_absent() {
-    for present in [false, true] {
-        let trace = Arc::new(Mutex::new(Vec::new()));
-        let mods: Mods = vec![ModEntry::new(
-            "behaviour",
-            Box::new(Cadence::<3> {
-                package: "behaviour",
-                trace,
-            }),
-        )]
-        .into();
-        let mut packages = vec![package("behaviour", Some(DependencyKind::Optional))];
-        if present {
-            packages.push(package("owner", None));
-        }
-        crate::load_state::with_test_package_inventory(packages, || {
-            crate::testing::with_mods(mods.clone(), || {
-                install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false).unwrap();
-                let ids = if present {
-                    vec!["owner:comfort"]
-                } else {
-                    vec![]
-                };
-                mod_vocab::__private::resolve_effects(ids, |_| present.then_some(0)).unwrap();
-                mod_vocab::__private::validate_effect_part_owners(|_| present.then_some("owner"))
-                    .unwrap();
-                assert_eq!(
-                    mod_vocab::__private::effect_key_by_index(0).is_some(),
-                    present
-                );
-            });
-        });
-    }
-}
-
-#[test]
-fn unknown_required_effects_keep_the_key_resolution_diagnostic() {
+fn an_unguarded_optional_effect_is_reported_missing() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods: Mods = vec![ModEntry::new(
         "behaviour",
@@ -113,7 +77,7 @@ fn unknown_required_effects_keep_the_key_resolution_diagnostic() {
     )]
     .into();
     crate::load_state::with_test_package_inventory(
-        vec![package("behaviour", Some(DependencyKind::Required))],
+        vec![package("behaviour", Some(DependencyKind::Optional))],
         || {
             crate::testing::with_mods(mods.clone(), || {
                 install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false).unwrap();
@@ -141,7 +105,7 @@ fn registration_refuses_vanilla_and_duplicate_effect_parts() {
                 r.mob_effect_part(&vanilla, part()),
                 Err(MobEffectPartError::VanillaEffect { effect: vanilla })
             );
-            let custom = r.effect_key("owner:comfort");
+            let custom = r.effect_key("minecraft:comfort");
             r.mob_effect_part(&custom, part()).unwrap();
             assert_eq!(
                 r.mob_effect_part(&custom, part()),
@@ -152,13 +116,23 @@ fn registration_refuses_vanilla_and_duplicate_effect_parts() {
             );
         }
     }
-    let errors = install_parts(
-        &[ModEntry::new("owner", Box::new(Registration))],
-        &crate::parts::tests::rule_schema(),
-        |_| false,
-    )
-    .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("owner:comfort")));
+    let errors = super::super::shared::tests::with_builtin_part_registry(
+        "minecraft:mob_effect",
+        "minecraft:poison",
+        || {
+            install_parts(
+                &[ModEntry::new("owner", Box::new(Registration))],
+                &crate::parts::tests::rule_schema(),
+                |_| false,
+            )
+            .unwrap_err()
+        },
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("minecraft:comfort"))
+    );
 }
 
 #[test]
@@ -207,7 +181,7 @@ fn install(mods: &[ModEntry]) -> EffectKey {
 }
 
 #[test]
-fn effect_owner_runs_first_even_when_the_dependent_dispatches_first() {
+fn registered_foreign_effect_parts_run_without_dependencies_and_owner_runs_first() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let mods: Mods = vec![
         // The package resolver can put dependents first (order = "before").
@@ -237,14 +211,14 @@ fn effect_owner_runs_first_even_when_the_dependent_dispatches_first() {
     crate::load_state::with_test_package_inventory(
         vec![
             package("owner", None),
-            package("behaviour", Some(DependencyKind::Required)),
-            package("other", Some(DependencyKind::Required)),
+            package("behaviour", None),
+            package("other", None),
         ],
         || {
             crate::testing::with_mods(mods.clone(), || {
                 let effect = install(&mods);
                 let active_effects = [effect];
-                mod_vocab::__private::validate_effect_part_owners(|_| Some("owner")).unwrap();
+                mod_vocab::__private::freeze_effect_part_order(|_| Some("owner"));
                 for (ticks, amplifier, expected, expected_trace, expected_keep) in [
                     (1, 0, vec![], vec![], true),
                     (
@@ -318,43 +292,6 @@ fn effect_owner_runs_first_even_when_the_dependent_dispatches_first() {
                     assert_eq!(*trace.lock().unwrap(), expected_trace);
                     assert_eq!(keep, expected_keep);
                 }
-            });
-        },
-    );
-}
-
-#[test]
-fn a_removed_dependency_row_cannot_authorize_a_foreign_effect_part() {
-    let trace = Arc::new(Mutex::new(Vec::new()));
-    let mods: Mods = vec![ModEntry::new(
-        "behaviour",
-        Box::new(Cadence::<3> {
-            package: "behaviour",
-            trace,
-        }),
-    )]
-    .into();
-    crate::load_state::with_test_package_inventory(
-        vec![
-            package("owner", None),
-            package("behaviour", Some(DependencyKind::Required)),
-        ],
-        || {
-            // The manifest still declares owner; the effective graph lost that row.
-            crate::load_state::with_test_dependencies(Default::default(), || {
-                crate::testing::with_mods(mods.clone(), || {
-                    install(&mods);
-                    let errors =
-                        mod_vocab::__private::validate_effect_part_owners(|_| Some("owner"))
-                            .unwrap_err();
-                    assert_eq!(
-                        errors,
-                        [format!(
-                            "mod behaviour attached {} to effect owner:comfort, declared by package owner; declare owner as a dependency",
-                            std::any::type_name::<Cadence<3>>()
-                        )]
-                    );
-                });
             });
         },
     );

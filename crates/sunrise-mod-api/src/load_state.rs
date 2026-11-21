@@ -23,40 +23,6 @@ pub fn current_phase() -> ModPhase {
 }
 
 static PACKAGES: OnceLock<Arc<[PackageInfo]>> = OnceLock::new();
-static DEPENDENCIES: OnceLock<Arc<mod_vocab::__private::EffectiveDependencies>> = OnceLock::new();
-
-/// Install the host's dependency graph projection before any registration.
-pub fn install_dependencies(effective: mod_vocab::__private::EffectiveDependencies) {
-    assert!(
-        DEPENDENCIES.set(Arc::new(effective)).is_ok(),
-        "package dependencies already installed"
-    );
-}
-
-pub(crate) fn effective_dependencies() -> Arc<mod_vocab::__private::EffectiveDependencies> {
-    #[cfg(any(test, feature = "testing"))]
-    if let Some(effective) = TEST_DEPENDENCIES.with_borrow(Clone::clone) {
-        return effective;
-    }
-    DEPENDENCIES.get().cloned().unwrap_or_default()
-}
-
-#[cfg(any(test, feature = "testing"))]
-thread_local! {
-    static TEST_DEPENDENCIES: std::cell::RefCell<Option<Arc<mod_vocab::__private::EffectiveDependencies>>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Run a fixture with explicitly resolved dependency rows.
-#[cfg(any(test, feature = "testing"))]
-pub fn with_test_dependencies<R>(
-    effective: mod_vocab::__private::EffectiveDependencies,
-    f: impl FnOnce() -> R,
-) -> R {
-    let previous = TEST_DEPENDENCIES.replace(Some(Arc::new(effective)));
-    let result = f();
-    TEST_DEPENDENCIES.set(previous);
-    result
-}
 
 #[cfg(any(test, feature = "testing"))]
 thread_local! {
@@ -84,20 +50,9 @@ pub fn with_test_packages<R>(ids: &[&str], f: impl FnOnce() -> R) -> R {
 /// Runs `f` with exactly these packages installed, dependencies included, for tests.
 #[cfg(any(test, feature = "testing"))]
 pub fn with_test_package_inventory<R>(packages: Vec<PackageInfo>, f: impl FnOnce() -> R) -> R {
-    // Default fixtures model an unmodified installation of these declarations.
-    let mut effective = mod_vocab::__private::EffectiveDependencies::default();
-    for package in &packages {
-        for dependency in package.dependencies() {
-            match dependency.kind() {
-                DependencyKind::Optional => effective.insert(package.id(), dependency.id(), true),
-                DependencyKind::Required => effective.insert(package.id(), dependency.id(), false),
-                _ => {}
-            }
-        }
-    }
     let previous = TEST_PACKAGES.replace(Some(packages.into()));
     let _ = crate::__private::initialize();
-    let result = with_test_dependencies(effective, f);
+    let result = f();
     TEST_PACKAGES.set(previous);
     result
 }

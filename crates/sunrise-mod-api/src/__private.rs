@@ -33,12 +33,11 @@ pub fn install(mods: crate::Mods) {
 }
 
 #[doc(hidden)]
-pub use crate::load_state::{install_dependencies, install_packages, install_registration_data};
+pub use crate::load_state::{install_packages, install_registration_data};
 #[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 pub use crate::load_state::{
-    with_test_dependencies, with_test_package_inventory, with_test_packages,
-    with_test_registration_data,
+    with_test_package_inventory, with_test_packages, with_test_registration_data,
 };
 
 #[doc(hidden)]

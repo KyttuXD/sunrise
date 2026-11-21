@@ -362,11 +362,10 @@ pub struct Item {
     /// A component patch over the template: `Some(tag)` sets, `None` removes.
     /// Component names are namespaced identifiers, without a removal prefix `!`; repeated IDs are refused.
     pub components: Vec<(String, Option<crate::Tag>)>,
-    /// What it leaves in the crafting grid (`Item.Properties.craftRemainder`):
-    /// a vanilla item (`minecraft:<path>`) or one of the mod's own (a bare name is the mod's).
+    /// The registered item it leaves in the crafting grid (`Item.Properties.craftRemainder`).
+    /// A bare name uses this mod's namespace. Omit it for no remainder; `minecraft:air` is not a stack.
     pub crafting_remainder: Option<String>,
-    /// The block placed by this item, if any: one of this mod's (a bare name is this mod's)
-    /// or a vanilla one (`minecraft:<path>`).
+    /// The registered block placed by this item, if any. A bare name uses this mod's namespace.
     pub block: Option<String>,
     /// The arm pose a humanoid takes holding it, in place of vanilla's (`ArmPose`).
     pub arm_pose: Option<ArmPose>,
