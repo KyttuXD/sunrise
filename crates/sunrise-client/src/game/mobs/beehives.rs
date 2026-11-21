@@ -108,6 +108,10 @@ impl Game<'_> {
             .find(|mob| mob.id == id)
             .is_some_and(|mob| sunrise_client::mobs::ai::brain_target(mob).is_some());
         let mut chosen = target;
+        let mut player_id = (target == Some(Who::Player))
+            .then(|| self.player_entity_id_by_connection(player))
+            .flatten()
+            .and_then(|id| u32::try_from(id).ok());
         let mut redirected = false;
         if self.native_authoritative()
             && mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)
@@ -122,10 +126,7 @@ impl Game<'_> {
                     epoch, target,
                 ))),
                 Some(Who::Player) => {
-                    let Some(target) = self
-                        .player_entity_id_by_connection(player)
-                        .and_then(|id| u32::try_from(id).ok())
-                    else {
+                    let Some(target) = player_id else {
                         return false;
                     };
                     Some(mod_api::LivingRef::new(mod_api::EntityRef::new(
@@ -141,6 +142,7 @@ impl Game<'_> {
                     return false;
                 };
                 chosen = bound;
+                player_id = result.map(|t| t.entity().id());
                 redirected = true;
             }
         }
@@ -160,7 +162,7 @@ impl Game<'_> {
         let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
-        if !is_brain || !sunrise_client::mobs::ai::set_brain_target(mob, chosen) {
+        if !is_brain || !sunrise_client::mobs::ai::set_brain_target(mob, chosen, player_id) {
             mob.set_target(chosen);
         }
         true

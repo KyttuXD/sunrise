@@ -530,13 +530,13 @@ impl Game<'_> {
                     .is_none();
                 if let Some(slot) = self.mobs.iter_mut().find(|m| m.id == id) {
                     // LivingEntity.readAdditionalSaveData only replaces a decoded
-                    // Brain. Keep the Allay's modeled LIKED_PLAYER when the
-                    // required root memory map cannot load; valid empty maps clear it.
-                    let keep_liked_player = slot.species() == sunrise_client::mobs::Species::Allay
-                        && !matches!(
-                            tag.get("Brain").and_then(|brain| brain.get("memories")),
-                            Some(Tag::Compound(_))
-                        );
+                    // Brain. A missing or unreadable memory map is not an empty map.
+                    let unreadable_brain = !matches!(
+                        tag.get("Brain").and_then(|brain| brain.get("memories")),
+                        Some(Tag::Compound(_))
+                    );
+                    let keep_liked_player =
+                        unreadable_brain && slot.species() == sunrise_client::mobs::Species::Allay;
                     // Runtime identity and lifetime stay on the resident owner.
                     new.join = slot.join;
                     new.random = slot.random.clone();
@@ -594,6 +594,12 @@ impl Game<'_> {
                     }
                     if slot.species() == sunrise_client::mobs::Species::Shulker {
                         sunrise_client::mobs::shulker::keep_eased_peek(slot, &old);
+                    }
+                    if unreadable_brain
+                        && let (Some(st), Some(was)) =
+                            (slot.extra.warden.as_mut(), old.extra.warden)
+                    {
+                        st.brain = was.brain;
                     }
                     slot.ai = old.ai;
                     // Mob.readAdditionalSaveData updates persistent home fields,

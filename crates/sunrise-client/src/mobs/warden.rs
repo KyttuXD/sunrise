@@ -377,6 +377,29 @@ impl AngerManagement {
     }
 }
 
+/// `ATTACK_TARGET` stores an entity, not a loan of whichever player the tick sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AttackTarget {
+    pub(super) who: Who,
+    pub(super) player_id: Option<u32>,
+}
+
+impl AttackTarget {
+    pub(super) fn new(who: Who, player_id: Option<u32>) -> Self {
+        Self {
+            who,
+            player_id: if who == Who::Player { player_id } else { None },
+        }
+    }
+
+    fn id(self) -> Option<u32> {
+        match self.who {
+            Who::Mob(id) => Some(id),
+            Who::Player => self.player_id,
+        }
+    }
+}
+
 /// The warden's state: anger, its vibration listener and its brain.
 #[derive(Clone, Debug, Default)]
 pub struct Warden {
@@ -386,11 +409,11 @@ pub struct Warden {
     /// `getClientAngerLevel`, synchronised once a second.
     pub client_anger: i32,
     /// Attackers noted by `hurtServer` and not yet reacted to.
-    hurt_by: Vec<(Option<Who>, bool)>,
+    hurt_by: Vec<(Option<AttackTarget>, bool)>,
 }
 impl Warden {
     pub fn target(&self) -> Option<Who> {
-        self.brain.mem.attack_target.value()
+        self.brain.mem.target()
     }
     pub fn has_pending_hurt(&self) -> bool {
         !self.hurt_by.is_empty()
@@ -548,7 +571,7 @@ pub(super) fn increase_anger(
         && warden_brain::mem(m).attack_target.present()
         && let TargetChange::Set(target) = w.change_target(m, true, None)
     {
-        warden_brain::mem(m).attack_target.set_opt(target);
+        warden_brain::mem(m).set_target(target, w.selected_player_identity().map(|(_, id)| id));
     }
     if play_sound && pose(m) != Pose::Roaring {
         let level = anger_level(m);
@@ -585,7 +608,13 @@ pub fn hurt(m: &mut Mob, source: &Damage, attack: &crate::health::Attack) {
     }
     let direct = attack.is_direct(source);
     if let Some(st) = m.extra.warden.as_mut() {
-        st.hurt_by.push((source.attacker, direct));
+        let attacker = source.attacker.map(|who| {
+            AttackTarget::new(
+                who,
+                u32::try_from(attack.attacker).ok().filter(|id| *id != 0),
+            )
+        });
+        st.hurt_by.push((attacker, direct));
     }
 }
 /// The rest of `Warden.hurtServer`.
@@ -600,17 +629,17 @@ pub fn handle_hurt(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         increase_anger(
             m,
             w,
-            attacker,
+            attacker.map(|target| target.who),
             AngerLevel::Angry.minimum() + ON_HURT_ANGER_BOOST,
             false,
             events,
         );
         if !warden_brain::mem(m).attack_target.present()
-            && let Some(who) = attacker
-            && let Some(p) = position_of(w, who)
+            && let Some(target) = attacker
+            && let Some(p) = position_of(w, target.who)
             && (direct || m.distance_sqr(p) < 25.0)
         {
-            warden_brain::set_attack_target(m, w, who);
+            warden_brain::set_attack_target(m, w, target);
         }
     }
 }
@@ -655,7 +684,13 @@ pub(super) fn do_hurt_target(
 
 /// The brain's attack target (`Warden.getTarget` before `asValidTarget`).
 pub fn brain_target(m: &Mob) -> Option<Who> {
-    warden_brain::mem_ref(m).and_then(|mem| mem.attack_target.value())
+    warden_brain::mem_ref(m)?.target()
+}
+
+/// Identity in the raw brain slot, before the caller checks the live entity.
+/// A probe without a verified player can still model the AI view, but cannot name an entity.
+pub fn brain_target_id(m: &Mob) -> Option<u32> {
+    warden_brain::mem_ref(m)?.attack_target.value()?.id()
 }
 
 // ---- vibrations ----
@@ -908,7 +943,9 @@ pub fn server_ai_step(
     });
     let target_change = target_change.map(|original| match w.change_target(m, true, None) {
         TargetChange::Keep => original,
-        TargetChange::Set(target) => target,
+        TargetChange::Set(target) => {
+            target.map(|who| AttackTarget::new(who, w.selected_player_identity().map(|(_, id)| id)))
+        }
     });
     if let Some(st) = m.extra.warden.as_mut() {
         st.brain.update_activity();
@@ -920,7 +957,7 @@ pub fn server_ai_step(
 /// `SonicBoom.tick`: face the target; once the sound delay is over, the
 /// beam, the sound, the damage and the knockback.
 pub(super) fn tick_sonic_boom(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    let Some(target) = warden_brain::mem(m).attack_target.value() else {
+    let Some(target) = warden_brain::mem(m).target() else {
         return;
     };
     if let Some(t) = w.target_info(target) {
@@ -1453,7 +1490,7 @@ mod tests {
             assert!(m.damage(&mut test_level.level().attacked_by(&same_mob), 1.0, source));
             assert_eq!(
                 m.extra.warden.as_ref().unwrap().hurt_by,
-                [(Some(Who::Mob(5)), true)],
+                [(Some(AttackTarget::new(Who::Mob(5), None)), true)],
                 "same causing and direct entity must be direct for {kind:?}"
             );
         }
@@ -1472,27 +1509,25 @@ mod tests {
             direct_kind: Some(DirectEntity::Projectile),
             ..Default::default()
         };
-        for (attack, attacker, kind) in [
-            (&indirect_mob, Some(Who::Mob(5)), DamageKind::MobAttack),
-            (&indirect_mob, Some(Who::Mob(5)), DamageKind::Thorns),
-            (
-                &indirect_player,
-                Some(Who::Player),
-                DamageKind::PlayerAttack,
-            ),
-            (&indirect_player, Some(Who::Player), DamageKind::MaceSmash),
+        let mob = AttackTarget::new(Who::Mob(5), None);
+        let player = AttackTarget::new(Who::Player, Some(7));
+        for (attack, target, kind) in [
+            (&indirect_mob, mob, DamageKind::MobAttack),
+            (&indirect_mob, mob, DamageKind::Thorns),
+            (&indirect_player, player, DamageKind::PlayerAttack),
+            (&indirect_player, player, DamageKind::MaceSmash),
         ] {
             let mut m = warden();
             let source = Damage {
                 kind,
-                attacker,
+                attacker: Some(target.who),
                 from: None,
                 attacker_species: None,
             };
             assert!(m.damage(&mut test_level.level().attacked_by(attack), 1.0, source));
             assert_eq!(
                 m.extra.warden.as_ref().unwrap().hurt_by,
-                [(attacker, false)],
+                [(Some(target), false)],
                 "different causing and direct entity must be indirect for {kind:?}"
             );
         }
@@ -1515,7 +1550,7 @@ mod tests {
         assert_eq!(m.health, before);
         assert_eq!(
             m.extra.warden.as_ref().unwrap().hurt_by,
-            [(Some(Who::Mob(5)), true)],
+            [(Some(mob), true)],
             "Warden still reacts to a hit rejected on hurt cooldown"
         );
     }

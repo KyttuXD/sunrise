@@ -318,11 +318,22 @@ fn spawn_test_projectile(
 #[test]
 #[ignore = "daily"]
 fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() {
-    use crate::game::commands::Target;
+    use crate::game::{
+        commands::{Target, data::DataRef},
+        native_goal_ticks::live_read_tests::read_borrowed_target,
+        native_living_flags::tests::{guest, guest_server},
+    };
     use mod_api::{ExplosionInteraction, ExplosionSettings};
-    use sunrise_client::projectiles::ProjectileKind;
-    use sunrise_core::{geometry::Vec3, position::BlockPos};
+    use sunrise_client::{mobs::ai, projectiles::ProjectileKind};
+    use sunrise_core::{geometry::Vec3, nbt::Tag, position::BlockPos};
 
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::commands::world_cmds::registered_damage_tests::live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown",
+        "SUNRISE_WARDEN_LIVE_DAMAGE_CHILD",
+        &["live-damage"],
+    ) {
+        return;
+    }
     with_game(|game| {
         setup_live_damage_world(game);
         assert!(game.run_command("summon warden 4.5 64 4.5 {UUID:[I;84,0,0,1],NoGravity:1b}"));
@@ -352,9 +363,8 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
             w.invulnerable = 0;
             w.last_hurt = 0.0;
             w.health = 500.0;
-            let st = w.extra.warden.as_mut().unwrap();
-            st.anger = Default::default();
-            st.brain.mem.attack_target.clear();
+            w.extra.warden.as_mut().unwrap().anger = Default::default();
+            assert!(ai::set_brain_target(w, None, None));
         };
         let warden_state = |game: &Game<'_>| {
             let st = game
@@ -487,6 +497,119 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         )
         .unwrap();
         assert_eq!(warden_state(game), (None, 0));
+
+        const WARDEN: &str = "00000054-0000-0000-0000-000000000001";
+        const DRAGON: &str = "00000054-0000-0000-0000-000000000007";
+        let warden = game.mob(game.entity(warden_id).unwrap()).unwrap();
+        let check_target = |game: &mut Game<'_>, expected: Option<mod_api::LivingRef>| {
+            assert_eq!(warden.target(game), expected);
+            // Keep guest 23 selected in the tick even when the stored target is 22.
+            assert_eq!(read_borrowed_target(game, warden, pig_id, 23), expected);
+            let selector = match expected.map(|living| living.entity().id()) {
+                Some(22) => "@s[name=guest22]",
+                Some(23) => "@s[name=guest23]",
+                Some(id) if id == pig_id => "@s[type=minecraft:pig]",
+                Some(_) => "@s[type=minecraft:ender_dragon]",
+                None => "@s",
+            };
+            game.cmds.results = Some(Vec::new());
+            assert!(game.run_command(&format!(
+                "execute as {WARDEN} on target if entity {selector}"
+            )));
+            let results = game.cmds.results.take().unwrap();
+            if expected.is_some() {
+                assert_eq!(results, [(true, 1)], "{selector}");
+            } else {
+                assert!(
+                    results.is_empty(),
+                    "the target fork should produce no source"
+                );
+            }
+        };
+        guest_server(game, true, false);
+        let (first, _first_out) = guest(game, 22);
+        let (second, _second_out) = guest(game, 23);
+        let hurt = |game: &mut Game<'_>, amount, direct| {
+            game.hurt_target(
+                Target::Mob(warden_id),
+                amount,
+                "minecraft:generic",
+                direct,
+                None,
+                None,
+            )
+        };
+        reset_warden(game);
+        assert!(hurt(game, 1.0, Some(Target::Guest(22))));
+        assert!(hurt(game, 5.0, Some(Target::Guest(23))));
+        assert_eq!(
+            game.lan.as_ref().unwrap().mob_players.get(&warden_id),
+            Some(&23)
+        );
+        check_target(game, Some(first));
+
+        reset_warden(game);
+        assert!(hurt(game, 5.0, None));
+        assert!(!hurt(game, 1.0, Some(Target::Guest(23))));
+        check_target(game, Some(second));
+        assert!(game.entity_set_invulnerable_time(second.entity(), 7));
+        check_target(game, None);
+        assert!(game.entity_set_invulnerable_time(second.entity(), 0));
+        check_target(game, Some(second));
+
+        // A read after every live edit: absence and the two unreadable shapes
+        // keep the brain; a correctly typed empty map replaces it.
+        let cooldown = |game: &mut Game<'_>| {
+            game.data_of(&DataRef::Entity(Target::Mob(warden_id)))
+                .unwrap()
+                .get("Brain")
+                .and_then(|tag| tag.get("memories"))
+                .and_then(|tag| tag.get("minecraft:sonic_boom_cooldown"))
+                .and_then(|tag| tag.get("ttl"))
+                .cloned()
+        };
+        assert_eq!(cooldown(game), Some(Tag::Long(200)));
+        for edit in [
+            format!("data remove entity {WARDEN} Brain"),
+            format!("data modify entity {WARDEN} Brain set value 1"),
+            format!("data modify entity {WARDEN} Brain.memories set value 1"),
+        ] {
+            assert!(game.run_command(&edit), "{edit}");
+            assert_eq!(cooldown(game), Some(Tag::Long(200)), "{edit}");
+            check_target(game, Some(second));
+        }
+        assert!(game.run_command(&format!(
+            "data modify entity {WARDEN} Brain.memories set value {{}}"
+        )));
+        assert_eq!(cooldown(game), None);
+        check_target(game, None);
+
+        let pig = game.living(game.entity(pig_id).unwrap()).unwrap();
+        reset_warden(game);
+        assert!(hurt(game, 1.0, Some(Target::Mob(pig_id))));
+        game.mobs
+            .iter_mut()
+            .find(|mob| mob.id == pig_id)
+            .unwrap()
+            .invulnerable = 20;
+        check_target(game, Some(pig)); // Damage cooldown is not entity immunity.
+        assert!(game.entity_set_invulnerable_time(pig.entity(), 5));
+        check_target(game, None);
+        assert!(game.entity_set_invulnerable_time(pig.entity(), 0));
+        check_target(game, Some(pig));
+
+        assert!(game.run_command("summon ender_dragon 8.5 64 8.5 {UUID:[I;84,0,0,7]}"));
+        let (dragon_id, _) = game.dragon_target().unwrap();
+        let dragon = game.living(game.entity(dragon_id).unwrap()).unwrap();
+        reset_warden(game);
+        assert!(game.run_command(&format!("damage {WARDEN} 1 minecraft:generic by {DRAGON}")));
+        check_target(game, Some(dragon));
+        assert!(game.entity_set_invulnerable_time(dragon.entity(), 10));
+        check_target(game, None);
+        assert!(game.entity_set_invulnerable_time(dragon.entity(), 0));
+        check_target(game, Some(dragon));
+        assert!(game.entity_set_invulnerable(dragon.entity(), true));
+        check_target(game, None);
     });
 }
 

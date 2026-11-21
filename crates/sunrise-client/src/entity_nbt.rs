@@ -6561,22 +6561,34 @@ mod tests {
     }
 }
 
-/// `Brain`'s two measured Warden Unit memories, using actual existing slots.
+/// `Brain.Packed`: serialize each owned Warden Unit memory from its live slot.
 fn write_warden_owned_memories(m: &Mob, map: &mut EntityTagWriter) {
     let brain = map
         .entry("Brain".into())
         .or_insert_with(|| Tag::Compound(Compound::new()));
-    let Tag::Compound(brain) = brain else { return };
+    if !matches!(brain, Tag::Compound(_)) {
+        *brain = Tag::Compound(Compound::new());
+    }
+    let Tag::Compound(brain) = brain else {
+        unreachable!()
+    };
     let memories = brain
         .entry("memories".into())
         .or_insert_with(|| Tag::Compound(Compound::new()));
+    if !matches!(memories, Tag::Compound(_)) {
+        *memories = Tag::Compound(Compound::new());
+    }
     let Tag::Compound(memories) = memories else {
-        return;
+        unreachable!()
     };
     let mem = m.extra.warden.as_ref().map(|st| &st.brain.mem);
     for (key, slot) in [
         ("minecraft:is_emerging", mem.map(|mem| &mem.is_emerging)),
         ("minecraft:dig_cooldown", mem.map(|mem| &mem.dig_cooldown)),
+        (
+            "minecraft:sonic_boom_cooldown",
+            mem.map(|mem| &mem.sonic_boom_cooldown),
+        ),
     ] {
         if let Some(slot) = slot.filter(|slot| slot.present()) {
             let mut entry = Tag::compound([("value", Tag::Compound(Compound::new()))]);
@@ -6589,7 +6601,7 @@ fn write_warden_owned_memories(m: &Mob, map: &mut EntityTagWriter) {
         }
     }
 }
-/// `Brain` / `ExpirableValue`: admitted Unit values with absent or Long TTL.
+/// `Brain` / `ExpirableValue`: Unit values with a lenient optional numeric TTL.
 fn restore_warden_owned_memories(m: &mut Mob, tag: &Tag) {
     let memories = tag.get("Brain").and_then(|brain| brain.get("memories"));
     let Some(st) = m.extra.warden.as_mut() else {
@@ -6598,6 +6610,10 @@ fn restore_warden_owned_memories(m: &mut Mob, tag: &Tag) {
     for (key, slot) in [
         ("minecraft:is_emerging", &mut st.brain.mem.is_emerging),
         ("minecraft:dig_cooldown", &mut st.brain.mem.dig_cooldown),
+        (
+            "minecraft:sonic_boom_cooldown",
+            &mut st.brain.mem.sonic_boom_cooldown,
+        ),
     ] {
         let Some(entry) = memories.and_then(|memories| memories.get(key)) else {
             // Fresh Java read/load: absent entries do not retain finalize's slot.
@@ -6607,10 +6623,9 @@ fn restore_warden_owned_memories(m: &mut Mob, tag: &Tag) {
         if !matches!(entry.get("value"), Some(Tag::Compound(value)) if value.is_empty()) {
             continue; // Unmeasured malformed shapes retain existing initialization.
         }
-        match entry.get("ttl") {
+        match sunrise_client_core::nbt_value::number(entry.get("ttl")) {
+            Some(ttl) => slot.set_ttl((), ttl),
             None => slot.set(()),
-            Some(Tag::Long(ttl)) => slot.set_ttl((), *ttl),
-            _ => {} // No new numeric/malformed TTL policy.
         }
     }
 }
