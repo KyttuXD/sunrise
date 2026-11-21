@@ -30,7 +30,7 @@ impl MobLevel for Game<'_> {
         &mut self,
         stack: sunrise_client::items::ItemStack,
         position: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> [f64; 3] {
         Game::spawn_item_own(self, stack, position, pickup_delay)
     }

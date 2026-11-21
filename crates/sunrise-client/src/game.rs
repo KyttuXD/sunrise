@@ -5004,7 +5004,7 @@ impl Game<'_> {
         stack: ItemStack,
         position: [f64; 3],
         velocity: Option<[f64; 3]>,
-        pickup_delay: u32,
+        pickup_delay: i32,
         random: Option<spill::ItemRandom>,
     ) -> [f64; 3] {
         let velocity = self.push_item_entity(stack, position, velocity, pickup_delay, random);

@@ -234,7 +234,7 @@ impl Game<'_> {
     /// way. A refusal sets a vanilla eligibility delay of at least 10 ticks;
     /// later touches still dispatch the hook, and `True` overrides the delay.
     pub(in crate::game) fn pickup_decision(
-        pickup_delay: &mut i64,
+        pickup_delay: &mut i32,
         target: Option<[i32; 4]>,
         player: [i32; 4],
         answer: TriState,

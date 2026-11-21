@@ -803,7 +803,7 @@ impl Game<'_> {
         stack: ItemStack,
         position: [f64; 3],
         velocity: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) {
         self.add_item_entity(stack, position, Some(velocity), pickup_delay);
     }
@@ -814,7 +814,7 @@ impl Game<'_> {
         &mut self,
         stack: ItemStack,
         position: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> [f64; 3] {
         self.add_item_entity(stack, position, None, pickup_delay)
     }
@@ -835,7 +835,7 @@ impl Game<'_> {
         stack: ItemStack,
         position: [f64; 3],
         velocity: Option<[f64; 3]>,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> [f64; 3] {
         self.add_item_entity_prepared(stack, position, velocity, pickup_delay, None)
     }

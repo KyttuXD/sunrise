@@ -61,11 +61,7 @@ impl Game<'_> {
             .dropped
             .get(self.native_item_entity_index(item)?)?
             .pickup_delay;
-        if delay == i64::from(u32::MAX) {
-            Some(i32::from(i16::MAX))
-        } else {
-            i32::try_from(delay).ok()
-        }
+        Some(delay)
     }
 
     /// `ItemEntity.setPickUpDelay`.
@@ -73,7 +69,7 @@ impl Game<'_> {
         let Some(index) = self.native_item_entity_index(item) else {
             return false;
         };
-        self.dropped[index].pickup_delay = i64::from(ticks);
+        self.dropped[index].pickup_delay = ticks;
         true
     }
 
@@ -182,8 +178,6 @@ mod tests {
             assert_eq!(item.pickup_delay(game), Some(-7));
             assert!(item.set_default_pickup_delay(game));
             assert_eq!(item.pickup_delay(game), Some(10));
-            game.dropped[0].pickup_delay = i64::from(u32::MAX);
-            assert_eq!(item.pickup_delay(game), Some(32767));
             assert!(item.set_never_pickup(game));
             assert_eq!(game.dropped[0].pickup_delay, 32767);
             assert_eq!(item.pickup_delay(game), Some(32767));

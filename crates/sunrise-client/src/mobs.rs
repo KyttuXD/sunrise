@@ -2268,7 +2268,7 @@ pub enum MobEvent {
         stack: crate::items::ItemStack,
         at: [f64; 3],
         motion: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     },
     /// `Goat.dropHorn`: a horn from goat `mob` (`Goat.createHorn` picks the
     /// instrument from its UUID), thrown with `motion` as
