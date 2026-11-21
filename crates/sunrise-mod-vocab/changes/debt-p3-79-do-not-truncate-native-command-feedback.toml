@@ -1,10 +1,13 @@
 ids = [
+    "method:Commands::run_command",
     "method:Commands::run_command_with_output",
     "method:Commands::run_command_with_feedback",
     "type:CommandFeedback",
     "type:CommandFeedback.Success",
     "type:CommandFeedback.Failure",
     "type:CommandFeedback.System",
+    "type:CommandResult",
+    "type:CommandResult.feedback",
 ]
-why = "The native console now delivers the command source's messages in order without the old guest-console line and byte caps. It follows vanilla 26.3 CommandSourceStack.sendSuccess, sendFailure and sendSystemMessage and RconConsoleSource.sendSystemMessage. NeoForge's Commands.performCommand patch also reports command exceptions to the issuing source via sendFailure, separately from logging."
-migrate = "No change is required for host.commands().run_command_with_output(line): result.success and result.feedback still give the outcome and ordered plain strings, now untruncated. Move any display limit to the code that displays those strings. To keep components and tell success from failure, create (send, receive) with std::sync::mpsc::channel(), replace the call with host.commands().run_command_with_feedback(line, send), and iterate receive for Ok(CommandFeedback::Success(text)), Ok(CommandFeedback::Failure(text)), Ok(CommandFeedback::System(text)), or Err(TextFormError). Use the call's bool in place of result.success."
+why = "Native console commands now run in the world spawn's level and deliver ordered, untruncated feedback to the issuing source, even when a command keeps that source for later ticks. This follows vanilla 26.3 MinecraftServer.createCommandSourceStack, TeleportCommand.teleportToPos, CommandSourceStack.sendSuccess/sendFailure/sendSystemMessage, CommandSource.sendSystemMessage, TestCommand.trackAndStartRunner and MsgCommand.sendMessage via CommandSourceStack.sendChatMessage. NeoForge's Commands.performCommand patch likewise sends command exceptions to the issuing source separately from logging."
+migrate = "No call change is required for host.commands().run_command(line) or run_command_with_output(line): they now execute in the world spawn's level even when called from another level. result.success is the immediate outcome; result.feedback is the ordered, untruncated plain-text snapshot when the call returns. Move display limits to your interface. For structured or delayed messages, make (send, receive) with std::sync::mpsc::channel() and call host.commands().run_command_with_feedback(line, send) instead. Use the bool in place of result.success; handle Ok(CommandFeedback::Success(text)), Ok(CommandFeedback::Failure(text)), Ok(CommandFeedback::System(text)) and Err(TextFormError) from receive. Drain it on another thread or poll try_recv on later ticks: the game's sender can remain open after the call while the command still holds its source. A non-player source's outgoing whisper is System; only the target gets the incoming chat."

@@ -118,6 +118,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
         .as_ref()
         .unwrap()
         .summary_source
+        .clone()
         .unwrap();
     assert_eq!(context.source.entity, Some(Target::Mob(actor)));
     assert_eq!(context.recipient, Some(Target::Guest(2)));
@@ -152,6 +153,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
             .as_ref()
             .unwrap()
             .summary_source
+            .as_ref()
             .unwrap()
             .source
             .entity,
@@ -171,12 +173,12 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
         silent: true,
         ..game.player_source()
     };
-    game.command_source = Some(outer);
+    game.command_source = Some(outer.clone());
     game.chat_capture = Some(Vec::new());
     let before = (game.exec.commands, game.exec.callback);
     let marker = Text::literal("issuer-only-context-control");
     let component = component_nbt(&marker.component());
-    game.test_source_output(context, marker.clone(), false);
+    game.test_source_output(&context, marker.clone(), SummaryKind::Success);
     for g in &game.lan.as_ref().unwrap().hub.guests {
         g.sender.flush();
     }
@@ -201,7 +203,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
         .hub
         .guests
         .retain(|g| g.conn != 2);
-    game.test_source_output(context, marker, true);
+    game.test_source_output(&context, marker, SummaryKind::SuccessAndBroadcast);
     game.game_tests
         .outbox
         .push(Out::Coordinates(context, vec![Dim::Overworld]));
@@ -226,12 +228,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
         game.score.board.score("success", "context").unwrap().value,
         1
     );
-    // Added GUI/verify path-selection controls: no retained command context.
-    assert!(
-        RunnerOptions::verify(Grid::new((8, 8), 10))
-            .summary_source
-            .is_none()
-    );
+    // A runner started by a test block has no issuing command source.
     let info = Info::new(
         999,
         "minecraft:always_pass".into(),
@@ -250,7 +247,11 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
             .is_none()
     );
     assert!(matches!(
-        summary_line(None, Text::literal("GUI path"), true),
+        summary_line(
+            None,
+            Text::literal("GUI path"),
+            SummaryKind::SuccessAndBroadcast
+        ),
         Out::Console { .. }
     ));
 }

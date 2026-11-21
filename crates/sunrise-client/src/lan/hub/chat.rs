@@ -414,6 +414,28 @@ impl Hub {
         }
     }
 
+    /// `ServerPlayer.sendChatMessage` for an unsigned command message to one player.
+    pub fn send_source_chat(
+        &self,
+        conn: u32,
+        chat_type: &str,
+        name: Tag,
+        message: Tag,
+        target: Option<Tag>,
+    ) {
+        if let Some(k) = self.guests.connection_index(conn) {
+            self.send_disguised(
+                k,
+                message,
+                play::ChatTypeBound {
+                    chat_type: self.chat_type_id(chat_type),
+                    name,
+                    target,
+                },
+            );
+        }
+    }
+
     /// `PlayerList.broadcastSystemMessage` to everyone but `except`, whose
     /// copy travels with its command's captured output (as `/say`'s).
     pub fn system_message_except(&self, content: Tag, except: u32) {

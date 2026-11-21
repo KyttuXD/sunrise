@@ -210,7 +210,7 @@ pub enum CommandFeedback {
 pub struct CommandResult {
     /// Whether the command parsed and ran successfully, as `EntityRef::run_command` reports.
     pub success: bool,
-    /// Success and failure messages received by the source, in order, as plain text.
+    /// Messages received by the source before the run returns, in order, as plain text.
     /// Player chat delivery is preserved. Silent sources have no feedback lines.
     pub feedback: Vec<String>,
 }

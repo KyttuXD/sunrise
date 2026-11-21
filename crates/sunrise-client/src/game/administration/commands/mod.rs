@@ -356,7 +356,7 @@ impl Game<'_> {
     }
     /// `CommandSourceStack.sendSystemMessage`: no success-feedback rule. Unlike `sendSuccess`
     /// and `sendFailure`, it addresses the executing player when there is one.
-    fn command_system_message(&mut self, message: Text) {
+    pub(super) fn command_system_message(&mut self, message: Text) {
         if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
@@ -462,10 +462,11 @@ impl Game<'_> {
     /// server the console when `log_admin_commands`. Queued while the
     /// command runs; `send_admin_feedback` sends it.
     pub(super) fn broadcast_to_admins(&mut self, message: Text) {
-        let informs = match self.console_broadcast {
-            Some(broadcast) => broadcast,
-            None => self.lan_acting.is_some() || self.lan.is_some(),
-        };
+        let native_console = self.native_console_source();
+        let informs = native_console
+            || self
+                .console_broadcast
+                .unwrap_or(self.lan_acting.is_some() || self.lan.is_some());
         if !informs
             || message
                 .translation_key()
@@ -478,7 +479,8 @@ impl Game<'_> {
             .rules
             .bool_at(sunrise_client::gamerules::vanilla::SEND_COMMAND_FEEDBACK);
         // MinecraftServer.sendSystemMessage, unless the server is the source.
-        let console = self.console_broadcast.is_none()
+        let console = !native_console
+            && self.console_broadcast.is_none()
             && self.lan_acting.is_some()
             && self.is_dedicated_server()
             && self
@@ -492,7 +494,7 @@ impl Game<'_> {
         // the server's own source, "Server".
         let who = match self.command_source.as_ref().and_then(|s| s.entity) {
             Some(entity) => self.target_name(entity),
-            None if self.console_broadcast.is_some() => self.server_name(),
+            None if native_console || self.console_broadcast.is_some() => self.server_name(),
             None => self.player_display_name(),
         };
         let line = Text::translate("chat.type.admin", &[who, message])
@@ -527,9 +529,9 @@ impl Game<'_> {
     /// MinecraftServer.createCommandSourceStack's position: the corner of
     /// the respawn block (`Vec3.atLowerCornerOf`).
     pub(super) fn server_position(&self) -> [f64; 3] {
-        self.spawn.map_or([0.0, 64.0, 0.0], |s| {
-            [s.x.floor(), s.y.floor(), s.z.floor()]
-        })
+        self.level
+            .world_spawn
+            .map_or([0.0, 64.0, 0.0], |pos| pos.map(f64::from))
     }
     pub(super) fn source_rotation(&self) -> [f32; 2] {
         self.command_source
@@ -4145,7 +4147,74 @@ impl Game<'_> {
             }
             "me" => Text::translate("chat.type.emote", &[name, message]),
             _ => {
-                let _ = self.entities(ctx, "targets", true)?;
+                let targets = self.entities(ctx, "targets", true)?;
+                if self.native_console_source() {
+                    // MsgCommand.sendMessage: the outgoing decoration goes to the source,
+                    // and the incoming chat goes to each selected player, never the source sink.
+                    use sunrise_client::lan::data::component_nbt;
+                    let acting = self.lan_acting;
+                    let connection = |target| match target {
+                        Target::Player => acting,
+                        Target::Guest(conn) => Some(conn),
+                        _ => None,
+                    };
+                    let actor = self.source_entity().filter(|target| target.is_player());
+                    let sender = actor.and_then(connection);
+                    let silent = self.command_source.as_ref().is_some_and(|s| s.silent);
+                    let content = component_nbt(&message.component());
+                    let source_name = component_nbt(&name.component());
+                    let count = targets.len() as i32;
+                    for target in targets {
+                        let recipient = connection(target);
+                        if !silent {
+                            let target_name = self.target_name(target);
+                            if let Some(conn) = sender {
+                                if let Some(host) = &self.lan {
+                                    host.hub.send_source_chat(
+                                        conn,
+                                        "msg_command_outgoing",
+                                        source_name.clone(),
+                                        content.clone(),
+                                        Some(component_nbt(&target_name.component())),
+                                    );
+                                }
+                            } else {
+                                let outgoing = Text::translate(
+                                    "commands.message.display.outgoing",
+                                    &[target_name, message.clone()],
+                                )
+                                .with_color(text::GRAY)
+                                .italic();
+                                if actor.is_some() {
+                                    self.player_message(outgoing);
+                                } else {
+                                    self.command_system_message(outgoing);
+                                }
+                            }
+                        }
+                        if let Some(conn) = recipient {
+                            if let Some(host) = &self.lan {
+                                host.hub.send_source_chat(
+                                    conn,
+                                    "msg_command_incoming",
+                                    source_name.clone(),
+                                    content.clone(),
+                                    None,
+                                );
+                            }
+                        } else {
+                            self.player_message(
+                                Text::translate(
+                                    "commands.message.display.incoming",
+                                    &[name.clone(), message.clone()],
+                                )
+                                .with_color(text::GRAY)
+                                .italic(),
+                            );
+                        }
+                    }
+                    return Ok(count);
+                }
                 // Whispering to yourself: the incoming and outgoing lines.
                 let out = Text::translate(
                     "commands.message.display.outgoing",

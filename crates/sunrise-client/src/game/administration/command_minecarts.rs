@@ -68,7 +68,7 @@ impl Game<'_> {
                 dimension,
                 origin_dimension: dimension,
                 origin_player: false,
-                native_console: false,
+                native_console: None,
                 level: None,
                 block: None,
                 cart: Some(id),

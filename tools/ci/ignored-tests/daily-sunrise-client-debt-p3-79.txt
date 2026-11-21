@@ -1,1 +1,3 @@
 sunrise-client game::native_console_tests::native_console_delivers_all_source_feedback_in_order lib daily resources
+sunrise-client game::native_console_tests::native_console_dispatches_direct_commands_in_the_world_spawn_dimension lib daily resources
+sunrise-client game::native_console_tests::native_console_keeps_the_source_attached_until_delayed_test_feedback_arrives lib daily resources

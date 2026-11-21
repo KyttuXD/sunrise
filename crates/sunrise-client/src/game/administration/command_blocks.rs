@@ -311,7 +311,7 @@ impl Game<'_> {
                 dimension: self.dim,
                 origin_dimension: self.dim,
                 origin_player: false,
-                native_console: false,
+                native_console: None,
                 level: None,
                 block: Some(pos),
                 cart: None,

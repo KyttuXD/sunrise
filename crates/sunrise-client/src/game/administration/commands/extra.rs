@@ -1132,7 +1132,7 @@ impl Game<'_> {
         };
         for line in lines {
             out.push_str(&format!("{}[C] {line}", indent(depth + 1)));
-            match self.execute_line(line, source) {
+            match self.execute_line(line, source.clone()) {
                 Ok(v) => out.push_str(&format!(" -> {v}\n")),
                 Err(e) => {
                     out.push('\n');

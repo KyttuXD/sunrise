@@ -553,10 +553,7 @@ impl Game<'_> {
                         self.world.random.next_float() < chance
                     }
                     _ => {
-                        let source = self
-                            .command_source
-                            .clone()
-                            .unwrap_or_else(|| self.player_source());
+                        let pos = self.source_position();
                         // Scores are read from the holder's board only where
                         // an `entity_scores` leaf may ask.
                         let scored = adv::asks_scores(cond);
@@ -567,8 +564,8 @@ impl Game<'_> {
                                 game.entity_view_asked(t, cond)
                             }
                         };
-                        let this = source
-                            .entity
+                        let this = self
+                            .source_entity()
                             .filter(|_| c.without_this.is_none())
                             .map(|t| view(self, t));
                         let target = c.target.map(|t| view(self, t));
@@ -576,7 +573,7 @@ impl Game<'_> {
                         let entities = context_entities(
                             c,
                             this.as_ref(),
-                            source.pos,
+                            pos,
                             target.as_ref(),
                             interacting.as_ref(),
                         );

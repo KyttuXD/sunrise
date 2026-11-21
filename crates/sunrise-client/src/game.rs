@@ -4247,8 +4247,6 @@ struct Game<'a> {
     fake_action: std::sync::Arc<native_server::FakeAction>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<sunrise_client::text::Text>>,
-    /// Output for the native console source, separate from player messages and logs.
-    native_console_output: Option<native_console::Output>,
     /// Packets for the guest acting now, sent once its action returns.
     guest_packets: Vec<sunrise_protocol::packets::play::Clientbound>,
     /// The acting guest's cooldowns, as (item, ticks): their packet needs the
@@ -13824,7 +13822,6 @@ impl<'a> Game<'a> {
             lan_acting_fake: false,
             fake_action: Default::default(),
             chat_capture: None,
-            native_console_output: None,
             admin_feedback: Vec::new(),
             console_broadcast: None,
             rcon_source: false,

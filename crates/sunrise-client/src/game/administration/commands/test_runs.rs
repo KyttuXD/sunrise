@@ -10,7 +10,7 @@ use crate::game::{
     game_tests::{Grid, Info, Retry, RunnerOptions, verify_batches},
     test_instances::TestDef,
 };
-use sunrise_client::text::{self, Text};
+use sunrise_client::text::Text;
 use sunrise_core::bounding_box::BoundingBox;
 use sunrise_world::worldgen::structure::Rotation;
 
@@ -40,17 +40,6 @@ fn rotation_for_steps(steps: i32) -> Option<Rotation> {
 }
 
 impl Game<'_> {
-    /// `CommandSourceStack.sendFailure`.
-    fn test_failure(&mut self, message: Text) {
-        if self.command_source.as_ref().is_some_and(|s| s.silent) {
-            return;
-        }
-        self.send_command_output(
-            mod_api::CommandFeedback::Failure,
-            message.with_color(text::RED),
-        );
-    }
-
     /// `StructureUtils.findTestBlocks`: the test instance blocks within
     /// `radius` of `center` (the POI search is a sphere).
     pub(super) fn find_test_instance_blocks(&self, center: Pos, radius: i32) -> Vec<Pos> {
@@ -163,7 +152,7 @@ impl Game<'_> {
         if self.template_entry(structure).is_some() {
             return true;
         }
-        self.test_failure(Text::translate(
+        self.command_failure(Text::translate(
             "commands.test.error.structure_not_found",
             &[Text::literal(structure.to_owned())],
         ));
@@ -174,7 +163,7 @@ impl Game<'_> {
     fn test_info_at(&mut self, pos: Pos, retry: Retry) -> Option<Info> {
         let key = self.test_instance_at(pos).and_then(|b| b.data.test.clone());
         if self.test_instance_at(pos).is_none() {
-            self.test_failure(Text::translate(
+            self.command_failure(Text::translate(
                 "commands.test.error.test_instance_not_found.position",
                 &[pos.0, pos.1, pos.2].map(|v| Text::literal(v.to_string())),
             ));
@@ -182,7 +171,7 @@ impl Game<'_> {
         }
         let Some(def) = key.as_deref().and_then(|k| self.test_def(k)) else {
             let name = self.test_name(pos);
-            self.test_failure(Text::translate(
+            self.command_failure(Text::translate(
                 "commands.test.error.non_existant_test",
                 &[name],
             ));
@@ -222,7 +211,7 @@ impl Game<'_> {
         }
         .filter(|d| *d == self.dim || !self.options.execution_role.is_client());
         let Some(dim) = dim else {
-            self.test_failure(Text::literal(format!(
+            self.command_failure(Text::literal(format!(
                 "Could not resolve level for dimension: {}",
                 def.dimension
             )));
@@ -277,7 +266,7 @@ impl Game<'_> {
             &[Text::literal(infos.len().to_string())],
         ));
         let grid = Grid::new(self.test_around(), per_row);
-        self.track_and_start_command_runner(infos, grid);
+        self.track_and_start_runner(infos, false, Some(grid), true);
         Ok(1)
     }
 
