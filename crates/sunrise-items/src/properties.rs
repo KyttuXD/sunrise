@@ -1,4 +1,5 @@
 //! Stack property calculations shared by gameplay, display and mod queries.
+use crate::items::{ItemInfo, ItemStack, Items};
 use sunrise_core::{color::hsv_to_argb, nbt::Tag};
 
 pub mod attack_range;
@@ -68,6 +69,18 @@ pub fn same_item_id(a: &str, b: &str) -> bool {
             .unwrap_or(id)
     }
     path(a) == path(b)
+}
+
+/// `ItemStack.isBarVisible`, `getBarWidth` and `getBarColor`, before client
+/// drawing extensions. Read the resolved stack rather than encoding its patch.
+pub fn stack_bar(items: &Items, stack: &ItemStack, info: Option<&ItemInfo>) -> Option<ItemBar> {
+    if let Some(info) = info.filter(|item| item.bundle) {
+        return crate::bundle::stack_bar(items, stack, info);
+    }
+    if !damageable(|id| stack.carries_component(info, id)) {
+        return None;
+    }
+    damage_bar(stack.effective_damage(info), stack.max_damage(info))
 }
 
 /// `Item.getBarWidth` and `getBarColor`, when the durability bar is visible.

@@ -262,8 +262,9 @@ impl ItemResource {
         backend_of(host)?.item_resource_creator_mod_id(&self.0)
     }
     /// `ItemStack.isBarVisible`, `getBarWidth` and `getBarColor`: the visible
-    /// vanilla durability or bundle bar, after effective components. None when
-    /// no bar is visible. Client drawing hooks can later replace this bar.
+    /// vanilla durability or bundle bar from the effective stack components
+    /// (item defaults, sets and removals). None when no bar is visible.
+    /// Client drawing hooks can later replace this bar.
     pub fn bar(&self, host: &dyn Host) -> Option<ItemBar> {
         backend_of(host)?.item_resource_bar(&self.0)
     }

@@ -165,41 +165,13 @@ impl Game<'_> {
     }
     /// `ItemStack.isBarVisible`, `getBarWidth`, `getBarColor`, before client-only hooks.
     pub(in crate::game) fn item_resource_bar(&self, stack: &ItemStack) -> Option<mod_api::ItemBar> {
-        use super::api_values::TryIntoApi;
-        let snapshot = stack.try_into_api().ok()?;
-        let resource = mod_api::ItemResource::of(&snapshot);
-        let component = |id| {
-            resource.value(
-                self,
-                &mod_api::ComponentId::new(id).expect("built-in component"),
-            )
-        };
-        if self.items().get(&stack.item)?.bundle {
-            let contents = component("minecraft:bundle_contents")?;
-            let patch = Tag::compound([("minecraft:bundle_contents", contents)]);
-            let (damage, extra) = sunrise_items::item_data::decode_components(Some(&patch));
-            let effective = ItemStack {
-                item: stack.item.clone(),
-                count: 1,
-                damage,
-                extra,
-            };
-            let (width, color) =
-                sunrise_items::bundle::Contents::of(self.items(), &effective)?.bar()?;
-            return Some(mod_api::ItemBar { width, color });
-        }
-        if !resource.damageable(self) {
-            return None;
-        }
-        let max_damage = component("minecraft:max_damage")
-            .as_ref()
-            .and_then(sunrise_items::properties::component_int)?;
-        let damage = component("minecraft:damage")
-            .as_ref()
-            .and_then(sunrise_items::properties::component_int)?;
-        sunrise_items::properties::damage_bar(damage, max_damage)
-            .try_into_api()
-            .unwrap()
+        let items = self.items();
+        let info = items.get(&stack.item)?;
+        let bar = sunrise_items::properties::stack_bar(items, stack, Some(info))?;
+        Some(mod_api::ItemBar {
+            width: bar.width,
+            color: bar.color,
+        })
     }
     /// Actor state shared by detached stack queries, without swapping equipment or players.
     fn item_combat_actor(&self, actor: mod_api::LivingRef) -> Option<(bool, bool, f64, bool)> {
@@ -613,6 +585,8 @@ mod item_resource_property_tests {
             serde_json::from_slice(&fs::read(resources.join("items.json")).unwrap()).unwrap();
         defaults["minecraft:iron_sword"]["minecraft:damage"] = json!(75);
         defaults["minecraft:iron_sword"]["minecraft:enchantment_glint_override"] = json!(false);
+        defaults["minecraft:bundle"]["minecraft:bundle_contents"] =
+            json!([{"id": "minecraft:stone", "count": 32}]);
         defaults["sunrise:consumable_fixture"] = defaults["minecraft:stick"].clone();
         // A mod item belongs to the registry as well as the component report.
         let mut registries: Value =
@@ -688,6 +662,27 @@ mod item_resource_property_tests {
             let removed = resource.without_component(game, &damage);
             assert_eq!(engine(&removed, 1).effective_damage(info), 0);
             assert!(removed.bar(game).is_none());
+
+            let bundle = ItemResource::of(&super::super::api_values::test_snapshot(
+                &ItemStack::new("minecraft:bundle", 1),
+            ));
+            // Vanilla BundleItem: half a stack weighs 1/2, showing 1 + floor(12 / 2)
+            // pixels in the not-full colour. An explicitly empty or removed component
+            // suppresses the prototype's bar rather than inheriting its contents.
+            let bar = bundle.bar(game).unwrap();
+            assert_eq!((bar.width, bar.color), (7, 0x7087FF));
+            let contents = ComponentId::new("minecraft:bundle_contents").unwrap();
+            let empty = bundle
+                .with_component(game, &contents, Tag::List(Vec::new()))
+                .unwrap();
+            assert!(empty.bar(game).is_none());
+            assert!(
+                bundle
+                    .without_component(game, &contents)
+                    .bar(game)
+                    .is_none()
+            );
+
             let enchanted = resource
                 .with_component(
                     game,

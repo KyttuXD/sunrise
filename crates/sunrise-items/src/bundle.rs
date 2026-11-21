@@ -2,7 +2,8 @@
 //! weight. The menus (`menu`, `lan::menu`) run `BundleItem`'s click
 //! overrides on it.
 use crate::item_data::BundleSelected;
-use crate::items::{ItemStack, Items};
+use crate::items::{ItemInfo, ItemStack, Items};
+use crate::properties::ItemBar;
 use sunrise_core::nbt::Tag;
 
 /// A bundle weight: vanilla's `Fraction`, exact and kept reduced.
@@ -98,6 +99,24 @@ fn item_weight(items: &Items, stack: &ItemStack) -> Weight {
 fn contents_weight(items: &Items, inside: &[ItemStack]) -> Weight {
     inside.iter().fold(Weight::ZERO, |w, s| {
         w.add(item_weight(items, s).times(s.count))
+    })
+}
+
+/// `BundleItem.isBarVisible`, `getBarWidth` and `getBarColor`, over the
+/// effective component. A removed component has no bar.
+pub(crate) fn stack_bar(items: &Items, stack: &ItemStack, info: &ItemInfo) -> Option<ItemBar> {
+    let inside = match stack.data() {
+        Some(data) if data.sets_component("minecraft:bundle_contents") => &data.bundle_contents,
+        Some(data) if data.other("!minecraft:bundle_contents").is_some() => return None,
+        _ => &info.component_prototype.data()?.bundle_contents,
+    };
+    let Weight { n, d } = contents_weight(items, inside);
+    if n <= 0 {
+        return None;
+    }
+    Some(ItemBar {
+        width: (1 + n * 12 / d).min(13) as i32,
+        color: if n >= d { 0xFF5454 } else { 0x7087FF },
     })
 }
 
@@ -256,17 +275,6 @@ impl Contents {
     /// `Fraction.ONE`: a full bundle draws the full bar and says so.
     pub fn is_full(&self) -> bool {
         self.weight.n >= self.weight.d
-    }
-
-    /// `BundleItem.isBarVisible`, `getBarWidth` and `getBarColor`: the fullness bar
-    /// (width, RGB), blue until the bundle is full, then red.
-    pub fn bar(&self) -> Option<(i32, u32)> {
-        if self.weight.n <= 0 {
-            return None;
-        }
-        let width = (1 + self.weight.n * 12 / self.weight.d).min(13) as i32;
-        let color = if self.is_full() { 0xFF5454 } else { 0x7087FF };
-        Some((width, color))
     }
 
     /// `toImmutable`, written back into the bundle's component.

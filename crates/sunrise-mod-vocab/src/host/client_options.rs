@@ -24,10 +24,8 @@ pub trait ClientOptionsClientHost {
     /// resolves it from the GUI Scale option and the window size: the option is
     /// a maximum (0 = automatic, not a guarantee), and with the Unicode font
     /// forced an odd result is raised by one. This read returns the scale the
-    /// window applies, never a separate recomputation. The framebuffer size
-    /// stays `native_physical_window_size()`; divide it by this scale, rounding
-    /// up, for the GUI-scaled width and height
-    /// (`Window.getGuiScaledWidth/Height`).
+    /// window applies, never a separate recomputation. Draw callbacks can read
+    /// their GUI dimensions from [`DrawContext::size`].
     #[access(ClientSetup)]
     fn gui_scale(&self) -> Option<u32>;
     /// Side: client.
