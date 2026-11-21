@@ -104,6 +104,9 @@ impl Game<'_> {
             self.level_suffocation(),
         );
         let sprinting = sprints(&input) && !body.item_use_slows_sprint;
+        let entities = self.entity_collisions(super::collision_source::Mover::PlayerAt {
+            feet_y: body.position.y,
+        });
         if mod_api::__private::listened(mod_api::HookId::EntitySize) {
             let id = player.entity().id();
             let result = (|| -> sunrise_client::Result<()> {
@@ -111,7 +114,7 @@ impl Game<'_> {
                     let side = game_side!(self);
                     MotionWorld {
                         side: &side,
-                        entities: &[],
+                        entities: &entities,
                         player: &mut body,
                         scene: &mut self.world,
                         assets: &self.pack.assets,
@@ -125,12 +128,12 @@ impl Game<'_> {
                     }
                     .begin_local_tick()?;
                 }
-                self.update_body_local_crouching(id, &mut body, &[])?;
+                self.update_body_local_crouching(id, &mut body, &entities)?;
                 let previous = {
                     let side = game_side!(self);
                     MotionWorld {
                         side: &side,
-                        entities: &[],
+                        entities: &entities,
                         player: &mut body,
                         scene: &mut self.world,
                         assets: &self.pack.assets,
@@ -144,12 +147,12 @@ impl Game<'_> {
                     }
                     .travel_replayed_tick(keys, sprinting)?
                 };
-                self.update_body_pose(id, &mut body, &[], false)?;
+                self.update_body_pose(id, &mut body, &entities, false)?;
                 {
                     let side = game_side!(self);
                     MotionWorld {
                         side: &side,
-                        entities: &[],
+                        entities: &entities,
                         player: &mut body,
                         scene: &mut self.world,
                         assets: &self.pack.assets,
@@ -164,12 +167,15 @@ impl Game<'_> {
                     .finish_local_tick(previous)
                 }
             })();
-            result.ok()?;
+            if let Err(error) = result {
+                log::warn!("Could not simulate movement for player {id}: {error}");
+                return None;
+            }
         } else {
             let side = game_side!(self);
             MotionWorld {
                 side: &side,
-                entities: &[],
+                entities: &entities,
                 player: &mut body,
                 scene: &mut self.world,
                 assets: &self.pack.assets,

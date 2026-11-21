@@ -4,13 +4,8 @@
 //! `Player.updatePlayerPose` / `canPlayerFitWithinBlocksAndEntitiesWhen`) resolve only the
 //! candidate poses vanilla actually tests, on demand, with a read-only `Host`.
 //!
-//! Sunrise computes a mob's size from its state (`Mob::dims`) and keeps a player's in its body
-//! (`PlayerMotion::refresh_dimensions`), storing the current pose's answer on the entity
-//! (`pose::SizeAnswer`) for as long as that pose and vanilla size hold. The server's mobs are
-//! asked before and after their ticks; players resolve candidate poses on demand during
-//! `update_local_crouching` and `update_player_pose`, and current-pose changes outside motion
-//! (initial tick, sleeping, dead, spectator, or an external scale/pose edit) are resolved without
-//! precomputing inactive poses.
+//! The current answer is kept only while its pose and vanilla size hold. It is installed
+//! before resize relocation and before travel; non-current pose fits resolve separately.
 
 use super::Game;
 use mod_api::{EntityRef, Pose};
@@ -24,6 +19,7 @@ impl Game<'_> {
     /// are accepted without a synthetic upper cap; invalid answers are reported and keep vanilla.
     fn ask_entity_size_with_old(
         &self,
+        host: &dyn mod_api::Host,
         id: u32,
         pose: Pose,
         vanilla: [f32; 3],
@@ -34,7 +30,8 @@ impl Game<'_> {
         }
         let entity = EntityRef::new(self.native_lifecycle.epoch()?, id);
         let mut size = vanilla;
-        self.native_entity_size(entity, pose, old, &mut size);
+        super::native_hooks::NativeHookHost { host }
+            .native_entity_size(entity, pose, old, &mut size);
         // Accept any finite non-negative dimensions (matching vanilla `EntityDimensions` and
         // NeoForge `EntityEvent.Size`, with no synthetic upper cap). Reject non-finite or
         // negative values loudly rather than silently reverting or poisoning AABBs.
@@ -53,8 +50,9 @@ impl Game<'_> {
 
     /// Ask `entity_size` for an entity whose vanilla size in `pose` is `vanilla`, unless
     /// `previous` was already asked for both. `None`: nothing to ask, keep `previous`.
-    fn ask_entity_size(
+    pub(in crate::game) fn ask_entity_size(
         &self,
+        host: &dyn mod_api::Host,
         id: u32,
         pose: Pose,
         vanilla: [f32; 3],
@@ -65,22 +63,36 @@ impl Game<'_> {
         }
         // `getOldSize`: the size it had (the last answer's, or vanilla's on the first ask).
         let old = previous.map_or(vanilla, |answer| answer.effective());
-        self.ask_entity_size_with_old(id, pose, vanilla, old)
+        self.ask_entity_size_with_old(host, id, pose, vanilla, old)
     }
 
-    /// The server's mobs whose pose or size changed since they were last asked.
-    pub(super) fn native_mob_sizes(&mut self) {
-        if !mod_api::__private::listened(mod_api::HookId::EntitySize) {
-            return;
+    /// Resolve a mob's current size before its first level operation.
+    pub(in crate::game) fn refresh_new_mob_size(&self, mob: &mut sunrise_client::mobs::Mob) {
+        if mod_api::__private::listened(mod_api::HookId::EntitySize)
+            && let Some(answer) = self.ask_entity_size(
+                self,
+                mob.id,
+                mob.pose(),
+                mob.vanilla_dims(),
+                mob.size_answer,
+            )
+        {
+            mob.size_answer = Some(answer);
         }
-        for i in 0..self.mobs.len() {
-            let m = &self.mobs[i];
-            let (id, pose, vanilla, previous) = (m.id, m.pose(), m.vanilla_dims(), m.size_answer);
-            if let Some(answer) = self.ask_entity_size(id, pose, vanilla, previous)
-                && let Some(m) = self.mobs.get_mut(i)
-                && m.id == id
-            {
-                m.size_answer = Some(answer);
+    }
+
+    /// A loaded or spawned mob reaching its level's join boundary.
+    pub(in crate::game) fn refresh_mob_size_at(&mut self, index: usize) {
+        if mod_api::__private::listened(mod_api::HookId::EntitySize) {
+            let mob = &self.mobs[index];
+            if let Some(answer) = self.ask_entity_size(
+                self,
+                mob.id,
+                mob.pose(),
+                mob.vanilla_dims(),
+                mob.size_answer,
+            ) {
+                self.mobs[index].size_answer = Some(answer);
             }
         }
     }
@@ -116,7 +128,7 @@ impl Game<'_> {
             },
             |answer| answer.effective(),
         );
-        let answer = self.ask_entity_size_with_old(id, api_pose, vanilla_arr, old);
+        let answer = self.ask_entity_size_with_old(self, id, api_pose, vanilla_arr, old);
         let dims = answer.map_or(vanilla, |answer| Dimensions::from_array(answer.effective()));
         Ok((dims, answer))
     }
@@ -146,21 +158,16 @@ impl Game<'_> {
         body: &PlayerMotion,
         entities: &[Aabb],
     ) -> sunrise_client::Result<bool> {
-        if body.flying || body.swimming {
-            return Ok(false);
-        }
-        let (crouch_fits, _) = self.body_can_fit_pose(id, body, entities, MotionPose::Crouching)?;
-        if !crouch_fits {
-            return Ok(false);
-        }
-        if body.shift_key_down {
-            return Ok(true);
-        }
-        if body.sleeping {
-            return Ok(false);
-        }
-        let (stand_fits, _) = self.body_can_fit_pose(id, body, entities, MotionPose::Standing)?;
-        Ok(!stand_fits)
+        sunrise_client::pose::local_crouching(
+            body.flying,
+            body.swimming,
+            body.shift_key_down,
+            body.sleeping,
+            |pose| {
+                self.body_can_fit_pose(id, body, entities, pose)
+                    .map(|(fits, _)| fits)
+            },
+        )
     }
 
     /// Update `body.local_crouching` using on-demand candidate pose resolution.
@@ -200,32 +207,12 @@ impl Game<'_> {
         entities: &[Aabb],
         passenger: bool,
     ) -> sunrise_client::Result<Option<(MotionPose, Option<SizeAnswer>)>> {
-        let (fits_swimming, swimming_answer) =
-            self.body_can_fit_pose(id, body, entities, MotionPose::Swimming)?;
-        if !fits_swimming {
-            return Ok(None);
-        }
-        let desired = body.desired_pose();
-        if body.spectator || passenger || body.is_passenger {
-            return Ok(Some((desired, None)));
-        }
-        if desired == MotionPose::Swimming {
-            return Ok(Some((MotionPose::Swimming, swimming_answer)));
-        }
-        let (fits_desired, desired_answer) = self.body_can_fit_pose(id, body, entities, desired)?;
-        if fits_desired {
-            return Ok(Some((desired, desired_answer)));
-        }
-        if desired == MotionPose::Crouching {
-            return Ok(Some((MotionPose::Swimming, swimming_answer)));
-        }
-        let (fits_crouching, crouching_answer) =
-            self.body_can_fit_pose(id, body, entities, MotionPose::Crouching)?;
-        Ok(Some(if fits_crouching {
-            (MotionPose::Crouching, crouching_answer)
-        } else {
-            (MotionPose::Swimming, swimming_answer)
-        }))
+        Ok(sunrise_client::pose::select_player_pose(
+            body.desired_pose(),
+            body.spectator || passenger || body.is_passenger,
+            |pose| self.body_can_fit_pose(id, body, entities, pose),
+        )?
+        .map(|(pose, answer)| (pose, answer.flatten())))
     }
 
     fn apply_body_size(body: &mut PlayerMotion, answer: SizeAnswer) {
@@ -267,7 +254,7 @@ impl Game<'_> {
         if let Some(answer) = pre_resolved.filter(|answer| answer.asked(api_pose, vanilla)) {
             return Some(answer);
         }
-        self.ask_entity_size(id, api_pose, vanilla, body.size_answer)
+        self.ask_entity_size(self, id, api_pose, vanilla, body.size_answer)
     }
 
     /// Run `Player.updatePlayerPose` (and a passenger's swim sit-up fixup) for `body`, resolving
@@ -313,66 +300,26 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// A body's pose or size changed since it was last asked: ask, and size it by the answer.
-    fn ask_body_size(&self, id: u32, body: &PlayerMotion) -> Option<SizeAnswer> {
-        let vanilla = body.pose.dimensions(body.scale).to_array();
-        self.ask_entity_size(id, body.pose.into(), vanilla, body.size_answer)
-    }
-
-    /// The client's own body, after its tick (covers sleeping, dead, initial tick, or a
-    /// server-synced pose/scale change outside `update_player_pose_with_sizes`).
-    pub(super) fn native_local_player_size(&mut self) {
+    /// Install the current answer before any collision or motion uses this player's box.
+    pub(in crate::game) fn refresh_player_size(&mut self, id: u32) {
         if !mod_api::__private::listened(mod_api::HookId::EntitySize) {
             return;
         }
-        let Some(id) = self.remote.as_ref().map(|remote| remote.entity_id as u32) else {
+        let Some(body) = self.player.as_ref() else {
             return;
         };
-        let Some(answer) = self
-            .player
-            .as_ref()
-            .and_then(|body| self.ask_body_size(id, body))
-        else {
-            return;
-        };
-        if let Some(body) = self.player.as_mut() {
-            Self::apply_body_size(body, answer);
-        }
-    }
-
-    /// Each guest's current-pose size on the server when its pose or vanilla size changed since
-    /// it was last asked (initial join, spectator, or an external scale/sleep edit). Never
-    /// precomputes inactive candidate poses or allocates a batch list.
-    pub(super) fn native_guest_sizes(&mut self) {
-        if !mod_api::__private::listened(mod_api::HookId::EntitySize) {
-            return;
-        }
-        let len = self
-            .lan
-            .as_ref()
-            .map_or(0, |host| host.hub.guests.as_slice().len());
-        for i in 0..len {
-            let Some((conn, id, pose, vanilla, previous)) = self.lan.as_ref().and_then(|host| {
-                let guest = host.hub.guests.as_slice().get(i)?;
-                let body = guest.motion.as_deref()?;
-                Some((
-                    guest.conn,
-                    guest.entity_id as u32,
-                    body.pose.into(),
-                    body.pose.dimensions(body.scale).to_array(),
-                    body.size_answer,
-                ))
-            }) else {
-                continue;
-            };
-            if let Some(answer) = self.ask_entity_size(id, pose, vanilla, previous)
-                && let Some(body) = self
-                    .lan
-                    .as_mut()
-                    .and_then(|host| host.hub.guests.motion_mut(conn))
-            {
-                Self::apply_body_size(body, answer);
+        let scale = match body.computed_scale() {
+            Ok(scale) => scale,
+            Err(error) => {
+                log::warn!("Could not refresh the current size of player {id}: {error}");
+                return;
             }
+        };
+        let vanilla = body.pose.dimensions(scale).to_array();
+        let answer = self.ask_entity_size(self, id, body.pose.into(), vanilla, body.size_answer);
+        if let (Some(body), Some(answer)) = (self.player.as_mut(), answer) {
+            body.scale = scale;
+            Self::apply_body_size(body, answer);
         }
     }
 }
@@ -419,21 +366,21 @@ mod tests {
                     .unwrap();
                 let i = game.mobs.iter().position(|m| m.id == id).unwrap();
                 let vanilla = game.mobs[i].vanilla_dims();
-                game.native_mob_sizes();
+                game.refresh_mob_size_at(i);
                 let grown = [vanilla[0] * 2.0, vanilla[1] * 2.0, vanilla[2]];
                 let m = &game.mobs[i];
                 assert_eq!((m.width(), m.height()), (grown[0], grown[1]));
                 assert_eq!(m.eye_height(), f64::from(vanilla[2]));
                 assert!((m.bounds().size().y - f64::from(grown[1])).abs() < 1e-9);
                 // Asked once for a pose and vanilla size, from the constructor's.
-                game.native_mob_sizes();
+                game.refresh_mob_size_at(i);
                 assert_eq!(
                     calls.lock().unwrap().as_slice(),
                     &[(m_pose(game, i), vanilla, vanilla)]
                 );
                 // Grown down to a baby: asked again, from the size it had.
                 sunrise_client::mobs::finalize::set_baby(&mut game.mobs[i], true);
-                game.native_mob_sizes();
+                game.refresh_mob_size_at(i);
                 let calls = calls.lock().unwrap();
                 assert_eq!(calls.len(), 2);
                 assert_eq!(calls[1].1, grown);
@@ -471,14 +418,15 @@ mod tests {
                     .unwrap();
                 let i = game.mobs.iter().position(|m| m.id == id).unwrap();
                 let vanilla = game.mobs[i].vanilla_dims();
-                let default_dims = game.mobs[i].dims();
+                let [w, h, e] = vanilla.map(f64::from);
+                let default_dims = (w, h, e);
                 for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
                     for axis in 0..3 {
                         let mut answer = vanilla;
                         answer[axis] = invalid;
                         *size.lock().unwrap() = answer;
                         game.mobs[i].size_answer = None;
-                        game.native_mob_sizes();
+                        game.refresh_mob_size_at(i);
                         let mob = &game.mobs[i];
                         assert_eq!(mob.size_answer.unwrap().effective(), vanilla, "{answer:?}");
                         assert_eq!(mob.dims(), default_dims, "{answer:?}");
@@ -488,7 +436,7 @@ mod tests {
                 for accepted in [0.0, 32.0, 32.001, 64.0, 128.0] {
                     *size.lock().unwrap() = [accepted; 3];
                     game.mobs[i].size_answer = None;
-                    game.native_mob_sizes();
+                    game.refresh_mob_size_at(i);
                     assert_eq!(
                         game.mobs[i].dims(),
                         (
@@ -502,7 +450,7 @@ mod tests {
                 *size.lock().unwrap() = [0.0; 3];
                 game.mobs[i].size_answer = None;
                 for _ in 0..4 {
-                    game.native_mob_sizes();
+                    game.refresh_mob_size_at(i);
                     let mob = &game.mobs[i];
                     let path_mob = mob.path_mob();
                     assert_eq!((path_mob.width, path_mob.height), (0.0, 0.0));
@@ -564,7 +512,7 @@ mod tests {
                     for answer in [[0.0; 3], [1e-30; 3], [1e-45; 3], vanilla] {
                         *size.lock().unwrap() = answer;
                         game.mobs[i].size_answer = None;
-                        game.native_mob_sizes();
+                        game.refresh_mob_size_at(i);
                         let mut mob = game.mobs[i].path_mob();
                         mob.on_ground = true;
                         let world = game.mob_world_base(&[]);
@@ -583,7 +531,7 @@ mod tests {
                     let i = game.mobs.iter().position(|m| m.id == id).unwrap();
                     game.mobs[i].extra.model_scale = 0.0625;
                     *size.lock().unwrap() = game.mobs[i].vanilla_dims();
-                    game.native_mob_sizes();
+                    game.refresh_mob_size_at(i);
                     let mut mob = game.mobs[i].path_mob();
                     mob.on_ground = true;
                     assert!((mob.width - 0.025).abs() < 1e-8);
@@ -767,18 +715,250 @@ mod tests {
                 ));
                 game.lan.as_mut().unwrap().hub.guests.push(guest);
 
-                // native_guest_sizes asks only the current pose (Standing), never inactive poses.
-                game.native_guest_sizes();
+                // The first turn installs only the current pose, in the guest's level.
+                game.as_guest(1, |_| ()).unwrap();
                 assert_eq!(poses.lock().unwrap().as_slice(), &[Pose::Standing]);
                 poses.lock().unwrap().clear();
                 // Calling it again with no pose or scale change fires nothing.
-                game.native_guest_sizes();
+                game.as_guest(1, |_| ()).unwrap();
                 assert!(poses.lock().unwrap().is_empty());
 
                 // In open air, ServerPlayer.updatePlayerPose tests Swimming and reuses the cached
                 // Standing answer; Crouching is never queried because Standing fits.
                 game.guest_server_tick(1, true);
                 assert_eq!(poses.lock().unwrap().as_slice(), &[Pose::Swimming]);
+            })
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn oversized_hook_answer_reaches_navigation_and_the_wither_sweep() {
+        use sunrise_client::mobs::{
+            MobEvent,
+            path::{Evaluator, Finder},
+            wither,
+        };
+        use sunrise_core::geometry::Vec3;
+        let mods = vec![mod_api::ModEntry::new(
+            "tall",
+            Box::new(SetSize(Arc::new(Mutex::new([0.6, 1.0e30, 0.4])))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                for x in 8..=12 {
+                    game.world.set(x, 69, 9, stone).unwrap();
+                }
+                let id = game
+                    .spawn_mob_spawned(
+                        "cow",
+                        [8.5, 70.0, 9.5],
+                        crate::game::creatures::SpawnSite::Plain,
+                    )
+                    .unwrap();
+                let mut body = game.mobs.iter().find(|m| m.id == id).unwrap().path_mob();
+                body.on_ground = true;
+                assert_eq!(body.height, 1.0e30);
+                let world = game.mob_world_base(&[]);
+                let path = Finder::new(&world, &body, Evaluator::Walk)
+                    .find(&[[11, 70, 9]], 8.0, 0, 16)
+                    .unwrap();
+                assert!(path.reached);
+
+                // The wrapped height is INT_MIN. The signed cursor's first 2^31 visits all have
+                // z == 2; the same X/Y on the next Z plane are not part of that sweep.
+                for [x, y, z] in [[0, 70, 2], [1, 71, 2], [1, 70, 3]] {
+                    game.world.set(x, y, z, stone).unwrap();
+                }
+                let id = game
+                    .spawn_mob_spawned(
+                        "wither",
+                        [1.5, 70.0, 3.5],
+                        crate::game::creatures::SpawnSite::Plain,
+                    )
+                    .unwrap();
+                let mut mob = game.mobs.iter().find(|m| m.id == id).unwrap().clone();
+                mob.position = Vec3::new(1.5, 70.0, 3.5);
+                mob.extra.counter = 0;
+                mob.extra.counter2 = 1;
+                let mut events = Vec::new();
+                wither::custom_server_ai_step(&mut mob, &game.mob_world_base(&[]), &mut events);
+                let broken: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        MobEvent::BreakBlock { pos, .. } => Some(*pos),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(broken, [[0, 70, 2], [1, 71, 2]]);
+            })
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_goat_uses_its_new_answer_before_resize_relocation() {
+        use sunrise_client::mobs::{goat, sync};
+        use sunrise_core::geometry::Vec3;
+        let mods = vec![mod_api::ModEntry::new(
+            "short_goat",
+            Box::new(SetSize(Arc::new(Mutex::new([0.6, 0.3, 0.2])))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let id = game
+                    .spawn_mob_spawned(
+                        "goat",
+                        [3.5, 70.0, 3.5],
+                        crate::game::creatures::SpawnSite::Plain,
+                    )
+                    .unwrap();
+                let mut goat = game.mobs.iter().find(|m| m.id == id).unwrap().clone();
+                goat.age = 1;
+                let world = game.mob_world_base(&[]);
+                goat::set_pose(&mut goat, &world, sync::LONG_JUMPING);
+                goat::set_pose(&mut goat, &world, sync::STANDING);
+                assert_eq!(goat.height(), 0.3);
+                assert_eq!(goat.position, Vec3::new(3.5, 70.0, 3.5));
+            })
+        });
+    }
+
+    struct FitSizes(Arc<Mutex<Vec<Pose>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for FitSizes {
+        fn entity_size(&self, _: &dyn Host, event: &mut EntitySizeEvent<'_>) {
+            let mut calls = self.0.lock().unwrap();
+            match event.pose {
+                Pose::Standing => *event.size = [128.0, 128.0, 1.62],
+                Pose::Crouching if !calls.contains(&Pose::Crouching) => event.size[1] = 1.5,
+                Pose::Crouching => event.size[1] = 0.75,
+                _ => (),
+            }
+            calls.push(event.pose);
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_large_candidate_checks_the_entire_box_and_only_commits_the_winning_answer() {
+        use sunrise_client::{motion::PlayerMotion, pose::Pose as MotionPose};
+        use sunrise_core::geometry::Vec3;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![mod_api::ModEntry::new(
+            "fit_sizes",
+            Box::new(FitSizes(calls.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                let body = || PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+                let mut large = body();
+                assert!(
+                    game.body_can_fit_pose(1, &large, &[], MotionPose::Standing)
+                        .unwrap()
+                        .0
+                );
+                game.world.set(5, 190, 5, stone).unwrap();
+                assert!(
+                    !game
+                        .body_can_fit_pose(1, &large, &[], MotionPose::Standing)
+                        .unwrap()
+                        .0
+                );
+
+                game.world.set(0, 65, 0, stone).unwrap();
+                calls.lock().unwrap().clear();
+                large.shift_key_down = true;
+                game.update_body_pose(1, &mut large, &[], false).unwrap();
+                assert_eq!(
+                    *calls.lock().unwrap(),
+                    [Pose::Swimming, Pose::Crouching, Pose::Crouching]
+                );
+                assert_eq!(large.pose, MotionPose::Crouching);
+                assert_eq!(large.dimensions.height, 0.75);
+            })
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn guest_pose_fit_respects_solid_entities_and_ticking_spectators() {
+        use crate::game::native_item_places::tests::{guest, open_to_lan};
+        use sunrise_client::pose::Pose as MotionPose;
+        use sunrise_core::geometry::Vec3;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![mod_api::ModEntry::new(
+            "short_crouch",
+            Box::new(ShortCrouch(calls.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                open_to_lan(game);
+                game.streaming
+                    .insert_remote(&mut game.world, sunrise_client::chunk::Chunk::empty(0, 0));
+                let mut player = guest(1);
+                player.loaded = true;
+                player.position = [1.5, 64.0, 1.5];
+                game.lan.as_mut().unwrap().hub.guests.push(player);
+                game.as_guest(1, |_| ()).unwrap();
+                calls.lock().unwrap().clear();
+                // The boat obstructs Standing only. Swimming and the listener's short Crouching fit.
+                game.boats.push(crate::game::boats::Boat::new(
+                    99,
+                    Arc::from("oak"),
+                    Vec3::new(1.5, 65.0, 1.5),
+                    0.0,
+                ));
+                game.guest_server_tick(1, true);
+                let pose = game
+                    .lan
+                    .as_ref()
+                    .unwrap()
+                    .hub
+                    .guest(1)
+                    .unwrap()
+                    .motion
+                    .as_ref()
+                    .unwrap()
+                    .pose;
+                assert_eq!(pose, MotionPose::Crouching);
+                assert_eq!(*calls.lock().unwrap(), [Pose::Swimming, Pose::Crouching]);
+                game.lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .update_guest(1, |guest| guest.game_mode = 3);
+                calls.lock().unwrap().clear();
+                game.guest_server_tick(1, false);
+                assert!(calls.lock().unwrap().is_empty());
+                game.guest_server_tick(1, true);
+                assert_eq!(*calls.lock().unwrap(), [Pose::Swimming, Pose::Standing]);
             })
         });
     }

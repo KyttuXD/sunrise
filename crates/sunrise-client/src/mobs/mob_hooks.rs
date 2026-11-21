@@ -5,6 +5,12 @@ use sunrise_world::registry::BlockStateId;
 
 /// Native mod hooks the mob AI asks while it decides.
 pub trait MobHooks {
+    /// Answer the current dimensions during `Entity.refreshDimensions`.
+    fn refresh_entity_size(&self, _mob: &mut Mob, _world: &MobWorld<'_>) {}
+    /// Whether positional parts can change this state's own or adjacent path classification.
+    fn path_type_varies_at(&self, _state: BlockStateId) -> bool {
+        true
+    }
     /// Positional block classification, before air and all vanilla rules.
     /// None declines to vanilla; the host reads the same owning level.
     fn block_path_type(&self, _state: BlockStateId, _pos: [i32; 3]) -> Option<PathType> {

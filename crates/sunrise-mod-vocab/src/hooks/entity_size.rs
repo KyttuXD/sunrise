@@ -15,7 +15,8 @@ pub trait Hooks {
     /// ignored, keeping vanilla's dimensions. `host` reads the side that asks; the entity may be
     /// new, so read only what you need of it.
     ///
-    /// A mob is asked on the server before and after its tick. A player is asked on demand only
+    /// A mob is asked on the server at construction and when its pose or vanilla dimensions
+    /// refresh. A player is asked on demand only
     /// for the candidate poses vanilla's fit checks actually test (including `FallFlying`,
     /// `Sleeping`, and `SpinAttack` when desired), reusing an unchanged current-pose answer, and
     /// for current-pose changes outside motion (initial tick, sleeping, dead, spectator, or an
@@ -36,6 +37,7 @@ pub trait Hooks {
         contract = "collect",
         out = "size",
         host = "read",
+        target = "sunrise_client::game::native_hooks::entity_size::NativeHookHost<'_>::native_entity_size",
         neoforge = "EntityEvent.Size",
         cancellable = false
     )]

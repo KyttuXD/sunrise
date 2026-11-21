@@ -10,8 +10,6 @@ impl Game<'_> {
     }
 
     fn tick_level_guests_inner(&mut self) {
-        // `EntityEvent.Size` for the poses the guests' moves set since the last tick.
-        self.native_guest_sizes();
         let Some(host) = self.lan.as_mut() else {
             return;
         };

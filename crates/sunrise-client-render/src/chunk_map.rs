@@ -270,6 +270,11 @@ impl ChunkMap {
         self.near.get(&key) == Some(&9)
     }
 
+    /// Column keys with at least one resident column in their 3×3 neighborhood.
+    pub fn keys_with_neighbors(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.near.keys().copied()
+    }
+
     /// Whether the centre is lit and its 3×3 is resident, the column readiness
     /// required by `ChunkMap.prepareTickingChunk`.
     #[inline]

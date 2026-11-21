@@ -188,7 +188,9 @@ clearing the use. Finish is not cancellable; its result stack can be replaced.
 
 ## Player size and pose fit
 
-`entity_size` resolves dimensions through a read-only `Host`.
+`entity_size` resolves dimensions through a read-only `Host`. The current answer is
+installed before the entity moves or finds space for its resized box. Neither a pose-fit
+query nor a query from `PlayerRef::simulate_move` is notice of a committed pose.
 Player pose-fit checks (`LocalPlayer.aiStep` crouching and `Player.updatePlayerPose` /
 `canPlayerFitWithinBlocksAndEntitiesWhen`) resolve only the candidate poses vanilla
 actually tests, on demand, at live `minecraft:scale`. An unchanged current-pose answer

@@ -572,6 +572,7 @@ impl Game<'_> {
             // A saved dying body has already passed die; loading only resumes tickDeath.
             self.died.insert(id);
         }
+        self.refresh_new_mob_size(&mut m);
         self.remember(id, uuid, tag);
         if refused {
             self.persist.off_level.insert(id, OffLevel::Mob(m));

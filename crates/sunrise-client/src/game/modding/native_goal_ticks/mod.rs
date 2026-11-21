@@ -887,6 +887,20 @@ impl mobs::part_goals::GoalHost for Game<'_> {
 }
 
 impl Game<'_> {
+    /// Refresh a tick-resident mob with the same live-actor and peer view as its native goals.
+    pub(in crate::game) fn refresh_tick_mob_size(&self, mob: &mut Mob, world: &MobWorld<'_>) {
+        let (id, pose, vanilla, previous) =
+            (mob.id, mob.pose(), mob.vanilla_dims(), mob.size_answer);
+        let context = GoalCx {
+            m: mob,
+            w: world,
+            host: self,
+        };
+        if let Some(answer) = self.ask_entity_size(&context, id, pose, vanilla, previous) {
+            mob.size_answer = Some(answer);
+        }
+    }
+
     /// Tell `mob_despawn` for a mob the tick holds out of the game. The handle
     /// resolves through the tick's own read view (#795) — the ticking mob
     /// itself, the player it sees and the snapshot of the others — because the

@@ -1,5 +1,18 @@
 // Included in creatures/mod.rs to preserve its existing scope.
 impl sunrise_client::mobs::MobHooks for Game<'_> {
+    fn refresh_entity_size(&self, mob: &mut Mob, world: &MobWorld<'_>) {
+        if mod_api::__private::listened(mod_api::HookId::EntitySize) {
+            self.refresh_tick_mob_size(mob, world);
+        }
+    }
+
+    fn path_type_varies_at(&self, state: sunrise_world::registry::BlockStateId) -> bool {
+        use crate::game::api_values::block_state::block_listens;
+        self.is_logical_server()
+            && (block_listens(mod_api::HookId::BlockPathType, state)
+                || block_listens(mod_api::HookId::AdjacentBlockPathType, state))
+    }
+
     fn block_path_type(
         &self,
         state: sunrise_world::registry::BlockStateId,

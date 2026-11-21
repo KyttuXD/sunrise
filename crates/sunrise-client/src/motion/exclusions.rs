@@ -30,7 +30,9 @@ pub fn no_player_collision_read(
             entity: player_collision_identity(player),
             context,
             bounds,
-            candidate_budget: 1_000_000,
+            // CollisionGetter.noBlockCollision has no visit cutoff. The scan still checks
+            // whether its bounds can be represented by vanilla's integer cursor.
+            candidate_budget: usize::MAX,
         },
     )?)
 }

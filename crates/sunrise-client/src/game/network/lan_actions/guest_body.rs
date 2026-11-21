@@ -1,5 +1,6 @@
 //! Restore the guest's first body without borrowing another player's RNG.
 use super::*;
+use crate::game::collision_source::Mover;
 use sunrise_client::{
     lan::guest::Guest,
     motion::{MotionResources, PlayerMotion, ServerTravel},
@@ -80,6 +81,37 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
 }
 
 impl Game<'_> {
+    /// ServerPlayer.doTick's pose update, including the Swimming prerequisite for spectators.
+    fn server_guest_pose_tick(&mut self, id: u32, riding: bool) {
+        let entities = self.entity_collisions(Mover::Player);
+        let listens = mod_api::__private::listened(mod_api::HookId::EntitySize);
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let side = game_side!(self);
+        let mut motion = motion_world!(self, side, player);
+        motion.entities = &entities;
+        let result = if listens {
+            let ready = if riding {
+                motion.passenger_base_tick()
+            } else {
+                motion.player.count_down_server_spin();
+                motion.player.refresh_attributes()
+            };
+            ready.and_then(|()| {
+                self.refresh_player_size(id);
+                self.update_player_pose_with_sizes(id, &entities, riding)
+            })
+        } else if riding {
+            motion.passenger_pose_tick()
+        } else {
+            motion.server_player_pose_tick()
+        };
+        if let Err(error) = result {
+            log::warn!("Could not resolve the pose of server player {id}: {error}");
+        }
+    }
+
     /// The guest's connection-path body: Entity.baseTick's fluid phase
     /// (burning), then for each move
     /// ServerPlayer.doCheckFallDamage (the fall distance grows while they go
@@ -152,6 +184,7 @@ impl Game<'_> {
                     rules,
                 );
                 let events = std::mem::take(&mut player.events);
+                game.server_guest_pose_tick(id, game.riding.is_some());
                 game.record_combat(&events);
             });
             return;
@@ -330,26 +363,7 @@ impl Game<'_> {
             }
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
-            // LivingEntity.aiStep: a Riptide spin counts down on the server's
-            // copy too, or it would stay in the spin pose (eye 0.4) for good.
-            // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
-            // ends with updatePlayerPose — or, for a passenger, the rideTick
-            // path that clears a swim (#4509 / #3308).
-            if mod_api::__private::listened(mod_api::HookId::EntitySize) {
-                if riding {
-                    let _ = w.passenger_base_tick();
-                } else {
-                    w.player.count_down_server_spin();
-                    let _ = w.player.refresh_attributes();
-                }
-                let _ = game.update_player_pose_with_sizes(id, &[], riding);
-            } else {
-                let _ = if riding {
-                    w.passenger_pose_tick()
-                } else {
-                    w.server_player_pose_tick()
-                };
-            }
+            game.server_guest_pose_tick(id, riding);
             let mut events = game
                 .player
                 .as_mut()

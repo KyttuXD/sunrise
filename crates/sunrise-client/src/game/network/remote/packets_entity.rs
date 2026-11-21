@@ -597,6 +597,7 @@ impl Game<'_> {
         if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
             let nameplate = self.remote_nameplate_values(&p.values);
             self.apply_own_attributes(p.values);
+            self.refresh_player_size(p.id as u32);
             if let Some(m) = self.player_model.as_mut() {
                 if let Some(value) = nameplate.name_tag {
                     m.set_name_tag_distance(value);

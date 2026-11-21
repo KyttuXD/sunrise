@@ -99,7 +99,10 @@ and world, for non-finite numbers and for more than 256 explosions.
 live player's body. It returns `SimulatedMove` with position, velocity, ground,
 horizontal-collision and sprinting results. It refuses stale or inaccessible players,
 dead players, spectators, riders and invalid numeric input. A supplied velocity is
-input to the prediction, not a write to the player.
+input to the prediction, not a write to the player. The prediction runs `entity_size`
+callbacks synchronously for the dimensions it queries and uses the answers only
+on the simulated body. Listener authors must not interpret a size query as a
+committed pose or size change.
 
 `LevelRef::collision_boxes` reads block collision boxes within a finite, ordered
 axis-aligned box. It excludes entity and border collisions. A refused level or a
