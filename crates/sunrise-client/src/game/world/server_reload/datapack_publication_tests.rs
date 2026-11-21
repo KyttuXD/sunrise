@@ -377,8 +377,8 @@ fn remote_reload_never_decodes_local_registry_files() {
         },
     );
 }
-/// A reload over a decode limit, or with a bad winning file, is refused naming the pack and
-/// file; the old generation stays live and the next valid reload publishes.
+/// A reload with a malformed winning file is refused naming the pack and file; the old
+/// generation stays live and the next valid reload publishes.
 #[test]
 #[ignore = "daily"]
 fn refused_reload_names_the_pack_and_keeps_the_old_generation() {
@@ -404,33 +404,27 @@ fn refused_reload_names_the_pack_and_keeps_the_old_generation() {
                 let features = game.level.enabled_features.clone();
                 let initial = game.mods.datapack_registries.as_ref().unwrap().clone();
                 assert_eq!(power(game), DatapackValue::Int(7));
-                let over = format!(
-                    r#"{{"power":7{}}}"#,
-                    " ".repeat(mod_api::MAX_DATAPACK_ENTRY_BYTES)
+                write(&winning, "{bad");
+                let Err(mod_api::__private::reload::ReloadStageError::DataSource(message)) =
+                    game.reload_datapacks(true, &features)
+                else {
+                    panic!("the reload is refused");
+                };
+                assert!(
+                    message.contains(
+                        "pack file/override, file data/registry_test/registry_test/spell/fire.json"
+                    ) && message.contains("Malformed"),
+                    "{message}"
                 );
-                for (text, reason) in [(over.as_str(), "EntryTooLarge"), ("{bad", "Malformed")] {
-                    write(&winning, text);
-                    let Err(mod_api::__private::reload::ReloadStageError::DataSource(message)) =
-                        game.reload_datapacks(true, &features)
-                    else {
-                        panic!("the reload is refused");
-                    };
-                    assert!(
-                        message.contains(
-                            "pack file/override, file data/registry_test/registry_test/spell/fire.json"
-                        ) && message.contains(reason),
-                        "{message}"
-                    );
-                    assert_eq!(power(game), DatapackValue::Int(7));
-                    assert!(std::sync::Arc::ptr_eq(
-                        game.mods.datapack_registries.as_ref().unwrap(),
-                        &initial
-                    ));
-                    assert_eq!(
-                        sunrise_client::datapack_net::served(),
-                        game.mods.datapack_registries
-                    );
-                }
+                assert_eq!(power(game), DatapackValue::Int(7));
+                assert!(std::sync::Arc::ptr_eq(
+                    game.mods.datapack_registries.as_ref().unwrap(),
+                    &initial
+                ));
+                assert_eq!(
+                    sunrise_client::datapack_net::served(),
+                    game.mods.datapack_registries
+                );
                 write(&winning, r#"{"power":9}"#);
                 assert!(game.run_command("reload"));
                 assert_eq!(power(game), DatapackValue::Int(9));

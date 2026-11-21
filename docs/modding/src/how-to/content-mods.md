@@ -980,9 +980,11 @@ fields)` (NeoForge's `NewDatapackRegistryEvent`).
 schema: `Bool`, `Int { min, max }`, `Float { min, max }`, `Text { max_len }`, `Identifier` or `Reference { registry }`,
 each required or given a default. Entry `addon:fire` is `data/addon/example/spell/fire.json`
 (`DatapackRegistryDeclaration::entry_file`), the registry's namespace being a folder as NeoForge's modded
-registries have it. The game decodes entries against the schema without running mod code: an undeclared key, a missing required key, a wrong type or an out-of-range value fails
-the entry, and a default never stands in for invalid data. The engine adds no entry-size or field-count limit
-of its own. The game loads entries from mod content and enabled data packs.
+registries have it. The game loads entries from mod content and enabled data packs, reading only the
+winning file for each entry. An unreadable winner fails the load and the error names its pack and file.
+The game decodes entries against the schema without running mod code: an undeclared key, a missing required
+key, a wrong type or an out-of-range value fails the entry, and a default never stands in for invalid data.
+Local loads do not use the byte or entry-count limits of network snapshots.
 
 Client-only packages cannot declare datapack registries. A `side = "server"` package can declare
 `DatapackRegistrySync::ServerOnly` (entries are never sent) or `DatapackRegistrySync::Optional`

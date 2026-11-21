@@ -1,3 +1,29 @@
-ids = ["method:DatapackRegistriesRegistrar::declare_datapack_registry", "type:DatapackRegistrationError", "type:DatapackRegistrySync"]
-why = "Registry declaration no longer means that clients need the mod. Like NeoForge's NewDatapackRegistryEvent.worldRegistry and reloadableRegistry and DataPackRegistriesHooks.addWorldRegistry, and vanilla's RegistryDataLoader.load, local loading is distinct from what is sent to clients. Only a Required registry makes a server-only package incompatible with the join-content rule; the load refusal names the registry."
-migrate = "The declare_datapack_registry call is unchanged. When moving a registry to a side = \"server\" package, pass DatapackRegistrySync::ServerOnly to keep entries local, or DatapackRegistrySync::Optional to send entries only to clients that offer the same registry and schema. Keep DatapackRegistrySync::Required with side = \"both\" if joining clients must have the registry. DatapackRegistrationError::WrongSide now means the declaring package is client-only; a server-only package declaring Required is refused at package load instead."
+ids = [
+    "method:DatapackRegistriesRegistrar::declare_datapack_registry",
+    "type:DatapackRegistrationError",
+    "type:DatapackRegistrySync",
+    "const:MAX_DATAPACK_ENTRY_BYTES",
+    "type:DatapackCandidate",
+    "fn:DatapackCandidate::build",
+    "fn:DatapackCandidate::bind_tags",
+    "type:DatapackLoadReason",
+    "type:DatapackLoadReason.TooManyRegistries",
+    "type:DatapackLoadReason.EntryTooLarge",
+    "type:DatapackLoadReason.TooManyEntries",
+    "type:DatapackLoadReason.CandidateTooLarge",
+    "type:DatapackLoadReason.SnapshotTooLarge",
+    "type:DatapackLoadReason.ReadFile",
+    "fn:DatapackSnapshot::candidate",
+    "type:DatapackSnapshotError.TooLarge",
+]
+why = """
+Registry declaration no longer means that clients need the mod. Like NeoForge's NewDatapackRegistryEvent.worldRegistry and reloadableRegistry and DataPackRegistriesHooks.addWorldRegistry, and vanilla's RegistryDataLoader.load, local loading is distinct from what is sent to clients. Only a Required registry makes a server-only package incompatible with the join-content rule; the load refusal names the registry.
+
+Vanilla's RegistryDataLoader.load uses ResourceManagerRegistryLoadTask.load to select winning resources and RegistryLoadTask.PendingRegistration.loadFromResource to read them and report failures with pack and entry identity. NeoForge's DataPackRegistriesHooks.addWorldRegistry collects local registry codecs separately from network codecs. Local candidate loading and tag binding no longer check the size of a hypothetical network snapshot. Received snapshots keep their network bounds and are validated without trial encoding.
+"""
+migrate = """
+- Keep the declare_datapack_registry call. When moving a registry to a side = "server" package, pass DatapackRegistrySync::ServerOnly to keep entries local, or DatapackRegistrySync::Optional to send entries only to clients that offer the same registry and schema. Keep DatapackRegistrySync::Required with side = "both" if joining clients must have the registry. DatapackRegistrationError::WrongSide now means the declaring package is client-only; a server-only package declaring Required is refused at package load instead.
+- Remove imports and local size checks using mod_api::MAX_DATAPACK_ENTRY_BYTES; it has no replacement. Keep calling DatapackCandidate::build(declarations, files) and candidate.bind_tags(registry, tags), and handle their remaining schema, reference and tag errors as before.
+- Remove match arms for DatapackLoadReason::{TooManyRegistries, EntryTooLarge, TooManyEntries, CandidateTooLarge, SnapshotTooLarge}. When reporting file I/O failures, use DatapackLoadReason::ReadFile(message) together with the pack, file and entry on DatapackLoadError.
+- Keep validating received data with DatapackSnapshot::decode(bytes) then snapshot.candidate(declarations). For received snapshots over the tag-count or tag-member-count bound, handle DatapackSnapshotError::TooLarge instead of Unresolved with DatapackLoadReason::TooManyEntries.
+"""

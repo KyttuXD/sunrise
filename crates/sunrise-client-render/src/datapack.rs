@@ -770,11 +770,9 @@ fn resource_id(file: &str, kind: &str, ext: &str) -> Option<String> {
 }
 /// The entry files of mods' datapack registries in `packs`, lowest pack first: each file
 /// `data/<entry namespace>/<registry namespace>/<registry path>/<entry>.json` of a registry
-/// in `registries` (`(namespace, path)` of its key), by that path, each path's versions in
-/// pack order, each with its pack's id. Only the highest accepted version is read into
-/// the returned map. `fallback` permits trying lower versions after a condition refusal;
-/// registered conditions disable fallback so losing callbacks never run. The folders
-/// are the mods' own, so the fixed kinds `DataStore` lists never cover them.
+/// in `registries` (`(namespace, path)` of its key), by that path. Only the winning pack's
+/// file is read and passed to `accepts`. A rejected winner does not reveal a lower version.
+/// The folders are the mods' own, so the fixed kinds `DataStore` lists never cover them.
 pub fn registry_files(
     packs: &[&DataPack],
     registries: &[(&str, &str)],
@@ -786,62 +784,46 @@ pub fn registry_files(
     let mut sources = BTreeMap::new();
     for pack in packs {
         for file in pack.list_kinds(&kinds) {
-            let in_registry = file
+            let Some((_, rest)) = file
                 .strip_prefix("data/")
                 .and_then(|rest| rest.split_once('/'))
-                .is_some_and(|(_, rest)| {
-                    file.ends_with(".json")
-                        && registries.iter().any(|(namespace, path)| {
-                            rest.strip_prefix(namespace)
-                                .and_then(|rest| rest.strip_prefix('/'))
-                                .and_then(|rest| rest.strip_prefix(path))
-                                .is_some_and(|rest| rest.starts_with('/'))
-                        })
-                });
-            if in_registry {
-                sources.insert(file, pack);
+            else {
+                continue;
+            };
+            if !file.ends_with(".json") {
+                continue;
+            }
+            if let Some((namespace, path)) =
+                registries.iter().copied().find(|&(namespace, path)| {
+                    rest.strip_prefix(namespace)
+                        .and_then(|rest| rest.strip_prefix('/'))
+                        .and_then(|rest| rest.strip_prefix(path))
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+            {
+                sources.insert(file, (pack, namespace, path));
             }
         }
     }
     let mut files = BTreeMap::new();
-    let mut total = 0;
-    for (file, pack) in sources {
-        // Read at most the custom-registry limit plus a refusal byte, including
-        // decompressed output. A rejected winner never reveals a lower file.
-        let bytes = pack
-            .source
-            .read_head(&file, mod_api::MAX_DATAPACK_ENTRY_BYTES as u64 + 1)
-            .unwrap_or_default();
-        let oversized = bytes.len() > mod_api::MAX_DATAPACK_ENTRY_BYTES;
-        if !oversized && !accepts(&file, &bytes) {
-            continue;
+    for (file, (pack, namespace, path)) in sources {
+        let bytes = match pack.source.read(&file) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let entry = resource_id(&file, &format!("{namespace}/{path}"), ".json")
+                    .expect("listed custom registry file");
+                return Err(Box::new(mod_api::DatapackLoadError {
+                    registry: format!("{namespace}:{path}"),
+                    entry,
+                    file,
+                    pack: pack.id.clone(),
+                    reason: mod_api::DatapackLoadReason::ReadFile(error.to_string()),
+                }));
+            }
+        };
+        if accepts(&file, &bytes) {
+            files.insert(file, vec![(pack.id.clone(), bytes)]);
         }
-        total += bytes.len();
-        if !oversized && total > mod_api::MAX_SNAPSHOT_BYTES {
-            let (namespace, path) = registries
-                .iter()
-                .find(|(namespace, path)| {
-                    file.splitn(3, '/')
-                        .nth(2)
-                        .is_some_and(|rest| rest.starts_with(&format!("{namespace}/{path}/")))
-                })
-                .expect("listed custom registry file");
-            let rest = file.strip_prefix("data/").unwrap();
-            let (entry_namespace, rest) = rest.split_once('/').unwrap();
-            let entry = rest
-                .strip_prefix(&format!("{namespace}/{path}/"))
-                .unwrap()
-                .strip_suffix(".json")
-                .unwrap();
-            return Err(Box::new(mod_api::DatapackLoadError {
-                registry: format!("{namespace}:{path}"),
-                entry: format!("{entry_namespace}:{entry}"),
-                file,
-                pack: pack.id.clone(),
-                reason: mod_api::DatapackLoadReason::CandidateTooLarge,
-            }));
-        }
-        files.insert(file, vec![(pack.id.clone(), bytes)]);
     }
     Ok(files)
 }
@@ -2351,16 +2333,58 @@ mod tests {
                 .is_empty(),
             "a rejected winning resource does not reveal the lower version"
         );
-        // Oversized losing files are never read; an oversized winner is retained
-        // only as the bounded refusal prefix, not as its full payload.
-        let path = "data/example/example/spell/fire.json";
-        std::fs::write(root.join("low").join(path), vec![b' '; 1_048_577]).unwrap();
-        let files = registry_files(&refs, &[("example", "spell")], |_, _| true).unwrap();
-        assert_eq!(files[path], vec![("high".to_owned(), b"high".to_vec())]);
-        std::fs::write(root.join("high").join(path), vec![b' '; 1_048_578]).unwrap();
-        let files = registry_files(&refs, &[("example", "spell")], |_, _| true).unwrap();
-        assert_eq!(files[path].len(), 1);
-        assert_eq!(files[path][0].1.len(), 1_048_577);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn registry_files_reads_the_whole_winner_without_reading_the_loser() {
+        use std::io::{Cursor, Write};
+        use sunrise_assets::resource_source::Resource;
+
+        let path = "data/addon/example/spell/nested/fire.json";
+        let mut entry = vec![b' '; 1 << 20];
+        entry.extend_from_slice(br#"{"power":7}"#);
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file(
+            path,
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
+        zip.write_all(&entry).unwrap();
+        let mut archive = zip.finish().unwrap().into_inner();
+        let start = {
+            let mut zip = zip::ZipArchive::new(Cursor::new(&archive)).unwrap();
+            zip.by_index_raw(0).unwrap().data_start().unwrap() as usize
+        };
+        // A reserved deflate block makes this large resource fail only if read.
+        archive[start] |= 0b110;
+        let low = DataPack::from_source(
+            "low".into(),
+            ResourceSource::opened_archive(sunrise_assets::zip::Zip::from_bytes(archive).unwrap()),
+        );
+        let entry_len = entry.len();
+        let high = DataPack::from_source(
+            "high".into(),
+            ResourceSource::indexed(BTreeMap::from([(path.to_owned(), Resource::bytes(entry))])),
+        );
+        let keys = [("example", "spell")];
+        let error = registry_files(&[&high, &low], &keys, |_, _| true).unwrap_err();
+        assert_eq!(error.registry, "example:spell");
+        assert_eq!(error.entry, "addon:nested/fire");
+        assert_eq!(error.file, path);
+        assert_eq!(error.pack, "low");
+        assert!(
+            matches!(error.reason, mod_api::DatapackLoadReason::ReadFile(message) if !message.is_empty())
+        );
+
+        let files =
+            registry_files(&[&low, &high], &keys, |_, bytes| bytes.len() == entry_len).unwrap();
+        let [(pack, bytes)] = files[path].as_slice() else {
+            panic!("only the winning resource should be returned");
+        };
+        assert_eq!(pack, "high");
+        assert_eq!(bytes.len(), entry_len);
+        assert!(bytes.ends_with(br#"{"power":7}"#));
     }
 }
