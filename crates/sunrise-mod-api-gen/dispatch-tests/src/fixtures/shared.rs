@@ -284,7 +284,9 @@ fn has_part_hook(_: HookId) -> bool {
         || !parts.menus.is_empty()
         || !parts.entities.is_empty()
 }
-fn parts(_: HookId, _: &'static str) -> &'static Parts {
+// The fixture collector keys top-level definitions by name; `parts` is also a module.
+use part_table as parts;
+fn part_table(_: HookId, _: &'static str) -> &'static Parts {
     PARTS.get()
 }
 mod parts {
