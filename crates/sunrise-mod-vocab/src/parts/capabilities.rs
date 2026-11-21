@@ -17,8 +17,8 @@ pub(crate) struct CapabilityPart<P> {
     pub(crate) provider: P,
 }
 
-/// A capability provider whose handler type is a mod's own (a key a library's `[api]` crate
-/// publishes), erased: only mods linked with that crate know its handler type.
+/// An erased provider for a capability a mod publishes from its root crate. Mods link against
+/// that crate to share the handler type.
 // hidden: the registrar's erased provider, not part of the mod surface
 // exhaustive: its fields are private, so mods cannot build or destructure it
 // no wire: transfers the handler name and a retained provider resource id, reporting unsupported handlers rather than serializing the native Any object.

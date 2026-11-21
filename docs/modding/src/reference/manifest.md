@@ -115,10 +115,11 @@ missing/version/order checks at startup. A missing required dependency, incompat
 version or dispatch cycle refuses loading; an absent optional dependency is allowed. Content and
 native manifests share the installed-set rule resolver.
 
-**Physical linking is separate from dispatch policy.** Native builds wire only supplied code
-packages; a content-only target has no Cargo alias. At startup, the loader and compiled package
-inventory enforce physical requirements. Dispatch order, side filters and instance overrides cannot
-remove those requirements or bypass ABI and build identity checks.
+**Physical linking is separate from dispatch policy.** The build wires supplied native dependencies
+by their actual root Cargo package, not a separate API declaration. A content-only target has no Cargo
+alias. At startup, the loader and compiled package inventory enforce physical requirements. Dispatch
+order, side filters and instance overrides cannot remove those requirements or bypass ABI and build
+identity checks.
 See [Dependencies between mods](../concepts/dependencies.md).
 
 Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only,

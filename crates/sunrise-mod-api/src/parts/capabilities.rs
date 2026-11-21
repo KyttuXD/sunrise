@@ -5,8 +5,8 @@ impl PartRegistrar {
     /// Adds `provider` for capability `name` and `id` to `table`. Refused for a capability name
     /// or an id with no namespace, and for a capability name another provider answers with
     /// another handler type (two mods each declaring their own key under one name, rather than
-    /// sharing the one the defining mod's `[api]` crate publishes): asked by one type, the other's
-    /// providers would never answer.
+    /// sharing the one the defining mod publishes from its root crate): asked by one type, the
+    /// other's providers would never answer.
     /// `shares_names` is the table whose capability names are the same capabilities as
     /// `table`'s (a block's and a block entity type's, asked together at a position), so one
     /// name has one handler type across both.
@@ -255,7 +255,7 @@ pub mod tests {
     };
 
     /// A second test mod, sharing `CHEMICALS` and `Chemical` with the first, as a mod depending
-    /// on another's `[api]` crate does: its vats answer the same capability.
+    /// on another's root crate does: its vats answer the same capability.
     pub(crate) struct Chemist;
     #[mod_api::__subscriptions]
     impl Hooks for Chemist {

@@ -147,11 +147,12 @@ fn parse(owner: &str, value: Option<&toml::Value>) -> Result<Vec<Dependency>, Er
     ))
 }
 
+/// A package in the logical dependency graph or the native build's link graph.
 #[derive(Clone)]
 pub struct Mod<'a> {
     pub id: &'a str,
     pub version: &'a Version,
-    /// Code declarations also participate in physical library linking.
+    /// `true` for a native package. Content-only packages have no library to link.
     pub code: bool,
     pub dependencies: &'a [Dependency],
 }
@@ -188,10 +189,9 @@ pub fn resolve(mods: &[Mod<'_>]) -> Result<Resolution, Error> {
 
 /// Physical library order, independent of manifest validation/dispatch overrides.
 ///
-/// Only library requirements enter this projection. A supplied code dependency
-/// needs an API package; content targets (`code = false`) are skipped. Version
-/// ranges and dispatch order are logical rules; Cargo and the native linker
-/// still enforce actual imports and ABI requirements.
+/// Only edges between supplied native packages enter this projection. Content-only
+/// packages have no library to link. Version ranges and dispatch order are logical
+/// rules; Cargo and the native linker enforce actual imports and ABI requirements.
 pub fn resolve_links(mods: &[Mod<'_>]) -> Result<Resolution, Error> {
     resolve_all(mods, &[], &Overrides::default(), true)
 }
@@ -220,14 +220,11 @@ pub fn resolve_manifests(
     let inputs: Vec<_> = manifests
         .iter()
         .zip(&declared)
-        .map(|(manifest, dependencies)| {
-            let code = manifest.native.is_some();
-            Mod {
-                id: &manifest.id,
-                version: &manifest.version,
-                code,
-                dependencies,
-            }
+        .map(|(manifest, dependencies)| Mod {
+            id: &manifest.id,
+            version: &manifest.version,
+            code: manifest.native.is_some(),
+            dependencies,
         })
         .collect();
     let rules: Vec<_> = manifests
@@ -958,6 +955,23 @@ mod tests {
         assert!(
             matches!(resolve_links(&mods[..1]), Err(Error::Missing { owner, target, .. }) if owner == "user" && target == "base")
         );
+    }
+
+    #[test]
+    fn only_supplied_native_packages_contribute_link_edges() {
+        let required = deps("[dependencies]\nlibrary='^1'\ndata='^1'");
+        let mods = [
+            item("consumer", "1", &required),
+            item("library", "1", &[]),
+            Mod {
+                id: "data",
+                version: &Version::new(1, 0, 0),
+                code: false,
+                dependencies: &[],
+            },
+        ];
+        assert_eq!(resolve_links(&mods).unwrap().order, [1, 0, 2]);
+        assert_eq!(resolve(&mods).unwrap().order, [1, 2, 0]);
     }
 
     fn manifest(id: &str, extra: &str) -> crate::Manifest {

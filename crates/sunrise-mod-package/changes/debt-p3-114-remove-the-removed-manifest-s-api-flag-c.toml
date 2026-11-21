@@ -1,0 +1,11 @@
+ids = [
+  "type:dependencies::Mod",
+  "type:dependencies::Mod.has_api",
+  "type:dependencies::Error",
+  "type:dependencies::Error.NoApi",
+]
+why = "The resolver still carried the old [api] check even though every supplied native project links through its root Cargo package. This is a Sunrise native-build rule, with no vanilla or NeoForge equivalent. Logical dependency validation and dispatch order are unchanged."
+migrate = """
+Remove any legacy [api] table. Export shared items from the dependency's root src/lib.rs and keep its [native] declaration. In the consuming mod, declare the target's mod ID and version requirement under [dependencies] in sunrise-mod.toml and import the shared items using that ID as the Rust crate name. The generated top-level api version is separate and unchanged.
+If you use sunrise_mod_package::dependencies directly, remove has_api from Mod literals and keep code set from whether the manifest is native. Delete any Error::NoApi match arm; there is no replacement refusal.
+"""
