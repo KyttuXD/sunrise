@@ -147,7 +147,7 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 | `onStopUsing(stack, entity, timeLeft)` | Partial | `ItemPart::release_using` (`hooks/base.rs`) | Runs on an early release only, after the vanilla item's release; finishing the use or switching to another item stops it without asking. Both sides. |
 | `onLeftClickEntity(stack, player, entity)` | Covered | `ItemPart::on_left_click_entity` (`hooks/item_attack.rs`) | Runs where `Player.attack` starts, after `attack_entity` let the blow through; a cancel leaves the target unhurt, with no `hurt_enemy` and no wear. |
 | `getCraftingRemainder(instance)` | Covered | `ItemPart::crafting_remainder`, content `crafting_remainder` | The per-stack Part override replaces the data remainder in crafting, fuel and quick moves. |
-| `getEntityLifespan(stack, level)` | Partial | `item_expire` (`hooks/base.rs`) | Adds extra ticks to a dropped item's life; no absolute lifespan and not per-item. |
+| `getEntityLifespan(stack, level)` | Partial | `item_expire` (`hooks/item_expire.rs`) | Adds extra ticks to a dropped item's `lifespan` (default 6000, clamped to `0..=32766`); no per-item initial lifespan override. |
 | `hasCustomEntity(stack)` | Missing | — | No custom dropped-entity selection. |
 | `createEntity(level, entity, stack)` | Missing | — | Same. |
 | `onEntityItemUpdate(stack, itemEntity)` | Missing | — | No per-item dropped-entity tick. [#1039](https://github.com/arismoko/horizon/issues/1039). |
@@ -171,7 +171,7 @@ which is the same place NeoForge's item components live. Reads are on `host` (`h
 | `getCreatorModId(registries, stack)` | Covered | `ItemPart::creator_mod_id` (`hooks/creator_mod_id.rs`), read by `ItemResource::creator_mod_id` | Both sides, from the stack alone. The answer arrives as the item id's namespace; a part sets another mod or none. An item without a part costs one table lookup. |
 | `onAnimalArmorTick(stack, level, mob)` | Missing | — | No per-item animal-armour tick. |
 | `damageItem(stack, amount, entity, onBreak)` | Covered | `ItemPart::damage_item` (`hooks/damage_item.rs`) | Runs on the server for the parts of the worn item, after Unbreaking, on every wear path (a player's tools, armour and shield, a dispenser's tool, a mob's armour). The part gets the stack, the wearing or using entity (`None` for a dispenser's tool) and the amount about to be lost, and changes it (0 or less leaves the item whole), cancels the wear, or sets `break_now` to break the item whatever durability is left, the Sunrise form of calling `onBroken`. |
-| `onDestroyed(itemEntity, source)` | Missing | — | `item_despawn` is lifetime removal, not damage destruction. |
+| `onDestroyed(itemEntity, source)` | Missing | — | `item_expire` is lifetime expiry and `entity_leave_level` is general removal, not damage destruction. |
 | `isGazeDisguise(stack, player, target)` | Missing | — | No gaze-disguise query. |
 | `canWalkOnPowderedSnow(stack, entity)` | Missing | — | Powder-snow walking is engine-owned. |
 | `isDamageable(stack)` | Covered | `ItemResource::damageable(host)` | Reads the effective components: `minecraft:max_damage` and `minecraft:damage` present, `minecraft:unbreakable` absent. |

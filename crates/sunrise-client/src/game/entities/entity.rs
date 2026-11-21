@@ -1036,7 +1036,7 @@ impl Game<'_> {
             self.res.facts(),
             self.collision,
         );
-        let alive = item.tick_settle(
+        let above_void = item.tick_settle(
             &self.world,
             self.pack.assets.registry,
             self.res.facts(),
@@ -1050,7 +1050,7 @@ impl Game<'_> {
         let (water, _) =
             item.push_by_fluid(&self.world, &self.res.motion().fluids, &self.loop_context);
         item.water_entry(water > 0.0, false, before, splash);
-        (alive, false)
+        (above_void, false)
     }
 }
 

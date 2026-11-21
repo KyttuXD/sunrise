@@ -94,7 +94,7 @@ impl ItemTables<'_> {
         step
     }
     /// The rest of the move after its vertical contact: block effects, bubble columns, settling
-    /// and the water entry. Whether the item lives on.
+    /// and the water entry. Whether the item is still above the void.
     pub(in crate::game) fn settle_item(
         &self,
         item: &mut ItemEntity,
@@ -111,7 +111,7 @@ impl ItemTables<'_> {
             self.context,
         );
         item.push_by_bubble_column(self.world, self.registry, self.facts, self.collision);
-        let alive = item.tick_settle(
+        let above_void = item.tick_settle(
             self.world,
             self.registry,
             self.facts,
@@ -124,7 +124,7 @@ impl ItemTables<'_> {
         let before = item.velocity;
         let (water, _) = item.push_by_fluid(self.world, &self.motion.fluids, self.context);
         item.water_entry(water > 0.0, false, before, splash);
-        alive
+        above_void
     }
 }
 
@@ -136,8 +136,7 @@ pub(super) fn reach(item: &ItemEntity) -> Aabb {
         .inflate(Vec3::new(v.x.abs() + 1.0, v.y.abs() + 1.0, v.z.abs() + 1.0))
 }
 
-/// An item's move as its turn makes it: without physics (inside a block), alive, discarded, and
-/// its splashes.
+/// An item's move: without physics (inside a block), above the void, discarded, and its splashes.
 pub(super) type Moved = (bool, bool, bool, Vec<ItemSplash>);
 
 /// One item's move, worked out on a copy.
@@ -169,8 +168,8 @@ fn move_alone(
     if step.vertical_contact.is_some() && item.stack.count == 0 {
         return (no_physics, false, true, splashes);
     }
-    let alive = tables.settle_item(item, no_physics, step, &mut |s| splashes.push(s));
-    (no_physics, alive, false, splashes)
+    let above_void = tables.settle_item(item, no_physics, step, &mut |s| splashes.push(s));
+    (no_physics, above_void, false, splashes)
 }
 
 #[cfg(test)]

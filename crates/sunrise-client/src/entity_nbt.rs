@@ -2796,6 +2796,13 @@ pub fn item_entity_to_nbt(
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Owner".into());
     }
+    // NeoForge `ItemEntity.addAdditionalSaveData`: store non-default lifespan
+    // so extended items survive save/load while vanilla items keep exact tags.
+    if e.lifespan != ItemEntity::LIFETIME {
+        put(&mut tag, "Lifespan", Tag::Int(e.lifespan));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Lifespan".into());
+    }
     tag
 }
 /// `PrimedTnt.readAdditionalSaveData`: `explosion_power`, 4 by default and
@@ -2916,7 +2923,7 @@ pub fn entity_base_tag(
 }
 
 /// `ItemEntity.readAdditionalSaveData`: `getShortOr` (floored, then narrowed) for three;
-/// Owner and Thrower use the numeric UUID codec.
+/// Owner and Thrower use the numeric UUID codec, and NeoForge reads `Lifespan` with `getIntOr`.
 pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemEntity> {
     let stack = item_from_nbt(tag.get("Item")?)?;
     let position = position(tag)?;
@@ -2924,6 +2931,11 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         Some(Tag::Float(v)) => f32::from_bits(*v).floor() as i32 as i16,
         Some(Tag::Double(v)) => f64::from_bits(*v).floor() as i32 as i16,
         other => number(other).unwrap_or(default) as i16,
+    };
+    let lifespan = match tag.get("Lifespan") {
+        Some(Tag::Float(v)) => sunrise_core::mth::floor_f32(f32::from_bits(*v)),
+        Some(Tag::Double(v)) => sunrise_core::mth::floor(f64::from_bits(*v)),
+        other => number(other).map_or(ItemEntity::LIFETIME, |v| v as i32),
     };
     Some(ItemEntity {
         attachment_lifetime: Default::default(),
@@ -2945,7 +2957,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         // Entity.load: getDoubleOr, any number widened.
         fall_distance: float(tag.get("fall_distance")).unwrap_or(0.0),
         age: i32::from(short("Age", 0)),
-        lifespan: ItemEntity::LIFETIME,
+        lifespan,
         pickup_delay: i64::from(short("PickupDelay", 0)),
         bob_offset,
         ticks: 0,
@@ -5872,6 +5884,44 @@ mod tests {
         cleared.thrower = None;
         let cleared = item_entity_to_nbt(&cleared, [1, 2, 3, 4], Some(&tag), &Default::default());
         assert!(cleared.get("Thrower").is_none());
+    }
+    #[test]
+    fn item_lifespan_nbt_round_trip_omits_default_and_preserves_extended() {
+        let mut e = ItemEntity::new(
+            11,
+            ItemStack::new("minecraft:stone", 1),
+            Vec3::new(0.5, 64.0, 0.5),
+            Vec3::ZERO,
+            0.0,
+        );
+        let default_tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None, &Default::default());
+        assert!(default_tag.get("Lifespan").is_none());
+        let from_default = item_entity_from_nbt(&default_tag, 12, 0.0).unwrap();
+        assert_eq!(from_default.lifespan, ItemEntity::LIFETIME);
+
+        e.lifespan = 12345;
+        let mut extended_tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None, &Default::default());
+        assert_eq!(extended_tag.get("Lifespan"), Some(&Tag::Int(12345)));
+        let from_extended = item_entity_from_nbt(&extended_tag, 13, 0.0).unwrap();
+        assert_eq!(from_extended.lifespan, 12345);
+
+        e.lifespan = ItemEntity::LIFETIME;
+        let reset_tag =
+            item_entity_to_nbt(&e, [1, 2, 3, 4], Some(&extended_tag), &Default::default());
+        assert!(reset_tag.get("Lifespan").is_none());
+
+        put(
+            &mut extended_tag,
+            "Lifespan",
+            Tag::Float((-1.5_f32).to_bits()),
+        );
+        assert_eq!(
+            item_entity_from_nbt(&extended_tag, 14, 0.0)
+                .unwrap()
+                .lifespan,
+            -2,
+            "NeoForge accepts a numeric tag and floors floating-point values"
+        );
     }
     #[test]
     fn nbt_numeric_flags_decode_and_save_modeled_values_without_raw() {

@@ -72,6 +72,25 @@ emit a second notice.
 See the [generated API reference](../../reference/api.md) and the hook's
 [caller notes](../../reference/hook-notes.md#player-bed-leave-callers).
 
+## Dropped-item expiry
+
+`item_expire` runs on the server when a dropped item reaches its lifespan (normally 6000 ticks),
+before the game decides whether to discard it. Read the stack from `event.stack` and the drop's
+position with `host.entity(event.entity).and_then(|entity| entity.position(host))`.
+
+To extend its life, add to `event.extra_life` with `wrapping_add` so contributions combine like
+NeoForge's signed 32-bit integers. The game adds that amount to the lifespan with the same
+arithmetic, clamps the result to `0..=32766` (`Short.MAX_VALUE - 1` in NeoForge's `ItemEntity.tick`),
+and leaves the current age unchanged. The drop survives only if its age is below its new lifespan
+and it hasn't otherwise been removed. If a listener panics, the game reports it and disables
+that callback for the session. Other listeners still run, and the failed listener's edit to
+`extra_life` is ignored.
+
+To observe actual removals instead, listen to `entity_leave_level` and check for
+`event.kind == "minecraft:item"`. It reports departures from any cause, not just expiry. A drop
+discarded at expiry leaves before the next drop ticks; extending its life does not fire a leave
+notice.
+
 ## Physical movement decisions
 
 `entity_move` runs on the server before one physical `Entity.move` invocation,

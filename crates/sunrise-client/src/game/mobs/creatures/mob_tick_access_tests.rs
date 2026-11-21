@@ -413,8 +413,12 @@ fn item_lifetime_edit_in_the_item_tick_still_lands() {
                 .find(|item| item.id == id)
                 .expect("the extended item stayed");
             assert_eq!(
-                item.age, 5900,
-                "the listener's 100 ticks landed on the item's age"
+                item.lifespan, 6100,
+                "the listener's 100 ticks extended the item's lifespan"
+            );
+            assert_eq!(
+                item.age, 6001,
+                "extending lifespan leaves the item's age intact"
             );
         });
         let _ = std::fs::remove_dir_all(&root);

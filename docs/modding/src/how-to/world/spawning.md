@@ -93,7 +93,7 @@ entity notifies once with `loaded_from_disk = false`; restoring it from a saved 
 notifies once with `loaded_from_disk = true`. The normal join cancellation and
 transaction rules apply to these entities too.
 
-`entity_leave_level` (hook version 3) reports the same additional kinds when they leave.
+`entity_leave_level` reports the same additional kinds when they leave.
 On the server, `LevelRef::visit_entities_in` also visits block, item and text displays,
 markers and interactions. Eyes of ender, leash knots and other unmodeled kinds are
 not visited yet. The query uses physical boxes, not rendering bounds: displays

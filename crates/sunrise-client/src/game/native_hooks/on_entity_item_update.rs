@@ -26,7 +26,7 @@ impl Game<'_> {
                 );
                 if !(merging && self.joined_during_entity_pass(id)) && ticking(x, z) {
                     if round.listening() {
-                        round.add(id, native_ticks::TickKind::Fixed(native_ticks::ITEM));
+                        round.add(id, native_ticks::TickKind::Item(item.join));
                     } else if update_hook && self.item_update_halts(i) {
                         round.halt(id);
                     }

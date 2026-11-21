@@ -12,8 +12,11 @@
 //! either hook is listened to.
 use super::Game;
 use std::sync::Arc;
-use sunrise_client::join_seq::JoinSeq;
 use sunrise_client::mobs::MobType;
+use sunrise_client::{
+    entities::ItemEntity,
+    join_seq::{JoinList, JoinSeq},
+};
 
 /// The item entities' type, as the hooks name it.
 pub(super) const ITEM: &str = "minecraft:item";
@@ -24,6 +27,7 @@ pub(super) const PLAYER: &str = "minecraft:player";
 pub(super) enum TickKind {
     Fixed(&'static str),
     Mob(Arc<MobType>),
+    Item(JoinSeq),
 }
 
 impl TickKind {
@@ -31,6 +35,7 @@ impl TickKind {
         match self {
             Self::Fixed(id) => id,
             Self::Mob(kind) => &kind.id,
+            Self::Item(_) => ITEM,
         }
     }
 }
@@ -248,6 +253,13 @@ impl TickRound {
         if self.listening() {
             self.ticking.retain(|(other, _)| *other != id);
         }
+    }
+    /// After a dropped-item callback changed membership, a later drop that left never ticked.
+    /// Keep Post for drops at or before `through`: their turns have already run.
+    pub(super) fn forget_missing_drops(&mut self, through: JoinSeq, drops: &JoinList<ItemEntity>) {
+        self.ticking.retain(|(_, kind)| {
+            !matches!(kind, TickKind::Item(join) if *join > through && drops.locate(*join).is_none())
+        });
     }
 }
 

@@ -242,7 +242,8 @@ pub struct ItemEntity {
     /// `fallOn` on landing ([`ItemStep::landed`]), then reset.
     pub fall_distance: f64,
     pub age: i32,
-    /// The age at which the server asks whether this item should expire.
+    /// NeoForge `ItemEntity.lifespan`: maximum age in ticks before expiry
+    /// (default [`Self::LIFETIME`], 6000).
     pub lifespan: i32,
     /// Signed NBT counter; widened to retain the legacy internal u32::MAX sentinel.
     pub pickup_delay: i64,
@@ -468,7 +469,7 @@ impl ItemEntity {
             self.bounds(),
             &mut self.velocity,
         );
-        let alive = self.tick_settle(
+        let above_void = self.tick_settle(
             world,
             registry,
             facts,
@@ -480,15 +481,19 @@ impl ItemEntity {
         let before = self.velocity;
         let (water, _) = self.update_fluids(world, fluids, context);
         self.water_entry(water > 0.0, false, before, &mut |_| {});
-        alive
+        above_void && self.age < self.lifespan
     }
 }
 impl ItemEntity {
-    /// `ItemEntity.LIFETIME`: the default five-minute lifetime, in ticks.
-    pub const LIFETIME: i32 = 6000;
     pub const WIDTH: f64 = 0.25;
     /// `EntityTypes.ITEM` declares a float eye height, widened by `Entity.getEyeY`.
     pub const EYE_HEIGHT: f64 = 0.2125_f32 as f64;
+    /// Vanilla `ItemEntity.LIFETIME`: default dropped-item lifespan in ticks.
+    pub const LIFETIME: i32 = 6000;
+    /// NeoForge `ItemEntity.tick` lifespan cap (`Short.MAX_VALUE - 1`),
+    /// preventing `age` (stored as a short) from wrapping into an accidental
+    /// infinite lifespan.
+    pub const MAX_LIFESPAN: i32 = i16::MAX as i32 - 1;
     /// `Entity.getLightProbePosition(partialTick)` for a dropped item: the eye
     /// position (`getEyePosition`) over the position drawn this frame
     /// (`getPosition(partialTick)`), not this tick's own.
@@ -608,9 +613,9 @@ impl ItemEntity {
         );
     }
     /// The rest of `ItemEntity.tick`, after the bubble column's push: slime,
-    /// drag, block contact, age. Returns false when the item should be
-    /// removed. The game then runs the fluid push again (`ItemEntity.tick`
-    /// refreshes immersion after moving).
+    /// drag, block contact, age. Returns false if the item is below the world.
+    /// The game runs the server lifespan check after merging and refreshes
+    /// immersion after moving (`ItemEntity.tick`).
     pub fn tick_settle(
         &mut self,
         world: &World,
@@ -683,7 +688,7 @@ impl ItemEntity {
         if self.age != i16::MIN as i32 {
             self.age = self.age.wrapping_add(1);
         }
-        self.age < 6000 && self.position.y >= f64::from(world.shape.min_y - 64)
+        self.position.y >= f64::from(world.shape.min_y - 64)
     }
     /// `Entity.makeStuckInBlock` as `WebBlock.entityInside` and
     /// `PowderSnowBlock.entityInside` call it for an item (which, unlike a
@@ -781,11 +786,12 @@ impl ItemEntity {
         self.pickup_delay == i64::from(i16::MAX) || self.pickup_delay == i64::from(u32::MAX)
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
-    /// delay isn't infinite, before its lifetime ends.
+    /// delay isn't infinite. NeoForge's `ItemEntity.tick` patch leaves the
+    /// vanilla merge threshold unchanged, even if a drop outlives it.
     fn mergeable(&self, age: i32, max_stack: u32) -> bool {
         !self.has_infinite_pickup_delay()
             && age != i16::MIN as i32
-            && age < 6000
+            && age < Self::LIFETIME
             && self.stack.count < max_stack
     }
 }

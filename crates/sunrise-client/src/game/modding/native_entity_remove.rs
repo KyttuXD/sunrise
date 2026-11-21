@@ -202,8 +202,24 @@ impl Game<'_> {
             }
         }
     }
+    /// Retires the item rows for removals already announced by `remove_target_now`. The item pass
+    /// also sweeps these while its rows are resident, before it can tick, merge or pick them up.
+    pub(super) fn native_item_removals_flush(&mut self) {
+        let dropped = &mut self.dropped;
+        self.persist.removals.retain(|target| {
+            let Target::Item(id) = *target else {
+                return true;
+            };
+            if let Some(i) = dropped.iter().position(|item| item.id == id) {
+                dropped.remove(i);
+            }
+            false
+        });
+    }
+
     /// Takes out the entities mods removed since the last sweep.
     pub(super) fn native_removals_flush(&mut self) {
+        self.native_item_removals_flush();
         if self.persist.removals.is_empty() {
             return;
         }

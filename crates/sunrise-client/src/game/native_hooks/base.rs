@@ -2958,17 +2958,6 @@ impl Game<'_> {
     pub(in crate::game) fn native_explosion_prime(&mut self, center: [f64; 3], radius: f32) {
         self.fire_explosion_prime(center, radius);
     }
-    /// A dropped item entity reached its 6000-tick lifetime and is about to be
-    /// removed (Bukkit's `ItemDespawnEvent`).
-    pub(in crate::game) fn native_item_despawn(
-        &mut self,
-        entity: u32,
-        item: &str,
-        count: i32,
-        pos: [f64; 3],
-    ) {
-        self.fire_item_despawn(entity, item, count, pos);
-    }
     /// A mob is about to drop `count` of `item` at `pos` (Bukkit's
     /// `EntityDropItemEvent`).
     pub(in crate::game) fn native_entity_drop_item(
@@ -3892,15 +3881,18 @@ impl Game<'_> {
     ) {
         self.fire_loot_drops(context, drops);
     }
-    /// A dropped item reaches its lifetime on the server (`ItemEntity.tick`,
-    /// NeoForge's `ItemExpireEvent`). Every mod may set or add to `extra_life`,
-    /// in ticks, which starts at zero; a positive total keeps the item that much
-    /// longer, zero or less lets it expire. Extensions are capped at 32766
-    /// ticks.
+    /// A dropped item reaches its lifespan on the server (`ItemEntity.tick`,
+    /// NeoForge's `EventHooks.onItemExpire` / `ItemExpireEvent`), before
+    /// removal. Every mod may set or add to `extra_life`, in ticks, which
+    /// starts at zero, and may query the live item entity through `Host`.
+    /// Afterward `lifespan` gets `extra_life` by signed 32-bit wrapping
+    /// addition, then is clamped to `0..=32766` (`Short.MAX_VALUE - 1`)
+    /// without rewinding `age`. If `age >= lifespan`, the item is discarded
+    /// and `entity_leave_level` fires before the next drop ticks.
     pub(in crate::game) fn native_item_expire(
         &mut self,
         entity: u32,
-        stack: &ItemStack,
+        stack: &mod_api::ItemStack,
         extra_life: &mut i32,
     ) {
         self.fire_item_expire(entity, stack, extra_life);
