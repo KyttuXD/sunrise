@@ -127,6 +127,7 @@ mod add_pack_finders;
 mod add_section_geometry;
 mod add_server_reload_listeners;
 mod adjacent_block_path_type;
+mod adjust_player_turn;
 mod affect_neighbors_after_removal;
 mod animal_tame;
 mod animate_tick;

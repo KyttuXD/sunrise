@@ -16,6 +16,17 @@ pub fn wrap_degrees(angle: f32) -> f32 {
     }
     normalized
 }
+pub(crate) fn validate_turn_delta(yaw_delta: &f64, pitch_delta: &f64) -> Result<(), &'static str> {
+    // Entity.turn converts its double arguments to float before multiplying by 0.15F.
+    if !(*yaw_delta as f32).is_finite() {
+        return Err("yaw_delta is not a finite float");
+    }
+    if !(*pitch_delta as f32).is_finite() {
+        return Err("pitch_delta is not a finite float");
+    }
+    Ok(())
+}
+
 /// What `AbstractClientPlayer.getFieldOfViewModifier` reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it

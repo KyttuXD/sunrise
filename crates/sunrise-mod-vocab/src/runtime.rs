@@ -449,6 +449,32 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Invoke a scalar listener. Only its successful proposal may be published by dispatch.
+/// A phase refusal is not a callback fault and does not disable the listener.
+pub(crate) fn invoke_isolated_listener(
+    hook: generated::HookId,
+    id: &'static str,
+    name: &'static str,
+    contained: bool,
+    call: impl FnOnce(),
+) -> bool {
+    match crate::callback_owner::contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(())) => true,
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            false
+        }
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod `{id}` panicked in `{name}`; this callback is disabled for the session: {message}"
+            );
+            crate::callback_owner::record_callback_panic(id, "hook", name, message);
+            false
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,

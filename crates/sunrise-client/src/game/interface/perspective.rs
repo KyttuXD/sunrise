@@ -698,12 +698,16 @@ impl Game<'_> {
     /// agent's `turn`.
     /// The model's old pitch is the player's `xRotO`, which the turn moves
     /// with `xRot` (`turn_rotation`).
-    pub(super) fn turn_player(&mut self, xo: f64, yo: f64) {
+    pub(super) fn turn_player(&mut self, mut xo: f64, mut yo: f64) {
         if self.studio.flying() {
             self.studio
                 .freecam
                 .turn((xo * 0.15) as f32, (yo * 0.15) as f32);
             return;
+        }
+        if self.player.is_some() && mod_api::__private::listened(mod_api::HookId::AdjustPlayerTurn)
+        {
+            self.native_adjust_player_turn(&mut xo, &mut yo);
         }
         let pitch_o = self.player_model.as_ref().map(|m| m.previous_head_pitch);
         let rotation = turn_rotation(self.yaw, self.pitch, pitch_o, xo, yo);
