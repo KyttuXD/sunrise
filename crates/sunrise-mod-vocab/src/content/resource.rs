@@ -5,7 +5,7 @@ use crate::{
     Capability, Host, HostTransaction, ItemStack, ItemStackView, ServerHost, Tag, Transaction,
     backend_of,
 };
-use std::fmt;
+use std::{fmt, ops::Range};
 use sunrise_core::nbt::JavaString;
 
 /// A data component's id, `namespace:path` (`minecraft:damage`, `mymod:charge`), checked once
@@ -489,6 +489,25 @@ impl fmt::Debug for ItemResource {
     }
 }
 
+/// The slots a [resource handler](ResourceHandler::next_slots) must consider in an indexed scan.
+// no wire: a process-local selector that can borrow a resource.
+#[non_exhaustive]
+pub enum ResourceSlotScan<'a, R> {
+    /// Slots that report a resource or a nonzero amount.
+    Occupied,
+    /// Slots whose held amount is below their capacity for the resource they hold, or below
+    /// their general capacity if they hold no resource.
+    BelowCapacity,
+    /// Slots that accept this resource, even if they currently have no room.
+    Accepting(&'a R),
+    /// Slots into which some of this resource could be inserted.
+    Inserting(&'a R),
+    /// Slots holding this resource with room to top it up, and empty slots that accept the
+    /// resource and have room. A run of multiple indices must report the same held resource,
+    /// amount, resource-specific capacity and validity at each index in the run.
+    CapacityFor(&'a R),
+}
+
 /// The contents of one holder (a block entity as one side reaches it, an item where it lives),
 /// numbered from 0, as NeoForge's `ResourceHandler`: a provider makes one for its holder, so it
 /// knows where its contents live. It holds no borrow of the game: each call is given the host,
@@ -512,6 +531,18 @@ pub trait ResourceHandler<R> {
 
     /// How many indices it has.
     fn size(&self, host: &mut dyn ServerHost) -> usize;
+    /// The first candidate run in `range`, or `None` if there are no more candidates. Dense
+    /// handlers can keep the default and let the caller examine each slot. Sparse handlers can
+    /// skip indices they know cannot match `scan`, or return a run of equivalent candidates.
+    /// Return a nonempty subrange of `range`; the caller advances the start as it processes slots.
+    fn next_slots(
+        &self,
+        _host: &mut dyn ServerHost,
+        range: Range<usize>,
+        _scan: &ResourceSlotScan<'_, R>,
+    ) -> Option<Range<usize>> {
+        (!range.is_empty()).then(|| range.start..range.start + 1)
+    }
     /// What index `index` holds, if anything.
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R>;
     /// How much of it.
@@ -563,8 +594,12 @@ pub trait ResourceHandler<R> {
         resource: &R,
         amount: u32,
     ) -> Result<u32, Overanswered> {
-        let size = self.size(host);
-        in_turn(host, tx, amount, 0..size, |host, tx, index, left| {
+        let slots = slot_indices(
+            self,
+            0..self.size(host),
+            ResourceSlotScan::Inserting(resource),
+        );
+        in_turn(host, tx, amount, slots, |host, tx, index, left| {
             Ok(self.insert_at(host, tx, *index, resource, left))
         })
     }
@@ -578,10 +613,37 @@ pub trait ResourceHandler<R> {
         resource: &R,
         amount: u32,
     ) -> Result<u32, Overanswered> {
-        let size = self.size(host);
-        in_turn(host, tx, amount, 0..size, |host, tx, index, left| {
+        let slots = slot_indices(self, 0..self.size(host), ResourceSlotScan::Occupied);
+        in_turn(host, tx, amount, slots, |host, tx, index, left| {
             Ok(self.extract_at(host, tx, *index, resource, left))
         })
+    }
+}
+
+pub(crate) fn slot_candidates<R>(
+    handler: &(impl ResourceHandler<R> + ?Sized),
+    host: &mut dyn ServerHost,
+    range: Range<usize>,
+    scan: &ResourceSlotScan<'_, R>,
+) -> Option<Range<usize>> {
+    if range.is_empty() {
+        return None;
+    }
+    handler
+        .next_slots(host, range.clone(), scan)
+        .filter(|run| !run.is_empty() && run.start >= range.start && run.end <= range.end)
+}
+
+/// A forward scan whose next candidate comes from the live handler, not a snapshot of its slots.
+pub(crate) fn slot_indices<'a, R>(
+    handler: &'a (impl ResourceHandler<R> + ?Sized),
+    mut range: Range<usize>,
+    scan: ResourceSlotScan<'a, R>,
+) -> impl FnMut(&mut dyn ServerHost) -> Option<usize> + 'a {
+    move |host| {
+        let index = slot_candidates(handler, host, range.clone(), &scan).map(|run| run.start);
+        range.start = index.map_or(range.end, |i| i + 1);
+        index
     }
 }
 
@@ -590,13 +652,13 @@ pub(crate) fn in_turn<P>(
     host: &mut dyn ServerHost,
     tx: &Transaction,
     amount: u32,
-    parts: impl IntoIterator<Item = P>,
+    next: impl FnMut(&mut dyn ServerHost) -> Option<P>,
     ask: impl FnMut(&mut dyn ServerHost, &Transaction, &P, u32) -> Result<u32, Overanswered>,
 ) -> Result<u32, Overanswered> {
     if amount == 0 || host.transaction_current().as_ref() != Some(tx) {
         return Ok(0);
     }
-    host.transaction(|host, tx| try_in_turn(host, tx, amount, parts, ask))
+    host.transaction(|host, tx| try_in_turn(host, tx, amount, next, ask))
 }
 
 /// Asks each part for the full remaining amount. The owning transaction aborts on `Err`.
@@ -604,15 +666,14 @@ pub(crate) fn try_in_turn<P>(
     host: &mut dyn ServerHost,
     tx: &Transaction,
     amount: u32,
-    parts: impl IntoIterator<Item = P>,
+    mut next: impl FnMut(&mut dyn ServerHost) -> Option<P>,
     mut ask: impl FnMut(&mut dyn ServerHost, &Transaction, &P, u32) -> Result<u32, Overanswered>,
 ) -> Result<u32, Overanswered> {
     let mut done = 0;
-    for part in parts {
+    while done < amount
+        && let Some(part) = next(host)
+    {
         let left = amount - done;
-        if left == 0 {
-            break;
-        }
         done += checked_transfer(ask(host, tx, &part, left)?, left)?;
     }
     Ok(done)

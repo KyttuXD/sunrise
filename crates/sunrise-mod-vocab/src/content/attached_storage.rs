@@ -7,14 +7,15 @@ use crate::content::registry_keys::{fluid_id, fluid_key, item_id, item_key_by_id
 use crate::{
     AttachmentCodec, AttachmentError, AttachmentType, Components, Compound, EnergyHandler,
     FluidIdentity, FluidResource, FluidStack, Holder, Identifier, ItemResource, ItemStack,
-    ResourceHandler, ServerHost, Tag, Transaction,
+    ResourceHandler, ResourceSlotScan, ServerHost, Tag, Transaction,
 };
+use std::{collections::BTreeMap, ops::Range};
 use sunrise_core::nbt::JavaString;
 
-/// What each index holds and how much, none for an empty one: the saved value of an
-/// [`AttachedStacks`] (NeoForge's `ResourceStacksResourceHandler` contents).
-// no wire: the saved value of an attachment, written by its codec, never sent.
-pub type StackList<R> = Vec<Option<(R, u32)>>;
+/// The contents of an [`AttachedStacks`], keyed by slot or tank index. Missing indices are
+/// empty; the handler's size is independent of this map.
+// no wire: attachment contents are serialized only by the declared attachment codec.
+pub type StackList<R> = BTreeMap<usize, (R, u32)>;
 
 /// A resource an [`AttachedStacks`] holds: how much of it one index takes at most, given the
 /// handler's own capacity. Items stack to their stack size; anything else to the capacity.
@@ -59,24 +60,22 @@ pub type AttachedFluids = AttachedStacks<FluidResource>;
 
 impl<R: StackedResource> AttachedStacks<R> {
     /// `size` indices of `attachment` on `holder`, each holding up to `capacity` of what `valid`
-    /// accepts. Returns `None` if `size` exceeds the codecs' 4096-index limit.
+    /// accepts. Only occupied indices take space. A codec, if declared, may refuse a write it
+    /// cannot represent.
     pub fn new(
         attachment: &'static AttachmentType<StackList<R>>,
         holder: Holder,
         size: usize,
         capacity: u32,
         valid: fn(&R) -> bool,
-    ) -> Option<Self> {
-        if size > MAX_SLOTS {
-            return None;
-        }
-        Some(Self {
+    ) -> Self {
+        Self {
             attachment,
             holder,
             size,
             capacity,
             valid,
-        })
+        }
     }
     /// One index (`ItemStackResourceHandler`, a single tank).
     pub fn single(
@@ -86,29 +85,34 @@ impl<R: StackedResource> AttachedStacks<R> {
         valid: fn(&R) -> bool,
     ) -> Self {
         Self::new(attachment, holder, 1, capacity, valid)
-            .expect("one index is within the codec limit")
     }
-    /// What index `index` holds; none past the handler's `size`, or where the holder has none
-    /// or is gone. One borrowed read of the stored list: only the entry is cloned.
-    fn at(&self, host: &mut dyn ServerHost, index: usize) -> Option<(R, u32)> {
-        if index >= self.size {
-            return None;
-        }
-        let borrowed = self.attachment.with_decoded(host, self.holder, |list| {
-            list.map(|list| list.get(index).and_then(|held| held.as_ref()).cloned())
-        });
-        match borrowed {
-            // The holder keeps a decoded list: the entry is read without a clone.
-            Ok(Some(held)) => held,
-            // Nothing decoded yet: `get_existing` decodes a saved value once, and the store
-            // keeps its decoded copy for the borrowed reads after it.
-            _ => self
+    /// Reads the map by reference if decoded, or decodes the saved attachment once for this holder.
+    fn read<T>(
+        &self,
+        host: &mut dyn ServerHost,
+        read: impl Fn(&StackList<R>) -> Option<T>,
+    ) -> Option<T> {
+        match self
+            .attachment
+            .with_decoded(host, self.holder, |list| list.map(&read))
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => self
                 .attachment
                 .get_existing(host, self.holder)
                 .ok()
                 .flatten()
-                .and_then(|list| list.into_iter().nth(index).flatten()),
+                .as_ref()
+                .and_then(read),
+            Err(_) => None,
         }
+    }
+    /// What index `index` holds; none past `size`, where the holder has none, or it is gone.
+    fn at(&self, host: &mut dyn ServerHost, index: usize) -> Option<(R, u32)> {
+        if index >= self.size {
+            return None;
+        }
+        self.read(host, |list| list.get(&index).cloned())
     }
     /// Index `index` set to `now`: whether the write went through. Indices past the handler's
     /// `size` that the holder keeps are preserved, so a write through a smaller view never
@@ -120,11 +124,12 @@ impl<R: StackedResource> AttachedStacks<R> {
             .ok()
             .flatten()
             .unwrap_or_default();
-        if list.len() <= index {
-            list.resize(index + 1, None);
+        if let Some(held) = now.filter(|(_, amount)| *amount > 0) {
+            list.insert(index, held);
+        } else {
+            list.remove(&index);
         }
-        list[index] = now.filter(|(_, amount)| *amount > 0);
-        if list.iter().all(Option::is_none) {
+        if list.is_empty() {
             self.attachment.remove(host, self.holder).is_ok()
         } else {
             self.attachment.set(host, self.holder, list).is_ok()
@@ -135,6 +140,43 @@ impl<R: StackedResource> AttachedStacks<R> {
 impl<R: StackedResource> ResourceHandler<R> for AttachedStacks<R> {
     fn size(&self, _: &mut dyn ServerHost) -> usize {
         self.size
+    }
+    fn next_slots(
+        &self,
+        host: &mut dyn ServerHost,
+        range: Range<usize>,
+        scan: &ResourceSlotScan<'_, R>,
+    ) -> Option<Range<usize>> {
+        let range = range.start..range.end.min(self.size);
+        if range.is_empty() {
+            return None;
+        }
+        let first = range.start..range.start + 1;
+        let capacity_for = match scan {
+            ResourceSlotScan::Occupied => None,
+            ResourceSlotScan::BelowCapacity if self.capacity == 0 => None,
+            ResourceSlotScan::BelowCapacity => return Some(first),
+            ResourceSlotScan::Accepting(resource) => {
+                return (self.valid)(resource).then_some(first);
+            }
+            ResourceSlotScan::Inserting(resource) => {
+                return ((self.valid)(resource) && resource.limit(host, self.capacity) > 0)
+                    .then_some(first);
+            }
+            ResourceSlotScan::CapacityFor(resource) => Some(*resource),
+        };
+        let occupied = self.read(host, |list| {
+            list.range(range.clone()).next().map(|(&index, _)| index)
+        });
+        if let Some(resource) = capacity_for
+            && occupied != Some(range.start)
+            && (self.valid)(resource)
+            && resource.limit(host, self.capacity) > 0
+        {
+            Some(range.start..occupied.unwrap_or(range.end))
+        } else {
+            occupied.map(|index| index..index + 1)
+        }
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         self.at(host, index).map(|(resource, _)| resource)
@@ -268,10 +310,9 @@ impl EnergyHandler for AttachedEnergy {
 }
 
 /// The codec of an [`AttachedItems`] attachment: `{stacks: [{Slot, id, count, components}]}`,
-/// each held index as vanilla saves a container's items. An amount past what a signed `Int`
-/// saves (`i32::MAX`) fails the encode rather than wrapping; the handler's capacity is far
-/// below it.
-/// At most 4096 indices (slots 0 through 4095) can be encoded or decoded.
+/// only occupied slots, as in vanilla's `ContainerHelper.saveAllItems`. In this format `Slot`
+/// and `count` are NBT `Int`s. An occupied index or amount above `i32::MAX` fails encoding
+/// rather than wrapping; a negative saved index fails decoding.
 pub const ITEM_STACKS: AttachmentCodec<StackList<ItemResource>> = AttachmentCodec {
     encode: |list| {
         encode_stacks(list, |item, amount| {
@@ -312,10 +353,9 @@ pub const ITEM_STACKS: AttachmentCodec<StackList<ItemResource>> = AttachmentCode
 };
 
 /// The codec of an [`AttachedFluids`] attachment: `{stacks: [{Slot, id, amount, components}]}`.
-/// At most 4096 indices (slots 0 through 4095) can be encoded or decoded.
-/// An amount past what a signed `Int` saves (`i32::MAX`) fails the encode, as the items codec
-/// does; a fluid tank that can hold more carries it in a mod's own codec (NeoForge saves the
-/// same `Int`).
+/// As with [`ITEM_STACKS`], only occupied indices are saved. `Slot` and `amount` are NBT
+/// `Int`s: an occupied index or amount above `i32::MAX` fails encoding, and a negative saved
+/// index fails decoding.
 pub const FLUID_STACKS: AttachmentCodec<StackList<FluidResource>> = AttachmentCodec {
     encode: |list| {
         encode_stacks(list, |fluid, amount| {
@@ -362,17 +402,12 @@ fn encode_stacks<R>(
     list: &StackList<R>,
     entry: impl Fn(&R, u32) -> Option<Compound>,
 ) -> Result<Compound, AttachmentError> {
-    if list.len() > MAX_SLOTS {
-        return Err(AttachmentError::Encode);
-    }
+    // Vanilla ListTag.write stores the element count as a signed Int.
+    i32::try_from(list.len()).map_err(|_| AttachmentError::Encode)?;
     let mut stacks = Vec::new();
-    for (slot, (resource, amount)) in list
-        .iter()
-        .enumerate()
-        .filter_map(|(slot, held)| Some((slot, held.as_ref()?)))
-    {
-        let mut saved = entry(resource, *amount).ok_or(AttachmentError::Encode)?;
+    for (&slot, (resource, amount)) in list {
         let slot = i32::try_from(slot).map_err(|_| AttachmentError::Encode)?;
+        let mut saved = entry(resource, *amount).ok_or(AttachmentError::Encode)?;
         saved.insert("Slot".into(), Tag::Int(slot));
         stacks.push(Tag::Compound(saved));
     }
@@ -381,13 +416,8 @@ fn encode_stacks<R>(
     Ok(saved)
 }
 
-/// The most indices a handler or saved stack list may span. Checked at construction and
-/// at both codec boundaries, before a hostile saved slot can drive allocation.
-const MAX_SLOTS: usize = 4096;
-
-/// The list `saved` holds, each index read by `entry`; one it can't read fails the decode. A
-/// `Slot` past [`MAX_SLOTS`] fails the decode before anything is allocated to its size.
-fn decode_stacks<R: Clone>(
+/// Decode each occupied index. A high `Slot` does not allocate any of the preceding slots.
+fn decode_stacks<R>(
     saved: &Compound,
     entry: impl Fn(&Compound) -> Option<(R, u32)>,
 ) -> Result<StackList<R>, AttachmentError> {
@@ -403,14 +433,8 @@ fn decode_stacks<R: Clone>(
             return Err(AttachmentError::Decode);
         };
         let slot = usize::try_from(slot).map_err(|_| AttachmentError::Decode)?;
-        if slot >= MAX_SLOTS {
-            return Err(AttachmentError::Decode);
-        }
         let held = entry(stack).ok_or(AttachmentError::Decode)?;
-        if list.len() <= slot {
-            list.resize(slot + 1, None);
-        }
-        list[slot] = Some(held);
+        list.insert(slot, held);
     }
     Ok(list)
 }

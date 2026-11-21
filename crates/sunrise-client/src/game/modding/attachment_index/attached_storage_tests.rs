@@ -55,8 +55,7 @@ fn attached_items_are_undone_by_an_abort_and_saved_by_their_codec() {
         let held = ITEMS.get_existing(host, CHUNK).unwrap().unwrap();
         let codec = ITEMS.codec.as_ref().unwrap();
         let reloaded = (codec.decode)(&(codec.encode)(&held).unwrap()).unwrap();
-        assert_eq!(reloaded[4], Some((dirt, 10)));
-        assert!(reloaded[..4].iter().all(Option::is_none));
+        assert_eq!(reloaded, StackList::from([(4, (dirt, 10))]));
     });
 }
 

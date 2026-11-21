@@ -6,11 +6,11 @@
 //! [`pickup_fluid`](LevelRef::pickup_fluid) and [`place_fluid`](LevelRef::place_fluid), and a
 //! dispenser's answer for a fluid container ([`dispense_container`]): nothing changes until a mod
 //! calls them.
-use crate::content::resource::{Ends, move_once};
+use crate::content::resource::{Ends, move_once, slot_indices};
 use crate::{
     Capability, Direction, DispenseItemEvent, Dispensed, FLUIDS, FluidResource, FluidStack,
     GameEventContext, Hand, HostTransaction, ITEM_FLUIDS, ItemPlace, LevelRef, PlayerRef,
-    ResourceHandler, ServerHost, SoundSource,
+    ResourceHandler, ResourceSlotScan, ServerHost, SoundSource,
 };
 
 /// `FluidType.BUCKET_VOLUME`: what a source block holds, and what a placement takes.
@@ -223,7 +223,8 @@ pub fn try_place_fluid(
     pos: [i32; 3],
     validate: bool,
 ) -> Option<FluidStack> {
-    for index in 0..source.size(host) {
+    let mut slots = slot_indices(source, 0..source.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
         let Some(fluid) = source.resource(host, index) else {
             continue;
         };
@@ -303,11 +304,17 @@ pub fn dispense_container(
 /// come out, and the container may hold more. None where nothing there holds a fluid.
 pub fn first_stack_contained(host: &mut dyn ServerHost, place: &ItemPlace) -> Option<FluidStack> {
     let item = place.capability(host, &ITEM_FLUIDS)?;
-    (0..item.size(host)).find_map(|index| {
-        let fluid = item.resource(host, index)?;
+    let mut slots = slot_indices(&item, 0..item.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
+        let Some(fluid) = item.resource(host, index) else {
+            continue;
+        };
         let amount = item.amount(host, index);
-        (amount > 0).then(|| fluid.to_stack(amount))
-    })
+        if amount > 0 {
+            return Some(fluid.to_stack(amount));
+        }
+    }
+    None
 }
 
 /// One move of the first fluid of `from`, index by index, that `to` takes any of, as much of it
@@ -320,7 +327,8 @@ fn move_first(
     from: &Capability<dyn ResourceHandler<FluidResource>>,
     to: &Capability<dyn ResourceHandler<FluidResource>>,
 ) -> Option<FluidStack> {
-    for index in 0..from.size(host) {
+    let mut slots = slot_indices(from, 0..from.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
         let Some(fluid) = from.resource(host, index) else {
             continue;
         };

@@ -26,14 +26,23 @@ each other's handlers. So the game refuses that at startup, naming both mods and
 namespace. Both checks run once, when the mods register.
 
 Storage for a holder without a block entity (an entity, a player, a chunk, the level) comes stock, kept in an
-attachment the mod declares, as NeoForge mods keep a `ItemStacksResourceHandler` or `SimpleEnergyHandler` in one:
-`AttachedItems::new(&SLOTS, holder, size, capacity, valid)` (returns `None` for more than 4096
-indices) and `AttachedFluids` (`AttachedStacks<R>`, a
-`ResourceHandler<R>` over an `AttachmentType<StackList<R>>`, `single` for one index) and
-`AttachedEnergy::new(&ENERGY, holder, capacity, max_insert, max_extract)` over an `AttachmentType<u32>`. Give the
-item or fluid attachment the codec `ITEM_STACKS` or `FLUID_STACKS` to save it. Every write is an attachment write, so
-the transaction journal, which keeps each holder's attachment map, undoes it on an abort; sync follows the attachment
-type's `sync` flag. A mod's own resource type implements `StackedResource` to be held. `capacity` stays the physical
-limit of an in-range index while `valid` refuses only inserts (extraction never asks it), indices past the handler's
-`size` that the attachment keeps are never deleted by a smaller view, and the codecs refuse a saved `Slot` past 4096
-indices or an amount past what a signed `Int` saves, rather than honoring or wrapping it.
+attachment the mod declares, as NeoForge mods keep an `ItemStacksResourceHandler` or `SimpleEnergyHandler` in one:
+`AttachedItems::new(&SLOTS, holder, size, capacity, valid)` and `AttachedFluids::new` return a handler directly.
+Both are `AttachedStacks<R>`, a `ResourceHandler<R>` over an `AttachmentType<StackList<R>>` (`single` for one
+index). `StackList<R>` maps occupied indices to `(resource, amount)`; use `StackList::new` for an empty attachment
+default. The handler's `size` defines its index range without allocating empty slots. `capacity` stays the physical
+limit of an in-range index, and `valid` checks inserts only. A write through a smaller view preserves any stored
+indices outside that view. A mod's own resource type implements `StackedResource` to use the same handler.
+`AttachedEnergy::new(&ENERGY, holder, capacity, max_insert, max_extract)` works over an `AttachmentType<u32>`.
+
+Give an item or fluid attachment `ITEM_STACKS` or `FLUID_STACKS` to save it. The stock codecs save only occupied
+indices, and their NBT `Int` fields must represent each saved index and amount. A handler without a codec is not
+limited by these fields; a handler with a stock codec refuses a write that would not fit. Every write goes through
+the attachment store, so the transaction journal undoes it on abort. Sync follows the attachment type's `sync` flag
+and the connection's limits.
+
+Stock transfer and query helpers use `ResourceHandler::next_slots` to skip gaps in sparse handlers without changing
+slot order. A dense handler can keep the default. If you wrap another handler without changing its indices, forward
+`next_slots(host, range, scan)` along with the indexed reads and writes. A custom sparse handler can return the first
+candidate run for the requested `ResourceSlotScan`. For example, the by-kind storage adapter can count empty slots
+that all have the same capacity as a single run.

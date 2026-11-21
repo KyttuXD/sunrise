@@ -1,0 +1,26 @@
+ids = [
+    "handle:AttachedStacks::new",
+    "type:StackList",
+    "method:ResourceHandler::next_slots",
+    "type:ResourceSlotScan",
+]
+why = "NeoForge's StacksResourceHandler constructors take their size from the backing storage, as used by ItemStacksResourceHandler and FluidStacksResourceHandler, not from a transfer limit. Vanilla's ContainerHelper.saveAllItems and loadAllItems save occupied indices without deriving the handler size from the largest saved index. Sunrise now stores only occupied indices and traverses them in the same order as NeoForge's ResourceHandler and ResourceHandlerUtil, without scanning empty gaps on reads or extraction. The codecs keep their existing signed NBT Int fields and the list length from ListTag.write. Attachment sync keeps its connection limits."
+migrate = """
+Replace `AttachedItems::new(&KEY, holder, size, capacity, valid)?` or `.unwrap()` on that
+constructor with `AttachedItems::new(&KEY, holder, size, capacity, valid)`; do the same for
+`AttachedFluids::new` and `AttachedStacks::new`. There is no `None` case. `single` is unchanged.
+
+For an `AttachmentType<StackList<R>>`, replace `default: Vec::new` with
+`default: StackList::new`. For reads of the stored value or a custom codec, replace
+`list.get(index).and_then(Option::as_ref)` with `list.get(&index)`, assigning a
+`Some((resource, amount))` with `list.insert(index, (resource, amount))`, and assigning
+`None` with `list.remove(&index)`. Iterate `for (&index, (resource, amount)) in &list`
+for occupied slots; use `handler.size(host)`, not `list.len()`, for the logical slot count.
+Keep using `ITEM_STACKS` and `FLUID_STACKS`; existing saved data needs no conversion.
+
+Dense `ResourceHandler` implementations need no changes. When forwarding indexed operations
+unchanged to a wrapped handler, forward `next_slots(host, range, scan)` as well so the stock
+helpers do not walk its empty indices. To let the helpers skip gaps in your own sparse
+handler, implement `next_slots` using `ResourceSlotScan` to find the first candidate run
+in the supplied range.
+"""

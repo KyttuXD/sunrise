@@ -15,7 +15,7 @@ A block's `ItemStorage` answers by kind, with `u64` amounts:
 
 **Who answers it.** The game answers `STORAGE` for every container or composter port `ITEMS` reaches. Its own containers are asked in
 one pass over the slots the side reaches, by the rules hoppers follow, so a chest, a hopper, a composter and a furnace give the same
-answers through either capability. A container whose `ITEMS` a mod answers is wrapped slot by slot. A mod's bulk store
+answers through either capability. A container whose `ITEMS` a mod answers is wrapped using its indexed handler. A mod's bulk store
 (a drive, drawers, a vault) answers `STORAGE` with a provider of its own, one entry per kind however many items it
 holds: register it `before_game` if the block also has slots.
 
@@ -66,7 +66,8 @@ wrapping.
 
 **Cost.** A bulk store can use a by-kind index to avoid scanning slots. The game's adapter answers in one pass over the slots
 (O(slots)), with no work per item moved, so a question about a chest costs the same whether it moves one item or a
-stack. A wrapped mod `ITEMS` handler costs one handler call per slot.
+stack. A wrapped mod `ITEMS` handler can skip empty gaps for reads and count equivalent empty slots together
+in `space_for` by supplying `ResourceHandler::next_slots` (see [A mod's own capability](own-capability.md)).
 
 ## Choosing a capability
 

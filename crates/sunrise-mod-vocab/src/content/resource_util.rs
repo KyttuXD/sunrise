@@ -2,8 +2,13 @@
 //! Writes and probes take `Some(tx)` for the current transaction or `None` to open a root.
 //! They refuse without calling handlers if the token does not name the current transaction,
 //! or if a transaction is open but no token was supplied. Probes always roll back.
-use crate::content::resource::{checked_transfer, in_turn, try_in_turn};
-use crate::{Capability, HostTransaction, Overanswered, ResourceHandler, ServerHost, Transaction};
+use crate::content::resource::{
+    checked_transfer, in_turn, slot_candidates, slot_indices, try_in_turn,
+};
+use crate::{
+    Capability, HostTransaction, Overanswered, ResourceHandler, ResourceSlotScan, ServerHost,
+    Transaction,
+};
 use std::ops::Range;
 
 /// Several handlers as one (`CombinedResourceHandler`): their indices one after another, the
@@ -52,6 +57,27 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
     fn size(&self, _: &mut dyn ServerHost) -> usize {
         self.size
     }
+    fn next_slots(
+        &self,
+        host: &mut dyn ServerHost,
+        range: Range<usize>,
+        scan: &ResourceSlotScan<'_, R>,
+    ) -> Option<Range<usize>> {
+        let mut offset = 0usize;
+        for (handler, size) in &self.handlers {
+            let end = offset.saturating_add(*size);
+            let local =
+                range.start.saturating_sub(offset)..range.end.min(end).saturating_sub(offset);
+            if let Some(run) = slot_candidates(handler.as_ref(), host, local, scan) {
+                return Some(offset + run.start..offset + run.end);
+            }
+            if end >= range.end {
+                break;
+            }
+            offset = end;
+        }
+        None
+    }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         let (handler, at) = self.locate(index)?;
         handler.resource(host, at)
@@ -99,11 +125,12 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
         resource: &R,
         amount: u32,
     ) -> Result<u32, Overanswered> {
+        let mut handlers = self.handlers.iter();
         in_turn(
             host,
             tx,
             amount,
-            &self.handlers,
+            |_| handlers.next(),
             |host, tx, (handler, _), left| handler.insert(host, tx, resource, left),
         )
     }
@@ -114,11 +141,12 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
         resource: &R,
         amount: u32,
     ) -> Result<u32, Overanswered> {
+        let mut handlers = self.handlers.iter();
         in_turn(
             host,
             tx,
             amount,
-            &self.handlers,
+            |_| handlers.next(),
             |host, tx, (handler, _), left| handler.extract(host, tx, resource, left),
         )
     }
@@ -129,13 +157,17 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
 /// [`ResourceHandler`] on a struct holding the handler and forward to it:
 ///
 /// ```
-/// use mod_api::{Overanswered, ResourceHandler, ServerHost, Transaction};
+/// use mod_api::{Overanswered, ResourceHandler, ResourceSlotScan, ServerHost, Transaction};
+/// use std::ops::Range;
 ///
 /// struct Delegating<R>(Box<dyn ResourceHandler<R>>);
 ///
 /// impl<R> ResourceHandler<R> for Delegating<R> {
 ///     fn size(&self, host: &mut dyn ServerHost) -> usize {
 ///         self.0.size(host)
+///     }
+///     fn next_slots(&self, host: &mut dyn ServerHost, range: Range<usize>, scan: &ResourceSlotScan<'_, R>) -> Option<Range<usize>> {
+///         self.0.next_slots(host, range, scan)
 ///     }
 ///     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
 ///         self.0.resource(host, index)
@@ -213,6 +245,21 @@ impl<R> RangedResourceHandler<R> {
 impl<R> ResourceHandler<R> for RangedResourceHandler<R> {
     fn size(&self, _: &mut dyn ServerHost) -> usize {
         self.range.len()
+    }
+    fn next_slots(
+        &self,
+        host: &mut dyn ServerHost,
+        range: Range<usize>,
+        scan: &ResourceSlotScan<'_, R>,
+    ) -> Option<Range<usize>> {
+        let (start, end) = (self.inner(range.start)?, range.end.min(self.range.len()));
+        slot_candidates(
+            self.handler.as_ref(),
+            host,
+            start..self.range.start + end,
+            scan,
+        )
+        .map(|run| run.start - self.range.start..run.end - self.range.start)
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         let at = self.inner(index)?;
@@ -386,9 +433,15 @@ pub fn index_of<R: PartialEq>(
     handler: &dyn ResourceHandler<R>,
     resource: &R,
 ) -> Option<usize> {
-    (0..handler.size(host)).find(|&index| {
-        handler.amount(host, index) > 0 && handler.resource(host, index).as_ref() == Some(resource)
-    })
+    let mut slots = slot_indices(handler, 0..handler.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
+        if handler.amount(host, index) > 0
+            && handler.resource(host, index).as_ref() == Some(resource)
+        {
+            return Some(index);
+        }
+    }
+    None
 }
 
 /// Whether an index holds `resource` (`contains`).
@@ -402,16 +455,30 @@ pub fn contains<R: PartialEq>(
 
 /// Whether all indices hold nothing (`isEmpty`); a handler with no indices is empty.
 pub fn is_empty<R>(host: &mut dyn ServerHost, handler: &dyn ResourceHandler<R>) -> bool {
-    (0..handler.size(host)).all(|index| handler.amount(host, index) == 0)
+    let mut slots = slot_indices(handler, 0..handler.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
+        if handler.amount(host, index) != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether every index has reached capacity (`isFull`); true for no indices.
 /// An empty index uses its general capacity, so a zero-capacity index is already full.
 pub fn is_full<R>(host: &mut dyn ServerHost, handler: &dyn ResourceHandler<R>) -> bool {
-    (0..handler.size(host)).all(|index| {
+    let mut slots = slot_indices(
+        handler,
+        0..handler.size(host),
+        ResourceSlotScan::BelowCapacity,
+    );
+    while let Some(index) = slots(host) {
         let resource = handler.resource(host, index);
-        handler.amount(host, index) >= handler.capacity(host, index, resource.as_ref())
-    })
+        if handler.amount(host, index) < handler.capacity(host, index, resource.as_ref()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether any index accepts `resource` (`ResourceHandlerUtil.isValid`), regardless of space.
@@ -420,7 +487,17 @@ pub fn is_valid<R>(
     handler: &dyn ResourceHandler<R>,
     resource: &R,
 ) -> bool {
-    (0..handler.size(host)).any(|index| handler.is_valid(host, index, resource))
+    let mut slots = slot_indices(
+        handler,
+        0..handler.size(host),
+        ResourceSlotScan::Accepting(resource),
+    );
+    while let Some(index) = slots(host) {
+        if handler.is_valid(host, index, resource) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The vanilla container comparator scale (0..=15), using all indices as the denominator.
@@ -432,7 +509,8 @@ pub fn comparator_signal<R>(host: &mut dyn ServerHost, handler: &dyn ResourceHan
         return 0;
     }
     let mut fill = 0f32;
-    for index in 0..size {
+    let mut slots = slot_indices(handler, 0..size, ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
         let Some(resource) = handler.resource(host, index) else {
             continue;
         };
@@ -473,14 +551,17 @@ fn try_insert_stacking<R: PartialEq>(
 ) -> Result<u32, Overanswered> {
     let handler = endpoint.handler;
     let size = handler.size(host);
-    let indices = [true, false]
-        .into_iter()
-        .flat_map(|holding| (0..size).map(move |index| (holding, index)));
+    let mut occupied = slot_indices(handler, 0..size, ResourceSlotScan::Occupied);
+    let mut empty = slot_indices(handler, 0..size, ResourceSlotScan::Inserting(resource));
     try_in_turn(
         host,
         tx,
         amount,
-        indices,
+        |host| {
+            occupied(host)
+                .map(|index| (true, index))
+                .or_else(|| empty(host).map(|index| (false, index)))
+        },
         |host, tx, &(holding, index), left| {
             let matches = if holding {
                 handler.amount(host, index) > 0
@@ -548,16 +629,25 @@ fn probe_extractable<R>(
     handler: &dyn ResourceHandler<R>,
     filter: impl Fn(&R) -> bool,
 ) -> Option<R> {
-    (0..handler.size(host)).find_map(|index| {
-        let amount = u32::try_from(handler.amount_int(host, index)).ok()?;
-        let resource = handler
+    let mut slots = slot_indices(handler, 0..handler.size(host), ResourceSlotScan::Occupied);
+    while let Some(index) = slots(host) {
+        let Ok(amount) = u32::try_from(handler.amount_int(host, index)) else {
+            continue;
+        };
+        let Some(resource) = handler
             .resource(host, index)
-            .filter(|r| amount != 0 && filter(r))?;
+            .filter(|r| amount != 0 && filter(r))
+        else {
+            continue;
+        };
         let probe: Result<std::convert::Infallible, _> = host
             .transaction(|host, tx| Err(handler.extract_at(host, tx, index, &resource, amount)));
         let answer = probe.unwrap_err();
-        (answer > 0 && answer <= amount).then_some(resource)
-    })
+        if answer > 0 && answer <= amount {
+            return Some(resource);
+        }
+    }
+    None
 }
 
 /// Validates an optional enclosing transaction before opening any new journal.
@@ -662,10 +752,14 @@ fn move_resources_by<R>(
 ) -> Result<u32, Overanswered> {
     with_move_transaction(host, tx, |host| {
         let mut moved = 0;
-        for index in 0..from.handler.size(host) {
-            if moved == max {
-                break;
-            }
+        let mut slots = slot_indices(
+            from.handler,
+            0..from.handler.size(host),
+            ResourceSlotScan::Occupied,
+        );
+        while moved < max
+            && let Some(index) = slots(host)
+        {
             while moved < max {
                 let Some(resource) = from.handler.resource(host, index).filter(|r| filter(r))
                 else {
@@ -724,10 +818,14 @@ fn move_first_by<R: PartialEq>(
     with_move_transaction(host, tx, |host| {
         let mut selected = None;
         let mut moved = 0;
-        for index in 0..from.handler.size(host) {
-            if moved == max {
-                break;
-            }
+        let mut slots = slot_indices(
+            from.handler,
+            0..from.handler.size(host),
+            ResourceSlotScan::Occupied,
+        );
+        while moved < max
+            && let Some(index) = slots(host)
+        {
             let Some(resource) = from.handler.resource(host, index) else {
                 continue;
             };

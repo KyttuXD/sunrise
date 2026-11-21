@@ -1,9 +1,8 @@
 //! The handlers and their codecs, against the fixture host: literal amounts on writes, the
 //! hostile saved shapes refused, and the journal's nested snapshots.
 use super::*;
-use crate::{HostTransaction, ItemKey, testing::FakeHost};
+use crate::{HostTransaction, ItemKey, resource_util, testing::FakeHost};
 use std::cell::RefCell;
-use sunrise_core::nbt::JavaString;
 
 thread_local! {
     /// The one item `accepts_the_chosen` lets in: a `fn` pointer cannot capture it.
@@ -104,24 +103,35 @@ fn a_fluid_tank_round_trips_through_its_codec_and_moves() {
         resolve(&[], &["minecraft:water"]);
         let mut host = FakeHost::new();
         let water = fluid("minecraft:water");
-        let tanks = AttachedFluids::new(&FLUIDS, CHUNK, 3, 1000, |_| true);
+        let tanks = AttachedFluids::new(&FLUIDS, CHUNK, 5001, 1000, |_| true);
         let moved =
-            host.transaction(|host, tx| Ok::<_, ()>(tanks.insert_at(host, tx, 1, &water, 250)));
+            host.transaction(|host, tx| Ok::<_, ()>(tanks.insert_at(host, tx, 5000, &water, 250)));
         assert_eq!(moved, Ok(250));
-        assert_eq!(tanks.amount(&mut host, 1), 250);
-        // The codec of the saved attachment reads back to the same index and amount.
+        assert_eq!(tanks.amount(&mut host, 5000), 250);
+        // The exact old on-disk layout still holds, including the signed Int slot and amount.
+        let expected: Compound = [(
+            "stacks".into(),
+            Tag::List(vec![Tag::Compound(
+                [
+                    ("Slot".into(), Tag::Int(5000)),
+                    ("id".into(), Tag::String("minecraft:water".into())),
+                    ("amount".into(), Tag::Int(250)),
+                ]
+                .into(),
+            )]),
+        )]
+        .into();
         let server: &mut dyn ServerHost = &mut host;
         let held = FLUIDS.get_existing(server, CHUNK).unwrap().unwrap();
-        let codec = FLUIDS.codec.as_ref().unwrap();
-        let saved = (codec.encode)(&held).unwrap();
-        let reloaded = (codec.decode)(&saved).unwrap();
-        assert_eq!(reloaded[1], Some((water.clone(), 250)));
-        assert!(reloaded[..1].iter().all(Option::is_none));
-        // A transfer takes the same amount out again.
+        assert_eq!((FLUID_STACKS.encode)(&held), Ok(expected.clone()));
+        assert_eq!(
+            (FLUID_STACKS.decode)(&expected),
+            Ok(StackList::from([(5000, (water.clone(), 250))]))
+        );
         let came =
-            host.transaction(|host, tx| Ok::<_, ()>(tanks.extract_at(host, tx, 1, &water, 250)));
+            host.transaction(|host, tx| Ok::<_, ()>(tanks.extract_at(host, tx, 5000, &water, 250)));
         assert_eq!(came, Ok(250));
-        assert_eq!(tanks.amount(&mut host, 1), 0);
+        assert_eq!(tanks.amount(&mut host, 5000), 0);
     });
 }
 
@@ -164,8 +174,7 @@ fn capacity_stays_physical_while_validity_refuses_inserts_only() {
         let dirt = item("minecraft:dirt");
         let cobble = item("minecraft:cobblestone");
         CHOSEN.with_borrow_mut(|chosen| *chosen = Some(dirt.to_stack(1).unwrap().item()));
-        let only_dirt =
-            AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, accepts_the_chosen);
+        let only_dirt = AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, accepts_the_chosen);
         assert_eq!(
             only_dirt.capacity(&mut host, 2, Some(&cobble)),
             64,
@@ -242,67 +251,119 @@ fn a_smaller_view_keeps_higher_indices() {
     });
 }
 
-/// A hostile `Slot` fails the decode before anything is allocated to its size.
 #[test]
-fn a_hostile_slot_is_refused_not_allocated() {
+fn a_saved_slot_uses_the_full_nonnegative_nbt_int_range() {
     in_world(|| {
-        let hostile = |slot: i32| {
-            let mut entry = Compound::new();
-            entry.insert("Slot".into(), Tag::Int(slot));
-            entry.insert("id".into(), Tag::String("minecraft:dirt".into()));
-            entry.insert("count".into(), Tag::Int(1));
-            let mut saved = Compound::new();
-            saved.insert(
-                JavaString::from("stacks"),
-                Tag::List(vec![Tag::Compound(entry)]),
-            );
-            saved
+        resolve(&["minecraft:dirt"], &[]);
+        let dirt = item("minecraft:dirt");
+        let saved = |slot: i32| -> Compound {
+            [(
+                "stacks".into(),
+                Tag::List(vec![Tag::Compound(
+                    [
+                        ("Slot".into(), Tag::Int(slot)),
+                        ("id".into(), Tag::String("minecraft:dirt".into())),
+                        ("count".into(), Tag::Int(1)),
+                    ]
+                    .into(),
+                )]),
+            )]
+            .into()
         };
+        let last = i32::MAX as usize;
+        let held = StackList::from([(last, (dirt.clone(), 1))]);
+        assert_eq!((ITEM_STACKS.decode)(&saved(i32::MAX)), Ok(held.clone()));
+        assert_eq!((ITEM_STACKS.encode)(&held), Ok(saved(i32::MAX)));
         assert_eq!(
-            decode_stacks(&hostile(i32::MAX), |_| Some(((), 1))),
+            (ITEM_STACKS.decode)(&saved(-1)),
             Err(AttachmentError::Decode)
         );
-        // The boundary itself is fine.
-        let list = decode_stacks(&hostile((MAX_SLOTS - 1) as i32), |_| Some(((), 1))).unwrap();
-        assert_eq!(list.len(), MAX_SLOTS);
-        assert_eq!(list[MAX_SLOTS - 1], Some(((), 1)));
+        assert_eq!(
+            (ITEM_STACKS.encode)(&StackList::from([(last + 1, (dirt, 1))])),
+            Err(AttachmentError::Encode)
+        );
     });
 }
 
-/// The constructor, handler writes and saved slots share the same literal boundary.
 #[test]
-fn handler_and_codec_limits_agree() {
+fn the_codec_round_trips_more_than_4096_occupied_slots() {
+    let stacks: StackList<_> = (0..5000).map(|slot| (slot, ((), 1))).collect();
+    let encoded = encode_stacks(&stacks, |_, _| Some(Compound::new())).unwrap();
+    let Some(Tag::List(entries)) = encoded.get(&"stacks".into()) else {
+        panic!("encoded stack list");
+    };
+    assert_eq!(entries.len(), 5000);
+    assert_eq!(decode_stacks(&encoded, |_| Some(((), 1))), Ok(stacks));
+}
+
+#[test]
+fn slotless_transfers_skip_gaps_in_large_attached_handlers() {
+    #[derive(Clone, PartialEq)]
+    struct Charge(u8);
+    impl StackedResource for Charge {}
+
+    static CELLS: AttachmentType<StackList<Charge>> = AttachmentType {
+        namespace: "attached_storage_test",
+        name: "cells",
+        default: StackList::new,
+        codec: None,
+        copy_on_death: false,
+        sync: false,
+    };
+
     in_world(|| {
-        resolve(&["minecraft:dirt"], &[]);
-        let mut host = FakeHost::new();
-        let dirt = item("minecraft:dirt");
-        assert!(AttachedItems::new(&ITEMS, CHUNK, 4097, 64, |_| true).is_none());
-        let slots = AttachedItems::new(&ITEMS, CHUNK, 4096, 64, |_| true);
+        let host: &mut dyn ServerHost = &mut FakeHost::new();
+        let charge = Charge(1);
+        let last = usize::MAX - 1;
+        let slots = AttachedStacks::new(&CELLS, CHUNK, usize::MAX, 64, |r| r.0 == 1);
         assert_eq!(
-            host.transaction(|host, tx| Ok::<_, ()>(slots.insert_at(host, tx, 4095, &dirt, 1))),
-            Ok(1)
-        );
-        assert_eq!(
-            host.transaction(|host, tx| Ok::<_, ()>(slots.insert_at(host, tx, 4096, &dirt, 1))),
+            host.transaction(|host, tx| slots.insert(host, tx, &Charge(0), 1)),
             Ok(0)
         );
-        let server: &mut dyn ServerHost = &mut host;
-        let mut held = ITEMS.get_existing(server, CHUNK).unwrap().unwrap();
-        let codec = ITEMS.codec.as_ref().unwrap();
-        let saved = (codec.encode)(&held).unwrap();
-        let decoded = (codec.decode)(&saved).unwrap();
-        assert_eq!(decoded.len(), 4096);
-        assert_eq!(decoded[4095], Some((dirt.clone(), 1)));
-        let mut hostile = saved;
-        let Some(Tag::List(entries)) = hostile.get_mut(&"stacks".into()) else {
-            panic!("saved stacks")
-        };
-        let Tag::Compound(entry) = &mut entries[0] else {
-            panic!("saved entry")
-        };
-        entry.insert("Slot".into(), Tag::Int(4096));
-        assert_eq!((codec.decode)(&hostile), Err(AttachmentError::Decode));
-        held.push(Some((dirt, 1)));
-        assert_eq!((codec.encode)(&held), Err(AttachmentError::Encode));
+        assert_eq!(
+            host.transaction(|host, tx| Ok::<_, ()>(slots.insert_at(host, tx, last, &charge, 55))),
+            Ok(55)
+        );
+        let ranged =
+            resource_util::RangedResourceHandler::of(host, Box::new(slots), 1..usize::MAX).unwrap();
+        let closed = AttachedStacks::single(&CELLS, CHUNK, 0, |_| false);
+        let slots = resource_util::CombinedResourceHandler::new(
+            host,
+            vec![Box::new(closed), Box::new(ranged)],
+        );
+        assert_eq!(resource_util::index_of(host, &slots, &charge), Some(last));
+        assert_eq!(
+            host.transaction(|host, tx| slots.extract(host, tx, &charge, 23)),
+            Ok(23)
+        );
+        assert_eq!(slots.amount(host, last), 32);
+        assert_eq!(
+            resource_util::insert_stacking(host, &slots, &charge, 37, None),
+            Ok(37)
+        );
+        assert_eq!(
+            slots.amount(host, last),
+            64,
+            "top up before a lower empty slot"
+        );
+        assert_eq!(
+            slots.amount(host, 1),
+            5,
+            "the rest goes in the first accepting empty slot"
+        );
+        assert_eq!(
+            host.transaction(|host, tx| slots.extract(host, tx, &charge, 38)),
+            Ok(38)
+        );
+        assert_eq!(
+            slots.amount(host, 1),
+            0,
+            "extraction takes the lower slot first"
+        );
+        assert_eq!(
+            host.transaction(|host, tx| slots.extract(host, tx, &charge, 32)),
+            Ok(31)
+        );
+        assert!(resource_util::is_empty(host, &slots));
     });
 }

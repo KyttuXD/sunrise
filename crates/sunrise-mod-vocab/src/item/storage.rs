@@ -10,7 +10,8 @@
 //! What a call costs is the handler's. A bulk store keyed by kind answers a question about one
 //! kind, and a move of one kind, in constant time whatever it holds. The game's own adapter
 //! answers each question in one pass over the slots the side reaches (O(slots), with no work per
-//! item moved); a mod's `ITEMS` handler wrapped by kind is asked slot by slot. [`transfer`] is
+//! item moved); a mod's `ITEMS` handler wrapped by kind is asked slot by slot, or by runs of
+//! equivalent slots if the handler supplies those. [`transfer`] is
 //! four handler calls whatever it moves. [`ItemStorage::visit_entries`] reads entries in
 //! provider order and stops as soon as the visitor breaks.
 //!
@@ -19,10 +20,10 @@
 //! measurements behind this API, 256 pipes moving 8 items a tick each cost 2.8 ms a tick that
 //! way against 3.7 ms through `STORAGE`. `STORAGE` pays off for bulk stores, large moves, and
 //! networks that sleep while idle.
-use crate::content::resource::{Ends, move_once};
+use crate::content::resource::{Ends, move_once, slot_candidates, slot_indices};
 use crate::{
-    BlockSide, Capability, CapabilityKey, ITEMS, ItemResource, ResourceHandler, ServerHost,
-    Transaction,
+    BlockSide, Capability, CapabilityKey, ITEMS, ItemResource, ResourceHandler, ResourceSlotScan,
+    ServerHost, Transaction,
 };
 use std::{collections::HashSet, marker::PhantomData, ops::ControlFlow};
 
@@ -240,13 +241,23 @@ impl Slots {
         tx: &Transaction,
         resource: &ItemResource,
         left: &mut u64,
-        pick: impl Fn(&mut dyn ServerHost, usize) -> bool,
+        matching: bool,
     ) {
-        for index in 0..self.0.size(host) {
-            if *left == 0 {
-                return;
-            }
-            if pick(host, index) {
+        let scan = if matching {
+            ResourceSlotScan::Occupied
+        } else {
+            ResourceSlotScan::Inserting(resource)
+        };
+        let mut slots = slot_indices(&self.0, 0..self.0.size(host), scan);
+        while *left != 0
+            && let Some(index) = slots(host)
+        {
+            let pick = if matching {
+                self.holds(host, index, resource)
+            } else {
+                self.0.resource(host, index).is_none()
+            };
+            if pick {
                 let ask = (*left).min(u32::MAX as u64) as u32;
                 *left -= self.0.insert_at(host, tx, index, resource, ask).min(ask) as u64;
             }
@@ -261,7 +272,8 @@ impl ItemStorage for Slots {
         resource: &ItemResource,
     ) -> Result<u64, StorageError> {
         let mut held = 0u64;
-        for index in 0..self.0.size(host) {
+        let mut slots = slot_indices(&self.0, 0..self.0.size(host), ResourceSlotScan::Occupied);
+        while let Some(index) = slots(host) {
             if self.holds(host, index, resource) {
                 held = held
                     .checked_add(self.0.amount(host, index) as u64)
@@ -276,7 +288,10 @@ impl ItemStorage for Slots {
         resource: &ItemResource,
     ) -> Result<u64, StorageError> {
         let mut room = 0u64;
-        for index in 0..self.0.size(host) {
+        let mut range = 0..self.0.size(host);
+        let scan = ResourceSlotScan::CapacityFor(resource);
+        while let Some(run) = slot_candidates(&self.0, host, range.clone(), &scan) {
+            let index = run.start;
             let here = match self.0.resource(host, index) {
                 Some(held) if held == *resource => self
                     .0
@@ -288,9 +303,11 @@ impl ItemStorage for Slots {
                 }
                 None => 0,
             };
-            room = room
-                .checked_add(here as u64)
+            room = u64::from(here)
+                .checked_mul(run.len() as u64)
+                .and_then(|space| room.checked_add(space))
                 .ok_or(StorageError::Overflow)?;
+            range.start = run.end;
         }
         Ok(room)
     }
@@ -302,12 +319,8 @@ impl ItemStorage for Slots {
         amount: u64,
     ) -> u64 {
         let mut left = amount;
-        self.fill(host, tx, resource, &mut left, |host, index| {
-            self.holds(host, index, resource)
-        });
-        self.fill(host, tx, resource, &mut left, |host, index| {
-            self.0.resource(host, index).is_none()
-        });
+        self.fill(host, tx, resource, &mut left, true);
+        self.fill(host, tx, resource, &mut left, false);
         amount - left
     }
     fn extract(
@@ -318,10 +331,10 @@ impl ItemStorage for Slots {
         amount: u64,
     ) -> u64 {
         let mut left = amount;
-        for index in 0..self.0.size(host) {
-            if left == 0 {
-                break;
-            }
+        let mut slots = slot_indices(&self.0, 0..self.0.size(host), ResourceSlotScan::Occupied);
+        while left != 0
+            && let Some(index) = slots(host)
+        {
             if self.holds(host, index, resource) {
                 let ask = left.min(u32::MAX as u64) as u32;
                 left -= self.0.extract_at(host, tx, index, resource, ask).min(ask) as u64;
@@ -334,7 +347,8 @@ impl ItemStorage for Slots {
         host: &mut dyn ServerHost,
         visitor: &mut dyn FnMut(&ItemResource, u64) -> ControlFlow<()>,
     ) -> Result<(), StorageError> {
-        for index in 0..self.0.size(host) {
+        let mut slots = slot_indices(&self.0, 0..self.0.size(host), ResourceSlotScan::Occupied);
+        while let Some(index) = slots(host) {
             if let Some(resource) = self.0.resource(host, index) {
                 let amount = u64::from(self.0.amount(host, index));
                 if visitor(&resource, amount).is_break() {
@@ -554,6 +568,37 @@ mod tests {
             })
             .unwrap();
         assert_eq!(total, 97);
+    }
+
+    #[test]
+    fn bulk_space_counts_sparse_slots_without_visiting_each_empty_slot() {
+        use crate::world::phase::{ModPhase, PhaseOwner};
+        use crate::{AttachedItems, AttachmentType, Holder, StackList};
+
+        static ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
+            namespace: "storage_test",
+            name: "sparse_items",
+            default: StackList::new,
+            codec: None,
+            copy_on_death: false,
+            sync: false,
+        };
+        let _world = PhaseOwner::scope(ModPhase::World);
+        let (mut fake, resources) = host_with(&["minecraft:stone"]);
+        let host: &mut dyn ServerHost = &mut fake;
+        let (stone, size) = (&resources[0], usize::MAX);
+        let slots = AttachedItems::new(&ITEMS, Holder::Chunk([0, 0]), size, 1, |_| true);
+        host.transaction(|host, tx| {
+            assert_eq!(slots.insert_at(host, tx, size - 1, stone, 1), 1);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        let storage = Slots(Capability {
+            handler: Box::new(slots),
+            owner: None,
+        });
+        assert_eq!(storage.amount(host, stone), Ok(1));
+        assert_eq!(storage.space_for(host, stone), Ok(size as u64 - 1));
     }
 
     #[test]
