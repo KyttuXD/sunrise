@@ -4,13 +4,13 @@ use super::native_entity_refs::tests::with_game;
 use super::runtime_levels::RuntimeTable;
 use mod_api::{
     Hooks, HostSide, LevelLoadEvent, LevelRef, LevelTickPostEvent, LevelUnloadEvent, ModEntry,
-    RuntimeGenerator, RuntimeLevel, RuntimeLevelError,
+    RuntimeLevel, RuntimeLevelError,
 };
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn flat() -> RuntimeLevel {
-    RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Flat, 1)
+    RuntimeLevel::flat("minecraft:overworld", 1)
 }
 
 #[test]
@@ -65,22 +65,22 @@ fn a_level_is_open_after_its_request_is_applied_and_until_its_close_is() {
     table.queue_open("test", "state:a", flat()).unwrap();
     assert!(!table.is_open("state:a"));
     assert_eq!(
-        table.queue_unload("state:a"),
+        table.queue_unload("test", "state:a"),
         Err(RuntimeLevelError::NotOpen)
     );
     table.mark_open("state:a");
     assert!(table.is_open("state:a"));
-    assert_eq!(table.queue_unload("state:a"), Ok(()));
+    assert_eq!(table.queue_unload("test", "state:a"), Ok(()));
     assert!(
         table.is_open("state:a"),
         "still open until the close is applied"
     );
     assert_eq!(
-        table.queue_unload("state:a"),
+        table.queue_unload("test", "state:a"),
         Err(RuntimeLevelError::NotOpen)
     );
     assert_eq!(
-        table.queue_unload("state:none"),
+        table.queue_unload("test", "state:none"),
         Err(RuntimeLevelError::NotOpen)
     );
 }
@@ -803,7 +803,10 @@ fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() 
     table.mark_open("del:a");
     assert_eq!(table.queue_delete("test", "del:a"), Ok(()));
     assert!(table.is_open("del:a"));
-    assert_eq!(table.queue_unload("del:a"), Err(RuntimeLevelError::NotOpen));
+    assert_eq!(
+        table.queue_unload("test", "del:a"),
+        Err(RuntimeLevelError::NotOpen)
+    );
     assert_eq!(
         table.queue_open("test", "del:a", flat()),
         Err(RuntimeLevelError::AlreadyOpen),
@@ -1317,7 +1320,7 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
         let key = sunrise_core::LevelKey::parse("cycle:a").unwrap();
         let mut first = None;
         for seed in [1, 2, 3, i64::MIN, i64::MAX] {
-            let level = RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Flat, seed);
+            let level = RuntimeLevel::flat("minecraft:overworld", seed);
             game.levels
                 .runtime
                 .queue_open("cycle", "cycle:a", level)
