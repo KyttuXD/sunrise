@@ -223,7 +223,7 @@ pub trait DrawContext {
     /// renderer and `register_entity_layers` layers included, else the vanilla
     /// model), full bright, lit by `Lighting.ENTITY_IN_UI`'s two lights, with a
     /// depth of its own and cut off at the box. A client's call, available
-    /// with [`crate::MenuScreen::with_draw`] or `gui_render_post`.
+    /// with [`crate::MenuScreen::with_draw`] or `render_gui_post`.
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         Err(GuiEntityError::Unavailable)
     }
@@ -245,7 +245,7 @@ pub trait DrawContext {
     ///   `fill` is.
     ///
     /// A client's call, available with [`crate::MenuScreen::with_draw`] or
-    /// `gui_render_post`. Per call it draws the subject's baked quads, the cached
+    /// `render_gui_post`. Per call it draws the subject's baked quads, the cached
     /// model a slot's item uses, with nothing on the tick path.
     fn model_3d(&mut self, subject: Gui3dSubject<'_>, view: Gui3dView) -> Result<(), Gui3dError> {
         Err(Gui3dError::Unavailable)

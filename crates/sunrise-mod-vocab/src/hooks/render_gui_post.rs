@@ -12,7 +12,8 @@ pub trait Hooks {
         dispatch = "flat",
         side = "client",
         contract = "listen",
+        version = 2,
         neoforge = "RenderGuiEvent.Post"
     )]
-    fn render_gui_post(draw: &mut dyn DrawContext, corners: &mut Corners);
+    fn render_gui_post(draw: &mut dyn DrawContext);
 }

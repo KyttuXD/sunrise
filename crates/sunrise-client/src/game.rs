@@ -11011,7 +11011,6 @@ impl Game<'_> {
         // GUI hooks project against this frame's camera, including its bob/spin and FOV.
         let mut hud = sunrise_client::spans::time("hud", || self.hud(size));
         self.flush_ime(&mut hud);
-        self.native_gui_render_post(&mut hud, self.ui.hide_gui, self.focused);
         if let Some((bar, fade)) = reload_overlay {
             sunrise_client::level_loading::draw_loading_overlay(
                 &mut hud,

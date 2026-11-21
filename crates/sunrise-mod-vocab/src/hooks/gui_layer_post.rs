@@ -6,7 +6,7 @@ pub trait Hooks {
     /// Fires once with the ID from `gui_layer_pre`, even if a wrapper omitted its previous
     /// body. Does not fire when `gui_layer_pre` cancels the layer. Use `event.draw` to
     /// paint above the layer. For a foreground pass independent of any layer, use
-    /// `gui_render_post`.
+    /// `render_gui_post`.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_gui_layer_post",
         receiver = "read",

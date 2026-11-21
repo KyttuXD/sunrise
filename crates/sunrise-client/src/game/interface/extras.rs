@@ -96,7 +96,7 @@ impl Game<'_> {
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
         self.draw_pvp_hud(batch, &mut corners);
-        self.native_render_gui_post(batch, &mut corners);
+        self.native_render_gui_post(batch);
         // The layers crates registered (`sunrise_hooks::hud`): none, no canvas.
         let layers = sunrise_hooks::hud::engine::all();
         if !layers.is_empty() {

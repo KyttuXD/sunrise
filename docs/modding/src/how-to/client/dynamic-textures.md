@@ -20,10 +20,10 @@ fn bake_panel(host: &mut dyn ClientHost) -> Result<(), DynamicTextureError> {
     host.create_dynamic_texture(&id, width as u32, height as u32, &rgba)
 }
 
-fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
     // The whole image (`src` in its own pixels), stretched over 128 by 64 GUI pixels.
     event
-        .batch
+        .draw
         .sprite(PANEL, [0.0, 0.0, 64.0, 32.0], [8.0, 8.0, 128.0, 64.0], None);
 }
 ```

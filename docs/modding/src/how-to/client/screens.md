@@ -294,7 +294,7 @@ A label is text laid out in a box: measured, wrapped and placed, and nothing els
 scale the label is drawn at, and draw the lines it answers with where it says:
 
 ```rust
-// From a menu screen draw callback, gui_render_post or another drawing hook.
+// From a menu screen draw callback, render_gui_post or another drawing hook.
 let scale = 2.0;
 let lines = draw.text_lines(&label, 120.0, TextAlign::Centre, scale)?;
 let mut draws = Vec::with_capacity(lines.lines.len() + 2);

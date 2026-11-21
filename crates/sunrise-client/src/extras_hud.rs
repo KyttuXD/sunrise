@@ -4,8 +4,46 @@ use crate::{
     extras::Corner,
     hud::{HudAtlas, HudBatch, rgba},
 };
-pub use mod_api::client::extras_hud::Corners;
 use sunrise_hooks::hud;
+
+/// The gap between an overlay and the screen edge or the next overlay.
+const MARGIN: f32 = 2.0;
+/// Where the next overlay goes in each corner.
+// no wire: offsets are local to this paint pass.
+pub struct Corners {
+    width: f32,
+    height: f32,
+    /// Distance from the corner's top or bottom edge, per `Corner::ALL`.
+    used: [f32; 4],
+}
+impl Corners {
+    /// `top_right` reserves the status effect icons' rows.
+    pub fn new(width: f32, height: f32, top_right: f32) -> Self {
+        Self {
+            width,
+            height,
+            used: [0.0, top_right, 0.0, 0.0],
+        }
+    }
+    /// The top-left position of a `w` x `h` box in `corner`, below (or
+    /// above) what the corner already holds.
+    pub fn place(&mut self, corner: Corner, w: f32, h: f32) -> (f32, f32) {
+        let i = Corner::ALL.iter().position(|c| *c == corner).unwrap_or(0);
+        let edge = self.used[i] + MARGIN;
+        self.used[i] = edge + h;
+        let x = if corner.left() {
+            MARGIN
+        } else {
+            self.width - MARGIN - w
+        };
+        let y = if corner.top() {
+            edge
+        } else {
+            self.height - edge - h
+        };
+        (x, y)
+    }
+}
 
 const BACKGROUND: u32 = 0x7800_0000;
 

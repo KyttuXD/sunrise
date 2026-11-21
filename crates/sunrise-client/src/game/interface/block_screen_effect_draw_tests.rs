@@ -4,7 +4,7 @@ use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
 use BlockScreenEffect::{Block, Fire, Water};
 use mod_api::{
     BlockScreenEffect, BlockScreenEffectRender, BlockScreenEffectRenderer, ClientHost,
-    ExtractBlockScreenEffectEvent, Flow, GuiRenderPostEvent, Hooks, ModEntry, Mods,
+    ExtractBlockScreenEffectEvent, Flow, Hooks, ModEntry, Mods, RenderGuiPostEvent,
 };
 use std::sync::{Arc, Mutex};
 use sunrise_client::{
@@ -414,12 +414,10 @@ impl Hooks for Painter {
         }
         Flow::Continue
     }
-    fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+    fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         if DRAWING.load(std::sync::atomic::Ordering::Relaxed) {
-            let [width, height] = event.batch.size();
-            event
-                .batch
-                .fill([0.0, 0.0, width / 2.0, height], 0xFF00FF00);
+            let [width, height] = event.draw.size();
+            event.draw.fill([0.0, 0.0, width / 2.0, height], 0xFF00FF00);
         }
     }
 }

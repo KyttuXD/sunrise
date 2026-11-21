@@ -55,7 +55,7 @@ paint is discarded. A wrapper's completed `draw_previous()` calls keep their pai
 without being called again. A panic disables just the offending callback for this session; a
 disabled wrapper leaves the previous body to draw directly. If Pre cancels the slot, neither the
 installed body nor Post runs. For work that must happen even when the HUD is hidden, use the independent foreground
-`gui_render_post` hook.
+`render_gui_post` hook.
 
 ## Status rows and fixed text positions
 
@@ -180,11 +180,11 @@ fade out. The current HUD shader discards interpolated alpha below 0.004, not ju
 fragments can therefore differ from vanilla's exact-zero discard.
 
 ```rust,ignore
-fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
     // A panel shaded from dark purple at the top to black at the bottom.
-    event.batch.fill_gradient([20.0, 20.0, 120.0, 60.0], 0xF010_0010, 0xF000_0000);
+    event.draw.fill_gradient([20.0, 20.0, 120.0, 60.0], 0xF010_0010, 0xF000_0000);
     // A shade that fades out downwards.
-    event.batch.fill_gradient([20.0, 80.0, 120.0, 10.0], 0x8000_0000, 0x0000_0000);
+    event.draw.fill_gradient([20.0, 80.0, 120.0, 10.0], 0x8000_0000, 0x0000_0000);
 }
 ```
 
