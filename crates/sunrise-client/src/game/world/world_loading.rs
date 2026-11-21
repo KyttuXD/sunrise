@@ -642,7 +642,7 @@ fn world_worldgen_overrides(
 
 /// The worldgen entries of the world's enabled data packs, and what the
 /// generator leaves out of them.
-fn worldgen_overrides_of(
+pub(super) fn worldgen_overrides_of(
     world_root: &std::path::Path,
     resources: &std::path::Path,
     biomes: &sunrise_client::biome::Biomes,
@@ -928,6 +928,15 @@ fn mod_terrain(
         |biome| biomes.contains(biome).then(|| biomes.id(biome)),
         shape,
         seed,
+        |source| {
+            sunrise_world::worldgen::generator::GeneratorData::resolve_terrain_biome_source(
+                terrain_resources.dir,
+                &overrides,
+                source,
+                seed,
+            )
+            .map_err(|e| format!("{}: {e}", dim.id()))
+        },
     )
     .map(|terrain| terrain.map(ModLevel::Terrain))
 }
@@ -1198,19 +1207,23 @@ pub(super) fn make_streaming(
             }
         }
     } else {
-        if runtime.is_some() {
-            return Err(format!("{}: no generator builds this runtime level", dim.id()).into());
-        }
         // WorldOptions.generateStructures, from the world's settings.
         let structures = automatic_structures;
         let preset = WorldGen::noise_preset(generator);
-        let overrides = world_worldgen_overrides(
+        let mut overrides = world_worldgen_overrides(
             world_root,
             &options.resources,
             &biomes,
             enabled_features,
             &pack.additional_data,
         );
+        if let Some(super::runtime_levels::Generate::Stem(stem)) = runtime {
+            overrides.set(
+                sunrise_world::worldgen::overrides::DIMENSIONS,
+                dim.id(),
+                stem.to_string(),
+            );
+        }
         let saved_stem = saved_stem.map(sunrise_client::scoreboard::tag_to_json);
         let regions = sunrise_client::save::biome_regions::layout(world_root, dim.id())
             .map_err(|e| format!("Failed to read the world's biome regions: {e}"))?;

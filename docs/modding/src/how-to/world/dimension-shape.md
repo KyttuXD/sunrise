@@ -86,8 +86,7 @@ The level's biomes are the one `biome` everywhere unless `biome_source` says oth
 erosion, depth and weirdness, and an `offset` from 0 to 1. The biome whose point is nearest to the level's
 climate at a position wins, as in a data pack's `minecraft:multi_noise` source with an inline `biomes` list;
 the biomes can be the mod's own or vanilla's. A mod's points shape its own level only: placing a mod's biomes
-among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md). Only `Fixed` suits a chunk
-generator of the mod's own. `mod_biome_source` names a [biome source](#biome-sources) a
+among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md). A registered chunk generator can use the same biome sources as vanilla noise. `mod_biome_source` names a [biome source](#biome-sources) a
 mod registered instead, for either generator.
 
 A dimension in an unowned namespace, an empty name, a name that is not a folder of the world
@@ -282,6 +281,11 @@ it wrote. The chunk starts as air; invalid state ordinals are refused rather tha
 By default the generator gives terrain only: the level has no surface, carvers, structures or
 features, every chunk has the stem's one biome, unless its stem names a
 [biome source](#biome-sources) a mod registered, and `noise_settings` means nothing to it.
+
+A terrain-only generator still fills every biome cell using its stem's biome source. With no
+noise router, built-in climate sources use vanilla's zero climate channels (`ChunkMap`,
+`NoiseRouterData.none()`); fixed, checkerboard and registered sources choose biomes as usual.
+See [runtime levels](runtime-levels.md) to open a new instance of a registered stem.
 
 `vanilla_stages` asks for vanilla's stages around the terrain, as `VanillaStages` with the fields
 `surface`, `carvers`, `structures` and `features`; it is asked once, at registration. They run in
