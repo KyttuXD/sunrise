@@ -49,7 +49,11 @@ fn place_subject(game: &mut Game<'_>, kind: &str) -> BlockEntityRef {
 }
 
 fn access<'a, 'g>(game: &'a mut Game<'g>, subject: BlockEntityRef) -> TickAccess<'a, 'g> {
-    TickAccess { game, subject }
+    TickAccess {
+        game,
+        subject,
+        checked: None,
+    }
 }
 
 fn enable_block_ticks(game: &mut Game<'_>) {

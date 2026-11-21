@@ -1063,7 +1063,7 @@ impl ChunkEncoder {
     fn body(
         &self,
         chunk: &Chunk,
-        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+        block_entities: &FxHashMap<(i32, i32, i32), BlockEntity>,
         around: SectionMask,
     ) -> Vec<u8> {
         self.prepare(chunk, block_entities, around).write()
@@ -1073,7 +1073,7 @@ impl ChunkEncoder {
     fn prepare(
         &self,
         chunk: &Chunk,
-        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+        block_entities: &FxHashMap<(i32, i32, i32), BlockEntity>,
         around: SectionMask,
     ) -> Prepared {
         let (wires, entities) = self.blocks(chunk, block_entities);
@@ -1175,7 +1175,7 @@ impl ChunkEncoder {
     pub fn encode(
         &self,
         chunk: &Chunk,
-        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+        block_entities: &FxHashMap<(i32, i32, i32), BlockEntity>,
     ) -> LevelChunkWithLight {
         let mut packet = self.encode_blocks(chunk, block_entities);
         packet.light = self.light_data(chunk, SectionMask::ALL);
@@ -1186,7 +1186,7 @@ impl ChunkEncoder {
     fn encode_blocks(
         &self,
         chunk: &Chunk,
-        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+        block_entities: &FxHashMap<(i32, i32, i32), BlockEntity>,
     ) -> LevelChunkWithLight {
         let (wires, block_entities) = self.blocks(chunk, block_entities);
         LevelChunkWithLight {
@@ -1220,7 +1220,7 @@ impl ChunkEncoder {
     fn blocks(
         &self,
         chunk: &Chunk,
-        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+        block_entities: &FxHashMap<(i32, i32, i32), BlockEntity>,
     ) -> (Vec<Arc<[u8]>>, Vec<BlockEntityInfo>) {
         let mut wires = Vec::with_capacity(self.sections.len());
         let mut entity_infos = Vec::new();

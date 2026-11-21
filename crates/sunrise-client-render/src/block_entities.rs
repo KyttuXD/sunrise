@@ -87,7 +87,7 @@ struct LiveTicker {
 
 #[derive(Default)]
 pub struct BlockEntities {
-    map: HashMap<Pos, BlockEntity>,
+    map: FxHashMap<Pos, BlockEntity>,
     /// Runtime contents subscriptions, retired with their observer identity.
     pub contents_watches: ContentsWatches,
     generations: FxHashMap<Pos, u64>,
@@ -247,7 +247,7 @@ fn forget_mod(mods: &mut FxHashMap<(i32, i32), FxHashSet<Pos>>, pos: Pos) {
 }
 
 impl std::ops::Deref for BlockEntities {
-    type Target = HashMap<Pos, BlockEntity>;
+    type Target = FxHashMap<Pos, BlockEntity>;
     fn deref(&self) -> &Self::Target {
         &self.map
     }
