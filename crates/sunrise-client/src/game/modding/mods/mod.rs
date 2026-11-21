@@ -1686,7 +1686,6 @@ impl Game<'_> {
         self.protect_condition_root();
         self.loop_context = context.game;
         self.refresh_recipe_property_context();
-        self.setting_overrides.borrow_mut().clear();
         if let Some(audio) = context.audio {
             self.audio.set_loop_context(audio);
         }

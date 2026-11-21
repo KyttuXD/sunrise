@@ -646,14 +646,6 @@ impl WorldgenContext {
     }
 }
 
-/// Read the same per-key storage as the runtime settings service. No folder is
-/// created, and unrelated mod data files are not scanned or loaded eagerly.
-pub fn read_setting(directory: &Path, key: &str) -> Option<String> {
-    fs::read_to_string(directory.join(key))
-        .ok()
-        .map(|value| value.trim().to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1100,7 +1092,6 @@ mod tests {
         assert_eq!(before.setting("active", "invalid"), None);
         assert_eq!(before.setting("active", "late"), None);
         assert_eq!(before.setting("inactive", "mode"), None);
-        assert_eq!(read_setting(&active, "mode").as_deref(), Some("after"));
 
         let after = LoadContext::new(DataLoadOrigin::ClientPreload, inputs.clone(), ["active"]);
         assert_eq!(after.setting("active", "mode"), Some("after"));

@@ -4530,31 +4530,6 @@ impl Game<'_> {
     pub(in crate::game) fn instance_dir(&self) -> PathBuf {
         Self::game_dir()
     }
-    /// A mod's setting `key` (one file per key in `native_data_dir`). A mod's hook or part reads
-    /// only its own mod's: another mod's id gives None.
-    pub(in crate::game) fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        if Self::another_mods(mod_id) {
-            return None;
-        }
-        self.stored_setting(mod_id, key)
-    }
-    pub(super) fn stored_setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        mod_settings::read_raw(&self.native_data_dir(mod_id), mod_id, key)
-    }
-    /// Keeps a mod's setting `key`. A mod's hook or part keeps only its own mod's.
-    pub(in crate::game) fn set_setting(&self, mod_id: &str, key: &str, value: &str) {
-        if Self::another_mods(mod_id) {
-            return;
-        }
-        self.store_setting(mod_id, key, value);
-    }
-    pub(super) fn store_setting(&self, mod_id: &str, key: &str, value: &str) -> bool {
-        mod_settings::store(&self.native_data_dir(mod_id), mod_id, key, value)
-    }
-    /// A mod's hook or part is running, and `mod_id` is another mod's.
-    fn another_mods(mod_id: &str) -> bool {
-        mod_api::content::crash::current_native_mod().is_some_and(|running| running != mod_id)
-    }
     /// Shows the panel beside container screens with these items (at most
     /// 8192), as the game's own slots in pages, with a search box; the
     /// player's clicks, searches and keys over items come back as
