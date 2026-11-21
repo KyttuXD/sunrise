@@ -24,6 +24,10 @@ that level's local shapes for a loaded block inside build height. `LevelRef::can
 its published sky light, even outside build height or in an unloaded column. See
 [Level hosts](../../concepts/hooks-and-the-host.md#level-hosts) for the boundary rules.
 
+`level.surface_height(host, [x, z], heightmap)` reads a column of the level the window shows.
+It returns `Ok(None)` if the chunk has not been sent to the client. Iterate over coordinates
+to read an area without buffering the results.
+
 `ClientHost::playing()` is true while the player is in the world with nothing over it: no screen, title, sign
 editor or book, so keys and zoom apply. A HUD or screen hook can read held state, the current binding,
 or its Controls label using a [live vanilla mapping](input.md#reading-live-vanilla-mappings) retained
@@ -167,9 +171,10 @@ keeps its epoch. Unlike `view_hit` and `raycast`, this does not return a block
 behind a targeted entity.
 
 `ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view
-across loaded chunks only: far terrain is never hit. `raycast` stops at `distance`
-(returning `None` for nonpositive or non-finite values), while `view_hit` traverses the
-full loaded-chunk extent. Both return `None` on a miss.
+against outlines in loaded chunks only: far terrain is never hit. `raycast` uses the
+full `distance` for vanilla's shape clip, including when the eye is inside a block,
+while `view_hit` ends the ray at the boundary of the loaded extent. Both return
+`None` on a miss; `raycast` also returns `None` for nonpositive or non-finite distances.
 
 To query the displayed level independently of the committed crosshair pick, use
 [`visit_entities_in`](../world/spawning.md#visiting-entities-in-a-box) for a box, or

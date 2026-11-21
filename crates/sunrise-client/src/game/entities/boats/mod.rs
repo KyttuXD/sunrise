@@ -10,6 +10,7 @@ mod lifetime_tests;
 #[cfg(test)]
 mod paddle_tests;
 mod placement;
+pub(super) use placement::OutlineFluidRay;
 
 use super::{Game, InteractTarget, entity::Entity, entity_culling::at, view_vector};
 use std::{collections::HashMap, f32::consts::PI, sync::Arc};

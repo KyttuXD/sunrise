@@ -762,22 +762,17 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.noise_biomes(quarts)
     }
-    /// Exact undecorated surface queries, sharing the generator's bounded query worker.
+    /// Exact undecorated surface, sharing the generator's query worker.
     /// Custom terrain without a noise surface has no answer. No gameplay chunk is allocated.
-    pub fn terrain_surfaces(&self, columns: &[(i32, i32)]) -> Vec<Option<crate::columns::Surface>> {
+    pub fn terrain_surface(&self, x: i32, z: i32) -> Option<crate::columns::Surface> {
         if self.mod_terrain {
-            return vec![None; columns.len()];
+            return None;
         }
         let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
         let worker = worker.get_or_insert_with(|| self.generator.worker());
-        columns
-            .iter()
-            .map(|&(x, z)| {
-                worker
-                    .surface_sample(x, z)
-                    .map(|surface| self.client_surface(surface))
-            })
-            .collect()
+        worker
+            .surface_sample(x, z)
+            .map(|surface| self.client_surface(surface))
     }
     /// `/place jigsaw`: `JigsawPlacement.addPieces`.
     pub fn jigsaw_pieces(

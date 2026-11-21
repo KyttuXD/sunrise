@@ -6,6 +6,8 @@ use mod_api::{
     content::crash::{ModCall, enter_native_mod},
 };
 use std::sync::Arc;
+use sunrise_core::geometry::{BlockTraversalBounds, Vec3};
+use sunrise_world::world_ray::{RayBlockMode, RayFluidMode, clip_world_in_bounds};
 
 /// Client input captured by a main-hand item behavior, not a living entity's item use.
 pub(super) struct ActiveClientItemUse {
@@ -31,42 +33,65 @@ impl Game<'_> {
         self.cast_view_ray(None)
     }
     fn cast_view_ray(&self, max_distance: Option<f64>) -> Option<(f32, mod_api::Hit)> {
-        self.player.as_ref()?;
+        if max_distance.is_some_and(|distance| distance <= 0.0 || !distance.is_finite()) {
+            return None;
+        }
         let eye = self.eye_position()?;
-        let dir = super::view_vector(self.yaw, self.pitch);
-        let (t_start, t_end) = loaded_ray_segment(
-            self.world.chunks.keys().copied(),
-            self.world.bottom_y(),
-            self.world.top_y(),
-            eye,
-            dir,
-            max_distance,
-        )?;
-        let origin = if t_start > 0.0 {
-            [
-                eye[0] + dir[0] * t_start,
-                eye[1] + dir[1] * t_start,
-                eye[2] + dir[2] * t_start,
-            ]
-        } else {
-            eye
+        let direction = super::view_vector(self.yaw, self.pitch);
+        let mut chunks = self.world.chunks.keys();
+        let &(cx, cz) = chunks.next()?;
+        let (mut min_x, mut max_x, mut min_z, mut max_z) = (cx, cx, cz, cz);
+        for &(x, z) in chunks {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_z = min_z.min(z);
+            max_z = max_z.max(z);
+        }
+        let bounds = BlockTraversalBounds {
+            min: [
+                min_x.saturating_mul(16),
+                self.world.bottom_y(),
+                min_z.saturating_mul(16),
+            ],
+            max: [
+                max_x.saturating_mul(16).saturating_add(15),
+                self.world.top_y() - 1,
+                max_z.saturating_mul(16).saturating_add(15),
+            ],
         };
-        let hit = self.clip_ray(origin, dir, t_end - t_start)?;
-        let (pos, point) = (hit.pos, hit.point);
+        let reach = match max_distance {
+            Some(distance) => distance,
+            None => view_exit_distance(eye, direction, bounds)?,
+        };
+        let start = Vec3::new(eye[0], eye[1], eye[2]);
+        let end =
+            start.add_vector(Vec3::new(direction[0], direction[1], direction[2]).scale(reach));
+        let result = clip_world_in_bounds(
+            &mut super::boats::OutlineFluidRay(self),
+            start,
+            end,
+            RayBlockMode::Outline,
+            RayFluidMode::None,
+            bounds,
+        )
+        .ok()?;
+        if result.miss {
+            return None;
+        }
+        let hit = result.hit;
+        let pos = [hit.block.x, hit.block.y, hit.block.z];
+        let point = hit.location;
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let distance = (0..3)
-            .map(|i| (point[i] - eye[i]).powi(2))
-            .sum::<f64>()
-            .sqrt();
+        let distance = start.distance_squared(point).sqrt();
         Some((
             distance as f32,
             mod_api::Hit {
                 block_x: pos[0],
                 block_y: pos[1],
                 block_z: pos[2],
-                x: point[0],
-                y: point[1],
-                z: point[2],
+                x: point.x,
+                y: point.y,
+                z: point.z,
                 block: mod_api::__private::block_key(&self.res.facts().get(state).name)?,
             },
         ))
@@ -195,119 +220,24 @@ impl Game<'_> {
     }
 }
 
-/// Intersect ray `eye + t * dir` (`t >= 0`, optionally bounded by `max_distance`)
-/// with the padded bounding box of the loaded chunks.
-/// Returns `None` when no chunks are loaded, inputs are non-finite, `max_distance`
-/// is nonpositive or non-finite, or the ray misses the loaded extent.
-fn loaded_ray_segment(
-    chunks: impl IntoIterator<Item = (i32, i32)>,
-    bottom_y: i32,
-    top_y: i32,
-    eye: [f64; 3],
-    dir: [f64; 3],
-    max_distance: Option<f64>,
-) -> Option<(f64, f64)> {
-    if !eye.iter().all(|v| v.is_finite()) || !dir.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let mut t_min = 0.0_f64;
-    let mut t_max = match max_distance {
-        Some(limit) if limit.is_finite() && limit > 0.0 => limit,
-        Some(_) => return None,
-        None => f64::INFINITY,
-    };
-    let mut iter = chunks.into_iter();
-    let (first_cx, first_cz) = iter.next()?;
-    let (mut min_cx, mut max_cx) = (first_cx, first_cx);
-    let (mut min_cz, mut max_cz) = (first_cz, first_cz);
-    for (cx, cz) in iter {
-        min_cx = min_cx.min(cx);
-        max_cx = max_cx.max(cx);
-        min_cz = min_cz.min(cz);
-        max_cz = max_cz.max(cz);
-    }
-    // Pad by one block on each side so a ray entering a boundary chunk's outer face
-    // starts outside that block and steps cleanly across the face.
-    let bounds = [
-        (
-            f64::from(min_cx) * 16.0 - 1.0,
-            (f64::from(max_cx) + 1.0) * 16.0 + 1.0,
-        ),
-        (f64::from(bottom_y) - 1.0, f64::from(top_y) + 1.0),
-        (
-            f64::from(min_cz) * 16.0 - 1.0,
-            (f64::from(max_cz) + 1.0) * 16.0 + 1.0,
-        ),
-    ];
-    for axis in 0..3 {
-        let (lo, hi) = bounds[axis];
-        if dir[axis] == 0.0 {
-            if eye[axis] < lo || eye[axis] > hi {
+/// End the unbounded view query at the far face of the loaded extent. A
+/// distance supplied by a mod never goes through this endpoint selection.
+fn view_exit_distance(eye: [f64; 3], dir: [f64; 3], bounds: BlockTraversalBounds) -> Option<f64> {
+    let mut near = 0.0_f64;
+    let mut far = f64::INFINITY;
+    for i in 0..3 {
+        let lo = f64::from(bounds.min[i]);
+        let hi = f64::from(bounds.max[i]) + 1.0;
+        if dir[i] == 0.0 {
+            if !(lo..=hi).contains(&eye[i]) {
                 return None;
             }
-            continue;
-        }
-        let inv = 1.0 / dir[axis];
-        let a = (lo - eye[axis]) * inv;
-        let b = (hi - eye[axis]) * inv;
-        let (near, far) = if a < b { (a, b) } else { (b, a) };
-        t_min = t_min.max(near);
-        t_max = t_max.min(far);
-        if t_min > t_max {
-            return None;
+        } else {
+            let a = (lo - eye[i]) / dir[i];
+            let b = (hi - eye[i]) / dir[i];
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
         }
     }
-    if !t_min.is_finite() || !t_max.is_finite() || t_max <= t_min {
-        return None;
-    }
-    Some((t_min, t_max))
-}
-
-#[cfg(test)]
-mod ray_extent_tests {
-    use super::loaded_ray_segment;
-
-    #[test]
-    fn loaded_ray_segment_spans_loaded_chunks_past_1024_and_rejects_invalid_limits() {
-        let chunks = [(0, 0), (0, 100)];
-        let eye = [0.5, 100.0, 0.5];
-        let dir = [0.0, 0.0, 1.0];
-
-        assert_eq!(
-            loaded_ray_segment(chunks, -64, 320, eye, dir, None),
-            Some((0.0, 1616.5))
-        );
-        assert_eq!(
-            loaded_ray_segment(chunks, -64, 320, eye, dir, Some(2000.0)),
-            Some((0.0, 1616.5))
-        );
-        assert_eq!(
-            loaded_ray_segment(chunks, -64, 320, eye, dir, Some(1500.0)),
-            Some((0.0, 1500.0))
-        );
-        // Entering loaded extent from far outside starts at the near face.
-        assert_eq!(
-            loaded_ray_segment([(0, 100)], -64, 320, eye, dir, None),
-            Some((1598.5, 1616.5))
-        );
-        assert_eq!(
-            loaded_ray_segment([(0, 100)], -64, 320, eye, dir, Some(1500.0)),
-            None
-        );
-        // Empty chunk set, misses, and nonpositive or non-finite limits return None.
-        assert_eq!(
-            loaded_ray_segment(std::iter::empty(), -64, 320, eye, dir, None),
-            None
-        );
-        assert_eq!(
-            loaded_ray_segment(chunks, -64, 320, [40.5, 100.0, 0.5], [0.0, -1.0, 0.0], None),
-            None
-        );
-        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(
-                loaded_ray_segment(chunks, -64, 320, eye, dir, Some(bad)),
-                None
-            );
-        }
-    }
+    (far.is_finite() && far >= near && far > 0.0).then_some(far)
 }

@@ -5,16 +5,32 @@ ids = [
     "handle:LevelRef::find_nearest_structure",
     "method:prelude::ClientViewClientHost::raycast",
     "method:prelude::ClientViewClientHost::view_hit",
+    "method:prelude::ClientViewClientHost::client_surface_heights",
+    "method:prelude::WorldEditServerHost::surface_heights",
+    "method:prelude::WorldEditServerHost::terrain_surface",
+    "method:prelude::WorldEditServerHost::read_columns",
+    "type:ColumnBlocks",
+    "type:ColumnBlocks.palette",
+    "type:ColumnBlocks.bases",
+    "type:ColumnBlocks.blocks",
+    "type:ColumnBlocks.water_colors",
+    "handle:LevelRef::surface_height",
+    "handle:LevelRef::terrain_surface",
+    "handle:LevelRef::visit_column_blocks",
+    "type:ColumnRead",
 ]
-why = "Remove arbitrary Sunrise-only extent caps that vanilla 26.3 does not impose on biome searches (`ServerLevel.findClosestBiome3d`), structure searches (`ServerLevel.findNearestMapStructure`), and client view raycasts (`BlockGetter.clip`). `BiomeSearch::MAX_SAMPLES` (65,536) refused vanilla's own `/locate biome` default search (`radius = 6400, horizontal_step = 32, vertical_step = 64`), `StructureSearch::MAX_RADIUS` refused radii above 100, and `ClientHost::raycast` / `view_hit` clamped hits at 1024 blocks instead of the loaded chunks' extent."
+why = "Native mods no longer need guest result quotas. Column queries follow LevelReader.getHeight and ChunkGenerator.getBaseColumn at the active or parked level without loading chunks; NeoForge's ILevelReaderExtension keeps the same underlying height and chunk reads. BlockGetter.clip and VoxelShape.clip now use the original view ray while visiting only the resident extent. Both biome searches use the actual build height (ServerLevel.findClosestBiome3d and LocateCommand.locateBiome) and BlockPos.spiralAround's signed leg count. Structure search has no separate origin gate and ranks locate positions in all three dimensions, as ChunkGenerator.findNearestMapStructure and Vec3i.distSqr do."
 migrate = '''
-### `BiomeSearch::MAX_SAMPLES` and `LevelRef::find_closest_biome`
-- Remove references to `BiomeSearch::MAX_SAMPLES`. `LevelRef::find_closest_biome` no longer enforces a pre-search sample budget and accepts any nonnegative `radius` with positive `horizontal_step` and `vertical_step`. If your mod wants a smaller synchronous cap, check its own parameters before calling.
+### Biome and structure search
+- Drop references to `BiomeSearch::MAX_SAMPLES`. Continue calling `level.find_closest_biome(host, selector, BiomeSearch::new(origin, radius, horizontal_step, vertical_step))` with a nonnegative radius and positive steps. The search no longer refuses vanilla `/locate biome` parameters (`6400, 32, 64`); vertical clamping uses the actual build range. Very large sample radii follow vanilla's wrapping spiral leg count and can yield no sample.
+- Drop references to `StructureSearch::MAX_RADIUS`. Continue calling `level.find_nearest_structure(host, selector, StructureSearch::new(origin, radius))` with a nonnegative radius. The origin is not rejected merely for lying outside the ordinary world bounds. Results can change for tags whose placements have different locate heights: the nearest candidate is judged in 3D even though `/locate structure` displays horizontal distance.
 
-### `StructureSearch::MAX_RADIUS` and `LevelRef::find_nearest_structure`
-- Remove references to `StructureSearch::MAX_RADIUS`. `LevelRef::find_nearest_structure` accepts any nonnegative `radius` (vanilla `/locate structure` uses `100`) and still checks vanilla's `Level.isInWorldBoundsHorizontal` bound (`-30_000_000..30_000_000`) on `origin`.
+### Client view rays
+- Keep `host.raycast(distance)` to clip the full finite segment against loaded block outlines, without the old 1024-block ceiling. Pass `1024.0` explicitly for that extent. Check `None` for a miss, nonpositive or non-finite distance, or a sweep too short for vanilla shape clipping. Inside hits use the original sweep, not a sweep cut to loaded bounds.
+- Keep `host.view_hit()` to use the loaded extent as the end of the view ray. Far terrain is still not hit.
 
-### `ClientHost::raycast` and `ClientHost::view_hit`
-- `ClientHost::view_hit` now traverses the full extent of loaded chunks along the view rather than stopping at 1024 blocks.
-- `ClientHost::raycast(distance)` no longer clamps `distance` to 1024 blocks; it returns `None` for nonpositive or non-finite distances and hits loaded blocks out to `distance` across loaded chunks. Pass `1024.0` explicitly if you want the previous ceiling.
+### Column queries
+- Replace `host.surface_heights(dimension, columns, heightmap)` with `let level = host.level(dimension)` (handle the absent level), then iterate the old `(x, z)` pairs and call `level.surface_height(host, [x, z], heightmap)?` for each. The result of each call is that column's optional height: `None` means its chunk is not resident. Replace `client_host.client_surface_heights(columns, heightmap)` with the same calls on the displayed level's handle.
+- Replace `host.terrain_surface(dimension, columns)` with calls to `level.terrain_surface(host, [x, z])?` on the selected server level. The per-column `Option<TerrainColumn>` still means no undecorated surface when it is `None`. Delete `MAX_TERRAIN_COLUMNS`; your loop can consume any number of results as they arrive, including from parked levels.
+- Replace `host.read_columns(dimension, columns, heightmap, (below, above))` with one `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)?` per input pair, in the same order. Instead of indexing `ColumnBlocks.palette` with `ColumnBlocks.blocks`, use each complete `BlockState` passed to the visitor, bottom first. Return `ControlFlow::Continue(())` to keep reading or `ControlFlow::Break(())` to stop that column. Read `ColumnRead.base` instead of that column's entry in `ColumnBlocks.bases`, and `ColumnRead.water_color` instead of its entry in `ColumnBlocks.water_colors`. Air padding and the zero water colour for nonresident chunks are unchanged. If a palette is required for your own output format, build it from the visited states in your mod.
 '''

@@ -114,20 +114,36 @@ impl Game<'_> {
         parameters: mod_api::BiomeSearch,
     ) -> Option<mod_api::BiomeSearchResult> {
         let world = self.native_level_world(level)?;
-        if parameters.radius < 0
-            || parameters.horizontal_step <= 0
-            || parameters.vertical_step <= 0
-            || world.shape.max_y() <= world.shape.min_y
+        if parameters.radius < 0 || parameters.horizontal_step <= 0 || parameters.vertical_step <= 0
         {
             return None;
         }
-        let terrain = if level.dimension() == self.dim.key() {
+        let terrain = self.level_locator(level)?;
+        self.find_level_biome(world, &terrain, &normalized_selector(biome), parameters)
+            .map(|(biome, position)| mod_api::BiomeSearchResult::new(biome, position))
+    }
+
+    /// The active or parked generator for a level already resolved by the caller.
+    pub(super) fn level_locator(
+        &self,
+        level: LevelRef,
+    ) -> Option<std::sync::Arc<sunrise_client::vanillagen::VanillaTerrain>> {
+        if level.dimension() == self.dim.key() {
             self.end.locator()
         } else {
             self.levels.parked_locator_of(level.dimension_id())
-        }?;
-        let selector = normalized_selector(biome);
-        let allowed = |name: &str| self.biome_matches(&selector, name);
+        }
+    }
+
+    /// The common request for the handle and `/locate biome`, with actual build heights.
+    pub(super) fn find_level_biome(
+        &self,
+        world: &World,
+        terrain: &sunrise_client::vanillagen::VanillaTerrain,
+        selector: &str,
+        parameters: mod_api::BiomeSearch,
+    ) -> Option<(String, [i32; 3])> {
+        let allowed = |name: &str| self.biome_matches(selector, name);
         let query = sunrise_world::worldgen::generator::BiomeSearch {
             allowed: &allowed,
             origin: parameters.origin,
@@ -139,9 +155,7 @@ impl Game<'_> {
             min_y: world.shape.min_y,
             max_y: world.shape.max_y() - 1,
         };
-        terrain
-            .find_closest_biome(&query)
-            .map(|(biome, position)| mod_api::BiomeSearchResult::new(biome, position))
+        terrain.find_closest_biome(&query)
     }
 
     /// `ServerLevel.findNearestMapStructure` without skipping known starts, through
@@ -153,15 +167,10 @@ impl Game<'_> {
         parameters: mod_api::StructureSearch,
     ) -> Option<mod_api::StructureSearchResult> {
         self.native_level_world(level)?;
-        // Vanilla `Level.isInWorldBoundsHorizontal` (-30_000_000..30_000_000).
-        if parameters.radius < 0 || !horizontal_in_bounds(parameters.origin) {
+        if parameters.radius < 0 {
             return None;
         }
-        let terrain = if level.dimension() == self.dim.key() {
-            self.end.locator()
-        } else {
-            self.levels.parked_locator_of(level.dimension_id())
-        }?;
+        let terrain = self.level_locator(level)?;
         let names = self.structure_names(&normalized_selector(structure));
         terrain
             .locate(&names, parameters.origin, parameters.radius)
@@ -3168,6 +3177,23 @@ mod environment_read_tests {
                 "client's own dimension shape"
             );
             assert_eq!(level.get_sky_darken(game), Some(game.sky_darken()));
+            let heightmap = mod_api::Heightmap::WorldSurface;
+            assert_eq!(level.surface_height(game, [48, 48], heightmap), Ok(None));
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(0, 64, 0, stone).unwrap();
+            assert_eq!(level.surface_height(game, [0, 0], heightmap), Ok(Some(65)));
+            assert_eq!(
+                nether.surface_height(game, [0, 0], heightmap),
+                Err(mod_api::LevelReadError::Unavailable),
+            );
             assert_eq!(
                 nether.logical_height(game),
                 None,
@@ -3247,7 +3273,6 @@ mod environment_read_tests {
                 BiomeSearch::new([0, 64, 0], 0, 32, i32::MAX),
                 BiomeSearch::new([0, 64, 0], 6400, 32, 64),
                 BiomeSearch::new([0, 64, 0], 128, 1, i32::MAX),
-                BiomeSearch::new([0, 64, 0], i32::MAX, 1, 1),
             ] {
                 let hit = nether
                     .find_closest_biome(game, "#minecraft:is_nether", parameters)
@@ -3265,7 +3290,36 @@ mod environment_read_tests {
                     "nonpositive step must be refused"
                 );
             }
+            assert_eq!(
+                nether.find_closest_biome(
+                    game,
+                    "#minecraft:is_nether",
+                    BiomeSearch::new([0, 64, 0], i32::MAX, 1, 1),
+                ),
+                None,
+                "vanilla's signed spiral leg count wraps to -4",
+            );
             assert_eq!(before, (game.world.chunks.len(), game.streaming.pending()));
+
+            game.build_registries();
+            let origin = [8, -64, 8];
+            let clamped = nether
+                .find_closest_biome(
+                    game,
+                    "#minecraft:is_nether",
+                    BiomeSearch::new(origin, 6400, 32, 64),
+                )
+                .unwrap();
+            assert_eq!(clamped.position, [8, 1, 8]);
+            assert_eq!(
+                game.as_console(
+                    |game| game.recording_command_outcome(|game| game.run_command(
+                        "execute positioned 8.0 -64.0 8.0 run locate biome #minecraft:is_nether",
+                    ))
+                ),
+                (true, Some((true, clamped.position[1] - origin[1]))),
+            );
+
             game.enter_level(Dim::Overworld).unwrap();
             let parked = nether
                 .find_closest_biome(game, "#minecraft:is_nether", parameters)
@@ -3369,27 +3423,28 @@ mod environment_read_tests {
                 ),
                 Some(mineshaft)
             );
-            for parameters in [
-                StructureSearch::new([0, 64, 0], -1),
-                StructureSearch::new([i32::MAX, 64, 0], 100),
-                StructureSearch::new([0, 64, i32::MIN], 100),
-                StructureSearch::new([30_000_000, 64, 0], 0),
-            ] {
-                assert_eq!(
-                    overworld.find_nearest_structure(game, "minecraft:stronghold", parameters),
-                    None,
-                    "{parameters:?} is refused"
-                );
-            }
-            assert!(
-                overworld
-                    .find_nearest_structure(
-                        game,
-                        "minecraft:stronghold",
-                        StructureSearch::new([29_999_999, i32::MIN, -30_000_000], 0)
-                    )
-                    .is_some(),
-                "the world's edge and any height are searched"
+            assert_eq!(
+                overworld.find_nearest_structure(
+                    game,
+                    "minecraft:stronghold",
+                    StructureSearch::new([0, 64, 0], -1),
+                ),
+                None,
+            );
+            let outside = [30_000_000, i32::MIN, i32::MIN];
+            let (name, pos) = game
+                .end
+                .locator()
+                .unwrap()
+                .locate(&["minecraft:stronghold".into()], outside, 0)
+                .expect("the generator searches its rings regardless of the origin");
+            assert_eq!(
+                overworld.find_nearest_structure(
+                    game,
+                    "minecraft:stronghold",
+                    StructureSearch::new(outside, 0),
+                ),
+                Some(mod_api::StructureSearchResult::new(name, pos)),
             );
             assert_eq!(before, (game.world.chunks.len(), game.streaming.pending()));
             let stale = LevelRef::new(

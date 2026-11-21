@@ -127,7 +127,6 @@ client_view::block_collision
 client_view::camera
 client_view::camera_entity
 client_view::camera_type
-client_view::client_surface_heights
 client_view::clock
 client_view::crosshair_target
 client_view::gui_ticks
@@ -1129,9 +1128,6 @@ text::text_from_legacy
 text::text_string
 world_edit::edit_blocks
 world_edit::place_template
-world_edit::read_columns
 world_edit::structure_template
-world_edit::surface_heights
-world_edit::terrain_surface
 world_edit::upgrade_block_entity_nbt
 world_edit::upgrade_entity_nbt

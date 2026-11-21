@@ -1,4 +1,4 @@
-//! BoatItem's server POV clip; deliberately separate from renderer/mining picks.
+//! Outline clip provider for BoatItem's POV and loaded-world mod rays.
 use super::{Fluid, Game};
 use std::io;
 use sunrise_core::{
@@ -41,25 +41,38 @@ impl RayWorld for OutlineFluidRay<'_, '_> {
         _: RayBlockMode,
     ) -> io::Result<VoxelShape> {
         // LiquidBlock.getShape is empty. Waterlogged blocks retain their outline.
-        if matches!(
-            &*self.0.res.facts().get(state).name,
-            "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
-        ) {
+        if self.0.res.facts().is_air(state)
+            || matches!(
+                &*self.0.res.facts().get(state).name,
+                "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
+            )
+        {
             return Ok(VoxelShape::empty());
         }
-        let mut shape = VoxelShape::empty();
-        for b in self.0.outline_boxes([p.x, p.y, p.z]) {
-            let b: [f64; 6] = std::array::from_fn(|i| b[i] - f64::from([p.x, p.y, p.z][i % 3]));
-            let part = VoxelShape::from_box(Aabb::new(
-                Vec3::new(b[0], b[1], b[2]),
-                Vec3::new(b[3], b[4], b[5]),
-            ))
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
-            shape = shape
-                .join(&part, ShapeOp::OR)
-                .map_err(|e| io::Error::other(format!("{e:?}")))?;
-        }
-        Ok(shape)
+        let mut shapes = self
+            .0
+            .outline_boxes_iter(
+                &self.0.world,
+                state,
+                &self.0.be_anims,
+                [p.x, p.y, p.z],
+                true,
+            )
+            .map(|b| {
+                let b: [f64; 6] = std::array::from_fn(|i| b[i] - f64::from([p.x, p.y, p.z][i % 3]));
+                VoxelShape::from_box(Aabb::new(
+                    Vec3::new(b[0], b[1], b[2]),
+                    Vec3::new(b[3], b[4], b[5]),
+                ))
+            });
+        let shape = shapes
+            .next()
+            .transpose()
+            .map_err(|e| io::Error::other(format!("{e:?}")))?
+            .unwrap_or_else(VoxelShape::empty);
+        shapes
+            .try_fold(shape, |shape, part| shape.join(&part?, ShapeOp::OR))
+            .map_err(|e| io::Error::other(format!("{e:?}")))
     }
     fn interaction_shape(&mut self, _: BlockStateId, _: BlockPos) -> io::Result<VoxelShape> {
         // Pinned vanilla's registered interaction shapes are all empty;

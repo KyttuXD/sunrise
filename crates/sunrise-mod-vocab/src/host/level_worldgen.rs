@@ -29,9 +29,8 @@ pub trait LevelWorldgenBackend {
     /// ring position whatever the radius. Starts are built as the search needs
     /// them, without loading or generating chunks or switching parked levels.
     /// None for no start, a structure that does not generate in this level,
-    /// a world without structures, a stale level, a client, a negative radius,
-    /// or an origin outside vanilla's `Level.isInWorldBoundsHorizontal` bound
-    /// (`-30_000_000..30_000_000`).
+    /// a world without structures, a stale level, a client, or a negative radius.
+    /// Candidates are ranked by three-axis distance to the placement's locate position.
     #[access(WorldOnly)]
     fn level_find_nearest_structure(
         &self,
@@ -39,6 +38,47 @@ pub trait LevelWorldgenBackend {
         structure: &str,
         parameters: StructureSearch,
     ) -> Option<StructureSearchResult>;
+    /// Side: both.
+    /// One above the highest block in `[x, z]` that counts for `heightmap`
+    /// (`LevelReader.getHeight`), or `Ok(None)` if its chunk isn't resident.
+    /// Reads an active or parked server level, or the level this client is showing.
+    /// Does not load chunks; iterate coordinates to read an area without buffering results.
+    #[access(WorldOnly)]
+    fn level_surface_height(
+        &self,
+        level: LevelRef,
+        column: [i32; 2],
+        heightmap: Heightmap,
+    ) -> Result<Option<i32>, LevelReadError>;
+    /// Side: server.
+    /// Sample `[x, z]` in the level's generator, without loading chunks or applying
+    /// features or slope rules. The Nether returns the roof, not a floor. A void
+    /// column or a generator with no noise surface gives `Ok(None)`. A stale or
+    /// unavailable level gives `Err`. Works for active and parked levels.
+    /// Iterate coordinates to sample an area without buffering the results.
+    #[access(WorldOnly)]
+    fn level_terrain_surface(
+        &self,
+        level: LevelRef,
+        column: [i32; 2],
+    ) -> Result<Option<TerrainColumn>, LevelReadError>;
+    /// Side: server.
+    /// Visit complete block states from `below` blocks below `[x, z]`'s heightmap
+    /// base to `above - 1` above it, bottom first. Air is reported outside the
+    /// chunk's height and for a nonresident chunk. No block list or palette is built.
+    /// Return `ControlFlow::Break(())` to stop this column; its base and biome
+    /// water colour are returned whether or not the visitor stopped. Works for
+    /// active and parked levels and never loads chunks. Shared reads (including
+    /// other column visits) are allowed inside the visitor.
+    #[access(WorldOnly)]
+    fn level_visit_column_blocks(
+        &self,
+        level: LevelRef,
+        column: [i32; 2],
+        heightmap: Heightmap,
+        range: (u32, u32),
+        visit: &mut dyn FnMut(BlockState) -> core::ops::ControlFlow<()>,
+    ) -> Result<ColumnRead, LevelReadError>;
     /// Side: server.
     /// The biome id selected by `LevelReader.getBiome` and this level's biome zoom.
     /// Reads an active or parked server level. None for a

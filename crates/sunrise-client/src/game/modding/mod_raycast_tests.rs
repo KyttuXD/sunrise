@@ -114,4 +114,20 @@ fn mod_raycasts_hit_loaded_blocks_only_with_far_terrain_on_or_off() {
     for bad in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         assert_eq!(game.raycast(bad), None);
     }
+
+    assert!(game.run_command("setblock 0 101 0 stone"));
+    let inside = game.raycast(100.0).expect("the eye is inside stone");
+    assert_eq!(
+        (inside.block_x, inside.block_y, inside.block_z),
+        (0, 101, 0)
+    );
+    // `VoxelShape.clip` nudges from z=0.5 by 0.001 of the original 100-block sweep.
+    assert_eq!(inside.z, 0.6);
+    game.world.chunks.remove(&(0, 100));
+    assert_eq!(game.raycast(100.0), Some(inside));
+    assert_eq!(
+        game.raycast(0.0001),
+        None,
+        "vanilla rejects a sweep below 1e-7 squared"
+    );
 }

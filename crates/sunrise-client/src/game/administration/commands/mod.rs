@@ -3898,28 +3898,22 @@ impl Game<'_> {
             // LocateCommand.locateBiome: BiomeSource.findClosestBiome3d with
             // a 6400-block radius, 32-block columns and 64-block layers.
             let from = origin.map(|v| v.floor() as i32);
-            let allowed = |name: &str| self.biome_matches(&biome, name);
-            let search = sunrise_world::worldgen::generator::BiomeSearch {
-                allowed: &allowed,
-                origin: from,
-                radius: 6400,
-                horizontal: 32,
-                vertical: 64,
-                min_y: self.world.bottom_y(),
-                max_y: self.world.top_y() - 1,
-            };
-            let found = self
-                .end
-                .locator()
-                .and_then(|t| t.find_closest_biome(&search));
+            let found = self.end.locator().and_then(|terrain| {
+                self.find_level_biome(
+                    &self.world,
+                    &terrain,
+                    &biome,
+                    mod_api::BiomeSearch::new(from, 6400, 32, 64),
+                )
+            });
             let Some((name, p)) = found else {
                 return Err(CommandError::new(Text::tr(
                     "commands.locate.biome.not_found",
                     &[&biome],
                 )));
             };
-            let d2 = [p[0] - from[0], p[1] - from[1], p[2] - from[2]]
-                .map(|d| f64::from(d) * f64::from(d))
+            let d2 = std::array::from_fn::<_, 3, _>(|i| f64::from(p[i]) - f64::from(from[i]))
+                .map(|d| d * d)
                 .iter()
                 .sum::<f64>();
             let shown = if biome.starts_with('#') {

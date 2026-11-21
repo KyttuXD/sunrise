@@ -140,8 +140,8 @@ structure` runs in the level's generator. `structure` is an id or `#tag`; the re
 structure and the position `/locate` reports. `radius` counts rings of placement cells for
 random-spread sets (nonnegative; `/locate` uses 100); strongholds' rings are all checked whatever
 it is. The search builds structure starts but neither loads nor generates chunks; a world without
-structures, a structure this level cannot generate, an origin past the world's 30,000,000-block
-edge (`Level.isInWorldBoundsHorizontal`) and a negative radius give `None`.
+structures, a structure this level cannot generate, and a negative radius give `None`.
+Candidate ranking includes Y, unlike the command's displayed distance.
 
 `ChunkRef::watchers(host)` is `ChunkMap.getPlayers(pos, false)`: the players the chunk was sent to
 and is inside the view of, from their `chunk_watch` until they move away from it. Fake players

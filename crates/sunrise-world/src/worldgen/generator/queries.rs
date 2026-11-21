@@ -1,5 +1,5 @@
 //! Requests and results of the generator's queries (`/place jigsaw`, `/locate biome`) and
-//! the search orders they walk, moved out of `generator.rs` unchanged.
+//! the search orders they walk.
 use std::{collections::BTreeSet, sync::Arc};
 
 /// A `JigsawPlacement.generateJigsaw` request (`/place jigsaw`).
@@ -57,13 +57,13 @@ pub fn out_from_origin(origin: i32, lower: i32, upper: i32, step: i32) -> Vec<i3
 }
 
 /// `BlockPos.spiralAround(ZERO, radius, EAST, SOUTH)` as (x, z) offsets.
-pub fn spiral_around(radius: i32) -> impl Iterator<Item = [i32; 2]> {
+pub fn spiral_around(radius: i32) -> impl std::iter::FusedIterator<Item = [i32; 2]> {
     const DIRS: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-    let legs = 4 * i64::from(radius);
-    let (mut leg, mut leg_size, mut leg_index) = (-1i64, 0i64, 0i64);
+    let legs = radius.wrapping_mul(4);
+    let (mut leg, mut leg_size, mut leg_index) = (-1i32, 0i32, 0i32);
     let mut last = [0i32, 1i32];
     std::iter::from_fn(move || {
-        let d = DIRS[((leg + 4) % 4) as usize];
+        let d = DIRS[(leg & 3) as usize];
         let cursor = [last[0].wrapping_add(d[0]), last[1].wrapping_add(d[1])];
         last = cursor;
         if leg_index >= leg_size {
@@ -77,6 +77,7 @@ pub fn spiral_around(radius: i32) -> impl Iterator<Item = [i32; 2]> {
         leg_index += 1;
         Some(cursor)
     })
+    .fuse()
 }
 
 #[cfg(test)]
@@ -84,12 +85,23 @@ mod tests {
     use super::spiral_around;
 
     #[test]
-    fn spiral_around_handles_zero_negative_and_max_radius_without_overflow() {
-        assert_eq!(spiral_around(0).collect::<Vec<_>>(), vec![[0, 0]]);
-        assert!(spiral_around(-1).next().is_none());
+    fn spiral_around_uses_java_int_leg_count() {
+        let first = [[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1]];
         assert_eq!(
-            spiral_around(i32::MAX).take(5).collect::<Vec<_>>(),
-            vec![[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1]]
+            spiral_around((1 << 29) - 1).take(5).collect::<Vec<_>>(),
+            first
+        );
+        for radius in [-1, 1 << 29, (1 << 30) - 1, i32::MAX] {
+            let mut spiral = spiral_around(radius);
+            assert_eq!(spiral.next(), None, "radius {radius}");
+            assert_eq!(spiral.next(), None, "exhausted at radius {radius}");
+        }
+        for radius in [0, 1 << 30] {
+            assert_eq!(spiral_around(radius).collect::<Vec<_>>(), [[0, 0]]);
+        }
+        assert_eq!(
+            spiral_around((1 << 30) + 1).take(5).collect::<Vec<_>>(),
+            first
         );
     }
 }

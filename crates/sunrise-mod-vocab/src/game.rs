@@ -81,9 +81,6 @@ pub struct Clock {
     /// it modulo 24000 for the hour; `/time set` can make it negative.
     pub day_time: i64,
 }
-/// Maximum number of columns in one generator surface query.
-pub const MAX_TERRAIN_COLUMNS: usize = 4096;
-
 /// The generator's undecorated surface, without slope rules or chunk allocation.
 /// Created only by the game.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,24 +97,24 @@ pub struct TerrainColumn {
     pub biome: String,
 }
 
-/// What `read_columns` read: the blocks round each column's height (`bases`, none where it isn't loaded),
-/// as indexes into `palette`, a column after another, and each column's biome JSON water colour
-/// (`water_colors`, `0xRRGGBB`, `0` where unloaded).
-///
-/// Colormap-derived grass and foliage tints are client-side only: read blended tints with
-/// [`BlockAndTintGetter::block_tint`] inside block tint callbacks or `ClientHost::biome_tint`
-/// in other client hooks.
-#[derive(Clone, Debug, PartialEq, Default)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ColumnBlocks {
-    /// Distinct complete states, including separate entries for different property combinations.
-    pub palette: Vec<BlockState>,
-    pub bases: Vec<Option<i32>>,
-    pub blocks: Vec<u16>,
-    /// One `0xRRGGBB` biome water colour (`BiomeSpecialEffects.waterColor`) per column, at the
-    /// column's top block (`base - 1`); `0` where the column is not loaded.
-    pub water_colors: Vec<u32>,
+/// The metadata of one column read by [`LevelRef::visit_column_blocks`].
+// no wire: returned by an in-process column visit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ColumnRead {
+    /// Heightmap base (one above the highest matching block), if the chunk is resident.
+    pub base: Option<i32>,
+    /// `BiomeSpecialEffects.waterColor` at the top block (`base - 1`), as `0xRRGGBB`;
+    /// zero for a nonresident chunk. This is not a blended client colormap tint.
+    pub water_color: u32,
+}
+impl ColumnRead {
+    /// Construct the result at the game boundary.
+    // hidden: a game-side constructor, not a mod API method
+    #[doc(hidden)]
+    pub fn new(base: Option<i32>, water_color: u32) -> Self {
+        Self { base, water_color }
+    }
 }
 /// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
 /// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level

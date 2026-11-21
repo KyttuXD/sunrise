@@ -25,6 +25,28 @@ use std::{
 };
 use sunrise_core::{density::Beardifier, position::ChunkPos};
 
+/// `Vec3i.distSqr`: rank locate positions in three dimensions, not by the
+/// horizontal distance displayed by `LocateCommand`.
+fn locate_distance_squared(from: [i32; 3], to: [i32; 3]) -> f64 {
+    let [dx, dy, dz] = std::array::from_fn(|i| f64::from(from[i]) - f64::from(to[i]));
+    dx * dx + dy * dy + dz * dz
+}
+
+fn retain_nearest_locate_candidate(
+    best: &mut Option<(f64, String, [i32; 3])>,
+    from: [i32; 3],
+    name: String,
+    position: [i32; 3],
+) {
+    let distance = locate_distance_squared(from, position);
+    if best
+        .as_ref()
+        .is_none_or(|(previous, ..)| distance < *previous)
+    {
+        *best = Some((distance, name, position));
+    }
+}
+
 pub(super) type Starts = Arc<Vec<Arc<StructureStart>>>;
 impl StructureState {
     /// [`StartCache::census`].
@@ -724,7 +746,7 @@ impl StructureState {
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:
     /// sectors in growing squares up to `radius`). Returns the structure and
-    /// its locate position (the start chunk's corner at y 0). `skip` says a
+    /// its locate position (the start chunk's corner plus the placement's offset). `skip` says a
     /// start (structure name, its chunk) can't be referenced again
     /// (`StructureStart.canBeReferenced`): the search goes on past it.
     pub(super) fn locate<C: super::structure::start::StartContext>(
@@ -738,14 +760,7 @@ impl StructureState {
         let seed = context.seed();
         let rings = self.rings(context).clone();
         let wanted = |s: usize| names.iter().any(|n| *n == self.registry.structures[s].name);
-        let dist = |p: [i32; 3]| {
-            let (dx, dz) = (
-                f64::from(p[0]) - f64::from(from[0]),
-                f64::from(p[2]) - f64::from(from[2]),
-            );
-            dx * dx + dz * dz
-        };
-        let mut best: Option<(f64, String, [i32; 3])> = None;
+        let mut best = None;
         let wanted_structures: Vec<usize> = (0..self.registry.structures.len())
             .filter(|&s| wanted(s))
             .collect();
@@ -789,11 +804,14 @@ impl StructureState {
                     };
                     let mut nearest: Option<(f64, ChunkPos, String)> = None;
                     for &c in chunks {
-                        let d = dist([
-                            c.x.wrapping_mul(16).wrapping_add(8),
-                            32,
-                            c.z.wrapping_mul(16).wrapping_add(8),
-                        ]);
+                        let d = locate_distance_squared(
+                            from,
+                            [
+                                c.x.wrapping_mul(16).wrapping_add(8),
+                                32,
+                                c.z.wrapping_mul(16).wrapping_add(8),
+                            ],
+                        );
                         if nearest.as_ref().is_none_or(|(n, ..)| d < *n)
                             && self
                                 .registry
@@ -804,11 +822,7 @@ impl StructureState {
                         }
                     }
                     if let Some((_, c, name)) = nearest {
-                        let p = set.locate_pos(c);
-                        let d = dist(p);
-                        if best.as_ref().is_none_or(|(b, ..)| d < *b) {
-                            best = Some((d, name, p));
-                        }
+                        retain_nearest_locate_candidate(&mut best, from, name, set.locate_pos(c));
                     }
                 }
                 Some(spacing) => {
@@ -846,11 +860,12 @@ impl StructureState {
                                 continue;
                             }
                             if let Some(name) = found_at(self, context, c) {
-                                let p = set.locate_pos(c);
-                                let d = dist(p);
-                                if best.as_ref().is_none_or(|(b, ..)| d < *b) {
-                                    best = Some((d, name, p));
-                                }
+                                retain_nearest_locate_candidate(
+                                    &mut best,
+                                    from,
+                                    name,
+                                    set.locate_pos(c),
+                                );
                                 found_in_ring = true;
                                 break 'ring;
                             }
@@ -1059,6 +1074,23 @@ fn tag_json(tag: &sunrise_core::nbt::Tag) -> Value {
 mod tests {
     use super::*;
     use crate::worldgen::structure::stronghold::{ring_positions, ring_searches};
+
+    #[test]
+    fn locate_ranks_mixed_placements_by_their_offset_height() {
+        let origin = [0, 12, 0];
+        // A concentric-ring start one chunk away with locate_offset [0, -16, 0],
+        // and a random-spread start two chunks away with locate_offset [0, 12, 0].
+        let ring = [16, -16, 0];
+        let spread = [32, 12, 0];
+        let mut best = None;
+        retain_nearest_locate_candidate(&mut best, origin, "test:ring".into(), ring);
+        retain_nearest_locate_candidate(&mut best, origin, "test:spread".into(), spread);
+        assert_eq!(best, Some((1024.0, "test:spread".into(), spread)));
+        assert_eq!(
+            locate_distance_squared([i32::MIN, 0, 0], [0, 0, 0]),
+            4_611_686_018_427_387_904.0,
+        );
+    }
 
     #[test]
     fn structure_biome_plain_lists_and_scalar_fields_keep_their_leniency() {

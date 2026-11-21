@@ -50,12 +50,14 @@ pub trait ClientViewClientHost {
     #[access(ClientSetup)]
     fn clock(&self) -> Option<Clock>;
     /// Side: client.
-    /// The first block along the view within `distance`, in loaded chunks only;
+    /// `BlockGetter.clip` along the view for `distance`, against loaded block outlines only.
+    /// Inside hits use the supplied segment, even when it extends past the loaded chunks.
     /// `None` on a miss or a nonpositive or non-finite `distance`.
     #[access(ClientSetup)]
     fn raycast(&self, distance: f32) -> Option<Hit>;
     /// Side: client.
-    /// The first block along the view across loaded chunks only, and its distance; `None` on a miss.
+    /// The first block outline along the view and its distance, clipping to the end of the
+    /// loaded extent. `None` on a miss.
     #[access(ClientSetup)]
     fn view_hit(&self) -> Option<(f32, Hit)>;
     /// Side: client.
@@ -95,18 +97,6 @@ pub trait ClientViewClientHost {
     /// the camera to, else the local player. None outside a client world.
     #[access(ClientSetup)]
     fn camera_entity(&self) -> Option<EntityRef>;
-    /// Side: client.
-    /// Each column's height by `heightmap` in the world this window shows
-    /// (`LevelReader.getHeight(type, x, z)` on a client level): one above the highest block that
-    /// counts on that map, from the blocks the server has sent, none for a column whose chunk this
-    /// client does not hold. `Err`, reading nothing, for no client world (the title screen) or more
-    /// than 65,536 columns (`MAX_COLUMNS`).
-    #[access(WorldOnly)]
-    fn client_surface_heights(
-        &self,
-        columns: &[(i32, i32)],
-        heightmap: Heightmap,
-    ) -> Result<Vec<Option<i32>>, String>;
     /// Side: client.
     /// Points the view at `entity` (`Minecraft.setCameraEntity`), as a server's camera packet
     /// does; the local player's own ref puts it back. True when the view now follows it; false,

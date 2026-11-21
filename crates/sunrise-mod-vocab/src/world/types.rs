@@ -1808,7 +1808,7 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct StructureSearch {
-    /// Where the search starts, in block coordinates; the distance is horizontal.
+    /// Where the search starts, in block coordinates. Candidate ranking includes Y.
     pub origin: [i32; 3],
     /// How many rings of placement cells around the origin's are searched for
     /// random-spread structure sets (vanilla's `searchRadius`); `/locate` uses 100.

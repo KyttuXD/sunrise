@@ -2,7 +2,10 @@
 use crate::entity_obstruction::EntityIdentity;
 use std::fmt;
 use sunrise_core::{
-    geometry::{BlockHit, Direction, TraversalError, Vec3, VoxelShape, traverse_blocks},
+    geometry::{
+        BlockHit, BlockTraversalBounds, Direction, TraversalError, Vec3, VoxelShape,
+        traverse_blocks, traverse_blocks_in_bounds,
+    },
     position::BlockPos,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,7 +105,50 @@ pub fn clip_world<W: RayWorld>(
     fluids: RayFluidMode,
     max_visits: usize,
 ) -> Result<RayResult, RayError<W::Error>> {
-    let result = traverse_blocks(start, end, max_visits, |p| {
+    clip(
+        world,
+        start,
+        end,
+        blocks,
+        fluids,
+        ClipTraversal::Budget(max_visits),
+    )
+}
+
+/// The same clip for a world known to be empty outside `bounds`. Neither
+/// the entry nor the exit of the box replaces the original shape endpoints.
+pub fn clip_world_in_bounds<W: RayWorld>(
+    world: &mut W,
+    start: Vec3,
+    end: Vec3,
+    blocks: RayBlockMode,
+    fluids: RayFluidMode,
+    bounds: BlockTraversalBounds,
+) -> Result<RayResult, RayError<W::Error>> {
+    clip(
+        world,
+        start,
+        end,
+        blocks,
+        fluids,
+        ClipTraversal::Bounds(bounds),
+    )
+}
+
+enum ClipTraversal {
+    Budget(usize),
+    Bounds(BlockTraversalBounds),
+}
+
+fn clip<W: RayWorld>(
+    world: &mut W,
+    start: Vec3,
+    end: Vec3,
+    blocks: RayBlockMode,
+    fluids: RayFluidMode,
+    traversal: ClipTraversal,
+) -> Result<RayResult, RayError<W::Error>> {
+    let visit = |p| {
         let mut query = || -> Result<Option<BlockHit>, W::Error> {
             let block = world.block_state(p)?;
             let fluid = world.fluid_state(p)?;
@@ -126,7 +172,11 @@ pub fn clip_world<W: RayWorld>(
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
-    })
+    };
+    let result = match traversal {
+        ClipTraversal::Budget(budget) => traverse_blocks(start, end, budget, visit),
+        ClipTraversal::Bounds(bounds) => traverse_blocks_in_bounds(start, end, bounds, visit),
+    }
     .map_err(RayError::Traversal)?;
     match result {
         Some(hit) => Ok(RayResult {

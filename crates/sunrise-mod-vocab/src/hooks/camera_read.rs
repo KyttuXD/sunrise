@@ -12,9 +12,9 @@ the entity only; the camera angle stays the entity's, and `camera_pose` is the w
 
 ## Client heights
 
-`ClientHost::client_surface_heights(columns, heightmap)` is `LevelReader.getHeight(type, x, z)` on a
-client level: each column's height from the chunks the server has sent this window, `None` for a
-column it holds no chunk of. A minimap or a tracker reads many columns in one call instead of
-scanning blocks. It is the client's own view, so it follows the server's block changes as they arrive."#]
+`level.surface_height(host, [x, z], heightmap)` is `LevelReader.getHeight(type, x, z)` on
+this client's displayed level. It sees the chunks the server has sent this window and
+returns `Ok(None)` for a nonresident column. Iterate coordinates in the mod to read an area
+without first building a result list."#]
     fn camera_read_note0();
 }
