@@ -3,6 +3,7 @@
 //! effects (regeneration, poison, wither, hunger, saturation, instant
 //! effects), and the derived flags the movement and damage code read.
 use crate::particles::{ParticleOptions, ParticleType};
+use std::ops::{Deref, DerefMut};
 use sunrise_client_core::potions;
 use sunrise_protocol::entity_data::Value;
 
@@ -362,9 +363,95 @@ impl SavedEffect {
         e
     }
 }
+/// Engine storage for the effects held by a living entity. Structural edits
+/// go through the list; slice access is for reading or updating instances.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActiveEffectList<T>(Vec<T>);
+
+impl<T> Default for ActiveEffectList<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<T> From<Vec<T>> for ActiveEffectList<T> {
+    fn from(effects: Vec<T>) -> Self {
+        Self(effects)
+    }
+}
+
+impl<T> Deref for ActiveEffectList<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for ActiveEffectList<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+impl<T> IntoIterator for ActiveEffectList<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a ActiveEffectList<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut ActiveEffectList<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<T> Extend<T> for ActiveEffectList<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, effects: I) {
+        self.0.extend(effects);
+    }
+}
+
+impl<T> ActiveEffectList<T> {
+    pub fn push(&mut self, effect: T) {
+        self.0.push(effect);
+    }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        self.0.remove(index)
+    }
+
+    pub fn retain(&mut self, keep: impl FnMut(&T) -> bool) {
+        self.0.retain(keep);
+    }
+
+    pub fn retain_mut(&mut self, keep: impl FnMut(&mut T) -> bool) {
+        self.0.retain_mut(keep);
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlayerEffects {
-    pub list: Vec<EffectInstance>,
+    pub list: ActiveEffectList<EffectInstance>,
     pub tick_count: i32,
     /// How many times `add` added or updated an effect: each is one
     /// `onEffectAdded` or `onEffectUpdated` (`EffectsChangedTrigger`).

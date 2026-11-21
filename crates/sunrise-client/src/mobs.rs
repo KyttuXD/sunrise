@@ -163,6 +163,7 @@ impl StoredEffect {
 
 use crate::{
     blocks::BlockFacts,
+    effects::ActiveEffectList,
     health::{DamageContainer, DamageLevel, Reduction},
     mesher::Vertex,
     world::World,
@@ -1267,7 +1268,7 @@ pub struct Extra {
     pub repellent: Option<[i32; 3]>,
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
-    pub effects: Vec<StoredEffect>,
+    pub effects: ActiveEffectList<StoredEffect>,
     /// Hidden effect instances behind an active effect, keyed by effect id.
     pub effect_chains: Vec<crate::effects::EffectInstance>,
     /// The effects above given with `hideParticles`: no swirls for them.
@@ -5978,8 +5979,8 @@ mod magic_absorb_tests {
         // (nothing changed), the visibility follows.
         assert!(m.add_effect_with("speed", 100, 0, true, true));
         assert_eq!(
-            m.extra.effects,
-            vec![crate::mobs::StoredEffect::new(speed, 600, 0)]
+            &m.extra.effects[..],
+            &[crate::mobs::StoredEffect::new(speed, 600, 0)]
         );
         assert!(
             m.extra.ambient_effects.contains(&speed) && !m.extra.hidden_effects.contains(&speed)
@@ -5993,8 +5994,8 @@ mod magic_absorb_tests {
         assert!(m.add_effect_with("speed", 900, 0, true, true));
         assert!(m.extra.ambient_effects.contains(&speed));
         assert_eq!(
-            m.extra.effects,
-            vec![crate::mobs::StoredEffect::new(speed, 900, 0)]
+            &m.extra.effects[..],
+            &[crate::mobs::StoredEffect::new(speed, 900, 0)]
         );
     }
 
@@ -6052,8 +6053,8 @@ mod magic_absorb_tests {
             );
         }
         assert_eq!(
-            m.extra.effects,
-            vec![crate::mobs::StoredEffect::new(
+            &m.extra.effects[..],
+            &[crate::mobs::StoredEffect::new(
                 "minecraft:absorption",
                 110,
                 0
@@ -6102,8 +6103,8 @@ mod magic_absorb_tests {
             );
         }
         assert_eq!(
-            m.extra.effects,
-            vec![crate::mobs::StoredEffect::new("minecraft:speed", 110, 0)]
+            &m.extra.effects[..],
+            &[crate::mobs::StoredEffect::new("minecraft:speed", 110, 0)]
         );
     }
 
@@ -6146,8 +6147,8 @@ mod magic_absorb_tests {
             );
         }
         assert_eq!(
-            m.extra.effects,
-            vec![crate::mobs::StoredEffect::new("minecraft:speed", 3, 0)]
+            &m.extra.effects[..],
+            &[crate::mobs::StoredEffect::new("minecraft:speed", 3, 0)]
         );
         assert!(m.extra.ambient_effects.contains(&"minecraft:speed"));
         assert!(m.extra.hidden_effects.contains(&"minecraft:speed"));
@@ -6662,8 +6663,8 @@ mod totem_tests {
         assert_eq!(m.extra.main_hand_id(), None, "the totem was used up");
         // DeathProtection.TOTEM_EFFECTS.
         assert_eq!(
-            m.extra.effects,
-            vec![
+            &m.extra.effects[..],
+            &[
                 crate::mobs::StoredEffect::new("minecraft:regeneration", 900, 1),
                 crate::mobs::StoredEffect::new("minecraft:absorption", 100, 1),
                 crate::mobs::StoredEffect::new("minecraft:fire_resistance", 800, 0),

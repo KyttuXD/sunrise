@@ -326,8 +326,8 @@ fn a_mob_keeps_a_mod_effect() {
     assert_eq!(text(saved[0].get("id")).as_deref(), Some("testfx:glow"));
     let back = mob_from_nbt(&tag, &types, 2, None).unwrap();
     assert_eq!(
-        back.extra.effects,
-        [crate::mobs::StoredEffect::new("testfx:glow", 200, 2)]
+        &back.extra.effects[..],
+        &[crate::mobs::StoredEffect::new("testfx:glow", 200, 2)]
     );
 }
 

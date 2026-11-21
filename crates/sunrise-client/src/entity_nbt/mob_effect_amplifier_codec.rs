@@ -61,7 +61,7 @@ fn decoded_numeric_amplifiers_roundtrip_without_raw_input() {
         let mob = mob_from_nbt(&raw, &types, 7, None).unwrap();
         let mut loaded = crate::mobs::StoredEffect::new("minecraft:night_vision", 200, expected);
         loaded.show_icon = false;
-        assert_eq!(mob.extra.effects, [loaded], "{value:?}");
+        assert_eq!(&mob.extra.effects[..], &[loaded], "{value:?}");
         for source in [None, Some(&raw)] {
             let saved = mob_to_nbt(
                 &mob,

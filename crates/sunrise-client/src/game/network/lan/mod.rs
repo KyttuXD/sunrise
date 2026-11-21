@@ -4867,7 +4867,8 @@ mod tests {
             guest.placed = true;
             let mut faint_speed = EffectInstance::new("speed", 600, 0);
             faint_speed.ambient = true;
-            guest.effects.list = vec![faint_speed.clone(), EffectInstance::new("slowness", 600, 0)];
+            guest.effects.list =
+                vec![faint_speed.clone(), EffectInstance::new("slowness", 600, 0)].into();
             game.lan.as_mut().unwrap().hub.guests.push(guest);
             let kind = game
                 .res
@@ -5015,7 +5016,7 @@ mod tests {
                 let mut weakness = EffectInstance::new("weakness", 600, 0);
                 weakness.visible = false;
                 hub.guests
-                    .update(0, |g| g.effects.list = vec![faint_speed, weakness]);
+                    .update(0, |g| g.effects.list = vec![faint_speed, weakness].into());
                 assert_eq!(
                     effect_entries(&hub.player_effect_meta(&hub.guests[0], true)),
                     guest_swirls

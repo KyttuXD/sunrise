@@ -32,7 +32,7 @@ use super::{BlockEntity, BlockStateId, Game, machines::HopperState, maps::MapDat
 use mod_api::{Transaction, TransactionLifecycle, TransactionSeal};
 use std::collections::{BTreeMap, HashMap};
 use sunrise_client::{
-    effects::EffectInstance,
+    effects::{ActiveEffectList, EffectInstance},
     items::ItemStack,
     lan::configuration_tasks::ConfigurationCompletion,
     living_attributes::ModifierChanges,
@@ -385,7 +385,7 @@ struct KeptMobHealth {
 }
 
 struct KeptMobEffects {
-    active: Vec<StoredEffect>,
+    active: ActiveEffectList<StoredEffect>,
     chains: Vec<EffectInstance>,
     ambient: Vec<&'static str>,
     hidden: Vec<&'static str>,

@@ -3983,7 +3983,7 @@ mod tests {
                         default_tooltip: true,
                     },
                 ] {
-                    game.potions.effects.list = vec![EffectInstance::new(case.id, 450, 1)];
+                    game.potions.effects.list = vec![EffectInstance::new(case.id, 450, 1)].into();
                     let left = 102 + image_width;
                     let origin = (100.0, 50.0);
                     let mut batch = HudBatch::scratch([(left + case.room) as u32, 480]);

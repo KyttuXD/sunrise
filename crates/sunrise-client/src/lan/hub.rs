@@ -1794,7 +1794,7 @@ impl Hub {
     /// PlayerList.sendActivePlayerEffects: every effect, unblended, when the
     /// player is placed (or respawns).
     pub fn send_active_effects(&mut self, i: usize) {
-        let effects = self.guests[i].effects.list.clone();
+        let effects = self.guests[i].effects.list.to_vec();
         let sent = effects
             .iter()
             .filter_map(|e| self.send_effect(i, e, false))

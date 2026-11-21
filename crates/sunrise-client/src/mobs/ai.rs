@@ -414,8 +414,8 @@ mod inside_walk_tests {
         });
         assert!(ran, "the vanilla test resources must be available");
         assert_eq!(
-            mob.extra.effects,
-            vec![crate::mobs::StoredEffect::new("minecraft:wither", 40, 1)]
+            &mob.extra.effects[..],
+            &[crate::mobs::StoredEffect::new("minecraft:wither", 40, 1)]
         );
     }
 }

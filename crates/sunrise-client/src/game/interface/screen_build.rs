@@ -775,7 +775,8 @@ mod tests {
             game.title = None;
             game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
                 "speed", 200, 0,
-            )];
+            )]
+            .into();
             let batch = HudBatch::new(
                 [320, 240],
                 GuiScale {
@@ -1245,7 +1246,8 @@ mod tests {
                 game.craft_size = 2;
                 game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
                     "speed", 200, 0,
-                )];
+                )]
+                .into();
                 game.frames = 11;
                 game.build_screen();
                 assert_eq!(

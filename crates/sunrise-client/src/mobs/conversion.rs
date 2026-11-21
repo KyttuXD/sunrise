@@ -194,8 +194,8 @@ mod tests {
                 single(&s, &mut boosted, Params::KEEP_ALL);
                 assert_eq!(boosted.absorption, 8.0);
                 assert_eq!(
-                    boosted.extra.effects,
-                    vec![crate::mobs::StoredEffect::new(
+                    &boosted.extra.effects[..],
+                    &[crate::mobs::StoredEffect::new(
                         "minecraft:absorption",
                         600,
                         1

@@ -3138,8 +3138,8 @@ mod tests {
         assert!(!matches(&game, 32300, speed_two.clone()));
         game.mobs[0].add_effect_with("minecraft:speed", -1, 2, false, false);
         assert_eq!(
-            game.mobs[0].extra.effects,
-            vec![sunrise_client::mobs::StoredEffect::new(
+            &game.mobs[0].extra.effects[..],
+            &[sunrise_client::mobs::StoredEffect::new(
                 "minecraft:speed",
                 -1,
                 2
