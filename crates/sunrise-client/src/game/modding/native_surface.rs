@@ -497,7 +497,7 @@ mod tests {
                 travel_in_air(
                     &mut world,
                     &mut sunrise_world::move_gate::MoveGate::new(),
-                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0).into(),
                 )
                 .unwrap();
                 let reads = calls.load(Ordering::SeqCst);
