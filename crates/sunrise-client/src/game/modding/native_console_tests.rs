@@ -209,7 +209,7 @@ fn native_console_delivers_all_source_feedback_in_order() {
                     "/feedback_probe",
                     send
                 ));
-                let mut output = receive.into_iter();
+                let mut output = receive.try_iter();
                 let long = "€".repeat(1500);
                 let Some(Ok(CommandFeedback::Success(first))) = output.next() else {
                     panic!("expected the command's first success message");
@@ -225,7 +225,10 @@ fn native_console_delivers_all_source_feedback_in_order() {
                 let Some(Ok(CommandFeedback::Failure(error))) = output.next() else {
                     panic!("a failed command must deliver its error after earlier successes");
                 };
-                assert!(error.style.color.is_some(), "the error keeps its color");
+                assert!(
+                    matches!(error.style.color.as_deref(), Some("red" | "#FF5555")),
+                    "the error keeps its red style"
+                );
                 assert_eq!(
                     output.next(),
                     None,
