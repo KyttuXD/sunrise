@@ -528,14 +528,14 @@ impl Game<'_> {
                         .as_ref()
                         .and_then(|host| host.hub.guest(conn))
                         .map(|g| (g.entity_id as u32, "minecraft:player"));
-                    let sound = self.block_sound_type(
+                    let sound = self.selected_block_sound(
                         [position.x, position.y, position.z],
                         state,
                         entity,
                         mod_api::BlockSoundCause::Fall,
                     );
                     self.audio.play_unshared(
-                        sound.fall.as_str(),
+                        sound.event.as_str(),
                         Some(at),
                         sound.volume * 0.5,
                         sound.pitch * 0.75,
@@ -543,7 +543,7 @@ impl Game<'_> {
                     self.send_level_sound(
                         // `Player.playSound` plays in the players' source.
                         LevelSound::new(
-                            sound.fall.as_str(),
+                            sound.event.as_str(),
                             at,
                             sound.volume * 0.5,
                             sound.pitch * 0.75,

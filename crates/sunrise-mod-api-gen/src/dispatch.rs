@@ -121,6 +121,8 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_part_listen =
+            hook.isolate && hook.scope.is_some() && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +507,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && !isolated_part_listen
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -946,7 +952,10 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener
+            || isolated_collect
+            || isolated_part_listen
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -1223,6 +1232,22 @@ pub(super) fn emit<'a>(
                 ),
             ),
         };
+        let isolated_output = if isolated_part_listen {
+            match rollback.as_slice() {
+                [(output, true)]
+                    if surfaces.is_empty() && write_back.is_empty() && hook.inert.is_none() =>
+                {
+                    Some(output)
+                }
+                _ => {
+                    return Err(format!(
+                        "{name}: an isolated scoped listener needs one borrowed value to edit"
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let inert_owner = fresh_name("disabled_owner", &mut used);
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => (
@@ -1306,7 +1331,12 @@ pub(super) fn emit<'a>(
                         )
                     }
                 },
-                if let Some(inert) = &hook.inert {
+                if let Some(output) = isolated_output {
+                    let draft = fresh_name("draft", &mut used);
+                    format!(
+                        "for {part_item} in super::entered_parts({part_list}, \"{name}\") {{ if let Some({replacement}) = super::runtime::isolated_part_answer(HookId::{hook_id}, \"{name}\", || {{ let mut {draft} = ToOwned::to_owned(&*{output}); {{ let {output} = &mut {draft}; {local_event} {part_item}.{name}({invoke}); }} {draft} }}) {{ *{output} = {replacement}; }} }}"
+                    )
+                } else if let Some(inert) = &hook.inert {
                     let inert = if inert_signal {
                         "*inert = true;"
                     } else {

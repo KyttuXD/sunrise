@@ -98,13 +98,13 @@ impl Game<'_> {
                         if age.is_multiple_of(10) {
                             let sniffer = Some((id, self.mobs[i].kind.id.as_str()));
                             let hit = self
-                                .block_sound_type(
+                                .selected_block_sound(
                                     ground,
                                     below,
                                     sniffer,
                                     mod_api::BlockSoundCause::Dig,
                                 )
-                                .hit;
+                                .event;
                             self.audio.play(hit.as_str(), Some(at), 0.5, 0.5);
                         }
                     }

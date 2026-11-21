@@ -4,6 +4,7 @@ mod decode;
 use crate::Result;
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Arc};
+use sunrise_mod_vocab::{BlockSoundType, SoundEventKey};
 use sunrise_world::{
     level::{Behaviours, GameplayStateSource},
     registry::{BlockRegistry, BlockStateId},
@@ -22,16 +23,6 @@ pub enum Fluid {
     Lava,
     /// A mod's world fluid: a fluid to a bucket's ray, neither water nor lava to anything else.
     Modded,
-}
-#[derive(Clone, Debug)]
-pub struct Sounds {
-    pub volume: f32,
-    pub pitch: f32,
-    pub break_sound: Arc<str>,
-    pub step: Arc<str>,
-    pub place: Arc<str>,
-    pub hit: Arc<str>,
-    pub fall: Arc<str>,
 }
 /// `SignBlockEntity.createDefaultSignText` of a content sign: the `DyeColor` id and glow.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,7 +58,7 @@ pub struct StateFacts {
     /// The item pick-block takes (`BlockState.getCloneItemStack`): `item` unless the block
     /// declares its own, as a crop picks its seed.
     pub pick_item: Arc<str>,
-    pub sounds: Sounds,
+    pub sounds: BlockSoundType,
     pub fluid: Fluid,
     /// Fluid amount 1..=8 (8 = source/falling surface), 0 when there is no fluid.
     pub fluid_level: u8,
@@ -468,6 +459,17 @@ impl BlockFacts {
             names.insert(s.to_owned(), name.clone());
             name
         };
+        let mut sound_events: HashMap<String, SoundEventKey> = HashMap::new();
+        let mut sound_event = |id: Option<&str>| -> Result<SoundEventKey> {
+            let name = id.unwrap_or("");
+            if let Some(key) = sound_events.get(name) {
+                return Ok(key.clone());
+            }
+            let key = SoundEventKey::parse(name)
+                .ok_or_else(|| format!("invalid block sound event identifier: {name:?}"))?;
+            sound_events.insert(name.to_owned(), key.clone());
+            Ok(key)
+        };
         let mut shapes = decode::Shapes::default();
         let mut states = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
@@ -566,14 +568,14 @@ impl BlockFacts {
                         .or(entry.item.as_deref())
                         .unwrap_or("minecraft:air"),
                 ),
-                sounds: Sounds {
+                sounds: BlockSoundType {
                     volume: sound.volume as f32,
                     pitch: sound.pitch as f32,
-                    break_sound: intern(sound.r#break.id.as_deref().unwrap_or("")),
-                    step: intern(sound.step.id.as_deref().unwrap_or("")),
-                    place: intern(sound.place.id.as_deref().unwrap_or("")),
-                    hit: intern(sound.hit.id.as_deref().unwrap_or("")),
-                    fall: intern(sound.fall.id.as_deref().unwrap_or("")),
+                    break_sound: sound_event(sound.r#break.id.as_deref())?,
+                    step: sound_event(sound.step.id.as_deref())?,
+                    place: sound_event(sound.place.id.as_deref())?,
+                    hit: sound_event(sound.hit.id.as_deref())?,
+                    fall: sound_event(sound.fall.id.as_deref())?,
                 },
                 fluid,
                 fluid_level,
@@ -686,6 +688,7 @@ mod pane_tests {
 
     fn state(name: &str, classes: &[&str]) -> StateFacts {
         let text = |s: &str| -> Arc<str> { s.into() };
+        let sound = SoundEventKey::parse("").unwrap();
         StateFacts {
             name: text(name),
             emission: 0,
@@ -707,14 +710,14 @@ mod pane_tests {
             explosion_resistance: 0.0,
             item: text("minecraft:air"),
             pick_item: text("minecraft:air"),
-            sounds: Sounds {
+            sounds: BlockSoundType {
                 volume: 1.0,
                 pitch: 1.0,
-                break_sound: text(""),
-                step: text(""),
-                place: text(""),
-                hit: text(""),
-                fall: text(""),
+                break_sound: sound.clone(),
+                step: sound.clone(),
+                place: sound.clone(),
+                hit: sound.clone(),
+                fall: sound,
             },
             fluid: Fluid::None,
             fluid_level: 0,

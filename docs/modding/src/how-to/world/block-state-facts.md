@@ -22,7 +22,7 @@ known state reads as `Ok(None)`; unavailable metadata, invalid states and refuse
 | `replaceable(state) -> Option<bool>` | `BlockState.canBeReplaced()` |
 | `destroy_speed(state) -> Option<f32>` | `BlockBehaviour.Properties.destroyTime` (`getDestroySpeed`): stone 1.5, -1 unbreakable |
 | `requires_correct_tool(state) -> Option<bool>` | `BlockState.requiresCorrectToolForDrops()`: stone and ores true, dirt and logs false; which tool is correct for a state is `BlockStates::is_correct_tool_for_drops` |
-| `sound(state) -> Option<BlockSoundType>` | `BlockState.getSoundType()`: volume, pitch and the break, step, place, hit and fall events |
+| `sound(state) -> Option<BlockSoundType>` | `BlockState.getSoundType()`: base volume, pitch and the validated break, step, place, hit and fall event keys |
 | `has_block_entity(state) -> Option<bool>` | `BlockState.hasBlockEntity()` |
 | `light_emission(state) -> Option<u8>` | `BlockState.getLightEmission()`: 0 to 15; a block with `dynamic_light` answers per cell through its parts, which this does not ask |
 | `friction(state) -> Option<f32>` | `BlockBehaviour.getFriction()` of the block: 0.6 usually, 0.98 ice, 0.8 slime |
@@ -62,6 +62,19 @@ placed block, use `LevelRef::is_redstone_conductor(host, pos)` (server side, `No
 position).
 
 Queries return `None` for an unknown state or block, including an invalid local ordinal, and on a host with no game behind it (a mod's test double). The ordinal order is defined by the complete canonical property constraints, not by the engine's numeric enumeration.
+
+## Block sounds
+
+The facts query does not run the block's parts or check loaded sound resources. Read an event by
+name with `sound.step.as_str()`, or borrow the key for a known action with `sound.event(cause)`.
+
+To change a contextual sound through `BlockPart::sound_type`, parse its event key once during
+registration with `SoundEventKey::parse("my_mod:block.machine.step")`, handle `None` as invalid
+syntax, and keep the key on the part. For example, on `BlockSoundCause::Step`, assign
+`event.sound.step = self.step.clone()`. Both `block.stone.step` and `:block.stone.step` resolve to
+`minecraft:block.stone.step`. The game reads the event for that action and applies its usual
+volume and pitch factors. An event missing from the active sound resources plays nothing; it
+never causes the block to play its old sound instead.
 
 ## Contextual friction
 

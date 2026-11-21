@@ -109,6 +109,13 @@ pub struct Sounds {
     pub fall: Arc<str>,
 }
 
+/// A block item's selected placement event and the block sound type's base levels.
+pub struct PlacementSound {
+    pub event: Arc<str>,
+    pub volume: f32,
+    pub pitch: f32,
+}
+
 /// Precomputed queries over one cached collision shape.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShapeInfo {

@@ -133,6 +133,13 @@ mod root {
         pub(super) fn refusable<T>(_: bool, call: impl FnOnce() -> T) -> Result<T, Refusal> {
             Ok(call())
         }
+        pub(super) fn isolated_part_answer<T>(
+            _: super::HookId,
+            _: &'static str,
+            call: impl FnOnce() -> T,
+        ) -> Option<T> {
+            Some(call())
+        }
 
         pub(super) fn listening_kind_owner(
             hook: super::HookId,

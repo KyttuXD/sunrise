@@ -449,6 +449,33 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Run an already-attributed Part listener and admit only its completed answer.
+pub(crate) fn isolated_part_answer<T>(
+    hook: generated::HookId,
+    name: &'static str,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    let id = crate::content::crash::current_native_mod()?;
+    if poisoned(hook, id) {
+        return None;
+    }
+    match crate::callback_owner::contain_unwind(|| refusable(outside_world(), call)) {
+        Ok(Ok(answer)) => Some(answer),
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            None
+        }
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod {id}: {name} callback panicked and is disabled for this session: {message}"
+            );
+            crate::callback_owner::record_callback_panic(id, "block part", name, message);
+            None
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,

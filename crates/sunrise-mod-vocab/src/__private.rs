@@ -373,6 +373,11 @@ pub mod game {
         modifiers.changed.then_some(modifiers.entries)
     }
 
+    /// Move a validated sound key into the engine's sound event queue.
+    pub fn sound_event_name(event: SoundEventKey) -> Arc<str> {
+        event.0
+    }
+
     /// A stack's enchantments for `get_enchantment_level`, as its
     /// component gives them.
     pub fn item_enchantments(entries: Vec<(Identifier, u32)>) -> ItemEnchantments {

@@ -397,10 +397,10 @@ impl Game<'_> {
         self.predict_blocks(rest, seq);
         let state = primary.1;
         if !self.res.facts().is_air(state) {
-            let sound = self.own_sound_type(at, state, mod_api::BlockSoundCause::Place);
+            let sound = self.own_block_sound(at, state, mod_api::BlockSoundCause::Place);
             self.play_client_local_sound(
                 LevelSound::new(
-                    sound.place.as_str(),
+                    sound.event.as_str(),
                     at.map(|n| f64::from(n) + 0.5),
                     (sound.volume + 1.0) / 2.0,
                     sound.pitch * 0.8,

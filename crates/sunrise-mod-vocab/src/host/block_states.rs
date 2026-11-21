@@ -178,7 +178,9 @@ pub trait BlockStatesBackend {
     fn block_state_explosion_resistance(&self, state: BlockState) -> Option<f32>;
     /// Side: both.
     /// `BlockState.getSoundType()`: its volume, pitch and the sound events for breaking,
-    /// stepping on, placing, hitting and falling on it. None for an unknown state.
+    /// stepping on, placing, hitting and falling on it. The keys describe the base state,
+    /// not the contextual answer of a block part or the events in the loaded sound resources.
+    /// None for an unknown state.
     #[access(Metadata)]
     fn block_state_sound(&self, state: BlockState) -> Option<BlockSoundType>;
     /// Side: both.

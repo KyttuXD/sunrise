@@ -52,8 +52,8 @@ pub struct NativeClientHooks {
         BlockStateId,
         Option<(u32, &str)>,
         BlockSoundCause,
-        &mut BlockSoundType,
-    ),
+        &BlockSoundType,
+    ) -> Option<BlockSoundType>,
     /// `ItemPart::can_grindstone_repair` of the stack's item; `can_repair` arrives with
     /// vanilla's.
     pub can_grindstone_repair: fn(&LoopContext, &ItemStack, &mut bool),
@@ -329,11 +329,10 @@ pub(crate) fn sound_type(
     state: BlockStateId,
     entity: Option<(u32, &str)>,
     cause: BlockSoundCause,
-    sound: &mut BlockSoundType,
-) {
-    if let Some(hooks) = HOOKS.get() {
-        (hooks.sound_type)(context, pos, state, entity, cause, sound);
-    }
+    own: &BlockSoundType,
+) -> Option<BlockSoundType> {
+    let hooks = HOOKS.get()?;
+    (hooks.sound_type)(context, pos, state, entity, cause, own)
 }
 
 /// Ask the installed adapter for the parts of `stack`'s item (`can_grindstone_repair`); with none

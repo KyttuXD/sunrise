@@ -6074,14 +6074,27 @@ impl Game<'_> {
                     } else {
                         format!("minecraft:{sound}")
                     };
+                    use sunrise_world::level::LevelSoundSource;
                     match source {
-                        Some(sunrise_world::level::LevelSoundSource::Blocks) => self.audio.play_on(
-                            mod_api::SoundSource::Blocks.index(),
-                            &name,
-                            Some(c),
-                            volume,
-                            pitch,
-                        ),
+                        Some(LevelSoundSource::Blocks | LevelSoundSource::BlockPlacement) => {
+                            self.audio.play_on(
+                                mod_api::SoundSource::Blocks.index(),
+                                &name,
+                                Some(c),
+                                volume,
+                                pitch,
+                            );
+                            if source == Some(LevelSoundSource::BlockPlacement)
+                                && let Some(placer) = self.lan_acting_entity
+                                && let Some(captured) = self
+                                    .audio
+                                    .capture
+                                    .as_mut()
+                                    .and_then(|sounds| sounds.last_mut())
+                            {
+                                captured.except_entity = Some(placer as u32);
+                            }
+                        }
                         None => self.audio.play(&name, Some(c), volume, pitch),
                     }
                 }

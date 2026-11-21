@@ -1802,14 +1802,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn report_placement(&mut self, placed: &AppliedPlacement) {
         let pos = placed.context.pos;
         let state = placed.state;
-        let own = self.b.data(state).sounds.clone();
-        let sounds = self.level.place_sound_type(pos, state, own);
+        let sound = self
+            .level
+            .override_place_sound(pos, state)
+            .unwrap_or_else(|| {
+                let own = &self.b.data(state).sounds;
+                super::data::PlacementSound {
+                    event: own.place.clone(),
+                    volume: own.volume,
+                    pitch: own.pitch,
+                }
+            });
         self.emit(LevelEvent::Sound {
             pos,
-            sound: sounds.place.clone(),
-            source: None,
-            volume: (sounds.volume + 1.0) / 2.0,
-            pitch: sounds.pitch * 0.8,
+            sound: sound.event,
+            source: Some(super::LevelSoundSource::BlockPlacement),
+            volume: (sound.volume + 1.0) / 2.0,
+            pitch: sound.pitch * 0.8,
         });
         self.game_event_state(pos, "minecraft:block_place", state);
     }
