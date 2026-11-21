@@ -511,7 +511,6 @@ level_blocks::level_destroy_block
 level_blocks::level_remove_block
 level_chunks::chunk_is_slime_chunk
 level_chunks::chunk_loaded
-level_chunks::chunk_resend
 level_chunks::chunk_sections_with_block
 level_chunks::chunk_status
 level_chunks::chunk_watchers
@@ -568,7 +567,6 @@ level_light::level_brightness
 level_light::level_can_see_sky
 level_light::level_check_light
 level_light::level_get_sky_darken
-level_light::level_relight_chunks
 level_rules::level_difficulty
 level_rules::level_enabled_features
 level_rules::level_game_rule_bool

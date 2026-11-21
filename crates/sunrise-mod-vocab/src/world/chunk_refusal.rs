@@ -9,21 +9,20 @@ pub enum ChunkRefusal {
     Stale,
     /// The call was made on a client; chunks are the server's.
     Client,
-    /// The level is not the one in place, the one being ticked; only that one is written.
-    NotInPlace,
     /// `chunk.resend` of a chunk that is not loaded.
     NotLoaded,
-    /// `relight_chunks` was given more chunks than it may queue now.
-    TooManyChunks {
-        /// The chunks given.
-        asked: u32,
-        /// The most a call takes now: 256, less while the level's light queue is nearly full.
-        max: u32,
-    },
+    /// The server-level backend is not available in this phase.
+    Unavailable,
+}
+
+impl crate::AccessRefusal for ChunkRefusal {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
 }
 
 impl crate::NoBackend for ChunkRefusal {
     fn no_backend() -> Self {
-        Self::Stale
+        Self::Unavailable
     }
 }

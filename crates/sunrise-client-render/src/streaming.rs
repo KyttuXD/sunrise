@@ -1703,6 +1703,14 @@ impl Streaming {
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
     }
+
+    /// A level that is not ticking can still advance its resident chunks' light work.
+    pub fn has_ready_light_work(&self, world: &World) -> bool {
+        !self.lighting.is_empty()
+            || world.dirty_light.iter().any(|&(x, z)| {
+                world.chunks.contains_key(&(x, z)) && self.light_region_ready(world, x, z)
+            })
+    }
     /// The non-air sections of a column that is a decorated proto chunk
     /// here (vanilla's INITIALIZE_LIGHT and on), if it is one: a level
     /// chunk's light layers count them (#4294).
@@ -2038,6 +2046,7 @@ impl Streaming {
             self.forget_visibility(world, far.iter().copied());
             for key in &far {
                 world.entities_pending.remove(key);
+                world.chunk_resends.remove(key);
                 self.lit.remove(key);
                 self.meshed.remove(key);
                 self.lighting.remove(key);
@@ -2296,7 +2305,7 @@ impl Streaming {
         for &(x, z) in world.dirty_light.iter() {
             if !world.chunks.contains_key(&(x, z)) {
                 gone.push((x, z));
-            } else if self.light_region_ready(world, x, z) {
+            } else if !self.lighting.contains_key(&(x, z)) && self.light_region_ready(world, x, z) {
                 light.push((self.distance(x, z), x, z));
             }
         }
@@ -2320,6 +2329,18 @@ impl Streaming {
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
         }
+        // ChunkMap.waitForLightBeforeSending: hand the chunk to the broadcaster only
+        // after its queued light work has been applied, never merely submitted.
+        world.chunk_resends.retain(|key| {
+            if !world.chunks.contains_key(key) {
+                return false;
+            }
+            if world.dirty_light.contains(key) || self.lighting.contains_key(key) {
+                return true;
+            }
+            world.bulk_log.insert(*key);
+            false
+        });
         hz_laps.lap("st_light");
         // A server draws nothing: its sections are never meshed.
         if !self.mesh {

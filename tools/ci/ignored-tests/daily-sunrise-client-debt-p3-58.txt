@@ -1,0 +1,3 @@
+sunrise-client game::native_chunk_relight_tests::large_relight_batches_admit_all_resident_columns lib daily child-process
+sunrise-client game::native_chunk_relight_tests::operations_queue_only_on_the_owning_level lib daily child-process
+sunrise-client game::native_chunk_relight_tests::resend_waits_for_the_queued_light_to_land lib daily child-process

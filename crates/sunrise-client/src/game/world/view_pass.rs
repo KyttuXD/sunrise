@@ -1,5 +1,5 @@
-//! The view pass (#3716): a level that only viewed `Loaded` areas name is not ticked, but its
-//! chunks are loaded, generated and sent to the players whose clients view it.
+//! Chunk passes for levels that do not tick: viewed `Loaded` areas (#3716) load and send their
+//! chunks, and resident chunks can finish their queued lighting work without a gameplay tick.
 //!
 //! After the ticked levels, `tick_server` runs a pass for each such level: it enters the level,
 //! rebuilds `Streaming.extra` (`lan_update_streaming`, where the areas are added: no `tick_lan`
@@ -32,25 +32,36 @@ impl Game<'_> {
                 .is_some_and(|h| h.hub.viewed_open(dim.id()))
     }
 
-    /// A view pass for each level the viewed areas name that `ticked` does not hold.
-    pub(super) fn run_view_passes(&mut self, ticked: &[Dim]) -> Result<()> {
-        if !self.lan.as_ref().is_some_and(|h| h.hub.viewed.active()) {
-            return Ok(());
-        }
-        let viewed: Vec<Dim> = Dim::all()
-            .into_iter()
-            .filter(|d| !ticked.contains(d) && self.needs_view_pass(*d))
-            .collect();
-        for dim in viewed {
-            let _span = sunrise_client::spans::guard("view_pass");
+    /// Advance the chunk source of each non-ticking level that has viewers or ready light work.
+    pub(super) fn run_chunk_passes(&mut self, ticked: &[Dim]) -> Result<()> {
+        let viewed = self.lan.as_ref().is_some_and(|h| h.hub.viewed.active());
+        for dim in Dim::all().into_iter().filter(|d| !ticked.contains(d)) {
+            let send_view = viewed && self.needs_view_pass(dim);
+            if !send_view {
+                let ready = if dim == self.dim {
+                    self.streaming.has_ready_light_work(&self.world)
+                } else {
+                    self.levels
+                        .parked
+                        .get(&dim)
+                        .is_some_and(|level| level.streaming.has_ready_light_work(&level.world))
+                };
+                if !ready {
+                    continue;
+                }
+            }
+            let _span =
+                sunrise_client::spans::guard(if send_view { "view_pass" } else { "idle_light" });
             self.enter_level(dim)?;
             self.update_dedicated_streaming();
             self.lan_update_streaming();
             self.update_world();
-            // `LevelChunk.postProcessGeneration` comes before a chunk is sent
-            // (`ChunkMap.prepareTickingChunk`, then `onChunkReadyToSend`), ticked or not.
-            self.postprocess_chunks()?;
-            self.view_pass_send();
+            if send_view {
+                // `LevelChunk.postProcessGeneration` comes before a chunk is sent
+                // (`ChunkMap.prepareTickingChunk`, then `onChunkReadyToSend`), ticked or not.
+                self.postprocess_chunks()?;
+                self.view_pass_send();
+            }
         }
         Ok(())
     }

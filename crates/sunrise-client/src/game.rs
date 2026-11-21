@@ -1067,6 +1067,8 @@ mod native_chat_recipients_tests;
 mod native_chunk_areas;
 #[path = "game/modding/native_chunk_generator.rs"]
 mod native_chunk_generator;
+#[path = "game/modding/native_chunk_operations.rs"]
+mod native_chunk_operations;
 #[path = "game/modding/native_chunk_queries.rs"]
 mod native_chunk_queries;
 #[cfg(test)]

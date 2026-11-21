@@ -142,7 +142,7 @@ const IDLE_TICKS: u32 = 300;
 /// A level that is not in place: every per-level field of `Game`.
 pub(super) struct Parked {
     pub(super) world: World,
-    streaming: Streaming,
+    pub(super) streaming: Streaming,
     locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
@@ -1421,9 +1421,9 @@ impl Game<'_> {
                 }
             }
         }
-        // The levels only `Loaded` areas name: streamed and sent, never ticked.
+        // Advance the other levels' chunk sources without ticking their gameplay.
         if result.is_ok() {
-            result = self.run_view_passes(&order);
+            result = self.run_chunk_passes(&order);
         }
         if let Some(&first) = order.first()
             && self.dim != first
