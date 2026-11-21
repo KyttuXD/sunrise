@@ -4830,6 +4830,10 @@ impl LevelView<'_> {
 mod screen_open_tests;
 
 #[cfg(test)]
+#[path = "base_tests/screen_widgets_tests.rs"]
+mod screen_widgets_tests;
+
+#[cfg(test)]
 mod text_tests {
     use super::*;
 

@@ -1,0 +1,12 @@
+# Mounted screen widgets and transitions (debt 59).
+sunrise-client game::native_hooks::base::screen_open_tests::mod_screen_open_replaces_the_foreground_and_initializes_once lib daily child-process
+sunrise-client game::native_hooks::base::screen_open_tests::mod_screen_open_refuses_without_a_ready_client_window lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::init_mounts_distinct_widgets_and_resize_and_close_dispose_them lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::mounted_button_changes_state_on_click_enter_and_space lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::mounted_text_field_edits_and_submits_without_drawing lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::button_transitions_are_synchronous_and_post_stays_on_the_receiver lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::ime_and_double_click_use_the_focused_edit_box lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::a_panicking_widget_is_disabled_without_disabling_its_siblings lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::custom_widget_receives_input_and_unhandled_events_reach_post lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::mouse_press_post_can_override_the_handled_result_for_double_clicks lib daily child-process
+sunrise-client game::native_hooks::base::screen_widgets_tests::unhandled_key_posts_can_stop_the_mapping_on_both_edges lib daily child-process

@@ -11560,6 +11560,36 @@ impl Game<'_> {
         }
     }
 
+    fn screen_takes_first_key_release(
+        &mut self,
+        receiver: Option<&screen_build::ObservedScreen>,
+        key: KeyCode,
+    ) -> Result<bool> {
+        if self.screen_key_released_on(receiver, key) {
+            // Screen cancellation must not leave a held keyboard mapping down.
+            self.keys.remove(&key);
+            self.mapped_key_event(key, false, false)?;
+            return Ok(true);
+        }
+        Ok(receiver.is_some()
+            && self.mounted_widget_key_released(key, glfw_modifiers(self.modifiers)))
+    }
+
+    /// After the screen's key handlers decline a physical key, its Post hook can
+    /// still take it before the key mappings see it.
+    fn finish_window_key_event(
+        &mut self,
+        receiver: Option<&screen_build::ObservedScreen>,
+        key: KeyCode,
+        pressed: bool,
+        repeat: bool,
+    ) -> Result<()> {
+        if self.screen_key_post_on(receiver, key, pressed, repeat) {
+            return Ok(());
+        }
+        self.mapped_key_event(key, pressed, repeat)
+    }
+
     /// One window event, in the order vanilla's `KeyboardHandler` and `MouseHandler` see it.
     ///
     /// A controller doesn't come through here in play: `pad_action` goes straight to the mappings
@@ -11963,18 +11993,9 @@ impl Game<'_> {
             if let WindowEvent::KeyboardInput { event, .. } = &event
                 && event.state == ElementState::Released
                 && let PhysicalKey::Code(key) = event.physical_key
+                && self.screen_takes_first_key_release(key_receiver.as_ref(), key)?
             {
-                if self.screen_key_released_on(key_receiver.as_ref(), key) {
-                    // Screen cancellation must not leave a held keyboard mapping down.
-                    self.keys.remove(&key);
-                    self.mapped_key_event(key, false, false)?;
-                    return Ok(());
-                }
-                if key_receiver.is_some()
-                    && self.mounted_widget_key_released(key, glfw_modifiers(self.modifiers))
-                {
-                    return Ok(());
-                }
+                return Ok(());
             }
             let mut options_key_release_handled = false;
             if let WindowEvent::KeyboardInput { event, .. } = &event
@@ -13079,21 +13100,10 @@ impl Game<'_> {
                     {
                         self.smooth_camera_action();
                     }
-                    // ScreenEvent.KeyPressed.Post / KeyReleased.Post: no screen arm
-                    // took the key, so the open screen's `keyPressed` returned
-                    // false; a cancel marks it handled and the game's own key
-                    // handling never sees it.
-                    if !(options_key_release_handled && !pressed)
-                        && self.screen_key_post_on(
-                            key_receiver.as_ref(),
-                            key,
-                            event.state == ElementState::Pressed,
-                            event.repeat,
-                        )
-                    {
-                        return Ok(());
-                    }
-                    self.mapped_key_event(key, event.state == ElementState::Pressed, event.repeat)?;
+                    let unhandled_receiver = key_receiver
+                        .as_ref()
+                        .filter(|_| pressed || !options_key_release_handled);
+                    self.finish_window_key_event(unhandled_receiver, key, pressed, event.repeat)?;
                 }
                 WindowEvent::RedrawRequested => {
                     sunrise_client::spans::time("recover_device", || self.recover_device())?;
