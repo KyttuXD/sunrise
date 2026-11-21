@@ -37,8 +37,8 @@ type Layer = EntityDrawCallback<dyn EntityRenderLayer>;
 /// One target's layers, in the order they were added.
 pub(in crate::game) type Layers = Arc<[EntityDrawCallback<dyn EntityRenderLayer>]>;
 
-/// A layer re-added from the same Arc is still the same callback. Keep its owner across reloads
-/// without keeping a removed layer alive or treating a replacement as the failed callback.
+/// A layer re-added from the same Arc is still the same callback. The weak reference keeps its
+/// address from being reused without keeping the layer alive after a resource reload replaces it.
 #[derive(Default)]
 pub(super) struct LayerOwners(Mutex<BTreeMap<(&'static str, usize), LayerOwner>>);
 
@@ -75,11 +75,6 @@ impl<'a> LayerRegistration<'a> {
         routed: &'a dyn Fn(&str) -> bool,
         owners: &'a LayerOwners,
     ) -> Self {
-        owners
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|_, entry| entry.layer.strong_count() != 0);
         Self {
             rows,
             mod_renderers,
@@ -134,13 +129,18 @@ impl EntityLayers for LayerRegistration<'_> {
             log::warn!("{why}");
             return Err(why);
         };
-        if let LayerTarget::Entity(id) = &target
-            && let Some(why) = self.refusal(id)
-        {
-            let why = format!("the entity layer for {id} is refused: {why}");
-            log::warn!("Mod {mod_id}: {why}");
-            return Err(why);
-        }
+        let layers = match target {
+            LayerTarget::Player(PlayerModel::Wide) => &mut self.wide,
+            LayerTarget::Player(PlayerModel::Slim) => &mut self.slim,
+            LayerTarget::Entity(id) => {
+                if let Some(why) = self.refusal(&id) {
+                    let why = format!("the entity layer for {id} is refused: {why}");
+                    log::warn!("Mod {mod_id}: {why}");
+                    return Err(why);
+                }
+                self.entity.entry(id).or_default()
+            }
+        };
         let key = (mod_id, Arc::as_ptr(&layer).cast::<()>() as usize);
         let owner = self
             .owners
@@ -154,15 +154,10 @@ impl EntityLayers for LayerRegistration<'_> {
             })
             .owner
             .clone();
-        let layer = EntityDrawCallback {
+        layers.push(EntityDrawCallback {
             inner: layer,
             owner,
-        };
-        match target {
-            LayerTarget::Player(PlayerModel::Wide) => self.wide.push(layer),
-            LayerTarget::Player(PlayerModel::Slim) => self.slim.push(layer),
-            LayerTarget::Entity(id) => self.entity.entry(id).or_default().push(layer),
-        }
+        });
         Ok(())
     }
 }
@@ -240,8 +235,17 @@ impl Game<'_> {
         Self::native_register_entity_layers(&RegistrationContext::new(), &mut registration);
         let table = LayerTable::resolve(registration, mob_types);
         let any = !table.is_empty();
-        *TABLE.write().unwrap_or_else(PoisonError::into_inner) = Some(table);
+        let previous = TABLE
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(table);
         ANY.store(any, Ordering::Relaxed);
+        drop(previous);
+        OWNERS
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|_, entry| entry.layer.strong_count() != 0);
     }
 
     /// Draws `layers` over `mob`, told as the entity `id`, each from its frame (at the feet,

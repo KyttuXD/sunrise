@@ -1,8 +1,7 @@
 //! `register_entity_renderers` for living types (#860 stage 3): a renderer registered for a type
 //! drawn as a mob draws in place of the type's model and vanilla layers, reading the living
 //! frame; the mods' layers and the render hook pair still run around it, a canceled
-//! `render_living_pre` skips it, and a failing renderer leaves the type its own model until a
-//! resource reload resolves it again.
+//! `render_living_pre` skips it, and a failed draw leaves the type its own model.
 use super::Game;
 use mod_api::{
     BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, FrameModel,
@@ -300,27 +299,28 @@ fn a_canceled_living_pre_skips_a_registered_renderer() {
     );
 }
 
-/// A failing renderer leaves the type its model and is asked no more; only a reload's fresh table
-/// asks it again.
+/// A failing draw leaves the type its own model; the next draw can use the registered renderer.
 #[test]
 #[ignore = "daily"]
 fn a_failed_renderer_skips_only_the_failed_draw() {
     in_scene(
         "a_failed_renderer_skips_only_the_failed_draw",
         |game, _, skeleton| {
-            for frame_name in ["the failing frame", "the next frame"] {
-                let drawn = frame(game, "minecraft:skeleton", 93);
-                assert!(!drawn.is_empty(), "{frame_name}: its own model");
-                assert!(
-                    drawn.iter().all(|v| above(v) < 3.0),
-                    "{frame_name}: no quad kept: {drawn:?}"
-                );
-                let calls = skeleton.calls.load(Ordering::Relaxed);
-                assert_eq!(calls, 1, "{frame_name}: asked once, then no more");
-            }
+            let drawn = frame(game, "minecraft:skeleton", 93);
+            assert!(!drawn.is_empty(), "the skeleton's own model");
+            assert!(drawn.iter().all(|v| above(v) < 3.0), "no failed submission");
+            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 1);
+
+            let drawn = frame(game, "minecraft:skeleton", 93);
+            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                drawn.iter().map(above).collect::<Vec<_>>(),
+                [401.0, 400.0, 400.0, 401.0]
+            );
+
             super::model_baking_completed_tests::reload(game);
             let drawn = frame(game, "minecraft:skeleton", 93);
-            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 2, "resolved again");
+            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 3, "resolved again");
             assert_eq!(quads(&drawn), [400.0], "its quad alone, no bow or model");
         },
     );

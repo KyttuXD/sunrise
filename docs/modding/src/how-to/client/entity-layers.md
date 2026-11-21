@@ -95,7 +95,8 @@ carry over, so add them each time. The event also tells what renderers this load
 - `submit` returns `Ok(())` to keep what it drew. An `Err` is logged each time and discards only
   this submission. The other layers and later draws still run. A panic also discards the submission
   and disables that callback for the session, with an error log and toast naming the mod. Re-adding
-  the same layer on reload does not re-enable it; a different layer can still take its place.
+  the same `Arc` on reload does not re-enable it, even in another position or on another target.
+  A replacement layer has its own callback state.
 
 ## Where layers draw
 

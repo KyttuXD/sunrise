@@ -1,7 +1,7 @@
 //! `register_entity_renderers` for primed TNT (#1296): a renderer registered for
 //! `minecraft:tnt` draws in place of the primed TNT cube, reading the TNT fuse; with no
-//! renderer the family's own geometry is unchanged; a failing renderer leaves that cube until a
-//! resource reload resolves it again.
+//! renderer the family's own geometry is unchanged; a failing renderer leaves that cube for
+//! that draw only.
 use super::Game;
 use super::native_entity_renderers::{EntityRendererTable, fixture_renderer};
 use mod_api::{
@@ -468,26 +468,31 @@ fn an_unregistered_tnt_is_byte_identical_to_the_vanilla_route() {
     });
 }
 
-/// A failing renderer falls back to the cube and is asked no more; only a reload's fresh table
-/// asks it again.
+/// A failing draw keeps the vanilla cube; the next draw can use the registered renderer.
 #[test]
 #[ignore = "daily"]
 fn a_failed_tnt_renderer_skips_only_the_failed_draw() {
     in_scene(
         "a_failed_tnt_renderer_skips_only_the_failed_draw",
         |game, _, flaky| {
-            for frame_name in ["the failing frame", "the next frame"] {
-                let drawn = tnt_frame(game, 93, FUSE);
-                assert!(!drawn.is_empty(), "{frame_name}: its own cube");
-                assert!(
-                    drawn.iter().all(|v| above(v) < 2.0),
-                    "{frame_name}: no quad kept: {drawn:?}"
-                );
-                assert_eq!(flaky.calls(), 1, "{frame_name}: asked once, then no more");
-            }
+            let drawn = tnt_frame(game, 93, FUSE);
+            assert!(!drawn.is_empty(), "the vanilla cube still draws");
+            assert_eq!(
+                verts(&drawn),
+                verts(&expected_cube(game, &primed(93, FUSE), CAMERA, ALPHA))
+            );
+            assert_eq!(flaky.calls(), 1);
+
+            let drawn = tnt_frame(game, 93, FUSE);
+            assert_eq!(flaky.calls(), 2, "runs again without a reload");
+            assert_eq!(
+                drawn.iter().map(above).collect::<Vec<_>>(),
+                [401.0, 400.0, 400.0, 401.0]
+            );
+
             super::model_baking_completed_tests::reload(game);
             let drawn = tnt_frame(game, 93, FUSE);
-            assert_eq!(flaky.calls(), 2, "the reload resolved it again");
+            assert_eq!(flaky.calls(), 3, "the reload resolved it again");
             assert_eq!(drawn.len(), 4, "one quad and no cube: {drawn:?}");
             assert!(drawn.iter().all(|v| (400.0..=401.0).contains(&above(v))));
         },

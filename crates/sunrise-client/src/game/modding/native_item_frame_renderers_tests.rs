@@ -1,8 +1,7 @@
 //! `register_entity_renderers` for item frames and glow item frames (#1296): a renderer
 //! registered for `minecraft:item_frame` or `minecraft:glow_item_frame` draws in place of the
 //! frame model and the item or map on its face, reading the frame's own state; with no renderer
-//! the family's own geometry is unchanged; a failing renderer leaves that geometry until a
-//! resource reload resolves it again.
+//! the family's own geometry is unchanged; a failing renderer leaves that geometry for the draw.
 use super::Game;
 use super::native_entity_renderers::{EntityRendererTable, fixture_renderer};
 use mod_api::{
@@ -468,26 +467,31 @@ fn an_unregistered_item_frame_is_byte_identical_to_the_vanilla_route() {
     });
 }
 
-/// A failing renderer falls back to the frame model and is asked no more; only a reload's fresh
-/// table asks it again.
+/// A failing draw keeps the vanilla model; the next draw can use the registered renderer.
 #[test]
 #[ignore = "daily"]
 fn a_failed_item_frame_renderer_skips_only_the_failed_draw() {
     in_scene(
         "a_failed_item_frame_renderer_skips_only_the_failed_draw",
         |game, _, flaky| {
-            for frame_name in ["the failing frame", "the next frame"] {
-                let drawn = frame_frame(game, 93, false);
-                assert!(!drawn.is_empty(), "{frame_name}: its own model");
-                assert!(
-                    drawn.iter().all(|v| above(v) < 2.0),
-                    "{frame_name}: no quad kept: {drawn:?}"
-                );
-                assert_eq!(flaky.calls(), 1, "{frame_name}: asked once, then no more");
-            }
+            let drawn = frame_frame(game, 93, false);
+            assert!(!drawn.is_empty(), "the vanilla model still draws");
+            assert_eq!(
+                verts(&drawn),
+                verts(&expected_frame(game, &hanging(93, false), CAMERA))
+            );
+            assert_eq!(flaky.calls(), 1);
+
+            let drawn = frame_frame(game, 93, false);
+            assert_eq!(flaky.calls(), 2, "runs again without a reload");
+            assert_eq!(
+                drawn.iter().map(above).collect::<Vec<_>>(),
+                [401.0, 400.0, 400.0, 401.0]
+            );
+
             super::model_baking_completed_tests::reload(game);
             let drawn = frame_frame(game, 93, false);
-            assert_eq!(flaky.calls(), 2, "the reload resolved it again");
+            assert_eq!(flaky.calls(), 3, "the reload resolved it again");
             assert_eq!(drawn.len(), 4, "one quad and no frame: {drawn:?}");
             assert!(drawn.iter().all(|v| (400.0..=401.0).contains(&above(v))));
         },

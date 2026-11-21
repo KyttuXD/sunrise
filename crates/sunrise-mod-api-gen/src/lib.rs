@@ -621,8 +621,8 @@ mod tests {
         for (name, version) in [
             ("add_client_reload_listeners", 2),
             ("add_server_reload_listeners", 2),
-            ("register_entity_layers", 4),
-            ("register_entity_renderers", 4),
+            ("register_entity_layers", 5),
+            ("register_entity_renderers", 5),
             ("section_visibility", 2),
             ("movement_input_update", 1),
         ] {

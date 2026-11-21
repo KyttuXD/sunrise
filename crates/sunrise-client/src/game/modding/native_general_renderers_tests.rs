@@ -1,7 +1,7 @@
 //! A mod's general entity types on the client (#792, stage 5): a renderer registered for one
 //! resolves to its catalog slot, a type with none is named; each row shown on the window is drawn
-//! by its type's renderer at the frame's interpolated pose, with its synced attachments; a renderer that fails is dropped until resources reload; a type
-//! with no renderer draws nothing.
+//! by its type's renderer at the frame's interpolated pose, with its synced attachments. A type
+//! with no renderer draws nothing; a panic disables just the panicking renderer for the session.
 use super::Game;
 use super::native_entity_renderers::{EntityRendererTable, RenderersByType, fixture_renderer};
 use crate::game::general::GeneralTypeCatalog;
@@ -496,8 +496,8 @@ fn general_submission_keeps_lookup_order_across_removal_and_reentry() {
     );
 }
 
-/// A panicking renderer draws nothing and is asked no more until a reload resolves it again; a
-/// type with no renderer draws nothing, and neither stops the others.
+/// A panicking renderer stays disabled across reload; a type with no renderer also draws
+/// nothing, and neither stops the others.
 #[test]
 #[ignore = "daily"]
 fn a_panicking_renderer_stays_disabled_and_a_type_without_one_draws_nothing() {
@@ -512,8 +512,8 @@ fn a_panicking_renderer_stays_disabled_and_a_type_without_one_draws_nothing() {
             assert_eq!(frame(game, 1.0).len(), 4);
             assert_eq!(
                 scene.bomb.calls.load(Ordering::Relaxed),
-                2,
-                "asked again after it"
+                1,
+                "reload doesn't re-enable the panicking renderer"
             );
             // The reload kept the rows.
             assert_eq!(game.remote.as_ref().unwrap().general.rows.len(), 3);

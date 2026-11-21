@@ -52,7 +52,8 @@ pub trait EntityRenderLayer: Send + Sync + 'static {
     /// `draw.keep()` does nothing here. `Ok(())` keeps what it drew. An `Err` is logged for each
     /// failure and discards just this submission; later layers and later draws still run. A panic
     /// discards this submission and disables this callback for the session, with an error log and
-    /// toast naming its mod. Re-adding the same layer on reload does not re-enable it.
+    /// toast naming its mod. Re-adding the same `Arc` on reload does not re-enable it, even when
+    /// it moves to a different target or position. A replacement layer has its own callback state.
     fn submit(
         &self,
         entity: &EntityRenderState,

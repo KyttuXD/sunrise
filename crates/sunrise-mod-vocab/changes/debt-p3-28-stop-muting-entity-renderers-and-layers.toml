@@ -6,5 +6,33 @@ ids = [
   "hook:register_entity_layers",
   "hook:register_entity_renderers",
 ]
-why = "NeoForge's EntityRenderersEvent.AddLayers.getEntityTypes and getSkins expose views of the renderer metadata. In vanilla 26.3, EntityRenderer.submit, LivingEntityRenderer.submit and RenderLayer.submit submit the current draw in layer order; they do not mute the next draw. The old guest-era render latch made a returned error silence that renderer or layer until a reload. An error now discards only that submission and is reported each time. A panic uses the shared session callback policy and names the mod in the log and error toast. The engine collects renderer registrations so it can bind each one to its registering mod. Both registration hooks are now version 5."
-migrate = "Use event.layers.entity_types().iter().map(String::as_str) instead of consuming the old Vec<String>, or use event.layers.entity_types().to_vec() only if you need to keep an owned list. Use event.layers.player_models().iter().copied() instead of consuming the old Vec<PlayerModel>. To register a renderer, replace EntityRendererRegistry::default(), register(...) and into_renderers() with event.renderers.register(entity_type, renderer) inside register_entity_renderers; the engine owns the collector. The submit signatures are unchanged: return Err for a failure local to that invocation and expect later submissions without reloading. A panic disables the callback for the session, including when the same layer is re-added by a reload."
+
+why = """
+Vanilla 26.3 builds each draw's state in `EntityRenderer.createRenderState` and submits that draw in
+`EntityRenderer.submit`, with `LivingEntityRenderer.submit` calling `RenderLayer.submit` in layer order.
+Sunrise used to mute a renderer or layer after any failed draw. Now an `Err` discards only that
+submission and is logged each time, leaving later submissions active. Only a panic disables the
+callback for the session; the shared callback policy logs the panic and raises an error toast naming
+the mod. The engine owns renderer registration so it can retain that attribution across reloads.
+NeoForge's `EntityRenderersEvent.AddLayers.getEntityTypes` and `getSkins` return views of the renderer
+metadata; `EntityLayers` now borrows those lists instead of rebuilding them for each caller.
+"""
+
+migrate = """
+- Rebuild against `register_entity_layers` v5 and `register_entity_renderers` v5. The hook signatures and
+  the two `submit` signatures stay the same. Return `Err` to skip the current draw, not to disable later
+  submissions. For a failed replacement draw, the type draws as it would with no registered renderer.
+- Replace consumption of `event.layers.entity_types().into_iter()` as `String`s with
+  `event.layers.entity_types().iter().map(String::as_str)` to borrow ids; use `.to_vec()` only if ids
+  must outlive the borrow. When you select targets before calling `add`, first collect the selected
+  ids as owned `LayerTarget::Entity(id.to_owned())` values, then iterate those targets to add layers.
+- Replace iteration of `event.layers.player_models()` as owned `PlayerModel`s with
+  `event.layers.player_models().iter().copied()`. When adding layers for all models, use
+  `let models = event.layers.player_models().to_vec();` and loop over `models` while calling `add`.
+- Replace `EntityRendererRegistry::default()` / `register(...)` / `into_renderers()` with
+  `event.renderers.register(entity_type, renderer)` inside `register_entity_renderers`. The engine
+  builds and keeps the resulting registry.
+- Continue to call `EntityLayers::add(target, layer)` each reload. Re-adding the same `Arc` keeps its
+  panic state even if it moves to a different target or position. Pass a new layer's `Arc` when
+  replacing it; the new callback does not inherit the old one's panic state.
+"""

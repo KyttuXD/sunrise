@@ -78,8 +78,9 @@ nonhumanoids, or `None` if no body pose was produced (such as after a successful
 renderer). Read a named part or follow the hierarchy and compose its parent transforms to attach
 geometry. An `Err` is logged each time and discards just that submission, leaving the next layers
 and draws alone. A panic also discards the submission and disables that callback for the session, with
-an error log and toast naming the mod. The layers draw on the mobs (vanilla's and the content mods'
-living types) and the players; the armour stand and the ender dragon take them once their own draws run
+an error log and toast naming the mod. Re-adding the same `Arc` after a reload does not re-enable it.
+The layers draw on mobs (vanilla's and the content mods' living types) and players; the armour stand
+and the ender dragon take them once their own draws run
 layers, in a follow-up of #860, which lifts their refusal."#]
     #[hook(
         receiver = "associated",

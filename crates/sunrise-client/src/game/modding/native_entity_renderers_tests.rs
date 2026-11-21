@@ -309,16 +309,45 @@ fn a_refused_renderer_draws_the_item_only_for_that_submission() {
     in_scene(
         "a_refused_renderer_draws_the_item_only_for_that_submission",
         |game, scene| {
+            // Only this test's child process installs the log witness.
+            struct RefusalLog(AtomicU32);
+            impl log::Log for RefusalLog {
+                fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+                    metadata.level() == log::Level::Warn
+                }
+                fn log(&self, record: &log::Record<'_>) {
+                    if self.enabled(record.metadata())
+                        && record.args().to_string()
+                            == "Mod ruby: entity renderer submission for ruby:spike failed: refused this frame"
+                    {
+                        self.0.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                fn flush(&self) {}
+            }
+            static LOG: RefusalLog = RefusalLog(AtomicU32::new(0));
+            log::set_logger(&LOG).unwrap();
+            log::set_max_level(log::LevelFilter::Warn);
+
             for call in 1..=2 {
                 let spike = thrown_frame(game, &["ruby:spike"]);
                 assert!(!spike.is_empty(), "the snowball item still draws");
                 assert!(spike.iter().all(|v| above(v) < 2.0), "no partial quad");
                 assert_eq!(scene.spike.calls(), call);
+                assert_eq!(
+                    LOG.0.load(Ordering::Relaxed),
+                    call,
+                    "each refusal is reported"
+                );
             }
             let spike = thrown_frame(game, &["ruby:spike"]);
             assert_eq!(scene.spike.calls(), 3, "no reload was needed");
-            assert_eq!(spike.len(), 4, "one quad and no item: {spike:?}");
-            assert!(spike.iter().all(|v| matches!(above(v), 400.0 | 401.0)));
+            assert_eq!(
+                spike.iter().map(above).collect::<Vec<_>>(),
+                [401.0, 400.0, 400.0, 401.0]
+            );
+            assert_eq!(LOG.0.load(Ordering::Relaxed), 2);
+            assert!(take_callback_panic_notices().is_empty());
         },
     );
 }
@@ -334,11 +363,9 @@ fn a_panicking_renderer_stays_disabled_without_muting_another_renderer() {
             assert!(!spike.is_empty(), "the snowball item still draws");
             assert!(spike.iter().all(|v| above(v) < 2.0), "no partial quad");
             let notices = take_callback_panic_notices();
-            assert!(
-                notices
-                    .iter()
-                    .any(|n| n.mod_id == "ruby" && n.kind == "entity renderer")
-            );
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].mod_id, "ruby");
+            assert_eq!(notices[0].kind, "entity renderer");
 
             super::model_baking_completed_tests::reload(game);
             let spike = thrown_frame(game, &["ruby:spike"]);

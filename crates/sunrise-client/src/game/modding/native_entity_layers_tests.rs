@@ -112,10 +112,6 @@ fn the_event_tells_the_renderers_this_load_built() {
     }
     let owners = LayerOwners::default();
     let event = LayerRegistration::new(&rows, &renderers, &routed, &owners);
-    assert!(std::ptr::eq(
-        event.entity_types(),
-        rows.non_player_ids.as_slice()
-    ));
     assert_eq!(
         event
             .entity_types()
@@ -150,38 +146,40 @@ fn the_event_tells_the_renderers_this_load_built() {
 
 #[test]
 fn a_target_that_is_no_living_entity_type_is_refused_by_name() {
-    let rows = rows();
-    let renderers = RenderersByType::new();
-    let owners = LayerOwners::default();
-    let mut event = LayerRegistration::new(&rows, &renderers, &routed, &owners);
-    let _listener = mod_api::__private::enter("fixture", "register_entity_layers");
-    let mut add = |target: &str| event.add(LayerTarget::Entity(target.into()), Raised::new(1.0));
-    assert_eq!(
-        add("minecraft:oak_boat"),
-        Err("the entity layer for minecraft:oak_boat is refused: its renderer is not a living entity's, and only those take layers".into())
-    );
-    assert_eq!(
-        add("nope:ghost"),
-        Err("the entity layer for nope:ghost is refused: it is no entity type".into())
-    );
-    assert_eq!(
-        add("minecraft:player"),
-        Err("the entity layer for minecraft:player is refused: a player takes layers through its model (wide or slim)".into())
-    );
-    assert_eq!(
-        add("minecraft:armor_stand"),
-        Err("the entity layer for minecraft:armor_stand is refused: it draws through a route of its own, which does not run layers yet".into())
-    );
-    assert_eq!(
-        add("minecraft:ender_dragon"),
-        Err("the entity layer for minecraft:ender_dragon is refused: it draws through a route of its own, which does not run layers yet".into())
-    );
-    assert_eq!(add("minecraft:zombie"), Ok(()));
-    assert_eq!(add("ruby:golem"), Ok(()), "a mod's living type");
-    assert_eq!(
-        event.add(LayerTarget::Player(PlayerModel::Slim), Raised::new(1.0)),
-        Ok(())
-    );
+    mod_platform::testing::with_mods(Default::default(), || {
+        let rows = rows();
+        let renderers = RenderersByType::new();
+        let owners = LayerOwners::default();
+        let mut event = LayerRegistration::new(&rows, &renderers, &routed, &owners);
+        let _listener = mod_api::__private::enter("fixture", "register_entity_layers");
+        let mut add =
+            |target: &str| event.add(LayerTarget::Entity(target.into()), Raised::new(1.0));
+        let unrouted = "it draws through a route of its own, which does not run layers yet";
+        for (target, why) in [
+            (
+                "minecraft:oak_boat",
+                "its renderer is not a living entity's, and only those take layers",
+            ),
+            ("nope:ghost", "it is no entity type"),
+            (
+                "minecraft:player",
+                "a player takes layers through its model (wide or slim)",
+            ),
+            ("minecraft:armor_stand", unrouted),
+            ("minecraft:ender_dragon", unrouted),
+        ] {
+            assert_eq!(
+                add(target),
+                Err(format!("the entity layer for {target} is refused: {why}"))
+            );
+        }
+        assert_eq!(add("minecraft:zombie"), Ok(()));
+        assert_eq!(add("ruby:golem"), Ok(()), "a mod's living type");
+        assert_eq!(
+            event.add(LayerTarget::Player(PlayerModel::Slim), Raised::new(1.0)),
+            Ok(())
+        );
+    });
 }
 
 /// The layers the scene's mods add on every load: the first mod `zombie` 100 blocks up, `wide`
@@ -193,7 +191,7 @@ struct Scene {
     wide: Arc<Raised>,
     slim: Arc<Raised>,
     pig: Arc<Raised>,
-    current_pig: Arc<Mutex<Arc<Raised>>>,
+    pig_layers: Arc<Mutex<[Arc<Raised>; 2]>>,
 }
 
 /// The camera, south of the entity and looking at it.
@@ -263,13 +261,13 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
         second: Raised::new(200.0),
         wide: Raised::new(300.0),
         slim: Raised::new(400.0),
-        current_pig: Arc::new(Mutex::new(pig.clone())),
+        pig_layers: Arc::new(Mutex::new([Raised::new(450.0), pig.clone()])),
         pig,
     };
     /// A mod adding `layers` on every load.
     struct Layers(
         Vec<(LayerTarget, Arc<Raised>)>,
-        Option<Arc<Mutex<Arc<Raised>>>>,
+        Option<Arc<Mutex<[Arc<Raised>; 2]>>>,
     );
     #[mod_api::__subscriptions]
     impl Hooks for Layers {
@@ -281,12 +279,13 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
             for (target, layer) in &self.0 {
                 event.layers.add(target.clone(), layer.clone()).unwrap();
             }
-            if let Some(pig) = &self.1 {
-                let layer = pig.lock().unwrap().clone();
-                event
-                    .layers
-                    .add(LayerTarget::Entity("minecraft:pig".into()), layer)
-                    .unwrap();
+            if let Some(layers) = &self.1 {
+                for layer in layers.lock().unwrap().clone() {
+                    event
+                        .layers
+                        .add(LayerTarget::Entity("minecraft:pig".into()), layer)
+                        .unwrap();
+                }
             }
         }
     }
@@ -296,9 +295,8 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Scene)) {
             (entity("minecraft:zombie"), scene.zombie.clone()),
             (LayerTarget::Player(PlayerModel::Wide), scene.wide.clone()),
             (LayerTarget::Player(PlayerModel::Slim), scene.slim.clone()),
-            (entity("minecraft:pig"), Raised::new(450.0)),
         ],
-        Some(scene.current_pig.clone()),
+        Some(scene.pig_layers.clone()),
     );
     let second = Layers(
         vec![
@@ -482,25 +480,27 @@ fn a_panicking_layer_stays_disabled_on_reload_but_a_replacement_draws() {
                 [450.0, 600.0]
             );
             let notices = take_callback_panic_notices();
-            assert!(
-                notices
-                    .iter()
-                    .any(|n| n.mod_id == "first" && n.kind == "entity layer")
-            );
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].mod_id, "first");
+            assert_eq!(notices[0].kind, "entity layer");
 
+            scene.pig_layers.lock().unwrap().swap(0, 1);
             super::model_baking_completed_tests::reload(game);
             assert_eq!(
                 quads(&layer_frame(game, "minecraft:pig", false)),
-                [450.0, 600.0]
+                [450.0, 600.0],
+                "the layer's panic state followed the callback, not its position"
             );
-            assert_eq!(scene.pig.calls(), 1, "reload re-added the same callback");
+            assert_eq!(scene.pig.calls(), 1);
 
-            *scene.current_pig.lock().unwrap() = Raised::new(700.0);
+            scene.pig_layers.lock().unwrap()[0] = Raised::new(700.0);
             super::model_baking_completed_tests::reload(game);
             assert_eq!(
                 quads(&layer_frame(game, "minecraft:pig", false)),
-                [450.0, 700.0, 600.0]
+                [700.0, 450.0, 600.0],
+                "a replacement doesn't inherit the old layer's panic state"
             );
+            assert!(take_callback_panic_notices().is_empty());
         },
     );
 }

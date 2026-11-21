@@ -452,7 +452,8 @@ impl Game<'_> {
             *out = surface.into_vertices_with_light(level.as_ref());
             return true;
         }
-        *out = surface.into_vertices();
+        // Don't finalize a failed draw: only this submission's suffix belongs to it.
+        *out = std::mem::take(surface.vertices_mut());
         out.truncate(start);
         if let Ok(Err(error)) = result {
             log::warn!(
