@@ -3783,9 +3783,6 @@ mod tests {
             .into(),
             || {
                 super::super::native_guest_turn_tests::with_guests(|game| {
-                    if game.native_lifecycle.epoch().is_none() {
-                        game.native_lifecycle.world_open_ready().unwrap();
-                    }
                     let host = game.lan.as_mut().unwrap();
                     let receivers = [12, 13].map(|conn| {
                         let (tx, rx) = std::sync::mpsc::channel();

@@ -500,7 +500,10 @@ mod tests {
         let tree = CommandTree {
             root: serde_json::json!({"type": "root", "children": {
                 "a_hide": {"type": "literal", "children": {"hidden_child": {"type": "literal", "executable": true}}},
-                "b_keep": {"type": "literal", "children": {"kept_child": {"type": "literal", "executable": true}}},
+                "b_keep": {"type": "literal", "children": {
+                    "kept_child": {"type": "argument", "parser": "brigadier:integer", "properties": {"min": 2, "max": 9}, "executable": true, "suggestions": "minecraft:ask_server"},
+                    "requires_op": {"type": "literal", "executable": true, "permissions": {"permission": {"level": "owners"}}}
+                }},
                 "c_hidden_alias": {"type": "literal", "redirect": ["a_hide"]},
                 "d_indirect_alias": {"type": "literal", "redirect": ["c_hidden_alias"]},
                 "e_child_alias": {"type": "literal", "redirect": ["a_hide", "hidden_child"]},
@@ -514,10 +517,19 @@ mod tests {
             &[],
             &crate::gamerules::rule_registry(),
         );
+        use sunrise_protocol::{buf::Reader, packets::play::Clientbound, registry::Ids};
+        let builtin = Builtin {
+            registries: HashMap::from([(
+                "minecraft:command_argument_type".into(),
+                Ids::from_names(
+                    ["bool", "float", "double", "integer"]
+                        .map(|ty| format!("brigadier:{ty}"))
+                        .into(),
+                ),
+            )]),
+        };
         assert_eq!(graph.roots().next(), Some("a_hide"));
-        let packet = graph.packet(&Builtin::default(), &[0]);
-
-        use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
+        let packet = graph.packet(&builtin, &[0]);
         let encoded = Clientbound::Commands(packet).encode();
         let mut reader = Reader::new(&encoded);
         let id = reader.varint().unwrap();
@@ -532,7 +544,12 @@ mod tests {
                     node("", vec![1, 2], None),
                     node("b_keep", vec![3], None),
                     node("f_kept_alias", vec![], Some(1)),
-                    node("kept_child", vec![], None),
+                    CommandNode {
+                        kind: 2,
+                        parser: Some((3, vec![3, 0, 0, 0, 2, 0, 0, 0, 9])),
+                        suggestions: Some("minecraft:ask_server".into()),
+                        ..node("kept_child", vec![], None)
+                    },
                 ],
             },
         );

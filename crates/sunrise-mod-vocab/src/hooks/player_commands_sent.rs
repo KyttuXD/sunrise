@@ -11,6 +11,9 @@ pub trait Hooks {
     /// At join the handle has connection data before appearing in online player lists.
     /// A permission update exposes the new level; cross-dimension travel exposes the
     /// source dimension and position until the command tree has been sent.
+    /// A panic discards just that listener's answer, logs its mod ID, and reports
+    /// the disabled callback through the game error toast. The listener is not asked
+    /// again this session; other listeners still answer.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_commands_sent",
         dispatch = "api_carrier",

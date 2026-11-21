@@ -365,7 +365,10 @@ if event.player.name(host) == Some("Alex") {
 
 Each send asks again: return the selection from the callback that created it.
 Successful selections combine; another listener cannot restore a root. Redirects
-into a removed branch disappear with that branch. On join, the recipient's
+into a removed branch disappear with that branch. If a listener panics, its answer
+is discarded and only its command-tree callback is disabled for the session. The
+server logs the mod ID, and a game error toast names the disabled callback's mod.
+On join, the recipient's
 address, brand and announced channels are already available, but the recipient
 is not yet in the online list. A permission update exposes the new permission;
 during cross-dimension travel, the recipient is still at the source.

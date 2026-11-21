@@ -213,5 +213,6 @@ pub(crate) mod command_argument;
 pub(crate) mod entity_selector;
 pub(crate) mod suggestion;
 pub(crate) mod suggestion_provider;
-pub(crate) mod tree_filter;
 pub(crate) mod types;
+
+pub(crate) mod tree_filter;
