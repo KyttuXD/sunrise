@@ -400,7 +400,7 @@ impl Game<'_> {
             let sound = self.own_sound_type(at, state, mod_api::BlockSoundCause::Place);
             self.play_client_local_sound(
                 LevelSound::new(
-                    &sound.place,
+                    sound.place.as_str(),
                     at.map(|n| f64::from(n) + 0.5),
                     (sound.volume + 1.0) / 2.0,
                     sound.pitch * 0.8,

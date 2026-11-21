@@ -535,15 +535,20 @@ impl Game<'_> {
                         mod_api::BlockSoundCause::Fall,
                     );
                     self.audio.play_unshared(
-                        &sound.fall,
+                        sound.fall.as_str(),
                         Some(at),
                         sound.volume * 0.5,
                         sound.pitch * 0.75,
                     );
                     self.send_level_sound(
                         // `Player.playSound` plays in the players' source.
-                        LevelSound::new(&sound.fall, at, sound.volume * 0.5, sound.pitch * 0.75)
-                            .in_source(mod_api::SoundSource::Players),
+                        LevelSound::new(
+                            sound.fall.as_str(),
+                            at,
+                            sound.volume * 0.5,
+                            sound.pitch * 0.75,
+                        )
+                        .in_source(mod_api::SoundSource::Players),
                         Some(conn),
                     );
                 }

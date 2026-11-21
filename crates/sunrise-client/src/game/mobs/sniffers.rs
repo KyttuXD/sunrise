@@ -105,7 +105,7 @@ impl Game<'_> {
                                     mod_api::BlockSoundCause::Dig,
                                 )
                                 .hit;
-                            self.audio.play(&hit, Some(at), 0.5, 0.5);
+                            self.audio.play(hit.as_str(), Some(at), 0.5, 0.5);
                         }
                     }
                 }

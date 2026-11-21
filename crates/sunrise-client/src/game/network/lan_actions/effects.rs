@@ -28,7 +28,10 @@ impl Game<'_> {
                 let state = self.world.block(x, y, z);
                 let place = mod_api::BlockSoundCause::Place;
                 let name = self.block_sound_type([x, y, z], state, placer, place).place;
-                (at, name.trim_start_matches("minecraft:").to_owned())
+                (
+                    at,
+                    name.as_str().trim_start_matches("minecraft:").to_owned(),
+                )
             })
             .collect();
         let mut sounds = Vec::new();

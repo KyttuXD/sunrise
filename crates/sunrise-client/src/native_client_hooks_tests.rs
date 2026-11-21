@@ -227,7 +227,8 @@ pub(crate) fn install() {
                     && entity.is_some_and(|(_, kind)| kind == "minecraft:player")
                     && cause == mod_api::BlockSoundCause::Step
                 {
-                    sound.step = "rules_mod:block.rules.step".into();
+                    sound.step =
+                        mod_api::SoundEventKey::parse("rules_mod:block.rules.step").unwrap();
                     sound.volume = 2.0;
                 }
             },

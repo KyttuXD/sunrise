@@ -217,9 +217,7 @@ impl<'a> BlockTables<'a> {
     /// stepping on, placing, hitting and falling on it. None for an unknown state.
     pub(in crate::game) fn block_state_sound(&self, state: BlockStateId) -> Option<BlockSoundType> {
         self.pack.assets.registry.state(state)?;
-        Some(sunrise_client::block_sounds::own(
-            &self.res.facts().get(state).sounds,
-        ))
+        Some(self.res.facts().get(state).sounds.clone())
     }
     /// `BlockState.hasBlockEntity()`. None for an unknown state.
     pub(in crate::game) fn block_state_has_block_entity(

@@ -1049,7 +1049,7 @@ impl Game<'_> {
                     } else {
                         (sounds.volume * 0.15, sounds.pitch)
                     };
-                    self.play_client_player_sound(&sounds.step, volume, pitch);
+                    self.play_client_player_sound(sounds.step.as_str(), volume, pitch);
                 }
                 sunrise_client::motion::MotionEvent::Swim { volume, pitch } => {
                     self.play_client_player_sound("minecraft:entity.player.swim", volume, pitch);

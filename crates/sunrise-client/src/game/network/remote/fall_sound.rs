@@ -32,7 +32,7 @@ impl Game<'_> {
             state,
             mod_api::BlockSoundCause::Fall,
         );
-        self.play_client_player_sound(&sound.fall, sound.volume * 0.5, sound.pitch * 0.75);
+        self.play_client_player_sound(sound.fall.as_str(), sound.volume * 0.5, sound.pitch * 0.75);
     }
 }
 
