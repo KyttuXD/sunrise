@@ -1181,6 +1181,18 @@ pub(in crate::game) fn register_iterated_registries(
     let path = Builtin::find(root).ok_or("registries.json not found")?;
     let builtin = Builtin::load(&path)?;
     if let Some(ids) = builtin.get("minecraft:entity_type") {
+        // At this point the report also includes content-pack types, which were not
+        // present in the built-in registry snapshot lent to the native registrar.
+        let declarations = mod_api::__private::general_entity_type_declarations();
+        for declared in declarations {
+            if ids.names.iter().any(|name| name == declared.id.as_str()) {
+                return Err(format!(
+                    "mod {}: general entity type {} duplicates a registered entity type",
+                    declared.mod_id, declared.id
+                )
+                .into());
+            }
+        }
         mod_api::__private::resolve_entity_types(
             ids.names
                 .iter()

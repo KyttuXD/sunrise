@@ -87,7 +87,12 @@ pub fn general(kind: &str) -> Option<(&'static mod_api::Identifier, i32, u32, bo
         i32::MAX => 0,
         n => u32::try_from(n).unwrap_or(0),
     };
-    Some((&declared.id, declared.tracking_chunks.max(0), interval, true))
+    Some((
+        &declared.id,
+        declared.tracking_chunks.max(0),
+        interval,
+        true,
+    ))
 }
 
 /// the settings of one entity type: a content mod's type takes its

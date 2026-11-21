@@ -171,6 +171,37 @@ mod tests {
     }
 
     #[test]
+    fn a_general_type_can_use_the_minecraft_namespace_but_not_an_existing_type() {
+        let (_phase, mut registrar) = registrar();
+        let data = crate::__private::RegistrationData::new(
+            [(
+                "minecraft:entity_type".to_owned(),
+                vec!["minecraft:pig".to_owned()],
+            )]
+            .into(),
+            Default::default(),
+            Default::default(),
+            crate::RuntimeEnvironment::new(
+                crate::Dist::Client,
+                "26.3".into(),
+                "test".into(),
+                false,
+            ),
+        );
+        crate::__private::with_test_registration_data(data, || {
+            assert_eq!(
+                declare(&mut registrar, "minecraft:pig", 1.0, 1.0, 8, 3, &[]),
+                Err(Error::Duplicate)
+            );
+            assert!(declare(&mut registrar, "minecraft:robot", 1.0, 1.0, 8, 3, &[]).is_ok());
+        });
+        assert_eq!(
+            registrar.general_entity_types[0].id.as_str(),
+            "minecraft:robot"
+        );
+    }
+
+    #[test]
     fn a_non_finite_passenger_attachment_refuses_registration() {
         crate::__private::initialize().unwrap();
         let (_phase, mut registrar) = registrar();
