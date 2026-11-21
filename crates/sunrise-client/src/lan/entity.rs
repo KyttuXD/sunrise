@@ -262,13 +262,13 @@ enum Kind {
     Type(i32),
     /// A native mod's general row (#792), whose type no client registry holds: a
     /// `sunrise:general_entity` spawn, to the clients that read it.
-    General,
+    General(&'static mod_api::Identifier),
 }
 
 impl Viewer<'_> {
     /// Whether this client may be paired with an entity introduced as `kind`.
     fn pairs_with(&self, kind: Kind) -> bool {
-        kind != Kind::General || self.general_entity
+        !matches!(kind, Kind::General(_)) || self.general_entity
     }
 }
 
@@ -403,8 +403,12 @@ impl ServerEntity {
         // A live general row takes its declaration's settings, which may reach past a
         // vanilla type's byte; any other entity its type's, whatever its key.
         let ((range, interval, track_deltas), kind) = if e.general {
-            let declared = tracking::general(&e.kind).unwrap_or((5, 3, true));
-            (declared, Some(Kind::General))
+            tracking::general(&e.kind).map_or(
+                ((0, 0, false), None),
+                |(id, range, interval, deltas)| {
+                    ((range, interval, deltas), Some(Kind::General(id)))
+                },
+            )
         } else {
             let (range, interval, deltas) = tracking::settings(&e.kind);
             ((i32::from(range), interval, deltas), kind.map(Kind::Type))
@@ -469,19 +473,18 @@ impl ServerEntity {
                 head_yaw: pack_degrees(e.head_yaw),
                 data: e.data,
             })),
-            Kind::General => {
+            Kind::General(type_key) => {
                 // Where the clients that already track it were last told it is: the next
                 // move is a delta from there (VecDeltaCodec's base), for this client too.
                 let spawn = general_entity::Message::Spawn {
                     id: e.id,
                     uuid: e.uuid,
-                    type_key: e.kind.clone(),
+                    type_key: type_key.clone(),
                     position: self.base,
                     rotation: [e.yaw, e.pitch],
                     velocity: e.velocity,
                 };
-                // Registration bounds the key as the codec does, and a row's values are
-                // finite; one that still breaks them is introduced to nobody.
+                // Only this peer-facing boundary applies the wire string length.
                 match general_entity::encode(&spawn) {
                     Ok(data) => out.push(play::Clientbound::CustomPayload(CustomPayload {
                         channel: general_entity::CHANNEL.into(),

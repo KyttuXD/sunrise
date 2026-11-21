@@ -208,10 +208,11 @@ you need a list after the call, collect the handles you need in your visitor.
 ## Checking a spawn
 
 `mob_spawn_placement_check` and `mob_spawn_position_check` both get the `level` the mob would join (a `LevelRef`, so a
-listener can read the blocks around `pos` through the host) and the `spawner` that asked: `Spawner::Block { pos }` for a
-spawner block, `Spawner::Trial { pos }` for a trial spawner, and `None` when no block asked, including a spawner
-minecart. Set `*event.result` to `SpawnCheck::Succeed` or `Fail` to override that
-check; `Default` keeps the check's own answer.
+listener can read the blocks around `pos` through the host). The placement check gets a spawn reason, not a spawner.
+Only the position check gets the regular `BaseSpawner`: `Spawner::Block { pos }` for a monster spawner block,
+`Spawner::Minecart(cart)` for a spawner minecart, and `None` when no `BaseSpawner` asked. Trial spawners check
+obstruction directly and never fire the position hook. Set `*event.result` to `SpawnCheck::Succeed` or `Fail`
+to override the check; `Default` keeps the check's own answer.
 
 In `mob_spawn_placement_check` version 2, `event.default_result` is the effective predicate result. It can differ
 from vanilla even for a vanilla type, because registrations can add to or replace its predicate. The hook fires
@@ -251,7 +252,7 @@ fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api
 
 Where the game does not create the mob fresh, the handle answers only `kind` and `position` (the rest is
 `UnspawnedMobError::Unsupported`): chunk generation's packs, which the world generator creates and finalizes after the
-check, and a spawner or trial spawner whose spawn data carries entity data, which the game loads after the tick.
+check, and a regular spawner whose spawn data carries entity data, which the game loads after the tick.
 
 ## Stopping a spawn or leaving a mob plain
 
@@ -265,6 +266,11 @@ fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpa
     mod_api::Flow::Continue
 }
 ```
+
+The `finalize_spawn` hook can identify the owner that fired it: `Some(Spawner::Block { pos })` for an
+ordinary spawner block, `Some(Spawner::Trial { pos })` for a trial spawner block, or
+`Some(Spawner::Minecart(cart))` for a spawner minecart. A reason such as `SpawnReason::Spawner`
+alone does not identify an owner; only the spawner's own call supplies one.
 
 `finalize_spawn` fires only where vanilla calls `finalizeSpawn`, so a breeding, an infested block's silverfish or a thrown egg's chick does not tell it.
 
@@ -313,7 +319,7 @@ See [the `finalize_spawn` contract](https://github.com/sunrise-org/sunrise/blob/
 
 ## Changing how large a spawn group grows
 
-A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, why and from what it spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
+A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, its spawn reason, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
 
 ```rust,ignore
 struct ZombiePacks;
@@ -324,7 +330,6 @@ impl mod_api::EntityPart for ZombiePacks {
         _: &dyn mod_api::Host,
         _: mod_api::UnspawnedMobRef,
         _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
         vanilla: u32,
     ) -> Option<u32> {
         Some(vanilla * 2)
@@ -383,6 +388,14 @@ Every mod is asked about every key, so a mod ignores keys it does not own. See [
 - `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
 
 A general row can move to another position in its level through `EntityRef::teleport_to`. A row teleported on its own dismounts; a teleported vehicle takes its riders with it. Removing the vehicle dismounts its riders and leaves them in the level. `EntityRef::set_rotation` turns a general row without moving or dismounting it; the new angles reach clients through ordinary tracking.
+
+Pass `Identifier::from_parts("mymod", "robot")` (a validated namespaced ID) to
+`declare_general_entity`. Save its returned `EntityTypeKey` for uses of the type registry.
+The final argument is a list of `FeatureFlag` values, not mod IDs: pass `&[FeatureFlag::Vanilla]`
+for the vanilla builder default, `&[FeatureFlag::RedstoneExperiments]` for that experiment,
+or `&[]` if no flags are required. Creation is refused if the world lacks any required flag.
+Declare mod dependencies in the manifest instead. The local registry does not impose a
+network string size limit; the serialized identifier is checked when sending or receiving it.
 
 In `declare_general_entity`, pass `pickable` after `summonable`. Pass `false` for
 vanilla's plain `Entity.isPickable` default. With `true`, the crosshair can hit

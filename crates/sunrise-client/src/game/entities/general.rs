@@ -142,7 +142,7 @@ pub enum GeneralRecordCheck {
 /// record checks cleanly.
 pub fn check_general_record(
     record: &GeneralEntityRecord,
-    is_known_type: impl Fn(&str) -> bool,
+    mut is_known_type: impl FnMut(&str) -> bool,
 ) -> Result<GeneralRecordCheck, GeneralRecordError> {
     let mut seen = FxHashSet::default();
     let mut ancestors = FxHashSet::default();
@@ -490,11 +490,16 @@ impl GeneralTypeCatalog {
         declarations: &[mod_api::__private::GeneralEntityTypeDeclaration],
     ) -> Result<Self, String> {
         let mut sorted = declarations.to_vec();
-        sorted.sort_by(|left, right| (&left.mod_id, &left.id).cmp(&(&right.mod_id, &right.id)));
+        sorted.sort_by(|left, right| {
+            (&left.mod_id, left.id.as_str()).cmp(&(&right.mod_id, right.id.as_str()))
+        });
         let mut by_key = FxHashMap::with_capacity_and_hasher(sorted.len(), Default::default());
         for (slot, declaration) in sorted.iter().enumerate() {
             // Enumeration already yields the catalog index without narrowing.
-            if by_key.insert(declaration.id.clone(), slot).is_some() {
+            if by_key
+                .insert(declaration.id.as_str().to_owned(), slot)
+                .is_some()
+            {
                 return Err(format!(
                     "duplicate general entity type {} (declared by {})",
                     declaration.id, declaration.mod_id
@@ -529,7 +534,14 @@ impl GeneralTypeCatalog {
 
     /// The type key a slot belongs to.
     pub fn key(&self, slot: usize) -> &str {
-        &self.entries[slot].id
+        self.entries[slot].id.as_str()
+    }
+
+    fn enabled(&self, slot: usize, features: &[String]) -> bool {
+        self.entries[slot]
+            .required_features
+            .iter()
+            .all(|f| features.iter().any(|id| id == f.id()))
     }
 
     pub(in crate::game) fn keys(&self) -> impl Iterator<Item = &str> {
@@ -1138,7 +1150,17 @@ impl Game<'_> {
         transferred: Option<TransferredEntityState>,
     ) -> Result<Option<u32>, ()> {
         let catalog = general_type_catalog();
-        match check_general_record(&record, |key| catalog.slot(key).is_some()) {
+        let mut disabled = None;
+        let flags = self.enabled_feature_ids();
+        match check_general_record(&record, |key| {
+            let Some(slot) = catalog.slot(key) else {
+                return false;
+            };
+            if disabled.is_none() && !catalog.enabled(slot, flags) {
+                disabled = Some(slot);
+            }
+            true
+        }) {
             Ok(GeneralRecordCheck::Ready) => {}
             Ok(GeneralRecordCheck::UnknownType) => return Err(()),
             Err(error) => {
@@ -1148,6 +1170,13 @@ impl Game<'_> {
                 );
                 return Ok(None);
             }
+        }
+        if let Some(slot) = disabled {
+            let kind = catalog.key(slot);
+            log::warn!(
+                "Sunrise: refusing general entity type {kind}: required features are disabled"
+            );
+            return Ok(None);
         }
         // A UUID a live entity of the level already owns refuses the whole
         // tree (`uuid_admission_refused`, the boundary every loaded kind

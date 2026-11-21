@@ -47,8 +47,8 @@ pub enum AttributeRegistrationError {
 // exhaustive: its field is private, so only registration creates a key
 pub struct EffectKey(pub(crate) u32);
 
-/// An entity type (`minecraft:zombie`) in the built-in entity-type registry, in
-/// registration order. Returned by `EntityRef::kind`; Copy/Eq comparisons do not
+/// An entity type (`minecraft:zombie` or a registered mod type) in the completed entity-type
+/// registry. Returned by `EntityRef::kind`; Copy/Eq comparisons do not
 /// allocate. `key.id(host)` pins its namespaced name, if available, without
 /// copying the text. A key stays valid until the game exits.
 // no wire: the manual scalar codec validates host slots.

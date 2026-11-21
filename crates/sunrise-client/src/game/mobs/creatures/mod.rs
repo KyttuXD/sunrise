@@ -1226,7 +1226,6 @@ impl Game<'_> {
         &self,
         mob: &mut Mob,
         reason: SpawnReason,
-        spawner: Option<mod_api::Spawner>,
         vanilla: u32,
     ) -> Option<u32> {
         if !mod_api::__private::has_entity_parts() {
@@ -1251,7 +1250,7 @@ impl Game<'_> {
                 match mod_api::__private::contain_outside_world(|| {
                     attached
                         .part()
-                        .spawn_cluster_size(self, lent, reason, spawner, vanilla)
+                        .spawn_cluster_size(self, lent, reason, vanilla)
                 }) {
                     Ok(answer) => answer,
                     Err(refusal) => {

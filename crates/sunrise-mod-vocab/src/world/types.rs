@@ -505,6 +505,33 @@ pub enum LightLayer {
     Sky,
 }
 
+/// A flag in vanilla's `FeatureFlags.REGISTRY`.
+// no wire: native entity declarations use these flags only in process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FeatureFlag {
+    /// Ordinary vanilla content.
+    Vanilla,
+    /// Experimental villager trades.
+    TradeRebalance,
+    /// Experimental redstone behavior.
+    RedstoneExperiments,
+    /// Experimental minecart behavior.
+    MinecartImprovements,
+}
+
+impl FeatureFlag {
+    /// The registered id used by the world's effective [`FeatureFlags`].
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Vanilla => "minecraft:vanilla",
+            Self::TradeRebalance => "minecraft:trade_rebalance",
+            Self::RedstoneExperiments => "minecraft:redstone_experiments",
+            Self::MinecartImprovements => "minecraft:minecart_improvements",
+        }
+    }
+}
+
 /// The effective feature flags a world enables (`FeatureFlagSet`, `LevelReader.enabledFeatures`),
 /// each as its id (`minecraft:vanilla`, `minecraft:redstone_experiments`), shared with the world.
 /// Getting and reading it allocates nothing.
@@ -936,22 +963,12 @@ impl Difficulty {
     }
 }
 
-/// What spawned a mob, where `EntitySpawnReason` alone does not say (`FinalizeSpawnEvent.getSpawner`).
+/// Identity of a spawner, independent of the mob's [`SpawnReason`].
+/// `finalize_spawn` can name any of these owners; `mob_spawn_position_check` only
+/// names a regular `BaseSpawner` (block or minecart). Placement checks have no spawner.
+// no wire: only lent to native spawn callbacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum SpawnSource {
-    /// A spawner or trial spawner block at this position.
-    Block(BlockPos),
-}
-
-/// The spawner block that asked for a spawn check (`MobSpawnEvent.PositionCheck.getSpawner`):
-/// what `mob_spawn_placement_check` and `mob_spawn_position_check` get when a block spawns the
-/// mob. Natural spawning, chunk generation, patrols, sieges, reinforcements and a spawner
-/// minecart have none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum Spawner {
     /// A monster spawner block (`SpawnerBlockEntity`).
     Block {
@@ -963,6 +980,8 @@ pub enum Spawner {
         /// Where the block is.
         pos: BlockPos,
     },
+    /// A `MinecartSpawner`, identified by its entity rather than the block it is over.
+    Minecart(MinecartRef),
 }
 
 /// What a mod answers a spawn check (`MobSpawnEvent.PositionCheck.Result` and

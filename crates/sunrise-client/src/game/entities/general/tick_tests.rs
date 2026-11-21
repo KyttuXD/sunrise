@@ -122,7 +122,15 @@ struct Declare {
 impl Hooks for Declare {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
         r.register_attachment_type("mymod:counter", false).unwrap();
-        for (path, save) in [("robot", true), ("ghost", false)] {
+        for (path, save, flags) in [
+            ("robot", true, &[][..]),
+            ("ghost", false, &[][..]),
+            (
+                "experimental",
+                true,
+                &[mod_api::FeatureFlag::RedstoneExperiments][..],
+            ),
+        ] {
             r.declare_general_entity(
                 mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 GeneralEntityCategory::Misc,
@@ -140,7 +148,7 @@ impl Hooks for Declare {
                 8,
                 3,
                 1,
-                &[],
+                flags,
             )
             .unwrap();
         }
@@ -1116,5 +1124,36 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
         );
         assert_eq!(game.resident_entities.general.rows.len(), rows);
         assert_eq!(game.mobs.len(), mobs);
+    });
+}
+
+/// `EntityType.canSpawn` checks the world's features, not installed mods.
+#[test]
+#[ignore = "daily"]
+fn general_entity_creation_checks_the_worlds_required_features() {
+    with_counter(|game, _| {
+        game.world.chunks.insert(
+            (0, 0),
+            std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+        );
+        let level = game.level(game.dim.id()).unwrap();
+        let spawn = mod_api::EntitySpawn::new(mod_api::SpawnBody::General);
+        let before = game.resident_entities.general.rows.len();
+        let at = [2.5, 65.5, 2.5];
+        assert_eq!(
+            game.level_spawn_entity(level, "mymod:experimental", at, &spawn),
+            None
+        );
+        assert_eq!(game.resident_entities.general.rows.len(), before);
+        game.level.enabled_features = [
+            "minecraft:vanilla".to_owned(),
+            "minecraft:redstone_experiments".to_owned(),
+        ]
+        .into();
+        let entity = game
+            .level_spawn_entity(level, "mymod:experimental", at, &spawn)
+            .unwrap();
+        assert_eq!(game.general_kind(entity.id()), Some("mymod:experimental"));
+        assert_eq!(game.resident_entities.general.rows.len(), before + 1);
     });
 }

@@ -10,7 +10,13 @@ struct Declare;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Declare {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
-        for (path, chunks, interval) in [("near", 2, 1), ("far", 8, 10), ("wide", 320, 3)] {
+        let long = "l".repeat(32_767);
+        for (path, chunks, interval) in [
+            ("near", 2, 1),
+            ("far", 8, 10),
+            ("wide", 320, 3),
+            (&long, 2, 1),
+        ] {
             r.declare_general_entity(
                 mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 GeneralEntityCategory::Misc,
@@ -215,7 +221,7 @@ fn a_reading_client_in_range_gets_one_spawn_and_another_client_nothing() {
             [general_entity::Message::Spawn {
                 id: 7,
                 uuid: 0x1007,
-                type_key: "mymod:far".into(),
+                type_key: mod_api::Identifier::parse_namespaced("mymod:far").unwrap(),
                 position: [4.5, 64.0, 0.5],
                 rotation: [45.0, -10.0],
                 velocity: [0.125, 0.0, 0.0],
@@ -328,12 +334,12 @@ fn leaving_range_removes_the_row_and_coming_back_spawns_it_afresh() {
     });
 }
 
-/// A key the spawn cannot carry (registration refuses one; a row may not have one): no client is
-/// introduced to the row, so none is recorded as tracking it or sent its moves.
+/// An installed type can have a name that only the wire boundary refuses. No client is
+/// introduced to such a row, recorded as tracking it or sent its moves.
 #[test]
 fn a_row_whose_spawn_cannot_be_written_is_tracked_by_nobody() {
     with_types(|| {
-        let long = format!("mymod:{}", "l".repeat(general_entity::MAX_KEY));
+        let long = format!("mymod:{}", "l".repeat(32_767));
         let [sunrise, _] = run([0.5, 64.0, 0.5], 3, |tick| {
             vec![row(7, &long, 0.5 + f64::from(tick))]
         });

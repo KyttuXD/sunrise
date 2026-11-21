@@ -184,17 +184,14 @@ impl Game<'_> {
         let mut sequences = std::mem::take(&mut self.rand_sequences);
         let mut events = Vec::new();
         let mut planned: Vec<Planned> = Vec::new();
-        let source = Some(mod_api::SpawnSource::Block(mod_api::BlockPos::new(
-            key.0, key.1, key.2,
-        )));
+        let source = Some(mod_api::Spawner::Trial {
+            pos: mod_api::BlockPos::new(key.0, key.1, key.2),
+        });
         let mut uuids: Vec<(u32, Uuid)> = Vec::new();
         let mut ejected: Vec<(ItemStack, [f64; 3])> = Vec::new();
         let extras: (Vec<Mob>, Vec<(u32, u32)>);
         let next = {
-            let mut level = self.natural_level();
-            level.spawner = Some(mod_api::Spawner::Trial {
-                pos: mod_api::BlockPos::new(key.0, key.1, key.2),
-            });
+            let level = self.natural_level();
             let loot = self.server_loot.get();
             let seed = self.level.seed;
             let mut spawn = |l: &GameLevel, rng: &mut LevelRandom, r: &SpawnerSpawn| {

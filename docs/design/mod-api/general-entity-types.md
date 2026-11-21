@@ -9,13 +9,13 @@ Provisional answer to [#792](https://github.com/arismoko/horizon/issues/792): re
 ## Implemented stage 2 API
 
 `Hooks::register` receives `&mut dyn Registrar`, whose `GeneralTypesRegistrar`
-supertrait provides `declare_general_entity(path, category, width, height,
+supertrait provides `declare_general_entity(id, category, width, height,
 passenger_attachment, save_policy, summonable, pickable, piston_push_reaction,
-tracking_chunks, update_interval, payload_version, required_features)`. Use `GeneralEntityCategory::Misc` and
-`GeneralSavePolicy::{Save, NoSave}`. The path must belong to the declaring
-mod's namespace. Registration is only available during the registration phase,
-requires a both-side package, and refuses duplicates and unavailable required
-mods with `GeneralEntityRegistrationError` while recording a refusal.
+tracking_chunks, update_interval, payload_version, required_features)`. Use a validated
+`Identifier`, `GeneralEntityCategory::Misc` and `GeneralSavePolicy::{Save, NoSave}`. Registration
+requires a both-side package and returns the registered `EntityTypeKey`. Duplicate names are
+refused. Requirements are `FeatureFlag` values checked against the current level when creating
+an entity; installed mods are not feature flags.
 
 Dimensions and passenger attachment coordinates must be finite. A passenger
 attachment is a vehicle-local point in blocks, rotated with the vehicle's yaw.
@@ -104,7 +104,7 @@ The [moving-structures carrier](moving-structures.md) remains a game-owned speci
 ### Implemented: tracking, the client table and the renderer handoff (stage 5)
 
 - **The tracker.** General rows join the level's one tracker (`lan_general_states` in `game/network/lan_entities.rs`). A row's range and interval are its declaration's (`tracking::general` in `lan/tracking.rs`): the range in chunks is capped by the view distance, and an interval of `i32::MAX` or below 1 never updates. Deltas are on. A quarantined record never becomes a row, so it is never tracked.
-- **Pairing.** A general key is in no client registry, so pairing sends a `sunrise:general_entity` spawn (`crates/sunrise-protocol/src/general_entity.rs`) in place of `AddEntity`. Only a client that negotiated that engine channel is paired (`Viewer::general_entity`, `Guest::negotiated_general_entity`). After the spawn:
+- **Pairing.** A general key is in no client registry, so pairing sends a `sunrise:general_entity` spawn (`crates/sunrise-protocol/src/general_entity.rs`) in place of `AddEntity`. The packet encodes the type name with the `Identifier.STREAM_CODEC` string limit; registration does not apply that limit. Only a client that negotiated that engine channel is paired (`Viewer::general_entity`, `Guest::negotiated_general_entity`). After the spawn:
   - moves, position syncs, teleports and the removal are the vanilla packets keyed by the network id;
   - the row's declared fields are its synced attachments, whose snapshot tracking start queues as for any entity.
 - **Vanilla clients.** A vanilla client is never paired with a row: no packet names it. Refusing such a client when required general types exist is still the open question below.

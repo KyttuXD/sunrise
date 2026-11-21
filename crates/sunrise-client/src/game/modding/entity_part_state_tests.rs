@@ -64,7 +64,7 @@ impl Hooks for StateMod {
         r.register_attachment_type("part_state:charge", false)
             .unwrap();
         r.declare_general_entity(
-            mod_api::Identifier::from_parts("mymod", "robot").unwrap(),
+            mod_api::Identifier::from_parts("part_state", "robot").unwrap(),
             mod_api::GeneralEntityCategory::Misc,
             0.8,
             1.9,

@@ -210,14 +210,19 @@ fn template(kind: &str) -> Option<&'static str> {
 /// interval of `i32::MAX` (vanilla's "never"), or one below 1, never updates.
 /// Asked for a live general row only (`EntityState::general`), never for a key:
 /// a quarantined record keeps its type's key.
-pub fn general(kind: &str) -> Option<(i32, u32, bool)> {
+pub fn general(kind: &str) -> Option<(&'static mod_api::Identifier, i32, u32, bool)> {
     let declarations = mod_api::__private::general_entity_type_declarations();
-    let declared = declarations.iter().find(|d| d.id == kind)?;
+    let declared = declarations.iter().find(|d| d.id.as_str() == kind)?;
     let interval = match declared.update_interval {
         i32::MAX => 0,
         n => u32::try_from(n).unwrap_or(0),
     };
-    Some((declared.tracking_chunks.max(0), interval, true))
+    Some((
+        &declared.id,
+        declared.tracking_chunks.max(0),
+        interval,
+        true,
+    ))
 }
 
 /// the settings of one entity type: a content mod's type takes its

@@ -1,10 +1,11 @@
 //! Concrete authoring extracted from the vocabulary layer.
 use super::*;
+use mod_vocab::__private::game::RegistrationContextNew;
 
 impl GeneralTypesRegistrar for PartRegistrar {
     fn declare_general_entity(
         &mut self,
-        path: &str,
+        id: Identifier,
         category: GeneralEntityCategory,
         width: f64,
         height: f64,
@@ -16,8 +17,8 @@ impl GeneralTypesRegistrar for PartRegistrar {
         tracking_chunks: i32,
         update_interval: i32,
         payload_version: u16,
-        required_features: &[&str],
-    ) -> Result<(), GeneralEntityRegistrationError> {
+        required_features: &[FeatureFlag],
+    ) -> Result<EntityTypeKey, GeneralEntityRegistrationError> {
         use GeneralEntityRegistrationError as Error;
         // The registry freezes with the phase: once registration ends and any
         // later phase begins, no declaration is accepted anywhere.
@@ -28,25 +29,11 @@ impl GeneralTypesRegistrar for PartRegistrar {
             ));
             return Err(Error::Frozen);
         }
-        let id = match self.owned_declaration_id(path) {
-            // The key travels in the spawn that introduces a row to a client, which carries
-            // no longer one.
-            Ok(id) if id.len() > sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY => {
-                self.refused.push(format!(
-                    "mod {} declares general entity type {id}, longer than {} bytes",
-                    self.mod_id,
-                    sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY
-                ));
-                return Err(Error::InvalidId);
-            }
-            Ok(id) => id,
-            Err(reason) => {
-                self.refused.push(reason);
-                return Err(Error::InvalidId);
-            }
-        };
         let id_for_log = id.clone();
         let result = (|| {
+            if id.path().is_empty() {
+                return Err(Error::InvalidId);
+            }
             if mod_vocab::__private::parts_installation::loaded_mods()
                 .get(self.mod_id)
                 .is_some_and(|package| package.side() != crate::Side::Both)
@@ -57,6 +44,9 @@ impl GeneralTypesRegistrar for PartRegistrar {
                 .general_entity_types
                 .iter()
                 .any(|declared| declared.id == id)
+                || RegistrationContext::new()
+                    .registry("minecraft:entity_type")
+                    .is_ok_and(|names| names.iter().any(|name| name == id.as_str()))
             {
                 return Err(Error::Duplicate);
             }
@@ -67,14 +57,12 @@ impl GeneralTypesRegistrar for PartRegistrar {
             {
                 return Err(Error::NotFinite);
             }
-            for feature in required_features {
-                if mod_vocab::__private::parts_installation::loaded_mods()
-                    .get(feature)
-                    .is_none()
-                {
-                    return Err(Error::UnknownDependency);
-                }
-            }
+            let slot = self
+                .registry_keys
+                .borrow_mut()
+                .entity_types
+                .request_identifier(self.mod_id, &id)
+                .map_err(|_| Error::RegistrySlotsExhausted)?;
             self.general_entity_types
                 .push(GeneralEntityTypeDeclaration {
                     mod_id: self.mod_id.to_owned(),
@@ -90,9 +78,11 @@ impl GeneralTypesRegistrar for PartRegistrar {
                     tracking_chunks,
                     update_interval,
                     payload_version,
-                    required_features: required_features.iter().map(|&f| f.to_owned()).collect(),
+                    required_features: required_features.to_vec(),
                 });
-            Ok(())
+            Ok(mod_vocab::__private::parts_installation::entity_type_key(
+                slot,
+            ))
         })();
         if let Err(error) = &result {
             self.refused.push(format!(
@@ -124,10 +114,10 @@ mod tests {
         height: f64,
         tracking_chunks: i32,
         update_interval: i32,
-        required: &[&str],
-    ) -> Result<(), Error> {
+        required: &[FeatureFlag],
+    ) -> Result<EntityTypeKey, Error> {
         registrar.declare_general_entity(
-            path,
+            Identifier::parse(path).unwrap(),
             GeneralEntityCategory::Misc,
             width,
             height,
@@ -143,59 +133,41 @@ mod tests {
         )
     }
 
-    /// The registration's checks: an id outside the mod's namespace (a
-    /// vanilla type's included), a duplicate, non-finite or non-positive
-    /// dimensions and a required feature
-    /// naming no loaded mod all refuse, naming the mod; the good declaration
-    /// stands beside them.
     #[test]
     pub(crate) fn general_entity_type_declarations_validate() {
         crate::__private::initialize().unwrap();
         let (_phase, mut registrar) = registrar();
-        declare(&mut registrar, "robot", 0.8, 1.9, 8, 3, &[]).unwrap();
-        // The path stays in the declaring mod's namespace.
+        let name = format!("other:{}", "l".repeat(300));
+        let key = declare(
+            &mut registrar,
+            &name,
+            0.8,
+            1.9,
+            8,
+            3,
+            &[FeatureFlag::TradeRebalance],
+        )
+        .unwrap();
+        assert_eq!(registrar.entity_type_key(&name), key);
+        assert_eq!(registrar.general_entity_types[0].id.as_str(), name);
         assert_eq!(
-            declare(&mut registrar, "minecraft:creeper", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
+            registrar.general_entity_types[0].required_features,
+            [FeatureFlag::TradeRebalance]
         );
         assert_eq!(
-            declare(&mut registrar, "foreign:robot", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        assert_eq!(
-            declare(&mut registrar, "Not An Id", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        // A key the spawn that introduces a row could not carry; the longest it can stands.
-        let room = sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY - "mymod:".len();
-        assert_eq!(
-            declare(&mut registrar, &"l".repeat(room + 1), 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        declare(&mut registrar, &"l".repeat(room), 0.6, 1.7, 8, 3, &[]).unwrap();
-        // The same type twice, whatever declared it, is a duplicate.
-        assert_eq!(
-            declare(&mut registrar, "robot", 0.5, 1.0, 4, 2, &[]),
+            declare(&mut registrar, &name, 0.8, 1.9, 8, 3, &[]),
             Err(Error::Duplicate)
         );
-        // Non-finite dimensions.
         assert_eq!(
-            declare(&mut registrar, "wide", f64::NAN, 1.0, 8, 3, &[]),
+            declare(&mut registrar, "mymod:", 0.8, 1.9, 8, 3, &[]),
+            Err(Error::InvalidId)
+        );
+        assert_eq!(
+            declare(&mut registrar, "mymod:wide", f64::NAN, 1.0, 8, 3, &[]),
             Err(Error::NotFinite)
         );
-        assert_eq!(
-            declare(&mut registrar, "wide", f64::INFINITY, 1.0, 8, 3, &[]),
-            Err(Error::NotFinite)
-        );
-        // A required feature naming no loaded mod.
-        assert_eq!(
-            declare(&mut registrar, "needy", 1.0, 1.0, 8, 3, &["missing:mod"]),
-            Err(Error::UnknownDependency)
-        );
-        // Every refusal was reported, and the good declaration stands.
-        assert_eq!(registrar.general_entity_types.len(), 2);
-        assert_eq!(registrar.general_entity_types[0].id, "mymod:robot");
-        assert_eq!(registrar.refused.len(), 8);
+        assert_eq!(registrar.general_entity_types.len(), 1);
+        assert_eq!(registrar.refused.len(), 3);
     }
 
     #[test]
@@ -204,7 +176,7 @@ mod tests {
         let (_phase, mut registrar) = registrar();
         assert_eq!(
             registrar.declare_general_entity(
-                "robot",
+                Identifier::parse("mymod:robot").unwrap(),
                 GeneralEntityCategory::Misc,
                 0.8,
                 1.9,
@@ -229,7 +201,7 @@ mod tests {
         let (_phase, mut registrar) = registrar();
         declare(
             &mut registrar,
-            "robot",
+            "mymod:robot",
             f64::from(f32::MAX),
             f64::from(f32::MAX),
             i32::MAX,
@@ -237,7 +209,16 @@ mod tests {
             &[],
         )
         .unwrap();
-        declare(&mut registrar, "signed", 0.0, -1.0, i32::MIN, i32::MIN, &[]).unwrap();
+        declare(
+            &mut registrar,
+            "mymod:signed",
+            0.0,
+            -1.0,
+            i32::MIN,
+            i32::MIN,
+            &[],
+        )
+        .unwrap();
         assert_eq!(registrar.general_entity_types.len(), 2);
         assert!(registrar.refused.is_empty());
     }
@@ -277,7 +258,7 @@ mod tests {
         let _world = PhaseOwner::scope(ModPhase::World);
         let mut registrar = PartRegistrar::new("mymod");
         assert_eq!(
-            declare(&mut registrar, "robot", 0.8, 1.9, 8, 3, &[]),
+            declare(&mut registrar, "mymod:robot", 0.8, 1.9, 8, 3, &[]),
             Err(Error::Frozen)
         );
         assert!(registrar.general_entity_types.is_empty());
@@ -291,7 +272,7 @@ mod tests {
     pub(crate) fn general_entity_types_unlisted_mod_declares() {
         crate::__private::initialize().unwrap();
         let (_phase, mut registrar) = registrar();
-        declare(&mut registrar, "robot", 0.8, 1.9, 8, 3, &[]).unwrap();
+        declare(&mut registrar, "mymod:robot", 0.8, 1.9, 8, 3, &[]).unwrap();
         assert_eq!(registrar.general_entity_types.len(), 1);
         assert!(registrar.refused.is_empty());
     }
@@ -357,7 +338,7 @@ mod tests {
         let dynamic: &mut dyn crate::Registrar = &mut registrar;
         dynamic
             .declare_general_entity(
-                "robot",
+                Identifier::parse("mymod:robot").unwrap(),
                 GeneralEntityCategory::Misc,
                 0.8,
                 1.9,

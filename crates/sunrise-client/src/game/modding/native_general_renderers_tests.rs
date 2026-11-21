@@ -159,7 +159,7 @@ impl mod_api::Hooks for Scene {
         r.register_attachment_type("test:fuel", true).unwrap();
         for path in ["missile", "bomb", "plain"] {
             r.declare_general_entity(
-                mod_api::Identifier::from_parts("mymod", path).unwrap(),
+                mod_api::Identifier::from_parts("test", path).unwrap(),
                 mod_api::GeneralEntityCategory::Misc,
                 0.5,
                 0.5,
@@ -201,7 +201,7 @@ fn spawn(id: i32, key: &str, at: [f64; 3]) -> C {
         data: encode(&Message::Spawn {
             id,
             uuid: 0x100 + id as u128,
-            type_key: key.into(),
+            type_key: mod_api::Identifier::parse_namespaced(key).unwrap(),
             position: at,
             rotation: [0.0, 0.0],
             velocity: [0.0; 3],

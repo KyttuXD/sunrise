@@ -86,7 +86,8 @@ pub trait LevelSpawningBackendMut {
     ///   pitch, which it has no state for.
     /// - [`SpawnBody::General`]: a new row of the general type, with a fresh
     ///   UUID and the type's declared payload version, through the insertion
-    ///   `/summon` and chunk loading share. The owner is kept on the row and
+    ///   `/summon` and chunk loading share. The level must enable the type's required
+    ///   features. The owner is kept on the row and
     ///   saved (`Owner`); [`EntityRef::owner`] reads it back, for the type's
     ///   own tick to skip its shooter and credit its damage. The row's state is
     ///   its attachments: write them on the returned handle in the same
