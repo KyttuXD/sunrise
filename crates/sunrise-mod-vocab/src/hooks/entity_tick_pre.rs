@@ -16,18 +16,17 @@ pub trait Hooks {
     /// player Pre runs before the observed parts of `ServerPlayer.tick`, not the connection
     /// body's `player_tick_pre`. The local client player is not yet observed here.
     /// Push an ID from `entities` onto `canceled` to skip that entity's observed tick work and
-    /// suppress its Post. IDs outside this call are ignored; repeated IDs count once. A mod
-    /// using these hooks also opts in through `entity_tick_listened`.
+    /// suppress its Post. IDs outside this call are ignored; repeated IDs count once.
     /// Removing a general entity during its own Pre skips its tick and Post and dismounts its
     /// passengers unless dismount is vetoed. An eligible former passenger can still tick as a
     /// root in this pass if it has not ticked and its join-order slot is still ahead. An
     /// already-passed slot is not revisited.
-    /// Version 3 expands the version 2 coverage without changing the event signature.
+    /// Subscribe to `entity_tick_pre` directly; no Post subscription is needed.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_pre",
         dispatch = "flat",
         side = "both",
-        version = 3,
+        version = 4,
         contract = "collect",
         out = "canceled",
         neoforge = "EntityTickEvent.Pre",

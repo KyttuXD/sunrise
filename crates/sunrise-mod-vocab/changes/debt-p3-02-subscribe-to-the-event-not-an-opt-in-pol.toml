@@ -1,0 +1,25 @@
+ids = [
+    "hook:entity_tick_listened",
+    "method:Hooks::entity_tick_listened",
+    "type:EntityTickListenedEvent",
+    "hook:living_equipment_listened",
+    "method:Hooks::living_equipment_listened",
+    "type:LivingEquipmentListenedEvent",
+    "hook:hears_projectile_impacts",
+    "method:Hooks::hears_projectile_impacts",
+    "type:HearsProjectileImpactsEvent",
+    "hook:entity_tick_pre",
+    "method:Hooks::entity_tick_pre",
+    "hook:entity_tick_post",
+    "method:Hooks::entity_tick_post",
+    "hook:living_equipment_change",
+    "method:Hooks::living_equipment_change",
+    "hook:projectile_impact",
+    "method:Hooks::projectile_impact",
+]
+why = """Subscribing to the event replaces the three opt-in polls.
+
+- NeoForge's `EntityTickEvent.Pre` and `EntityTickEvent.Post` wrap vanilla `ServerLevel.tickNonPassenger` and `ClientLevel.tickNonPassenger`. A named entity gets only the subscribed phases; the game does not hand back the live entity lists just to dispatch an absent phase. Sleeping, item Parts and section crossings still run independently.
+- NeoForge posts `LivingEquipmentChangeEvent` in vanilla `LivingEntity.collectEquipmentChanges`, called within `LivingEntity.tick` before `aiStep`. Mobs report before their Post, and a canceled Pre does not reach equipment detection. Connected players report in the living body tick (`ServerPlayer.doTick`), not the earlier level tick (`ServerPlayer.tick`). Gameplay equipment bookkeeping still runs on its original path without listeners.
+- NeoForge's `ProjectileImpactEvent` runs at a real collision; for example, `FireworkRocketEntity.onHit` posts it after `Projectile.hitTargetOrDeflectSelf` decides deflection. Rockets check subscriptions there. The shared flight pass checks immediately before each projectile that could need a preflight copy, without changing capture or resolution order. With no subscriber, no impact payload or replay copy is prepared."""
+migrate = """Delete `Hooks::entity_tick_listened` and its `EntityTickListenedEvent` import; keep `Hooks::entity_tick_pre` or `Hooks::entity_tick_post` (both version 4), or both. Keep `entity_tick_each` registration for types you want told individually. Delete `Hooks::living_equipment_listened` and its `LivingEquipmentListenedEvent` import; keep `Hooks::living_equipment_change` (version 2). Move code that depends on the mob having finished its tick to `Hooks::entity_tick_post`: the equipment notice now arrives before AI and Post, and does not arrive on a canceled tick. For connected players it now arrives inside the body tick before `Hooks::player_tick_post`, not inside the level's entity tick. Delete `Hooks::hears_projectile_impacts` and its `HearsProjectileImpactsEvent` import; keep `Hooks::projectile_impact` (version 3). Remove any manifest version pin for a deleted hook and update any pin for a retained hook to its new version."""

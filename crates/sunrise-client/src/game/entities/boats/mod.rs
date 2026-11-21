@@ -1190,7 +1190,7 @@ impl Game<'_> {
                     self.boat_server_passes(id, &driven, &ticking, &round);
                     break 'boat;
                 }
-                let kind = if round.listening() {
+                let kind = if round.told_listening() {
                     self.boats[i].entity_type()
                 } else {
                     String::new()

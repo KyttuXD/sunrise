@@ -246,6 +246,68 @@ fn no_impact_expiration_retires_only_the_expired_owner() {
     });
 }
 
+struct EnableImpactOnArrowPre;
+
+#[mod_api::__subscriptions]
+impl Hooks for EnableImpactOnArrowPre {
+    fn register(&self, registrar: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        registrar.entity_tick_each("minecraft:arrow");
+    }
+
+    fn entity_tick_pre(&self, _: mod_api::HostSide<'_>, _: &mut mod_api::EntityTickPreEvent<'_>) {
+        assert!(mod_api::__private::set_mod_enabled(
+            "cancel-projectile-batch",
+            true
+        ));
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn impact_capture_observes_the_subscription_after_projectile_pre() {
+    let observed = Arc::new(Mutex::new(Observed::default()));
+    let mods = vec![
+        mod_api::ModEntry::new("enable-impact", Box::new(EnableImpactOnArrowPre)),
+        mod_api::ModEntry::new(
+            "cancel-projectile-batch",
+            Box::new(CancelImpacts(observed.clone())),
+        ),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::super::native_projectiles::impact_probe::with_impact_game(|game| {
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(2, 64, 0, stone).unwrap();
+            assert!(game.run_command(
+                "summon minecraft:arrow 0.5 64.5 0.5 {HasBeenShot:1b,NoGravity:1b,Motion:[3.0d,0.0d,0.0d]}"
+            ));
+            let id = game.creatures.projectiles[0].id;
+            game.ticked_entities_through = u32::MAX;
+            assert!(mod_api::__private::set_mod_enabled(
+                "cancel-projectile-batch",
+                false
+            ));
+            game.tick_projectiles().unwrap();
+            assert_eq!(observed.lock().unwrap().impacts, [id]);
+            let arrow = game
+                .creatures
+                .projectiles
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap();
+            assert!(
+                !arrow.stuck,
+                "the newly subscribed mod canceled the wall hit"
+            );
+        });
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn canceled_impacts_keep_projectile_batch_joins_and_survivor_order() {

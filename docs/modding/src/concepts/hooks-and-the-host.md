@@ -34,16 +34,26 @@ does not change that decision for the current tick.
 
 ## Entity tick hooks
 
-`entity_tick_pre` and `entity_tick_post` version 3 observe additional entity families, including
-server players, named projectiles, displays and other entities the server keeps without simulation.
-Whether a call represents one entity or a family depends on the tick route and the types named in
-registration. Keep cancellations within the current Pre call. The player connection body remains
-separate from the server-side entity tick, and the local client avatar is not observed by these hooks.
+`entity_tick_pre` and `entity_tick_post` observe entity ticks on both logical sides. Subscribe to either
+phase or both. Whether a call represents one entity or a family depends on the tick route and the types
+named in registration. A type named with `entity_tick_each` still gets its own Post when no mod listens
+to Pre. Keep cancellations within the current Pre call. The player connection body remains separate
+from the server-side entity tick, and these hooks do not observe the local client avatar.
+
+`living_equipment_change` is a server-side notification during equipment detection. Mobs report before
+AI and before their entity tick Post; canceling a mob's tick in Pre skips equipment detection. Connected
+players report from their body tick, not the level's entity tick.
 
 Removing a general entity during its own Pre skips its tick and Post. A passenger dismounted by that
 removal can still tick as a root if it is eligible, has not ticked, and its join-order slot is still ahead.
 The pass does not revisit an earlier slot. Canceling an entity's Pre does not by itself skip its passengers'
 ticks, though a listener can separately change the riding graph.
+
+## Projectile impacts
+
+Subscribe to the server-side `projectile_impact` hook directly. It runs for a hit before that hit applies
+its effects. A canceled impact does not discard the projectile. A flying bobber still stops against solid
+blocks and a rocket's normal lifetime still runs.
 
 ## Explosion membership
 

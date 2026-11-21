@@ -659,6 +659,29 @@ pub fn resume_after_breathing(
     })
 }
 
+/// Resume the living tick after its equipment change notice, with the current navigation owner.
+pub fn resume_after_equipment(
+    mobs: &mut JoinList<Mob>,
+    index: usize,
+    w: &MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    was_on_fire: bool,
+    events: &mut Vec<super::MobEvent>,
+    trample: &mut Option<super::ai::MobTrample>,
+) -> super::ai::TickProgress {
+    tick_with(mobs, index, w, level, events, |m, w, level, events| {
+        let progress = if m.removed {
+            super::ai::TickProgress::Complete(false)
+        } else {
+            super::ai::resume_after_equipment(m, w, level, events, was_on_fire, Some(trample))
+        };
+        if matches!(progress, super::ai::TickProgress::Complete(_)) {
+            super::neutral_anger::after_tick(m, w.game_time);
+        }
+        progress
+    })
+}
+
 /// Resume after the level applied (or refused) the paused landing.
 pub fn resume_after_trample(
     mobs: &mut JoinList<Mob>,

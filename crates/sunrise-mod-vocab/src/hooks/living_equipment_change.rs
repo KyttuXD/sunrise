@@ -9,24 +9,26 @@ pub trait Hooks {
     /// `EquipmentSlot` (`mainhand`, `offhand`, `feet`, `legs`, `chest`, `head`,
     /// `body`, `saddle`), `from` what the slot held when this was last heard
     /// (none for empty) and `to` what it holds now. Once for each slot that
-    /// changed, in that order, after the mobs' tick, so a mob that joins the
-    /// level wearing something counts from empty on its first tick. It only
-    /// hears: change the entity with its own helpers.
+    /// changed, in that order. For mobs this runs during their own living
+    /// tick, before AI and `entity_tick_post`; a mob canceled in
+    /// `entity_tick_pre` does not reach equipment detection. A mob that joins
+    /// wearing something counts from empty on its first living tick. This is
+    /// a notification, not a veto: change the entity with its own helpers.
     ///
-    /// Players are told the same way, once a tick, for the players connected
-    /// to the server (a dedicated server's, a published world's guests): a
-    /// player new to the level counts from empty, and the main hand is the
+    /// Connected players are told during their body tick (`ServerPlayer.doTick`),
+    /// before applying the new equipment modifiers. A player new to the level
+    /// counts from empty, and the main hand is the
     /// selected hotbar slot, so a hotbar selection or a pickup into the
     /// selected slot is a `mainhand` change. Only their six slots `mainhand`,
     /// `offhand`, `feet`, `legs`, `chest` and `head` are told: a player's
-    /// `body` and `saddle` slots are never told. Mobs and players are told
-    /// only while a mod sets `living_equipment_listened`. The world
-    /// host's own player, in single player or hosting a LAN world, isn't told
-    /// here: `on_equip` hears it. Server-side.
+    /// `body` and `saddle` slots are never told. The world host's own player, in
+    /// single player or hosting a LAN world, isn't told here: `on_equip` hears
+    /// it. Server-side. Subscribe to `living_equipment_change` directly.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_equipment_change",
         dispatch = "flat",
         side = "server",
+        version = 2,
         contract = "listen",
         neoforge = "LivingEquipmentChangeEvent",
         cancellable = false

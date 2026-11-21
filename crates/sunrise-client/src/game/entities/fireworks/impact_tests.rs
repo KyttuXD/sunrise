@@ -1,6 +1,8 @@
 //! Real rocket tick coverage for impact payloads and canceled explosions.
 use super::*;
-use crate::game::native_projectiles::impact_probe::{Action, point, with_probe};
+use crate::game::native_projectiles::impact_probe::{Action, point, with_impact_game, with_probe};
+use mod_api::{Flow, Hooks, ModEntry, ProjectileImpactEvent, ServerHost, VanillaGameEventEvent};
+use std::sync::{Arc, Mutex};
 use sunrise_client::mobs::Mob;
 
 fn launch(game: &mut Game<'_>, lifetime: i32) {
@@ -67,6 +69,71 @@ fn rocket_hits_report_geometry_and_cancellation_skips_the_explosion() {
             });
         }
     }
+}
+
+struct EnableImpactOnShot;
+
+#[mod_api::__subscriptions]
+impl Hooks for EnableImpactOnShot {
+    fn vanilla_game_event(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut VanillaGameEventEvent<'_>,
+    ) -> Flow {
+        if event.event == "minecraft:projectile_shoot" {
+            assert!(mod_api::__private::set_mod_enabled("rocket-impact", true));
+        }
+        Flow::Continue
+    }
+}
+
+struct CancelImpact(Arc<Mutex<Vec<u32>>>);
+
+#[mod_api::__subscriptions]
+impl Hooks for CancelImpact {
+    fn projectile_impact(
+        &self,
+        _: &mut dyn ServerHost,
+        event: &mut ProjectileImpactEvent<'_>,
+    ) -> Flow {
+        self.0.lock().unwrap().push(event.projectile);
+        Flow::Cancel
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_rocket_checks_impact_subscriptions_after_earlier_rockets_tick() {
+    let impacts = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![
+        ModEntry::new("rocket-shot", Box::new(EnableImpactOnShot)),
+        ModEntry::new("rocket-impact", Box::new(CancelImpact(impacts.clone()))),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_impact_game(|game| {
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(2, 64, 0, stone).unwrap();
+            let mut earlier = Rocket::remote(70, Vec3::new(0.5, 64.5, 4.5), Vec3::ZERO);
+            earlier.has_been_shot = false;
+            game.rockets.push(earlier);
+            launch(game, 100);
+            assert!(mod_api::__private::set_mod_enabled("rocket-impact", false));
+            game.tick_rockets();
+            assert_eq!(*impacts.lock().unwrap(), [71]);
+            assert_eq!(
+                game.rockets.len(),
+                2,
+                "the later rocket's impact was canceled"
+            );
+            assert_eq!(game.rockets[1].life, 1);
+        });
+    });
 }
 
 #[test]

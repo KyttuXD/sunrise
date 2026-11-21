@@ -369,16 +369,18 @@ impl Game<'_> {
                     .then(|| TickKind::Mob(self.mobs[i].kind.clone()))
             };
             if let Some(kind) = &alone {
-                let stamp = self.mobs.stamp();
-                let ticks = self.native_tick_pre_one(&mut round, id, kind.id());
-                if self.mobs.stamp() != stamp {
-                    places = Some(crate::game::native_ticks::places_of(
-                        self.mobs.iter().map(|m| m.id),
-                    ));
-                }
-                match crate::game::native_ticks::slot_place(&places, &slots, slot) {
-                    Some(at) if ticks => i = at,
-                    _ => continue,
+                if round.pre_listened() {
+                    let stamp = self.mobs.stamp();
+                    let ticks = self.native_tick_pre_one(&mut round, id, kind.id());
+                    if self.mobs.stamp() != stamp {
+                        places = Some(crate::game::native_ticks::places_of(
+                            self.mobs.iter().map(|m| m.id),
+                        ));
+                    }
+                    match crate::game::native_ticks::slot_place(&places, &slots, slot) {
+                        Some(at) if ticks => i = at,
+                        _ => continue,
+                    }
                 }
                 client_fluid_step(
                     &mut self.mobs[i],
@@ -640,7 +642,9 @@ impl Game<'_> {
                 self.remote_entity_section_step(section_id, section_from, section_to);
             }
             // Its own Post, right after its turn.
-            if let Some(kind) = &alone {
+            if round.post_listened()
+                && let Some(kind) = &alone
+            {
                 let stamp = self.mobs.stamp();
                 self.native_tick_post_one(&round, id, kind.id());
                 if self.mobs.stamp() != stamp {

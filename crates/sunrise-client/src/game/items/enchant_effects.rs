@@ -1287,28 +1287,32 @@ impl Game<'_> {
             return;
         }
         let id = stand.id;
-        let told: Vec<_> = (0..changed.len())
-            .filter(|&i| changed[i])
-            .map(|i| {
-                let slot = sunrise_items::equipment::SLOT_NAMES[i];
-                (
-                    slot,
-                    stand.enchantment_equipment[i].clone(),
-                    stand.equipment[i].clone(),
-                )
-            })
-            .collect();
+        let listen_equipment = self.is_logical_server()
+            && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange);
+        let told: Vec<_> = if listen_equipment {
+            (0..changed.len())
+                .filter(|&i| changed[i])
+                .map(|i| {
+                    let slot = sunrise_items::equipment::SLOT_NAMES[i];
+                    (
+                        slot,
+                        stand.enchantment_equipment[i].clone(),
+                        stand.equipment[i].clone(),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         stand.enchantment_equipment.clone_from(&stand.equipment);
-        if self.remote.is_none() && !self.options.execution_role.is_client() {
-            for (slot, from, to) in told {
-                self.native_living_equipment_change(
-                    id,
-                    "minecraft:armor_stand",
-                    slot,
-                    from.as_ref(),
-                    to.as_ref(),
-                );
-            }
+        for (slot, from, to) in told {
+            self.native_living_equipment_change(
+                id,
+                "minecraft:armor_stand",
+                slot,
+                from.as_ref(),
+                to.as_ref(),
+            );
         }
         let stand = &self.armor_stands[index];
         let at = [stand.position.x, stand.position.y, stand.position.z];

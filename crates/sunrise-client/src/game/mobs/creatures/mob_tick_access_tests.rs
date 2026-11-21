@@ -6,7 +6,7 @@ use crate::game::native_entity_refs::tests::with_game;
 use mod_api::{Despawn, EntityTickPreEvent, HostSide, ModEntry, ServerHost};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use sunrise_client::chunk::Chunk;
 
@@ -615,6 +615,108 @@ fn a_named_pre_cannot_clear_an_earlier_turns_cancellation() {
         phases,
         [("pre", vec![71]), ("pre", vec![72]), ("post", vec![72])]
     );
+}
+
+#[derive(Debug, PartialEq)]
+enum EquippedTurn {
+    Pre(u32),
+    Equipment(u32, [f64; 3]),
+    Post(u32),
+}
+
+#[derive(Default)]
+struct EquipmentTiming {
+    cancel_first: AtomicBool,
+    heard: Mutex<Vec<EquippedTurn>>,
+}
+
+struct EquipmentListener(Arc<EquipmentTiming>);
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for EquipmentListener {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.entity_tick_each("minecraft:pig");
+    }
+
+    fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+        let id = event.entities[0];
+        self.0.heard.lock().unwrap().push(EquippedTurn::Pre(id));
+        if id == 71 && self.0.cancel_first.load(Ordering::Relaxed) {
+            event.canceled.push(id);
+        }
+    }
+
+    fn living_equipment_change(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::LivingEquipmentChangeEvent<'_>,
+    ) {
+        assert_eq!(event.kind, "minecraft:pig");
+        assert_eq!(event.slot, "head");
+        assert!(event.from.is_none());
+        assert!(event.to.is_some());
+        let pos = host.entity(event.entity).unwrap().position(host).unwrap();
+        self.0
+            .heard
+            .lock()
+            .unwrap()
+            .push(EquippedTurn::Equipment(event.entity, pos));
+    }
+
+    fn entity_tick_post(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
+        self.0
+            .heard
+            .lock()
+            .unwrap()
+            .push(EquippedTurn::Post(event.entities[0]));
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn mob_equipment_is_told_during_each_uncanceled_living_tick() {
+    use EquippedTurn::{Equipment, Post, Pre};
+    use sunrise_items::equipment::HEAD;
+
+    let timing = Arc::new(EquipmentTiming::default());
+    let mods = vec![ModEntry::new(
+        "mob-equipment-order",
+        Box::new(EquipmentListener(timing.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            let helmet = ItemStack::new("minecraft:iron_helmet", 1);
+            for pig in &mut game.mobs {
+                assert!(pig.set_equipment_stack(HEAD, Some(helmet.clone())));
+                pig.no_ai = false;
+                pig.no_gravity = false;
+                pig.on_ground = false;
+                pig.velocity = Vec3::new(0.0, -0.5, 0.0);
+            }
+            timing.cancel_first.store(true, Ordering::Relaxed);
+            game.tick_creature_entities().unwrap();
+            assert_eq!(
+                std::mem::take(&mut *timing.heard.lock().unwrap()),
+                [Pre(71), Pre(72), Equipment(72, [2.0, 80.0, 0.5]), Post(72),]
+            );
+            assert_eq!(game.mobs[0].position.y, 80.0);
+            assert!(game.mobs[1].position.y < 80.0);
+
+            timing.cancel_first.store(false, Ordering::Relaxed);
+            game.tick_creature_entities().unwrap();
+            assert_eq!(
+                *timing.heard.lock().unwrap(),
+                [
+                    Pre(71),
+                    Equipment(71, [1.0, 80.0, 0.5]),
+                    Post(71),
+                    Pre(72),
+                    Post(72),
+                ]
+            );
+        });
+    });
 }
 
 /// With no type named, the mobs are told as one family: one Pre before the first tick, one

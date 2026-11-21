@@ -43,7 +43,6 @@ pub(in crate::game) struct Observed {
 
 struct Probe {
     action: Action,
-    hears: bool,
     observed: Arc<Observed>,
 }
 
@@ -89,41 +88,64 @@ impl Hooks for Probe {
     }
 }
 
+struct UnsubscribedProbe {
+    observed: Arc<Observed>,
+}
+
+#[mod_api::__subscriptions]
+impl Hooks for UnsubscribedProbe {
+    fn item_fished(&self, _: &mut dyn ServerHost, _: &mut mod_api::ItemFishedEvent<'_>) -> Flow {
+        self.observed.catches.fetch_add(1, Ordering::Relaxed);
+        Flow::Continue
+    }
+}
+
 /// Run a real server tick fixture with a live player and listener installed.
 pub(in crate::game) fn with_probe(
     action: Action,
-    hears: bool,
+    subscribed: bool,
     test: impl FnOnce(&mut Game<'_>, &Observed),
 ) {
     let observed = Arc::new(Observed::default());
-    let mods = vec![mod_api::ModEntry::new(
-        "impact-probe",
-        Box::new(Probe {
-            action,
-            hears,
-            observed: observed.clone(),
-        }),
-    )]
-    .into();
-    mod_platform::testing::with_mods(mods, || {
-        with_game(|game| {
-            game.options.dedicated = Some(Vec::new());
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
-            game.block_ticks
-                .add_empty_chunk(ChunkPos::new(0, 0))
-                .unwrap();
-            game.build_registries();
-            game.set_allow_commands(true);
-            assert!(game.run_command("forceload add 0 0"));
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)).unwrap());
-            bind_local_player(game, 7, 7);
-            game.selected = 0;
-            game.inventory[0] = Some(ItemStack::new("minecraft:fishing_rod", 1));
-            game.next_entity = 100;
-            test(game, &observed);
-        })
+    let entry = if subscribed {
+        mod_api::ModEntry::new(
+            "impact-probe",
+            Box::new(Probe {
+                action,
+                observed: observed.clone(),
+            }),
+        )
+    } else {
+        mod_api::ModEntry::new(
+            "impact-probe",
+            Box::new(UnsubscribedProbe {
+                observed: observed.clone(),
+            }),
+        )
+    };
+    let mods = vec![entry].into();
+    mod_platform::testing::with_mods(mods, || with_impact_game(|game| test(game, &observed)));
+}
+
+/// A server with a player and a forced chunk for real projectile ticks.
+pub(in crate::game) fn with_impact_game(test: impl FnOnce(&mut Game<'_>)) {
+    with_game(|game| {
+        game.options.dedicated = Some(Vec::new());
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        assert!(game.run_command("forceload add 0 0"));
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 8.5)).unwrap());
+        bind_local_player(game, 7, 7);
+        game.selected = 0;
+        game.inventory[0] = Some(ItemStack::new("minecraft:fishing_rod", 1));
+        game.next_entity = 100;
+        test(game);
     });
 }
 

@@ -54,7 +54,6 @@ impl Game<'_> {
         self.lan_menu_links_tick();
         self.lan_containers_tick();
         self.tick_lan_mount_menus();
-        self.native_players_equipment();
         self.announce_guest_advancements();
         let mut told = None;
         for &(conn, _) in &turns {
@@ -71,7 +70,10 @@ impl Game<'_> {
             else {
                 continue;
             };
-            if !canceled && round.alone_kind(crate::game::native_ticks::PLAYER) {
+            if !canceled
+                && round.post_listened()
+                && round.alone_kind(crate::game::native_ticks::PLAYER)
+            {
                 told = Some(host.hub.guests[gi].entity_id as u32);
             }
             // A player waiting for a teleport destination cannot dig there yet.
@@ -452,7 +454,22 @@ impl Game<'_> {
         }
         // LivingEntity.tick's detectEquipmentUpdates, part of the body: after the
         // item use above and before aiStep's travel and updatePlayerPose, so a new
-        // scale modifier rebuilds the box this tick.
+        // scale modifier rebuilds the box this tick. NeoForge posts the notice
+        // while collecting changes, before applying the new modifiers.
+        let gi = if body
+            && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+        {
+            self.native_player_equipment(conn);
+            let Some(gi) = self.lan.as_ref().and_then(|host| {
+                let gi = host.hub.guests.connection_index(conn)?;
+                host.hub.here(&host.hub.guests[gi]).then_some(gi)
+            }) else {
+                return;
+            };
+            gi
+        } else {
+            gi
+        };
         if body
             && let Some(host) = self.lan.as_mut()
             && {

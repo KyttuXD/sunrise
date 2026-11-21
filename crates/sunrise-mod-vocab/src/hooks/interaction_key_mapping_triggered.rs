@@ -20,15 +20,12 @@ pub trait Hooks {
     /// Covers arrows, tridents, thrown items, fireballs, wither skulls, wind
     /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
     /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
-    /// dragon or crystal. Heard only when a mod also sets
-    /// `hears_projectile_impacts`. Server-side. Version 2 adds bobbers and rockets;
-    /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
-    /// and `minecraft:firework_rocket`.
+    /// dragon or crystal. Server-side. Subscribe to `projectile_impact` directly.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_projectile_impact",
         dispatch = "api_carrier",
         side = "server",
-        version = 2,
+        version = 3,
         contract = "cancel",
         out = "canceled",
         neoforge = "ProjectileImpactEvent",

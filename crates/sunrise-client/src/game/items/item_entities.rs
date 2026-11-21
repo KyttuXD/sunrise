@@ -91,7 +91,7 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            if alone {
+            if alone && (round.pre_listened() || update_hook) {
                 let id = items[i].id;
                 let given =
                     self.give_items_back(items, &mut removed, &mut cells, &mut gone, i, |game| {
@@ -315,7 +315,7 @@ impl Game<'_> {
                     }
                 }
             }
-            if alone {
+            if alone && round.post_listened() {
                 let id = items[i].id;
                 let given =
                     self.give_items_back(items, &mut removed, &mut cells, &mut gone, i, |game| {
