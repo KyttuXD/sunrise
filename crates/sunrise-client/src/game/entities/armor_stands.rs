@@ -1009,7 +1009,10 @@ impl Game<'_> {
         let mut obstacles: Option<sunrise_client::entities::ObstacleGrid> = None;
         let mut nearby = Vec::new();
         for i in 0..self.armor_stands.len() {
-            let at = self.armor_stands[i].position;
+            let Some(stand) = self.armor_stands.get(i) else {
+                break;
+            };
+            let at = stand.position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
                 self.armor_stands[i].previous = at;
                 self.armor_stands[i].previous_yaw = self.armor_stands[i].yaw;
@@ -1019,7 +1022,9 @@ impl Game<'_> {
             // Entity.baseTick: the saved invulnerability window counts down
             // (#916).
             self.tick_saved_invulnerable_time(self.armor_stands[i].id);
-            self.armor_stand_location_effects(i, false);
+            let Some(mut i) = self.armor_stand_location_effects(i, false) else {
+                continue;
+            };
             // ArmorStand.travel: a marker or a NoGravity stand does not move.
             let travels = !self.armor_stands[i].marker && !self.armor_stands[i].no_gravity;
             if travels && obstacles.is_none() {
@@ -1100,7 +1105,10 @@ impl Game<'_> {
             // fallOn, then aiStep's applyEffectsFromBlocks (stepOn, then the
             // blocks it is inside).
             if landed {
-                self.armor_stand_location_effects(i, true);
+                let Some(index) = self.armor_stand_location_effects(i, true) else {
+                    continue;
+                };
+                i = index;
             }
             self.armor_stand_turtle_eggs(i, landed)?;
             if landed {

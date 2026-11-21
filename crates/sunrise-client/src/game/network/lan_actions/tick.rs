@@ -54,7 +54,6 @@ impl Game<'_> {
         self.lan_menu_links_tick();
         self.lan_containers_tick();
         self.tick_lan_mount_menus();
-        self.native_players_equipment();
         self.announce_guest_advancements();
         let mut told = None;
         for &(conn, _) in &turns {
@@ -349,9 +348,10 @@ impl Game<'_> {
         if host.hub.guests[gi].dead
             || (host.hub.guests[gi].health <= 0.0 && host.hub.guests[gi].death_canceled)
         {
-            // LivingEntity.baseTick's tickDeath is part of the body vanilla skips.
+            // LivingEntity still detects equipment changes during the death ticks.
             if body {
                 self.guest_tick_death(gi);
+                self.native_player_equipment(conn);
             }
             if let Some(host) = self.lan.as_ref() {
                 refresh_building_player(host, conn);
@@ -456,6 +456,19 @@ impl Game<'_> {
         // LivingEntity.tick's detectEquipmentUpdates, part of the body: after the
         // item use above and before aiStep's travel and updatePlayerPose, so a new
         // scale modifier rebuilds the box this tick.
+        let gi = if body {
+            self.native_player_equipment(conn);
+            // The listener may have removed or moved a player.
+            let Some(gi) = self.lan.as_ref().and_then(|host| {
+                let gi = host.hub.guests.connection_index(conn)?;
+                host.hub.here(&host.hub.guests[gi]).then_some(gi)
+            }) else {
+                return;
+            };
+            gi
+        } else {
+            gi
+        };
         if body
             && let Some(host) = self.lan.as_mut()
             && {

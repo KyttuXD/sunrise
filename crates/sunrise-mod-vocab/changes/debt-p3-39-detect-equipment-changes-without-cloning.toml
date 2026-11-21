@@ -1,0 +1,23 @@
+ids = [
+    "hook:living_equipment_change",
+    "hook:living_equipment_change.entity",
+    "hook:living_equipment_change.kind",
+    "hook:living_equipment_change.slot",
+    "hook:living_equipment_change.from",
+    "hook:living_equipment_change.to",
+    "method:Hooks::living_equipment_change",
+    "type:LivingEquipmentChangeEvent",
+    "type:LivingEquipmentChangeEvent.entity",
+    "type:LivingEquipmentChangeEvent.kind",
+    "type:LivingEquipmentChangeEvent.slot",
+    "type:LivingEquipmentChangeEvent.from",
+    "type:LivingEquipmentChangeEvent.to",
+]
+why = "Follow vanilla 26.3 LivingEntity.detectEquipmentUpdates, collectEquipmentChanges, handleEquipmentChanges and PlayerEquipment.get, and NeoForge's LivingEquipmentChangeEvent in collectEquipmentChanges. Read equipment by borrow and copy only a changed stack into the history needed for the next tick. Let listeners borrow the affected living handle and both stacks without converting their component patches. Observe connected players in ServerPlayer.doTick, in vanilla equipment slot order, including Body and Saddle."
+migrate = '''
+Keep implementing `Hooks::living_equipment_change` and rebuild against version 3 of the hook.
+- `event.entity` now gives a `LivingRef` instead of a raw integer. Use `event.entity.id()` for the old ID, or `event.entity` directly where you formerly resolved it with `host.entity(id)` followed by `host.living(entity)`.
+- Replace the removed `event.kind` with `event.entity.entity().kind(host)` for the entity's typed registry key, or `event.entity.entity().kind(host).and_then(|key| key.id(host))` for its optional canonical name.
+- Replace comparisons with `"mainhand"`, `"offhand"`, `"feet"`, `"legs"`, `"chest"`, `"head"`, `"body"` and `"saddle"` with `EquipmentSlot::{MainHand, OffHand, Feet, Legs, Chest, Head, Body, Saddle}`, respectively. Connected players may now report `Body` and `Saddle` too.
+- `event.from` and `event.to` are now `Option<&ItemStackView<'_>>`. Use `event.to.map(|stack| stack.count())`, for example, to read a scalar, or `event.to.and_then(ItemStackView::project)` to read components or keep an owned stack. Use the same calls on `from`; `None` still denotes an empty slot.
+'''

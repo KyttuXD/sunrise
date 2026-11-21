@@ -35,7 +35,7 @@ fn armor_index(slot: EquipmentSlot) -> Option<usize> {
 }
 
 /// A player's stack in `slot`, from its inventory, armour and off hand.
-fn player_slot<'a>(
+pub(super) fn player_slot<'a>(
     inventory: &'a [Option<ItemStack>],
     selected: usize,
     armor: &'a [Option<ItemStack>; 4],

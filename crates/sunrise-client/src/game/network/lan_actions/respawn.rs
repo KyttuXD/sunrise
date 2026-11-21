@@ -41,7 +41,7 @@ impl Game<'_> {
             return;
         };
         // PlayerList.respawn builds a new `ServerPlayer`, whose `lastEquipmentItems` starts
-        // empty: the mods hear each worn item again from empty (`native_players_equipment`).
+        // empty: the mods hear each worn item again from empty on the new player's tick.
         if let Some(play) = host.play.get_mut(&conn) {
             play.equipment_heard = None;
             play.inventory_heard = None;

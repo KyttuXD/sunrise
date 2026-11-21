@@ -42,8 +42,9 @@ its own Post when no mod listens to Pre. Keep cancellations within the current P
 connection body remains separate from the server-side entity tick, and these hooks do not observe the local
 client avatar.
 
-`living_equipment_change` is a server-side notification. For a mob, it fires during equipment detection in
-its own living tick, before AI and Post. Canceling that tick in Pre also skips its equipment detection.
+`living_equipment_change` is a server-side notification during equipment detection, before a mob's AI
+or a connected player's `player_tick_post`. Canceling a mob's tick in Pre skips its detection. The event lends the living
+handle and the changed slot's two stacks; see [equipment changes](../how-to/entities/entity-hooks.md#observing-equipment-changes).
 
 Removing a general entity during its own Pre skips its tick and Post. A passenger dismounted by that
 removal can still tick as a root if it is eligible, has not ticked, and its join-order slot is still ahead.

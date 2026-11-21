@@ -29,11 +29,8 @@ impl Hooks for Counter {
         self.0.lock().unwrap().push((
             event.entity.id(),
             event.slot,
-            event
-                .from
-                .as_ref()
-                .and_then(mod_api::ItemStackView::project),
-            event.to.as_ref().and_then(mod_api::ItemStackView::project),
+            event.from.and_then(mod_api::ItemStackView::project),
+            event.to.and_then(mod_api::ItemStackView::project),
         ));
     }
 }
@@ -57,11 +54,12 @@ fn a_stands_body_and_saddle_writes_are_told_once_each() {
             stand.equipment[BODY] = Some(body.clone());
             stand.equipment[SADDLE] = Some(saddle.clone());
             stand.equipment[HEAD] = Some(helmet.clone());
-            game.armor_stand_location_effects(0, false);
-            // Moving or landing later copies nothing unreported.
-            game.armor_stand_location_effects(0, true);
+            assert_eq!(game.armor_stand_location_effects(0, false), Some(0));
             game.armor_stands[0].equipment[BODY] = None;
-            game.armor_stand_location_effects(0, false);
+            // Landing is not another equipment check; the next tick reports the removal.
+            assert_eq!(game.armor_stand_location_effects(0, true), Some(0));
+            assert_eq!(heard.lock().unwrap().len(), 3);
+            assert_eq!(game.armor_stand_location_effects(0, false), Some(0));
             let heard = heard.lock().unwrap();
             let told: Vec<_> = heard
                 .iter()

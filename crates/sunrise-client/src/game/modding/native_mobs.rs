@@ -5,62 +5,154 @@
 //! as `native_set_block` does: another one is refused. While the game ticks its
 //! mobs they are out of the level: a mob a hook spawns then joins it after the
 //! tick, and the others read as gone.
+use super::api_values::{project_stack, stack_read_metadata};
+use super::native_living_refs::player_slot;
+use super::native_ticks::place;
 use super::{Game, commands::Target};
+use mod_api::{EntityRef, EquipmentSlot, HookId, ItemStackView, LivingRef};
+use sunrise_client::mobs::finalize::{EquipmentRead, equipment_slot};
+use sunrise_items::equipment::Equipment;
+use sunrise_items::items::ItemStack;
 
 impl Game<'_> {
-    /// `LivingEntity.collectEquipmentChanges` for the server's players (they are living entities
-    /// too): each slot whose stack differs from what the mods last heard is told, the previous
-    /// stack with it, so a hotbar selection that moves the main hand counts. A player new to the
-    /// level counts from empty, as for mobs, and only while an enabled mod subscribes.
-    pub(super) fn native_players_equipment(&mut self) {
+    /// `LivingEntity.collectEquipmentChanges`: compare in slot order and lend
+    /// each difference before looking at the next slot. `read` returns `None`
+    /// if the subject has left, or `Some(None)` for a slot that is empty.
+    /// Only the new historical value is owned across dispatch: the callback
+    /// borrows it and the previous value, even if it edits the live subject.
+    pub(super) fn observe_equipment(
+        &mut self,
+        living: Option<LivingRef>,
+        history: &mut Option<Box<Equipment>>,
+        mut read: impl for<'g> FnMut(&'g Self, EquipmentSlot) -> Option<Option<EquipmentRead<'g>>>,
+    ) -> [bool; EquipmentSlot::ALL.len()] {
+        let mut changed = [false; EquipmentSlot::ALL.len()];
+        for slot in EquipmentSlot::ALL {
+            let index = slot as usize;
+            let Some(current) = read(self, slot) else {
+                break;
+            };
+            let previous = history.as_deref().and_then(|worn| worn.get(index));
+            if EquipmentRead::matches(current.as_ref(), previous) {
+                continue;
+            }
+            changed[index] = true;
+            let current = current.map(|stack| stack.project().into_owned());
+            if let Some(living) = living {
+                self.dispatch_living_equipment_change(living, slot, previous, current.as_ref());
+            }
+            history.get_or_insert_with(Default::default)[index] = current;
+        }
+        if history.as_deref().is_some_and(Equipment::is_empty) {
+            *history = None;
+        }
+        changed
+    }
+
+    /// Lend the retained stacks using the held-stack API's lazy projection.
+    fn dispatch_living_equipment_change(
+        &mut self,
+        entity: LivingRef,
+        slot: EquipmentSlot,
+        from: Option<&ItemStack>,
+        to: Option<&ItemStack>,
+    ) {
+        let report = |error: &super::api_values::StackReadError| {
+            log::warn!(
+                "living_equipment_change for entity {} in {slot:?}: {error:?}",
+                entity.id(),
+            );
+        };
+        let metadata = |stack: Option<&ItemStack>| stack.map(stack_read_metadata).transpose();
+        let (from_metadata, to_metadata) = match (metadata(from), metadata(to)) {
+            (Ok(from), Ok(to)) => (from, to),
+            (Err(error), _) | (_, Err(error)) => {
+                report(&error);
+                return;
+            }
+        };
+        let project_from = |metadata| project_stack(from?, metadata).inspect_err(report).ok();
+        let project_to = |metadata| project_stack(to?, metadata).inspect_err(report).ok();
+        let from_view =
+            from_metadata.map(|metadata| ItemStackView::resident(metadata, &project_from));
+        let to_view = to_metadata.map(|metadata| ItemStackView::resident(metadata, &project_to));
+        self.native_living_equipment_change(mod_api::__private::LivingEquipmentChangeCall {
+            entity,
+            slot,
+            from: from_view.as_ref(),
+            to: to_view.as_ref(),
+        });
+    }
+
+    /// A mob paused its living tick at the first difference. The live row is
+    /// back in the level; only changed slots need to be copied into history.
+    pub(super) fn native_mob_equipment(
+        &mut self,
+        id: u32,
+        mut index: usize,
+        history: &mut Option<Box<Equipment>>,
+    ) {
+        let Some(epoch) = self.native_lifecycle.epoch() else {
+            return;
+        };
+        let living = LivingRef::new(EntityRef::new(epoch, id));
+        self.observe_equipment(Some(living), history, |game, slot| {
+            index = place(&game.mobs, index, |m| m.id == id && !m.removed)?;
+            Some(equipment_slot(&game.mobs[index], slot))
+        });
+    }
+
+    /// A connected player's `LivingEntity.detectEquipmentUpdates` during its
+    /// connection's living tick. Read the selected inventory slot as `MainHand` and
+    /// the rest through the same slot lookup as `LivingRef::with_equipment`.
+    pub(super) fn native_player_equipment(&mut self, conn: u32) {
         if self.remote.is_some()
             || self.options.execution_role.is_client()
-            || !mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+            || !mod_api::__private::enabled_listened(HookId::LivingEquipmentChange)
         {
             return;
         }
+        let Some(epoch) = self.native_lifecycle.epoch() else {
+            return;
+        };
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        let mut changes = Vec::new();
-        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
-            let now: [Option<crate::items::ItemStack>; 6] = [
-                g.inventory.get(g.selected).cloned().flatten(),
-                g.offhand.clone(),
-                g.armor[3].clone(),
-                g.armor[2].clone(),
-                g.armor[1].clone(),
-                g.armor[0].clone(),
-            ];
-            let Some(play) = host.play.get_mut(&g.conn) else {
-                continue;
-            };
-            let heard = play.equipment_heard.get_or_insert_with(Default::default);
-            if **heard == now {
-                continue;
-            }
-            for (slot, name) in PLAYER_SLOTS.into_iter().enumerate() {
-                if now[slot] != heard[slot] {
-                    let from = heard[slot].take();
-                    changes.push((g.entity_id as u32, name, from, now[slot].clone()));
-                }
-            }
-            **heard = now;
-        }
-        for (id, slot, from, to) in changes {
-            self.native_living_equipment_change(
-                id,
-                "minecraft:player",
-                slot,
-                from.as_ref(),
-                to.as_ref(),
-            );
+        let Some(guest) = host.hub.guest(conn).filter(|g| host.hub.here(g)) else {
+            return;
+        };
+        let id = guest.entity_id;
+        let Some(play) = host.play.get_mut(&conn) else {
+            return;
+        };
+        let mut history = play.equipment_heard.take();
+        let living = LivingRef::new(EntityRef::new(epoch, id as u32));
+        self.observe_equipment(Some(living), &mut history, |game, slot| {
+            let host = game.lan.as_ref()?;
+            let guest = host
+                .hub
+                .guest(conn)
+                .filter(|g| g.entity_id == id && host.hub.here(g))?;
+            Some(
+                player_slot(
+                    &guest.inventory,
+                    guest.selected,
+                    &guest.armor,
+                    &guest.offhand,
+                    &guest.equipment,
+                    slot,
+                )
+                .map(EquipmentRead::resident),
+            )
+        });
+        if let Some(host) = self.lan.as_mut()
+            && host.hub.guest(conn).is_some_and(|g| g.entity_id == id)
+            && let Some(play) = host.play.get_mut(&conn)
+        {
+            play.equipment_heard = history;
         }
     }
 }
-
-/// The `EquipmentSlot` names of a player's equipment, in the order of `native_players_equipment`.
-const PLAYER_SLOTS: [&str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
 
 /// A mob as a native mod reads it.
 #[derive(Clone, Debug, PartialEq)]

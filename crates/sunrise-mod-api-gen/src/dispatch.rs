@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -946,7 +947,8 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener || isolated_collect || isolated_listen
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -1255,6 +1257,12 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_listen => (
+                String::new(),
+                format!(
+                    "for (mod_id, {mod_item}) in super::entered_with_id(HookId::{hook_id}, \"{name}\") {{ if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} {local_event} super::runtime::call_isolated_observer(HookId::{hook_id}, mod_id, \"{name}\", contained, || {mod_item}.{name}({invoke})); }}"
+                ),
+            ),
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.
@@ -1347,7 +1355,7 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
+        let early_return = if isolated_listen || body.contains("refusable(") {
             format!("{early_return} let contained = super::runtime::outside_world();")
         } else {
             early_return

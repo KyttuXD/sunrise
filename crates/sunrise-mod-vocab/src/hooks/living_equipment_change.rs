@@ -2,44 +2,35 @@
 // catalog-order: 0157
 
 pub trait Hooks {
-    /// A mob's, an armor stand's or a player's equipment slot took a different
-    /// stack (NeoForge's `LivingEquipmentChangeEvent`, posted in
-    /// `LivingEntity.collectEquipmentChanges`): `entity` is its ID and `kind`
-    /// its type (`minecraft:zombie`, `minecraft:player`), `slot` the
-    /// `EquipmentSlot` (`mainhand`, `offhand`, `feet`, `legs`, `chest`, `head`,
-    /// `body`, `saddle`), `from` what the slot held when this was last heard
-    /// (none for empty) and `to` what it holds now. Once for each slot that
-    /// changed, in that order. For mobs this runs during their own living
-    /// tick, before AI and `entity_tick_post`; a mob canceled in
-    /// `entity_tick_pre` does not reach equipment detection. A mob that joins
-    /// wearing something counts from empty on its first living tick. This is
-    /// a notification, not a veto: change the entity with its own helpers.
+    /// NeoForge's `LivingEquipmentChangeEvent`, at `LivingEntity.collectEquipmentChanges`.
+    /// This server-side notification runs for each equipment slot that differs from the
+    /// last tick's observation; a newly joined or respawned entity counts from empty.
+    /// `entity` is the affected [`LivingRef`], `slot` is the [`EquipmentSlot`], and
+    /// `from` and `to` lend the old and new stacks as [`ItemStackView`]s (`None` for
+    /// an empty slot). Call [`ItemStackView::project`] only to read components or
+    /// keep an owned copy. To find the entity's type, use `entity.entity().kind(host)`.
     ///
-    /// Players are told the same way, once a tick, for the players connected
-    /// to the server (a dedicated server's, a published world's guests): a
-    /// player new to the level counts from empty, and the main hand is the
-    /// selected hotbar slot, so a hotbar selection or a pickup into the
-    /// selected slot is a `mainhand` change. Only their six slots `mainhand`,
-    /// `offhand`, `feet`, `legs`, `chest` and `head` are told: a player's
-    /// `body` and `saddle` slots are never told. The world host's own player, in
-    /// single player or hosting a LAN world, isn't told here: `on_equip` hears
-    /// it. Server-side. Version 2 fires whenever a mod subscribes to
-    /// `living_equipment_change` directly (the separate
-    /// `living_equipment_listened` opt-in poll hook is removed).
+    /// Mobs are checked during their living tick before AI; connected players are
+    /// checked in the living tick of `ServerPlayer.doTick`, before `player_tick_post`. A
+    /// mob canceled in `entity_tick_pre` does not reach detection. Mobs, armor stands and connected players use all
+    /// equipment slots in vanilla order, including `Body` and `Saddle`. A player's
+    /// `MainHand` is the selected hotbar stack. The host's own local player, where
+    /// simulated outside the connected-player path, is still heard by `on_equip`.
+    /// This is a notification, not a veto; change living equipment through its handle.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_equipment_change",
-        dispatch = "flat",
+        dispatch = "api_carrier",
         side = "server",
-        version = 2,
+        version = 3,
         contract = "listen",
+        isolate = true,
         neoforge = "LivingEquipmentChangeEvent",
         cancellable = false
     )]
     fn living_equipment_change(
-        entity: u32,
-        kind: &str,
-        slot: &str,
-        from: Option<&ItemStack>,
-        to: Option<&ItemStack>,
+        entity: LivingRef,
+        slot: EquipmentSlot,
+        from: Option<&ItemStackView<'_>>,
+        to: Option<&ItemStackView<'_>>,
     );
 }

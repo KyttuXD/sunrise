@@ -1111,19 +1111,11 @@ pub enum Pause {
     /// Changed equipment, before sleeping and `aiStep`.
     Equipment {
         entity: u32,
-        kind: std::sync::Arc<super::MobType>,
-        changes: Vec<EquipmentChange>,
+        history: Option<Box<sunrise_items::equipment::Equipment>>,
         was_on_fire: bool,
     },
     /// The caller's trample slot holds the continuation.
     Trample,
-}
-
-#[derive(Debug)]
-pub struct EquipmentChange {
-    pub slot: EquipmentSlot,
-    pub from: Option<ItemStack>,
-    pub to: Option<ItemStack>,
 }
 
 #[derive(Debug)]
@@ -1348,37 +1340,23 @@ fn after_base_tick(
     // Only a pausable tick can give the live mob back to its owner for dispatch.
     if trample.is_some()
         && w.loop_context.side() == LoopSide::Server
-        && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
         && !(m.extra.equipment.is_empty() && m.extra.equipment_heard.is_none())
-    {
-        let now = m.equipment_stacks();
-        let mut changes = Vec::new();
-        for (slot, to) in EquipmentSlot::ALL.into_iter().zip(now) {
-            let index = slot as usize;
-            let from = m
+        && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+        && EquipmentSlot::ALL.into_iter().any(|slot| {
+            let current = super::finalize::equipment_slot(m, slot);
+            let previous = m
                 .extra
                 .equipment_heard
                 .as_deref()
-                .and_then(|worn| worn.get(index));
-            let same = match (from, to.as_ref()) {
-                (Some(from), Some(to)) => from.matches(to),
-                (None, None) => true,
-                _ => false,
-            };
-            if !same {
-                let heard = m.extra.equipment_heard.get_or_insert_with(Default::default);
-                let from = std::mem::replace(&mut heard[index], to.clone());
-                changes.push(EquipmentChange { slot, from, to });
-            }
-        }
-        if !changes.is_empty() {
-            return TickProgress::Paused(Pause::Equipment {
-                entity: m.id,
-                kind: m.kind.clone(),
-                changes,
-                was_on_fire,
-            });
-        }
+                .and_then(|worn| worn.get(slot as usize));
+            !super::finalize::EquipmentRead::matches(current.as_ref(), previous)
+        })
+    {
+        return TickProgress::Paused(Pause::Equipment {
+            entity: m.id,
+            history: m.extra.equipment_heard.take(),
+            was_on_fire,
+        });
     }
     resume_after_equipment(m, w, level, events, was_on_fire, trample)
 }

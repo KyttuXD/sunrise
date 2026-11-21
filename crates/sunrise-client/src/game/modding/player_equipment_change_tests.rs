@@ -32,11 +32,8 @@ impl Hooks for Counter {
             event.entity.id(),
             event.entity.entity().kind(host),
             event.slot,
-            event
-                .from
-                .as_ref()
-                .and_then(mod_api::ItemStackView::project),
-            event.to.as_ref().and_then(mod_api::ItemStackView::project),
+            event.from.and_then(mod_api::ItemStackView::project),
+            event.to.and_then(mod_api::ItemStackView::project),
         ));
     }
 }
@@ -99,7 +96,7 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
         let sword = ItemStack::new("minecraft:iron_sword", 1);
         let stone = ItemStack::new("minecraft:stone", 1);
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
-        // Both guests start empty-handed in slot 0: counting from empty, nothing changed.
+        // The guest starts empty-handed in slot 0: counting from empty, nothing changed.
         game.native_player_equipment(12);
         assert_eq!(take(heard), Heard::new());
 
@@ -140,6 +137,106 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
         // A tick with no change tells nothing.
         game.native_player_equipment(12);
         assert_eq!(take(heard), Heard::new());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_players_body_and_saddle_are_observed_during_its_tick() {
+    use sunrise_items::equipment::{BODY, SADDLE};
+
+    with_counter(true, |game, heard| {
+        let body = ItemStack::new("minecraft:iron_horse_armor", 1);
+        let saddle = ItemStack::new("minecraft:saddle", 1);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.equipment[BODY] = Some(body);
+            g.equipment[SADDLE] = Some(saddle);
+        });
+        let expected =
+            |id, count| mod_api::ItemStack::new(mod_api::__private::item_key(id).unwrap(), count);
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            [
+                player(
+                    EquipmentSlot::Body,
+                    None,
+                    expected("minecraft:iron_horse_armor", 1)
+                ),
+                player(EquipmentSlot::Saddle, None, expected("minecraft:saddle", 1)),
+            ]
+            .concat(),
+        );
+        game.tick_guests();
+        assert!(take(heard).is_empty());
+
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.equipment[BODY] = None;
+            g.equipment[SADDLE] = None;
+        });
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            [
+                player(
+                    EquipmentSlot::Body,
+                    expected("minecraft:iron_horse_armor", 1),
+                    None
+                ),
+                player(EquipmentSlot::Saddle, expected("minecraft:saddle", 1), None),
+            ]
+            .concat(),
+        );
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .equipment_heard
+                .is_none()
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_equipment_listener_panic_does_not_stop_other_listeners_or_repeat() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fault(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Fault {
+        fn living_equipment_change(
+            &self,
+            _: &mut dyn ServerHost,
+            _: &mut LivingEquipmentChangeEvent<'_>,
+        ) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            panic!("equipment observer fault");
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let heard = Arc::new(Mutex::new(Heard::new()));
+    let mods = vec![
+        mod_api::ModEntry::new("equipment-fault", Box::new(Fault(calls.clone()))),
+        mod_api::ModEntry::new(
+            "equipment-witness",
+            Box::new(Counter {
+                heard: heard.clone(),
+            }),
+        ),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_guests(|game| {
+            game.lan.as_mut().unwrap().play.entry(12).or_default();
+            for id in ["minecraft:stone", "minecraft:dirt"] {
+                game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                    g.inventory[0] = Some(ItemStack::new(id, 1));
+                });
+                game.native_player_equipment(12);
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(take(&heard).len(), 2);
+        });
     });
 }
 

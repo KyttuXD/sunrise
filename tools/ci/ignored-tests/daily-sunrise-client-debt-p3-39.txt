@@ -1,0 +1,2 @@
+sunrise-client game::player_equipment_change_tests::a_players_body_and_saddle_are_observed_during_its_tick lib daily resources
+sunrise-client game::player_equipment_change_tests::an_equipment_listener_panic_does_not_stop_other_listeners_or_repeat lib daily resources

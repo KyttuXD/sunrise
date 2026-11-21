@@ -34,6 +34,32 @@ Use `project()` when you need components or an owned stack after the callback. F
 server-side attacker's live weapon, use `with_weapon_item`; for the weapon recorded by a
 projectile, see [Death sources and weapons](../items/death-loot-context.md).
 
+## Observing equipment changes
+
+Implement `Hooks::living_equipment_change` to hear each changed slot during the server entity's tick.
+`LivingEquipmentChangeEvent` lends a `LivingRef`, a typed `EquipmentSlot`, and the `from` and `to`
+`ItemStackView`s. An empty slot is `None`. Newly joined or respawned entities are compared against
+empty slots. A player's `MainHand` comes from the selected hotbar slot. Switching to an identical
+stack does not fire the event; changing the item, count, or components does.
+
+```rust,ignore
+fn living_equipment_change(
+    &self,
+    host: &mut dyn ServerHost,
+    event: &mut LivingEquipmentChangeEvent<'_>,
+) {
+    if event.slot == EquipmentSlot::MainHand {
+        let kind = event.entity.entity().kind(host);
+        let before = event.from.map(|stack| stack.count());
+        let after = event.to.map(|stack| stack.count());
+        // Use the kind and counts without copying either stack's components.
+    }
+}
+```
+
+Use `project()` if you need components or an owned value beyond the callback. Replacing the loan in
+the event does not change equipment; use `event.entity.set_equipment(host, slot, stack)` for a write.
+
 ## Checking an entity's tags
 
 In a server hook that gives you an entity and a host, use

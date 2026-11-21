@@ -172,6 +172,10 @@ pub fn isolated_failures() -> u64 {
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     let (entered, trapped) = LISTENER_SERIAL.get();
     LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    disable_listener(hook, id);
+}
+
+fn disable_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -446,6 +450,27 @@ pub(crate) fn refusable<T>(
         )
     } else {
         Ok(call())
+    }
+}
+
+/// An observer has no result to undo. Disable only this listener on a panic;
+/// a normal phase refusal still reports every time and does not disable it.
+pub(crate) fn call_isolated_observer(
+    hook_id: generated::HookId,
+    mod_id: &'static str,
+    hook: &'static str,
+    contained: bool,
+    call: impl FnOnce(),
+) {
+    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    match contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => refusal.report_each(),
+        Err(message) => {
+            disable_listener(hook_id, mod_id);
+            log::error!("mod {mod_id} hook {hook} panicked and was disabled: {message}");
+            record_callback_panic(mod_id, "hook", hook, message);
+        }
     }
 }
 

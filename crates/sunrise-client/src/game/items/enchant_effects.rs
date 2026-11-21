@@ -1275,45 +1275,49 @@ impl Game<'_> {
     /// `LivingEntity.onChangedBlock`, landing and `collectEquipmentChanges`
     /// for an armor stand: run location effects before travel (including a
     /// piston push), on landing, and for newly equipped items.
-    pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+    pub(super) fn armor_stand_location_effects(
+        &mut self,
+        mut index: usize,
+        landed: bool,
+    ) -> Option<usize> {
+        use super::native_ticks::place;
+        use sunrise_client::mobs::finalize::EquipmentRead;
+
         let stand = &mut self.armor_stands[index];
+        let id = stand.id;
         let block = BlockPos::containing(stand.position);
         let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
-        // `collectEquipmentChanges` walks every `EquipmentSlot`, body and
-        // saddle included; only the six slots below wear enchantments.
-        let changed: [bool; 8] =
-            std::array::from_fn(|i| stand.equipment[i] != stand.enchantment_equipment[i]);
-        if !moved && !landed && !changed.iter().any(|c| *c) {
-            return;
-        }
-        let id = stand.id;
-        let listen_equipment = self.remote.is_none()
-            && !self.options.execution_role.is_client()
-            && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange);
-        let told: Vec<_> = if listen_equipment {
-            (0..changed.len())
-                .filter(|&i| changed[i])
-                .map(|i| {
-                    let slot = sunrise_items::equipment::SLOT_NAMES[i];
-                    (
-                        slot,
-                        stand.enchantment_equipment[i].clone(),
-                        stand.equipment[i].clone(),
+        // Landing runs location effects, not a second `detectEquipmentUpdates`.
+        let changed =
+            if landed || (stand.equipment.is_empty() && stand.enchantment_equipment.is_none()) {
+                [false; mod_api::EquipmentSlot::ALL.len()]
+            } else {
+                let mut history = stand.enchantment_equipment.take();
+                let living = if self.remote.is_none()
+                    && !self.options.execution_role.is_client()
+                    && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+                {
+                    self.native_lifecycle
+                        .epoch()
+                        .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id)))
+                } else {
+                    None
+                };
+                let changed = self.observe_equipment(living, &mut history, |game, slot| {
+                    index = place(&game.armor_stands, index, |s| s.id == id)?;
+                    Some(
+                        game.armor_stands[index]
+                            .equipment
+                            .get(slot as usize)
+                            .map(EquipmentRead::resident),
                     )
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        stand.enchantment_equipment.clone_from(&stand.equipment);
-        for (slot, from, to) in told {
-            self.native_living_equipment_change(
-                id,
-                "minecraft:armor_stand",
-                slot,
-                from.as_ref(),
-                to.as_ref(),
-            );
+                });
+                index = place(&self.armor_stands, index, |s| s.id == id)?;
+                self.armor_stands[index].enchantment_equipment = history;
+                changed
+            };
+        if !moved && !landed && !changed.iter().any(|c| *c) {
+            return Some(index);
         }
         let stand = &self.armor_stands[index];
         let at = [stand.position.x, stand.position.y, stand.position.z];
@@ -1355,6 +1359,7 @@ impl Game<'_> {
         for (effect, level) in disks {
             self.replace_disk(&effect, level, at, who);
         }
+        place(&self.armor_stands, index, |s| s.id == id)
     }
     /// `ReplaceDisk.apply`: the blocks of the disk around `at` that pass the
     /// predicate become the effect's state, and each placement is a game event.

@@ -576,7 +576,12 @@ impl Game<'_> {
                                 &mut trample,
                             )
                         }
-                        Some(Pause::Equipment { was_on_fire, .. }) => {
+                        Some(Pause::Equipment {
+                            history,
+                            was_on_fire,
+                            ..
+                        }) => {
+                            mobs[i].extra.equipment_heard = history;
                             sunrise_client::mobs::riders::resume_after_equipment(
                                 &mut mobs,
                                 i,
@@ -877,7 +882,7 @@ impl Game<'_> {
                 }
                 if let Some(id) = retry_rider {
                     self.dismount_mob(id);
-                } else if let Some(paused) = pause.as_ref() {
+                } else if let Some(paused) = pause.as_mut() {
                     match paused {
                         Pause::Consumption { decision, .. } => {
                             self.apply_fox_consumption(decision);
@@ -886,20 +891,9 @@ impl Game<'_> {
                             air_answer = self.ask_mob_breath(air);
                         }
                         Pause::Equipment {
-                            entity,
-                            kind,
-                            changes,
-                            ..
+                            entity, history, ..
                         } => {
-                            for change in changes {
-                                self.native_living_equipment_change(
-                                    *entity,
-                                    &kind.id,
-                                    sunrise_items::equipment::SLOT_NAMES[change.slot as usize],
-                                    change.from.as_ref(),
-                                    change.to.as_ref(),
-                                );
-                            }
+                            self.native_mob_equipment(*entity, cursor, history);
                         }
                         Pause::Trample => {
                             let trample = trample.as_ref().expect("the trample pause was stored");

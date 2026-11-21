@@ -65,9 +65,8 @@ pub(super) struct GuestPlay {
     pub(super) mount_window: Option<super::lan_mount_menu::GuestMount>,
     /// The lectern the guest reads (game/network/lan_stations.rs).
     pub(super) lectern: Option<super::lan_stations::GuestLectern>,
-    /// The equipment the mods last heard this guest wear (`native_players_equipment`), by
-    /// `EquipmentSlot`: main hand, off hand, feet, legs, chest, head.
-    pub(super) equipment_heard: Option<Box<[Option<crate::items::ItemStack>; 6]>>,
+    /// The guest's last observed equipment, by `EquipmentSlot`.
+    pub(super) equipment_heard: Option<Box<sunrise_items::equipment::Equipment>>,
     /// The slots of the guest's inventories the mods last heard (`native_players_inventory_changes`),
     /// by `NativeInventoryKind`: Player, Ender, Cursor, Crafting.
     pub(super) inventory_heard: Option<Box<[Vec<Option<crate::items::ItemStack>>; 4]>>,

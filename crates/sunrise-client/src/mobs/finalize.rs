@@ -1294,6 +1294,23 @@ impl<'a> EquipmentRead<'a> {
         Cow::Owned(stack)
     }
 
+    /// Compare a slot with its last equipment (`ItemStack.matches`), applying
+    /// any gear overlay by borrow instead of projecting a copy of the stack.
+    pub fn matches(current: Option<&Self>, previous: Option<&ItemStack>) -> bool {
+        match (current, previous) {
+            (None, None) => true,
+            (Some(current), Some(previous)) => match current.overlays {
+                None => current.base.matches(previous),
+                Some((gear, index)) => current.base.matches_with_overlay(
+                    previous,
+                    &gear.slots[index],
+                    gear.trims[index].as_ref(),
+                ),
+            },
+            _ => false,
+        }
+    }
+
     /// Encode selected extra components with the same gear overlay as a full projection.
     /// Encode only the selected gear values over the resident patch, without cloning the slot.
     pub fn extra_components_matching(
@@ -3096,6 +3113,26 @@ mod tests {
         assert!(!halloween_date(10, 30));
         assert!(!halloween_date(11, 1));
         assert!(!halloween_date(1, 1));
+    }
+
+    #[test]
+    fn equipment_read_matches_stack_with_and_without_gear_overlays() {
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        let mut m = crate::mobs::Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
+        set_item(&mut m, CHEST, "minecraft:iron_chestplate");
+        set_slot_enchantments(&mut m, CHEST, vec![(Arc::from("minecraft:thorns"), 3)]);
+        let trim: gear::Trim = ("minecraft:gold".into(), "minecraft:coast".into());
+        gear::set_trim(&mut m, gear::CHEST, Some(trim));
+        set_slot_damage(&mut m, CHEST, 2);
+
+        let read = equipment_slot(&m, EquipmentSlot::Chest).unwrap();
+        let mut expected = ItemStack::new("minecraft:iron_chestplate", 1);
+        expected.damage = 2;
+        expected.data_mut().enchantments = vec![(Arc::from("minecraft:thorns"), 3)];
+        expected.data_mut().trim = Some(("minecraft:gold".into(), "minecraft:coast".into()));
+        assert!(EquipmentRead::matches(Some(&read), Some(&expected)));
+        expected.data_mut().trim = None;
+        assert!(!EquipmentRead::matches(Some(&read), Some(&expected)));
     }
 }
 

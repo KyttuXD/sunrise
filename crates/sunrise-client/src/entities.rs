@@ -1860,7 +1860,7 @@ pub struct ArmorStand {
     /// Each downward movement is narrowed to float before adding to this double.
     pub enchantment_fall_distance: f64,
     /// Last equipment seen by `collectEquipmentChanges`; not saved to NBT.
-    pub enchantment_equipment: sunrise_items::equipment::Equipment,
+    pub enchantment_equipment: Option<Box<sunrise_items::equipment::Equipment>>,
     /// The live attribute map (`AttributeMap`), built when an item with
     /// attribute modifiers is worn or it is read.
     pub live: crate::living_attributes::LivingAttributes,
