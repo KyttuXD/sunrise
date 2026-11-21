@@ -2184,15 +2184,14 @@ impl Game<'_> {
     ) {
         self.fire_player_item_frame_change(player, name, entity_id, action, item, rotation);
     }
-    /// Mending repaired a server player's item with experience from an orb. `repair` is durability
-    /// restored and `experience` is the orb's value. Server-side.
+    /// Mending restored `repair` durability. `experience` is the signed input to this repair.
     pub(in crate::game) fn native_player_item_mend(
         &mut self,
         player: u128,
         name: &str,
         item: &str,
         repair: u32,
-        experience: u32,
+        experience: i32,
     ) {
         self.fire_player_item_mend(player, name, item, repair, experience);
     }
@@ -3925,20 +3924,16 @@ impl Game<'_> {
     ) {
         self.fire_food_level_changed(player, name, from, to, cancel);
     }
-    /// Before `player` picks up orb `orb` in `dimension`. Mutations to `value`
-    /// and `count` take effect only when not canceled. Value keeps vanilla
-    /// signed integer semantics; count is kept at least one.
-    /// Canceling leaves the orb and pickup delay unchanged. Server-side.
+    /// `ExperienceOrb.playerTouch`, after checking `takeXpDelay` and before setting it.
+    /// NeoForge's `PlayerXpEvent.PickupXp` exposes the live orb; a veto stops only the pickup.
     pub(in crate::game) fn native_pickup_xp(
         &mut self,
         player: u128,
         dimension: &str,
-        orb: u32,
-        value: &mut i32,
-        count: &mut u32,
+        orb: mod_api::ExperienceOrbRef,
         canceled: &mut bool,
     ) {
-        self.fire_pickup_xp(player, dimension, orb, value, count, canceled);
+        self.fire_pickup_xp(player, dimension, orb, canceled);
     }
     /// A player's hit landed on the mob `entity` of type `kind`
     /// (`minecraft:zombie`), holding `stack`: where `Item.hurtEnemy` is called,

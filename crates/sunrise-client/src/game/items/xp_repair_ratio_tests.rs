@@ -89,7 +89,7 @@ fn pickaxe_damage(game: &Game<'_>) -> u32 {
 
 /// Mending with 5 points and a part's `answer`: the pickaxe's damage after,
 /// and the experience left for the player.
-fn mend(game: &mut Game<'_>, part: &Ratio, damage: u32, answer: Option<f32>) -> (u32, u32) {
+fn mend(game: &mut Game<'_>, part: &Ratio, damage: u32, answer: Option<f32>) -> (u32, i32) {
     hold_pickaxe(game, damage);
     part.answer(answer);
     let rest = game.mending(5);

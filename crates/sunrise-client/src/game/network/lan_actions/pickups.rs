@@ -235,8 +235,9 @@ impl Game<'_> {
         let g = &host.hub.guests[gi];
         let own = g.bounds();
         let vehicle = g.vehicle;
-        let (conn, id, at, player, name) =
-            (g.conn, g.entity_id, g.position, g.uuid, g.name.clone());
+        let (conn, id, at, player) = (g.conn, g.entity_id, g.position, g.uuid);
+        let name = mod_api::__private::listened(mod_api::HookId::PlayerExpCooldownChange)
+            .then(|| g.name.clone());
         let unable = g.spectator() || g.dead || g.health <= 0.0;
         let play = host.play.entry(conn).or_default();
         let cooldown = if play.xp_delay > 0 {
@@ -245,11 +246,10 @@ impl Game<'_> {
         } else {
             None
         };
-        let delayed = play.xp_delay > 0;
-        if let Some(cooldown) = cooldown {
-            self.native_player_exp_cooldown_change(player, &name, cooldown);
+        if let (Some(cooldown), Some(name)) = (cooldown, &name) {
+            self.native_player_exp_cooldown_change(player, name, cooldown);
         }
-        if unable || delayed {
+        if unable {
             return;
         }
         let area = match vehicle.and_then(|v| self.guest_target_box(gi, v as i32)) {
@@ -268,84 +268,83 @@ impl Game<'_> {
                 area.max_position().z,
             ],
         );
-        let touching: Vec<usize> = self
-            .orbs
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| {
-                o.position.x + 0.25 > min[0]
-                    && o.position.x - 0.25 < max[0]
-                    && o.position.y + 0.5 > min[1]
-                    && o.position.y < max[1]
-                    && o.position.z + 0.25 > min[2]
-                    && o.position.z - 0.25 < max[2]
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if touching.is_empty() {
+        let mut touching = self.orbs.iter().filter(|o| {
+            o.position.x + 0.25 > min[0]
+                && o.position.x - 0.25 < max[0]
+                && o.position.y + 0.5 > min[1]
+                && o.position.y < max[1]
+                && o.position.z + 0.25 > min[2]
+                && o.position.z - 0.25 < max[2]
+        });
+        let count = touching.clone().count();
+        if count == 0 {
             return;
         }
-        // Util.getRandom(orbs, random).
-        let pick = self
-            .world
-            .random
-            .next_int_bound(touching.len() as i32)
-            .unwrap_or(0) as usize;
-        // A merged orb gives its value once per count and goes at zero.
-        let index = touching[pick];
-        let mut orb = self.orbs[index].clone();
-        let mut canceled = false;
-        // Swapping the guest in costs: only when a mod hears the pickup.
+        // Player.aiStep chooses an orb with the player's random even on a tick when
+        // ExperienceOrb.playerTouch refuses it because of takeXpDelay.
+        let Ok(pick) = sunrise_client::random_source::entity().next_int_bound(count as i32) else {
+            log::error!("ExperienceOrb.playerTouch: invalid touching-orb count {count}");
+            return;
+        };
+        if self
+            .lan
+            .as_ref()
+            .is_none_or(|host| host.play.get(&conn).is_some_and(|play| play.xp_delay > 0))
+        {
+            return;
+        }
+        let Some(orb) = touching.nth(pick as usize) else {
+            return;
+        };
+        let (join, orb_id) = (orb.join, orb.id);
         let listened = (self.serving.is_some() || self.options.dedicated.is_some())
             && mod_api::__private::listened(mod_api::HookId::PickupXp);
-        if listened {
-            let dimension = self.dim.id();
-            let called = self.as_guest(conn, |game| {
-                let player = game.native_acting_id();
-                game.native_pickup_xp(
-                    player,
-                    dimension,
-                    orb.id,
-                    &mut orb.value,
-                    &mut orb.count,
-                    &mut canceled,
-                );
-            });
-            if called.is_none() || canceled {
-                return;
+        let _ = self.as_guest_at(gi, conn, |game| {
+            if listened && let Some(epoch) = game.native_lifecycle.epoch() {
+                let orb = mod_api::ExperienceOrbRef::new(mod_api::EntityRef::new(epoch, orb_id));
+                let mut canceled = false;
+                game.native_pickup_xp(player, game.dim.id(), orb, &mut canceled);
+                if canceled {
+                    return;
+                }
             }
-
-            orb.count = orb.count.max(1);
-            self.orbs[index].value = orb.value;
-            self.orbs[index].count = orb.count;
-        }
-        if orb.count <= 1 {
-            self.remove_orb(index);
-        } else {
-            self.orbs[index].count -= 1;
-        }
-        if let Some(host) = self.lan.as_mut() {
-            host.play.entry(conn).or_default().xp_delay = 2;
-        }
-        self.native_player_exp_cooldown_change(player, &name, 2);
-        if let Some(host) = self.lan.as_ref() {
-            host.hub.take_item(orb.id as i32, id, 1, at);
-        }
-        // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
-        let mut random = sunrise_client::random_source::create(); // the listener's own stream
-        let pitch = (random.next_float() - random.next_float()) * 0.35 + 0.9;
-        let p = orb.position;
-        self.audio.play(
-            "minecraft:entity.experience_orb.pickup",
-            Some([p.x, p.y, p.z]),
-            0.1,
-            pitch,
-        );
-        let value = orb.value.max(0) as u32;
-        self.as_guest(conn, |game| {
-            let rest = game.mending(value);
+            // ExperienceOrb.playerTouch: delay, take, repair, award positive remaining
+            // experience, then decrement count and discard at zero.
+            game.xp_delay = 2;
+            if let Some(name) = &name {
+                game.native_player_exp_cooldown_change(player, name, 2);
+            }
+            // Listeners can move or remove entities. Resolve the same live orb,
+            // not whatever occupies its former index.
+            let Some(index) = game.orbs.locate(join) else {
+                return;
+            };
+            let orb = &game.orbs[index];
+            let (orb_value, p) = (orb.value, orb.position);
+            // LivingEntity.take doesn't send a pickup packet for an already removed orb.
+            if !game.target_removed(&crate::game::commands::Target::Orb(orb_id)) {
+                if let Some(host) = game.lan.as_ref() {
+                    host.hub.take_item(orb_id as i32, id, 1, at);
+                }
+                // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
+                let mut random = sunrise_client::random_source::create();
+                let pitch = (random.next_float() - random.next_float()) * 0.35 + 0.9;
+                game.audio.play(
+                    "minecraft:entity.experience_orb.pickup",
+                    Some([p.x, p.y, p.z]),
+                    0.1,
+                    pitch,
+                );
+            }
+            let rest = game.mending(orb_value);
             if rest > 0 {
-                game.give_experience_points(rest.min(i32::MAX as u32) as i32);
+                game.give_experience_points(rest);
+            }
+            if let Some(index) = game.orbs.locate(join) {
+                game.orbs[index].count -= 1;
+                if game.orbs[index].count == 0 {
+                    game.remove_orb(index);
+                }
             }
         });
     }

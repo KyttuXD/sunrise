@@ -201,6 +201,31 @@ pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
     })
 }
 
+/// Run an attributed listener without rolling back live writes or retaining non-panic refusals.
+pub(crate) fn call_contained_listener<T>(
+    hook: generated::HookId,
+    name: &'static str,
+    id: &'static str,
+    outside_world: bool,
+    invoke: impl FnOnce() -> T,
+) -> Option<T> {
+    match crate::callback_owner::contain_unwind(|| refusable(outside_world, invoke)) {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            None
+        }
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod {id}: hook {name} panicked and is disabled for this session: {message}"
+            );
+            crate::callback_owner::record_callback_panic(id, "hook", name, message);
+            None
+        }
+    }
+}
+
 /// How many listeners of `hook` are poisoned for the session.
 pub(crate) fn poisoned_count(hook: generated::HookId) -> usize {
     installed().map_or(0, |installed| {

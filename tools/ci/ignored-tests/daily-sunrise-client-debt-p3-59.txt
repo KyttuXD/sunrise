@@ -1,0 +1,8 @@
+# P3-59: live orb edits, signed Mending, persistence, discard, and pickup ordering.
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_later_listener_sees_the_same_live_orb lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_count_writer_refuses_invalid_values_and_saves_a_valid_decrement lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_wide_live_value_is_only_narrowed_on_save lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_zero_and_negative_values_still_reach_mending lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::a_panicking_pickup_xp_listener_does_not_interrupt_other_listeners lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_veto_keeps_live_edits_and_vanilla_delay_order lib daily resources
+sunrise-client game::lan_actions::pickup_xp_tests::pickup_xp_can_discard_and_veto_instead_of_taking_the_orb lib daily resources

@@ -267,7 +267,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`player_take_lectern_book(player, name, pos, book)`**: a server player removed `book` from the lectern at `pos`, after its block entity changed.
 - **`player_lectern_page_change(player, name, pos, page)`**: a server player changed the lectern at `pos` to zero-based `page`, after its page and redstone pulse changed.
 - **`player_item_frame_change(player, name, entity_id, action, item, rotation)`**: a server player changed a frame (`put`, `rotate`, `remove_item` or `break`), after its contents and comparator output changed. `item` is empty when none remains.
-- **`player_item_mend(player, name, item, repair, experience)`**: an orb actually repaired `repair` durability on `item` for a server player, after the item changed. `experience` is the orb value.
+- **`player_item_mend(player, name, item, repair, experience)`**: after Mending restores `repair` durability to `item` for a server player. `experience` is the signed input to the item's repair effect: the orb value for the first item or the remaining experience for a later item. A data-pack effect can repair with a nonpositive input.
 - **`player_trade(player, name, entity_id)`**: a server player completed a villager or wandering trader trade, after the merchant applied it. `entity_id` is the merchant network id.
 - **`player_shield_disable(player, name, ticks)`**: a blocked melee hit disabled the server player’s shield for `ticks` ticks. It fires just before the cooldown is set.
 - **`player_loom_pattern_select(player, name, pattern)`**: a server player selected loom pattern button `pattern`, after the menu accepted it.
@@ -2321,7 +2321,7 @@ registration path.
 
 - a player changing dimension: `player_changed_dimension(player, name, from, to)` is heard once per move of a server's player into another level, when the move has ended (a portal's exit found and the player standing there, a command's teleport landed, a respawn in another level placed for good), with `from` and `to` as dimension ids (`minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`) and the player's state swapped in so that `PlayerRef::tell` and the other helpers reach them. A move within a level is not heard. Not heard by a remote client window; listeners run on the server that simulates the world.
 
-- `pickup_xp(player, dimension, orb, value, count, canceled)` runs before a server player takes an orb; with no listener the server skips swapping a guest in for it (the shared `listened` probe). Canceling leaves the orb and the pickup delay unchanged; otherwise the signed value is preserved, including zero and negative values, and the count is clamped to at least one, then one count is taken. It runs on the integrated and the dedicated server, guests included.
+- `pickup_xp(player, dimension, orb, canceled)` runs on the integrated and dedicated server before a player takes an orb (`ExperienceOrb.playerTouch`, NeoForge's `PlayerXpEvent.PickupXp`), only when `takeXpDelay` is 0. `event.orb()` returns the same live `ExperienceOrbRef` to every listener: reads see prior listeners' writes. A veto skips the pickup and its delay without undoing those writes. Otherwise the server sets `takeXpDelay` to 2, takes the orb, runs Mending with its signed value, gives only positive remaining XP, then decrements the count and discards the orb at 0. `orb.set_count(host, count)` rejects values outside the saved positive int (`ExtraCodecs.POSITIVE_INT`). To discard without a pickup, call `orb.entity().discard(host)` and return `Flow::Cancel`.
 
 - Whom an experience orb follows (`XpOrbTargetingEvent`): `xp_orb_targeting(orb, scan_distance, following)`, on a server, for each orb as it ticks. `following` starts as the nearest living player within `scan_distance` (8) blocks who isn't a spectator, or `None`; set another player, or `None` to follow no one. The orb goes only for a living player who isn't a spectator and is in its level, and moves only once they are within 8 blocks. An orb that follows no one gets vanilla's push out of a block it is stuck in. Sunrise looks for the nearest player on every orb tick, where vanilla keeps the player it follows while they stay within 8 blocks, so the hook is asked every tick for each orb. Clients still predict the orb's flight towards the nearest player; the server's position wins.
 
@@ -2522,7 +2522,7 @@ registration path.
 
 - A server player changed an item frame: `player_item_frame_change(player, name, entity_id, action, item, rotation)` is heard after its contents and comparator output changed.
 
-- An orb repaired an item through Mending: `player_item_mend(player, name, item, repair, experience)` is heard after its damage changed.
+- An orb repaired an item through Mending: `player_item_mend(player, name, item, repair, experience)` is heard after its damage changed, with the signed input to that repair effect.
 
 - A server player changed a lectern page: `player_lectern_page_change(player, name, pos, page)` is heard after the page and redstone pulse changed.
 

@@ -3025,7 +3025,8 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
         // `putShort("Age", (short) age)`.
         ("Age", Tag::Short(o.age as i16)),
         ("Value", Tag::Short(o.value as i16)),
-        ("Count", Tag::Int(o.count.min(i32::MAX as u32) as i32)),
+        // Live orbs hold a positive signed-int count (`ExtraCodecs.POSITIVE_INT`).
+        ("Count", Tag::Int(o.count as i32)),
     ] {
         put(&mut tag, key, value);
     }
@@ -3040,7 +3041,15 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     let Some(position) = position(tag) else {
         return Vec::new();
     };
-    let count = number(tag.get("Count")).unwrap_or(1).max(1) as u32;
+    // `Codec.INT` uses the boxed Number.intValue() before `ExtraCodecs.POSITIVE_INT`
+    // checks positivity. In particular, floats truncate/saturate rather than floor/wrap.
+    let count = match tag.get("Count") {
+        Some(Tag::Float(v)) => Some(f32::from_bits(*v) as i32),
+        Some(Tag::Double(v)) => Some(f64::from_bits(*v) as i32),
+        other => number(other).map(|n| n as i32),
+    }
+    .filter(|&n| n > 0)
+    .unwrap_or(1) as u32;
     let orb = ExperienceOrb {
         fire_ticks: number(tag.get("Fire")).unwrap_or(0) as i16 as i32,
         attachment_lifetime: Default::default(),
@@ -3052,7 +3061,7 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         position,
         previous: position,
         velocity: motion(tag),
-        // `getShortOr("Value", 0)`, unclamped.
+        // `getShortOr("Value", 0)` floors floating tags to int, then narrows to short.
         value: tag.get("Value").and_then(int_value).unwrap_or(0) as i16 as i32,
         // `getShortOr("Age", 0)`: a signed short, unclamped.
         age: tag.get("Age").and_then(int_value).unwrap_or(0) as i16 as i32,
@@ -6511,13 +6520,41 @@ mod tests {
         );
     }
     #[test]
-    fn every_orb_set_experience_orb_accepts_reloads_unchanged() {
+    fn orbs_with_short_values_and_positive_int_counts_reload_unchanged() {
         let at = Tag::compound([("Pos", doubles(&[1.0, 2.0, 3.0]))]);
         let mut o = orbs_from_nbt(&at).remove(0);
         for (value, count) in [(11, 1), (32767, 2147483647), (-32768, 1)] {
             (o.value, o.count) = (value, count);
             let back = orbs_from_nbt(&orb_to_nbt(&o, [0; 4])).remove(0);
             assert_eq!((back.value, back.count), (value, count));
+        }
+    }
+    #[test]
+    fn orb_nbt_reads_counts_as_boxed_ints_and_values_as_numeric_shorts() {
+        let at = ("Pos", doubles(&[1.0, 2.0, 3.0]));
+        // ExperienceOrb.readAdditionalSaveData uses two different NBT readers.
+        // Count validates after Number.intValue; Value floors float/double to
+        // Java int before narrowing to a short (NumericTag.shortValue).
+        for (numeric, count, value) in [
+            (
+                Tag::Double(2_147_483_648.0_f64.to_bits()),
+                2_147_483_647,
+                -1,
+            ),
+            (Tag::Float(2_147_483_648.0_f32.to_bits()), 2_147_483_647, -1),
+            (Tag::Double((-3.25_f64).to_bits()), 1, -4),
+            (Tag::Float(3.75_f32.to_bits()), 3, 3),
+            (Tag::Long(4_294_967_301), 5, 5),
+            (Tag::Long(2_147_483_648), 1, 0),
+            (Tag::Short(0), 1, 0),
+        ] {
+            let loaded = orbs_from_nbt(&Tag::compound([
+                at.clone(),
+                ("Count", numeric.clone()),
+                ("Value", numeric),
+            ]));
+            assert_eq!(loaded[0].count, count, "Count");
+            assert_eq!(loaded[0].value, value, "Value");
         }
     }
     /// `Entity.saveWithoutId` writes `Fire` for every entity and `Entity.load`

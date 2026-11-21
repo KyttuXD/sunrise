@@ -155,14 +155,9 @@ impl Game<'_> {
             return false;
         };
         self.native_player_write(player, |game| {
-            let rest = if points > 0 {
-                game.mending(points as u32)
-            } else {
-                0
-            };
+            let rest = if points > 0 { game.mending(points) } else { 0 };
             if rest > 0 {
-                // `rest` is at most `points`, which fits an int.
-                game.give_experience_points(rest as i32);
+                game.give_experience_points(rest);
             }
         })
     }

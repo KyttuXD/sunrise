@@ -999,8 +999,9 @@ impl Game<'_> {
         let event = [47, 48, 52, 51, 50, 49][slot];
         self.lan_entity_event(id as i32, event, at);
     }
-    /// `ExperienceOrb.repairPlayerItems`: returns the experience left over.
-    pub(in crate::game) fn mending(&mut self, amount: u32) -> u32 {
+    /// `ExperienceOrb.repairPlayerItems`: passes the signed value to the repair effect
+    /// and returns the experience left over.
+    pub(in crate::game) fn mending(&mut self, amount: i32) -> i32 {
         let mut amount = amount;
         let player = (self.serving.is_some() || self.options.dedicated.is_some())
             .then(|| self.native_acting_id());
@@ -1056,7 +1057,7 @@ impl Game<'_> {
             if let Some((player, name, item)) = notice {
                 self.native_player_item_mend(player, &name, &item, repaired, amount);
             }
-            if remaining == 0 {
+            if remaining <= 0 {
                 return 0;
             }
             amount = remaining;
@@ -1072,19 +1073,20 @@ impl Game<'_> {
         &self,
         player: Option<u128>,
         stack: &ItemStack,
-        experience: u32,
+        experience: i32,
         vanilla: u32,
     ) -> u32 {
         let Some(player) = player else {
             return vanilla;
         };
-        // One table lookup tells whether any part of this item listens; with none,
-        // the stack is not converted and no host is made.
-        if experience == 0
+        // The part scales durability per positive point. The vanilla effect has
+        // already evaluated the signed amount, including for zero and negative orbs.
+        if experience <= 0
             || !mod_api::__private::item_listens(mod_api::HookId::XpRepairRatio, &stack.item)
         {
             return vanilla;
         }
+        let experience = experience as u32;
         let arrived = vanilla as f32 / experience as f32;
         let mut ratio = arrived;
         self.native_xp_repair_ratio(player, stack, experience, &mut ratio);
@@ -1652,7 +1654,7 @@ fn repair_from_xp(
     enchantments: &Enchantments,
     items: Option<&Items>,
     stack: &ItemStack,
-    amount: u32,
+    amount: i32,
     random: &mut LegacyRandom,
 ) -> u32 {
     let ctx = EffectContext {
@@ -1660,13 +1662,16 @@ fn repair_from_xp(
         items,
         ..Default::default()
     };
-    enchantments.modify_value(
+    let repair = enchantments.modify_value(
         Some(stack),
         "minecraft:repair_with_xp",
         &ctx,
         random,
         amount as f32,
-    ) as u32
+    ) as i32;
+    // EnchantmentHelper.modifyDurabilityToRepairFromXp clamps the result,
+    // not the signed input to the enchantment effects.
+    repair.max(0) as u32
 }
 
 /// `ExperienceOrb.repairPlayerItems`: the damage `to_repair` xp per point takes
@@ -1674,14 +1679,14 @@ fn repair_from_xp(
 /// (`amount - repair * amount / toRepairFromXpAmount`, in vanilla's integer
 /// order). Vanilla divides only when it repairs something, so a rate of zero
 /// keeps all of `amount`.
-fn repaired_and_left(amount: u32, damage: u32, to_repair: u32) -> (u32, u32) {
+fn repaired_and_left(amount: i32, damage: u32, to_repair: u32) -> (u32, i32) {
     let repaired = to_repair.min(damage);
     if repaired == 0 {
         return (0, amount);
     }
-    let left = amount
-        .saturating_sub((u64::from(repaired) * u64::from(amount) / u64::from(to_repair)) as u32);
-    (repaired, left)
+    // Vanilla multiplies and subtracts in signed Java int arithmetic.
+    let spent = (repaired as i32).wrapping_mul(amount) / to_repair as i32;
+    (repaired, amount.wrapping_sub(spent))
 }
 
 /// `EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, player, ItemStack::isDamaged)`:
@@ -2063,6 +2068,11 @@ mod tests {
         assert_eq!(w_rng.next_long(), expected_wearer.next_long());
     }
 
+    #[test]
+    fn mending_remainder_uses_java_int_arithmetic_for_a_wide_orb_value() {
+        assert_eq!(repaired_and_left(40_000, 80_000, 80_000), (80_000, 53_687));
+    }
+
     /// A pack's `repair_with_xp` gated on swords: `Enchantment.itemContext`
     /// hands the repaired stack to the conditions as `LootContextParams.TOOL`,
     /// so the sword repairs at twice the xp and the axe at the plain rate.
@@ -2099,6 +2109,10 @@ mod tests {
         assert_eq!(to_repair, 10);
         assert_eq!(repaired_and_left(5, sword.damage, to_repair), (10, 0));
         assert_eq!(repaired_and_left(5, 2, to_repair), (2, 4));
+        // The x2 effect receives these signed inputs. The vanilla helper clamps
+        // its output, so neither repairs nor damages the item.
+        assert_eq!(repair_from_xp(&e, None, &sword, 0, &mut random), 0);
+        assert_eq!(repair_from_xp(&e, None, &sword, -5, &mut random), 0);
         // The axe matches no tool condition: 1 xp per damage point, so 5 xp
         // repairs 5 damage; 2 damage would eat 2 xp and leave 3.
         let axe = gated("minecraft:diamond_axe");

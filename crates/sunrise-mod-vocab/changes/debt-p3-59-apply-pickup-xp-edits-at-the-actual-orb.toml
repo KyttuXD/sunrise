@@ -1,0 +1,15 @@
+ids = [
+    "hook:pickup_xp",
+    "hook:pickup_xp.orb",
+    "hook:pickup_xp.value",
+    "hook:pickup_xp.count",
+    "type:PickupXpEvent.orb",
+    "type:PickupXpEvent.value",
+    "type:PickupXpEvent.count",
+    "handle:PickupXpEvent::orb",
+    "hook:player_item_mend",
+    "hook:player_item_mend.experience",
+    "type:PlayerItemMendEvent.experience",
+]
+why = "NeoForge PlayerXpEvent.PickupXp.getOrb exposes one live orb, not separate value and count outputs. Vanilla ExperienceOrb.playerTouch sets the delay and takes the orb after the veto, runs Mending with the signed value, awards only a positive remainder, then decrements Count and discards at zero. EnchantmentHelper.modifyDurabilityToRepairFromXp floors negative repair results at zero, not the value passed to the effect, so a data-pack effect can actually repair with a nonpositive input and the repair notice needs to carry that signed input. ExperienceOrb.addAdditionalSaveData writes Value as a short and Count as an int; readAdditionalSaveData reads Value through TagValueInput.getShortOr and Count through ExtraCodecs.POSITIVE_INT after Number.intValue."
+migrate = "Rebuild the pickup_xp listener against version 2. Replace event.orb with event.orb().entity().id() if you still need the numeric ID. Replace reads of event.value and event.count with event.orb().value(host) and event.orb().count(host); replace assignments with event.orb().set_value(host, value) and event.orb().set_count(host, count). Handle the Result of each operation: a count of 0 or above i32::MAX returns ExperienceOrbWriteError::InvalidCount without changing the orb. Live writes reach later listeners immediately and are not undone by Flow::Cancel. To discard instead of taking, call event.orb().entity().discard(host) and return Flow::Cancel. The player_item_mend version 2 event.experience is now i32; use signed arithmetic for it, or explicitly handle nonpositive values before converting to an unsigned type."

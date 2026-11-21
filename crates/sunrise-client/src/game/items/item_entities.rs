@@ -696,7 +696,6 @@ impl Game<'_> {
         let mut orbs = self.orbs.lift();
         #[cfg(test)]
         crate::game::entity::taken_pass_tests::after_take(self);
-        let mut gained = 0;
         let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
             orbs.retain_mut(|o| {
@@ -710,7 +709,6 @@ impl Game<'_> {
                     // ExperienceOrb.playerTouch: one orb every 2 ticks; a
                     // merged orb gives its value once per count.
                     self.xp_delay = 2;
-                    gained += o.points();
                     taken.push(o.clone());
                     o.count -= 1;
                     return o.count > 0;
@@ -720,10 +718,8 @@ impl Game<'_> {
         }
         self.orbs
             .restore(orbs, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
-        if gained > 0 {
-            gained = self.mending(gained);
-        }
         for o in taken {
+            let gained = self.mending(o.value);
             // ClientPacketListener.handleTakeItemEntity: every orb taken sounds
             // at the orb, whether mending took its points or not.
             let mut r = random_source::create();
@@ -739,9 +735,9 @@ impl Game<'_> {
                 crate::game::pickups::Taken::Orb(Box::new(o)),
                 crate::game::pickups::Collector::Player,
             );
-        }
-        if gained > 0 {
-            self.give_experience_points(gained as i32);
+            if gained > 0 {
+                self.give_experience_points(gained);
+            }
         }
     }
 

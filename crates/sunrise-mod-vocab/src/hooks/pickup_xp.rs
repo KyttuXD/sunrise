@@ -1,26 +1,33 @@
 //! The `pickup_xp` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
 // catalog-order: 0212
 
+use crate::ExperienceOrbRef;
+
 pub trait Hooks {
-    /// Before `player` picks up orb `orb` in `dimension`. Mutations to `value`
-    /// and `count` take effect only when not canceled; value is clamped to
-    /// 1..=i32::MAX and count to at least one.
-    /// Canceling leaves the orb and pickup delay unchanged. Server-side. Diverges from upstream: renamed from `experience_orb_pickup`, to NeoForge's `PlayerXpEvent.PickupXp`.
+    /// Before `player` takes the live `orb` in `dimension` (`ExperienceOrb.playerTouch`,
+    /// NeoForge's `PlayerXpEvent.PickupXp`). Fires only when `takeXpDelay` is 0.
+    /// Use `event.orb()` to read or edit its value and count: later listeners see the same
+    /// orb, including edits made by earlier listeners. Canceling skips the pickup
+    /// without starting the delay or undoing a listener's writes. A panicking listener is
+    /// reported and disabled for this session; other listeners keep running.
+    ///
+    /// A pickup sets `takeXpDelay` to 2, takes the orb, runs Mending with its signed
+    /// value, awards only positive remaining experience, then decrements the count
+    /// and discards the orb if it reaches 0. `ExperienceOrbRef::set_count` refuses
+    /// 0 and values above `i32::MAX` (`ExtraCodecs.POSITIVE_INT`). To remove an orb
+    /// without taking it, call `orb.entity().discard(host)` and cancel the pickup.
+    /// A surviving orb saves its value as a signed short, as vanilla does. Server-side.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_pickup_xp",
         dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "canceled",
+        read_only_input = "orb",
+        contain_listener_panic = true,
         neoforge = "PlayerXpEvent.PickupXp",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
-    fn pickup_xp(
-        player: u128,
-        dimension: &str,
-        orb: u32,
-        value: &mut i32,
-        count: &mut u32,
-        canceled: &mut bool,
-    );
+    fn pickup_xp(player: u128, dimension: &str, orb: ExperienceOrbRef, canceled: &mut bool);
 }

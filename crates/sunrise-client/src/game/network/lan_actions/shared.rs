@@ -2378,75 +2378,331 @@ mod respawn_position_tests {
 mod pickup_xp_tests {
     use super::super::native_entity_refs::tests::with_game;
     use super::super::native_item_places::tests::{guest, open_to_lan};
+    use crate::game::{Game, commands::Target};
+    use mod_api::{
+        ExperienceOrbRef, ExperienceOrbWriteError, Flow, Hooks, ModEntry, PickupXpEvent,
+        PlayerItemMendEvent, ServerHost,
+    };
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     use sunrise_client::entities::ExperienceOrb;
+    use sunrise_client::entity_nbt::{orb_to_nbt, orbs_from_nbt};
+    use sunrise_client::items::ItemStack;
     use sunrise_core::geometry::Vec3;
+    use sunrise_core::nbt::Tag;
 
-    /// Listens to `pickup_xp`, canceling it when told to.
-    struct Listen(bool);
+    type PickupCallback = dyn Fn(&mut dyn ServerHost, ExperienceOrbRef) -> Flow + Send + Sync;
+    struct Listen(Box<PickupCallback>);
     #[mod_api::__subscriptions]
-    impl mod_api::Hooks for Listen {
-        fn pickup_xp(
-            &self,
-            _: &mut dyn mod_api::ServerHost,
-            _: &mut mod_api::PickupXpEvent<'_>,
-        ) -> mod_api::Flow {
-            if self.0 {
-                mod_api::Flow::Cancel
-            } else {
-                mod_api::Flow::Continue
-            }
+    impl Hooks for Listen {
+        fn pickup_xp(&self, host: &mut dyn ServerHost, event: &mut PickupXpEvent<'_>) -> Flow {
+            (self.0)(host, event.orb())
         }
     }
 
-    /// A guest takes the orb it stands in: the orb's id left in the level and the
-    /// guest's total experience after.
-    fn take_orb() -> (bool, i32) {
-        let mut out = (false, 0);
-        with_game(|game| {
-            open_to_lan(game);
-            let mut g = guest(1);
-            g.loaded = true;
-            g.position = [0.5, 70.0, 0.5];
-            game.lan.as_mut().unwrap().hub.guests.push(g);
-            let p = Vec3::new(0.5, 70.0, 0.5);
-            game.orbs.push(ExperienceOrb {
-                attachment_lifetime: Default::default(),
-                rotation: [0.0, 0.0],
-                join: Default::default(),
-                id: 40,
-                position: p,
-                previous: p,
-                velocity: Vec3::ZERO,
-                value: 7,
-                age: 0,
-                on_ground: true,
-                count: 1,
-                fire_ticks: 0,
-                ticks: 0,
-                air: 300,
-                health: 5,
-                no_gravity: true,
-                following: None,
-                fall_distance: 0.0,
-            });
-            game.guest_orbs(0);
-            let left = game.orbs.iter().any(|o| o.id == 40);
-            out = (left, game.lan.as_ref().unwrap().hub.guests[0].xp_total);
-        });
-        out
+    fn listen(
+        id: &'static str,
+        callback: impl Fn(&mut dyn ServerHost, ExperienceOrbRef) -> Flow + Send + Sync + 'static,
+    ) -> ModEntry {
+        ModEntry::new(id, Box::new(Listen(Box::new(callback))))
     }
 
-    /// `PlayerXpEvent.PickupXp` through the shared `listened` probe: a pickup goes the
-    /// same with no listener and with one that changes nothing, and a cancel keeps the orb.
+    fn with_orb(mods: Vec<ModEntry>, count: u32, test: impl FnOnce(&mut Game<'_>)) {
+        mod_platform::testing::with_mods(mods.into(), || {
+            with_game(|game| {
+                open_to_lan(game);
+                let mut g = guest(1);
+                g.loaded = true;
+                g.position = [0.5, 70.0, 0.5];
+                game.lan.as_mut().unwrap().hub.guests.push(g);
+                let p = Vec3::new(0.5, 70.0, 0.5);
+                game.orbs.push(ExperienceOrb {
+                    attachment_lifetime: Default::default(),
+                    rotation: [0.0, 0.0],
+                    join: Default::default(),
+                    id: 40,
+                    position: p,
+                    previous: p,
+                    velocity: Vec3::ZERO,
+                    value: 7,
+                    age: 0,
+                    on_ground: true,
+                    count,
+                    fire_ticks: 0,
+                    ticks: 0,
+                    air: 300,
+                    health: 5,
+                    no_gravity: true,
+                    following: None,
+                    fall_distance: 0.0,
+                });
+                test(game);
+            });
+        });
+    }
+
+    fn pickup_state(game: &Game<'_>) -> (Option<(i32, u32)>, i32, u32) {
+        let orb = game.orbs.first().map(|o| (o.value, o.count));
+        let host = game.lan.as_ref().unwrap();
+        (
+            orb,
+            host.hub.guests[0].xp_total,
+            host.play.get(&1).map_or(0, |p| p.xp_delay),
+        )
+    }
+
     #[test]
     #[ignore = "daily"]
     fn pickup_xp_is_the_same_with_and_without_a_listener() {
-        let none = take_orb();
-        assert_eq!(none, (false, 7));
-        let mods = vec![mod_api::ModEntry::new("listen", Box::new(Listen(false)))].into();
-        mod_platform::testing::with_mods(mods, || assert_eq!(take_orb(), none));
-        let mods = vec![mod_api::ModEntry::new("cancel", Box::new(Listen(true)))].into();
-        mod_platform::testing::with_mods(mods, || assert_eq!(take_orb(), (true, 0)));
+        let take = |game: &mut Game<'_>| {
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (None, 7, 2));
+        };
+        with_orb(vec![], 1, take);
+        with_orb(vec![listen("observe", |_, _| Flow::Continue)], 1, take);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_later_listener_sees_the_same_live_orb() {
+        let first = listen("first", |host, orb| {
+            let entity = host.entity(orb.entity().id()).unwrap();
+            let resolved = host.experience_orb(entity).unwrap().unwrap();
+            assert_eq!(resolved, orb);
+            resolved.set_value(host, 15).unwrap();
+            resolved.set_count(host, 3).unwrap();
+            Flow::Continue
+        });
+        let second = listen("second", |host, orb| {
+            assert_eq!(orb.value(host), Ok(15));
+            assert_eq!(orb.count(host), Ok(3));
+            orb.set_value(host, 21).unwrap();
+            Flow::Continue
+        });
+        with_orb(vec![first, second], 1, |game| {
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((21, 2)), 21, 2));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_count_writer_refuses_invalid_values_and_saves_a_valid_decrement() {
+        let edit = listen("count", |host, orb| {
+            for invalid in [0, i32::MAX as u32 + 1] {
+                assert_eq!(
+                    orb.set_count(host, invalid),
+                    Err(ExperienceOrbWriteError::InvalidCount)
+                );
+                assert_eq!(orb.count(host), Ok(2));
+            }
+            orb.set_count(host, i32::MAX as u32).unwrap();
+            Flow::Continue
+        });
+        with_orb(vec![edit], 2, |game| {
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((7, 2_147_483_646)), 7, 2));
+            let saved = orb_to_nbt(&game.orbs[0], [0; 4]);
+            assert_eq!(saved.get("Count"), Some(&Tag::Int(2_147_483_646)));
+            assert_eq!(orbs_from_nbt(&saved)[0].count, 2_147_483_646);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_wide_live_value_is_only_narrowed_on_save() {
+        let edit = listen("value", |host, orb| {
+            orb.set_value(host, 40_000).unwrap();
+            Flow::Continue
+        });
+        with_orb(vec![edit], 2, |game| {
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((40_000, 1)), 40_000, 2));
+            let saved = orb_to_nbt(&game.orbs[0], [0; 4]);
+            assert_eq!(saved.get("Value"), Some(&Tag::Short(-25_536)));
+            assert_eq!(orbs_from_nbt(&saved)[0].value, -25_536);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_zero_and_negative_values_still_reach_mending() {
+        struct ObserveMending(Arc<Mutex<Vec<(i32, u32)>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for ObserveMending {
+            fn player_item_mend(
+                &self,
+                host: &mut dyn ServerHost,
+                event: &mut PlayerItemMendEvent<'_>,
+            ) {
+                let entity = host.entity(40).unwrap();
+                let orb = host.experience_orb(entity).unwrap().unwrap();
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((event.experience, orb.count(host).unwrap()));
+            }
+        }
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let observer = ModEntry::new("mending", Box::new(ObserveMending(Arc::clone(&observed))));
+        let edit = listen("signed-value", |host, orb| {
+            let value = if orb.value(host) == Ok(7) { 0 } else { -5 };
+            orb.set_value(host, value).unwrap();
+            Flow::Continue
+        });
+        with_orb(vec![edit, observer], 3, |game| {
+            // A datapack Mending effect with an offset makes selection and the
+            // signed input observable: 2 * 0 + 20 = 20; 2 * -5 + 20 = 10.
+            let root = tempfile::tempdir().unwrap();
+            let pack = root.path().join("datapacks/mending");
+            let definitions = pack.join("data/minecraft/enchantment");
+            std::fs::create_dir_all(&definitions).unwrap();
+            std::fs::write(
+                pack.join("pack.mcmeta"),
+                r#"{"pack":{"description":"Mending fixture"}}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                root.path().join("datapacks.json"),
+                r#"{"enabled":["file/mending"],"disabled":[]}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                definitions.join("mending.json"),
+                r#"{
+                "description":"Mending fixture", "supported_items":"minecraft:diamond_sword",
+                "weight": 1, "max_level": 1, "anvil_cost": 1,
+                "min_cost": {"base": 1, "per_level_above_first": 0},
+                "max_cost": {"base": 1, "per_level_above_first": 0}, "slots": ["any"],
+                "effects": {"minecraft:repair_with_xp": [
+                    {"effect":{"type":"minecraft:multiply","factor":2}},
+                    {"effect":{"type":"minecraft:add","value":20}}
+                ]}
+            }"#,
+            )
+            .unwrap();
+            let resources = game.options.resources.clone();
+            let packs = crate::game::functions::pack_stack(
+                root.path(),
+                &resources,
+                &game.pack.data_source,
+                &game.pack.data_changes,
+                false,
+                &[],
+                &[],
+            );
+            game.world_tables = game
+                .stage_world_tables(&packs, false, &resources)
+                .unwrap()
+                .tables;
+
+            let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
+            sword.damage = 40;
+            sword.enchant("minecraft:mending", 1);
+            game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                guest.inventory[0] = Some(sword);
+                guest.selected = 0;
+            });
+            let damage = |game: &Game<'_>| {
+                game.lan.as_ref().unwrap().hub.guests[0].inventory[0]
+                    .as_ref()
+                    .unwrap()
+                    .damage
+            };
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((0, 2)), 0, 2));
+            assert_eq!(damage(game), 20);
+
+            game.guest_orbs(0); // delayed
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((-5, 1)), 0, 2));
+            assert_eq!(damage(game), 10);
+            // The repair notice hears the signed input before the orb loses a count.
+            assert_eq!(*observed.lock().unwrap(), [(0, 3), (-5, 2)]);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_panicking_pickup_xp_listener_does_not_interrupt_other_listeners() {
+        struct Panics(Arc<AtomicUsize>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Panics {
+            fn pickup_xp(&self, host: &mut dyn ServerHost, event: &mut PickupXpEvent<'_>) -> Flow {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                event.orb().set_value(host, 11).unwrap();
+                event.cancelled = true;
+                panic!("pickup fixture panic");
+            }
+        }
+        let panics = Arc::new(AtomicUsize::new(0));
+        let broken = ModEntry::new("broken", Box::new(Panics(Arc::clone(&panics))));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let heard = Arc::clone(&calls);
+        let healthy = listen("healthy", move |host, orb| {
+            heard.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(orb.value(host), Ok(11));
+            Flow::Continue
+        });
+        with_orb(vec![broken, healthy], 2, |game| {
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (Some((11, 1)), 11, 2));
+            game.guest_orbs(0);
+            game.guest_orbs(0);
+            assert_eq!(pickup_state(game), (None, 22, 2));
+            assert_eq!(panics.load(Ordering::Relaxed), 1);
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_veto_keeps_live_edits_and_vanilla_delay_order() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let called = Arc::clone(&calls);
+        let listener = listen("veto-first", move |host, orb| {
+            if called.fetch_add(1, Ordering::Relaxed) == 0 {
+                orb.set_value(host, 9).unwrap();
+                orb.set_count(host, 2).unwrap();
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        });
+        with_orb(vec![listener], 1, |game| {
+            game.guest_orbs(0);
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(pickup_state(game), (Some((9, 2)), 0, 0));
+
+            game.guest_orbs(0);
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+            assert_eq!(pickup_state(game), (Some((9, 1)), 9, 2));
+
+            game.guest_orbs(0);
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+            assert_eq!(pickup_state(game), (Some((9, 1)), 9, 1));
+
+            game.guest_orbs(0);
+            assert_eq!(calls.load(Ordering::Relaxed), 3);
+            assert_eq!(pickup_state(game), (None, 18, 2));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pickup_xp_can_discard_and_veto_instead_of_taking_the_orb() {
+        let discard = listen("discard", |host, orb| {
+            assert!(orb.entity().discard(host));
+            Flow::Cancel
+        });
+        with_orb(vec![discard], 1, |game| {
+            game.guest_orbs(0);
+            assert!(game.target_removed(&Target::Orb(40)));
+            let (_, xp, delay) = pickup_state(game);
+            assert_eq!((xp, delay), (0, 0));
+        });
     }
 }
 

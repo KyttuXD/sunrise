@@ -181,6 +181,9 @@ pub struct Hook {
     /// A collector receives at most one returned value per registration, and later listeners
     /// still run after a failure.
     pub isolate: bool,
+    /// A global notice or veto whose panicking listener alone is disabled. Dispatch continues
+    /// with the prior veto state; live writes are not rolled back.
+    pub contain_listener_panic: bool,
     /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
     /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
     /// vector/scalar outputs in declaration order and naming the first refused one. A refused
@@ -208,6 +211,8 @@ pub struct Hook {
     pub stack_count: Option<StackCount>,
     /// Rebuild a listener event from its original inputs for every subscriber.
     pub event_per_listener: bool,
+    /// One copyable input whose binding is read-only through a getter.
+    pub read_only_input: Option<String>,
 }
 
 /// A drawing surface of the game's that drawing hooks get as a trait object (the catalog's
@@ -339,6 +344,7 @@ struct HookEntry {
     stack_count: Option<StackCount>,
     #[serde(default)]
     event_per_listener: bool,
+    read_only_input: Option<String>,
     inert: Option<String>,
     neoforge: Option<serde_json::Value>,
     fabric: Option<serde_json::Value>,
@@ -359,6 +365,8 @@ struct ModApiEntry {
     collect_validator: Option<String>,
     registration_append: Option<RegistrationAppend>,
     isolate: Option<bool>,
+    #[serde(default)]
+    contain_listener_panic: bool,
     output_validator: Option<String>,
 }
 
@@ -527,6 +535,18 @@ impl Hook {
                         .into(),
             });
         }
+        if api.contain_listener_panic
+            && (isolate
+                || scope.is_some()
+                || !matches!(api.contract, Contract::Listen | Contract::Cancel))
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error:
+                    "contain_listener_panic is for a global listen or cancel hook without isolate"
+                        .into(),
+            });
+        }
         if let Some(validator) = &api.output_validator
             && (!isolate
                 || api.contract != Contract::Cancel
@@ -557,6 +577,7 @@ impl Hook {
             registration_append: api.registration_append,
             inert: entry.inert,
             isolate,
+            contain_listener_panic: api.contain_listener_panic,
             output_validator: api.output_validator,
             scope,
             host: entry.host,
@@ -571,6 +592,7 @@ impl Hook {
             engine_inert,
             stack_count: entry.stack_count,
             event_per_listener: entry.event_per_listener,
+            read_only_input: entry.read_only_input,
         })
     }
 }
@@ -845,6 +867,7 @@ impl Declared {
                             "collect_validator",
                             "registration_append",
                             "isolate",
+                            "contain_listener_panic",
                             "output_validator",
                         ] {
                             if let Some(value) = entry.remove(key) {
@@ -1020,6 +1043,7 @@ impl Hook {
             registration_append: None,
             inert: None,
             isolate: false,
+            contain_listener_panic: false,
             output_validator: None,
             scope: None,
             host: None,
@@ -1034,6 +1058,7 @@ impl Hook {
             engine_inert: false,
             stack_count: None,
             event_per_listener: false,
+            read_only_input: None,
         }
     }
 }

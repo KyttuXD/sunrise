@@ -72,6 +72,27 @@ emit a second notice.
 See the [generated API reference](../../reference/api.md) and the hook's
 [caller notes](../../reference/hook-notes.md#player-bed-leave-callers).
 
+## Taking an experience orb
+
+`pickup_xp` runs on the server before a player takes an orb, when their pickup
+cooldown is zero. `event.orb()` returns the live `ExperienceOrbRef`. Read its
+value and count with `event.orb().value(host)` and `event.orb().count(host)`;
+write them with `event.orb().set_value(host, value)` and
+`event.orb().set_count(host, count)`. Later listeners see those writes on the same
+orb. Values are signed `i32` in play and saved as signed
+shorts; Count must be positive and fit the saved `ExtraCodecs.POSITIVE_INT`
+(`1..=i32::MAX`). An invalid count returns `ExperienceOrbWriteError::InvalidCount`
+without changing the orb.
+
+Return `Flow::Cancel` to skip the pickup without starting its cooldown or undoing
+writes. To remove the orb without taking it, call `event.orb().entity().discard(host)`
+and return `Flow::Cancel`. Otherwise the player takes the orb, Mending runs with
+its signed value, only positive remaining XP is awarded, and the orb loses one
+count. It disappears when that count reaches zero. A data-pack repair effect
+can restore durability even for zero or negative input; `player_item_mend`
+reports the signed input to the effect for the item actually repaired.
+A panic disables and reports just the panicking callback for the session.
+
 ## Physical movement decisions
 
 `entity_move` runs on the server before one physical `Entity.move` invocation,
