@@ -13,7 +13,7 @@ Prefix **API** = `crates/sunrise-mod-vocab/src/`; **Game** = `crates/sunrise-cli
 |---|---|---|---|
 | `CampfireBlock#isSmokeSource`, `@Inject` at HEAD, cancellable: answers for its own blocks. | `BlockPart::smoke_source` (API `hooks/base.rs:3327`): `replace`, scoped to the block under the campfire, asked on an authoritative server as the campfire is placed or that block changes. | **Works** | Game `modding/native_smoke_source_tests.rs:44`: a Part's yes makes a campfire over stone a signal fire, and a Part's no over a hay bale replaces vanilla's yes, through the shape update when the block under it changes. The map's location note (only the hook's rustdoc names the method) is settled: `sunrise-world` `level/survive.rs:504` is `CampfireBlock.isSmokeSource` and asks the hook. |
 | `LivingEntity#hurtServer`, `@ModifyVariable` at HEAD: changes the damage amount. | `living_incoming_damage` (API `hooks/base.rs:906`): `cancel`, with `container.set_new_damage`; fires past `hurtServer`'s guards. | **Works** | Game `modding/native_damage_tests.rs:119`: a listener sets 4 on a 10-point hit and the pig keeps 6 health, so the changed amount is the one dealt. The map's "contract mismatch" read the hook's name (`cancel`), not its mutable container. Farmer's Delight changes the amount before the guards, and the hook runs after them. In vanilla 26.3's `hurtServer`, the guards (`isInvulnerableTo`, `isDeadOrDying`, fire damage under Fire Resistance) return before the method first reads the amount, so the dealt damage is the same. |
-| `LivingEntity#knockback` (both overloads), `@ModifyVariable` at HEAD, ordinal 0: changes the strength. | `living_knockback` (API `hooks/base.rs:2069`): `cancel`, with mutable `strength`, `x` and `z` on the raw strength before knockback resistance. | **Works** | Game `modding/native_knockback_tests.rs:91`: a listener doubles the strength (`:42`) and the push the game applies carries 0.8 for 0.4 (`:142`). The map's "contract mismatch" read the hook's name, as above. |
+| `LivingEntity#knockback` (both overloads), `@ModifyVariable` at HEAD, ordinal 0: changes the strength. | `living_knockback` (API `hooks/base.rs:2069`): `cancel`, with mutable `strength`, `x` and `z` on the raw strength before knockback resistance. | **Works** | `one_event_per_living_knockback_operation` checks that doubling the strength turns 0.4 into one 0.8 push on both ordinary and effect paths. |
 | `MinecraftServer#onGameRuleChanged`, `@Inject` at HEAD: is told a rule changed. | `game_rule_changed` (API `hooks/game_rule_changed.rs:15`): `listen`, with the rule, the new value and the actor. | **Works** | Game `modding/native_level_world.rs:523`: setting `keep_inventory` tells a listener the rule, that no player caused it, and the whole rule set with the new value. The map found no candidate, because it tagged the method to two `Hub` setters rather than to the hook. |
 
 ## Cake eligibility
@@ -26,11 +26,8 @@ keeps vanilla hunger and creative-mode behavior.
 
 ## Gaps
 
-The `living_knockback` hook fires once per full-entry call. Its read-only `entry` value is
-`Short` for a delegated short-entry push and `Full` for a direct full-entry push (#3107).
-A listener may apply its strength rewrite twice for `Short` and once for `Full`. This is not
-an extra event: two non-commuting listeners run in dispatch order, each completing its
-rewrites before the next listener, rather than two separate passes over all listeners.
+The `living_knockback` hook fires once at the actual push, as NeoForge does. Apply a
+strength rewrite once per event instead of reproducing the mixin's two entry points.
 #2767 tracks cross-target API admission. For hearing refused
 damage attempts without changing the amount, use the existing
 [invulnerability observation](../../modding/src/how-to/entities/refused-damage-attempts.md), with its explicit vanilla exclusions (#2752).

@@ -566,6 +566,86 @@ fn beacon_dispatch_preserves_optional_effect_keys() {
 }
 
 #[test]
+fn knockback_panic_preserves_earlier_edits_and_does_not_stop_other_listeners() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Boost;
+    #[mod_api::__subscriptions]
+    impl Hooks for Boost {
+        fn living_knockback(
+            &self,
+            _: &mut dyn LevelRandomHost,
+            event: &mut LivingKnockbackEvent<'_>,
+        ) -> Flow {
+            event.strength *= 2.0;
+            Flow::Continue
+        }
+    }
+    struct Broken(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Broken {
+        fn living_knockback(
+            &self,
+            _: &mut dyn LevelRandomHost,
+            event: &mut LivingKnockbackEvent<'_>,
+        ) -> Flow {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            event.strength = 99.0;
+            event.x = 99.0;
+            event.cancelled = true;
+            panic!("broken knockback listener");
+        }
+    }
+    struct Turn;
+    #[mod_api::__subscriptions]
+    impl Hooks for Turn {
+        fn living_knockback(
+            &self,
+            _: &mut dyn LevelRandomHost,
+            event: &mut LivingKnockbackEvent<'_>,
+        ) -> Flow {
+            event.z = event.strength;
+            Flow::Continue
+        }
+    }
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    install(
+        vec![
+            ModEntry::new("knockback-boost", Box::new(Boost)),
+            ModEntry::new("knockback-broken", Box::new(Broken(broken_calls.clone()))),
+            ModEntry::new("knockback-turn", Box::new(Turn)),
+        ]
+        .into(),
+    );
+    let source = HurtSource {
+        damage_type: "minecraft:generic",
+        position: None,
+    };
+    for _ in 0..2 {
+        let (mut strength, mut x, mut z, mut canceled) = (0.5, 1.0, 0.0, false);
+        dispatch_living_knockback(
+            &mut TestLevel,
+            calls::LivingKnockbackCall {
+                entity: 12,
+                kind: "minecraft:armor_stand",
+                source: &source,
+                attacker: 0,
+                attacker_main: None,
+                attacker_off: None,
+                kill_credit: 0,
+                kill_credit_main: None,
+                strength: &mut strength,
+                x: &mut x,
+                z: &mut z,
+                canceled: &mut canceled,
+            },
+        );
+        assert_eq!((strength, x, z, canceled), (1.0, 1.0, 1.0, false));
+    }
+    assert_eq!(broken_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn dispatch_contracts() {
     struct Weapon;
     #[mod_api::__subscriptions]

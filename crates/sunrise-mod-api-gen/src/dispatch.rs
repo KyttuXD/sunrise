@@ -946,7 +946,16 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.isolate_listener {
+            if !mod_cancel || rollback.iter().any(|(_, borrowed)| *borrowed) {
+                return Err(format!(
+                    "{name}: isolate_listener requires a cancel hook with scalar outputs"
+                ));
+            }
+            // Each event is a listener's proposal. Commit the scalars only on return, so a
+            // panic cannot replace either inherited outputs or other listeners' inputs.
+            (String::new(), build)
+        } else if hook.event_per_listener || isolated_collect {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -969,7 +978,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if hook.event_per_listener || hook.isolate_listener {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
@@ -1262,6 +1271,13 @@ pub(super) fn emit<'a>(
                 format!(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(Some(answer))) => {o}(Answered {{ answer, mod_id }}), Ok(Ok(None)) => {{}}, Ok(Err(refusal)) => refusal.report(), Err(payload) => {{ if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {{ std::mem::forget(payload); }} super::runtime::poison(HookId::{hook_id}, mod_id); }} }} }} }}",
                     o = out.unwrap()
+                ),
+            ),
+            None if hook.isolate_listener => (
+                String::new(),
+                format!(
+                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) || (*{o} && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} if let Some(flow) = super::runtime::isolated_refusable(HookId::{hook_id}, mod_id, \"{name}\", contained, || {mod_item}.{name}({invoke})) {{ *{o} = {event}.cancelled || matches!(flow, Flow::Cancel); {local_write_back} }} }} }}",
+                    o = cancel_out.unwrap(),
                 ),
             ),
             None if mod_cancel && hook.isolate => (

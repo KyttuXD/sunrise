@@ -1,0 +1,9 @@
+ids = [
+    "hook:living_knockback",
+    "method:Hooks::living_knockback",
+    "type:LivingKnockbackEvent",
+    "type:KnockbackEntry",
+    "fn:sunrise_client::game::creatures::knockback::Game::knock_back_player_full",
+]
+why = "Vanilla 26.3 LivingEntity.knockback delegates to the actual push, where NeoForge CommonHooks.onLivingKnockBack posts once, before resistance and motion. b77bdc83bc5 exposed the overload only to reproduce a Java mixin applied twice. Remove that discriminator and lend the hands and kill-credit stack so an unrelated component projection cannot suppress the event. Source and credit resolution, strength, direction and cancellation keep their existing meaning. A panic disables only that mod's knockback callback, reports it, and leaves the other listeners and the push running."
+migrate = "Rebuild against hook version 3. Delete KnockbackEntry imports and event.entry matches; apply your strength or ratio rule once per event, not once per Java entry. attacker_main, attacker_off and kill_credit_main now contain borrowed ItemStackViews: keep item(), count() and damage() reads, and replace reads that need components or an owned copy with view.project(), handling None. The views must not escape the callback. Keep reading source, attacker and kill_credit as before, and keep returning Flow::Cancel to veto the push. Native patches targeting Game::knock_back_player_full must retarget Game::knock_back_player and remove the comes_from_effect binding; the flag did not affect player motion."

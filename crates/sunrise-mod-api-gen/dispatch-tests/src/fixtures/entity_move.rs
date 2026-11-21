@@ -134,6 +134,22 @@ mod root {
             Ok(call())
         }
 
+        pub(super) fn isolated_refusable<T>(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            _: bool,
+            call: impl FnOnce() -> T,
+        ) -> Option<T> {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+                Ok(output) => Some(output),
+                Err(_) => {
+                    poison(hook, id);
+                    None
+                }
+            }
+        }
+
         pub(super) fn listening_kind_owner(
             hook: super::HookId,
             kind: &str,

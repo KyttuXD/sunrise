@@ -13,23 +13,25 @@ The pages in this section follow a mod from its source to a player's game and a 
 
 <!-- section-pages -->
 
-## Living knockback entry
+## Living knockback
 
-`living_knockback` fires once per full-entry call, before resistance and motion changes.
-The read-only `entry` is `KnockbackEntry::Short` when the short overload delegated the push,
-otherwise `KnockbackEntry::Full`. To model doubling strength at both entries, double it
-once, then double it again only on `Short`: an input of 0.4 becomes 1.6 for `Short`
-and 0.8 for `Full`. There is no second hook dispatch. Two non-commuting listeners run
-in dispatch order, each completing its rewrites before the next; this does not simulate
-two separate passes over the listener list. Cancellation still leaves motion unchanged.
+`living_knockback` fires once for each `LivingEntity.knockback` operation, regardless of how
+it was called. Edit `strength`, `x` or `z` before resistance is applied, or return
+`Flow::Cancel` to leave motion unchanged. The ratios point toward the source, so the push
+moves the entity away from them.
 
-Version 2 also supplies `kill_credit` and `kill_credit_main`: the pushed living entity's
-kill credit and that entity's current main-hand stack, read after accepted-hit memories
-are committed and before the push. A remembered player takes precedence over the last
-hurting mob, including a tame wolf's owner. An unresolved remembered player yields 0 and
-no stack, not a fallback to the mob. After the remembered player expires, the recent mob
-may receive credit. This context is distinct from `attacker` and its captured source weapon. Both fields are additions: NeoForge's
-`LivingKnockBackEvent` doesn't carry them.
+`attacker_main`, `attacker_off` and `kill_credit_main` lend read-only `ItemStackView`s.
+Read `item()`, `count()` or `damage()` without copying components; call `project()` only
+if you need the component patch or an owned stack. A failed projection does not stop the
+listener or the push. A panicking listener's unfinished edits are discarded and its
+knockback callback is disabled for the session; each other listener can still run.
+
+`kill_credit` names the pushed entity's kill credit, read after accepted-hit memories
+are committed. A remembered player takes precedence over the last hurting mob, including
+a tame wolf's owner. An unresolved remembered player yields 0 and no stack; after the
+memory expires, the recent mob may receive credit. This is distinct from `attacker` and
+its captured hands. NeoForge's `LivingKnockBackEvent` does not carry the source and credit
+fields; mods there read them from the relevant entities.
 
 ## Living death contract version 2
 

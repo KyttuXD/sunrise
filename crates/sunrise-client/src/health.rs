@@ -398,21 +398,22 @@ impl<'a> DamageLevel<'a> {
             credit.accepted_mob_hit(mob);
         }
     }
-    /// Only the game bridge calls this after checking for a knockback subscriber. Without a
-    /// site's loan the credit comes from the pushed entity's own hurt memories and this hit's
-    /// attack ([`kill_credit::from_memory`]).
-    pub fn knockback_credit(
-        &self,
+    /// Split the already accepted hit's credit loan from the level the listener uses as its
+    /// host, so the credited stack can be read without copying it. Without a site's loan the
+    /// credit comes from the pushed entity's own memories and this hit's attack.
+    pub fn split_knockback_credit(
+        mut self,
         pushed: &Hurting<'_>,
-    ) -> (i32, Option<&crate::items::ItemStack>) {
-        match &self.credit {
+    ) -> (Self, i32, Option<&'a crate::items::ItemStack>) {
+        let (id, main) = match std::mem::replace(&mut self.credit, Credit::Memory) {
             Credit::Loan(credit) => credit.snapshot(pushed, self.attack),
             Credit::Memory => kill_credit::from_memory(pushed, self.attack),
             Credit::NoPush => {
                 debug_assert!(false, "living_knockback push from a no_push damage site");
                 kill_credit::from_memory(pushed, self.attack)
             }
-        }
+        };
+        (self, id, main)
     }
 
     /// The same level, on a client when `client_side`: a hook asked on both sides tells its
@@ -737,12 +738,13 @@ impl DamageLevel<'_> {
         };
         let before = *knock;
         let canceled = hook(self.reborrow(), pushed, knock);
-        for (now, was) in [
-            (&mut knock.strength, before.strength),
-            (&mut knock.x, before.x),
-            (&mut knock.z, before.z),
+        for (field, now, was) in [
+            ("strength", &mut knock.strength, before.strength),
+            ("x", &mut knock.x, before.x),
+            ("z", &mut knock.z, before.z),
         ] {
             if !now.is_finite() {
+                log::warn!("living_knockback refused non-finite {field}: {now}");
                 *now = was;
             }
         }
