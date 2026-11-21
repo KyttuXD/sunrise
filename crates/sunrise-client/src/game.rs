@@ -6070,32 +6070,21 @@ impl Game<'_> {
                         f64::from(pos.z) + 0.5,
                     ];
                     let name = if sound.contains(':') {
-                        sound.to_string()
+                        std::borrow::Cow::Borrowed(sound.as_ref())
                     } else {
-                        format!("minecraft:{sound}")
+                        std::borrow::Cow::Owned(format!("minecraft:{sound}"))
                     };
                     use sunrise_world::level::LevelSoundSource;
-                    match source {
-                        Some(LevelSoundSource::Blocks | LevelSoundSource::BlockPlacement) => {
-                            self.audio.play_on(
-                                mod_api::SoundSource::Blocks.index(),
-                                &name,
-                                Some(c),
-                                volume,
-                                pitch,
-                            );
-                            if source == Some(LevelSoundSource::BlockPlacement)
-                                && let Some(placer) = self.lan_acting_entity
-                                && let Some(captured) = self
-                                    .audio
-                                    .capture
-                                    .as_mut()
-                                    .and_then(|sounds| sounds.last_mut())
-                            {
-                                captured.except_entity = Some(placer as u32);
-                            }
+                    let blocks = mod_api::SoundSource::Blocks.index();
+                    match (source, self.lan_acting_entity) {
+                        (Some(LevelSoundSource::BlockPlacement), Some(placer)) => {
+                            self.audio
+                                .play_on_excluding(blocks, &name, c, volume, pitch, placer);
                         }
-                        None => self.audio.play(&name, Some(c), volume, pitch),
+                        (Some(LevelSoundSource::Blocks | LevelSoundSource::BlockPlacement), _) => {
+                            self.audio.play_on(blocks, &name, Some(c), volume, pitch);
+                        }
+                        (None, _) => self.audio.play(&name, Some(c), volume, pitch),
                     }
                 }
                 // Handled as the behaviour emits it (GameLevel::emit).

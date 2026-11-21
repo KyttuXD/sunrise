@@ -404,6 +404,8 @@ pub(super) fn emit<'a>(
         // The fields an isolated dispatch rolls back to the requested values on a listener's
         // unwind (#2414 ruling), each with whether the event holds it behind a `&mut`.
         let mut rollback: Vec<(String, bool)> = Vec::new();
+        // A scoped listener edits its own draft; there is no write-through field to roll back.
+        let mut part_output = None;
         // The rolled-back fields a snapshot copies by `Clone` rather than by `Copy`.
         let mut cloned: Vec<String> = Vec::new();
         // The `&mut dyn Trait` fields: registrars and draw surfaces, with no value to snapshot.
@@ -507,22 +509,28 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate
-                    && !isolated_part_listen
-                    && batch_entry.is_none()
-                    && !rollback_pointee_is_copy(&field_ty)
-                {
-                    return Err(format!(
-                        "{}: isolate rolls a listener's writes back to the requested values; \
-                         its mutable argument {name} must be a Copy primitive or a fixed array \
-                         of them",
-                        hook.name
-                    ));
+                if isolated_part_listen {
+                    if part_output.replace(name.clone()).is_some() {
+                        return Err(format!(
+                            "{}: an isolated scoped listener can edit only one borrowed value",
+                            hook.name
+                        ));
+                    }
+                } else {
+                    if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty)
+                    {
+                        return Err(format!(
+                            "{}: isolate rolls a listener's writes back to the requested values; \
+                             its mutable argument {name} must be a Copy primitive or a fixed array \
+                             of them",
+                            hook.name
+                        ));
+                    }
+                    if !rollback_pointee_is_copy(&field_ty) {
+                        cloned.push(name.clone());
+                    }
+                    rollback.push((name.clone(), true));
                 }
-                if !rollback_pointee_is_copy(&field_ty) {
-                    cloned.push(name.clone());
-                }
-                rollback.push((name.clone(), true));
             }
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
@@ -1232,22 +1240,17 @@ pub(super) fn emit<'a>(
                 ),
             ),
         };
-        let isolated_output = if isolated_part_listen {
-            match rollback.as_slice() {
-                [(output, true)]
-                    if surfaces.is_empty() && write_back.is_empty() && hook.inert.is_none() =>
-                {
-                    Some(output)
-                }
-                _ => {
-                    return Err(format!(
-                        "{name}: an isolated scoped listener needs one borrowed value to edit"
-                    ));
-                }
-            }
-        } else {
-            None
-        };
+        if isolated_part_listen
+            && (part_output.is_none()
+                || !rollback.is_empty()
+                || !surfaces.is_empty()
+                || !write_back.is_empty()
+                || hook.inert.is_some())
+        {
+            return Err(format!(
+                "{name}: an isolated scoped listener needs one borrowed value to edit"
+            ));
+        }
         let inert_owner = fresh_name("disabled_owner", &mut used);
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => (
@@ -1331,7 +1334,7 @@ pub(super) fn emit<'a>(
                         )
                     }
                 },
-                if let Some(output) = isolated_output {
+                if let Some(output) = part_output {
                     let draft = fresh_name("draft", &mut used);
                     let owner = fresh_name("part_owner", &mut used);
                     format!(

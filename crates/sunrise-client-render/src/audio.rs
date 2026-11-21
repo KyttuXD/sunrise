@@ -2315,6 +2315,17 @@ impl Audio {
         pitch: f32,
         seed: i64,
     ) {
+        self.play_seeded_excluding(event, at, volume, pitch, seed, None);
+    }
+    fn play_seeded_excluding(
+        &mut self,
+        event: &str,
+        at: Option<[f64; 3]>,
+        volume: f32,
+        pitch: f32,
+        seed: i64,
+        except_entity: Option<u32>,
+    ) {
         if let (Some(capture), Some(at)) = (self.capture.as_mut(), at) {
             capture.push(CapturedSound {
                 event: event.to_owned(),
@@ -2325,7 +2336,7 @@ impl Audio {
                     crate::settings::sound_source(&crate::sound_events::normalize(event))
                 }),
                 entity: None,
-                except_entity: None,
+                except_entity,
                 seed,
                 particles_before: crate::particles::requested_count(),
             });
@@ -2367,6 +2378,21 @@ impl Audio {
     ) {
         let seed = self.random.next_long();
         self.play_on_seeded(source, event, at, volume, pitch, seed);
+    }
+    /// Play a level sound and exclude the predicting player from its broadcast.
+    pub fn play_on_excluding(
+        &mut self,
+        source: usize,
+        event: &str,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+        except_entity: u32,
+    ) {
+        let seed = self.random.next_long();
+        self.source_override = Some(source);
+        self.play_seeded_excluding(event, Some(at), volume, pitch, seed, Some(except_entity));
+        self.source_override = None;
     }
     /// A level sound with an explicit category and seed, as received from the server.
     pub fn play_on_seeded(
