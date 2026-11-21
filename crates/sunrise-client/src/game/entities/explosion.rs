@@ -1222,48 +1222,12 @@ impl Game<'_> {
                     )
             }};
         }
-        // The walk visits the storages in storage order, unless a listening
-        // `explosion_detonate` left the list, and then it visits exactly what
-        // the list names, in its order (`explosion_detonate.rs`). The kinds
-        // outside the storages (players, frames, paintings, cushions,
-        // crystals, the dragon, hooks) answer no handle here: the player walk
-        // and their own passes read the list for them.
         let mut cursor = self.entity_id_cursor();
         let mut listed_at = 0;
-        loop {
-            let next = if let Some(list) = self.combat.blast_hit_list.as_ref() {
-                let Some(&id) = list.get(listed_at) else {
-                    break;
-                };
-                listed_at += 1;
-                self.blast_handle(id).map(|handle| (id, handle))
-            } else {
-                let Some(next) = self.next_entity_id(&mut cursor) else {
-                    break;
-                };
-                Some(next)
-            };
-            let Some((entity, handle)) = next else {
-                continue;
-            };
-            // A callback may discard a later original without sweeping its
-            // storage yet. Removed entities no longer receive blast callbacks.
-            // A discarded mob stays in its storage flagged removed, and its
-            // selector target is gone, so the flag is read on its own.
-            if with_entity!(self, handle, e => e.is_removed())
-                || with_entity!(self, handle, e => e.selector_target())
-                    .is_some_and(|target| self.target_removed(&target))
-            {
-                continue;
-            }
-            // An entity the blast's list does not name is neither hurt nor
-            // pushed; without a listener the storages are the walk.
-            let hit = if with_entity!(self, handle, e => self.combat.visits(e.id())) {
-                let seen = hurts || knockback != 0.0;
-                with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast, seen))
-            } else {
-                None
-            };
+        while let Some((entity, handle)) = self.next_blast_entity(&mut cursor, &mut listed_at) {
+            let seen = hurts || knockback != 0.0;
+            let hit =
+                with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast, seen));
             let mut destroyed = false;
             if let Some(Hit {
                 dist,
@@ -1851,16 +1815,19 @@ impl Game<'_> {
         if !self.blast_explodes_blocks() {
             targets.clear();
         }
-        // The walks that hurt entities follow the list a listening
-        // `explosion_detonate` leaves: a blast set off inside one of them
-        // (its own detonate, a nested `level_explode`) keeps its own list.
-        let outer = std::mem::take(&mut self.combat.blast_hit_list);
-        let outer_ids = std::mem::take(&mut self.combat.blast_hit_ids);
-        self.explosion_detonate(center, radius, &mut targets);
-        let pushed =
-            self.explosion_hurt_entities(center, radius, damage_type, interaction, &targets);
-        self.combat.blast_hit_list = outer;
-        self.combat.blast_hit_ids = outer_ids;
+        let source_id = self
+            .combat
+            .explosion_direct
+            .or(self.combat.explosion_source);
+        let pushed = self.with_explosion_detonate(
+            source_id,
+            center,
+            radius,
+            &mut targets,
+            |game, blocks| {
+                game.explosion_hurt_entities(center, radius, damage_type, interaction, blocks)
+            },
+        );
         self.explosion_block_step(&mut targets, radius, interaction, fire, &start)?;
         let effects = self.blast_effects();
         if !source.silent {
@@ -1917,7 +1884,7 @@ impl Game<'_> {
     /// blocks hit: the ones that were not air when their turn came.
     pub(super) fn explosion_block_step(
         &mut self,
-        targets: &mut [[i32; 3]],
+        targets: &mut Vec<[i32; 3]>,
         radius: f32,
         interaction: BlockInteraction,
         fire: bool,
@@ -1925,13 +1892,15 @@ impl Game<'_> {
     ) -> Result<usize> {
         let mut hit = 0;
         if interaction == BlockInteraction::Trigger {
-            self.explosion_trigger_blocks(targets)?;
+            let breeze = self.combat.explosion_source.is_some_and(|id| {
+                self.creatures.projectiles.iter().any(|p| {
+                    p.id == id
+                        && p.kind == sunrise_client::projectiles::ProjectileKind::BreezeWindCharge
+                })
+            });
+            self.explosion_trigger_blocks(targets, breeze, None)?;
         } else if interaction != BlockInteraction::Keep {
-            // Util.shuffle(list, level.random)
-            for i in (2..=targets.len()).rev() {
-                let swap = self.world.random.next_int_bound(i as i32).unwrap_or(0) as usize;
-                targets.swap(i - 1, swap);
-            }
+            self.shuffle_explosion_targets(targets);
             let mut drops = ExplosionDrops::default();
             for &pos in targets.iter() {
                 if self.explosion_hit_block(pos, radius, interaction, start, &mut drops)? {
@@ -1965,6 +1934,14 @@ impl Game<'_> {
         }
         Ok(hit)
     }
+    /// `Util.shuffle(list, level.random)` before the block phase, including a trigger blast.
+    pub(super) fn shuffle_explosion_targets(&mut self, targets: &mut [[i32; 3]]) {
+        for i in (2..=targets.len()).rev() {
+            let swap = self.world.random.next_int_bound(i as i32).unwrap_or(0) as usize;
+            targets.swap(i - 1, swap);
+        }
+    }
+
     fn explosion_hit_block(
         &mut self,
         pos: [i32; 3],

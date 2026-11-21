@@ -6,12 +6,26 @@ ids = [
     "type:ResistanceCellsError.Overflow",
     "type:ExplosionDestroyError",
     "type:ExplosionDestroyError.TooMany",
+    "type:ExplosionDestroyError.InvalidBlast",
+    "type:ExplodeError",
+    "type:ExplodeError.Unavailable",
+    "type:ExplodeError.InvalidBlast",
     "handle:LevelRef::explode",
+    "handle:LevelRef::explosion_resistance",
     "handle:LevelRef::explosion_resistances",
     "handle:LevelRef::explosion_destroy_blocks",
     "hook:explosion_detonate",
     "hook:explosion_resistance",
     "method:BlockPart::explosion_resistance",
 ]
-why = "Match vanilla 26.3 ServerLevel.explode, ServerExplosion, and ExplosionDamageCalculator.getBlockExplosionResistance, and NeoForge ExplosionEvent.Detonate and IBlockExtension.getExplosionResistance: LevelRef::explosion_destroy_blocks now applies listener-added, removed, and reordered block positions from explosion_detonate (deduplicated and filtered to loaded in-height chunks); synthetic caps and admission gates are removed (ResistanceCells::MAX, ResistanceCellsError::TooMany replaced by Overflow for allocation overflow, ExplosionDestroyError::MAX_POSITIONS and TooMany, the 30,000,000 centre bound and loaded-centre-chunk refusal on LevelRef::explode, and the negative-radius refusal on LevelRef::explosion_destroy_blocks); and BlockPart::explosion_resistance accepts finite negative values, combining them with fluid resistance via max (0.0 empty, 100.0 water/lava) and refusing only non-finite answers."
-migrate = "Remove references to ResistanceCells::MAX, ExplosionDestroyError::MAX_POSITIONS, ResistanceCellsError::TooMany, and ExplosionDestroyError::TooMany. Handle ResistanceCellsError::Overflow for cell areas that exceed allocation capacity. Expect explosion_detonate listeners to add, remove, or reorder blocks in LevelRef::explosion_destroy_blocks, LevelRef::explode to run for any finite centre without requiring the centre chunk to be loaded, and BlockPart::explosion_resistance finite negative answers to combine with fluid resistance via max. Rebuild native mods against the updated SDK."
+why = """
+Match NeoForge ExplosionEvent.Detonate and its ServerExplosion patch: WindCharge.explode and BreezeWindCharge.explode are trigger explosions, so they offer both lists before knockback or block interaction, even when ServerExplosion.canTriggerBlocks prevents a breeze charge from triggering blocks. LevelRef::explosion_destroy_blocks normalizes its input as before, then keeps listener edits, including repetitions, through the loaded-chunk and height checks, as ServerExplosion.interactWithBlocks and createFire consume the edited list.
+Vanilla 26.3 ServerLevel.explode does not gate admission on a loaded or in-bounds centre or use synthetic cell or position counts. The destruction helper also accepts finite negative radii. Only the engine's world access and allocation checks remain.
+BlockPart::explosion_resistance (NeoForge IBlockExtension.getExplosionResistance) moves from hook version 1 to 2: a finite negative part answer replaces the block's own value, and ExplosionDamageCalculator.getBlockExplosionResistance combines it with the fluid's via max (0 for empty, 100 for water or lava). Non-finite answers are still refused.
+"""
+migrate = """
+Remove references to ResistanceCells::MAX and ExplosionDestroyError::MAX_POSITIONS. Replace ResistanceCellsError::TooMany(_) with ResistanceCellsError::Overflow for an area that exceeds allocation capacity, and remove the ExplosionDestroyError::TooMany(_) match arm.
+If LevelRef::explode callers relied on ExplodeError::Unavailable for an unloaded centre chunk or ExplodeError::InvalidBlast for an out-of-bounds finite centre, check that condition before calling. If LevelRef::explosion_destroy_blocks callers relied on ExplosionDestroyError::InvalidBlast for a negative radius, validate the radius before calling: otherwise explosion_start runs and the supplied positions may be affected, without explosion_detonate below radius 0.00001.
+Keep the same explosion_detonate callback; it now also runs for wind bursts. Remove a block or entity from that list to spare it from the direct effects. For explosion_destroy_blocks, keep any desired uniqueness in your listener: the engine keeps added blocks, reordering and repetitions in the edited list, including repeated chances to catch fire.
+Pin explosion_resistance with hook_version = 2 if the manifest pins it. Return None (not a negative sentinel) to leave the block's resistance unchanged. Both LevelRef::explosion_resistance and LevelRef::explosion_resistances now yield the fluid-combined result for a finite negative part answer instead of substituting the block's static resistance. Rebuild native mods against the updated SDK.
+"""

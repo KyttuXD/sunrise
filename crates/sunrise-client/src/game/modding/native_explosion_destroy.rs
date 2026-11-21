@@ -12,9 +12,9 @@ const DETONATE_RADIUS: f32 = 1.0e-5;
 impl Game<'_> {
     /// Destroys the blocks at `positions` as the blast `level.explode(source, center, radius, fire,
     /// interaction)` would: `explosion_start` (which may cancel it), `explosion_detonate` with the
-    /// positions, then the blast's block step on those left. Positions in chunks that aren't
-    /// loaded, or outside the level's height, are skipped and not counted. The number of blocks
-    /// destroyed.
+    /// distinct input positions, then the blast's block step on the edited list, including
+    /// repeated positions. Positions in chunks that aren't loaded, or outside the level's height,
+    /// are skipped and not counted. Returns the number of blocks destroyed.
     pub(super) fn level_explosion_destroy_blocks(
         &mut self,
         level: LevelRef,
@@ -80,15 +80,9 @@ impl Game<'_> {
             // This block-only phase has no entity victims; listeners may remove, add or reorder
             // block positions (`ExplosionEvent.Detonate`).
             self.native_explosion_detonate(self.dim.id(), center, &mut targets, &mut Vec::new());
-            seen.clear();
-            targets.retain(|p| seen.insert(*p));
         }
         // Unlike the reference's rays, a mod's list never loads terrain.
-        let (min_y, max_y) = (self.world.bottom_y(), self.world.top_y());
-        targets.retain(|p| {
-            (min_y..max_y).contains(&p[1])
-                && self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))
-        });
+        targets.retain(|p| self.world.shape.contains_y(p[1]) && self.world.loaded(p[0], p[2]));
         match self.explosion_block_step(&mut targets, radius, interaction, fire, &start) {
             Ok(hit) => hit as u32,
             Err(error) => {

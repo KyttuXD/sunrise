@@ -2673,7 +2673,8 @@ pub(crate) mod tests {
                 assert_eq!(sounds(game, &other), [(name.into(), blocks as i32, 1.0)]);
             }
 
-            game.explosion_trigger_blocks(&mut [pos]).unwrap();
+            game.explosion_trigger_blocks(&mut vec![pos], false, None)
+                .unwrap();
             assert!(!open(game));
             game.lan_broadcast_effects();
             for listener in [&actor, &other] {
@@ -2706,7 +2707,8 @@ pub(crate) mod tests {
                 .with_props(gate, &[("open", "true"), ("powered", "true")])
                 .unwrap();
             game.world.set(x, y, z, powered).unwrap();
-            game.explosion_trigger_blocks(&mut [pos]).unwrap();
+            game.explosion_trigger_blocks(&mut vec![pos], false, None)
+                .unwrap();
             assert_eq!(game.world.block(x, y, z), powered);
             assert_eq!(game.audio.heard.get(blast_sound), Some(&1));
         });

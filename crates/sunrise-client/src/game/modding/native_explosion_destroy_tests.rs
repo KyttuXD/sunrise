@@ -222,10 +222,13 @@ fn a_detonate_listener_edits_reorders_and_adds_positions() {
             set(game, p, "cobblestone");
         }
         watch.edit.store(true, Ordering::Relaxed);
-        // Java Random seed 7: nextInt(2) is 1, so index 0 stays first after shuffle.
+        // Java Random seed 7 draws 1 for both nextInt(3) and nextInt(2): the added
+        // block stays first, and the repeated entry makes the shuffle draw twice.
         game.world.random.set_seed(7);
         let positions = [[1, 80, 1], [2, 80, 1]];
         destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(2));
+        // Two shuffle draws plus three nextDouble offsets for the merged drop.
+        assert_eq!(game.world.random.next_int(), -1_253_369_595);
         assert_eq!(name(game, [1, 80, 1]), "minecraft:cobblestone", "spared");
         assert_eq!(name(game, [2, 80, 1]), "minecraft:air");
         assert_eq!(name(game, [3, 80, 3]), "minecraft:air", "added, destroyed");
@@ -333,6 +336,20 @@ fn more_than_the_old_cap_of_positions_is_accepted() {
         destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(1));
         assert_eq!(name(game, [1, 80, 1]), "minecraft:air");
         assert_eq!(*watch.detonated.lock().unwrap(), [vec![[1, 80, 1]]]);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_negative_radius_still_destroys_the_supplied_blocks_without_detonate() {
+    with_watch(|game, watch| {
+        let pos = [1, 80, 1];
+        let mut blast = blast(ExplosionInteraction::Block);
+        blast.radius = -1.0;
+        set(game, pos, "stone");
+        destroy(game, &[pos], blast, Ok(1));
+        assert_eq!(name(game, pos), "minecraft:air");
+        assert!(watch.detonated.lock().unwrap().is_empty());
     });
 }
 

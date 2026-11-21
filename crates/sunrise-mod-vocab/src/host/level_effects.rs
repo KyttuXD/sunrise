@@ -138,7 +138,9 @@ pub trait LevelEffectsBackendMut {
     /// would set off would meet in the cell at `pos`, as its rays read it
     /// (`ExplosionDamageCalculator.getBlockExplosionResistance`), without exploding anything. The
     /// larger of the block's answer (its parts' `explosion_resistance` first, then its own value)
-    /// and the fluid's (water and lava 100); `NoResistance` for air with no fluid. The blast's
+    /// and the fluid's (0 for empty; water and lava 100). A finite negative part answer still
+    /// replaces the block's own value before this comparison. `NoResistance` for air with no
+    /// fluid. The blast's
     /// calculator is the one `explode` gives that source, read from the same selection: as
     /// vanilla's `EntityBasedExplosionDamageCalculator` asks the source, a primed TNT minecart's
     /// rails and the blocks under them resist 0 (and the blast spares them), and a dangerous
@@ -187,8 +189,10 @@ pub trait LevelEffectsBackendMut {
     /// explosion to the hooks: `explosion_start` first, which may cancel it (then nothing breaks
     /// and the answer is 0), then, for a radius of at least 0.00001, `explosion_detonate` with
     /// the positions as its block list, in the order given, a repeated one once; listeners may
-    /// remove, add or reorder positions (`ExplosionEvent.Detonate`), and duplicates are kept
-    /// once in the resulting order before loaded-chunk and height filtering. Then the block step
+    /// remove, add, repeat or reorder positions (`ExplosionEvent.Detonate`). The edited list
+    /// keeps its order and repetitions before loaded-chunk and height filtering. Negative finite
+    /// radii still run `explosion_start` and the block step, but not `explosion_detonate`.
+    /// Then the block step
     /// in vanilla's order: the positions shuffled with the level's random, and each block hit as
     /// the blast hits one (air skipped; `can_drop_from_explosion`; loot with the radius under
     /// the decay interaction; experience when the causing entity is a player;

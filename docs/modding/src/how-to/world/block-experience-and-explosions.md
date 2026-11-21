@@ -291,9 +291,11 @@ Each call is one explosion to the hooks. `explosion_start` hears it first and
 may cancel it: then nothing breaks and the answer is 0. For a radius of at
 least 0.00001, `explosion_detonate` hears the positions as its block list, in
 the order given, a repeated one once. Listeners may remove, add or reorder
-positions (`ExplosionEvent.Detonate`), and duplicates are kept once in the
-resulting order before loaded-chunk and height filtering. Then the block step
-runs as a blast's does, in vanilla's order:
+positions (`ExplosionEvent.Detonate`), including repeating a position. The block
+step keeps the edited list's order and repetitions before loaded-chunk and
+height filtering. It still runs for a finite negative radius, after
+`explosion_start` but without `explosion_detonate`. The steps follow vanilla's
+order:
 
 1. The positions are shuffled with the level's random.
 2. Each block is hit: air is skipped; `can_drop_from_explosion` decides the
@@ -307,8 +309,9 @@ runs as a blast's does, in vanilla's order:
    drops. Reordering a `block_drops` list changes the order of its joins;
    editing just a field keeps that entry's place without ordering its peers.
    A merged group shared by several blocks still joins only once.
-4. With `fire`, a third of the cells left air above a solid block catch fire,
-   under `None` too.
+4. With `fire`, each list entry has a one-in-three chance to set fire if its
+   cell is air above a solid block, under `None` too. A repeated position can
+   get another chance.
 
 `None` breaks nothing else, and `Trigger` only works the blocks it may. The
 causing entity and the damage type come from `source` as for `explode`.
