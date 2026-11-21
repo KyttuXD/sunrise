@@ -46,6 +46,7 @@ fn held_identity(stack: &ItemStack) -> ItemStack {
     if let Some(data) = stack.extra.as_deref_mut() {
         data.container.clear();
         data.bundle_contents.clear();
+        data.set_other("minecraft:bundle_contents", None);
     }
     stack.tidy();
     stack

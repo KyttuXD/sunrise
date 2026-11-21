@@ -58,7 +58,7 @@ impl Game<'_> {
         let Some(removed) = contents.remove_one(items) else {
             return;
         };
-        contents.store(&mut bundle);
+        contents.store(items, &mut bundle);
         let item = Arc::clone(&bundle.item);
         *self.stack_in_mut(slot) = Some(bundle);
         let Some(position) = self.player.as_ref().map(|p| p.position) else {

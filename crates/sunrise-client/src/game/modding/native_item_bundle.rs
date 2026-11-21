@@ -56,7 +56,7 @@ impl Game<'_> {
         let moved = bundle.try_insert(self.res.items(), &mut item.clone(), fits);
         let mut changed = stack.clone();
         changed.count = 1;
-        bundle.store(&mut changed);
+        bundle.store(self.res.items(), &mut changed);
         changed.data_mut().wire = Default::default();
         changed.tidy();
         Some((moved, changed))
@@ -88,7 +88,7 @@ impl Game<'_> {
             return Some((None, changed));
         };
         let take = out.count.min(max);
-        bundle.store(&mut changed);
+        bundle.store(self.res.items(), &mut changed);
         if take < out.count {
             let mut rest = out.clone();
             rest.count -= take;
