@@ -2643,7 +2643,7 @@ pub(super) mod tests {
         static MAP_SLOT: AttachmentType<StackList<ItemResource>> = AttachmentType {
             namespace: "crafted_map_fixture",
             name: "slot",
-            default: Vec::new,
+            default: StackList::new,
             codec: None,
             copy_on_death: false,
             sync: false,

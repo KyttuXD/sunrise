@@ -24,7 +24,7 @@ fn accepts_the_chosen(resource: &ItemResource) -> bool {
 static ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
     namespace: "attached_storage_test",
     name: "items",
-    default: Vec::new,
+    default: StackList::new,
     codec: Some(ITEM_STACKS),
     copy_on_death: false,
     sync: false,
@@ -32,7 +32,7 @@ static ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
 static VALID_ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
     namespace: "attached_storage_test",
     name: "valid_items",
-    default: Vec::new,
+    default: StackList::new,
     codec: Some(ITEM_STACKS),
     copy_on_death: false,
     sync: false,
@@ -40,7 +40,7 @@ static VALID_ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
 static FLUIDS: AttachmentType<StackList<FluidResource>> = AttachmentType {
     namespace: "attached_storage_test",
     name: "fluids",
-    default: Vec::new,
+    default: StackList::new,
     codec: Some(FLUID_STACKS),
     copy_on_death: false,
     sync: false,
@@ -104,7 +104,7 @@ fn a_fluid_tank_round_trips_through_its_codec_and_moves() {
         resolve(&[], &["minecraft:water"]);
         let mut host = FakeHost::new();
         let water = fluid("minecraft:water");
-        let tanks = AttachedFluids::new(&FLUIDS, CHUNK, 3, 1000, |_| true).unwrap();
+        let tanks = AttachedFluids::new(&FLUIDS, CHUNK, 3, 1000, |_| true);
         let moved =
             host.transaction(|host, tx| Ok::<_, ()>(tanks.insert_at(host, tx, 1, &water, 250)));
         assert_eq!(moved, Ok(250));
@@ -133,7 +133,7 @@ fn extraction_takes_part_and_none_of_another_resource() {
         let mut host = FakeHost::new();
         let dirt = item("minecraft:dirt");
         let cobble = item("minecraft:cobblestone");
-        let slots = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true).unwrap();
+        let slots = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true);
         let went =
             host.transaction(|host, tx| Ok::<_, ()>(slots.insert_at(host, tx, 4, &dirt, 30)));
         assert_eq!(went, Ok(30));
@@ -165,7 +165,7 @@ fn capacity_stays_physical_while_validity_refuses_inserts_only() {
         let cobble = item("minecraft:cobblestone");
         CHOSEN.with_borrow_mut(|chosen| *chosen = Some(dirt.to_stack(1).unwrap().item()));
         let only_dirt =
-            AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, accepts_the_chosen).unwrap();
+            AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, accepts_the_chosen);
         assert_eq!(
             only_dirt.capacity(&mut host, 2, Some(&cobble)),
             64,
@@ -179,7 +179,7 @@ fn capacity_stays_physical_while_validity_refuses_inserts_only() {
             host.transaction(|host, tx| Ok::<_, ()>(only_dirt.insert_at(host, tx, 2, &dirt, 120)));
         assert_eq!(went, Ok(64), "at most the item's stack size per index");
         // A cobblestone another (permissive) handler's write stored reads out through this one.
-        let anything = AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, |_| true).unwrap();
+        let anything = AttachedItems::new(&VALID_ITEMS, CHUNK, 4, 500, |_| true);
         let _ =
             host.transaction(|host, tx| Ok::<_, ()>(anything.insert_at(host, tx, 3, &cobble, 7)));
         let came =
@@ -226,10 +226,10 @@ fn a_smaller_view_keeps_higher_indices() {
         resolve(&["minecraft:dirt"], &[]);
         let mut host = FakeHost::new();
         let dirt = item("minecraft:dirt");
-        let big = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true).unwrap();
+        let big = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true);
         let went = host.transaction(|host, tx| Ok::<_, ()>(big.insert_at(host, tx, 7, &dirt, 12)));
         assert_eq!(went, Ok(12));
-        let small = AttachedItems::new(&ITEMS, CHUNK, 3, 64, |_| true).unwrap();
+        let small = AttachedItems::new(&ITEMS, CHUNK, 3, 64, |_| true);
         let went = host.transaction(|host, tx| Ok::<_, ()>(small.insert_at(host, tx, 0, &dirt, 5)));
         assert_eq!(went, Ok(5));
         assert_eq!(big.amount(&mut host, 7), 12, "the higher index survived");
@@ -277,7 +277,7 @@ fn handler_and_codec_limits_agree() {
         let mut host = FakeHost::new();
         let dirt = item("minecraft:dirt");
         assert!(AttachedItems::new(&ITEMS, CHUNK, 4097, 64, |_| true).is_none());
-        let slots = AttachedItems::new(&ITEMS, CHUNK, 4096, 64, |_| true).unwrap();
+        let slots = AttachedItems::new(&ITEMS, CHUNK, 4096, 64, |_| true);
         assert_eq!(
             host.transaction(|host, tx| Ok::<_, ()>(slots.insert_at(host, tx, 4095, &dirt, 1))),
             Ok(1)

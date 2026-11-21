@@ -12,7 +12,7 @@ use sunrise_client::{chunk::Chunk, items::ItemStack};
 static ITEMS: AttachmentType<StackList<ItemResource>> = AttachmentType {
     namespace: "storage_test",
     name: "items",
-    default: Vec::new,
+    default: StackList::new,
     codec: Some(ITEM_STACKS),
     copy_on_death: false,
     sync: false,
@@ -41,7 +41,7 @@ fn attached_items_are_undone_by_an_abort_and_saved_by_their_codec() {
     with_game(|game| {
         chunk_game(game);
         let dirt = ItemResource::of(&ItemStack::new("minecraft:dirt", 1).try_into_api().unwrap());
-        let slots = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true).unwrap();
+        let slots = AttachedItems::new(&ITEMS, CHUNK, 9, 64, |_| true);
         let host: &mut dyn ServerHost = game;
         let aborted =
             host.transaction(|host, tx| Err::<(), _>(slots.insert_at(host, tx, 4, &dirt, 10)));
