@@ -432,7 +432,8 @@ impl PackageInfo {
     pub fn icon_path(&self) -> Option<&str> {
         self.details.icon_path.as_deref()
     }
-    /// One value of its manifest's `[properties]` table.
+    /// One value of its manifest's `[properties]` table. Only the complete manifest's byte
+    /// limit applies; there is no separate property count or size limit.
     pub fn property(&self, key: &str) -> Option<&crate::PropertyValue> {
         self.details.properties.get(key)
     }

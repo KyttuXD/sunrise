@@ -753,30 +753,37 @@ mod tests {
     }
 
     #[test]
-    fn declaration_boundaries_apply_to_dependencies_and_pair_rules() {
+    fn long_policy_reasons_are_preserved_for_dependencies_and_pair_rules() {
+        let reason = "Some context. ".repeat(100);
+        let entry = format!("target={{version='^1',reason='{reason}'}}");
+        let source = manifest(
+            "owner",
+            &format!("[dependencies]\n{entry}\n[incompatible]\n{entry}\n[discouraged]\n{entry}"),
+        );
+        let dependency = from_manifest(&source.dependencies, Side::Client);
+        assert_eq!(dependency[0].reason.as_deref(), Some(reason.as_str()));
+        let pairs = rules(&source, Side::Client);
+        assert_eq!(pairs.len(), 2);
+        for rule in pairs {
+            assert_eq!(rule.reason.as_deref(), Some(reason.as_str()));
+        }
+    }
+
+    #[test]
+    fn policy_schema_errors_are_refused_when_the_manifest_is_parsed() {
         for table in ["dependencies", "incompatible", "discouraged"] {
             let manifest = |entry: &str| {
                 crate::Manifest::parse(&format!(
-                    "id='owner'\nname='Owner'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n[{table}]\n{entry}"
+                    "id='owner'\nname='Owner'\nversion='1'\n[{table}]\n{entry}"
                 ))
             };
+            let url_error =
+                manifest("target={version='^1',url='http://example.test'}").unwrap_err();
+            assert_eq!(url_error, "sunrise-mod.toml: url is not https:// (line 5)");
+            let reason_error = manifest("target={version='^1',reason=42}").unwrap_err();
             assert!(
-                manifest(&format!(
-                    "target={{version='^1',reason='{}',url='https://example.test'}}",
-                    "a".repeat(512)
-                ))
-                .is_ok()
-            );
-            let error = manifest(&format!(
-                "target={{version='^1',reason='{}'}}",
-                "a".repeat(513)
-            ))
-            .unwrap_err();
-            assert!(error.contains("target") && error.contains("reason over 512 bytes"));
-            assert!(
-                manifest("target={version='^1',url='http://example.test'}")
-                    .unwrap_err()
-                    .contains("url is not https://")
+                reason_error.contains("expected a string (line 5)"),
+                "{reason_error}"
             );
             assert!(
                 manifest("'bad id'='^1'")

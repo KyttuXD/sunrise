@@ -1,6 +1,7 @@
 //! Serde buffers internally tagged and untagged enums and replays from its own
-//! deserializer. Its callbacks do not expose the branches to `Probe`. Decode
-//! those paths with the real enum, then record the chosen form and its fields.
+//! deserializer; the manifest's custom policy visitors likewise accept shapes
+//! without naming variants. Decode those paths with the real enum, then record
+//! the chosen form and its fields.
 //! Keep the matches exhaustive so a new Rust variant needs a coverage rule.
 
 use crate::{Input, Probe};

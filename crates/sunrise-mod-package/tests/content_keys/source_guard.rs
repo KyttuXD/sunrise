@@ -62,8 +62,8 @@ const REVIEWED: &[(Use<'static>, &[&str])] = &[
     (("content/entity_type.rs", "passenger_attachments", "deserialize_with = \"deserialize_passenger_attachments\""), &["entity_type_full", "refused_entity_type_bad_attachments", "refused_entity_type_attachment_length", "refused_entity_type_attachment_type"]),
     (("manifest.rs", "version", "deserialize_with = \"version_from_str\""), &["manifest_full", "manifest_minimal", "refused_manifest_bad_version"]),
     (("manifest.rs", "Property", "untagged"), &["manifest_full", "refused_manifest_bad_property_type"]),
-    (("manifest.rs", "Dependency", "untagged"), &["manifest_full", "refused_manifest_unknown_dependency_key"]),
-    (("manifest.rs", "Rule", "untagged"), &["manifest_full", "keys_manifest_forms", "refused_manifest_unknown_rule_key"]),
+    (("manifest.rs", "Dependency", "impl Deserialize"), &["manifest_full", "refused_manifest_unknown_dependency_key"]),
+    (("manifest.rs", "Rule", "impl Deserialize"), &["manifest_full", "keys_manifest_forms", "refused_manifest_unknown_rule_key"]),
     (("manifest/jar.rs", "JarRef", "try_from = \"Fields\""), &["manifest_full", "refused_manifest_bad_jar_id", "refused_manifest_bad_jar_hash", "refused_manifest_empty_jar_version"]),
     (("manifest/runtime_files.rs", "RuntimeTable", "try_from = \"BTreeMap<String, String>\""), &["refused_manifest_runtime_on_content", "refused_manifest_empty_runtime", "refused_manifest_bad_runtime_hash", "refused_manifest_bad_runtime_path"]),
     // Not content declarations. Name the reader's unit-test fixtures instead of
