@@ -732,6 +732,11 @@ impl Game<'_> {
         if let Some(m) = self.mob_object_mut(id) {
             let from = m.position;
             sunrise_client::mobs::living::teleports::snap_to(m, transition.position_for(from));
+            sunrise_client::mobs::living::section_writes::discard_reported(
+                id,
+                from.components(),
+                m.position.components(),
+            );
             m.velocity = transition.velocity_for(m.velocity);
             carried = Some((from, m.position));
             if let Some([yaw, pitch]) = transition.rotation_for([m.yaw, m.head_pitch]) {

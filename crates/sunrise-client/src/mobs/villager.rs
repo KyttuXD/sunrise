@@ -150,7 +150,13 @@ pub fn sleeping(m: &Mob) -> bool {
 }
 /// `LivingEntity.startSleeping`: lie in the bed (`setPosToBed`), whose
 /// head becomes `occupied`.
-pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
+pub fn start_sleeping(
+    m: &mut Mob,
+    p: [i32; 3],
+    at: sunrise_core::geometry::Vec3,
+    w: &MobWorld,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if w.prop(p[0], p[1], p[2], "occupied") == Some("true") {
         return false;
     }
@@ -164,11 +170,7 @@ pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld, events: &mut Vec<M
         occupied: true,
     });
     m.velocity = sunrise_core::geometry::Vec3::ZERO;
-    super::living::teleports::set_pos_with(
-        m,
-        crate::bed_geometry::pos_to_bed(p, 0.5625),
-        w.section_writer.clone(),
-    );
+    super::living::teleports::set_pos_with(m, at, w.section_writer.clone());
     true
 }
 /// `LivingEntity.baseTick`: first-tick `setPosToBed` for a loaded sleeper.

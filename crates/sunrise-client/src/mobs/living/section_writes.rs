@@ -70,6 +70,22 @@ pub fn begin(enabled: bool) {
     });
 }
 
+/// Drop the latest capture when an owning write boundary files that same write.
+/// Only this write is redundant; earlier writes from a paused tick still belong to it.
+pub fn discard_reported(id: u32, from: [f64; 3], to: [f64; 3]) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.writes.back().is_some_and(|write| {
+            !write.delivered
+                && write.id == id
+                && write.from.map(Vec3::components) == Some(from)
+                && write.to.components() == to
+        }) {
+            let _ = state.writes.pop_back();
+        }
+    });
+}
+
 /// Capture a committed teleport while the current mob is being ticked.
 pub fn record(id: u32, join: JoinSeq, from: Vec3, to: Vec3) {
     record_with(id, join, from, to, None);

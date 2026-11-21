@@ -233,11 +233,10 @@ impl MobWorld<'_> {
         if outline.outline_offset {
             return None;
         }
-        let boxes: Vec<[f64; 6]> = outline
+        let boxes = outline
             .outline
             .iter()
-            .map(|b| std::array::from_fn(|i| f64::from(at[i % 3]) + b[i]))
-            .collect();
+            .map(|b| std::array::from_fn(|i| f64::from(at[i % 3]) + b[i]));
         shape_top(boxes, f64::from(at[1])).map(|height| pos_to_bed(head, height))
     }
     /// The biome's base temperature at a position.

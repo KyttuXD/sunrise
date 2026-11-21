@@ -2213,7 +2213,9 @@ impl B {
                 t.begin(cx.level.random(), cx.now);
                 if now > *next_ok {
                     close_doors(m, cx, None, None);
-                    if super::villager::start_sleeping(m, home, w, cx.events) {
+                    if let Some(at) = w.sleeping_position(home)
+                        && super::villager::start_sleeping(m, home, at, w, cx.events)
+                    {
                         mem(m).last_slept.set(now);
                     }
                     let mm = mem(m);

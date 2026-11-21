@@ -22,7 +22,8 @@ occupied bed). It moves the sleeper onto that shape and occupies the bed. `stop_
 beside the bed with the normal wake animation, teleport and pose sync; the usual level pass frees a player's bed.
 `set_sleeping_pos` and `clear_sleeping_pos` only change a player's sleeping position/pose, without moving them,
 occupying a bed or playing a wake animation. The next entity sync publishes the changed pose and bed to clients.
-Villagers use `start_sleeping`/`stop_sleeping`, not the raw player position setters.
+Villagers use `start_sleeping`/`stop_sleeping`, not the raw player position setters. When either operation moves
+one into a different section, `entity_entering_section` reports the crossing once.
 
 ## Sprinting
 

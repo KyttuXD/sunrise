@@ -1,0 +1,14 @@
+# Engine internals only. The default SDK comparison does not include the internal catalog.
+ids = [
+    "internal:struct:sunrise_client::game::entity_sections::Crossing",
+    "internal:struct:sunrise_client::game::entity_sections::EntitySections",
+    "internal:field:sunrise_client::game::entity_sections::EntitySections::queue",
+    "internal:field:sunrise_client::game::entity_sections::EntitySections::telling",
+    "internal:method:sunrise_client::game::entity_sections::EntitySections::begin_telling",
+    "internal:method:sunrise_client::game::entity_sections::EntitySections::end_telling",
+    "internal:method:sunrise_client::game::entity_sections::EntitySections::moved",
+    "internal:method:sunrise_client::game::Game::entity_sections_ticked_live",
+    "internal:method:sunrise_client::game::Game::tell_entity_sections_in",
+]
+why = "Vanilla 26.3 PersistentEntitySectionManager.Callback.onMove carries the entity into the new section through EntitySectionStorage before NeoForge posts EntityEvent.EnteringSection. Borrowed ticks now carry their mob row into that boundary instead of rebuilding an identity map. Nested writes stay with the owning host and report their own committed destinations, including passenger moves in Entity.teleportSameDimension and position writes in LivingEntity.startSleeping and stopSleeping."
+migrate = "No change to mod source or manifests that use Hooks::entity_entering_section or LivingRef. Native internal callers: replace entity_sections_ticked_live(&mut sections, &mut writes) with entity_sections_ticked_live(&mut writes, Some(row_index)) after restoring the mob list and its sections to Game; pass None if no row slot is known. The return value says whether callbacks wrote the mob list. Replace tell_entity_sections_in(&mut sections) or manual begin_telling/end_telling and queue/telling access with Game::tell_entity_sections() on the owning game. EntitySections::moved now returns whether it enqueued a crossing; a statement call can ignore the result. Obtain crossing records from section writes rather than constructing them (they now also carry the destination)."

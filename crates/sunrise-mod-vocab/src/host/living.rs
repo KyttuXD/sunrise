@@ -399,10 +399,10 @@ pub trait LivingBackendMut {
     /// `LivingEntity.startSleeping`: the entity lies in the bed whose head
     /// `pos` names, with the effect the game's own sleep has. The player in
     /// place is moved onto the bed, put to sleep and occupies it; a
-    /// villager or wandering trader takes a valid, unoccupied bed. Normal
-    /// integrated-owner, LAN and dedicated guests use their server body,
-    /// inside or outside their own turn, in the level in place. False for
-    /// a guest in another level, a fake player, another
+    /// villager or wandering trader takes a valid, unoccupied bed. A villager's move across a
+    /// section boundary is told through `entity_entering_section`. Normal integrated-owner,
+    /// LAN and dedicated guests use their server body, inside or outside their own turn,
+    /// in the level in place. False for a guest in another level, a fake player, another
     /// mob, an armor stand or the dragon, or a bed without a sleep shape.
     #[access(WorldOnly)]
     fn living_start_sleeping(&mut self, living: LivingRef, pos: [i32; 3]) -> bool;
@@ -410,7 +410,8 @@ pub trait LivingBackendMut {
     /// `LivingEntity.stopSleeping`: the sleeper stands up beside the bed, as
     /// the game's own waking does, with its pose and packets. True when the
     /// entity slept; false for a fake player, another mob, an armor stand
-    /// or the dragon. Normal server guests in the level in place use the
+    /// or the dragon. A villager's move across a section boundary is told through
+    /// `entity_entering_section`. Normal server guests in the level in place use the
     /// same wake-up path; guests in another level are refused.
     #[access(WorldOnly)]
     fn living_stop_sleeping(&mut self, living: LivingRef) -> bool;

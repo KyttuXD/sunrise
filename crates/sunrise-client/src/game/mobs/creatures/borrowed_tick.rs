@@ -1,5 +1,8 @@
 //! Resumable borrowed mob-tick region; the caller owns final restoration.
 use super::*;
+use crate::mobs::living::section_writes::{self, PositionWrite};
+use std::collections::hash_map::Entry;
+
 /// Route each player event to the player selected when it was emitted.
 /// Untagged events retain the previous per-tick guest binding.
 fn route_player_events(
@@ -124,8 +127,8 @@ impl Game<'_> {
         } else {
             (None, None)
         };
-        // A server's mobs that cross into another section are told to the residency table at the
-        // end of the pass whether or not a hook listens: the writes are captured for that.
+        // A server's mob crossings update residency whether or not a hook listens.
+        // Flush the borrowed writes before an owning callback can record more, or at pass end.
         let entries = self.is_logical_server();
         let mut section_entered =
             std::mem::take(&mut self.native_lifecycle.entity_sections.entered);
@@ -133,17 +136,17 @@ impl Game<'_> {
             Some(sections) => std::mem::take(&mut sections.borrow_mut().ticked),
             None => std::mem::take(&mut self.native_lifecycle.entity_sections.ticked),
         };
-        crate::mobs::living::section_writes::begin(section_table.is_some() || entries);
+        section_writes::begin(section_table.is_some() || entries);
         let mut dispatch_panic = None;
         let mut pushes = std::mem::take(state.pushes);
         let original_len = snapshot.len();
         let mut keep = vec![true; original_len];
         let mut grid =
             sunrise_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
-        // Snapshot slots stay stable even if a full-host listener removes an
-        // earlier row or adds a new one. Only that rare boundary needs a map
-        // from stable identities to the owning list's current positions.
-        let mut positions: Option<sunrise_client::fast_hash::FxHashMap<u32, usize>> = None;
+        // Snapshot slots stay stable when the owning list changes order. Use the
+        // existing ID-to-snapshot index to refresh the slots' row positions only
+        // when the pass or a callback changes the list, not on each section write.
+        let mut positions: Vec<Option<usize>> = Vec::new();
         let mut index = sunrise_client::fast_hash::FxHashMap::<u32, u32>::default();
         let mut villager_slots = Vec::new();
         let mut solid_slots = Vec::new();
@@ -193,6 +196,8 @@ impl Game<'_> {
             // position write was captured, stop after this mob, restore the
             // list, and tell its writes while the live row is readable.
             let mut section_yield = false;
+            let mut section_hint = None;
+            let mut views_dirty = false;
             {
                 let ticking = self.entity_ticking_area();
                 let listed = self.entity_tick_listed_area();
@@ -227,24 +232,22 @@ impl Game<'_> {
                 let mut cached_difficulty: Option<((i32, i32), spawning::LocalDifficulty)> = None;
                 while cursor < original_len {
                     let slot = cursor;
-                    let i = match &positions {
-                        None => slot,
-                        Some(positions) => {
-                            let Some(&i) = positions.get(&snapshot[slot].id) else {
-                                keep[slot] = false;
-                                snapshot[slot].alive = false;
-                                // The row's mob left the list at a boundary: the
-                                // tick view must answer a removed handle with nothing.
-                                snapshot[slot].removed = true;
-                                resume = None;
-                                trample = None;
-                                resume_selection = None;
-                                resume_sampled = None;
-                                cursor += 1;
-                                continue;
-                            };
-                            i
-                        }
+                    let i = if positions.is_empty() {
+                        slot
+                    } else if let Some(i) = positions[slot] {
+                        i
+                    } else {
+                        keep[slot] = false;
+                        snapshot[slot].alive = false;
+                        // The row's mob left the list at a boundary: the
+                        // tick view must answer a removed handle with nothing.
+                        snapshot[slot].removed = true;
+                        resume = None;
+                        trample = None;
+                        resume_selection = None;
+                        resume_sampled = None;
+                        cursor += 1;
+                        continue;
                     };
                     let m = &mut mobs[i];
                     let retried = retried_rider.take() == Some(m.id);
@@ -656,28 +659,24 @@ impl Game<'_> {
                     // it, are two position updates (`EntityInLevelCallback.onMove` for each).
                     if round.sections() || entries {
                         let start = section_moves.len();
-                        let captured = crate::mobs::living::section_writes::drain_for(
-                            m.id,
-                            &mut section_moves,
-                        );
+                        let captured = section_writes::drain_for(m.id, &mut section_moves);
                         if kept && !m.removed {
-                            let changed = captured != 0 || m.previous != m.position;
-                            if changed && captured == 0 {
+                            if captured == 0 && m.previous != m.position {
                                 // A position changed before the lifted tick (or a raw test fixture)
                                 // still has the old filed section as its first write.
                                 if round.sections() {
-                                    section_moves.push(
-                                        crate::mobs::living::section_writes::PositionWrite::baseline(
-                                            m.id, m.join, m.previous,
-                                        ),
-                                    );
+                                    section_moves
+                                        .push(PositionWrite::baseline(m.id, m.join, m.previous));
                                 }
-                                section_moves.push(
-                                    crate::mobs::living::section_writes::PositionWrite::captured(
-                                        m.id, m.join, m.previous, m.position,
-                                    ),
-                                );
-                                section_yield |= round.sections();
+                                section_moves.push(PositionWrite::captured(
+                                    m.id, m.join, m.previous, m.position,
+                                ));
+                            }
+                            if section_scope.is_some()
+                                && section_moves[start..].iter().any(|write| !write.delivered)
+                            {
+                                section_yield = true;
+                                section_hint = Some(i);
                             }
                         }
                         // One integer compare per captured write; a crossing is one push.
@@ -766,12 +765,14 @@ impl Game<'_> {
                     snapshot[slot].removed |= !kept;
                     grid.update(slot, snapshot[slot].bounds);
                     let id = m.id;
+                    let before_brain = mobs.stamp();
                     sunrise_client::mobs::apply_brain_events(
                         &mut mobs,
                         &mut level,
                         &mut events,
                         from,
                     );
+                    views_dirty |= mobs.stamp() != before_brain;
                     cursor += 1;
                     if !kept
                         && !was_removed
@@ -804,21 +805,15 @@ impl Game<'_> {
             // can read or replace another actor's velocity. A section-only
             // or a told-alone yield must not change the normal end-of-pass
             // push ordering.
-            if pause.is_some() || retry_rider.is_some() || removing_vehicle.is_some() {
+            let settle = pause.is_some() || retry_rider.is_some() || removing_vehicle.is_some();
+            if settle {
                 for m in &mut mobs {
                     sunrise_client::mobs::apply_mob_pushes(m, &mut pushes);
                 }
             }
-            // A yield only to tell a named mob alone changes nothing of the loop's own: the list
-            // goes back as it is (the rows that left the pass taken out first, when there are
-            // any) and is taken again as it is, so the loop's views of it (snapshot, grid,
-            // index, places) stay valid unless the call wrote a mob or added one. The list's
-            // write stamp says whether it did: any mutable access moves it.
-            let told_only = pause.is_none()
-                && retry_rider.is_none()
-                && removing_vehicle.is_none()
-                && !section_yield;
-            let same_rows = told_only && !gone_rows;
+            // A yield just to tell a tick hook or a crossing doesn't by itself
+            // change the list. Keep the same slots unless rows have left or joined.
+            let same_rows = !settle && !gone_rows;
             if !same_rows {
                 mobs.retain(|m| {
                     // Give the departing vehicle back for its pre-removal effects
@@ -833,32 +828,35 @@ impl Game<'_> {
                 gone_rows = false;
             }
             // Mobs that joined during the pass go first on a restore: the rows move.
-            let same_rows = same_rows && self.mobs.is_empty();
+            let restored_offset = self.mobs.len();
+            let same_rows = same_rows && restored_offset == 0;
             self.mobs
                 .restore(mobs, sunrise_client::join_seq::RestoreOrder::SpawnsFirst);
-            let restored = self.mobs.stamp();
+            let mut restored = Some(self.mobs.stamp());
+            self.file_mob_section_entries(&mut section_entered);
             std::mem::swap(&mut self.last_hurt_by_player, &mut player_credit);
             std::mem::swap(&mut self.died, &mut died);
             std::mem::swap(&mut self.creatures.ticked, &mut ticked);
             if let Some(host) = self.lan.as_mut() {
                 std::mem::swap(&mut host.mob_players, &mut bindings);
             }
-            // The lift is a position write made by the owning game, not by
-            // the borrowed mob. Give it the live section table as well.
-            let trampling = matches!(pause, Some(Pause::Trample));
-            let trample_sections = section_table.as_ref().filter(|_| trampling);
-            if let Some(sections) = trample_sections {
+            // Yield callbacks run on the owning game, not the borrowed mob.
+            // Swap the live section table back in so every section update,
+            // removal and nested listener move hits one authoritative table.
+            if let Some(sections) = section_table.as_ref() {
                 std::mem::swap(
                     &mut self.native_lifecycle.entity_sections,
                     &mut sections.borrow_mut(),
                 );
             }
             let callback_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                if section_yield && let Some(sections) = section_table.as_ref() {
-                    self.entity_sections_ticked_live(
-                        &mut sections.borrow_mut(),
+                if section_yield {
+                    let written = self.entity_sections_ticked_live(
                         &mut section_moves,
+                        section_hint.map(|index| restored_offset + index),
                     );
+                    // Restaging the committed position isn't a listener write.
+                    restored = (!written).then(|| self.mobs.stamp());
                 }
                 if let Some(id) = retry_rider {
                     self.dismount_mob(id);
@@ -910,13 +908,13 @@ impl Game<'_> {
                 }
             }))
             .err();
-            if let Some(sections) = trample_sections {
+            if let Some(sections) = section_table.as_ref() {
                 std::mem::swap(
                     &mut self.native_lifecycle.entity_sections,
                     &mut sections.borrow_mut(),
                 );
             }
-            let unchanged = same_rows && self.mobs.stamp() == restored;
+            let unchanged = same_rows && !views_dirty && restored == Some(self.mobs.stamp());
             if tell_pre.is_some() {
                 told_at = Some(cursor);
             }
@@ -948,31 +946,32 @@ impl Game<'_> {
                 })
                 .unwrap_or_default();
             spare = guests.first().map(|g| g.1.clone());
-            // A trample can lift other mobs without changing their slots. Rebuild
-            // their views before the rest of this pass can read their old bounds.
-            if !unchanged || trampling {
-                let current: sunrise_client::fast_hash::FxHashMap<u32, usize> =
-                    mobs.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
-                for (slot, s) in snapshot.iter_mut().enumerate() {
-                    if let Some(&i) = current.get(&s.id) {
-                        *s = seen(&mobs[i], uuid, world_items!(self));
-                        s.alive &= keep.get(slot).copied().unwrap_or(true);
-                        s.removed |= !keep.get(slot).copied().unwrap_or(true);
-                    } else {
-                        s.alive = false;
-                        s.removed = true;
-                    }
-                }
-                for m in &mobs {
-                    if let std::collections::hash_map::Entry::Vacant(entry) = index.entry(m.id) {
-                        let slot = snapshot.len();
-                        entry.insert(slot as u32);
-                        snapshot.push(seen(m, uuid, world_items!(self)));
+            // Apply actual writes (including changed bounds from a trample) to the
+            // rest of the pass. Index the live rows by the existing snapshot slots.
+            if !unchanged {
+                positions.clear();
+                positions.resize(snapshot.len(), None);
+                for (i, m) in mobs.iter().enumerate() {
+                    let current = seen(m, uuid, world_items!(self));
+                    match index.entry(m.id) {
+                        Entry::Occupied(entry) => {
+                            let slot = *entry.get() as usize;
+                            snapshot[slot] = current;
+                            positions[slot] = Some(i);
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(snapshot.len() as u32);
+                            snapshot.push(current);
+                            positions.push(Some(i));
+                        }
                     }
                 }
                 villager_slots.clear();
                 solid_slots.clear();
-                for (slot, s) in snapshot.iter().enumerate() {
+                for (slot, (s, position)) in snapshot.iter_mut().zip(&positions).enumerate() {
+                    let present = position.is_some() && keep.get(slot).copied().unwrap_or(true);
+                    s.alive &= present;
+                    s.removed |= !present;
                     if s.species == Species::Villager {
                         villager_slots.push(slot as u32);
                     }
@@ -983,7 +982,6 @@ impl Game<'_> {
                 grid = sunrise_client::mobs::seen_grid::SeenGrid::new(
                     snapshot.iter().map(|s| s.bounds),
                 );
-                positions = Some(current);
             }
             if let Some(writes) = self.world.path_writes.as_mut() {
                 path_writes.append(writes);
@@ -995,7 +993,7 @@ impl Game<'_> {
         }
         laps.lap("creature_loop");
         if dispatch_panic.is_none() {
-            if positions.is_none() {
+            if positions.is_empty() {
                 let mut flags = keep.into_iter();
                 mobs.retain(|_| flags.next().unwrap_or(true));
             } else {
@@ -1011,7 +1009,7 @@ impl Game<'_> {
                 sunrise_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
         }
-        crate::mobs::living::section_writes::finish();
+        section_writes::finish();
         drop(live_section_observer);
         // Keep the reusable write storage for the next pass; the live-row callback has already
         // consumed every record that belonged to this family tick.
@@ -1023,11 +1021,7 @@ impl Game<'_> {
         } else {
             self.native_lifecycle.entity_sections.ticked = section_moves;
         }
-        // `Callback.onMove`, in the order of the writes.
-        let table = self.resident_entities.table.get_mut();
-        for id in section_entered.drain(..) {
-            table.entered_section(id);
-        }
+        self.file_mob_section_entries(&mut section_entered);
         self.native_lifecycle.entity_sections.entered = section_entered;
         *state.pushes = pushes;
         *state.mobs = mobs;
@@ -1046,6 +1040,13 @@ impl Game<'_> {
         *state.path_writes = path_writes;
         *state.gone = gone;
         (lent, dispatch_panic)
+    }
+
+    fn file_mob_section_entries(&mut self, entered: &mut Vec<u32>) {
+        let table = self.resident_entities.table.get_mut();
+        for id in entered.drain(..) {
+            table.entered_section(id);
+        }
     }
 }
 

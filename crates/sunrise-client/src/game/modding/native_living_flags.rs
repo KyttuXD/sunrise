@@ -185,17 +185,17 @@ impl Game<'_> {
                 super::entity::taken_pass_tests::after_take(self);
                 let w = self.mob_world_base(&[]);
                 let mut events = Vec::new();
-                let slept = mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
-                    let slept = villager::start_sleeping(m, pos, &w, &mut events);
-                    if slept {
-                        sunrise_client::mobs::living::teleports::set_pos(m, at);
-                    }
-                    slept
+                let from = mobs.iter_mut().find(|m| m.id == id).and_then(|m| {
+                    let from = m.position;
+                    villager::start_sleeping(m, pos, at, &w, &mut events).then_some(from)
                 });
                 self.mobs
                     .restore(mobs, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
+                if let Some(from) = from {
+                    self.entity_section_moved(id, Some(from.components()), at.components());
+                }
                 let _ = self.handle_mob_events(events);
-                slept
+                from.is_some()
             }
             _ => false,
         }
@@ -228,12 +228,20 @@ impl Game<'_> {
                 super::entity::taken_pass_tests::after_take(self);
                 let w = self.mob_world_base(&[]);
                 let mut events = Vec::new();
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == id) {
+                let step = mobs.iter_mut().find(|m| m.id == id).map(|m| {
+                    let from = m.position;
                     villager::stop_sleeping(m, &w, &mut events);
-                }
+                    (from.components(), m.position.components())
+                });
                 self.mobs
                     .restore(mobs, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
+                if let Some((from, to)) = step {
+                    sunrise_client::mobs::living::section_writes::discard_reported(id, from, to);
+                }
                 let _ = self.handle_mob_events(events);
+                if let Some((from, to)) = step {
+                    self.entity_section_step(id, from, to);
+                }
                 true
             }
             _ => false,
@@ -698,7 +706,7 @@ pub(in crate::game) mod tests {
         (living, rx)
     }
 
-    fn bed(game: &mut Game<'_>, name: &str, pos: [i32; 3]) {
+    pub(in crate::game) fn bed(game: &mut Game<'_>, name: &str, pos: [i32; 3]) {
         let head = game
             .pack
             .assets
