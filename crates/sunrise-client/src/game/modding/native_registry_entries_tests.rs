@@ -4,7 +4,7 @@ use mod_api::{
     DatapackField, DatapackFieldKind, DatapackRegistrySync, Hooks, ModEntry, Registrar,
     RegistrationContext,
 };
-use std::{path::Path, sync::Arc};
+use std::{ops::ControlFlow, path::Path, sync::Arc};
 
 struct RegistryMod;
 #[mod_api::__subscriptions]
@@ -49,6 +49,18 @@ fn host<'a>(game: &'a super::Game<'_>) -> &'a dyn mod_api::Host {
 }
 fn id(value: &str) -> mod_api::Identifier {
     mod_api::Identifier::parse(value).unwrap()
+}
+
+fn registry_lists(host: &dyn mod_api::Host, registry: &str, expected: &str) -> bool {
+    host.visit_registry_entries(registry, &mut |id| {
+        if id == expected {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .unwrap_or_else(|| panic!("{registry}: expected an available registry"))
+    .is_break()
 }
 
 // Feed the same server-built snapshot to both Host implementations.
@@ -168,11 +180,16 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     None
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:not_a_registry"),
+                    host(game).visit_registry_entries(
+                        "registry_entry_test:not_a_registry",
+                        &mut |_| panic!("unavailable registry visited")
+                    ),
                     None
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:biome"),
+                    host(game).visit_registry_entries("minecraft:biome", &mut |_| panic!(
+                        "unavailable registry visited"
+                    )),
                     None,
                     "no synthetic registry aliases"
                 );
@@ -184,18 +201,16 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     None,
                     "an unused resource is not an accepted noise-settings definition",
                 );
-                assert!(
-                    !host(game)
-                        .registry_entries("minecraft:worldgen/noise_settings")
-                        .unwrap()
-                        .contains(&id("registry_entry_test:broken"))
-                );
-                assert!(
-                    !host(game)
-                        .registry_entries("minecraft:worldgen/noise_settings")
-                        .unwrap()
-                        .contains(&id("registry_entry_test:overflow"))
-                );
+                assert!(!registry_lists(
+                    host(game),
+                    "minecraft:worldgen/noise_settings",
+                    "registry_entry_test:broken"
+                ));
+                assert!(!registry_lists(
+                    host(game),
+                    "minecraft:worldgen/noise_settings",
+                    "registry_entry_test:overflow"
+                ));
                 let village = host(game)
                     .registry_entry("minecraft:worldgen/structure", "minecraft:village_plains")
                     .unwrap();
@@ -232,17 +247,24 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                         host(game).registry_entry(registry, entry).is_some(),
                         "{registry} / {entry}"
                     );
-                    assert!(
-                        host(game)
-                            .registry_entries(registry)
-                            .unwrap()
-                            .contains(&id(entry)),
-                        "{registry}"
-                    );
+                    assert!(registry_lists(host(game), registry, entry), "{registry}");
                 }
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:spell"),
-                    Some(vec![id("registry_entry_test:fire")])
+                    {
+                        let mut ids = Vec::new();
+                        assert_eq!(
+                            host(game).visit_registry_entries(
+                                "registry_entry_test:spell",
+                                &mut |id| {
+                                    ids.push(id.to_owned());
+                                    ControlFlow::Continue(())
+                                }
+                            ),
+                            Some(ControlFlow::Continue(()))
+                        );
+                        ids
+                    },
+                    ["registry_entry_test:fire"]
                 );
                 let held = host(game)
                     .registry_entry("registry_entry_test:spell", "registry_entry_test:fire")
@@ -296,8 +318,21 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     Some(true)
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:spell"),
-                    Some(vec![id("addon:ice")])
+                    {
+                        let mut ids = Vec::new();
+                        assert_eq!(
+                            host(game).visit_registry_entries(
+                                "registry_entry_test:spell",
+                                &mut |id| {
+                                    ids.push(id.to_owned());
+                                    ControlFlow::Continue(())
+                                }
+                            ),
+                            Some(ControlFlow::Continue(()))
+                        );
+                        ids
+                    },
+                    ["addon:ice"]
                 );
                 assert_eq!(
                     host(game).registry_entry("minecraft:damage_type", "registry_entry_test:late"),
@@ -347,7 +382,9 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     "not synchronized yet"
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:worldgen/noise"),
+                    host(game).visit_registry_entries("minecraft:worldgen/noise", &mut |_| panic!(
+                        "unavailable registry visited"
+                    )),
                     None,
                     "prepared server-only data must not leak"
                 );
@@ -356,7 +393,12 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     "minecraft:worldgen/placed_feature",
                     "minecraft:worldgen/block_state_provider",
                 ] {
-                    assert_eq!(host(game).registry_entries(registry), None);
+                    assert_eq!(
+                        host(game).visit_registry_entries(registry, &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
+                        None
+                    );
                     assert_eq!(host(game).registry_entry(registry, "minecraft:oak"), None);
                 }
                 let sync = super::lan::sync::sync_data(
@@ -378,12 +420,11 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                 let fall = host(game)
                     .registry_entry("minecraft:damage_type", "minecraft:fall")
                     .unwrap();
-                assert!(
-                    host(game)
-                        .registry_entries("minecraft:damage_type")
-                        .unwrap()
-                        .contains(&fall.id)
-                );
+                assert!(registry_lists(
+                    host(game),
+                    "minecraft:damage_type",
+                    "minecraft:fall"
+                ));
                 let stone = host(game)
                     .registry_entry("minecraft:block", "minecraft:stone")
                     .unwrap();
@@ -401,7 +442,10 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     None
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:context_int_provider"),
+                    host(game)
+                        .visit_registry_entries("minecraft:context_int_provider", &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
                     None
                 );
                 let declarations = mod_api::__private::datapack_registry_declarations();
@@ -444,7 +488,10 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     Some(true)
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:secret"),
+                    host(game)
+                        .visit_registry_entries("registry_entry_test:secret", &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
                     None
                 );
                 assert_eq!(
@@ -583,15 +630,12 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 .unwrap_or_else(|| {
                     panic!("{registry}: decoded entry must not depend on a terrain locator")
                 });
-            let entries = host(game).registry_entries(registry).unwrap_or_else(|| {
-                panic!("{registry}: published decoded registry must be available")
-            });
             assert!(
-                entries.contains(&id("registry_entry_test:accepted")),
+                registry_lists(host(game), registry, "registry_entry_test:accepted"),
                 "{registry}"
             );
             assert!(
-                !entries.contains(&id("registry_entry_test:rejected")),
+                !registry_lists(host(game), registry, "registry_entry_test:rejected"),
                 "{registry}"
             );
             assert_eq!(
@@ -640,10 +684,7 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 None
             );
             assert!(
-                !host(game)
-                    .registry_entries(registry)
-                    .unwrap()
-                    .contains(&id("registry_entry_test:accepted")),
+                !registry_lists(host(game), registry, "registry_entry_test:accepted"),
                 "{registry}"
             );
             let retired =
@@ -659,12 +700,11 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 "registry_entry_test:replacement",
             )
             .unwrap();
-        assert!(
-            host(game)
-                .registry_entries("minecraft:worldgen/material_condition")
-                .unwrap()
-                .contains(&id("registry_entry_test:replacement"))
-        );
+        assert!(registry_lists(
+            host(game),
+            "minecraft:worldgen/material_condition",
+            "registry_entry_test:replacement"
+        ));
         assert_eq!(
             host(game).registry_entry_in_tag(&replacement_entry, "registry_entry_test:missing"),
             Some(false)
