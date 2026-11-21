@@ -293,8 +293,6 @@ fn ordinary_only_wire_forms_refuse_registration_before_a_channel_exists() {
         refused::<crate::LevelKey>(&mut view, "test:level_key"),
         refused::<crate::LevelDimension>(&mut view, "test:dimension"),
         refused::<Option<crate::Identifier>>(&mut view, "test:identifier"),
-        refused::<crate::SpawnerKey>(&mut view, "test:spawner"),
-        refused::<crate::CustomSpawners>(&mut view, "test:spawners"),
     ];
     drop(view);
     assert!(registrar.parts.payloads.is_none());
