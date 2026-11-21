@@ -530,11 +530,11 @@ impl Game<'_> {
         }
     }
 
-    /// Queued hook-listener panics from any thread, each shown once per
-    /// `(hook, mod)` as a red-titled system toast. Enqueued directly on the
-    /// client toast queue rather than through `toast_add` so a mod cannot veto
-    /// or rewrite its own failure notice; headless servers log the error and do
-    /// not drain the client queue.
+    /// Queued mod panics from any thread, including registration disposal failures,
+    /// each shown as a red-titled system toast. Enqueued directly on the client
+    /// toast queue rather than through `toast_add` so a mod cannot veto or rewrite
+    /// its own failure notice; headless servers log the error and do not drain the
+    /// client queue.
     fn add_hook_panic_toasts(&mut self) {
         if self.serving.is_some() || self.options.dedicated.is_some() {
             return;
@@ -762,6 +762,7 @@ mod tests {
                     toast.title.component()["translate"],
                     "sunrise.mods.hook_panic.title"
                 );
+                assert_eq!(toast.title.plain(), "Mod panic");
                 let message = toast.message.as_ref().unwrap();
                 assert_eq!(
                     message.component(),

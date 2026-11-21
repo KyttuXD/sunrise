@@ -23,7 +23,7 @@ type Registration = (&'static str, DimensionTransitionScreen);
 
 /// Registrations resolved once at load; lookups never build dimension names.
 #[derive(Default)]
-struct TransitionScreens(HashMap<TransitionKey, Registration>);
+struct TransitionScreens(HashMap<TransitionKey<DimensionKey>, Registration>);
 
 static SCREENS: OnceLock<TransitionScreens> = OnceLock::new();
 
@@ -32,7 +32,7 @@ impl TransitionScreens {
         Self(
             registrations
                 .into_iter()
-                .map(|r| (r.key, (r.owner, r.screen)))
+                .map(|r| (r.resolve_key(), (r.owner, r.screen)))
                 .collect(),
         )
     }
@@ -53,16 +53,18 @@ impl TransitionScreens {
 
 /// Publish the client registrations once at startup.
 pub fn register(registrations: Vec<RegisteredTransitionScreen>) {
-    if let Err(TransitionScreens(screens)) = SCREENS.set(TransitionScreens::new(registrations)) {
+    let mut pending = Some(registrations);
+    SCREENS.get_or_init(|| TransitionScreens::new(pending.take().expect("registration batch")));
+    if let Some(unpublished) = pending {
         log::warn!("Dimension transition screens already registered; keeping the first table");
-        for (owner, screen) in screens.into_values() {
+        for registration in unpublished {
             discard_registration(
                 (
                     HookId::RegisterDimensionTransitionScreen,
                     "register_dimension_transition_screen",
                 ),
-                Some(owner),
-                screen,
+                Some(registration.owner),
+                registration.screen,
             );
         }
     }
@@ -98,9 +100,9 @@ mod tests {
         }
     }
 
-    fn key(id: &str) -> DimensionKey {
-        mod_api::__private::dimension_key(id)
-    }
+    const OVERWORLD: &str = "minecraft:overworld";
+    const NETHER: &str = "minecraft:the_nether";
+
     fn entry(screen: &str, transition: DimensionTransition, argb: u32) -> Registration {
         (
             "registrant",
@@ -114,15 +116,17 @@ mod tests {
         )
     }
     fn screens_from(entries: impl IntoIterator<Item = Registration>) -> TransitionScreens {
-        let mut registrations = Vec::new();
-        for (owner, screen) in entries {
-            RegisteredTransitionScreen::register(&mut registrations, owner, screen);
-        }
-        TransitionScreens::new(registrations)
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let mut registrations = Vec::new();
+            for (owner, screen) in entries {
+                RegisteredTransitionScreen::register(&mut registrations, owner, screen);
+            }
+            TransitionScreens::new(registrations)
+        })
     }
 
-    fn chosen(screens: &TransitionScreens, to: &str, from: &str) -> Option<u32> {
-        let (owner, factory) = screens.select(key(to), key(from))?;
+    fn chosen(screens: &TransitionScreens, to: DimensionKey, from: DimensionKey) -> Option<u32> {
+        let (owner, factory) = screens.select(to, from)?;
         assert_eq!(owner, "registrant");
         let mut canvas = Canvas::default();
         factory.create(&Client, Reason::Other.into()).draw(
@@ -139,45 +143,46 @@ mod tests {
         let screens = screens_from([
             entry(
                 "test:leave",
-                DimensionTransition::Outgoing("test:a".into()),
+                DimensionTransition::Outgoing(OVERWORLD.into()),
                 1,
             ),
             entry(
                 "test:arrive",
-                DimensionTransition::Incoming("test:b".into()),
+                DimensionTransition::Incoming(NETHER.into()),
                 2,
             ),
             entry(
                 "test:pair",
                 DimensionTransition::Conditional {
-                    to: "test:b".into(),
-                    from: "test:a".into(),
+                    to: NETHER.into(),
+                    from: OVERWORLD.into(),
                 },
                 3,
             ),
             entry(
                 "test:duplicate",
                 DimensionTransition::Conditional {
-                    to: "test:b".into(),
-                    from: "test:a".into(),
+                    to: NETHER.into(),
+                    from: OVERWORLD.into(),
                 },
                 4,
             ),
             entry(
                 "test:duplicate",
-                DimensionTransition::Incoming("test:b".into()),
+                DimensionTransition::Incoming(NETHER.into()),
                 5,
             ),
             entry(
                 "test:duplicate",
-                DimensionTransition::Outgoing("test:a".into()),
+                DimensionTransition::Outgoing(OVERWORLD.into()),
                 6,
             ),
         ]);
-        assert_eq!(chosen(&screens, "test:b", "test:a"), Some(3));
-        assert_eq!(chosen(&screens, "test:b", "test:c"), Some(2));
-        assert_eq!(chosen(&screens, "test:c", "test:a"), Some(1));
-        assert_eq!(chosen(&screens, "test:c", "test:b"), None);
+        use DimensionKey as K;
+        assert_eq!(chosen(&screens, K::NETHER, K::OVERWORLD), Some(3));
+        assert_eq!(chosen(&screens, K::NETHER, K::END), Some(2));
+        assert_eq!(chosen(&screens, K::END, K::OVERWORLD), Some(1));
+        assert_eq!(chosen(&screens, K::END, K::NETHER), None);
     }
 
     #[test]
@@ -185,12 +190,12 @@ mod tests {
         let screens = screens_from([
             entry(
                 "minecraft:reserved",
-                DimensionTransition::Incoming("test:b".into()),
+                DimensionTransition::Incoming(NETHER.into()),
                 1,
             ),
             entry(
                 "missing_namespace",
-                DimensionTransition::Incoming("test:b".into()),
+                DimensionTransition::Incoming(NETHER.into()),
                 2,
             ),
             entry(
@@ -206,21 +211,22 @@ mod tests {
             entry(
                 "test:invalid",
                 DimensionTransition::Conditional {
-                    to: "test:b".into(),
+                    to: NETHER.into(),
                     from: "INVALID:a".into(),
                 },
                 5,
             ),
             entry(
                 "test:valid",
-                DimensionTransition::Incoming("test:b".into()),
+                DimensionTransition::Incoming(NETHER.into()),
                 6,
             ),
         ]);
-        assert_eq!(chosen(&screens, "test:b", "test:a"), Some(6));
-        assert_eq!(chosen(&screens, "INVALID:b", "test:a"), None);
-        assert_eq!(chosen(&screens, "test:c", "missing_namespace"), None);
-        assert_eq!(chosen(&screens, "test:b", "INVALID:a"), Some(6));
+        assert_eq!(screens.0.len(), 1);
+        assert_eq!(
+            chosen(&screens, DimensionKey::NETHER, DimensionKey::OVERWORLD),
+            Some(6)
+        );
     }
 
     #[test]
@@ -228,8 +234,8 @@ mod tests {
         let screens = screens_from([entry(
             "test:arrival",
             DimensionTransition::Conditional {
-                to: "test:b".into(),
-                from: "test:a".into(),
+                to: NETHER.into(),
+                from: OVERWORLD.into(),
             },
             0xFF102030,
         )]);
@@ -240,7 +246,9 @@ mod tests {
         };
         let mut tracker = LevelLoadTracker::new(500);
         tracker.start_client_load(0, Reason::Other);
-        let (owner, factory) = screens.select(key("test:b"), key("test:a")).unwrap();
+        let (owner, factory) = screens
+            .select(DimensionKey::NETHER, DimensionKey::OVERWORLD)
+            .unwrap();
         tracker.set_transition_screen(ActiveTransitionScreen {
             owner,
             presentation: factory.create(&Client, tracker.reason.into()),
@@ -273,7 +281,11 @@ mod tests {
         assert!(tracker.transition_screen().is_none());
         assert!(!tracker.is_active());
         tracker.start_client_load(1000, Reason::Other);
-        assert!(screens.select(key("test:c"), key("test:b")).is_none());
+        assert!(
+            screens
+                .select(DimensionKey::END, DimensionKey::NETHER)
+                .is_none()
+        );
         assert!(tracker.transition_screen().is_none());
         tracker.loading_packets_received();
         tracker.player_section_ready();

@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn a_native_mods_entries_need_their_own_namespace_and_a_free_id() {
-        let kept = checked([
+        let entries = [
             RegisteredDebugEntry {
                 owner: "mymod",
                 entry: DebugEntry::text("mymod:tick_cost".into(), DebugGroup::Memory, |_, _| {}),
@@ -730,7 +730,8 @@ mod tests {
                 owner: "other",
                 entry: DebugEntry::renderer("other:queue".into()),
             },
-        ]);
+        ];
+        let kept = mod_platform::testing::with_mods(Vec::new().into(), || checked(entries));
         let ids: Vec<&str> = kept.iter().map(|e| e.entry.id()).collect();
         assert_eq!(ids, ["mymod:tick_cost", "other:queue"]);
         assert_eq!(kept[0].owner, "mymod");

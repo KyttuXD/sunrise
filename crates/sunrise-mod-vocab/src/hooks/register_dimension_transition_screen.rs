@@ -5,18 +5,18 @@ pub trait Hooks {
     /// `RegisterDimensionTransitionScreenEvent`). Call `event.register(screen)` for each trip.
     /// Conditional pairs take priority over incoming, then outgoing. The first valid
     /// factory for a key wins; `event.register` returns `false` for a duplicate or invalid key
-    /// and `true` to stage an accepted factory. Failed listeners publish no keys.
+    /// and `true` to stage an accepted factory. Dimension IDs resolve to keys only when
+    /// successful registrations are published.
     /// Unmatched travel, login and death use vanilla for a new screen.
     /// The client keeps whichever presentation is already open on an in-place load update.
     #[notes = r#"## Dimension transition screens
 
 Pass `DimensionTransitionScreen::new(id, transition, factory)` to `event.register(screen)`.
 Use `DimensionTransition::Incoming(to)`, `Outgoing(from)` or `Conditional { to, from }`
-with namespaced dimension IDs. The client resolves those IDs at registration and rejects
-invalid registrations and screen IDs in the `minecraft` namespace. A screen ID is for
-validation and diagnostics, not draw dispatch. `register` reports `false` for invalid or
-occupied keys, including a key already staged by this listener. A failed listener releases
-all its staged keys.
+with namespaced dimension IDs. A screen ID is for validation and diagnostics, not draw dispatch;
+screen IDs in the `minecraft` namespace are refused. `register` reports `false` for invalid or
+occupied keys, including a key already staged by this listener. Only published registrations
+resolve dimension IDs to keys; a failed listener does not make new dimension keys available.
 
 On a matching trip, the client calls the selected factory once as the registering mod and
 keeps its presentation until the loading screen closes. An existing loading screen (including
@@ -31,7 +31,7 @@ readiness, timeout and closing."#]
         side = "client",
         contract = "collect",
         out = "screens",
-        registration_append = "custom",
+        registration_append = "custom_with_owner",
         context = "registration",
         neoforge = "RegisterDimensionTransitionScreenEvent",
         version = 3

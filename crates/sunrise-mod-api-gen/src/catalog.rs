@@ -144,6 +144,8 @@ pub enum RegistrationAppend {
     Register,
     /// The vocabulary crate supplies the event methods in an inherent impl.
     Custom,
+    /// Hand-written event methods also need the dispatch entry's registrant ID.
+    CustomWithOwner,
 }
 
 /// One hook point: a moment the game tells mods about.

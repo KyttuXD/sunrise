@@ -398,6 +398,14 @@ pub(super) fn emit<'a>(
         } else {
             None
         };
+        let registration_owner =
+            hook.registration_append == Some(RegistrationAppend::CustomWithOwner);
+        if registration_owner && (scoped.is_some() || staged.is_some()) {
+            return Err(format!(
+                "{name}: an owner-attributed registration needs global dispatch"
+            ));
+        }
+        let event_per_listener = hook.event_per_listener || registration_owner;
         if !is_render {
             hook_ids.push_str(&format!("{hook_id},\n"));
             hook_constants.push_str(&format!(
@@ -440,6 +448,10 @@ pub(super) fn emit<'a>(
         let mut lifetimes = EventLifetimes::default();
         let mut fields = String::new();
         let mut inits = Vec::new();
+        if registration_owner {
+            fields.push_str("pub(super) registrant: &'static str,\n");
+            inits.push(format!("registrant: {listener_id}"));
+        }
         let mut write_back = String::new();
         // Fields restored to the last accepted values on a listener failure, each with whether
         // the event holds it behind a `&mut`.
@@ -558,7 +570,9 @@ pub(super) fn emit<'a>(
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
                 Some((RegistrationAppend::Register, _)) => "",
-                Some((RegistrationAppend::Custom, _)) => "pub(super)",
+                Some((RegistrationAppend::Custom | RegistrationAppend::CustomWithOwner, _)) => {
+                    "pub(super)"
+                }
                 None if task_registration
                     || matches!(
                         (event_type.as_str(), name.as_str()),
@@ -583,7 +597,7 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
-            } else if hook.event_per_listener
+            } else if event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
                 // Keep write-through access, but not changes to the reference itself.
@@ -928,7 +942,7 @@ pub(super) fn emit<'a>(
             Some((RegistrationAppend::Register, _)) => {
                 "Use [`Self::register`] to add entries without changing earlier registrations."
             }
-            Some((RegistrationAppend::Custom, _)) => {
+            Some((RegistrationAppend::Custom | RegistrationAppend::CustomWithOwner, _)) => {
                 "Use its registration methods to add entries without changing earlier registrations."
             }
             None => {
@@ -994,7 +1008,7 @@ pub(super) fn emit<'a>(
         // I/O checks use the outer event and cannot use a listener-local one.
         let (build, local_event) = if staged.is_some() {
             (String::new(), build)
-        } else if hook.event_per_listener {
+        } else if event_per_listener {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode.
@@ -1015,7 +1029,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if event_per_listener {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
