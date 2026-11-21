@@ -316,10 +316,10 @@ mod tests {
 
     fn terrain(stem: &serde_json::Value, shape: LevelShape, seed: i64) -> Option<ModTerrain> {
         let sources = sources(&["minecraft:plains", "minecraft:desert"]);
-        ModTerrain::for_stem(
+        ModTerrain::new(
             "test:pocket",
-            stem,
-            &generators(),
+            &stem["generator"]["biome_source"],
+            generators().get(stem["generator"]["type"].as_str()?)?.clone(),
             &sources,
             registry(),
             biome_id,
@@ -372,10 +372,10 @@ mod tests {
         )]);
         let open = |level: &str| {
             let stem = stem("test:by_level");
-            ModTerrain::for_stem(
+            ModTerrain::new(
                 level,
-                &stem,
-                &generators,
+                &stem["generator"]["biome_source"],
+                generators["test:by_level"].clone(),
                 &sources(&[]),
                 registry(),
                 biome_id,
@@ -439,10 +439,10 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let terrain = ModTerrain::for_stem(
+        let terrain = ModTerrain::new(
             "test:pocket",
-            &stem,
-            &generators(),
+            &stem["generator"]["biome_source"],
+            generators()["test:slab"].clone(),
             &sources(&[]),
             registry(),
             biome_id,
@@ -490,10 +490,10 @@ mod tests {
     #[test]
     fn a_missing_biome_or_source_refuses_the_level() {
         let refused = |stem: serde_json::Value, biomes: &[&str]| {
-            ModTerrain::for_stem(
+            ModTerrain::new(
                 "test:pocket",
-                &stem,
-                &generators(),
+                &stem["generator"]["biome_source"],
+                generators()["test:slab"].clone(),
                 &sources(biomes),
                 registry(),
                 biome_id,
@@ -530,10 +530,10 @@ mod tests {
         let sources = sources(&["minecraft:plains", "minecraft:desert"]);
         let known = |name: &str| biomes.contains(name).then(|| biomes.id(name));
         let shape = LevelShape::OVERWORLD;
-        let terrain = ModTerrain::for_stem(
+        let terrain = ModTerrain::new(
             "test:pocket",
-            &oasis_stem(),
-            &generators(),
+            &oasis_stem()["generator"]["biome_source"],
+            generators()["test:slab"].clone(),
             &sources,
             assets.registry,
             known,
