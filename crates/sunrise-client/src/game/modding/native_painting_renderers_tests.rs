@@ -3,7 +3,7 @@
 //! renderer the family's own geometry is unchanged; a failing renderer leaves those quads until a
 //! resource reload resolves it again.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
+use super::native_entity_renderers::{EntityRendererTable, fixture_renderer};
 use mod_api::{
     BlockEntityDrawContext, Direction, EntityRenderState, EntityRenderer, Hooks,
     RegisterEntityRenderersEvent, RegistrationContext,
@@ -268,7 +268,7 @@ fn a_painting_registration_resolves_to_the_painting_slot() {
     }
     let registered = std::collections::BTreeMap::from([(
         "minecraft:painting".to_owned(),
-        Arc::new(Mark) as Arc<dyn EntityRenderer>,
+        fixture_renderer(Mark),
     )]);
     let (table, unknown) = EntityRendererTable::resolve(
         &registered,
@@ -447,9 +447,9 @@ fn an_unregistered_painting_is_byte_identical_to_the_vanilla_route() {
 /// asks it again.
 #[test]
 #[ignore = "daily"]
-fn a_failed_painting_renderer_draws_the_quads_until_a_resource_reload() {
+fn a_failed_painting_renderer_skips_only_the_failed_draw() {
     in_scene(
-        "a_failed_painting_renderer_draws_the_quads_until_a_resource_reload",
+        "a_failed_painting_renderer_skips_only_the_failed_draw",
         |game, _, flaky| {
             for frame_name in ["the failing frame", "the next frame"] {
                 let drawn = painting_frame(game, 93);

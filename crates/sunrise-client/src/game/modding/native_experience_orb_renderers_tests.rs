@@ -3,7 +3,7 @@
 //! value; with no renderer the family's own geometry is unchanged; a failing renderer leaves that
 //! quad until a resource reload resolves it again.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
+use super::native_entity_renderers::{EntityRendererTable, fixture_renderer};
 use mod_api::{
     BlockEntityDrawContext, EntityRenderState, EntityRenderer, Hooks, RegisterEntityRenderersEvent,
     RegistrationContext,
@@ -154,7 +154,7 @@ fn an_experience_orb_registration_resolves_to_the_orb_slot() {
     }
     let registered = std::collections::BTreeMap::from([(
         "minecraft:experience_orb".to_owned(),
-        Arc::new(Mark) as Arc<dyn EntityRenderer>,
+        fixture_renderer(Mark),
     )]);
     let (table, unknown) = EntityRendererTable::resolve(
         &registered,
@@ -321,9 +321,9 @@ fn an_unregistered_experience_orb_is_byte_identical_to_the_vanilla_route() {
 /// asks it again.
 #[test]
 #[ignore = "daily"]
-fn a_failed_experience_orb_renderer_draws_the_quad_until_a_resource_reload() {
+fn a_failed_experience_orb_renderer_skips_only_the_failed_draw() {
     in_scene(
-        "a_failed_experience_orb_renderer_draws_the_quad_until_a_resource_reload",
+        "a_failed_experience_orb_renderer_skips_only_the_failed_draw",
         |game, _, flaky| {
             for frame_name in ["the failing frame", "the next frame"] {
                 let drawn = orb_frame(game, 93);

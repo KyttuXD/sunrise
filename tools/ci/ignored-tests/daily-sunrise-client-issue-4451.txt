@@ -1767,7 +1767,7 @@ sunrise-client game::native_living_refs::tests::stand_and_dragon_equipment_write
 sunrise-client game::native_living_refs::tests::the_engines_own_portal_melee_freeze_and_air_answers lib daily resources
 sunrise-client game::native_living_refs::tests::the_host_players_body_and_saddle_are_slots_and_saved_in_equipment lib daily resources
 sunrise-client game::native_living_renderers_tests::a_canceled_living_pre_skips_a_registered_renderer lib daily child-process
-sunrise-client game::native_living_renderers_tests::a_failed_renderer_draws_the_types_model_until_a_resource_reload lib daily child-process
+sunrise-client game::native_living_renderers_tests::a_failed_renderer_skips_only_the_failed_draw lib daily child-process
 sunrise-client game::native_living_renderers_tests::a_registered_living_type_draws_its_renderer_in_place_of_its_model lib daily child-process
 sunrise-client game::native_living_renderers_tests::a_sleeping_or_baby_frame_reads_as_the_model_lays_it lib daily resources
 sunrise-client game::native_living_renderers_tests::extracted_living_signs_death_time_and_hurt_overlay_are_literal lib daily resources

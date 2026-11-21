@@ -3,18 +3,15 @@
 //! by its type's renderer at the frame's interpolated pose, with its synced attachments; a renderer that fails is dropped until resources reload; a type
 //! with no renderer draws nothing.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
+use super::native_entity_renderers::{EntityRendererTable, RenderersByType, fixture_renderer};
 use crate::game::general::GeneralTypeCatalog;
 use mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, BlockEntityDrawContext, EntityRenderState,
     EntityRenderer,
 };
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
-    },
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU32, Ordering},
 };
 use sunrise_client::mesher::Vertex;
 use sunrise_core::nbt::Tag;
@@ -56,11 +53,7 @@ fn a_general_types_renderer_resolves_to_its_slot_and_a_type_without_one_is_named
     let catalog =
         GeneralTypeCatalog::freeze(&[declaration("test:missile"), declaration("test:plain")])
             .unwrap();
-    let registered: BTreeMap<String, Arc<dyn EntityRenderer>> = [(
-        "test:missile".to_owned(),
-        Arc::new(Blank) as Arc<dyn EntityRenderer>,
-    )]
-    .into();
+    let registered: RenderersByType = [("test:missile".to_owned(), fixture_renderer(Blank))].into();
     let (table, unknown) =
         EntityRendererTable::resolve(&registered, &[], &Default::default(), &catalog, |_| false);
     assert!(
@@ -507,9 +500,9 @@ fn general_submission_keeps_lookup_order_across_removal_and_reentry() {
 /// type with no renderer draws nothing, and neither stops the others.
 #[test]
 #[ignore = "daily"]
-fn a_failing_renderer_is_dropped_until_reload_and_a_type_without_one_draws_nothing() {
+fn a_panicking_renderer_stays_disabled_and_a_type_without_one_draws_nothing() {
     in_scene(
-        "a_failing_renderer_is_dropped_until_reload_and_a_type_without_one_draws_nothing",
+        "a_panicking_renderer_stays_disabled_and_a_type_without_one_draws_nothing",
         |game, scene| {
             for _ in 0..2 {
                 assert_eq!(frame(game, 1.0).len(), 4, "the missile alone");

@@ -4,7 +4,7 @@
 //! the family's own geometry is unchanged; a failing renderer leaves that geometry until a
 //! resource reload resolves it again.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
+use super::native_entity_renderers::{EntityRendererTable, fixture_renderer};
 use mod_api::{
     BlockEntityDrawContext, Direction, EntityRenderState, EntityRenderer, Hooks,
     RegisterEntityRenderersEvent, RegistrationContext,
@@ -214,13 +214,10 @@ fn an_item_frame_registration_resolves_to_the_frame_slots() {
         }
     }
     let registered = std::collections::BTreeMap::from([
-        (
-            "minecraft:item_frame".to_owned(),
-            Arc::new(Mark) as Arc<dyn EntityRenderer>,
-        ),
+        ("minecraft:item_frame".to_owned(), fixture_renderer(Mark)),
         (
             "minecraft:glow_item_frame".to_owned(),
-            Arc::new(Mark) as Arc<dyn EntityRenderer>,
+            fixture_renderer(Mark),
         ),
     ]);
     let (table, unknown) = EntityRendererTable::resolve(
@@ -475,9 +472,9 @@ fn an_unregistered_item_frame_is_byte_identical_to_the_vanilla_route() {
 /// table asks it again.
 #[test]
 #[ignore = "daily"]
-fn a_failed_item_frame_renderer_draws_the_model_until_a_resource_reload() {
+fn a_failed_item_frame_renderer_skips_only_the_failed_draw() {
     in_scene(
-        "a_failed_item_frame_renderer_draws_the_model_until_a_resource_reload",
+        "a_failed_item_frame_renderer_skips_only_the_failed_draw",
         |game, _, flaky| {
             for frame_name in ["the failing frame", "the next frame"] {
                 let drawn = frame_frame(game, 93, false);

@@ -304,9 +304,9 @@ fn a_canceled_living_pre_skips_a_registered_renderer() {
 /// asks it again.
 #[test]
 #[ignore = "daily"]
-fn a_failed_renderer_draws_the_types_model_until_a_resource_reload() {
+fn a_failed_renderer_skips_only_the_failed_draw() {
     in_scene(
-        "a_failed_renderer_draws_the_types_model_until_a_resource_reload",
+        "a_failed_renderer_skips_only_the_failed_draw",
         |game, _, skeleton| {
             for frame_name in ["the failing frame", "the next frame"] {
                 let drawn = frame(game, "minecraft:skeleton", 93);

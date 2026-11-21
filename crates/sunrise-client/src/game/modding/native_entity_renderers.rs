@@ -121,6 +121,16 @@ pub(in crate::game) struct EntityDrawCallback<T: ?Sized> {
     pub(super) owner: CallbackOwner,
 }
 
+#[cfg(test)]
+pub(super) fn fixture_renderer(
+    renderer: impl EntityRenderer,
+) -> Arc<EntityDrawCallback<dyn EntityRenderer>> {
+    Arc::new(EntityDrawCallback {
+        inner: Arc::new(renderer),
+        owner: CallbackOwner::for_mod("fixture"),
+    })
+}
+
 /// The registered renderers, by the slot each draw route reads: rebuilt on every resource load.
 pub(super) struct EntityRendererTable {
     /// By [`ThrownType::slot`].
