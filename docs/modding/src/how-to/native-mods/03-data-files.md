@@ -54,9 +54,11 @@ the winner fails.
   Opening does not load the whole resource or set a file-size limit; apply your codec's own limits
   when reading. The reader can report I/O or archive decoding errors, and the consumer reports its
   own format errors.
-- `Ok(None)` means no matching resource or pack stack, including a resource hidden by a pack filter.
-- `Err(ResourceOpenError)` means the published stack is unavailable in this phase or lookup/opening
-  failed. The `Io` variant preserves the original error.
+- `Ok(None)` means no matching resource, including a file hidden by a pack filter or a pack type
+  not served on this side.
+- `Err(ResourceOpenError::Unavailable)` means the host has no published resource manager yet (for
+  example, during first-load listener registration) or the current phase cannot access it.
+  `Err(ResourceOpenError::Io(error))` keeps the original lookup or open error.
 
 Use a reload listener to process a whole folder or parse resources when the packs change. Directory
 packs follow vanilla's symlink behavior: linked resource files are read through the pack.

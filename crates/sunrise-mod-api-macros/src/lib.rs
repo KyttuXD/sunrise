@@ -240,8 +240,9 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
 }
 
 /// Generate the defaults of a host area from each method's access declaration. An optional
-/// callback method marked `#[decline_unavailable]` returns without calling it; others panic if
-/// unimplemented. The same declarations drive game forwarders in the build-time API generator.
+/// callback marked `#[decline_unavailable]` returns without calling it. Other methods without
+/// an explicit default panic if unimplemented. The same declarations drive game forwarders in
+/// the build-time API generator, which checks access before calling the game.
 /// A backend trait may carry `#[table_backend("path")]`: the game answers its reads from the
 /// borrowed view at `path`, which implements the trait, and `Game` forwards to it. Methods can
 /// opt out of generated conversion in either direction with `#[forward_api_inputs]` or
@@ -302,7 +303,7 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
                 && !attr.path().is_ident("decline_unavailable")
                 && !attr.path().is_ident("manual_handle")
         });
-        method.default = Some(if decline {
+        if decline {
             if !matches!(method.sig.output, syn::ReturnType::Default) {
                 return syn::Error::new_spanned(
                     &method.sig.output,
@@ -311,14 +312,14 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             }
-            syn::parse_quote!({})
-        } else {
+            method.default = Some(syn::parse_quote!({}));
+        } else if method.default.is_none() {
             let operation = method.sig.ident.to_string();
             let label = format!("{union}::{operation}");
-            syn::parse_quote!({
+            method.default = Some(syn::parse_quote!({
                 crate::world::phase::unprovided(#label, #operation, crate::world::phase::LoadAccess::#level)
-            })
-        });
+            }));
+        }
         method.semi_token = None;
     }
     quote!(#area).into()

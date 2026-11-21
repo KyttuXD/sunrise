@@ -754,7 +754,7 @@ impl ResourceSource {
 mod tests {
     use super::*;
     use std::{
-        io::{Read, Seek, SeekFrom, Write},
+        io::{Read, Write},
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -1034,36 +1034,6 @@ mod tests {
             Err(error) if error.kind() == io::ErrorKind::NotFound
         ));
         assert!(ResourcePath::new("../data/demo/config.json").is_none());
-    }
-
-    #[test]
-    fn resource_reader_streams_past_the_old_limit() {
-        let fixture = Fixture::new();
-        let name = "data/demo/large.bin";
-        let path = fixture.0.join(name);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let old_limit = 64 * 1024 * 1024;
-        let mut file = fs::File::create(&path).unwrap();
-        file.write_all(b"start").unwrap();
-        file.seek(SeekFrom::Start(old_limit)).unwrap();
-        file.write_all(b"end").unwrap();
-        drop(file);
-        let source = ResourceSource::directory(fixture.0.clone());
-
-        let mut reader = source
-            .open_resource(ResourcePath::new(name).unwrap())
-            .unwrap()
-            .unwrap();
-        let mut marker = [0; 5];
-        reader.read_exact(&mut marker).unwrap();
-        assert_eq!(&marker, b"start");
-        assert_eq!(
-            io::copy(&mut reader.by_ref().take(old_limit - 5), &mut io::sink()).unwrap(),
-            old_limit - 5
-        );
-        let mut tail = Vec::new();
-        reader.read_to_end(&mut tail).unwrap();
-        assert_eq!(tail, b"end");
     }
 
     #[test]

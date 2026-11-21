@@ -53,6 +53,18 @@ fn root_with_asset(name: &str, bytes: &[u8]) -> PathBuf {
 }
 
 #[test]
+fn startup_host_reports_that_published_resources_are_unavailable() {
+    let host: &dyn Host = &StartupClientHost;
+    assert!(matches!(
+        host.open_resource(
+            mod_api::PackType::ClientResources,
+            &id("test_mod:hats/top.json")
+        ),
+        Err(mod_api::ResourceOpenError::Unavailable)
+    ));
+}
+
+#[test]
 fn stage_reads_resolved_asset_bytes_without_a_directory() {
     use sunrise_assets::resource_source::{Resource, ResourceSource};
     let source = ResourceSource::indexed(std::collections::BTreeMap::from([(

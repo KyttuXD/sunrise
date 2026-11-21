@@ -55,10 +55,17 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn server_resource_uses_the_higher_of_two_selected_world_packs() {
+        use std::{
+            fs::File,
+            io::{self, Seek, SeekFrom, Write},
+        };
+
         super::super::native_entity_refs::tests::with_game(|game| {
             let scratch = tempfile::tempdir().unwrap();
             game.world_root = scratch.path().to_owned();
-            for (name, bytes) in [("low", "low"), ("high", "high")] {
+            let old_limit = 64 * 1024 * 1024;
+            let identifier = "demo:value/order.bin";
+            for (name, bytes) in [("low", b"low".as_slice()), ("high", b"high".as_slice())] {
                 let pack = game.world_root.join("datapacks").join(name);
                 std::fs::create_dir_all(pack.join("data/demo/value")).unwrap();
                 std::fs::write(
@@ -66,7 +73,12 @@ mod tests {
                     r#"{"pack":{"description":"test","pack_format":121,"min_format":[121,0],"max_format":[121,0]}}"#,
                 )
                 .unwrap();
-                std::fs::write(pack.join("data/demo/value/order.json"), bytes).unwrap();
+                let mut file = File::create(pack.join("data/demo/value/order.bin")).unwrap();
+                file.write_all(bytes).unwrap();
+                if name == "high" {
+                    file.seek(SeekFrom::Start(old_limit)).unwrap();
+                    file.write_all(b"end").unwrap();
+                }
             }
             game.build_registries();
             game.set_allow_commands(true);
@@ -75,14 +87,32 @@ mod tests {
             assert!(game.run_command("datapack disable \"file/low\""));
             assert!(game.run_command("datapack enable \"file/low\" first"));
             assert!(game.run_command("datapack enable \"file/high\" last"));
-            assert_eq!(
-                read(game, PackType::ServerData, "demo:value/order.json").as_deref(),
-                Some(b"high".as_slice())
-            );
+            // The high pack wins even though its file exceeds the old guest reply limit.
+            {
+                let host: &dyn Host = game;
+                let mut reader = host
+                    .open_resource(
+                        PackType::ServerData,
+                        &Identifier::parse(identifier).unwrap(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let mut head = [0; 4];
+                reader.read_exact(&mut head).unwrap();
+                assert_eq!(&head, b"high");
+                let rest = old_limit - head.len() as u64;
+                assert_eq!(
+                    io::copy(&mut reader.by_ref().take(rest), &mut io::sink()).unwrap(),
+                    rest
+                );
+                let mut tail = Vec::new();
+                reader.read_to_end(&mut tail).unwrap();
+                assert_eq!(tail, b"end");
+            }
             assert!(game.run_command("datapack disable \"file/low\""));
             assert!(game.run_command("datapack enable \"file/low\" last"));
             assert_eq!(
-                read(game, PackType::ServerData, "demo:value/order.json").as_deref(),
+                read(game, PackType::ServerData, identifier).as_deref(),
                 Some(b"low".as_slice())
             );
         });

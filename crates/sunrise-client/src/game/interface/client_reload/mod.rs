@@ -22,9 +22,8 @@ use sunrise_client::datapack::DataPack;
 /// listener's prepared apply.
 pub(super) type PreparedClientReload = PreparedStep<()>;
 
-/// The registration host of the first load: no game exists yet, so it reads
-/// nothing — a host read during registration panics, as its contract forbids
-/// one. The reload itself reads through the game's host.
+/// The registration host of the first load: no game or published pack selection
+/// exists yet. Reload listener preparation reads through its own context.
 pub(super) struct StartupClientHost;
 impl Host for StartupClientHost {}
 mod_api::impl_host_areas!(StartupClientHost);

@@ -7,7 +7,7 @@ use crate::{Identifier, Text};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ResourceOpenError {
-    /// The current mod phase cannot access the published pack stack.
+    /// The host has no published resource manager or the current mod phase cannot access it.
     Unavailable,
     /// Resource lookup or opening failed. Preserves the original I/O cause.
     Io(std::io::Error),
@@ -22,7 +22,7 @@ impl crate::AccessRefusal for ResourceOpenError {
 impl std::fmt::Display for ResourceOpenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unavailable => f.write_str("pack resources are unavailable in this phase"),
+            Self::Unavailable => f.write_str("published pack resources are unavailable"),
             Self::Io(error) => error.fmt(f),
         }
     }

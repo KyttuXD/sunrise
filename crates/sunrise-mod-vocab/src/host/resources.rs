@@ -15,10 +15,12 @@ pub trait ResourcesHost {
     /// `identifier` is the resource ID (e.g. `minecraft:models/block/stone.json`
     /// or `mymod:machines/furnace.json`), without the pack's directory prefix.
     ///
-    /// `Ok(None)` means the resource or stack is absent, including a filtered-out
-    /// resource. Lookup or open errors
-    /// are returned as [`ResourceOpenError`]; I/O and archive decoding can also
-    /// fail while reading. A failure never substitutes a lower pack's bytes.
+    /// `Ok(None)` means no matching resource, including one hidden by a filter or
+    /// a pack type not served on this side. A host without a published resource
+    /// manager, or a phase that cannot access it, returns [`ResourceOpenError::Unavailable`].
+    /// Lookup or open errors are returned as [`ResourceOpenError::Io`]; I/O and
+    /// archive decoding can also fail while reading. A failure never substitutes
+    /// a lower pack's bytes.
     /// The reader borrows this host's published generation. It does not reload
     /// packs, impose a resource size limit, or read the whole file on open.
     /// Use `std::io::Read::read_to_end` to explicitly keep owned bytes.
@@ -27,5 +29,7 @@ pub trait ResourcesHost {
         &self,
         pack_type: PackType,
         identifier: &Identifier,
-    ) -> Result<Option<Box<dyn std::io::Read + '_>>, ResourceOpenError>;
+    ) -> Result<Option<Box<dyn std::io::Read + '_>>, ResourceOpenError> {
+        Err(ResourceOpenError::Unavailable)
+    }
 }
