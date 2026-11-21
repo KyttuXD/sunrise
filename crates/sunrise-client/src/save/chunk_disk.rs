@@ -9,6 +9,8 @@ pub(super) struct DiskRuntime {
     /// Chunks whose load listener failed: their stored record is kept as it was read and no
     /// save listener runs for them for the rest of the session.
     save_suppressed: Mutex<HashSet<(i32, i32)>>,
+    /// Chunks whose captured save did not reach disk; the game marks them dirty again.
+    failed_saves: Mutex<Vec<(i32, i32)>>,
     world: WorldEpoch,
     dimension: mod_api::Identifier,
     resources: Arc<sunrise_world::native_load_context::WorldgenContext>,
@@ -151,6 +153,7 @@ impl SaveDir {
         }
         let _ = self.disk.set(Arc::new(DiskRuntime {
             save_suppressed: Mutex::default(),
+            failed_saves: Mutex::default(),
             world,
             dimension,
             resources,
@@ -297,19 +300,36 @@ impl SaveDir {
     }
 }
 
+/// Remember the chunks of a failed write so the game can mark them dirty again.
+pub(super) fn note_failed(batch: &[QueuedWrite]) {
+    for job in batch {
+        if let Some(record) = job.record.disk_job()
+            && let Ok(mut failed) = record.runtime.failed_saves.lock()
+        {
+            failed.push(job.key);
+        }
+    }
+}
+
 impl SaveDir {
-    /// Chunk snapshots whose writes failed; the game marks those chunks dirty again.
+    /// Chunks whose subscribed save was refused or failed, once each. The
+    /// caller marks them modified again, so dirty state is never lost to a
+    /// save that did not complete. Empty without a subscriber.
     pub fn take_failed_chunk_saves(&self) -> Vec<(i32, i32)> {
-        std::mem::take(&mut *self.outstanding.failed_saves.lock().unwrap())
+        self.disk.get().map_or_else(Vec::new, |runtime| {
+            runtime
+                .failed_saves
+                .lock()
+                .map_or_else(|_| Vec::new(), |mut failed| std::mem::take(&mut *failed))
+        })
     }
 
     pub(super) fn note_refused_saves(&self, folder: Folder, keys: &[(i32, i32)]) {
-        if folder == Folder::Region {
-            self.outstanding
-                .failed_saves
-                .lock()
-                .unwrap()
-                .extend_from_slice(keys);
+        if folder == Folder::Region
+            && let Some(runtime) = self.disk.get()
+            && let Ok(mut failed) = runtime.failed_saves.lock()
+        {
+            failed.extend_from_slice(keys);
         }
     }
 }

@@ -43,8 +43,6 @@ pub(super) struct Outstanding {
     pub(super) error: Mutex<Option<String>>,
     /// The first per-record failure in the completed writes, consumed by a durability barrier.
     record_error: Mutex<Option<String>>,
-    /// Changed chunk snapshots that did not reach disk.
-    pub(super) failed_saves: Mutex<Vec<(i32, i32)>>,
     done: Condvar,
     /// What the folder's writes make stale: the portal blocks a search read from saved chunks.
     portals: saved_portals::SavedPortals,
@@ -209,28 +207,17 @@ impl SaveDir {
                             chunk_disk::prepare_batch(&batch)?;
                             write_region_records(&root, cache, folder, &records, |(x, z), error| {
                                 reports.report_save_failure(&root, x, z, &error);
-                                if kind == Folder::Region {
-                                    outstanding.failed_saves.lock().unwrap().push((x, z));
-                                }
                                 outstanding
                                     .record_error
                                     .lock()
                                     .unwrap()
                                     .get_or_insert_with(|| {
-                                        format!(
-                                            "failed to encode {folder} chunk ({x}, {z}): {error}"
-                                        )
+                                        format!("failed to save {folder} chunk ({x}, {z}): {error}")
                                     });
                             })
                         })();
                         if let Err(e) = &result {
-                            if kind == Folder::Region {
-                                outstanding
-                                    .failed_saves
-                                    .lock()
-                                    .unwrap()
-                                    .extend(batch.iter().map(|job| job.key));
-                            }
+                            chunk_disk::note_failed(&batch);
                             let message = format!("failed to write {folder} files: {e}");
                             log::warn!("Sunrise: {message}");
                             *outstanding.error.lock().unwrap() = Some(message);

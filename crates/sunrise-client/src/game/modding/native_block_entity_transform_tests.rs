@@ -712,7 +712,7 @@ fn structure_transform_save_refuses_only_its_invalid_chunk() {
                 .to_string()
                 .contains("chunk (0, 0)")
         );
-        assert_eq!(save.take_failed_chunk_saves(), [(0, 0)]);
+        assert!(save.take_failed_chunk_saves().is_empty()); // Encoder refusals do not requeue.
         assert_eq!(save.chunk_reports.take().save_failure, Some((0, 0)));
         let mut region = RegionFile::open(dir.path().join("region/r.0.0.mca")).unwrap();
         let old = region

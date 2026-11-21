@@ -2086,7 +2086,7 @@ fn write_region_records(
     cache: &RegionCache,
     folder: &str,
     records: &[((i32, i32), &Record)],
-    mut encode_failed: impl FnMut((i32, i32), std::io::Error),
+    mut record_failed: impl FnMut((i32, i32), std::io::Error),
 ) -> Result<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2101,7 +2101,7 @@ fn write_region_records(
                 source,
                 record,
             )),
-            Err(error) => encode_failed((x, z), error),
+            Err(error) => record_failed((x, z), error),
         }
     }
     for ((rx, rz), list) in by_region {
@@ -2118,10 +2118,14 @@ fn write_region_records(
         let mut changed = false;
         for (pos, source, record) in list {
             match record {
-                Some(record) => {
-                    write_chunk_record(&mut region, pos, source, record)?;
-                    changed = true;
-                }
+                Some(record) => match write_chunk_record(&mut region, pos, source, record) {
+                    Ok(()) => changed = true,
+                    // RegionFile rejects this record before changing the file.
+                    Err(error) if exceeds_compressed_chunk_limit(&error) => {
+                        record_failed((pos.x, pos.z), error);
+                    }
+                    Err(error) => return Err(error.into()),
+                },
                 None => changed |= region.clear(pos, timestamp)?,
             }
         }
@@ -2140,6 +2144,12 @@ fn write_region_records(
     Ok(())
 }
 
+fn exceeds_compressed_chunk_limit(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|cause| cause.is::<sunrise_world::region::CompressedChunkLimit>())
+}
+
 fn write_chunk_record(
     region: &mut RegionFile,
     pos: ChunkPos,
@@ -2155,11 +2165,7 @@ fn write_chunk_record(
         }
         Err(error) => error,
     };
-    if !primary
-        || !error
-            .get_ref()
-            .is_some_and(|cause| cause.is::<sunrise_world::region::CompressedChunkLimit>())
-    {
+    if !primary || !exceeds_compressed_chunk_limit(&error) {
         return Err(error);
     }
     let (compression, timestamp) = (record.compression, record.timestamp);

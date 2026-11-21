@@ -14,7 +14,7 @@ use sunrise_client::{
     ui,
 };
 use sunrise_core::position::BlockPos;
-use sunrise_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
+use sunrise_protocol::packets::play::{self, Serverbound as S};
 use winit::{
     event::{ElementState, KeyEvent},
     keyboard::{KeyCode, PhysicalKey},
@@ -760,7 +760,7 @@ impl Game<'_> {
     /// (`saveCustomOnly`) goes to the guest whose use opened it, as the
     /// chunk's update tag leaves it out and the edit screen shows it.
     pub(super) fn lan_open_command_block(&mut self, conn: u32, pos: Pos) {
-        let Some(host) = self.lan.as_ref() else {
+        let Some(host) = &mut self.lan else {
             return;
         };
         if !host
@@ -770,7 +770,7 @@ impl Game<'_> {
         {
             return;
         }
-        let Some(block) = self.command_block(pos) else {
+        let Some(BlockEntity::CommandBlock(block)) = self.world.block_entities.get(&pos) else {
             return;
         };
         let tag = Tag::compound(block.save());
@@ -778,13 +778,13 @@ impl Game<'_> {
         let Some(kind) = host.hub.encoder.entity_type(state) else {
             return;
         };
-        host.hub.send_to(
+        host.hub.send_block_entity_data(
             conn,
-            &C::BlockEntityData(play::BlockEntityData {
+            play::BlockEntityData {
                 pos: [pos.0, pos.1, pos.2],
                 kind,
                 tag,
-            }),
+            },
         );
     }
     /// What `handleSetCommandBlock` does once the player may edit the block.

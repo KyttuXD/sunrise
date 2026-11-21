@@ -20,9 +20,10 @@ impl sunrise_world::worldgen::structure::block_entity_transform::BlockEntityTran
         rotation: Rotation,
         mirror: Mirror,
     ) {
-        static IDENTITY: LazyLock<[JavaString; 4]> =
-            LazyLock::new(|| ["id", "x", "y", "z"].map(JavaString::from));
-        let Some(Tag::String(id)) = data.get(&IDENTITY[0]) else {
+        static IDENTITY: LazyLock<(JavaString, [JavaString; 3])> =
+            LazyLock::new(|| ("id".into(), ["x", "y", "z"].map(JavaString::from)));
+        let (id_key, position_keys) = &*IDENTITY;
+        let Some(Tag::String(id)) = data.get(id_key) else {
             return;
         };
         let Some((id, registration)) = self.0.get_key_value(id) else {
@@ -44,15 +45,22 @@ impl sunrise_world::worldgen::structure::block_entity_transform::BlockEntityTran
                 Mirror::FrontBack => mod_api::StructureMirror::FrontBack,
             },
         );
-        // The transform edits payload fields, not the saved entity's identity. Keep just
-        // those fields, not an undo copy of the working compound.
-        let identity = IDENTITY.each_ref().map(|key| data.get(key).cloned());
+        // Only the coordinates need to be saved; the registered key already holds the
+        // original id. Restore that string only if the callback changed it.
+        let coordinates = position_keys.each_ref().map(|key| data.get(key).cloned());
         let result = registration.owner.call(
             "structure block entity transform",
             "block_entity_transform",
             || registration.step.transform(data, transform),
         );
-        for (key, original) in IDENTITY.iter().zip(identity) {
+        match data.get_mut(id_key) {
+            Some(Tag::String(current)) if &*current == id => {}
+            Some(current) => *current = Tag::String(id.clone()),
+            None => {
+                data.insert(id_key.clone(), Tag::String(id.clone()));
+            }
+        }
+        for (key, original) in position_keys.iter().zip(coordinates) {
             if let Some(original) = original {
                 if let Some(current) = data.get_mut(key) {
                     *current = original;

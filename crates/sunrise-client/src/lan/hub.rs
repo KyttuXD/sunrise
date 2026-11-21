@@ -1181,6 +1181,25 @@ impl Hub {
         }
     }
 
+    /// Send a standalone block entity update. An encoding error disconnects only its recipient.
+    pub fn send_block_entity_data(&mut self, conn: u32, update: play::BlockEntityData) -> bool {
+        let Some(guest) = self.guest(conn).filter(|g| !g.disconnect_pending) else {
+            return false;
+        };
+        let pos = update.pos;
+        let packet = C::BlockEntityData(update);
+        match packet.try_encode() {
+            Ok(body) => {
+                guest.sender.send(body);
+                true
+            }
+            Err(error) => {
+                self.packet_encoding_failed(conn, packet.name(), format_args!("{pos:?}: {error}"));
+                false
+            }
+        }
+    }
+
     /// PacketEncoder and Connection.exceptionCaught report a failed non-skippable
     /// packet and disconnect its recipient, not the other connections.
     pub(in crate::lan) fn packet_encoding_failed(
@@ -4729,17 +4748,8 @@ impl Hub {
             let Some(kind) = self.encoder.entity_type(state.0) else {
                 continue;
             };
-            let packet = C::BlockEntityData(play::BlockEntityData { pos, kind, tag });
-            match packet.try_encode() {
-                Ok(body) => self.guests[i].sender.send(body),
-                Err(error) => {
-                    self.packet_encoding_failed(
-                        conn,
-                        packet.name(),
-                        format_args!("{pos:?}: {error}"),
-                    );
-                    break;
-                }
+            if !self.send_block_entity_data(conn, play::BlockEntityData { pos, kind, tag }) {
+                break;
             }
         }
     }
