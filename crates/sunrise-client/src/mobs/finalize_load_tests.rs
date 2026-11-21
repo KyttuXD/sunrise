@@ -217,37 +217,70 @@ fn a_wolf_with_a_health_modifier_keeps_its_taming_base() {
     }
 }
 
-/// `LivingEntity.readAdditionalSaveData` reads the attributes, then `setHealth` clamps the saved
-/// `Health` to `[0, getMaxHealth()]`, the loaded modifiers included (vanilla 26.3, #2360).
+/// Loaded `Health` matches the recorded vanilla 26.3 witness (`tools/witness/26.3/mob_loaded_health.tsv`, #2360).
 #[test]
 fn a_loaded_health_is_clamped_to_the_loaded_max_health() {
-    let health = |id: &str, species, max: f32, extra: &str| {
-        let mut types = types(id, species, &[("minecraft:max_health", f64::from(max))]);
-        Arc::make_mut(types.get_mut(id).unwrap()).max_health = max;
-        let snbt = format!(r#"{{id:"{id}",Pos:[0.5d,200d,0.5d]{extra}}}"#);
-        let input = parse_snbt(&snbt).unwrap().0;
-        mob_from_nbt(&input, &types, 1, None).unwrap().health
-    };
-    assert_eq!(
-        health(
-            "minecraft:endermite",
-            Species::Endermite,
-            8.0,
-            ",Health:20f"
-        ),
-        8.0
-    );
-    assert_eq!(
-        health("minecraft:parched", Species::Parched, 16.0, ",Health:20f"),
-        16.0
-    );
-    let bonus = r#",Health:25f,attributes:[{id:"minecraft:max_health",base:20d,modifiers:[{id:"minecraft:leader_zombie_bonus",amount:10d,operation:"add_value"}]}]"#;
-    assert_eq!(
-        health("minecraft:zombie", Species::Zombie, 20.0, bonus),
-        25.0
-    );
-    assert_eq!(
-        health("minecraft:pig", Species::Pig, 10.0, ",Health:-3f"),
-        0.0
-    );
+    const WITNESS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tools/witness/26.3/mob_loaded_health.tsv"
+    ));
+    let mut rows = 0usize;
+    for line in WITNESS.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        let &[
+            name,
+            entity,
+            default_max_hex,
+            loaded_max_hex,
+            loaded_health_hex,
+            saved_health_hex,
+            snbt,
+        ] = parts.as_slice()
+        else {
+            panic!("bad witness row: {line}");
+        };
+        let short = entity.strip_prefix("minecraft:").unwrap_or(entity);
+        let species = crate::mobs::species::ALL
+            .iter()
+            .find(|def| def.name == short)
+            .unwrap_or_else(|| panic!("unknown species {entity} in {name}"))
+            .species;
+        let default_max = f64::from_bits(u64::from_str_radix(default_max_hex, 16).unwrap());
+        let expected_max = u32::from_str_radix(loaded_max_hex, 16).unwrap();
+        let expected_health = u32::from_str_radix(loaded_health_hex, 16).unwrap();
+        let expected_saved = u32::from_str_radix(saved_health_hex, 16).unwrap();
+
+        let mut mob_types = types(entity, species, &[(HEALTH, default_max)]);
+        Arc::make_mut(mob_types.get_mut(entity).unwrap()).max_health = default_max as f32;
+        let input = parse_snbt(snbt).unwrap().0;
+        let mob = mob_from_nbt(&input, &mob_types, 1, None).unwrap();
+        assert_eq!(
+            mob.attrs.max_health.to_bits(),
+            expected_max,
+            "{name}: loaded max_health bits"
+        );
+        assert_eq!(
+            mob.health.to_bits(),
+            expected_health,
+            "{name}: loaded health bits"
+        );
+        let saved_tag = mob_to_nbt(
+            &mob,
+            [1, 2, 3, 4],
+            None,
+            None,
+            |_| None,
+            &Default::default(),
+        );
+        assert_eq!(
+            saved_tag.get("Health"),
+            Some(&Tag::Float(expected_saved)),
+            "{name}: saved Health bits"
+        );
+        rows += 1;
+    }
+    assert!(rows > 0, "witness file had no rows");
 }
