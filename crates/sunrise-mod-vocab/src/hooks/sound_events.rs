@@ -6,7 +6,9 @@ pub trait Hooks {
     /// for a category volume change applies volume and pitch. `None` stops the channel.
     /// Finite base volume and pitch edits, including zero and negative values, go through
     /// `SoundEngine.calculateVolume` and `calculatePitch`, as they do in `play_local_sound`.
-    /// Non-finite volume or pitch edits and invalid `effects` (`SoundEffects::valid`) refuse playback.
+    /// Non-finite volume or pitch edits and invalid `effects` (`SoundEffects::valid`) refuse playback
+    /// and are logged each time. A panicking listener is logged, named in an error toast and disabled
+    /// for this session; other listeners still run.
     /// A sound is about to play (`PlaySoundEvent`, vanilla's `SoundEngine.play`): `original` is the sound as asked for, `sound` starts as a copy of it. Edit `sound` (its volume, pitch, source, position, identifier, looping, delay, attenuation, relativeness or `effects`) to change what plays, or set it to `None` to play nothing. `effects` (`SoundEffects`) is the mixer's DSP for this one sound: its gain, a low-pass and a high-pass on the direct sound and sends to the shared `room`, `hall` and `cavern` reverbs, each in a fixed range (`SoundEffects::valid`: a value out of range, NaN or an infinity refuses the play, never clamped). A sound that doesn't tick keeps the effects it started with. It is asked before the engine's own checks (output open, sound resolved, volume, channel pool), for every sound the client plays, so answer fast; later mods see earlier mods' edits in `sound` and the sound as asked for in `original`. A new `identifier` is resolved again, with its own weighted pick. `context` is the client's `LoopContext`: no game is at hand inside the sound engine. Client-side only; a server has no sound.
     #[hook(
         side = "client",

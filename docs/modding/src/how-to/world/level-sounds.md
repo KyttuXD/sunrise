@@ -43,8 +43,10 @@ new sound or loop replay and false for a live playback update. `event.instance` 
 instance across those calls. A ticking sound applies volume, pitch and effects edits;
 updates from a category volume change apply volume and pitch. `None` stops playback.
 Finite base volume and pitch edits go through the same final calculations as local sound
-requests, even when negative. Non-finite numeric edits or invalid effects refuse the
-refresh. Updates do not replay the sound, resolve a different source, or modify the
+requests, even when negative. Non-finite volume or pitch edits and invalid effects refuse
+playback and are logged each time. If a listener panics, the game logs it, shows an error
+toast naming the mod, and skips that listener for the rest of the session. Other listeners
+still run. Updates do not replay the sound, resolve a different source, or modify the
 instance's stored settings.
 
 ## Sounds of viewed levels

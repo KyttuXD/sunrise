@@ -82,10 +82,21 @@ pub fn native_sound_engine_load(context: &sunrise_world::native_load_context::Lo
 // Validate a mod's changed parameters at the playback boundary, leaving vanilla
 // inputs alone. Starts and refreshes use the same contract.
 fn valid_playback_edit(original: &SoundPlay, edited: &SoundPlay) -> bool {
-    super::readable_base_edit(
+    let refusal = if !super::readable_base_edit(
         [original.volume, original.pitch],
         [edited.volume, edited.pitch],
-    ) && (edited.effects == original.effects || edited.effects.valid())
+    ) {
+        "non-finite base volume or pitch"
+    } else if edited.effects != original.effects && !edited.effects.valid() {
+        "invalid mixer effects"
+    } else {
+        return true;
+    };
+    log::warn!(
+        "play_sound edit for {} refused: {refusal}",
+        original.identifier
+    );
+    false
 }
 
 #[derive(Clone, Debug)]
@@ -655,6 +666,71 @@ mod tests {
     }
 
     #[test]
+    fn a_panicking_play_sound_listener_is_disabled_without_stopping_other_callbacks() {
+        #[derive(Default)]
+        struct Calls {
+            play: std::sync::atomic::AtomicUsize,
+            source: std::sync::atomic::AtomicUsize,
+        }
+        use std::sync::atomic::Ordering::Relaxed;
+        struct Panics(Arc<Calls>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Panics {
+            #[listener(priority = 10)]
+            fn play_sound(
+                &self,
+                _: &dyn mod_api::LoopContext,
+                _: &mut mod_api::PlaySoundEvent<'_>,
+            ) {
+                self.0.play.fetch_add(1, Relaxed);
+                panic!("a mod's sound callback failed");
+            }
+
+            fn play_sound_source(
+                &self,
+                _: &dyn mod_api::LoopContext,
+                _: &mut mod_api::PlaySoundSourceEvent<'_>,
+            ) {
+                self.0.source.fetch_add(1, Relaxed);
+            }
+        }
+        struct Continues;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Continues {
+            fn play_sound(
+                &self,
+                _: &dyn mod_api::LoopContext,
+                event: &mut mod_api::PlaySoundEvent<'_>,
+            ) {
+                event.sound.as_mut().unwrap().pitch = 0.75;
+            }
+        }
+        let calls = Arc::new(Calls::default());
+        let mods = vec![
+            mod_api::ModEntry::new("panics", Box::new(Panics(Arc::clone(&calls)))),
+            mod_api::ModEntry::new("continues", Box::new(Continues)),
+        ];
+        mod_platform::testing::with_mods(mods.into(), || {
+            use crate::sound_engine::PlayResult;
+            let (mut engine, mut backend) = (engine(), Null::default());
+            for seed in [1, 2] {
+                let instance = SoundInstance::for_ui(
+                    "minecraft:block.plain",
+                    1.0,
+                    1.0,
+                    LegacyRandom::new(seed),
+                );
+                let (id, result) = engine.play_new(instance, false, &mut backend);
+                assert_eq!(result, PlayResult::Started);
+                assert_eq!(backend.pitch[&engine.channel(id).unwrap()], 0.75);
+            }
+            assert_eq!(mod_api::__private::poisoned_listeners(HookId::PlaySound), 1);
+        });
+        assert_eq!(calls.play.load(Relaxed), 1);
+        assert_eq!(calls.source.load(Relaxed), 2);
+    }
+
+    #[test]
     fn invalid_play_sound_edits_refuse_starts_and_stop_live_channels() {
         struct Poison(bool);
         #[mod_api::__subscriptions]
@@ -685,6 +761,7 @@ mod tests {
                     engine.refresh_category_volume(crate::sound_engine::MASTER, &mut backend);
                     assert!(engine.instance(id).unwrap().stopped);
                 }
+                assert_eq!(mod_api::__private::poisoned_listeners(HookId::PlaySound), 0);
             });
         }
     }

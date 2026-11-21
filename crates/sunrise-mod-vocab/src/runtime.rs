@@ -172,6 +172,10 @@ pub fn isolated_failures() -> u64 {
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     let (entered, trapped) = LISTENER_SERIAL.get();
     LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    disable_listener(hook, id);
+}
+
+fn disable_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -638,6 +642,33 @@ impl ListenerScope {
             },
         );
         &*entry.hooks
+    }
+
+    /// Run one subscriber without spreading a panic to later listeners or an unrelated action.
+    pub(crate) fn call_contained<T>(
+        &mut self,
+        hook_id: HookId,
+        name: &'static str,
+        entry: &'static ModEntry,
+        contained: bool,
+        call: impl FnOnce(&dyn Hooks) -> T,
+    ) -> Option<T> {
+        if poisoned(hook_id, entry.id) {
+            return None;
+        }
+        let hooks = self.enter(entry, name);
+        match crate::callback_owner::contain_unwind(|| refusable(contained, || call(hooks))) {
+            Ok(Ok(answer)) => Some(answer),
+            Ok(Err(refusal)) => {
+                refusal.report_each();
+                None
+            }
+            Err(message) => {
+                disable_listener(hook_id, entry.id);
+                crate::callback_owner::report_callback_panic(entry.id, "hook", name, message);
+                None
+            }
+        }
     }
 }
 

@@ -1247,6 +1247,23 @@ pub(super) fn emit<'a>(
                     call(&mod_item, ""),
                 ),
             ),
+            None if name == "play_sound" => (
+                // Sound edits are already filtered by the playback boundary. Keep dispatching
+                // to later listeners after a panic without copying the sound in the live path.
+                String::new(),
+                format!(
+                    "{{ let contained = super::runtime::outside_world(); \
+                        let mut {entered} = super::runtime::ListenerScope::new(); \
+                        for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ \
+                            {snapshot_statement} \
+                            if {entered}.call_contained(HookId::{hook_id}, \"{name}\", {mod_entry}, contained, \
+                                    |{mod_item}| {mod_item}.{name}({invoke})).is_none() {{ \
+                                {restore_statement} \
+                            }} \
+                        }} \
+                    }}"
+                ),
+            ),
             None if hook.owner.is_some() => (
                 String::new(),
                 format!(
