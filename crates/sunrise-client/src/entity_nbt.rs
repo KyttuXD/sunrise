@@ -1810,6 +1810,16 @@ fn mob_from_nbt_at(
     read_mob_home(&mut m, tag);
     m.on_ground = flag(tag, "OnGround");
     m.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
+    // AbstractCubeMob.readAdditionalSaveData sizes before the living load, so saved bases win.
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Slime | crate::mobs::Species::MagmaCube
+    ) {
+        crate::mobs::cube::set_size(
+            &mut m,
+            (number(tag.get("Size")).unwrap_or(0) as i32).wrapping_add(1),
+        );
+    }
     // LivingEntity.readAdditionalSaveData: the saved attribute bases, then
     // the health, the max health when there is none.
     if let Some(Tag::List(attrs)) = tag.get("attributes") {
@@ -1831,13 +1841,12 @@ fn mob_from_nbt_at(
                     crate::mobs::finalize::Attr::MovementSpeed,
                     v,
                 ),
-                // A saved base other than the type's default is the
-                // attribute's base, which `/attribute ... base get` reads.
+                // A saved base unlike the current one (type default or cube size) becomes the base.
                 "minecraft:max_health"
-                    if crate::mobs::finalize::default_value(
+                    if crate::mobs::finalize::base_value(
                         &m,
                         crate::mobs::finalize::Attr::MaxHealth,
-                    ) != Some(v) =>
+                    ) != v =>
                 {
                     crate::mobs::finalize::set_base(
                         &mut m,
@@ -1847,10 +1856,10 @@ fn mob_from_nbt_at(
                 }
                 "minecraft:max_health" => m.attrs.max_health = v as f32,
                 "minecraft:movement_speed"
-                    if crate::mobs::finalize::default_value(
+                    if crate::mobs::finalize::base_value(
                         &m,
                         crate::mobs::finalize::Attr::MovementSpeed,
-                    ) != Some(v) =>
+                    ) != v =>
                 {
                     crate::mobs::finalize::set_base(
                         &mut m,
@@ -1860,10 +1869,10 @@ fn mob_from_nbt_at(
                 }
                 "minecraft:movement_speed" => m.attrs.speed = v,
                 "minecraft:attack_damage"
-                    if crate::mobs::finalize::default_value(
+                    if crate::mobs::finalize::base_value(
                         &m,
                         crate::mobs::finalize::Attr::AttackDamage,
-                    ) != Some(v) =>
+                    ) != v =>
                 {
                     crate::mobs::finalize::set_base(
                         &mut m,
@@ -1874,10 +1883,10 @@ fn mob_from_nbt_at(
                 "minecraft:attack_damage" => m.attrs.attack_damage = v as f32,
                 "minecraft:attack_knockback" => m.attrs.attack_knockback = v,
                 "minecraft:flying_speed"
-                    if crate::mobs::finalize::default_value(
+                    if crate::mobs::finalize::base_value(
                         &m,
                         crate::mobs::finalize::Attr::FlyingSpeed,
-                    ) != Some(v) =>
+                    ) != v =>
                 {
                     crate::mobs::finalize::set_base(
                         &mut m,
@@ -2554,13 +2563,6 @@ fn mob_from_nbt_at(
         m.species(),
         crate::mobs::Species::Slime | crate::mobs::Species::MagmaCube
     ) {
-        // AbstractCubeMob.readAdditionalSaveData: the size's attributes, then
-        // the saved health, the max health when there is none.
-        crate::mobs::cube::set_size(
-            &mut m,
-            (number(tag.get("Size")).unwrap_or(0) as i32).wrapping_add(1),
-        );
-        m.health = loaded_health(&m, float(tag.get("Health")));
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
     if m.species() == crate::mobs::Species::Phantom {

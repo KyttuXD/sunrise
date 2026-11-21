@@ -55,6 +55,13 @@ LOADED_HEALTH_CASES = [
     case('loaded_health_sulfur_cube_size1_bonus_kept', 'minecraft:sulfur_cube',
          ['{id:"minecraft:max_health",base:8.0d,modifiers:[{id:"test:boost",amount:6.0d,operation:"add_value"}]}'],
          health='12.0f', extra='Size:1', check_health=True),
+    # A cube sizes before the saved attributes load, so a raised or default-valued saved base wins.
+    case('loaded_health_slime_size1_raised_base_kept', 'minecraft:slime',
+         ['{id:"minecraft:max_health",base:50.0d}'], health='30.0f', extra='Size:1', check_health=True),
+    case('loaded_health_magma_cube_size0_raised_base_over_max', 'minecraft:magma_cube',
+         ['{id:"minecraft:max_health",base:10.0d}'], health='20.0f', extra='Size:0', check_health=True),
+    case('loaded_health_slime_size0_default_base_kept', 'minecraft:slime',
+         ['{id:"minecraft:max_health",base:20.0d}'], health='15.0f', extra='Size:0', check_health=True),
 ]
 CASES = [
     case('zombie_defaults', ZOMBIE, [], read=['minecraft:max_health', 'minecraft:attack_damage', 'minecraft:armor']),
