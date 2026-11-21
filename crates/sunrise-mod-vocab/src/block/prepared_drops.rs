@@ -205,7 +205,7 @@ impl<'a> PreparedDropView<'a> {
         self.access.velocity(self.index).unwrap_or([0.0; 3])
     }
 
-    /// Ticks before a player may pick up the item entity.
+    /// The signed pickup delay the entity will start with (`32767` never ticks down).
     pub fn pickup_delay(&self) -> i32 {
         self.access.pickup_delay(self.index).unwrap_or(0)
     }
@@ -282,7 +282,7 @@ impl PreparedDropMut<'_> {
         self.as_view().velocity()
     }
 
-    /// Ticks before a player may pick up the item entity.
+    /// The signed pickup delay the entity will start with (`32767` never ticks down).
     pub fn pickup_delay(&self) -> i32 {
         self.as_view().pickup_delay()
     }
@@ -334,7 +334,7 @@ impl PreparedDropMut<'_> {
         self.access.set_velocity(self.index, velocity);
     }
 
-    /// Set ticks before a player may pick up the item entity.
+    /// Set the signed `ItemEntity.pickupDelay` as given (`32767` never ticks down).
     pub fn set_pickup_delay(&mut self, pickup_delay: i32) {
         self.access.set_pickup_delay(self.index, pickup_delay);
     }

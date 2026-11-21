@@ -24,9 +24,10 @@ player's UUID (`breaker`), it carries `tool` as `Option<ItemStackView<'_>>`
 own break of it is running: a ravager's), and `drops` as a live
 `PreparedBlockDrops<'_>` view. Read entries or mutate them in place via
 `PreparedDropView` and `PreparedDropMut` to preserve each prepared drop's RNG,
-or add, replace or copy entries via owned `ItemDrop` captures. Stack writes are
-validated per edit with `StackWriteError`, so one invalid edit leaves all other
-drops, `experience` and cancel state intact. `breaker_entity` is not set when no
+or add, replace or copy entries via owned `ItemDrop` captures. Pickup delay
+is a signed `i32` on both forms; use `32767` for a delay that never counts down.
+Stack writes are validated per edit with `StackWriteError`, so one invalid
+edit leaves all other drops, `experience` and cancel state intact. `breaker_entity` is not set when no
 entity broke the block (a piston, water, a neighbour update, `/setblock destroy`)
 or for explosions. `block_entity` is `Option<BlockEntityRef>` only while the
 original entity is resident. `block_entity_data` is `Option<&Compound>` carrying

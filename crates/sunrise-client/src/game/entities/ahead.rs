@@ -160,6 +160,9 @@ fn move_alone(
     found: &mut Vec<u32>,
     near: &mut Vec<Aabb>,
 ) -> Moved {
+    if item.stack.count == 0 {
+        return (false, false, true, Vec::new());
+    }
     obstacles.near_shared(reach(item), found, near);
     let no_physics = item.inside_block(tables.world, tables.collision, near, Some(tables.border));
     // `moveTowardsClosestSpace` draws the speed from the item's own random.

@@ -18,8 +18,9 @@
 //! whole on its first write, from wherever the player's state lives then: the acting fields
 //! or a parked guest's record. On abort, the journal follows that storage through guest turns.
 //! An item a write drops from a player waits for
-//! the root commit too. An item entity's stack is kept on its first write; one emptied stays,
-//! empty, until the root commit removes it. A guest's menu storage (ender chest, crafting grid,
+//! the root commit too. An item entity's stack is kept on its first write. An item place
+//! emptied by extraction discards the entity at root commit if still empty. A direct stack
+//! write only sets the stack. A guest's menu storage (ender chest, crafting grid,
 //! a mod's chest menu) is kept whole on its first write through a menu slot; a crafting grid
 //! changed by the transaction has its result made again at the root commit.
 //! `LivingRef::set_health` keeps the player's synced float storage and unpublished update
@@ -511,7 +512,7 @@ pub(super) enum After {
     PlayerEquip(u128, String, Option<ItemStack>),
     /// An item split off an item entity, dropped where it is (`Block.popResource`'s delay).
     Spawn([f64; 3], ItemStack),
-    /// The item entity with this id was emptied: removed, unless it holds items again.
+    /// Item-place extraction emptied this entity: discard it unless it holds items again.
     Emptied(u32),
     /// A component-only mob equipment write must reach the normal tracker even if the mob is idle.
     EquipmentSync(u32),

@@ -40,28 +40,22 @@ impl Game<'_> {
         read(ItemStackView::resident(metadata, &project));
         Some(())
     }
-    /// Writes a nonempty complete stack using `ItemEntity.setItem`. Empty
-    /// stacks are refused: vanilla discards the item on its next tick. To
-    /// remove an item entity, use the removal handle. False also for an
-    /// unavailable item or outside a server.
-    pub(super) fn item_entity_set_stack(&mut self, item: ItemEntityRef, stack: ItemStack) -> bool {
-        if stack.count == 0
-            || &*stack.item == "minecraft:air"
-            || self.native_item_entity_index(item).is_none()
-        {
+    /// `ItemEntity.setItem` leaves the entity in the level even if the new stack is empty.
+    pub(super) fn item_entity_set_stack(
+        &mut self,
+        item: ItemEntityRef,
+        stack: Option<ItemStack>,
+    ) -> bool {
+        let Some(index) = self.native_item_entity_index(item) else {
             return false;
-        }
-        self.journal_set_item_entity(item.entity().id(), stack)
+        };
+        self.journal_set_item_entity(index, stack);
+        true
     }
 
-    /// The signed pickup delay; the legacy infinite sentinel reads as vanilla's
-    /// 32767. None also covers a stored value outside i32.
+    /// The signed `ItemEntity.pickupDelay`, if the item is available.
     pub(super) fn item_entity_pickup_delay(&self, item: ItemEntityRef) -> Option<i32> {
-        let delay = self
-            .dropped
-            .get(self.native_item_entity_index(item)?)?
-            .pickup_delay;
-        Some(delay)
+        Some(self.dropped[self.native_item_entity_index(item)?].pickup_delay)
     }
 
     /// `ItemEntity.setPickUpDelay`.
@@ -169,7 +163,7 @@ mod tests {
             let mut changed = stack;
             changed.damage = 21;
             let changed = test_snapshot(&changed);
-            assert_eq!(item.set_stack(game, changed.clone()), Ok(true));
+            assert_eq!(item.set_stack(game, Some(changed.clone())), Ok(true));
             assert_eq!(
                 item.with_stack(game, |stack| stack.project()).flatten(),
                 Some(changed)
@@ -212,18 +206,52 @@ mod tests {
             assert_eq!(stale.age(game), None);
             assert!(stale.with_stack(game, |_| ()).is_none());
             assert!(!stale.set_target(game, Some(target)));
-            let mut empty = item
-                .with_stack(game, |stack| stack.project())
-                .flatten()
-                .unwrap();
-            assert_eq!(empty.set_count(0), Err(mod_api::StackError::Empty));
-            let air = test_snapshot(&ItemStack::new("minecraft:air", 1));
-            assert_eq!(item.set_stack(game, air), Ok(false));
-            assert_eq!(item.with_stack(game, |stack| stack.damage()), Some(21));
             let taken = game.dropped.lift();
             assert!(item.with_stack(game, |_| ()).is_none());
             assert!(!item.set_no_pickup_delay(game));
             game.dropped = taken;
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn setting_an_empty_item_stack_leaves_discard_to_the_entity_tick() {
+        crate::game::in_own_process(
+            "game::native_item_entity_refs::tests::setting_an_empty_item_stack_leaves_discard_to_the_entity_tick",
+            || {
+                with_game(|game| {
+                    game.options.dedicated = Some(Vec::new());
+                    game.world.chunks.insert(
+                        (0, 0),
+                        std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                    );
+                    let air = test_snapshot(&ItemStack::new("minecraft:air", 1));
+                    for empty in [None, Some(air)] {
+                        game.spawn_item(
+                            ItemStack::new("minecraft:stone", 1),
+                            [2.5, 64.0, 2.5],
+                            [0.0; 3],
+                            0,
+                        );
+                        let id = game.next_entity;
+                        game.ticked_entities_through = id;
+                        let entity = game.entity(id).unwrap();
+                        let item = game.item_entity(entity).unwrap();
+
+                        assert_eq!(item.set_stack(game, empty), Ok(true));
+                        assert_eq!(
+                            game.item_entity(entity),
+                            Some(item),
+                            "setItem does not discard"
+                        );
+                        assert_eq!(item.with_stack(game, |stack| stack.count()), None);
+
+                        game.tick_items();
+                        assert!(!game.dropped.iter().any(|row| row.id == id));
+                        assert_eq!(game.item_entity(entity), None);
+                    }
+                });
+            },
+        );
     }
 }

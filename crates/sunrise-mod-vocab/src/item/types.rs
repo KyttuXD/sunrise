@@ -216,7 +216,8 @@ pub struct ItemDrop {
     pub position: [f64; 3],
     /// Its motion in blocks per tick, as vanilla's constructor drew it.
     pub velocity: [f64; 3],
-    /// Ticks before a player may pick it up.
+    /// The starting `ItemEntity.pickupDelay`, stored as a signed int (`32767`
+    /// never ticks down). The save format narrows it to a signed short.
     pub pickup_delay: i32,
     /// `ItemEntity.setThrower`: the UUID of the entity that threw it, none by default.
     pub thrower: Option<u128>,
@@ -227,6 +228,7 @@ pub struct ItemDrop {
     pub no_gravity: bool,
     /// The item entity's starting `age` in ticks, 0 by default. It despawns at 6000;
     /// [`ItemDrop::UNLIMITED_LIFETIME`] (vanilla's `setUnlimitedLifetime`) never does.
+    /// The save format narrows the age to a signed short.
     pub age: i32,
 }
 

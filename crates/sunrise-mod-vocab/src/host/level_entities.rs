@@ -179,10 +179,9 @@ pub trait LevelEntitiesBackendMut {
     /// Side: server.
     /// Spawns `stack` as an item entity at `x y z` (`new ItemEntity(level, x,
     /// y, z, stack)` and `addFreshEntity`): its own random motion (up 0.2, up
-    /// to 0.1 either way across), with `pickup_delay` ticks before it can be
-    /// picked up, as `ItemEntity.setPickupDelay` at construction (vanilla
-    /// passes 10 for a block's drop, 40 for a player's throw and 32767 for
-    /// never). None, with nothing
+    /// to 0.1 either way across), with the signed `pickup_delay` passed to
+    /// `ItemEntity.setPickUpDelay` (10 for a block's drop, 40 for a player's
+    /// throw, 32767 to never count down). None, with nothing
     /// spawned, for an empty stack or an unknown item, a value that isn't
     /// finite, on a client, for a stale handle, a level not in place, or an
     /// item a mod kept out (`entity_join_level`).
@@ -201,8 +200,8 @@ pub trait LevelEntitiesBackendMut {
     /// Side: server.
     /// `spawn_item` with the item entity's motion set to
     /// `motion` (blocks a tick), as `new ItemEntity(level, x, y, z, stack,
-    /// deltaX, deltaY, deltaZ)`, and the same `pickup_delay` ticks before it
-    /// can be picked up (`ItemEntity.setPickupDelay`). None in the same
+    /// deltaX, deltaY, deltaZ)`, and the same signed `pickup_delay`
+    /// (`ItemEntity.setPickUpDelay`). None in the same
     /// cases, and for a motion that isn't finite.
     #[access(WorldOnly)]
     fn level_spawn_item_with_motion(

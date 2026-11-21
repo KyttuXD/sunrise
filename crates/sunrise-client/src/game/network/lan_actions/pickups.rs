@@ -42,7 +42,13 @@ impl Game<'_> {
             .dropped
             .iter()
             .filter(|d| {
-                (listens || (d.pickup_delay == 0 && d.target.is_none_or(|t| t == uuid)))
+                (listens
+                    || Self::pickup_decision(
+                        d.pickup_delay,
+                        d.target,
+                        uuid,
+                        mod_api::TriState::Default,
+                    ))
                     && (d.position.x - position[0]).abs() < 1.5
                     && (d.position.z - position[2]).abs() < 1.5
                     && d.position.y > position[1] - 0.6
@@ -68,8 +74,9 @@ impl Game<'_> {
             } else {
                 mod_api::TriState::Default
             };
-            let d = &mut self.dropped[i];
-            if !Self::pickup_decision(&mut d.pickup_delay, d.target, uuid, answer) {
+            let d = &self.dropped[i];
+            if !Self::pickup_decision(d.pickup_delay, d.target, uuid, answer) || d.stack.count == 0
+            {
                 continue;
             }
             let stack = self.dropped[i].stack.clone();

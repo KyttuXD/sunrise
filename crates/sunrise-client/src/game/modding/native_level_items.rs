@@ -205,11 +205,13 @@ mod tests {
             assert_eq!(game.entity_position(spawned), Some([1.5, 70.0, 2.5]));
             let item = game.dropped.last().unwrap();
             assert_eq!((item.pickup_delay, item.velocity.y), (40, 0.3));
-            assert!(
-                game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 32767)
-                    .is_some()
-            );
-            assert_eq!(game.dropped.last().unwrap().pickup_delay, 32767);
+            for delay in [-9, 32767, i32::MAX] {
+                assert!(
+                    game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), delay)
+                        .is_some()
+                );
+                assert_eq!(game.dropped.last().unwrap().pickup_delay, delay);
+            }
             assert!(
                 game.level_spawn_item(level, f64::NAN, 70.0, 2.5, stone(), 0)
                     .is_none()

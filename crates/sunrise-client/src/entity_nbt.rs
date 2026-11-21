@@ -2757,7 +2757,6 @@ pub fn item_entity_to_nbt(
     raw: Option<&Tag>,
     items: &crate::items::Items,
 ) -> Tag {
-    let item = sunrise_items::item_nbt::item_to_nbt(&e.stack, items);
     let base = Base {
         id: "minecraft:item",
         uuid,
@@ -2769,21 +2768,22 @@ pub fn item_entity_to_nbt(
     };
     let mut tag = base.non_mob_tag(raw);
     for (key, value) in [
-        ("Item", item),
         ("Health", Tag::Short(e.health as i16)),
         ("Fire", Tag::Short(e.fire_ticks as i16)),
-        (
-            "Age",
-            Tag::Short(e.age.clamp(i16::MIN as i32, i16::MAX as i32) as i16),
-        ),
-        (
-            "PickupDelay",
-            Tag::Short(
-                e.pickup_delay.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
-            ),
-        ),
+        // ItemEntity.addAdditionalSaveData casts Java ints to signed shorts.
+        ("Age", Tag::Short(e.age as i16)),
+        ("PickupDelay", Tag::Short(e.pickup_delay as i16)),
     ] {
         put(&mut tag, key, value);
+    }
+    if e.stack.count > 0 {
+        put(
+            &mut tag,
+            "Item",
+            sunrise_items::item_nbt::item_to_nbt(&e.stack, items),
+        );
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Item".into());
     }
     if let Some(thrower) = e.thrower {
         put(&mut tag, "Thrower", Tag::IntArray(thrower.to_vec()));
@@ -4343,10 +4343,25 @@ mod tests {
         )
         .unwrap()
         .0;
-        let item = super::item_entity_from_nbt(&tag, 1, 0.0).unwrap();
+        let mut item = super::item_entity_from_nbt(&tag, 1, 0.0).unwrap();
+        item.age = 32768;
+        item.pickup_delay = 98303;
         let saved = super::item_entity_to_nbt(&item, [1; 4], None, &Default::default());
-        assert_eq!(saved.get("Age"), Some(&super::Tag::Short(i16::MIN)));
-        assert_eq!(saved.get("PickupDelay"), Some(&super::Tag::Short(i16::MAX)));
+        assert_eq!(saved.get("Age"), Some(&super::Tag::Short(-32768)));
+        assert_eq!(saved.get("PickupDelay"), Some(&super::Tag::Short(32767)));
+    }
+
+    #[test]
+    fn saving_an_empty_item_omits_the_item_even_with_old_nbt() {
+        let raw =
+            sunrise_core::nbt::parse_snbt("{Pos:[0d,0d,0d],Item:{id:\"minecraft:stone\",count:1}}")
+                .unwrap()
+                .0;
+        let mut item = super::item_entity_from_nbt(&raw, 1, 0.0).unwrap();
+        item.stack = super::ItemStack::new("minecraft:air", 0);
+        let saved = super::item_entity_to_nbt(&item, [1; 4], Some(&raw), &Default::default());
+        assert_eq!(saved.get("Item"), None);
+        assert!(super::item_entity_from_nbt(&saved, 1, 0.0).is_none());
     }
 
     // Added after the actual old Game proof: live mutation and a fresh absent

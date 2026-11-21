@@ -117,6 +117,13 @@ impl Game<'_> {
                 if round.halted(items[i].id) {
                     break 'tick;
                 }
+                // ItemEntity.tick discards an empty stack before its base tick or movement.
+                if items[i].stack.count == 0 {
+                    removed[i] = true;
+                    gone = true;
+                    cells.remove(i, items[i].position);
+                    break 'tick;
+                }
                 self.tick_saved_invulnerable_time(items[i].id);
                 let item = &mut items[i];
                 let mut at_turn = |item: &mut ItemEntity| {
