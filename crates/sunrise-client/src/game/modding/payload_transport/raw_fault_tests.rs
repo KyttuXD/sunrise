@@ -1,7 +1,7 @@
 //! Main-thread fault isolation on one raw channel (#3209), through a published server and a
 //! vanilla-shaped TCP peer that never answers the Sunrise payload query: the first declaring
-//! mod stages a write and fails, the second commits its own; the first's write is rolled back
-//! before the second runs, each runs once per message in load order, and the connection stays.
+//! mod stages a write then panics or returns an error, the second commits its own; the first's
+//! write is rolled back before the second runs, and neither failure mutes the callback or connection.
 use mod_api::{
     Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes, PayloadId, Registrar,
 };
@@ -58,6 +58,9 @@ impl IPayloadHandler for Step {
             );
             // A failed delivery discards its explicit disconnect with its writes.
             context.disconnect(mod_api::Text::literal("discard this failed handler's kick"));
+            if round == 1 {
+                panic!("raw handler panics after staging a write");
+            }
             return Err(mod_api::PayloadHandleError::Failed(
                 "refused after staging a write".into(),
             ));
@@ -144,7 +147,7 @@ fn a_failing_raw_handler_rolls_back_alone_and_the_next_one_commits() {
                 .expect("integrated server answered publication request")
                 .unwrap();
             let mut peer = connect_vanilla_peer(port);
-            // The second message's reply proves the first failure left the connection open.
+            // Both mods must run again after the first one's panic on this connection.
             for round in [1u8, 2] {
                 peer.send(
                     &play::Serverbound::CustomPayload(cfg::CustomPayload {

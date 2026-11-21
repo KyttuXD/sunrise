@@ -258,6 +258,8 @@ pub enum PayloadHandleError {
 /// channel, drops only that delivery and rolls back its staged effects (a staged disconnect
 /// included); the other owners' copies still run. A successful handler's explicit disconnect
 /// and a main-queue refusal disconnect either way.
+/// A panic follows the same delivery failure rules and reports the owning mod in the log and
+/// the client error toast. It does not disable the registration for later packets.
 pub trait IPayloadHandler: Send + Sync + 'static {
     /// Handle exact application bytes using connection-derived context.
     fn handle(
@@ -267,9 +269,10 @@ pub trait IPayloadHandler: Send + Sync + 'static {
     ) -> Result<(), PayloadHandleError>;
 }
 
-/// Work scheduled on the logical receiving main thread.
+/// Work scheduled on the logical receiving main thread. If its queued delivery is
+/// cancelled, the game releases its reference without calling `run`.
 pub trait PayloadWork: Send + Sync + 'static {
-    /// Execute with the same connection-derived context and transaction rules.
+    /// Execute with the same connection-derived context and failure rules as the handler.
     fn run(&self, context: &mut dyn IPayloadContext) -> Result<(), String>;
 }
 
@@ -330,7 +333,8 @@ pub trait IPayloadContext {
     /// task completion staged by the handler.
     fn disconnect(&mut self, reason: Text);
     /// Run now on the main thread or schedule there from the network executor.
-    /// Failure of the work is reported as a named session failure.
+    /// Failure of the work follows the receiving handler's connection or raw delivery
+    /// failure rules. A failed delivery discards its still-staged work.
     fn enqueue_work(
         &mut self,
         work: Arc<dyn PayloadWork>,

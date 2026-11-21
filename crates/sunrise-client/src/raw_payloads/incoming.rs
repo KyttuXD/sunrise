@@ -4,8 +4,8 @@ use super::{
     connection::{Epoch, IngressLease, MainTask},
 };
 use mod_api::{
-    __private::game::PayloadReceiver, PayloadBytes, PayloadContextError, PayloadId,
-    PayloadSendError, PayloadWork,
+    __private::game::{PayloadReceiver, PayloadWorkCall},
+    PayloadBytes, PayloadContextError, PayloadId, PayloadSendError,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,7 +13,7 @@ use sunrise_protocol::{packets::custom_payload::CustomPayload, payload_negotiati
 
 pub enum Body {
     Payload(PayloadBytes),
-    Work(Arc<dyn PayloadWork>),
+    Work(PayloadWorkCall),
 }
 pub struct Incoming {
     pub epoch: Arc<Epoch>,
@@ -193,7 +193,7 @@ impl Incoming {
     pub fn work(
         &self,
         transport: &Transport,
-        work: Arc<dyn PayloadWork>,
+        work: PayloadWorkCall,
     ) -> Result<Self, PayloadContextError> {
         if !self.epoch.active() {
             return Err(PayloadContextError::Disconnected);

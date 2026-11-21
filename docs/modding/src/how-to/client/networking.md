@@ -185,14 +185,20 @@ fn register(r: &mut dyn Registrar) {
   as it claims (forged, from another load, read as another type, or its mod off);
   `EncodeFailed` for a value the peer could not decode (a bound or the allocation budget),
   before anything is queued; `WrongProtocol` for a send in a phase the id is not declared in. A
-  received body that is not one value of the type closes the session, naming the mod, and the
-  handler does not run. A handler that panics is disabled: its transaction rolls back, nothing it
-  staged is sent, the session closes, and it is not called again.
+  received body that is not one value of the type closes the connection, naming the mod, and the
+  handler does not run.
+- **Handler and work failures.** A failed or panicking typed handler rolls back its transaction,
+  discards its staged replies and work, and closes only the receiving connection. A panic names
+  the mod in the log and the client's error toast. Other connections can still use the same
+  registration; there is no need to register it again. Work from `enqueue_work` follows the
+  receiving handler's failure rules. If queued work is cancelled, the game releases its work
+  reference without running it.
 - **Raw channel failures stay local.** A raw channel (`play_raw`) carries bytes from any client,
-  so a declaring mod's handler that returns `Failed` does not close the session: the game logs the mod and the channel, rolls back that delivery's staged
-  work (a staged disconnect included), and still delivers the other declaring mods' copies. A
-  handler that succeeds and asks to disconnect still disconnects, and so does a refusal by the
-  main thread's work queue. A typed payload's failure closes the session as above.
+  so a declaring mod's handler that returns `Failed` or panics does not close the connection:
+  the game logs the mod and the channel, rolls back that delivery's staged work (a staged
+  disconnect included), and still delivers the other declaring mods' copies. The failed handler
+  can receive later packets. A handler that succeeds and asks to disconnect still disconnects,
+  and so does a refusal by the main thread's work queue.
 
 ## Syncing remote item cooldowns
 

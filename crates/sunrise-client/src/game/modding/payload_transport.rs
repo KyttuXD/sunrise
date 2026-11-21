@@ -111,7 +111,7 @@ impl Game<'_> {
             Body::Payload(_) => {
                 Err("payload was not dispatched on its declared network executor".into())
             }
-            Body::Work(work) => incoming.receiver.run_work(work.as_ref(), &mut context),
+            Body::Work(work) => work.run(&mut context),
         };
         let reason = context.disconnect.take();
         let failure = context.failure.take().or_else(|| result.err());
@@ -266,11 +266,11 @@ impl IPayloadContext for MainContext<'_, '_> {
         &mut self,
         work: Arc<dyn PayloadWork>,
     ) -> Result<PayloadWorkStatus, PayloadContextError> {
+        let work = self.receiver.own_work(work);
         if !self.epoch.active() || self.disconnect.is_some() {
             return Err(PayloadContextError::Disconnected);
         }
-        let receiver = self.receiver.clone();
-        if let Err(error) = receiver.run_work(work.as_ref(), self) {
+        if let Err(error) = work.run(self) {
             self.failure = Some(error);
             return Err(PayloadContextError::Disconnected);
         }

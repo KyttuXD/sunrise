@@ -37,6 +37,7 @@ struct Probe {
 struct ReentrantWork {
     epoch: Arc<connection::Epoch>,
     drops: Arc<AtomicUsize>,
+    panic_on_drop: bool,
 }
 impl PayloadWork for ReentrantWork {
     fn run(&self, _: &mut dyn IPayloadContext) -> Result<(), String> {
@@ -49,12 +50,15 @@ impl Drop for ReentrantWork {
         // completion assertion below fails without joining the stuck thread.
         let _ = self.epoch.with_active(|| ());
         self.drops.fetch_add(1, Ordering::SeqCst);
+        if self.panic_on_drop {
+            panic!("deliberate panic dropping cancelled work");
+        }
     }
 }
 impl IPayloadHandler for Probe {
     fn handle(
         &self,
-        _: PayloadBytes,
+        bytes: PayloadBytes,
         ctx: &mut dyn IPayloadContext,
     ) -> Result<(), mod_api::PayloadHandleError> {
         assert!(matches!(
@@ -62,11 +66,12 @@ impl IPayloadHandler for Probe {
             Err(PayloadContextError::WrongThread)
         ));
         let transport = self.transport.lock().unwrap().upgrade().unwrap();
-        for _ in 0..2 {
+        for index in 0..2 {
             let before = self.events.stats().reserved_bytes;
             let result = ctx.enqueue_work(Arc::new(ReentrantWork {
                 epoch: transport.epoch().unwrap(),
                 drops: self.drops.clone(),
+                panic_on_drop: self.mode == Mode::Cancel && index == 0,
             }));
             if self.mode == Mode::Pressure {
                 assert_eq!(result, Err(PayloadContextError::Backpressure));
@@ -96,7 +101,7 @@ impl IPayloadHandler for Probe {
                     "deliberate handler error".into(),
                 ));
             }
-            Mode::Panic => panic!("deliberate handler panic after staging"),
+            Mode::Panic if bytes.0 != [42] => panic!("deliberate handler panic after staging"),
             Mode::Cancel => transport.close(),
             Mode::Reconfigure => transport.begin_configuration(),
             Mode::PublicationClosed => drop(self.receiver.lock().unwrap().take()),
@@ -259,6 +264,34 @@ fn handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies() {
                 };
                 assert!(has(b"a mod's network handler failed (executor_probe)"));
                 assert!(!has(b"deliberate handler error"));
+                assert!(endpoint.transport().closed());
+            }
+            if mode == Mode::Panic {
+                // A second connection on the same listener must still use the registered callback.
+                let transport = Transport::new(endpoint.transport().local.clone(), Side::Server);
+                transport
+                    .accept(transport.local.manifest.entries())
+                    .unwrap();
+                transport.finish_configuration().unwrap();
+                *probe.transport.lock().unwrap() = Arc::downgrade(&transport);
+                let (sender, out) = PlayerSender::payload_executor_test_sender(transport.clone());
+                let later = Endpoint::server(sender);
+                let incoming = Incoming::new(
+                    &transport,
+                    negotiation::Phase::Play,
+                    sunrise_protocol::packets::custom_payload::CustomPayload {
+                        channel: CHANNEL.into(),
+                        data: vec![42],
+                    },
+                )
+                .unwrap();
+                dispatch(incoming, later.clone(), queue(&probe, &later));
+                assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+                assert!(!transport.closed());
+                assert_eq!(reply_count(&out), 1);
+                drop(probe.receiver.lock().unwrap().take());
+                assert_eq!(probe.drops.load(Ordering::SeqCst), 4);
+                assert_eq!(probe.events.stats().reserved_bytes, 0);
             }
         });
     }

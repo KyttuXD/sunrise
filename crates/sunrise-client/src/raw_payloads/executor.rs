@@ -256,6 +256,7 @@ impl IPayloadContext for NetworkContext<'_> {
         &mut self,
         work: Arc<dyn PayloadWork>,
     ) -> Result<PayloadWorkStatus, PayloadContextError> {
+        let work = self.incoming.receiver.own_work(work);
         if self.disconnect.is_some() {
             return Err(PayloadContextError::Disconnected);
         }

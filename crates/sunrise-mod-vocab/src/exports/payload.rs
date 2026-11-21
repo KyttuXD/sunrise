@@ -2,8 +2,8 @@ mod payload;
 pub mod __private {
     pub mod game {
         pub use crate::parts::{
-            DropCounters, PayloadReceiver, Payloads, check_payload_token, installed_payloads,
-            payload_drop_counts,
+            DropCounters, PayloadReceiver, PayloadWorkCall, Payloads, check_payload_token,
+            installed_payloads, payload_drop_counts,
         };
     }
 }
