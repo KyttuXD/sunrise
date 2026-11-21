@@ -647,7 +647,7 @@ impl sunrise_polytone::expr::Host for BlockHost<'_> {
             (V::Object(1), "x" | "y" | "z") => {
                 num(f64::from(self.at[usize::from(name.as_bytes()[0] - b'x')]))
             }
-            (V::Object(1), "biome") => Ok(V::Str(self.biome.name.as_str().into())),
+            (V::Object(1), "biome") => Ok(V::Str(self.biome.name.as_ref().into())),
             (V::Object(1), "temperature") => num(f64::from(self.biome.temperature)),
             (V::Object(1), "downfall") => num(f64::from(self.biome.downfall)),
             (V::Object(2), "noise") => {

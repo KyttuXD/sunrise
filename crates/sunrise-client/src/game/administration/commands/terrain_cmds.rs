@@ -236,7 +236,7 @@ impl Game<'_> {
         let Some(target) = world_biomes!(self)
             .list
             .iter()
-            .position(|b| b.name == biome)
+            .position(|b| b.name.as_ref() == biome)
         else {
             return Err(err(
                 "argument.resource.not_found",
@@ -337,7 +337,7 @@ impl Game<'_> {
         let Some(target) = world_biomes!(self)
             .list
             .iter()
-            .position(|b| b.name == biome)
+            .position(|b| b.name.as_ref() == biome)
         else {
             return false;
         };

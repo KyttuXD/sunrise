@@ -202,7 +202,7 @@ impl Game<'_> {
         let max_qy = (world.shape.max_y() - 1) >> 2;
         let y = qy.clamp(min_qy, max_qy) << 2;
         let biome = chunk.biome(qx << 2, y, qz << 2);
-        Some(world_biomes!(self).get(biome).name.clone())
+        Some(world_biomes!(self).get(biome).name.to_string())
     }
 
     /// The authoritative server's `LevelReader.getBiome`, including parked levels.

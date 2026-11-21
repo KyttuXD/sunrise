@@ -93,7 +93,7 @@ mod entry {
         /// The registry's id.
         const REGISTRY: &'static str;
         /// The entry's full registry id.
-        fn id<'a>(&self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError>;
+        fn id<'a>(&'a self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError>;
     }
 }
 
@@ -103,7 +103,7 @@ macro_rules! typed_entries {
         impl DataMapEntry for $key {}
         impl entry::Entry for $key {
             const REGISTRY: &'static str = $registry;
-            fn id<'a>(&self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
+            fn id<'a>(&'a self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
                 backend.$id(*self).into_result()
             }
         }
@@ -167,7 +167,7 @@ typed_entries! {
 impl DataMapEntry for BiomeKey {}
 impl entry::Entry for BiomeKey {
     const REGISTRY: &'static str = "minecraft:worldgen/biome";
-    fn id<'a>(&self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
+    fn id<'a>(&'a self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
         backend
             .biome_key_id(*self)
             .map(EntryName::Borrowed)
@@ -191,7 +191,7 @@ impl BiomeKey {
 impl DataMapEntry for ProfessionKey {}
 impl entry::Entry for ProfessionKey {
     const REGISTRY: &'static str = "minecraft:villager_profession";
-    fn id<'a>(&self, _: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
+    fn id<'a>(&'a self, _: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
         Ok(EntryName::Owned(self.0.to_string()))
     }
 }

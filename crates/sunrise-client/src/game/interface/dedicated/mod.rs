@@ -649,7 +649,7 @@ impl Game<'_> {
             let (settings, errors) = sunrise_client::flatgen::settings_from_json(
                 &props.generator_settings,
                 |b| self.pack.assets.registry.default_state(b).is_some(),
-                |b| biomes.get(biomes.id(b)).name == b,
+                |b| biomes.get(biomes.id(b)).name.as_ref() == b,
             );
             for e in errors {
                 log_from("Worker-Main-1", "ERROR", &e);

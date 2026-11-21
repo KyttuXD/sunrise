@@ -7,12 +7,12 @@ use crate::mesher::{
 };
 use crate::section_mask::SectionMask;
 use crate::world::World;
-use mod_api::{BiomeId, CellVisibility, MAX_CELL_RECORDS, SECTION_INPUT_CELLS, SectionCell};
+use mod_api::{BiomeRef, CellVisibility, MAX_CELL_RECORDS, SECTION_INPUT_CELLS, SectionCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SNAPSHOT_BYTES: usize = SECTION_INPUT_CELLS
-    * (size_of::<SectionCell>() + size_of::<u8>() + size_of::<Option<BiomeId>>());
+    * (size_of::<SectionCell>() + size_of::<u8>() + size_of::<Option<BiomeRef<'static>>>());
 const WORKER_BYTES: usize = PLAN_BYTES + size_of::<Region>() + size_of::<FrozenPlan>();
 const HALO_BYTES: usize = size_of::<HaloAnswers>();
 const CACHE_BYTES: usize = ANSWER_BYTES + size_of::<HeldAnswer>() - size_of::<SectionAnswer>();

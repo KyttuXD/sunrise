@@ -446,7 +446,7 @@ impl Game<'_> {
                         }
                         let biomes = world_biomes!(self);
                         let names: Vec<&str> =
-                            biomes.list.iter().map(|b| b.name.as_str()).collect();
+                            biomes.list.iter().map(|b| b.name.as_ref()).collect();
                         post.custom.set_biomes(&names);
                         let text = pack.read_text("block.properties").unwrap_or_default();
                         let ids = BlockIds::parse(&Properties::parse(&text, &macros));
@@ -551,7 +551,7 @@ impl Game<'_> {
             hide_gui: self.ui.hide_gui,
             brightness: self.settings.gamma as f32,
             biome: info.map_or(-1, |b| {
-                let names = world_biomes!(self).list.iter().map(|b| b.name.as_str());
+                let names = world_biomes!(self).list.iter().map(|b| b.name.as_ref());
                 sunrise_shaders::biome_pack_id(&b.name, names)
             }),
             biome_known: biome.is_some(),

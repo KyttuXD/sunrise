@@ -13,7 +13,7 @@
 //! game's own: the set's spacing, the structure's biomes and its
 //! `terrain_adaptation`, and the pieces ride the one piece mechanism the game
 //! has, next to a fortress piece's.
-use crate::{BlockKey, BlockMetadata, BlockState, RandomSource};
+use crate::{BiomeRef, BlockKey, BlockMetadata, BlockState, RandomSource};
 use std::sync::Arc;
 pub use sunrise_core::position::ChunkPos;
 use sunrise_core::{
@@ -255,7 +255,7 @@ pub trait GenerationContext {
     /// `ChunkGenerator.getBaseColumn`'s blocks: the noise column at (x, z).
     fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn;
     /// Noise biome at a quart position (the resolver's, no zoom).
-    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
+    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeRef<'_>;
     /// `GenerationContext.validBiome` over inclusive block Y bounds of the
     /// column at (x, z): whether any biome the structure names occurs there.
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool;

@@ -2021,7 +2021,7 @@ pub(super) mod tests {
 
             let current = usize::from(game.world.chunks[&(0, 0)].biome(0, 64, 0));
             let target = usize::from(current == 0);
-            let name = world_biomes!(game).list[target].name.clone();
+            let name = world_biomes!(game).list[target].name.to_string();
             assert!(game.level_set_biome(level, [0, 64, 0], &name));
             assert_eq!(
                 usize::from(game.world.chunks[&(0, 0)].biome(3, 67, 3)),

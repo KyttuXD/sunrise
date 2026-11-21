@@ -66,7 +66,7 @@ fn main() -> sunrise_client::Result<()> {
     let biomes = sunrise_client::biome::Biomes::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
     )?;
-    let biome_names: Vec<String> = biomes.list.iter().map(|b| b.name.clone()).collect();
+    let biome_names: Vec<String> = biomes.list.iter().map(|b| b.name.to_string()).collect();
     let defaults = sunrise_world::item_defaults::read(root)?;
     let sync = sunrise_client::lan::data::SyncData::load(
         root,

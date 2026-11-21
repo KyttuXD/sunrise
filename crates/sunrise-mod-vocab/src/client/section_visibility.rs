@@ -3,7 +3,7 @@
 //!
 //! The game captures the input and asks on the client world thread, never on a meshing worker; the
 //! workers read only the checked answers.
-use crate::{BiomeId, BlockState};
+use crate::{BiomeRef, BlockState};
 
 /// Cells along each axis of a [`SectionVisibilityInput`]: the section's 16 and one each side.
 pub const SECTION_INPUT_SIDE: usize = 18;
@@ -34,21 +34,21 @@ pub enum SectionCell {
 // no wire: the client thread lends this snapshot directly to native listeners.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct SectionVisibilityInput {
+pub struct SectionVisibilityInput<'a> {
     /// The block position of the section's lowest corner: a multiple of 16 on each axis.
     pub origin: [i32; 3],
     cells: Box<[SectionCell]>,
     light: Box<[u8]>,
-    biomes: Box<[Option<BiomeId>]>,
+    biomes: Box<[Option<BiomeRef<'a>>]>,
 }
 
-impl SectionVisibilityInput {
+impl<'a> SectionVisibilityInput<'a> {
     /// The game captures one raw state, packed light and stored biome per position in the halo.
     // hidden: engine-only snapshot construction; listeners borrow the capture supplied by the game.
     #[doc(hidden)]
     pub fn capture(
         origin: [i32; 3],
-        mut cell_at: impl FnMut([i32; 3]) -> (SectionCell, u8, Option<BiomeId>),
+        mut cell_at: impl FnMut([i32; 3]) -> (SectionCell, u8, Option<BiomeRef<'a>>),
     ) -> Self {
         let mut cells = Vec::with_capacity(SECTION_INPUT_CELLS);
         let mut light = Vec::with_capacity(SECTION_INPUT_CELLS);
@@ -90,7 +90,7 @@ impl SectionVisibilityInput {
         Ok([packed >> 4, packed & 15])
     }
     /// The raw, stored biome at `local`, before biome zoom and blending; `None` in a missing column.
-    pub fn biome(&self, local: [i32; 3]) -> Result<Option<BiomeId>, SectionVisibilityRefusal> {
+    pub fn biome(&self, local: [i32; 3]) -> Result<Option<BiomeRef<'a>>, SectionVisibilityRefusal> {
         Ok(self.biomes[Self::index(local)?])
     }
     /// The position seed used for seeded block-model selection at `local`.
