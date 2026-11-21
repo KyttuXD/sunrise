@@ -50,6 +50,7 @@ use sunrise_world::{
     worldgen::tags::TagDefinitions,
 };
 mod exclusions;
+pub use exclusions::no_player_collision_read;
 mod restitution;
 pub mod section_writes;
 
@@ -475,8 +476,6 @@ pub struct PlayerMotion {
     /// What `entity_size` answered for this body's pose and vanilla size (see
     /// `game/modding/entity_sizes.rs`); `refresh_dimensions` keeps it while it holds.
     pub size_answer: Option<crate::pose::SizeAnswer>,
-    /// Standing, crouching and swimming answers resolved before motion; cloned with replay state.
-    pub pose_fit_sizes: [Option<crate::pose::SizeAnswer>; 3],
     /// The `minecraft:scale` the dimensions were last built with
     /// (`Entity.refreshDimensions`), for the poses the body takes before it
     /// next refreshes.
@@ -1252,6 +1251,77 @@ impl MotionWorld<'_, '_, '_> {
         self.apply_fire_contact()?;
         self.player.refresh_attributes()?;
         self.update_player_pose()?;
+        self.finish_local_tick(previous)
+    }
+    /// Base tick before `LocalPlayer.aiStep`'s crouching fit check (`Entity.baseTick` fluids).
+    pub fn begin_local_tick(&mut self) -> Result<()> {
+        self.player.health.advance_clock();
+        self.fluid_base_tick()
+    }
+    /// Input, sprint, movement, fire and dirty-attribute refresh between `update_local_crouching`
+    /// and `update_player_pose`. Returns the pre-move position for `finish_local_tick`.
+    pub fn travel_local_tick_with_sprint_window(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint_window: i32,
+    ) -> Result<Vec3> {
+        self.travel_local_tick(keys, |player, keys| {
+            player.sprint_input_tick_with_window(keys, sprint_window)
+        })
+    }
+    /// Same as `travel_local_tick_with_sprint_window` for a replayed tick with fixed sprinting,
+    /// suppressing mod movement-event notices (`replaying = true`) during travel.
+    pub fn travel_replayed_tick(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprinting: bool,
+    ) -> Result<Vec3> {
+        self.player.replaying = true;
+        let result = self.travel_local_tick(keys, |player, _| {
+            if player.sprinting == sprinting {
+                Ok(())
+            } else {
+                player.set_sprinting(sprinting)
+            }
+        });
+        self.player.replaying = false;
+        result
+    }
+    fn travel_local_tick(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
+    ) -> Result<Vec3> {
+        let mut keys = keys;
+        // LocalPlayer.aiStep: a pending auto-jump presses jump for this tick
+        // (input.makeJump) and keeps the jump from toggling flight.
+        self.player.was_auto_jump = self.player.auto_jump_time > 0;
+        if self.player.was_auto_jump {
+            self.player.auto_jump_time -= 1;
+            keys.jump = true;
+        }
+        sprint(self.player, keys)?;
+        self.player.shift_key_down = keys.shift;
+        let direction = keys.direction();
+        self.player.move_vector = direction;
+        let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
+            && self.player.moving_slowly()
+        {
+            Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
+        } else {
+            None
+        };
+        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
+        self.player.applied_input = modified;
+        self.tick_environment_damage()?;
+        let previous = self.player.position;
+        self.player_movement_tick_with_fluids(modified, keys.jump)?;
+        self.apply_fire_contact()?;
+        self.player.refresh_attributes()?;
+        Ok(previous)
+    }
+    /// Movement statistics and hunger after `update_player_pose`.
+    pub fn finish_local_tick(&mut self, previous: Vec3) -> Result<()> {
         // The resident scene accepts the resolved local movement directly.
         // Vanilla dispatches this separately from travel, on packet acceptance.
         self.check_movement_statistics(previous.vector_to(self.player.position))?;
@@ -1307,31 +1377,11 @@ impl MotionWorld<'_, '_, '_> {
         sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
     ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
-        self.player.health.advance_clock();
-        self.fluid_base_tick()?;
+        self.begin_local_tick()?;
         self.update_local_crouching()?;
-        let mut keys = keys;
-        // LocalPlayer.aiStep: a pending auto-jump presses jump for this tick
-        // (input.makeJump) and keeps the jump from toggling flight.
-        self.player.was_auto_jump = self.player.auto_jump_time > 0;
-        if self.player.was_auto_jump {
-            self.player.auto_jump_time -= 1;
-            keys.jump = true;
-        }
-        sprint(self.player, keys)?;
-        self.player.shift_key_down = keys.shift;
-        let direction = keys.direction();
-        self.player.move_vector = direction;
-        let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
-            && self.player.moving_slowly()
-        {
-            Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
-        } else {
-            None
-        };
-        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
-        self.player.applied_input = modified;
-        self.simulation_tick_with_fluids(modified, keys.jump)
+        let previous = self.travel_local_tick(keys, sprint)?;
+        self.update_player_pose()?;
+        self.finish_local_tick(previous)
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)

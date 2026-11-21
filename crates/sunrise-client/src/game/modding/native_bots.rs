@@ -104,23 +104,86 @@ impl Game<'_> {
             self.level_suffocation(),
         );
         let sprinting = sprints(&input) && !body.item_use_slows_sprint;
-        let side = game_side!(self);
-        MotionWorld {
-            side: &side,
-            entities: &[],
-            player: &mut body,
-            scene: &mut self.world,
-            assets: &self.pack.assets,
-            collision_binding: self.collision,
-            resources: self.motion,
-            health: &self.health_resources,
-            tag_items: Some(world_items!(self)),
-            loop_context: &self.loop_context,
-            damage_hooks: &self.damage_hooks,
-            block_registries: Some(&self.pack.block_registries),
+        if mod_api::__private::listened(mod_api::HookId::EntitySize) {
+            let id = player.entity().id();
+            let result = (|| -> sunrise_client::Result<()> {
+                {
+                    let side = game_side!(self);
+                    MotionWorld {
+                        side: &side,
+                        entities: &[],
+                        player: &mut body,
+                        scene: &mut self.world,
+                        assets: &self.pack.assets,
+                        collision_binding: self.collision,
+                        resources: self.motion,
+                        health: &self.health_resources,
+                        tag_items: Some(world_items!(self)),
+                        loop_context: &self.loop_context,
+                        damage_hooks: &self.damage_hooks,
+                        block_registries: Some(&self.pack.block_registries),
+                    }
+                    .begin_local_tick()?;
+                }
+                self.update_body_local_crouching(id, &mut body, &[])?;
+                let previous = {
+                    let side = game_side!(self);
+                    MotionWorld {
+                        side: &side,
+                        entities: &[],
+                        player: &mut body,
+                        scene: &mut self.world,
+                        assets: &self.pack.assets,
+                        collision_binding: self.collision,
+                        resources: self.motion,
+                        health: &self.health_resources,
+                        tag_items: Some(world_items!(self)),
+                        loop_context: &self.loop_context,
+                        damage_hooks: &self.damage_hooks,
+                        block_registries: Some(&self.pack.block_registries),
+                    }
+                    .travel_replayed_tick(keys, sprinting)?
+                };
+                self.update_body_pose(id, &mut body, &[], false)?;
+                {
+                    let side = game_side!(self);
+                    MotionWorld {
+                        side: &side,
+                        entities: &[],
+                        player: &mut body,
+                        scene: &mut self.world,
+                        assets: &self.pack.assets,
+                        collision_binding: self.collision,
+                        resources: self.motion,
+                        health: &self.health_resources,
+                        tag_items: Some(world_items!(self)),
+                        loop_context: &self.loop_context,
+                        damage_hooks: &self.damage_hooks,
+                        block_registries: Some(&self.pack.block_registries),
+                    }
+                    .finish_local_tick(previous)
+                }
+            })();
+            result.ok()?;
+        } else {
+            let side = game_side!(self);
+            MotionWorld {
+                side: &side,
+                entities: &[],
+                player: &mut body,
+                scene: &mut self.world,
+                assets: &self.pack.assets,
+                collision_binding: self.collision,
+                resources: self.motion,
+                health: &self.health_resources,
+                tag_items: Some(world_items!(self)),
+                loop_context: &self.loop_context,
+                damage_hooks: &self.damage_hooks,
+                block_registries: Some(&self.pack.block_registries),
+            }
+            .replayed_tick(keys, sprinting)
+            .ok()?;
         }
-        .replayed_tick(keys, sprinting)
-        .ok()?;
         let (p, v) = (body.position, body.velocity);
         let mut result = SimulatedMove::default();
         result.position = [p.x, p.y, p.z];

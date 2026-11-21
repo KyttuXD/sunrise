@@ -189,13 +189,14 @@ clearing the use. Finish is not cancellable; its result stack can be replaced.
 ## Player size and pose fit
 
 `entity_size` resolves dimensions through a read-only `Host`.
-Before player motion, standing, crouching and swimming candidates are resolved;
-an unchanged current-pose answer is reused. The fit test and pose application share
-the resolved answer. Answer using the event's pose, not the entity's current pose:
-a candidate need not become the actual pose. With subscribers, candidate resolution
-dispatches 2–3 times per player tick; keep the listener cheap.
+Player pose-fit checks (`LocalPlayer.aiStep` crouching and `Player.updatePlayerPose` /
+`canPlayerFitWithinBlocksAndEntitiesWhen`) resolve only the candidate poses vanilla
+actually tests, on demand, at live `minecraft:scale`. An unchanged current-pose answer
+is reused, and inactive poses are never precomputed. Non-standard desired poses
+(`FallFlying`, `Sleeping`, `SpinAttack`) and replayed ticks resolve through the same
+path. Answer using the event's pose, not the entity's current pose: a candidate need not
+become the actual pose. When no mod subscribes, no event is constructed or dispatched.
 
-Cached answers are keyed by pose and vanilla dimensions. A scale change after
-resolution or a replay with another key uses vanilla for that fit decision until
-the next pre-motion resolution. Uncached fall-flying, sleeping and spin-attack
-candidates also use vanilla dimensions.
+Any finite non-negative dimensions (including zero) are accepted with no synthetic upper
+limit; non-finite or negative values are reported via a warning log and keep vanilla's
+dimensions.

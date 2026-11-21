@@ -170,32 +170,44 @@ impl PlayerMotion {
             }
         }
     }
-    pub fn dimensions_for_pose(&mut self, pose: Pose) -> Result<Dimensions> {
-        let vanilla = pose.dimensions(self.attribute("minecraft:scale")? as f32);
+    /// Live computed `minecraft:scale` attribute (`LivingEntity.getScale`).
+    pub fn computed_scale(&self) -> Result<f32> {
         Ok(self
-            .pose_size_answer(pose, vanilla.to_array())
-            .map_or(vanilla, |answer| Dimensions::from_array(answer.effective())))
+            .attributes
+            .computed_value_of("minecraft:scale")
+            .map_err(crate::living_attributes::attribute_error)? as f32)
     }
-    fn pose_size_answer(&self, pose: Pose, vanilla: [f32; 3]) -> Option<SizeAnswer> {
-        self.size_answer
-            .filter(|answer| answer.asked(pose.into(), vanilla))
-            .or_else(|| {
-                let answer = match pose {
-                    Pose::Standing => self.pose_fit_sizes[0],
-                    Pose::Crouching => self.pose_fit_sizes[1],
-                    Pose::Swimming => self.pose_fit_sizes[2],
-                    _ => None,
-                };
-                answer.filter(|answer| answer.asked(pose.into(), vanilla))
-            })
+    /// `Player.getDesiredPose`: sleeping, swimming, gliding, Riptide's spin, crouching or standing.
+    pub fn desired_pose(&self) -> Pose {
+        if self.sleeping {
+            Pose::Sleeping
+        } else if self.swimming {
+            Pose::Swimming
+        } else if self.fall_flying {
+            Pose::FallFlying
+        } else if self.auto_spin_attack_ticks > 0 {
+            Pose::SpinAttack
+        } else if self.shift_key_down && !self.flying {
+            Pose::Crouching
+        } else {
+            Pose::Standing
+        }
+    }
+    pub fn dimensions_for_pose(&mut self, pose: Pose) -> Result<Dimensions> {
+        let vanilla = pose.dimensions(self.computed_scale()?);
+        Ok(self
+            .size_answer
+            .and_then(|answer| answer.holds(pose.into(), vanilla.to_array()))
+            .map_or(vanilla, Dimensions::from_array))
     }
     pub fn refresh_dimensions(&mut self) -> Result<()> {
-        self.scale = self.attribute("minecraft:scale")? as f32;
+        self.scale = self.computed_scale()?;
         self.dimensions = self.pose.dimensions(self.scale);
-        // Apply the same pre-resolved answer used by the pose fit decision.
-        if let Some(answer) = self.pose_size_answer(self.pose, self.dimensions.to_array()) {
-            self.size_answer = Some(answer);
-            self.dimensions = Dimensions::from_array(answer.effective());
+        if let Some(size) = self
+            .size_answer
+            .and_then(|answer| answer.holds(self.pose.into(), self.dimensions.to_array()))
+        {
+            self.dimensions = Dimensions::from_array(size);
         }
         Ok(())
     }
@@ -244,7 +256,8 @@ impl MotionWorld<'_, '_, '_> {
         self.player.local_crouching = !self.player.flying
             && !self.player.swimming
             && self.can_fit_pose(Pose::Crouching)?
-            && (self.player.shift_key_down || !self.can_fit_pose(Pose::Standing)?);
+            && (self.player.shift_key_down
+                || (!self.player.sleeping && !self.can_fit_pose(Pose::Standing)?));
         Ok(())
     }
     /// Dry Player.updatePlayerPose after movement: crawl when neither standing
@@ -253,27 +266,15 @@ impl MotionWorld<'_, '_, '_> {
         if !self.can_fit_pose(Pose::Swimming)? {
             return Ok(());
         }
-        // Player.getDesiredPose: sleeping, swimming, gliding, Riptide's spin.
-        let desired = if self.player.sleeping {
-            Pose::Sleeping
-        } else if self.player.swimming {
-            Pose::Swimming
-        } else if self.player.fall_flying {
-            Pose::FallFlying
-        } else if self.player.auto_spin_attack_ticks > 0 {
-            Pose::SpinAttack
-        } else if self.player.shift_key_down && !self.player.flying {
-            Pose::Crouching
-        } else {
-            Pose::Standing
-        };
-        let pose = if self.player.spectator || self.can_fit_pose(desired)? {
-            desired
-        } else if self.can_fit_pose(Pose::Crouching)? {
-            Pose::Crouching
-        } else {
-            Pose::Swimming
-        };
+        let desired = self.player.desired_pose();
+        let pose =
+            if self.player.spectator || self.player.is_passenger || self.can_fit_pose(desired)? {
+                desired
+            } else if self.can_fit_pose(Pose::Crouching)? {
+                Pose::Crouching
+            } else {
+                Pose::Swimming
+            };
         self.player.set_pose(pose)
     }
     /// The end of a server's copy of a player's tick (`ServerPlayer.doTick`
@@ -307,13 +308,17 @@ impl MotionWorld<'_, '_, '_> {
     /// `LivingEntity.aiStep` travels it from where it sat (`rider_travel_tick`), and that move's
     /// ground and collisions are what its look packet sends; `updatePlayerPose` sits it up.
     pub fn rider_tick(&mut self, direction: [f32; 2]) -> Result<()> {
-        self.passenger_base_tick()?;
-        self.rider_travel_tick(direction)?;
+        self.rider_travel_before_pose(direction)?;
         self.passenger_sits_up()
+    }
+    /// The fluid, ground and travel portion of `rider_tick` before `updatePlayerPose`.
+    pub fn rider_travel_before_pose(&mut self, direction: [f32; 2]) -> Result<()> {
+        self.passenger_base_tick()?;
+        self.rider_travel_tick(direction)
     }
     /// A passenger's tick before it could move: the fluids in the box its vehicle allows, off the
     /// ground, and neither swimming nor gliding.
-    fn passenger_base_tick(&mut self) -> Result<()> {
+    pub fn passenger_base_tick(&mut self) -> Result<()> {
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(crate::motion::WATER);
         self.update_fluids()?;
         // Player.tick: a passenger is never on the ground (setOnGround(false)
