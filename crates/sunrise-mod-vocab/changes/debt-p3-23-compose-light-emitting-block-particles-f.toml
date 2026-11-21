@@ -1,0 +1,23 @@
+ids = [
+    "method:prelude::BlockStatesHost::lit_block_name",
+    "method:prelude::EffectsClientHost::flame_particle",
+]
+why = "The Host helpers assumed the active level and supplied one effect's velocity and radius. Compose loaded-level reads and base state emission as in vanilla LevelReader.hasChunkAt and BlockBehaviour.BlockStateBase.getLightEmission (also the default of NeoForge IBlockExtension.getLightEmission). Submit ParticleTypes.FLAME or SOUL_FIRE_FLAME through vanilla ClientLevel.addParticle instead of an extra flame-specific path."
+migrate = """
+Replace `host.lit_block_name(pos)` with `level.block_state(host, pos)`, using
+ the `LevelRef` of the source position. This returns `None` without loading a
+ chunk. Import `HostBlockStates` and keep the state only if
+ `host.block_states().light_emission(state).is_some_and(|light| light > 0)`.
+ Get the old result's `BlockKey` with `state.block()`. This checks the state's
+ base emission, not the surrounding light or a dynamic part's emission.
+
+Replace `host.flame_particle(at, soul)` with
+ `host.add_particle(&ParticleOptions::simple(if soul { soul_flame } else { flame }), at, velocity)`.
+ Retain `flame` and `soul_flame` from `Registrar::particle_key("minecraft:flame")`
+ and `Registrar::particle_key("minecraft:soul_fire_flame")` at registration.
+ Supply your velocity (`[0.0, 0.01, 0.0]` was the old helper's input) and keep
+ any extra radius or rate check in the mod. Submit to the current client level;
+ its ordinary particle settings and camera-distance limiter still apply.
+ The returned `bool` says whether the request was submitted, not whether
+ the particle was visible.
+"""

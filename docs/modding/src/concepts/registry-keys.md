@@ -184,8 +184,9 @@ and use strings, as do labels and tags.
 Resolve item and block keys during load and keep them for tick and menu calls.
 `item_burn_time`, `item_compost_chance`, `give`, `enchantment_supports`'s item,
 and GUI `item` / `item_model` take `ItemKey`. `block_item`, `fluid_bucket` and
-`screen_hovered_item` return item keys. `level.block`, `lit_block_name` and
-`Hit.block` return block keys; `BlockEntityDrawContext::block` takes one.
+`screen_hovered_item` return item keys. `level.block` and `Hit.block` return block keys;
+`BlockEntityDrawContext::block` takes one. If you already read a `BlockState`, use
+`state.block()` to get its key without a second world read.
 `ItemStack::item()` returns an `ItemKey`, not a name. Request that same key in `Hooks::register`
 when binding a [`ClientItemUseBehavior`](parts/item-and-tag-parts.md#intercept-main-hand-client-input).
 The callback receives the original typed stack and a separate hotbar slot.

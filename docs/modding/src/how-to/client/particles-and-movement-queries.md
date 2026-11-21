@@ -16,6 +16,36 @@ sprite set. All option constructors take the resolved key, including `dust`, `it
 `vibration`, `shriek`, `sculk_charge` and `dust_transition`. Use the corresponding vanilla key
 for these parameter families. Sending an option performs no string parsing or registry scan.
 
+For flames around light-emitting blocks, request `minecraft:flame` and
+`minecraft:soul_fire_flame` at registration. Read the source position on the actual
+`LevelRef` from the callback; `level.block_state(host, pos)` does not load chunks.
+Then check the state's base light emission. This is not the block-light brightness
+of the surrounding area or the position-dependent output of a dynamic light part.
+
+```rust,ignore
+use mod_api::{ClientHost, HostBlockStates, LevelRef, ParticleKey, ParticleOptions};
+
+fn emit_if_lit(
+    host: &mut dyn ClientHost,
+    level: LevelRef,
+    pos: [i32; 3],
+    flame: ParticleKey, // whichever of the two flame keys the mod chose
+    at: [f64; 3],
+    velocity: [f64; 3],
+) {
+    if let Some(state) = level.block_state(host, pos)
+        && host.block_states().light_emission(state).is_some_and(|light| light > 0)
+    {
+        host.add_particle(&ParticleOptions::simple(flame), at, velocity);
+    }
+}
+```
+
+If the effect needs the block's key, use `state.block()` rather than reading the
+world a second time. Submit particles to the current client level. The mod
+chooses its offsets, velocity, emission rate and any extra cosmetic radius;
+`add_particle` still applies the ordinary particle settings and distance limiter.
+
 For stack-derived breaking or eating particles, call
 `ClientHost::item_particle_options(&stack)` and pass the returned options to
 `add_particle`. This read resolves the ground model with seed 0, preserving all

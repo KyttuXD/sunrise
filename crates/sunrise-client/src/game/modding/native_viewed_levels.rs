@@ -146,6 +146,98 @@ mod tests {
         assert_eq!(game.level("minecraft:the_end"), None);
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn flame_requests_compose_with_light_emission_from_the_named_level() {
+        use crate::game::{
+            api_values::register_game_keys,
+            mods::resolve_particle_providers,
+            native_entity_refs::tests::{fixture_root, run_fresh_cases},
+        };
+        use mod_api::{
+            __private::{ModPhase, PhaseOwner, particle_named_key},
+            ClientHost, HostBlockStates, ParticleOptions,
+        };
+        use sunrise_client::{motion::PlayerMotion, particles::ParticleType};
+
+        if run_fresh_cases(
+            "game::native_viewed_levels::tests::flame_requests_compose_with_light_emission_from_the_named_level",
+            "SUNRISE_FLAME_COMPOSITION_CHILD",
+            &["game"],
+        ) {
+            return;
+        }
+        let root = fixture_root();
+        let (registry, _) = sunrise_world::level::data::load_registry_with_flags(&root).unwrap();
+        register_game_keys(
+            (0..registry.len())
+                .map(|i| registry.state(BlockStateId(i as u32)).unwrap().name.clone()),
+        );
+        resolve_particle_providers(&sunrise_assets::resource_source::ResourceSource::directory(
+            root,
+        ))
+        .unwrap();
+        let flame = particle_named_key("minecraft:flame").unwrap();
+        let soul_flame = particle_named_key("minecraft:soul_fire_flame").unwrap();
+
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let (own, viewed) = viewing(&mut game);
+        let [torch, soul_torch] = ["minecraft:torch", "minecraft:soul_torch"]
+            .map(|id| registry.default_state(id).unwrap().0);
+        let soul_pos = [4, 70, 5];
+        game.handle_packet(run(1, &[set(POCKET, torch), set(soul_pos, soul_torch)]))
+            .unwrap();
+        game.player = Some(
+            PlayerMotion::new(
+                game.motion,
+                sunrise_core::geometry::Vec3::new(3.5, 70.0, 5.5),
+            )
+            .unwrap(),
+        );
+        game.particles.requested = Some(Vec::new());
+        let _world = PhaseOwner::scope(ModPhase::World);
+        let host: &mut dyn ClientHost = &mut game;
+        let velocity = [0.125, 0.25, -0.125];
+        for (level, pos, particle, expected) in [
+            (viewed, POCKET, flame, Some(("minecraft:torch", 14))),
+            (
+                viewed,
+                soul_pos,
+                soul_flame,
+                Some(("minecraft:soul_torch", 10)),
+            ),
+            (own, POCKET, flame, Some(("minecraft:stone", 0))),
+            (viewed, [32, 70, 5], flame, None),
+        ] {
+            let observed = level.block_state(host, pos).map(|state| {
+                let emission = host.block_states().light_emission(state).unwrap();
+                (state.block().id(host).unwrap(), emission)
+            });
+            assert_eq!(observed, expected);
+            if observed.is_some_and(|(_, emission)| emission > 0) {
+                let [x, y, z] = pos.map(f64::from);
+                let at = [x + 0.25, y + 0.75, z + 0.5];
+                assert!(host.add_particle(&ParticleOptions::simple(particle), at, velocity));
+            }
+        }
+        let submitted: Vec<_> = game
+            .particles
+            .requested
+            .take()
+            .unwrap()
+            .into_iter()
+            .map(|(options, at, velocity)| (options.ty, at, velocity))
+            .collect();
+        assert_eq!(
+            submitted,
+            [
+                (ParticleType::Flame, [3.25, 70.75, 5.5], velocity),
+                (ParticleType::SoulFireFlame, [4.25, 70.75, 5.5], velocity),
+            ]
+        );
+    }
+
     /// A ray down onto the viewed level's stone hits its top, while the same ray in the
     /// player's own level, all air there, misses.
     #[test]

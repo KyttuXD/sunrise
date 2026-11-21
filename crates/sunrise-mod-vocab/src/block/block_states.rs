@@ -413,8 +413,10 @@ impl BlockStates<'_> {
         self.backend.block_state_map_color_rgba(packed)
     }
     /// `BlockState.getLightEmission()`: the light level the state gives off, 0 to 15 (a torch 14,
-    /// glowstone 15). A block that declares `dynamic_light` answers per cell through its parts,
-    /// which this does not ask. None as for `replaceable`.
+    /// glowstone 15). For a placed block, obtain the state from
+    /// [`LevelRef::block_state`](crate::LevelRef::block_state) in the level you are observing.
+    /// A block that declares `dynamic_light` answers per cell through its parts, which this
+    /// metadata read does not ask. None as for `replaceable`.
     pub fn light_emission(&self, state: BlockState) -> Option<u8> {
         self.backend.block_state_light_emission(state)
     }

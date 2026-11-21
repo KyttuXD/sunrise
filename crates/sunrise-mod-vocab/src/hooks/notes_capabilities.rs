@@ -370,11 +370,13 @@ pub trait Notes {
   values must be finite and bounded, and source chunks must be loaded. At most
   256 rim edges and 16 colored lights are rendered. Requests are frame-local,
   so disabling a native mod or leaving the world clears them without a retained
-  state. Helpers `native_lit_block_name` and `native_flame_particle` read loaded
-  blocks and emit a nearby vanilla flame particle; native mods must rate-limit
-  emission. It also adds `emissive`: a world-frame hook for at most 32 pairs of
-  already-loaded terrain sprites. Transparent pixels in an overlay leave its
-  base unchanged; opaque pixels are drawn full-bright without changing gameplay
+  state. To place particles by a light-emitting block, read the source level's
+  `block_state`, query `host.block_states().light_emission(state)`, and submit the
+  chosen flame options with `host.add_particle`. The mod owns the effect's
+  position, velocity, rate and any extra radius. The `emissive` world-frame
+  hook takes at most 32 pairs of already-loaded terrain sprites. Transparent
+  pixels in an overlay leave its base unchanged; opaque pixels are drawn
+  full-bright without changing gameplay
   light or the surrounding rock. The source pack must supply the overlay texture
   under `assets/<namespace>/textures/emissive/`. When no mod requests overlays,
   the terrain shader skips the lookup.
