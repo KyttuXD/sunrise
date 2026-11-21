@@ -313,7 +313,12 @@ See [the `finalize_spawn` contract](https://github.com/sunrise-org/sunrise/blob/
 
 ## Changing how large a spawn group grows
 
-A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, why and from what it spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
+`EntityPart::spawn_cluster_size` answers the limit that natural spawning checks at
+`Mob.getMaxSpawnClusterSize` (NeoForge's `SpawnClusterSizeEvent`, not the earlier
+`MobSpawnEvent.SpawnPlacementCheck`). It receives the read-only host, the finalized mob,
+its spawn reason and source, and the limit vanilla would use. Return `Some(limit)` to
+replace it, or `None` to leave it to the next subscribed Part and then to vanilla. The
+first answer wins; a limit of zero or one stops the group with the current mob.
 
 ```rust,ignore
 struct ZombiePacks;
@@ -332,7 +337,10 @@ impl mod_api::EntityPart for ZombiePacks {
 }
 ```
 
-Only natural spawning's packs ask it: vanilla has no group limit anywhere else. A type with no part keeps vanilla's limit and costs nothing. The mob is the same `UnspawnedMobRef` as `finalize_spawn`'s, finalized and not in a level, and the call runs on replayed ticks like `finalize_spawn`, so an answer must be a pure function of its inputs. Attach the part with `r.entity_part("minecraft:zombie", ZombiePacks)` as [entity parts](../../concepts/parts/entity-parts-and-mob-goals.md) describe.
+Only natural spawning's packs ask it. If no Part on the type implements the callback, the
+spawner keeps vanilla's limit without lending the mob. As in `finalize_spawn`, the callback
+gets an `UnspawnedMobRef`, and its answer must be a pure function of its inputs. Attach the
+Part with `r.entity_part("minecraft:zombie", ZombiePacks)` as [entity parts](../../concepts/parts/entity-parts-and-mob-goals.md) describe.
 
 ## Keeping or removing a mob
 

@@ -96,7 +96,8 @@ impl Game<'_> {
                     .any(mod_api::__private::has_scoped_hook)))
             .then_some(self as &dyn sunrise_client::mobs::MobHooks),
             goal_host: (self.native_authoritative()
-                && (mod_api::__private::has_entity_parts()
+                && (mod_api::__private::has_part_hook(mod_api::HookId::RegisterGoals)
+                    || mod_api::__private::has_part_hook(mod_api::HookId::RegisterBehaviors)
                     || mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)))
             .then_some(self as &dyn sunrise_client::mobs::part_goals::GoalHost),
             asks_animal_tame: self.remote.is_none()

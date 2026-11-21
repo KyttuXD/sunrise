@@ -376,8 +376,8 @@ invalidate just the changed chunk (#1300).
 
 | Method | Verdict | Sunrise route |
 | --- | --- | --- |
-| `IShearable.isShearable(player, item, level, pos)` | **Covered** | `EntityPart::is_shearable(host, entity, player, shears)`, server-side, asked by a player's shears and a dispenser's before `player_shear_entity` / `block_shear_entity`; the first part to answer wins, `None` leaves it to the species. A `false` from a part ends a player's click with nothing done. |
-| `IShearable.onSheared(player, item, level, pos)` | **Covered** | `EntityPart::on_sheared(host, entity, player, shears)`, called on the part that said yes once the cancel hook passed; it returns the drops. |
+| `IShearable.isShearable(player, item, level, pos)` | **Covered** | `EntityPart::is_shearable(host, entity, player, shears: ItemStackView<'_>)`, server-side, asked by a player's shears and a dispenser's. The first subscribed Part to answer wins; `None` defers to the next Part and then the species. `Some(false)` ends a player's click with nothing done. |
+| `IShearable.onSheared(player, item, level, pos)` | **Covered** | `EntityPart::on_sheared(host, entity, player, shears: ItemStackView<'_>)` returns drops from the same Part that said yes, after any player veto. |
 | `IShearable.spawnShearedDrop(level, pos, drop)` | **Covered, engine-side** | The game spawns each returned drop one block above the entity with the sheep's random nudge, posts the shear game event and damages the shears. Not overridable per part. |
 
 Vanilla's shearable species (sheep, mooshroom, snow golem, bogged, copper golem, sulfur cube) keep their own

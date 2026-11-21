@@ -18,46 +18,109 @@ where
 /// An entity capability provider, as the registrar keeps it.
 pub type EntityProvider<T, C = ()> = dyn EntityCapabilityProvider<T, C>;
 
-/// Whether any mod attached an entity part, so `Mob` construction asks for
-/// goals, the mob tick builds a goal read view, and the general entity tick
-/// asks its dispatch.
-pub fn has_entity_parts() -> bool {
-    !crate::mods().is_empty()
-        && installed().is_some_and(|installed| !installed.keys.entities.is_empty())
-}
-
-/// The entity parts attached to entity type `id` (`minecraft:zombie`,
-/// `mymod:robot`), in dispatch order, for the goal registration at every
-/// `Mob` construction.
-pub fn entity_parts() -> PartsRef {
-    let Some(installed) = installed() else {
-        return PartsRef::Shared(&NO_PARTS);
-    };
-    let (game_parts, game_thread) =
-        GAME_PARTS.with_borrow(|lookup| (lookup.parts.clone(), lookup.game_thread));
-    if let Some(parts) = game_parts {
-        return PartsRef::Game(parts);
+/// Run the engine's preparation only after the subscription index finds Parts of this type.
+pub(crate) fn with_entity_part_calls<R>(
+    hook: HookId,
+    name: &'static str,
+    kind: &str,
+    visit: impl FnOnce(EntityPartCalls<'_>) -> R,
+) -> Option<R> {
+    if !has_scoped_hook(hook) {
+        return None;
     }
-    if !game_thread {
+    let table = parts(hook, name);
+    let parts = table.for_hook(hook)?.entity(|| Some(kind));
+    if parts.is_empty() {
+        return None;
+    }
+    if matches!(&table, PartsRef::Shared(_))
+        && !GAME_PARTS.with_borrow(|lookup| lookup.game_thread)
+        && crate::dispatch_scope::backend()
+            .is_none_or(|backend| (backend.diagnostics.first_off_thread_warning)())
+    {
         let thread = std::thread::current();
         let thread = thread.name().unwrap_or("unnamed");
-        if crate::dispatch_scope::backend()
-            .is_none_or(|backend| (backend.diagnostics.first_off_thread_warning)())
-        {
-            log::warn!(
-                "Native entity parts asked off a game thread ({thread}): a mob built there keeps no mod goals"
-            );
-        }
+        log::warn!("Entity Part callback {name} asked off a game thread ({thread})");
     }
-    PartsRef::Shared(&installed.keys)
+    Some(visit(EntityPartCalls {
+        parts: parts.iter(),
+        hook,
+        name,
+    }))
 }
 
-impl Parts {
-    /// The entity parts attached to entity type `id` (`minecraft:zombie`), in
-    /// dispatch order, for the goal registration at every `Mob` construction
-    ///.
-    pub fn entity_parts(&self, id: &str) -> &[Attached<dyn EntityPart>] {
-        self.entities.get(id).map_or(&[], Vec::as_slice)
+// no wire: dispatch iterates borrowed, process-local Part registrations.
+// exhaustive: the iterator is built only by the scoped dispatcher.
+/// The registered Parts for one callback and entity type, in dispatch order.
+#[doc(hidden)]
+pub struct EntityPartCalls<'a> {
+    parts: std::slice::Iter<'a, Attached<dyn EntityPart>>,
+    hook: HookId,
+    name: &'static str,
+}
+
+impl<'a> Iterator for EntityPartCalls<'a> {
+    type Item = EntityPartCall<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(EntityPartCall {
+            registration: self.parts.next()?,
+            hook: self.hook,
+            name: self.name,
+        })
+    }
+}
+
+// no wire: the callback borrows an installed Part registration.
+// exhaustive: the call is built only by the scoped dispatcher.
+/// One registered Part and the particular callback being dispatched.
+#[doc(hidden)]
+pub struct EntityPartCall<'a> {
+    /// The Part's owner and identity, for registrations and paired decisions.
+    pub registration: &'a Attached<dyn EntityPart>,
+    hook: HookId,
+    name: &'static str,
+}
+
+impl EntityPartCall<'_> {
+    /// Whether this subscriber is the same registration, on the same entity type, that
+    /// answered a paired callback. Two registrations can share one Part instance.
+    pub fn is_registration(&self, previous: &Attached<dyn EntityPart>) -> bool {
+        self.registration.mod_index == previous.mod_index
+            && self.registration.order == previous.order
+    }
+
+    /// Invoke the subscribed method. A phase refusal is reported every time; a panic disables
+    /// this mod's callback for this moment, without disabling other mods or other callbacks.
+    pub fn invoke<R>(self, invoke: impl FnOnce(&dyn EntityPart) -> R) -> Option<R> {
+        let attached = self.registration;
+        let id = attached.mod_id;
+        if !crate::mod_index_on(attached.mod_index) || crate::runtime::poisoned(self.hook, id) {
+            return None;
+        }
+        let _guard = crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
+            id,
+            hook: self.name,
+            part: Some(attached.type_name),
+        });
+        match crate::callback_owner::contain_unwind(|| {
+            crate::runtime::refusable(crate::runtime::outside_world(), || invoke(&*attached.part))
+        }) {
+            Ok(Ok(answer)) => Some(answer),
+            Ok(Err(refusal)) => {
+                refusal.report_each();
+                None
+            }
+            Err(message) => {
+                crate::runtime::poison(self.hook, id);
+                log::error!(
+                    "mod {id}: entity Part callback {} panicked and is disabled for this session: {message}",
+                    self.name
+                );
+                crate::callback_owner::record_callback_panic(id, "entity Part", self.name, message);
+                None
+            }
+        }
     }
 }
 
@@ -309,5 +372,124 @@ impl EntitiesCapabilityProviders for InstalledProviders {
         index: &mut u32,
     ) -> Option<(EntityProviderOf, &'static str, bool)> {
         next(&installed()?.keys.entity_capabilities, name, kind, index)
+    }
+}
+
+#[cfg(test)]
+mod callable_tests {
+    use super::super::installation::{AttachedInput, InstalledInput, PartsInput};
+    use super::*;
+    use crate::{ItemKey, ItemStackView, ModEntry, PlayerRef, WorldEpoch};
+    use std::cell::Cell;
+    use std::num::NonZeroU32;
+
+    struct Hooks;
+    #[mod_api::__subscriptions]
+    impl crate::Hooks for Hooks {}
+
+    struct Unrelated;
+    #[mod_api::sunrise_part]
+    impl EntityPart for Unrelated {
+        fn register_goals(&self, _: &mut crate::GoalRegistrar<'_>) {}
+    }
+
+    struct Panics;
+    #[mod_api::sunrise_part]
+    impl EntityPart for Panics {
+        fn is_shearable(
+            &self,
+            _: &dyn Host,
+            _: EntityRef,
+            _: Option<PlayerRef>,
+            _: ItemStackView<'_>,
+        ) -> Option<bool> {
+            panic!("test shearing callback panic");
+        }
+    }
+
+    struct Answers(bool);
+    #[mod_api::sunrise_part]
+    impl EntityPart for Answers {
+        fn is_shearable(
+            &self,
+            _: &dyn Host,
+            _: EntityRef,
+            _: Option<PlayerRef>,
+            shears: ItemStackView<'_>,
+        ) -> Option<bool> {
+            assert_eq!((shears.count(), shears.damage()), (1, 8));
+            Some(self.0)
+        }
+    }
+
+    #[test]
+    fn entity_callable_index_routes_only_matching_parts_and_skips_a_panicking_callback() {
+        let entries = ["unrelated", "panic", "first", "later"];
+        let mods: Vec<_> = entries
+            .iter()
+            .map(|&id| ModEntry::new(id, Box::new(Hooks)))
+            .collect();
+        crate::testing::with_parts_registration_probe(
+            mods.into(),
+            |_| (),
+            |mods, ()| {
+                crate::testing::with_dispatch(mods, || {
+                    let at = |index: usize, part: Arc<dyn EntityPart>| AttachedInput {
+                        mod_id: entries[index],
+                        mod_index: index,
+                        order: 0,
+                        type_name: entries[index],
+                        part,
+                    };
+                    crate::parts::install_input(InstalledInput {
+                        keys: PartsInput {
+                            entities: HashMap::from([(
+                                "test:goat".into(),
+                                vec![
+                                    at(0, Arc::new(Unrelated)),
+                                    at(1, Arc::new(Panics)),
+                                    at(2, Arc::new(Answers(true))),
+                                    at(3, Arc::new(Answers(false))),
+                                ],
+                            )]),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
+                    assert!(
+                        crate::dispatch_is_shearable::<()>("test:sheep", |_| panic!(
+                            "prepared shears for another type"
+                        ))
+                        .is_none()
+                    );
+                    let host = crate::testing::FakeHost::new();
+                    let attempts = Cell::new(0);
+                    let ask = || {
+                        crate::dispatch_is_shearable("test:goat", |mut parts| {
+                            parts.find_map(|part| {
+                                part.invoke(|part| {
+                                    attempts.set(attempts.get() + 1);
+                                    part.is_shearable(
+                                        &host,
+                                        EntityRef::new(WorldEpoch::new(1), 1),
+                                        None,
+                                        ItemStackView::resident(
+                                            (ItemKey(1), NonZeroU32::MIN, Some(8)),
+                                            &|_| panic!("scalar access projected the tool"),
+                                        ),
+                                    )
+                                })
+                                .flatten()
+                            })
+                        })
+                    };
+                    assert_eq!(ask(), Some(Some(true)));
+                    assert_eq!(attempts.get(), 2);
+                    assert_eq!(ask(), Some(Some(true)));
+                    assert_eq!(attempts.get(), 3);
+                    assert!(crate::runtime::poisoned(HookId::IsShearable, "panic"));
+                });
+            },
+        );
     }
 }

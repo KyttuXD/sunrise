@@ -13,10 +13,7 @@ use super::{
     Mob, MobWorld,
     goals::{Cx, Goal as EngineGoal, GoalSelector},
 };
-use mod_api::{
-    WorldEpoch,
-    content::crash::{ModCall, enter_native_mod},
-};
+use mod_api::WorldEpoch;
 
 /// The native side a mod goal runs against (the `mob_hooks` pattern): the
 /// game's facts for the tick's read view, and the one call that runs a goal
@@ -148,34 +145,23 @@ pub enum BehaviorOp {
 /// the species' own `ai::register` — vanilla's `registerGoals` moment, which a
 /// mob loaded from a chunk passes through as a spawned one does.
 pub fn attach(m: &mut Mob) {
-    if !mod_api::__private::has_entity_parts() {
-        return;
-    }
-    let parts = mod_api::__private::entity_parts();
-    let list = parts.entity_parts(&m.kind.id);
-    if list.is_empty() {
-        return;
-    }
-    let (id, mob_id) = (m.id, &m.kind.id);
-    for attached in list {
-        let _guard = enter_native_mod(ModCall {
-            id: attached.mod_id(),
-            hook: "register_goals",
-            part: Some(attached.type_name()),
-        });
-        let ai = &mut m.ai;
-        let mut registrar = RegistrarFor {
-            goals: &mut ai.goals,
-            targets: &mut ai.targets,
-            mob_id,
-            mob_entity: id,
-            mod_id: attached.mod_id(),
-            part: attached.type_name(),
-        };
-        attached
-            .part()
-            .register_goals(&mut mod_api::GoalRegistrar::new(&mut registrar));
-    }
+    let (id, mob_id, ai) = (m.id, m.kind.id.as_str(), &mut m.ai);
+    let _ = mod_api::dispatch_register_goals(mob_id, |parts| {
+        for part in parts {
+            let registration = part.registration;
+            let mut registrar = RegistrarFor {
+                goals: &mut ai.goals,
+                targets: &mut ai.targets,
+                mob_id,
+                mob_entity: id,
+                mod_id: registration.mod_id(),
+                part: registration.type_name(),
+            };
+            let _ = part.invoke(|part| {
+                part.register_goals(&mut mod_api::GoalRegistrar::new(&mut registrar));
+            });
+        }
+    });
 }
 
 /// The game's side of [`mod_api::GoalRegistrar`]: the mob's two selectors.

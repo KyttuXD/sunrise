@@ -37,6 +37,7 @@
 //! | `target` | the function that fires the hook; defaults to `Game::native_<name>` in the `native_hooks` module with the same filename as the declaration |
 //! | `receiver` | a game target borrows `&mut self` by default; `"read"` borrows `&self`, `"associated"` has no receiver |
 //! | `dispatch` | a game target takes the generated engine carrier by default; existing flat, already-converted (`"api_carrier"`), and direct bindings name their shape explicitly |
+//! | `callable` | `true` on a direct server entity Part hook: the declared parameters and return type are the Part method's signature, and the `#[engine]` `&str` key selects its subscribers before the engine prepares their arguments |
 //!
 //! Every hook needs `///` lines: they are the rustdoc of its trait method, and a hook without them
 //! is refused. `HookId` values are process-local dispatch indexes, not persistent API identities.

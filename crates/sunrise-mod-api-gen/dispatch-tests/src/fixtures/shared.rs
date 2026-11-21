@@ -284,8 +284,32 @@ fn has_part_hook(_: HookId) -> bool {
         || !parts.menus.is_empty()
         || !parts.entities.is_empty()
 }
-fn parts(_: HookId, _: &'static str) -> &'static Parts {
+// The fixture collector keys top-level definitions by name; `parts` is also a module.
+use part_table as parts;
+fn part_table(_: HookId, _: &'static str) -> &'static Parts {
     PARTS.get()
+}
+mod parts {
+    use super::{EntityPart, HookId, PARTS};
+
+    pub(super) type EntityPartCalls<'a> = std::slice::Iter<'a, &'static dyn EntityPart>;
+
+    pub(super) fn with_entity_part_calls<R>(
+        hook: HookId,
+        _: &'static str,
+        kind: &str,
+        visit: impl FnOnce(EntityPartCalls<'_>) -> R,
+    ) -> Option<R> {
+        let parts = &PARTS.get().entities;
+        (kind == "mymod:robot"
+            && parts.iter().any(|part| {
+                part.entity_subscribed()
+                    .iter()
+                    .flatten()
+                    .any(|id| *id as usize == hook as usize)
+            }))
+        .then(|| visit(parts.iter()))
+    }
 }
 impl Parts {
     fn for_hook(&self, _: HookId) -> Option<&Self> {

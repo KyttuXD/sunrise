@@ -68,11 +68,58 @@ pub(super) fn emit<'a>(
         let expected = if is_render { name } else { &native };
         if !declaration_only
             && (!(in_game || free_function_source(target).is_some())
-                || !target
-                    .rsplit_once("::")
-                    .is_some_and(|(_, function)| function == expected))
+                || (hook.callable_result.is_none()
+                    && !target
+                        .rsplit_once("::")
+                        .is_some_and(|(_, function)| function == expected)))
         {
             return Err(format!("wrong target for {name}: {target}"));
+        }
+        let hook_id = hook_id(name);
+        if !is_render {
+            hook_ids.push_str(&format!("{hook_id},\n"));
+            hook_constants.push_str(&format!(
+                "pub const {name}: Option<super::HookId> = Some(super::HookId::{hook_id});\n"
+            ));
+            hook_count += 1;
+            if hook.side == Side::Client {
+                client_hooks.push_str(&format!("(HookId::{hook_id}, \"{name}\"),\n"));
+            }
+        }
+        if let Some(result) = &hook.callable_result {
+            let key = &hook.scope.as_ref().expect("callable hook scope").key;
+            let doc = hook
+                .doc
+                .lines()
+                .map(|line| format!("/// {line}\n"))
+                .collect::<String>();
+            let params = hook
+                .call
+                .iter()
+                .map(|(arg, ty)| format!(", {arg}: {ty}"))
+                .collect::<String>();
+            let ignored = hook
+                .call
+                .iter()
+                .map(|(arg, _)| format!("{arg},"))
+                .collect::<String>();
+            let (returns, default) = if result == "()" {
+                (String::new(), "")
+            } else {
+                (format!(" -> {result}"), "Default::default()")
+            };
+            part_traits
+                .entry("EntityPart")
+                .or_default()
+                .push_str(&format!(
+                    "{doc}/// Side: server.\nfn {name}(&self{params}){returns} {{ let _ = ({ignored}); {default} }}\n"
+                ));
+            dispatch.push_str(&format!(
+                "#[doc(hidden)] pub fn dispatch_{name}<R>({key}: &str, visit: impl FnOnce(super::parts::EntityPartCalls<'_>) -> R) -> Option<R> {{ \
+                    super::parts::with_entity_part_calls(HookId::{hook_id}, \"{name}\", {key}, visit) \
+                }}\n"
+            ));
+            continue;
         }
         let receiver_mut = if declaration_only {
             Some(false)
@@ -99,7 +146,7 @@ pub(super) fn emit<'a>(
             .map_err(|e| format!("{name}: {e}"))?;
         let carried: Vec<_> = declared.iter().map(|(arg, ty)| (arg.clone(), ty)).collect();
         let mut args = carried.clone();
-        let carrier = format!("{}Call", hook_id(name));
+        let carrier = format!("{hook_id}Call");
         let uses_carrier = !declared.is_empty()
             && (name == "apply_effect_tick" && declaration_only
                 || in_game
@@ -322,8 +369,7 @@ pub(super) fn emit<'a>(
             }
         };
         let event = fresh_name("event", &mut used);
-        let event_type = format!("{}Event", hook_id(name));
-        let hook_id = event_type.strip_suffix("Event").unwrap();
+        let event_type = format!("{hook_id}Event");
         // The checked declaration view replaces the old plain collect output.
         // Surface export reads the input tree's types, including older trees.
         let declaration = match (name, output.as_ref()) {
@@ -359,16 +405,6 @@ pub(super) fn emit<'a>(
         } else {
             None
         };
-        if !is_render {
-            hook_ids.push_str(&format!("{hook_id},\n"));
-            hook_constants.push_str(&format!(
-                "pub const {name}: Option<super::HookId> = Some(super::HookId::{hook_id});\n"
-            ));
-            hook_count += 1;
-            if hook.side == Side::Client {
-                client_hooks.push_str(&format!("(HookId::{hook_id}, \"{name}\"),\n"));
-            }
-        }
         // A mod listener may still be told of a cancelled event, and see and clear its cancel; a
         // part never is.
         let mod_cancel = (contract == Contract::Cancel || collect_cancel) && scoped.is_none();
@@ -730,7 +766,7 @@ pub(super) fn emit<'a>(
                     &args,
                     output.as_ref(),
                     contract == Contract::Collect,
-                    hook_id,
+                    &hook_id,
                     scoped.is_some(),
                     hook.scope.as_ref().and_then(|scope| match scope.kind {
                         PartKind::Block => Some(scope.key.as_str()),

@@ -79,11 +79,10 @@ fn functions<'a>(
     })
 }
 
-const NATIVE_HOOKS: &str = "sunrise_client::game::native_hooks::";
+const GAME_TARGET: &str = "sunrise_client::game::";
 
 fn check_target(sources: &mut Sources<'_>, hook: &Hook, build: &Build) -> Result<bool, String> {
-    let (package, module, owner, target) = if let Some(path) =
-        hook.target.strip_prefix(NATIVE_HOOKS)
+    let (package, module, owner, target) = if let Some(path) = hook.target.strip_prefix(GAME_TARGET)
     {
         let (module_and_owner, target) = path.rsplit_once("::").ok_or("expected a method")?;
         let (module, owner) = module_and_owner
@@ -91,7 +90,7 @@ fn check_target(sources: &mut Sources<'_>, hook: &Hook, build: &Build) -> Result
             .ok_or("expected a method owner")?;
         (
             "sunrise_client".to_owned(),
-            format!("game::native_hooks::{module}"),
+            format!("game::{module}"),
             Some(owner),
             target,
         )

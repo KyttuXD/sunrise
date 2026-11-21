@@ -1,0 +1,33 @@
+ids = [
+    "method:EntityPart::register_goals",
+    "method:EntityPart::register_behaviors",
+    "method:EntityPart::spawn_cluster_size",
+    "method:EntityPart::is_shearable",
+    "method:EntityPart::on_sheared",
+    "hook:register_goals",
+    "hook:register_behaviors",
+    "hook:spawn_cluster_size",
+    "hook:is_shearable",
+    "hook:on_sheared",
+]
+why = """
+Entity Parts subscribe only to the callbacks they implement. Goal and behavior registration
+keep vanilla's Mob.registerGoals and Brain.Provider.makeBrain moments. The pack limit is
+anchored at NaturalSpawner.spawnCategoryForPosition and NeoForge's SpawnClusterSizeEvent,
+not the earlier MobSpawnEvent.SpawnPlacementCheck. For shearing, vanilla's Sheep.mobInteract
+and ShearsDispenseItemBehavior.tryShearEntity pass the actual tool. As in NeoForge's
+IShearable.isShearable and IShearable.onSheared, the same Part checks readiness and performs
+the shear. Readiness borrows the tool in place, and neither callback projects components
+unless the mod asks. A panic disables only the owning mod's callback for that moment and
+reports it; other failures do not disable it.
+"""
+migrate = """
+Use #[mod_api::sunrise_part] on each impl EntityPart; keep attaching it with
+r.entity_part("namespace:type", MyPart). Keep the register_goals(&mut GoalRegistrar),
+register_behaviors(&mut BehaviorRegistrar) and spawn_cluster_size signatures unchanged.
+In both is_shearable and on_sheared, replace shears: &ItemStack with
+shears: ItemStackView<'_> (import mod_api::ItemStackView). Read item(), count() or damage()
+directly. For components or an owned stack, replace shears.clone() with shears.project()
+and handle None. Keep returning Option<bool> from is_shearable and Vec<ItemStack> from
+on_sheared; the latter still runs only on the Part whose readiness answer was Some(true).
+"""
