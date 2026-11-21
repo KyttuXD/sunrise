@@ -341,7 +341,10 @@ GitHub repository (`source`, or `repo` if `source` is omitted), one plain tag se
 `<id>-<version>.smod` asset name using the full SemVer from the package. A bare filename is refused
 on a stable row. The URL is immutable after publication, just like the source pin and digest.
 The registry checks the bytes from `--files/<sha256>`; the generated index still points to the package
-on the registry's `<id>-<version>` mirror. Rows without `sunrise` still use a bare filename.
+on the registry's `<id>-<version>` mirror. Rows without `sunrise` still use a bare filename. Both the
+package and any verified binary archives are mirrored in `sunrise-org/sunrise-mods` by default.
+`registry build --release <base-url>` overrides the mirror for an alternate index, not the author URLs
+in the entry's `file` and `binaries` fields. Include the trailing `/` in that base URL.
 
 ### Stable native builds
 

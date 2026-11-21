@@ -197,13 +197,10 @@ fn stable_source_uses_an_author_url_but_the_index_uses_the_registry_mirror() {
     let mut row = entry.versions[0].clone();
     let legacy = checked_version(&entry, &row, &inputs, &[]).unwrap();
     assert_eq!(legacy.file.name, "coords_hud-0.1.0.smod");
-    assert!(
-        legacy
-            .file
-            .url
-            .ends_with("/coords_hud-0.1.0/coords_hud-0.1.0.smod")
+    assert_eq!(
+        legacy.file.url,
+        "https://github.com/sunrise-org/sunrise-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.smod"
     );
-    assert!(legacy.file.url.starts_with(super::super::FILE_HOST));
 
     row.sunrise = Some(releases[0].tag.clone());
     assert!(

@@ -161,6 +161,19 @@ impl Registry {
     }
 }
 
+#[test]
+fn registry_build_uses_an_explicit_release_base_when_supplied() {
+    let registry = Registry::new();
+    registry.add("coords", "1.0.0", "26.3", "");
+    let index = registry
+        .build(&["--release", "https://registry.example.test/download/"])
+        .unwrap();
+    assert_eq!(
+        index.project("coords").unwrap().versions[0].file.url,
+        "https://registry.example.test/download/coords-1.0.0/coords-1.0.0.smod"
+    );
+}
+
 const PROJECT_PAGE: &str = "id='example'\nkind='native-mod'\nname='Example'\nsummary='A source example.'\nowners=['author']\n";
 const RELEASE_TAG: &str = "26.3-0.1.0";
 const RELEASE_PIN: &str = "0123456789abcdef0123456789abcdef01234567";

@@ -88,17 +88,13 @@ version file the game is pinned to. If its text says the jars are unchanged, a p
 from the issue into `research-lock.json` fixes it. New players can't prepare the game until a Nightly with that fix
 is out, so label that pull request `release-now` (or ask the council to) once it merged.
 
-## The mods registry (horizon-rust/horizon-mods)
+## The mods registry
 
-- **Submissions from the website** arrive as pull requests authored by `ludovic111` (the registry's account). A
-  Team member reviews the mod (what it does, its licence, no sign-in or token handling, no Mojang files; see
-  `MOD-POLICY.md` there), approves, and squash-merges once `check` passed. Publishing to the registry is hourly
-  (`publish.yml`).
-- **Fork pull requests:** approve their workflow run, and upload the mod's file to the `staging` release as
-  `<sha256>.<extension>` after checking its hash.
-- **Taking a mod down:** a pull request adding it to `revoked.toml`. That file is a code-owner path: today only
-  Ludovic can approve it. For malware, two council members act at once as an emergency (GOVERNANCE.md 4.6), post
-  in #mod-log, and ask Ludovic to approve.
+The `check` and `publish` workflows run in [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods).
+`check` verifies the files listed by a pull request. `publish` mirrors verified packages and native archives to the
+registry's `<id>-<version>` releases and publishes the index. The modding book describes
+[staging and review](modding/src/how-to/publish.md#4-what-review-and-staging-do) and the
+[registry index](modding/src/reference/registry-index.md).
 
 ## Kira
 
