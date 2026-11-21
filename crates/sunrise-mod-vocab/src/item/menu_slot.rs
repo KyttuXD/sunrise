@@ -115,8 +115,6 @@ pub enum MenuDataRefusal {
     Unsupported,
     /// The player or the menu generation is no longer current.
     Stale,
-    /// The caller does not own the menu type.
-    WrongOwner,
     /// The index is outside the menu type's declared data slots.
     InvalidIndex,
 }

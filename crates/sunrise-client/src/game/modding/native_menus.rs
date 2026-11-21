@@ -2203,17 +2203,24 @@ mod tests {
                             ]
                         );
                         {
-                            // The menu's namespace is not its package identity.
+                            // The live menu is registered by status_package, not this mod.
                             let _guard = mod_api::content::crash::enter_native_mod(
                                 mod_api::content::crash::ModCall {
-                                    id: "listen",
+                                    id: "veto",
                                     hook: "test",
                                     part: None,
                                 },
                             );
+                            assert_eq!(mod_api::content::crash::current_native_mod(), Some("veto"));
+                            assert_eq!(menu.set_data_slot(game, 0, 12), Ok(true));
+                            assert_eq!(menu.set_data_slot(game, 0, 12), Ok(false));
                             assert_eq!(
-                                menu.set_data_slot(game, 0, 12),
-                                Err(MenuDataRefusal::WrongOwner)
+                                updates(sent(&rx)),
+                                [DataSlot {
+                                    window,
+                                    index: 0,
+                                    value: 12
+                                }]
                             );
                         }
                         // A full resend of this window has no hotbar slots, so a pending
@@ -2233,7 +2240,7 @@ mod tests {
                             DataSlot {
                                 window,
                                 index: 0,
-                                value: -80_000,
+                                value: 12,
                             },
                             DataSlot {
                                 window,
@@ -2242,13 +2249,6 @@ mod tests {
                             },
                         ];
                         assert_eq!(updates(packets), snapshot);
-                        let _guard = mod_api::content::crash::enter_native_mod(
-                            mod_api::content::crash::ModCall {
-                                id: "status_package",
-                                hook: "test",
-                                part: None,
-                            },
-                        );
                         assert_eq!(
                             menu.set_data_slot(game, 2, 1),
                             Err(MenuDataRefusal::InvalidIndex)
@@ -2270,7 +2270,7 @@ mod tests {
                             "a resend cannot see the pending write"
                         );
                         game.transaction_close(&abort, false);
-                        assert_eq!(menu.set_data_slot(game, 0, -80_000), Ok(false));
+                        assert_eq!(menu.set_data_slot(game, 0, 12), Ok(false));
                         assert!(sent(&rx).is_empty());
 
                         let capture = game.transaction_open();

@@ -43,8 +43,8 @@ pub trait PlayerMenusBackendMut {
     /// [`crate::MenuScreenOpen::extra`]. `pos`, when given, is offered to the factory and
     /// available later through `screen_pos`. `data` has exactly the menu type's `data_slots`
     /// signed `i32` values. The negotiated blockless payload sends indices `0..=u16::MAX` after
-    /// opening; read the received values through [`crate::MenuScreenFrame::data`]. The menu's
-    /// owning mod can change the stored values with [`MenuRef::set_data_slot`]. Pass
+    /// opening; read the received values through [`crate::MenuScreenFrame::data`]. Server mods
+    /// with the live handle can change the stored values with [`MenuRef::set_data_slot`]. Pass
     /// `opening_hand` for an item opener regardless of slot backing, or `None` for another opener.
     /// The server remembers that hand's stack for `menu_still_valid`. A type declaring
     /// `owned_slots` uses ordinary clicks and accepts writes through `ItemPlace::MenuSlot`; it may

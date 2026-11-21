@@ -209,12 +209,12 @@ pub trait MenusBackendMut {
     #[access(WorldOnly)]
     fn menu_close_container(&mut self, menu: MenuRef) -> bool;
     /// Side: server.
-    /// Set a data slot of the owning mod's current blockless menu (`DataSlot.set`).
-    /// Returns true only if the value changed. Publishes the final signed `i32` at
-    /// root commit (immediately outside a transaction) if the index fits `u16`.
-    /// Larger declared indices remain in server storage. An abort restores the
-    /// value silently. Stale handles, unsupported menus, other mods and undeclared
-    /// indices are refused.
+    /// Set a data slot on this live blockless mod menu (`AbstractContainerMenu.setData`),
+    /// regardless of which mod registered its type. Returns true only if the value changed.
+    /// Publishes the final signed `i32` at root commit (immediately outside a transaction)
+    /// if the index fits `u16`. Larger declared indices remain in server storage. An abort
+    /// discards pending writes without publishing them. Stale handles, unsupported menus
+    /// and undeclared indices are refused.
     #[access(WorldOnly)]
     fn menu_set_data_slot(
         &mut self,
