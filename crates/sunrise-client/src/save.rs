@@ -7643,6 +7643,7 @@ mod tests {
                 "test:other".into(),
                 "minecraft:chest".into(),
             ],
+            ["test:machine".into(), "test:other".into()],
         );
         // Seed the same canonical pairs as production when resources are available.
         // The explicit shared-representation cases below also run without resources.

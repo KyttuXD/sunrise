@@ -1212,16 +1212,20 @@ fn register_block_entity_types(
         .get("minecraft:block_entity_type")
         .ok_or("missing block entity type registry")?
         .names;
-    let membership = mods
-        .iter()
-        .flat_map(|m| &m.content.block_entity_types)
+    let declarations = mods.iter().flat_map(|m| &m.content.block_entity_types);
+    let membership = declarations
+        .clone()
         .flat_map(|kind| {
             kind.blocks
                 .iter()
                 .map(|block| (block.clone(), kind.id.clone()))
         })
         .collect();
-    let mut types = BlockEntityTypes::new(membership, names.clone());
+    let mut types = BlockEntityTypes::new(
+        membership,
+        names.clone(),
+        declarations.map(|kind| kind.id.clone()),
+    );
     let blocks = builtin.get("minecraft:block");
     for block in blocks
         .into_iter()

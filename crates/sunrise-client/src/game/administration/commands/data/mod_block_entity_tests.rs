@@ -119,6 +119,7 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
         let mut types = sunrise_client::block_entity_types::BlockEntityTypes::new(
             [(BLOCK.to_owned(), ENTITY.to_owned())].into(),
             vec![ENTITY.to_owned(), "fixture:replacement".to_owned()],
+            [ENTITY.to_owned(), "fixture:replacement".to_owned()],
         );
         types.add_valid(BLOCK, "fixture:replacement").unwrap();
         sunrise_client::block_entity_types::install(types).unwrap();

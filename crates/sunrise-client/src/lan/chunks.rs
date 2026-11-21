@@ -1759,6 +1759,7 @@ mod tests {
                 .unwrap()
                 .names
                 .clone(),
+            ["test:machine".into(), "test:casing".into()],
         );
         let states = [
             "minecraft:air",
@@ -1873,6 +1874,7 @@ mod tests {
                 .unwrap()
                 .names
                 .clone(),
+            ["test:machine".into()],
         );
         let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false, None));
         let encoder =
@@ -1918,6 +1920,7 @@ mod tests {
                 .unwrap()
                 .names
                 .clone(),
+            ["test:machine".into()],
         );
         let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false, None));
         let encoder =
@@ -1987,6 +1990,7 @@ mod tests {
                 .unwrap()
                 .names
                 .clone(),
+            ["test:machine".into()],
         );
         let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false, None));
         let mut encoder =
