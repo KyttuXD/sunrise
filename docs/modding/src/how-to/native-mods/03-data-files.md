@@ -22,9 +22,13 @@ that already ran. Contributions share a list, so a failed file cannot be attribu
 The original pack trees remain separate from the launcher's code-only horizon-mixins input.
 
 Client-side asset reads use [client asset reload listeners](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/client/client_reload.rs); server
-listeners cannot read `assets/`. Client listeners return the same once-only action, which runs on
-the game thread after the new packs are published. Packaged assets also participate in the game's
-normal resource packs.
+listeners cannot read `assets/`. In `Hooks::add_client_reload_listeners`, use the same
+`event.listeners.get_registry().iter()` and `event.listeners.get_graph().iter()` calls to
+borrow names and dependency pairs from the current registration.
+`event.listeners.get_last_vanilla_listener()` borrows the client's model-manager anchor.
+Clone only IDs you need after the borrow ends, for example to pass to `add_dependency`.
+Client listeners return the same once-only action, which runs on the game thread after
+the new packs are published. Packaged assets also participate in the game's normal resource packs.
 
 When registering a listener on either side, construct its converter with
 `FileToIdConverter::json("machines")` for JSON or `FileToIdConverter::new("machines", ".bin")`

@@ -9,48 +9,43 @@ fn files() -> FileToIdConverter {
 #[test]
 fn registry_views_and_explicit_order_before_vanilla() {
     let mut listeners = ClientListenerRegistry::new();
-    let first = Arc::new(Boundary);
-    let second = Arc::new(Boundary);
-    listeners
-        .add_listener(id("test_mod:first"), files(), first.clone())
+    let [first, model_manager, last, mod_first, mod_second] = [
+        "minecraft:first",
+        "minecraft:model_manager",
+        "minecraft:last",
+        "test_mod:first",
+        "test_mod:second",
+    ]
+    .map(id);
+    let registry: &mut dyn ClientReloadListeners = &mut listeners;
+    registry
+        .add_listener(mod_first.clone(), files(), Arc::new(Boundary))
         .unwrap();
-    listeners
-        .add_listener(id("test_mod:second"), files(), second.clone())
+    registry
+        .add_listener(mod_second.clone(), files(), Arc::new(Boundary))
         .unwrap();
-    assert_eq!(
-        listeners.get_last_vanilla_listener(),
-        VanillaClientListeners::model_manager()
-    );
-    assert_eq!(
-        listeners.get_registry(),
-        [
-            VanillaClientListeners::first(),
-            VanillaClientListeners::model_manager(),
-            VanillaClientListeners::last(),
-            id("test_mod:first"),
-            id("test_mod:second"),
-        ]
-    );
-    listeners
-        .add_dependency(
-            id("test_mod:second"),
-            VanillaClientListeners::model_manager(),
-        )
-        .unwrap();
-    assert!(listeners.get_graph().contains(&(
-        id("test_mod:second"),
-        VanillaClientListeners::model_manager()
-    )));
+
+    let anchor = registry.get_last_vanilla_listener();
+    assert_eq!(anchor, &model_manager);
+    let names = registry.get_registry().iter();
+    assert!(names.eq([&first, &model_manager, &last, &mod_first, &mod_second]));
+    let anchor = anchor.clone();
+    registry.add_dependency(mod_second.clone(), anchor).unwrap();
+    let edges = registry.get_graph().iter();
+    assert!(edges.eq([
+        (&first, &model_manager),
+        (&model_manager, &last),
+        (&first, &mod_first),
+        (&mod_first, &last),
+        (&first, &mod_second),
+        (&mod_second, &last),
+        (&mod_second, &model_manager),
+    ]));
+
     let sorted = listeners.finish().unwrap();
     assert_eq!(
         sorted.into_iter().map(|entry| entry.id).collect::<Vec<_>>(),
-        [
-            VanillaClientListeners::first(),
-            id("test_mod:second"),
-            VanillaClientListeners::model_manager(),
-            id("test_mod:first"),
-            VanillaClientListeners::last(),
-        ]
+        [first, mod_second, model_manager, mod_first, last]
     );
 }
 

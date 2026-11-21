@@ -6,6 +6,8 @@ pub trait Hooks {
     /// counterpart of `add_server_reload_listeners`): the first load
     /// on the loader thread, then every later reload — the player
     /// changed resource packs, F3+T was pressed, or a server sent its packs.
+    /// The registry lends the current listener names, dependency edges and
+    /// model-manager anchor during registration.
     /// The listener's `prepare` then reads the merged asset view with
     /// resource-pack overrides resolved, and returns an owned action that
     /// publishes the parsed state once, after all prepares, before
