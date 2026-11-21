@@ -963,6 +963,71 @@ mod tests {
         });
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn prediction_uses_entity_size_without_committing_the_pose() {
+        use crate::game::native_item_places::tests::{guest, open_to_lan};
+        use sunrise_client::pose::Pose as MotionPose;
+        use sunrise_core::geometry::Vec3;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![mod_api::ModEntry::new(
+            "short_crouch",
+            Box::new(ShortCrouch(calls.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                open_to_lan(game);
+                game.streaming
+                    .insert_remote(&mut game.world, sunrise_client::chunk::Chunk::empty(0, 0));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.set(1, 63, 1, stone).unwrap();
+                let mut entry = guest(1);
+                entry.loaded = true;
+                entry.on_ground = true;
+                entry.position = [1.5, 64.0, 1.5];
+                let uuid = entry.uuid;
+                game.lan.as_mut().unwrap().hub.guests.push(entry);
+                game.as_guest(1, |_| ()).unwrap();
+                let player = game.player(uuid).unwrap();
+                game.boats.push(crate::game::boats::Boat::new(
+                    99,
+                    Arc::from("oak"),
+                    Vec3::new(1.5, 65.0, 1.5),
+                    0.0,
+                ));
+
+                calls.lock().unwrap().clear();
+                let prediction = game.player_simulate_move(player, mod_api::PlayerInput::default());
+                assert!(prediction.is_some());
+                // LocalPlayer checks Crouching before travel; its Standing check reuses the
+                // current answer. After travel the boat rejects Standing, so Crouching is
+                // queried again and wins, but only for this replayed body.
+                assert_eq!(
+                    *calls.lock().unwrap(),
+                    [Pose::Crouching, Pose::Swimming, Pose::Crouching]
+                );
+                let live = game
+                    .lan
+                    .as_ref()
+                    .unwrap()
+                    .hub
+                    .guest(1)
+                    .unwrap()
+                    .motion
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(live.pose, MotionPose::Standing);
+                assert_eq!(live.dimensions.height, 1.8);
+            })
+        });
+    }
+
     fn m_pose(game: &crate::game::Game<'_>, i: usize) -> Pose {
         game.mobs[i].pose()
     }
