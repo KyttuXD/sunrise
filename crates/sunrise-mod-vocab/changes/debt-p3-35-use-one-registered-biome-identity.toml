@@ -26,6 +26,8 @@ data-map reads, rather than wrapping unrelated palette slots or issuing reload t
 The previous world-owned token (c4ebdb761d9) kept biome data-map reads off the process-wide
 registries; those reads still use the installed server snapshot.
 Vanilla's saved biome names and network registry IDs still belong to their own codecs.
+The section listener uses the shared isolated-callback reporting path: panics name the mod
+in the log and error toast, and a refused answer is logged each time without disabling the listener.
 """
 migrate = """
 - Replace `host.biome_key(name)` with `host.biome(name)?` in a fallible caller. The new

@@ -11,9 +11,9 @@ use std::{
     },
 };
 
-/// A retained mod callback panicked and was disabled for the rest of this session.
+/// A mod callback panicked and was disabled for the rest of this session.
 // no wire: in-process notification drained by the client's error toast queue.
-// exhaustive: engine-only notification record produced by `callback_owner::call`.
+// exhaustive: engine-only notification record produced by `report_callback_panic`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallbackPanicNotice {
     /// The `[mod] id` whose callback panicked.
@@ -165,12 +165,15 @@ pub fn take_callback_panic_notices() -> Vec<CallbackPanicNotice> {
     queue.drain(..).collect()
 }
 
-fn record_callback_panic(
+pub(crate) fn report_callback_panic(
     owner: &'static str,
     kind: &'static str,
     operation: &'static str,
     message: String,
 ) {
+    log::error!(
+        "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {message}"
+    );
     PANIC_NOTICES
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -447,11 +450,9 @@ fn call_opt<T>(
             if !first && invocation != Invocation::Dispose {
                 return Err(format!("{kind} callback panicked; it is disabled"));
             }
-            log::error!(
-                "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {msg}"
-            );
-            record_callback_panic(owner, kind, operation, msg.clone());
-            Err(format!("{kind} callback panicked; it is disabled: {msg}"))
+            let error = format!("{kind} callback panicked; it is disabled: {msg}");
+            report_callback_panic(owner, kind, operation, msg);
+            Err(error)
         }
     }
 }

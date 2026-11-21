@@ -27,27 +27,27 @@ impl Game<'_> {
             return;
         };
         let poisoned = mod_api::__private::poisoned_listeners(mod_api::HookId::SectionVisibility);
-        let mut refusals = std::mem::take(&mut self.streaming.section_visibility.refusals);
         for request in requests {
-            let input = capture_input(&request.region, request.key.1, request.biomes(), |raw| {
-                index
-                    .to_api(sunrise_world::registry::BlockStateId(raw))
-                    .unwrap_or(air)
-            });
             let mut plan = SectionPlanBuilder::new();
-            self.native_section_visibility(mod_api::__private::SectionVisibilityCall {
-                input: &input,
-                answers: &mut |Answered { answer, mod_id, .. }: Answered<SectionVisibility>| {
-                    if let Err(refusal) = plan.apply(&answer)
-                        && refusals.insert((mod_id, refusal.code()))
-                    {
-                        log::warn!(
-                            "Sunrise: mod {mod_id}'s section visibility at {:?} refused whole: {refusal}",
-                            input.origin
-                        );
-                    }
-                },
-            });
+            {
+                let input =
+                    capture_input(&request.region, request.key.1, request.biomes(), |raw| {
+                        index
+                            .to_api(sunrise_world::registry::BlockStateId(raw))
+                            .unwrap_or(air)
+                    });
+                self.native_section_visibility(mod_api::__private::SectionVisibilityCall {
+                    input: &input,
+                    answers: &mut |Answered { answer, mod_id, .. }: Answered<SectionVisibility>| {
+                        if let Err(refusal) = plan.apply(&answer) {
+                            log::warn!(
+                                "Sunrise: mod {mod_id}'s section visibility at {:?} refused whole: {refusal}",
+                                input.origin
+                            );
+                        }
+                    },
+                });
+            }
             if mod_api::__private::poisoned_listeners(mod_api::HookId::SectionVisibility)
                 != poisoned
             {
@@ -65,6 +65,5 @@ impl Game<'_> {
             self.streaming
                 .submit_visibility_answer(&mut self.world, request, plan.finish());
         }
-        self.streaming.section_visibility.refusals = refusals;
     }
 }

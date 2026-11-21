@@ -1260,7 +1260,16 @@ pub(super) fn emit<'a>(
                 // and the panic payload destructor, not the engine's answer callback.
                 String::new(),
                 format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(Some(answer))) => {o}(Answered {{ answer, mod_id }}), Ok(Ok(None)) => {{}}, Ok(Err(refusal)) => refusal.report(), Err(payload) => {{ if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {{ std::mem::forget(payload); }} super::runtime::poison(HookId::{hook_id}, mod_id); }} }} }} }}",
+                    "{{ let contained = super::runtime::outside_world(); \
+                     let mut {entered} = super::runtime::ListenerScope::new(); \
+                     for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ \
+                         {local_event} \
+                         if let Some(Some(answer)) = {entered}.call_contained(\
+                             HookId::{hook_id}, \"{name}\", {mod_entry}, contained, \
+                             |{mod_item}| {mod_item}.{name}({invoke})) {{ \
+                             {o}(Answered {{ answer, mod_id: {mod_entry}.id }}); \
+                         }} \
+                     }} }}",
                     o = out.unwrap()
                 ),
             ),

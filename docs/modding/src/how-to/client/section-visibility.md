@@ -61,10 +61,10 @@ Each registration returns at most one answer. Return `None` to leave the section
 returns `E_SECTION_VISIBILITY_TOO_MANY` at the first record past one section's worth, without collecting the
 rest. The game checks a returned answer whole: an out-of-section cell (`E_SECTION_VISIBILITY_OUTSIDE_SECTION`),
 a face mask above 63 (`E_SECTION_VISIBILITY_FACE_MASK`) or a cell named twice (`E_SECTION_VISIBILITY_DUPLICATE`)
-is logged once per mod and code, and the section draws as if the mod had not answered.
-A listener that panics (`E_SECTION_VISIBILITY_PANIC`) is switched off for this hook for the session, alone: the
-other listeners are asked as before and the level is remeshed without it, so no mask it gave earlier remains
-in a cached answer or can publish from a queued mesh.
+is logged each time, and the section draws as if the mod had not answered.
+A listener that panics (`E_SECTION_VISIBILITY_PANIC`) is switched off for this hook for the session, alone.
+The log and error toast name the mod. The other listeners are asked as before and the level is remeshed without
+it, so no mask it gave earlier remains in a cached answer or can publish from a queued mesh.
 
 The snapshots, frozen plans and cached masks share a memory budget with section geometry. A section waits
 for room before it captures anything or asks a listener. Cached answers have a separate ceiling within that

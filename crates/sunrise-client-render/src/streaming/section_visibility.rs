@@ -33,8 +33,6 @@ pub struct SectionPreparation {
     pending: Vec<VisibilityRequest>,
     answers: FxHashMap<(i32, i32, i32), HeldAnswer>,
     capacity_waiting: FxHashSet<(i32, i32, i32)>,
-    /// The mods and refusal codes already logged since the last refresh.
-    pub refusals: FxHashSet<(&'static str, &'static str)>,
     logged_capacity: bool,
 }
 
@@ -311,7 +309,6 @@ impl Streaming {
         state.pending.clear();
         state.answers.clear();
         state.capacity_waiting.clear();
-        state.refusals.clear();
         state.logged_capacity = false;
     }
 

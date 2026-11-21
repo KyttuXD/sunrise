@@ -10,8 +10,9 @@ pub trait Hooks {
     /// skipped if no mod contributes section geometry. Other levels drawn through level views
     /// do not call this hook. Answers
     /// only take away, and every mod's are combined, so no mod brings back what another hid. An
-    /// answer that breaks a bound is refused whole, logged once, and the section draws without
-    /// it. With no mod listening, the mesher pays nothing.
+    /// answer that breaks a bound is refused whole and logged each time, and the section draws
+    /// without it. A panic disables only that listener for the session, with a log and an error
+    /// toast naming the mod. With no mod listening, the mesher pays nothing.
     #[notes = r#"## Section visibility
 
 `section_visibility` decides, per chunk section, what the terrain mesh of that section draws: the whole section
@@ -60,10 +61,10 @@ hides nothing behind it; block entities that draw themselves still draw. All mod
 intersection. Fluid heights and flow still use the captured states; visibility only affects which faces draw.
 
 `keep` refuses the first record beyond one section's worth. A returned answer is checked whole: a cell outside
-0 to 15, a face mask above 63 or a cell named twice refuses the answer with one log line
+0 to 15, a face mask above 63 or a cell named twice refuses the answer. Each refusal is logged
 (`E_SECTION_VISIBILITY_...`), and the section draws as if the mod had not answered. A listener that panics is switched off
-for this hook for the session, alone: the other listeners are asked as before, and every section
-is asked again without the one that failed, so no mask it gave earlier stays. The decision is asked on the client world thread, so
+for this hook for the session, alone, with a log and an error toast naming the mod. The other listeners are asked
+as before, and every section is asked again without the one that failed, so no mask it gave earlier stays. The decision is asked on the client world thread, so
 it may read the `ClientHost`; it changes when the section meshes again, which a mod asks for with
 `ClientHost::refresh_render_visibility`, never by polling."#]
     #[hook(
