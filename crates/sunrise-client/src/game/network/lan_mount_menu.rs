@@ -183,7 +183,7 @@ impl Game<'_> {
             self.lan_place_back(gi, vec![carried]);
         }
         if window.is_some() {
-            self.player_menu_closing(conn);
+            self.player_menu_closing(conn, true);
         }
         true
     }

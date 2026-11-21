@@ -1908,7 +1908,7 @@ impl Game<'_> {
     pub(super) fn lan_crafting_closed(&mut self, conn: u32, window: Option<i32>) -> bool {
         let closed = self.lan_crafting_removed(conn, window, MenuRemoval::Live);
         if closed && window != Some(0) {
-            self.player_menu_closing(conn);
+            self.player_menu_closing(conn, true);
         }
         closed
     }

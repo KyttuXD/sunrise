@@ -1135,7 +1135,7 @@ impl Game<'_> {
                 self.lan_place_back(gi, vec![carried]);
             }
             if window.is_some() {
-                self.player_menu_closing(conn);
+                self.player_menu_closing(conn, true);
                 return true;
             }
         }
@@ -1163,7 +1163,7 @@ impl Game<'_> {
             self.lan_place_back(gi, carried.into_iter().chain(inputs).collect());
         }
         if window.is_some() {
-            self.player_menu_closing(conn);
+            self.player_menu_closing(conn, true);
         }
         true
     }

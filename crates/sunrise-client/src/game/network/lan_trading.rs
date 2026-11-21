@@ -607,7 +607,7 @@ impl Game<'_> {
         }
         self.merchant_closed(&mut gm.merchant);
         if window.is_some() {
-            self.player_menu_closing(conn);
+            self.player_menu_closing(conn, true);
         }
         true
     }

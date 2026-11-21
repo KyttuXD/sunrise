@@ -133,7 +133,7 @@ mod tests {
                 }
                 game.world.game_time = start + 10;
                 game.tick_mod_container_viewers();
-                game.player_menu_closing(12);
+                game.player_menu_closing(12, true);
                 assert_eq!(&notices.lock().unwrap()[before..], [(0, 1), (1, 1)]);
 
                 // A recheck for the old cabinet must not report on its same-type replacement.
@@ -143,7 +143,7 @@ mod tests {
                 game.world.block_entities.replace(pos, entity).unwrap();
                 game.world.game_time = start + 15;
                 game.tick_mod_container_viewers();
-                game.player_menu_closing(13);
+                game.player_menu_closing(13, true);
                 assert_eq!(notices.lock().unwrap().len(), before_notices);
                 assert_eq!(events.lock().unwrap().len(), before_events);
                 assert!(game.mod_container_viewers.is_empty());
@@ -215,7 +215,7 @@ mod tests {
                 );
                 game.player_menu_opening(13);
                 assert_eq!(&notices.lock().unwrap()[before..], [(0, 1), (0, 1)]);
-                game.player_menu_closing(13);
+                game.player_menu_closing(13, true);
                 assert_eq!(&notices.lock().unwrap()[before + 2..], [(1, 0), (1, 0)]);
                 assert_eq!(notices.lock().unwrap().last(), Some(&(1, 0)));
                 assert_eq!(

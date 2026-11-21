@@ -826,7 +826,7 @@ impl Game<'_> {
                     self.lan_place_back(gi, vec![carried]);
                 }
                 if closing {
-                    self.player_menu_closing(conn);
+                    self.player_menu_closing(conn, true);
                 }
             }
             S::ChatCommand(c) => self.guest_chat_command(conn, &c.command),
