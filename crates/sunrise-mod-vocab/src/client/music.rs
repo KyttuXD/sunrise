@@ -1,7 +1,7 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
-/// `Music`: a sound event and the delay range (ticks) before it starts.
+/// Situational music: a sound event and the delay range (ticks) before it starts.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -12,6 +12,7 @@ pub struct Music {
     pub replace_current_music: bool,
 }
 impl Music {
+    /// Choose a sound event by its namespaced ID from `sounds.json`.
     pub fn new(sound: &str, min_delay: i32, max_delay: i32, replace_current_music: bool) -> Self {
         Self {
             sound: sound.to_owned(),
@@ -47,19 +48,6 @@ impl Music {
     /// `Musics.GAME`.
     pub fn game() -> Self {
         Self::new("minecraft:music.game", 12000, 24000, false)
-    }
-    /// The built-in situations the Music page lists, in its order: the lang key
-    /// of the heading the page's group shows and the music that situation plays.
-    pub fn builtin() -> [(&'static str, Music); 7] {
-        [
-            ("sunrise.pages.music.menu", Self::menu()),
-            ("sunrise.pages.music.overworld", Self::game()),
-            ("sunrise.pages.music.creative", Self::creative()),
-            ("sunrise.pages.music.underwater", Self::under_water()),
-            ("sunrise.pages.music.end", Self::end()),
-            ("sunrise.pages.music.boss", Self::end_boss()),
-            ("sunrise.pages.music.credits", Self::credits()),
-        ]
     }
     /// `Music.CODEC`.
     // hidden: a game-side helper, not part of the mod surface

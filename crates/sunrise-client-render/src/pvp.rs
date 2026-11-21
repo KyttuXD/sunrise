@@ -675,7 +675,12 @@ fn world_label() -> String {
     crate::lang::get_or("sunrise.pvp.view.world", "World's")
 }
 fn corner_label(c: Corner) -> String {
-    crate::lang::get_or(&format!("sunrise.pvp.corner.{}", c.name()), c.label())
+    crate::lang::get(match c {
+        Corner::TopLeft => "sunrise.pvp.corner.top_left",
+        Corner::TopRight => "sunrise.pvp.corner.top_right",
+        Corner::BottomLeft => "sunrise.pvp.corner.bottom_left",
+        Corner::BottomRight => "sunrise.pvp.corner.bottom_right",
+    })
 }
 
 /// Smaller changes to what vanilla shows.
@@ -1785,10 +1790,6 @@ mod tests {
         for header in rows().into_iter().filter_map(Result::err) {
             assert!(en.get(header).is_some(), "{header}");
         }
-        for c in Corner::ALL {
-            let key = format!("sunrise.pvp.corner.{}", c.name());
-            assert_eq!(en.get(&key), Some(c.label()), "{key}");
-        }
         let names = Colour::ALL.map(|c| (format!("sunrise.pvp.colour.{}", c.name()), c.english()));
         let shapes = Shape::ALL.map(|c| (format!("sunrise.pvp.shape.{}", c.name()), c.english()));
         let times = ViewTime::ALL.map(|c| (format!("sunrise.pvp.time.{}", c.name()), c.english()));
@@ -1798,6 +1799,42 @@ mod tests {
         for (key, english) in names.iter().chain(&shapes).chain(&times).chain(&weathers) {
             assert_eq!(en.get(key), Some(*english), "{key}");
         }
+    }
+
+    #[test]
+    fn hud_corner_setting_uses_the_active_language() {
+        use crate::lang::{Language, scoped};
+
+        let labels = || {
+            let mut pvp = Pvp::default();
+            [
+                Corner::TopLeft,
+                Corner::TopRight,
+                Corner::BottomLeft,
+                Corner::BottomRight,
+            ]
+            .map(|corner| {
+                pvp.hud.fps_corner = corner;
+                Opt::HudFpsCorner.value(&pvp).unwrap()
+            })
+        };
+        let (english, missing) = scoped(Language::load(&[], "en_us"), labels);
+        assert!(missing.is_empty(), "{missing:?}");
+        assert_eq!(
+            english,
+            ["Top left", "Top right", "Bottom left", "Bottom right"]
+        );
+
+        let partial = Language::of(
+            "fr_fr",
+            [(
+                "sunrise.pvp.corner.top_left".into(),
+                "En haut à gauche".into(),
+            )],
+        );
+        let (localized, _) = scoped(partial, labels);
+        assert_eq!(localized[0], "En haut à gauche");
+        assert_eq!(localized[1], "sunrise.pvp.corner.top_right");
     }
 
     #[test]

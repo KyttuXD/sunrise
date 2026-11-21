@@ -4,7 +4,7 @@ use super::Game;
 use sunrise_client::{
     blocks::Fluid,
     music::{BackgroundMusic, Music, MusicFrequency, Situation},
-    options_ui::MusicGroup,
+    options_ui::{MusicGroup, music_track_groups},
     random_source,
     sound_engine::{SoundInstance, Sounds, TickContext},
 };
@@ -59,9 +59,9 @@ impl Game<'_> {
         }
     }
     /// The Music page's groups: every track the loaded `sounds.json` can play,
-    /// by situation (see `music::track_groups`).
+    /// grouped by the settings page.
     pub(super) fn music_groups(&self) -> Vec<MusicGroup> {
-        sunrise_client::music::track_groups(&self.audio.engine.registry)
+        music_track_groups(&self.audio.engine.registry)
     }
     /// A Music page row: play this track of `event` now.
     pub(super) fn play_music_track(&mut self, event: &str, track: &str) {

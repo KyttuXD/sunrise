@@ -88,6 +88,15 @@ level's work and on one worker at a time, and their meshes stay 5 seconds after 
 names the level. Once views of a viewed level are drawn, such a view draws the sections
 meshed so far and nothing where a section is not meshed yet.
 
+## Choosing situational music
+
+In `Hooks::music`, choose an individual vanilla definition such as `Music::menu()` or
+`Music::game()`, or construct one with `Music::new(sound_event, min_delay_ticks,
+max_delay_ticks, replace_current_music)`. Give a custom definition the namespaced ID of an
+event in your `sounds.json`. For music layered over that selection, use `Hooks::music_layers`.
+If your mod offers a music picker, pair the definitions with your own translation keys and put
+them in the order your screen needs.
+
 ## Muffling sounds
 
 `ClientHost::muffle_sounds(amount, lowpass, ticks, exempt)` temporarily muffles the sound output, for example to accompany ringing ears after a nearby blast:

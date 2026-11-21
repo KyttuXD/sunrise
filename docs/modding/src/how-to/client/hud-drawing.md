@@ -59,6 +59,11 @@ installed body nor Post runs. For work that must happen even when the HUD is hid
 
 ## Status rows and fixed text positions
 
+To anchor an overlay to a corner, use `draw.size()` for the GUI size. For example, the top-right
+origin for a box of width `box_width` and a margin `pad` is `[width - box_width - pad, pad]`.
+For a corner setting, keep the corner choice separate from its display text: assign each choice
+one of your mod's language keys and display it with `Text::translate(key, vec![])`.
+
 `minecraft:player_health` is still a single GUI layer for hearts, armour, food and air. Cancelling it
 in `gui_layer_pre` hides all four. `health_hud` replaces their combined drawing, not the separate
 `minecraft:vehicle_health` layer.

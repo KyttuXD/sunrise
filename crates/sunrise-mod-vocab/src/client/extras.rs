@@ -18,20 +18,13 @@ impl Corner {
         Corner::BottomLeft,
         Corner::BottomRight,
     ];
+    /// The stable key for this corner, not display text.
     pub fn name(self) -> &'static str {
         match self {
             Corner::TopLeft => "top_left",
             Corner::TopRight => "top_right",
             Corner::BottomLeft => "bottom_left",
             Corner::BottomRight => "bottom_right",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Corner::TopLeft => "Top left",
-            Corner::TopRight => "Top right",
-            Corner::BottomLeft => "Bottom left",
-            Corner::BottomRight => "Bottom right",
         }
     }
     // hidden: a game-side helper, not part of the mod surface

@@ -1,0 +1,8 @@
+ids = ["handle:Music::builtin", "handle:Corner::label"]
+why = """
+The Music settings page owns its headings and order, and the HUD settings page translates its corner names. Vanilla 26.3's Musics and MusicManager.tick and NeoForge's SelectMusicEvent deal in sound events, not picker entries. Vanilla OptionInstance constructs translatable captions, and GuiGraphicsExtractor.guiWidth/guiHeight (also accessible from NeoForge RenderGuiEvent.getGuiGraphics) give overlays their GUI dimensions without assigning corner labels.
+"""
+migrate = """
+Replace Music::builtin() with calls to the definitions your picker needs: Music::menu(), Music::game(), Music::creative(), Music::under_water(), Music::end(), Music::end_boss(), and Music::credits() give the same seven situations in the old order. Pair them with translation keys from your own mod. For a custom event, use Music::new(sound_event, min_delay_ticks, max_delay_ticks, replace_current_music), giving it the ID from your sounds.json. The music and music_layers hooks are unchanged.
+Replace corner.label() with a match on the overlay setting's four choices that returns one of your own keys, for example my_mod.hud.top_left, my_mod.hud.top_right, my_mod.hud.bottom_left or my_mod.hud.bottom_right. Put those keys in assets/my_mod/lang/en_us.json (and other language files) and display the label as mod_api::Text::translate(key, vec![]). Keep the choice as geometry: use draw.size() to get [width, height] in GUI pixels and subtract the overlay width from a right edge or its height from a bottom edge to obtain the origin, accounting for any margin.
+"""
