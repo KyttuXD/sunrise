@@ -105,7 +105,11 @@ pub trait PlayerWorldBackendMut {
         areas: &[ChunkArea],
     ) -> Result<(), ChunkAreaRefusal>;
     /// Side: both.
-    /// Simulate one client movement tick for this server player without changing the player. Refuses stale, absent, dead, spectator or riding players and invalid input.
+    /// Simulate one client movement tick for this server player without changing the player.
+    /// The simulation synchronously runs `entity_size` for the dimensions it queries and
+    /// uses its answers on the simulated body only. A size query is not a notification that
+    /// the live player committed a pose or size.
+    /// Refuses stale, absent, dead, spectator or riding players and invalid input.
     #[access(WorldOnly)]
     fn player_simulate_move(
         &mut self,

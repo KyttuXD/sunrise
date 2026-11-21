@@ -596,34 +596,97 @@ impl<'a, 'w> Finder<'a, 'w> {
     fn within_bb(&self, x: i32, y: i32, z: i32) -> Vec<PathType> {
         let mut out = Vec::with_capacity(4);
         let mp = self.mob.block_position();
-        for dx in 0..self.entity_width {
-            for dy in 0..self.entity_height {
-                for dz in 0..self.entity_depth {
-                    let mut t = self.path_type(
-                        x.saturating_add(dx),
-                        y.saturating_add(dy),
-                        z.saturating_add(dz),
-                    );
-                    if t == PathType::DoorWoodClosed
-                        && self.mob.can_open_doors
-                        && self.mob.can_pass_doors
-                    {
-                        t = PathType::WalkableDoor;
-                    }
-                    if t == PathType::DoorOpen && !self.mob.can_pass_doors {
-                        t = PathType::Blocked;
-                    }
-                    if t == PathType::Rail
-                        && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
-                    {
-                        t = PathType::UnpassableRail;
-                    }
-                    if !out.contains(&t) {
-                        out.push(t);
+        let mut classify = |x, y, z| {
+            let mut t = self.path_type(x, y, z);
+            if t == PathType::DoorWoodClosed && self.mob.can_open_doors && self.mob.can_pass_doors {
+                t = PathType::WalkableDoor;
+            }
+            if t == PathType::DoorOpen && !self.mob.can_pass_doors {
+                t = PathType::Blocked;
+            }
+            if t == PathType::Rail
+                && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
+                && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
+            {
+                t = PathType::UnpassableRail;
+            }
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        };
+        let hi_x = x.saturating_add(self.entity_width - 1);
+        let hi_y = y.saturating_add(self.entity_height - 1);
+        let hi_z = z.saturating_add(self.entity_depth - 1);
+        let span = |min: i32, max: i32| (i64::from(max) - i64::from(min) + 1) as u128;
+        let volume = span(x, hi_x) * span(y, hi_y) * span(z, hi_z);
+        let world = self.w.world;
+        let floor = world.bottom_y();
+        let ceiling = world.top_y();
+        let resident_volume = world.chunks.len() as u128 * 16 * 16 * span(floor, ceiling);
+        // WalkNodeEvaluator reads its own cell and (for open cells) the one below. Its
+        // neighbor scan can affect only cells supported by a resident block. FlyNodeEvaluator
+        // also looks at neighbors of unsupported air, so it includes the neighboring columns.
+        // Leave positional air parts in control whenever they can answer for absent space.
+        let fly = self.eval == Evaluator::Fly;
+        let low = if fly { floor - 1 } else { floor };
+        let (lo_y, upper_y) = (y.max(low), hi_y.min(ceiling));
+        let clipped_volume = if lo_y <= upper_y {
+            span(x, hi_x) * span(lo_y, upper_y) * span(z, hi_z)
+        } else {
+            0
+        };
+        let column_volume = resident_volume * if fly { 9 } else { 1 };
+        let block_air = [world.air, sunrise_world::registry::BlockStateId(0)];
+        let can_skip_air = (volume > column_volume || volume > clipped_volume)
+            && block_air.into_iter().all(|state| {
+                self.w.data.path_type(state) == PathType::Open
+                    && self
+                        .w
+                        .mob_hooks
+                        .is_none_or(|hooks| !hooks.path_type_varies_at(state))
+            });
+        if !can_skip_air || clipped_volume <= column_volume {
+            let (lo, hi) = if can_skip_air {
+                (lo_y, upper_y)
+            } else {
+                (y, hi_y)
+            };
+            for xx in x..=hi_x {
+                for yy in lo..=hi {
+                    for zz in z..=hi_z {
+                        classify(xx, yy, zz);
                     }
                 }
             }
+            if can_skip_air && clipped_volume < volume && !out.contains(&PathType::Open) {
+                out.push(PathType::Open);
+            }
+            return out;
+        }
+        let mut covered = 0;
+        let mut column = |(cx, cz): (i32, i32)| {
+            if !(x >> 4..=hi_x >> 4).contains(&cx) || !(z >> 4..=hi_z >> 4).contains(&cz) {
+                return;
+            }
+            let (bx, bz) = (cx * 16, cz * 16);
+            let (lx, ux) = (x.max(bx), hi_x.min(bx + 15));
+            let (lz, uz) = (z.max(bz), hi_z.min(bz + 15));
+            for xx in lx..=ux {
+                for yy in lo_y..=upper_y {
+                    for zz in lz..=uz {
+                        classify(xx, yy, zz);
+                    }
+                }
+            }
+            covered += span(lx, ux) * span(lo_y, upper_y) * span(lz, uz);
+        };
+        if fly {
+            world.chunks.keys_with_neighbors().for_each(&mut column);
+        } else {
+            world.chunks.keys().copied().for_each(&mut column);
+        }
+        if covered < volume && !out.contains(&PathType::Open) {
+            out.push(PathType::Open);
         }
         out
     }

@@ -1,6 +1,6 @@
 use super::*;
 
-impl Game<'_> {
+impl NativeHookHost<'_> {
     /// `EntityEvent.Size`: the size vanilla's `Entity.refreshDimensions` just computed for
     /// `entity` in `pose`, before its box and eyes use it (`modding/entity_sizes.rs`).
     pub(in crate::game) fn native_entity_size(

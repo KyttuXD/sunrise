@@ -501,11 +501,18 @@ struct MoveTrample {
 }
 
 impl Mob {
+    pub(super) fn refresh_size(&mut self, w: &MobWorld<'_>) {
+        if let Some(hooks) = w.mob_hooks {
+            hooks.refresh_entity_size(self, w);
+        }
+    }
+
     /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
     /// `fudgePositionAfterSizeChange` moves the mob to the free spot nearest
     /// its old centre where the bigger box fits (`findFreePosition`), or
     /// failing that, one that fits at the old height.
     pub fn fudge_position_after_size_change(&mut self, w: &MobWorld, old_w: f64, old_h: f64) {
+        self.refresh_size(w);
         let (new_w, new_h, _) = self.dims();
         let small = new_w <= 4.0 && new_h <= 4.0;
         if self.age == 0 || self.no_physics() || !small || !(new_w > old_w || new_h > old_h) {

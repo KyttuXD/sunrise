@@ -271,6 +271,7 @@ impl Game<'_> {
                 self.player_state.attachments.retire();
                 self.player = Some(player);
                 self.bind_local_player_residency();
+                self.refresh_player_size(self.own_entity_id() as u32);
                 self.input_player_replaced();
                 self.sway = Default::default();
                 self.eye = 1.62;

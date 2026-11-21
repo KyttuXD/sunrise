@@ -1,1 +1,5 @@
 sunrise-client game::entity_sizes::tests::guest_pose_queries_only_active_vanilla_candidates lib daily resources
+sunrise-client game::entity_sizes::tests::oversized_hook_answer_reaches_navigation_and_the_wither_sweep lib daily resources
+sunrise-client game::entity_sizes::tests::a_large_candidate_checks_the_entire_box_and_only_commits_the_winning_answer lib daily resources
+sunrise-client game::entity_sizes::tests::guest_pose_fit_respects_solid_entities_and_ticking_spectators lib daily resources
+sunrise-client game::entity_sizes::tests::a_goat_uses_its_new_answer_before_resize_relocation lib daily resources

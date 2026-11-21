@@ -1231,6 +1231,7 @@ fn tick_until_pause(
     if m.removed {
         return TickProgress::Complete(false);
     }
+    m.refresh_size(w);
     // ServerLevel.tick checks despawning before ticking the entity.
     if !check_despawn(m, w) {
         m.removed = true;
@@ -2823,6 +2824,7 @@ fn ai_step_after_goals(
     events: &mut Vec<MobEvent>,
     pause_trample: bool,
 ) -> Result<(), super::living::TravelTrample> {
+    m.refresh_size(w);
     m.handle_jumping(w);
     let input = Vec3::new(
         f64::from(m.ai.xxa),
@@ -2865,6 +2867,7 @@ fn finish_ai_step(
     animal_step(m, events);
     burn_undead(m, w, events);
     species_ai_step(m, w, level, events);
+    m.refresh_size(w);
 }
 /// The end of `LivingEntity.aiStep`: a mob that water hurts (an enderman, a
 /// blaze, a snow golem) takes 1 drowning damage in water or rain

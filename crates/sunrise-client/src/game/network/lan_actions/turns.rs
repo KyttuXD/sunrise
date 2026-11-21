@@ -248,6 +248,7 @@ impl Game<'_> {
         let g = &host.hub.guests[i];
         motion.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
         motion.entity_id = g.entity_id;
+        motion.spectator = g.spectator();
         motion.ground.on_ground = g.on_ground;
         motion.yaw = g.yaw;
         motion.pitch = g.pitch;
@@ -465,6 +466,9 @@ impl Game<'_> {
         // entity through a level change, with its attributes and effects.
         if fresh {
             self.apply_effect_status();
+        }
+        if let Some(id) = self.player.as_ref().map(|p| p.entity_id as u32) {
+            self.refresh_player_size(id);
         }
         self.update_totem_ready();
         self.entity_reach = self.interaction_range("minecraft:entity_interaction_range", 3.0, 5.0);

@@ -443,41 +443,38 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
     if m.extra.counter2 > 0 {
         m.extra.counter2 -= 1;
         if m.extra.counter2 == 0 && w.can_grief(m.id) {
-            let width = (m.width() / 2.0 + 1.0).floor() as i32;
-            let height = m.height().floor() as i32;
+            let width = sunrise_core::mth::floor_f32(m.width() / 2.0 + 1.0);
+            let height = sunrise_core::mth::floor_f32(m.height());
             let b = [
-                m.position.x.floor() as i32,
-                m.position.y.floor() as i32,
-                m.position.z.floor() as i32,
+                sunrise_core::mth::floor(m.position.x),
+                sunrise_core::mth::floor(m.position.y),
+                sunrise_core::mth::floor(m.position.z),
             ];
+            let sweep = BreakSweep::new(b, width, height);
             let mut destroyed = false;
-            for x in b[0] - width..=b[0] + width {
-                for y in b[1]..=b[1] + height {
-                    for z in b[2] - width..=b[2] + width {
-                        let name = w.block_name(x, y, z);
-                        let immune = w
-                            .block_tags
-                            .get("minecraft:wither_immune")
-                            .is_some_and(|t| t.contains(name));
-                        // WitherBoss.canDestroy, or what the block's parts answer.
-                        if name != "minecraft:air"
-                            && !name.ends_with("_air")
-                            && w.can_entity_destroy(m.id, [x, y, z], !immune)
-                        {
-                            events.push(MobEvent::BreakBlock {
-                                pos: [x, y, z],
-                                drop: true,
-                                by: Some(m.id),
-                                breaker: None,
-                            });
-                            // destroyBlock is true when setBlock changed the
-                            // cell: a liquid is already its fluid's block.
-                            let state = w.world.block(x, y, z);
-                            destroyed |= !w.facts.get(state).has_class("LiquidBlock");
-                        }
-                    }
+            sweep.each(w, |[x, y, z]| {
+                let name = w.block_name(x, y, z);
+                let immune = w
+                    .block_tags
+                    .get("minecraft:wither_immune")
+                    .is_some_and(|t| t.contains(name));
+                // WitherBoss.canDestroy, or what the block's parts answer.
+                if name != "minecraft:air"
+                    && !name.ends_with("_air")
+                    && w.can_entity_destroy(m.id, [x, y, z], !immune)
+                {
+                    events.push(MobEvent::BreakBlock {
+                        pos: [x, y, z],
+                        drop: true,
+                        by: Some(m.id),
+                        breaker: None,
+                    });
+                    // destroyBlock is true when setBlock changed the
+                    // cell: a liquid is already its fluid's block.
+                    let state = w.world.block(x, y, z);
+                    destroyed |= !w.facts.get(state).has_class("LiquidBlock");
                 }
-            }
+            });
             if destroyed {
                 // Level event 1022, once the game has broken a block.
                 let start = events.len();
@@ -495,6 +492,73 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
         m.heal(w.loop_context, 1.0);
     }
 }
+/// `BlockPos.betweenClosed`, including the signed Java cursor and wrapped strides. A
+/// huge iterator can visit billions of air cells; invert it at resident non-air positions
+/// instead when that enumerates fewer cells, keeping the iterator's original order.
+struct BreakSweep {
+    start: [i32; 3],
+    width: i32,
+    height: i32,
+    end: u32,
+}
+
+impl BreakSweep {
+    fn new([x, y, z]: [i32; 3], radius: i32, above: i32) -> Self {
+        let start = [x.wrapping_sub(radius), y, z.wrapping_sub(radius)];
+        let width = x
+            .wrapping_add(radius)
+            .wrapping_sub(start[0])
+            .wrapping_add(1);
+        let height = y.wrapping_add(above).wrapping_sub(y).wrapping_add(1);
+        Self {
+            start,
+            width,
+            height,
+            end: width.wrapping_mul(height).wrapping_mul(width) as u32,
+        }
+    }
+
+    fn position(&self, index: i32) -> [i32; 3] {
+        let [x, y, z] = self.start;
+        let slice = index.wrapping_div(self.width);
+        [
+            x.wrapping_add(index.wrapping_rem(self.width)),
+            y.wrapping_add(slice.wrapping_rem(self.height)),
+            z.wrapping_add(slice.wrapping_div(self.height)),
+        ]
+    }
+
+    fn each(&self, w: &MobWorld<'_>, mut visit: impl FnMut([i32; 3])) {
+        // The crossover is a work comparison, not a maximum valid sweep size.
+        let dense_world_cells =
+            (w.world.chunks.len() as u64).saturating_mul(w.world.layout().sections() as u64 * 4096);
+        if u64::from(self.end) <= dense_world_cells {
+            for index in 0..self.end {
+                visit(self.position(index as i32));
+            }
+            return;
+        }
+        let mut resident = Vec::new();
+        for chunk in w.world.chunks.values() {
+            for p in chunk.blocks_where(|state| !w.facts.is_air(state)) {
+                let dx = p.x.wrapping_sub(self.start[0]);
+                let dy = p.y.wrapping_sub(self.start[1]);
+                let dz = p.z.wrapping_sub(self.start[2]);
+                let slice = dz.wrapping_mul(self.height).wrapping_add(dy);
+                let index = slice.wrapping_mul(self.width).wrapping_add(dx);
+                let pos = [p.x, p.y, p.z];
+                if (index as u32) < self.end && self.position(index) == pos {
+                    resident.push((index as u32, pos));
+                }
+            }
+        }
+        resident.sort_unstable_by_key(|&(index, _)| index);
+        for (_, pos) in resident {
+            visit(pos);
+        }
+    }
+}
+
 /// `WitherBoss.hurtServer` filter: not while charging, no direct AbstractArrow
 /// (including ThrownTrident) once powered, nothing from the undead.
 pub fn accepts(

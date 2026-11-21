@@ -242,6 +242,46 @@ impl PlayerMotion {
         self.local_crouching || (visually_swimming && !self.fluids.was_touching_water)
     }
 }
+/// LocalPlayer.aiStep tests crouching before changing its input for this tick.
+pub fn local_crouching(
+    flying: bool,
+    swimming: bool,
+    shifting: bool,
+    sleeping: bool,
+    mut can_fit: impl FnMut(Pose) -> Result<bool>,
+) -> Result<bool> {
+    Ok(!flying
+        && !swimming
+        && can_fit(Pose::Crouching)?
+        && (shifting || (!sleeping && !can_fit(Pose::Standing)?)))
+}
+
+/// Player.updatePlayerPose. Keep the result of the successful check that selects the pose.
+/// The same non-current pose can be queried twice; each query resolves its own dimensions.
+pub fn select_player_pose<A>(
+    desired: Pose,
+    spectator_or_passenger: bool,
+    mut fit: impl FnMut(Pose) -> Result<(bool, A)>,
+) -> Result<Option<(Pose, Option<A>)>> {
+    let (swimming_fits, swimming) = fit(Pose::Swimming)?;
+    if !swimming_fits {
+        return Ok(None);
+    }
+    if spectator_or_passenger {
+        return Ok(Some((desired, None)));
+    }
+    let (desired_fits, answer) = fit(desired)?;
+    if desired_fits {
+        return Ok(Some((desired, Some(answer))));
+    }
+    let (crouching_fits, answer) = fit(Pose::Crouching)?;
+    if crouching_fits {
+        Ok(Some((Pose::Crouching, Some(answer))))
+    } else {
+        Ok(Some((Pose::Swimming, Some(swimming))))
+    }
+}
+
 impl MotionWorld<'_, '_, '_> {
     pub fn can_fit_pose(&mut self, pose: Pose) -> Result<bool> {
         let bounds = self
@@ -253,29 +293,27 @@ impl MotionWorld<'_, '_, '_> {
     /// LocalPlayer.aiStep computes crouching BEFORE KeyboardInput.tick, using
     /// the old shift input. This is distinct from Entity's current pose.
     pub fn update_local_crouching(&mut self) -> Result<()> {
-        self.player.local_crouching = !self.player.flying
-            && !self.player.swimming
-            && self.can_fit_pose(Pose::Crouching)?
-            && (self.player.shift_key_down
-                || (!self.player.sleeping && !self.can_fit_pose(Pose::Standing)?));
+        self.player.local_crouching = local_crouching(
+            self.player.flying,
+            self.player.swimming,
+            self.player.shift_key_down,
+            self.player.sleeping,
+            |pose| self.can_fit_pose(pose),
+        )?;
         Ok(())
     }
     /// Dry Player.updatePlayerPose after movement: crawl when neither standing
     /// nor crouching fits; leave the current pose if even crawling cannot fit.
     pub fn update_player_pose(&mut self) -> Result<()> {
-        if !self.can_fit_pose(Pose::Swimming)? {
-            return Ok(());
+        let chosen = select_player_pose(
+            self.player.desired_pose(),
+            self.player.spectator || self.player.is_passenger,
+            |pose| self.can_fit_pose(pose).map(|fits| (fits, ())),
+        )?;
+        if let Some((pose, _)) = chosen {
+            self.player.set_pose(pose)?;
         }
-        let desired = self.player.desired_pose();
-        let pose =
-            if self.player.spectator || self.player.is_passenger || self.can_fit_pose(desired)? {
-                desired
-            } else if self.can_fit_pose(Pose::Crouching)? {
-                Pose::Crouching
-            } else {
-                Pose::Swimming
-            };
-        self.player.set_pose(pose)
+        Ok(())
     }
     /// The end of a server's copy of a player's tick (`ServerPlayer.doTick`
     /// runs `Player.tick`): `LivingEntity.aiStep` counts a Riptide spin down,

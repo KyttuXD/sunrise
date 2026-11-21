@@ -849,6 +849,10 @@ impl Game<'_> {
         if self.player.is_none() {
             return Ok(None);
         }
+        let local_entity_id = self.remote.as_ref().map(|remote| remote.entity_id as u32);
+        if let Some(id) = local_entity_id {
+            self.refresh_player_size(id);
+        }
         // The LevelLoadingScreen takes the input until the level is ready.
         let loading = self
             .remote
@@ -921,6 +925,9 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         self.sync_player_body();
+        if let Some(id) = local_entity_id {
+            self.refresh_player_size(id);
+        }
         // LivingEntity.tickDeath: the local player counts its deathTime once
         // per client tick while dead (the camera's death roll and zoom).
         if self.screen == Screen::Dead {
@@ -939,7 +946,6 @@ impl Game<'_> {
         }
         let walks = self.can_move_local_player();
         let section_scope = self.player_section_scope();
-        let local_entity_id = self.remote.as_ref().map(|remote| remote.entity_id as u32);
         let Some(was_gliding) = self.player.as_ref().map(|p| p.fall_flying) else {
             return Ok(None);
         };
@@ -1449,9 +1455,6 @@ impl Game<'_> {
             self.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player });
         }
         let result = self.tick_local_player(entity_collisions, sprint_window);
-        // `EntityEvent.Size` if pose or vanilla size changed outside `update_player_pose_with_sizes`
-        // (initial tick, sleeping, dead, or a server-synced pose/scale edit).
-        self.native_local_player_size();
         if let Some(player) = player {
             self.native_player_tick_post(mod_api::__private::PlayerTickPostCall { player });
         }

@@ -84,6 +84,7 @@ impl Game<'_> {
                     mod_api::HookId::EntityMobGriefing,
                     mod_api::HookId::LivingVisibility,
                     mod_api::HookId::LivingChangeTarget,
+                    mod_api::HookId::EntitySize,
                 ]
                 .into_iter()
                 .any(mod_api::__private::listened)
@@ -97,7 +98,8 @@ impl Game<'_> {
             .then_some(self as &dyn sunrise_client::mobs::MobHooks),
             goal_host: (self.native_authoritative()
                 && (mod_api::__private::has_entity_parts()
-                    || mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)))
+                    || mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)
+                    || mod_api::__private::listened(mod_api::HookId::EntitySize)))
             .then_some(self as &dyn sunrise_client::mobs::part_goals::GoalHost),
             asks_animal_tame: self.remote.is_none()
                 && mod_api::__private::listened(mod_api::HookId::AnimalTame),
