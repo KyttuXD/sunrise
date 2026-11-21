@@ -24,5 +24,5 @@ In Hooks::mod_mismatch, replace event.resolved.push(mod_id.to_owned().into()) wi
 
 In Hooks::recipe_property_sets, replace event.additions.push(RecipePropertyAddition::new(set, items)) with event.register(RecipePropertyAddition::new(set, items)). A later call to register still adds items to an existing set. Do not read, replace or remove earlier additions.
 
-Hooks::register_render_pipelines still calls event.register(pipeline) unchanged. If your manifest pins these hooks, use hook_version = 3 for mod_mismatch and recipe_property_sets, and hook_version = 4 for register_render_pipelines.
+Keep event.register(pipeline) unchanged in Hooks::register_render_pipelines. Rebuild with cargo sunrise-mod build against the new SDK to refresh uses.json; the SDK now records mod_mismatch and recipe_property_sets at version 3 and register_render_pipelines at version 4. No manual hook version key is needed.
 """
