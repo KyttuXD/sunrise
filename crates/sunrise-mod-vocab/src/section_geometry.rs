@@ -59,7 +59,8 @@ pub struct SectionQuad {
     /// Corners in blocks relative to the section's lowest corner. Finite positions may extend
     /// beyond the section, but the quad is still rebuilt and unloaded with this section.
     pub positions: [[f32; 3]; 4],
-    /// Finite coordinates relative to the sprite. Zero and one mark its opposite edges.
+    /// Finite coordinates relative to the sprite. Zero and one mark its opposite edges;
+    /// coordinates are not restricted to that interval or rounded to model UV steps.
     pub uvs: [[f32; 2]; 4],
     /// ARGB the sprite's texels are multiplied by; `0xFFFFFFFF` leaves them as they are.
     pub color: u32,

@@ -1007,11 +1007,13 @@ mod tests {
             .iter()
             .map(|r| std::array::from_fn(|c| packed::packed_vertex(&r.unwrap(), c)))
             .collect();
-        // A quad off the block grid keeps its vertices (`packed::FULL`).
+        // A quad off the block grid keeps its vertices (`packed::FULL`), including a mod's
+        // sprite-relative coordinates outside the range or steps of the compact UV format.
         let mut spill = quads[5];
         for (v, y) in spill.iter_mut().zip([8.5, 3.25, 0.125, 15.75]) {
             v.pos[1] = y;
         }
+        spill[0].uv = [-0.250_001, 2.75];
         quads.push(spill);
         records.push(None);
         let compact = packed::place(&records, &quads);

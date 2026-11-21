@@ -56,10 +56,11 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
     let mut p = [[0u32; 3]; 4];
     for (to, v) in p.iter_mut().zip(quad) {
         for (c, &x) in to.iter_mut().zip(&v.pos) {
-            if !(0.0..=16.0).contains(&x) || x.fract() != 0.0 {
+            let raw = x as u32;
+            if raw > 16 || x.to_bits() != (raw as f32).to_bits() {
                 return None;
             }
-            *c = x as u32;
+            *c = raw;
         }
     }
     let axis = (0..3).find(|&a| p.iter().all(|c| c[a] == p[0][a]))?;
@@ -99,7 +100,7 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
         for k in 0..2 {
             let steps = v.uv[k] * 32.0;
             let raw = steps as u32;
-            if raw > 63 || steps != raw as f32 {
+            if raw > 63 || steps.to_bits() != (raw as f32).to_bits() {
                 return None;
             }
             uv[k] = raw;
@@ -385,7 +386,7 @@ mod tests {
         assert!(pack_quad(&slab, TINT).is_none());
         // A UV between the 1/32 steps.
         let mut uv = top([0, 1, 2, 3]);
-        uv[2].uv[0] += 1.0 / super::UV_STEPS;
+        uv[2].uv[0] += 1.0 / crate::mesher::UV_STEPS;
         assert!(pack_quad(&uv, TINT).is_none());
         // Light between the steps of 4.
         let mut light = top([0, 1, 2, 3]);

@@ -1,7 +1,7 @@
 //! The section geometry design's acceptance cases (docs/design/mod-api/section-geometry.md)
 //! that the mesher alone decides.
 use super::mod_geometry::Renderer;
-use super::mod_tint_tests::{resources, tint_values};
+use super::mod_tint_tests::resources;
 use super::*;
 use mod_api::{LightLayer, SectionGeometry, SectionGeometryContext, SectionQuad, SectionQuadError};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -55,7 +55,7 @@ impl SectionGeometry for Mixed {
         assert_eq!(quads.add(GOLD, bad), Err(SectionQuadError::NonFiniteUv));
         let mut outside = quad(false);
         outside.positions[1][0] = 17.25;
-        outside.uvs[0] = [-0.25, 1.25];
+        outside.uvs[0] = [-0.250_001, 2.75];
         quads.add("missing:block/nothing", outside).unwrap();
     }
 }
@@ -118,7 +118,6 @@ impl World {
         )
         .unwrap();
         tables.section_geometry = renderers.into_iter().collect();
-        tables.mod_tints.values = Some(tint_values(self.assets.registry));
         tables
     }
 
@@ -214,6 +213,7 @@ fn refusal_only_skips_its_quad_and_missing_sprites_draw() {
         assert_eq!(quads(&mesh.solid), 8, "cube plus the two finite quads");
         let gold = world.render.sprite_layers[GOLD] as u16;
         let missing = world.render.sprite_layers["minecraft:missingno"] as u16;
+        assert_ne!(gold, missing);
         assert_eq!(
             mesh.solid[24..28]
                 .iter()
@@ -229,6 +229,11 @@ fn refusal_only_skips_its_quad_and_missing_sprites_draw() {
             [missing; 4]
         );
         assert_eq!(mesh.solid[29].pos, [17.25, 8.0, 3.0]);
+        assert_eq!(
+            mesh.solid[28].uv().map(f32::to_bits),
+            [-0.250_001_f32, 2.75].map(f32::to_bits),
+            "sprite-relative UVs reach the mesh without rounding or clamping"
+        );
         assert_eq!(
             mesh.compute_bounds().unwrap()[1].x,
             17.25 + SectionMesh::BOUNDS_PAD
@@ -277,7 +282,6 @@ fn panic_keeps_completed_quads_and_disables_only_its_callback() {
         }
     }
 
-    let world = World::load().expect("prepared resources");
     let panics = Arc::new(Panics::default());
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
         "broken_geometry",
@@ -288,6 +292,7 @@ fn panic_keeps_completed_quads_and_disables_only_its_callback() {
     mod_platform::testing::with_mods(mods, || {
         mod_api::dispatch_add_section_geometry(&mod_api::RegistrationContext::new(), &mut registry);
     });
+    let world = World::load().expect("prepared resources");
     let registered = registry.into_renderers();
     let tables = world.tables(
         registered

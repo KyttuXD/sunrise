@@ -1,5 +1,5 @@
 //! Append native geometry to the section's own terrain buffers, after its blocks.
-use super::{Mesher, SectionMesh, TerrainVertex, Tints, mod_tint::Region};
+use super::{Mesher, OPAQUE_LAYER, SectionMesh, TerrainVertex, Tints, mod_tint::Region};
 use crate::connected::TileLayer;
 use mod_api::__private::game::CallbackOwner;
 use mod_api::{
@@ -62,6 +62,7 @@ struct Collector<'borrow, 'assets> {
     level: &'borrow dyn BlockAndTintGetter,
     mesher: &'borrow Mesher<'assets>,
     out: &'borrow mut SectionMesh,
+    cutout_vertices: &'borrow mut usize,
     origin: [i32; 3],
     mod_id: &'static str,
 }
@@ -75,7 +76,7 @@ impl SectionGeometryContext for Collector<'_, '_> {
         let vertices = if quad.translucent {
             self.out.translucent.len()
         } else {
-            self.out.solid.len()
+            *self.cutout_vertices
         };
         let layer = check_quad(&quad, vertices).and_then(|()| {
             let sprites = &self.mesher.render.sprite_layers;
@@ -98,10 +99,17 @@ impl SectionGeometryContext for Collector<'_, '_> {
         };
         let [a, r, g, b] = quad.color.to_be_bytes().map(u32::from);
         let color = r | g << 8 | b << 16 | a << 24;
+        // Keep the terrain vertex's existing encoding of the API's 0–15 light levels.
         let [sky, block] = quad.light.map(|l| u16::from(l.min(15)) * 16);
         let light = sky | block << 8;
-        let vertices = std::array::from_fn(|i| {
-            TerrainVertex::new(quad.positions[i], quad.uvs[i], 0, color, light)
+        // BufferBuilder writes the supplied position and UV floats, not the prepacked UVs
+        // used for baked models. The mesh codec spills any quad it cannot reproduce exactly.
+        let vertices = std::array::from_fn(|i| TerrainVertex {
+            pos: quad.positions[i],
+            uv: quad.uvs[i],
+            layer,
+            color,
+            light,
         });
         self.mesher.quad_as(
             self.out,
@@ -115,6 +123,9 @@ impl SectionGeometryContext for Collector<'_, '_> {
             false,
             Some(quad.color & 0xFF_FFFF),
         );
+        if !quad.translucent {
+            *self.cutout_vertices += vertices.len();
+        }
         Ok(())
     }
 }
@@ -159,6 +170,15 @@ pub(super) fn add(mesher: &Mesher<'_>, tints: &mut Tints<'_>, out: &mut SectionM
         tints: RefCell::new(tints),
         nether: mesher.nether_shading,
     };
+    // The engine stores solid terrain and cutout in the same mesh vector. Only cutout shares
+    // the layer that non-translucent submissions append to.
+    let mut cutout_vertices = out
+        .solid
+        .iter()
+        .step_by(4)
+        .filter(|v| v.layer & OPAQUE_LAYER == 0)
+        .count()
+        * 4;
     for renderer in mesher.tables.section_geometry.iter() {
         if !renderer.owner.is_enabled() {
             continue;
@@ -167,6 +187,7 @@ pub(super) fn add(mesher: &Mesher<'_>, tints: &mut Tints<'_>, out: &mut SectionM
             level: &region,
             mesher,
             out,
+            cutout_vertices: &mut cutout_vertices,
             origin,
             mod_id: renderer.owner.id(),
         };

@@ -54,7 +54,7 @@ rewrite("mesher/packed.rs", [
     ("bytemuck::cast::<TerrainVertex, [u32; 6]>", "bytemuck::cast::<TerrainVertex, ArenaSlot>"),
     ("packed_quads(layout: &[[u32; 6]]", "packed_quads(layout: &[ArenaSlot]"),
     ("let uv = [[0, 0], [16 << 10, 0], [16 << 10, 16 << 10], [0, 16 << 10]];", "let uv = [[0., 0.], [0.5, 0.], [0.5, 0.5], [0., 0.5]];"),
-    ("uv[2].uv[0] += 1;", "uv[2].uv[0] += 1.0 / super::UV_STEPS;"),
+    ("uv[2].uv[0] += 1;", "uv[2].uv[0] += 1.0 / crate::mesher::UV_STEPS;"),
     ("bytemuck::cast::<[u32; 6], TerrainVertex>", "bytemuck::cast::<ArenaSlot, TerrainVertex>"),
 ])
 rewrite("lod/packed.rs", [
