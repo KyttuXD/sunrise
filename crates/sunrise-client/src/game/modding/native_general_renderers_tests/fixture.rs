@@ -27,7 +27,7 @@ pub fn register(registrar: &mut dyn Registrar) {
         .unwrap();
     registrar
         .declare_general_entity(
-            "render_probe",
+            mod_api::Identifier::from_parts("mymod", "render_probe").unwrap(),
             GeneralEntityCategory::Misc,
             0.5,
             0.5,

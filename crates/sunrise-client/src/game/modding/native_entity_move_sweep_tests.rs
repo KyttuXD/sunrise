@@ -127,7 +127,7 @@ struct DeclareGeneral;
 impl Hooks for DeclareGeneral {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         r.declare_general_entity(
-            "robot",
+            mod_api::Identifier::from_parts("mymod", "robot").unwrap(),
             mod_api::GeneralEntityCategory::Misc,
             0.8,
             1.9,

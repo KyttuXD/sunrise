@@ -2436,7 +2436,7 @@ mod tests {
         let general = crate::game::general::GeneralTypeCatalog::freeze(&[
             mod_api::__private::GeneralEntityTypeDeclaration {
                 mod_id: "ruby".into(),
-                id: "ruby:robot".into(),
+                id: mod_api::Identifier::parse("ruby:robot").unwrap(),
                 category: mod_api::GeneralEntityCategory::Misc,
                 width: 0.5,
                 height: 1.0,

@@ -23,7 +23,7 @@ use sunrise_protocol::packets::play::{self, Clientbound as C};
 fn declaration(id: &str) -> mod_api::__private::GeneralEntityTypeDeclaration {
     mod_api::__private::GeneralEntityTypeDeclaration {
         mod_id: "test".into(),
-        id: id.into(),
+        id: mod_api::Identifier::parse(id).unwrap(),
         category: mod_api::GeneralEntityCategory::Misc,
         width: 0.5,
         height: 0.5,
@@ -159,7 +159,7 @@ impl mod_api::Hooks for Scene {
         r.register_attachment_type("test:fuel", true).unwrap();
         for path in ["missile", "bomb", "plain"] {
             r.declare_general_entity(
-                path,
+                mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 mod_api::GeneralEntityCategory::Misc,
                 0.5,
                 0.5,

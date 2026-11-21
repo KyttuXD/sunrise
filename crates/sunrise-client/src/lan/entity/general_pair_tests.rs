@@ -12,7 +12,7 @@ impl mod_api::Hooks for Declare {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         for (path, chunks, interval) in [("near", 2, 1), ("far", 8, 10), ("wide", 320, 3)] {
             r.declare_general_entity(
-                path,
+                mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 GeneralEntityCategory::Misc,
                 0.5,
                 0.5,

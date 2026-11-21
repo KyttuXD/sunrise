@@ -25,7 +25,7 @@ impl mod_api::Hooks for Declare {
             ),
         ] {
             r.declare_general_entity(
-                path,
+                mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 mod_api::GeneralEntityCategory::Misc,
                 0.8,
                 1.9,
