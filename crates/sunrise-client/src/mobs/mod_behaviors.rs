@@ -6,10 +6,7 @@
 //! list: nothing of this module runs, and the species' random streams stay
 //! exactly as they were.
 use super::{Mob, MobWorld, Species, brain::Timed, part_goals::BehaviorOp};
-use mod_api::{
-    BehaviorRegistrarBackend, RegisteredBehavior,
-    content::crash::{ModCall, enter_native_mod},
-};
+use mod_api::{BehaviorRegistrarBackend, RegisteredBehavior};
 use sunrise_core::random::LegacyRandom;
 
 /// One mod behavior, wrapped for a brain's list: the mod and part a panic in
@@ -350,28 +347,18 @@ pub fn has_brain(s: Species) -> bool {
 /// `backend` — the brain module's own, which knows its activities. The parts
 /// are named in a panic the way `register_goals` names them.
 pub fn attach(mob_id: &str, backend: &mut dyn BehaviorRegistrarBackend) {
-    if !mod_api::__private::has_entity_parts() {
-        return;
-    }
-    let parts = mod_api::__private::entity_parts();
-    let list = parts.entity_parts(mob_id);
-    if list.is_empty() {
-        return;
-    }
-    for attached in list {
-        let _guard = enter_native_mod(ModCall {
-            id: attached.mod_id(),
-            hook: "register_behaviors",
-            part: Some(attached.type_name()),
-        });
-        let mut registrar = mod_api::BehaviorRegistrar::new(
-            backend,
-            mob_id,
-            attached.mod_id(),
-            attached.type_name(),
-        );
-        attached.part().register_behaviors(&mut registrar);
-    }
+    let _ = mod_api::dispatch_register_behaviors(mob_id, |parts| {
+        for part in parts {
+            let registration = part.registration;
+            let mut registrar = mod_api::BehaviorRegistrar::new(
+                backend,
+                mob_id,
+                registration.mod_id(),
+                registration.type_name(),
+            );
+            let _ = part.invoke(|part| part.register_behaviors(&mut registrar));
+        }
+    });
 }
 
 /// `register_behaviors` for a type with no brain (#824): every add refuses

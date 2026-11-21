@@ -884,7 +884,7 @@ pub(crate) fn build(
         types.push(built);
     }
 
-    let hooks = hook_records(hooks, &types, &mut notes);
+    let hooks = hook_records(hooks, &types, &traits, &mut notes);
     let parts = part_records(&hooks, &traits, &mut notes);
     capabilities.extend(manifest_capabilities(root, &mut notes));
     let behaviours = behaviours::read(root).map_err(|e| e.to_string())?;
@@ -1448,11 +1448,17 @@ fn macros(
     Ok(out)
 }
 
-fn hook_records(hooks: &[catalog::Hook], types: &[Type], notes: &mut Vec<String>) -> Vec<Hook> {
+fn hook_records(
+    hooks: &[catalog::Hook],
+    types: &[Type],
+    traits: &[Trait],
+    notes: &mut Vec<String>,
+) -> Vec<Hook> {
     let mut events: BTreeMap<&str, Vec<&Type>> = BTreeMap::new();
     for t in types {
         events.entry(leaf(&t.id)).or_default().push(t);
     }
+    let entity_part = traits.iter().find(|item| item.id == "trait:EntityPart");
     let mut out = Vec::new();
     for hook in hooks {
         let event = format!("{}Event", crate::hook_id(&hook.name));
@@ -1466,6 +1472,7 @@ fn hook_records(hooks: &[catalog::Hook], types: &[Type], notes: &mut Vec<String>
                 ));
                 &[]
             }
+            None if hook.callable_result.is_some() => &[],
             None => {
                 notes.push(format!(
                     "hook {}: its event {event} is not a mod_api type, so its arguments are not recorded",
@@ -1491,6 +1498,23 @@ fn hook_records(hooks: &[catalog::Hook], types: &[Type], notes: &mut Vec<String>
                 output = Some(argument);
             } else {
                 arguments.push(argument);
+            }
+        }
+        if let Some(result) = &hook.callable_result {
+            arguments.extend(hook.call.iter().map(|(name, ty)| Argument {
+                name: name.clone(),
+                ty: print(ty.parse().expect("catalog parameter tokens")),
+            }));
+            output = hook.out.as_ref().map(|name| Argument {
+                name: name.clone(),
+                ty: print(result.parse().expect("catalog return tokens")),
+            });
+            if let Some(method) = entity_part.and_then(|part| {
+                part.methods.iter().find(|method| {
+                    method.id.strip_prefix("method:EntityPart::") == Some(hook.name.as_str())
+                })
+            }) {
+                merge(&mut refs, method.contract.refs.clone());
             }
         }
         let snake = |kind: catalog::PartKind| match kind {

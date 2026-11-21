@@ -1034,10 +1034,9 @@ for a stale handle, a client, the dragon, and a mob whose copy is held out — n
 `Host` is not there yet: change goals in `entity_join`, which fires for a loaded chunk's mobs too. Goals are not saved,
 as in vanilla: after a reload the mob has its species' set again, and a mod's `entity_join` adds its own back.
 
-These methods reuse built-in goal kinds; they do not define arbitrary goal callbacks or run at construction's
-`Mob.registerGoals` moment. A typed goal registrar and callbacks on `MobRef` and Parts are not part
-of this API yet. NeoForge has no bus event at this moment. The upstream raw-`Mob`
-`register_goals` interface is not part of this fork's API.
+These methods reuse built-in goal kinds and do not run at construction. To register native goal
+callbacks at `Mob.registerGoals`, implement `EntityPart::register_goals` with its `GoalRegistrar`.
+NeoForge has no bus event at this moment.
 
 ### Mob AI controls
 

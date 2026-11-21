@@ -1229,38 +1229,20 @@ impl Game<'_> {
         spawner: Option<mod_api::SpawnSource>,
         vanilla: u32,
     ) -> Option<u32> {
-        if !mod_api::__private::has_entity_parts() {
+        if !mod_api::__private::has_part_hook(mod_api::HookId::SpawnClusterSize) {
             return None;
         }
-        let parts = mod_api::__private::entity_parts();
-        let kind = mob.kind.id.clone();
-        let list = parts.entity_parts(&kind);
-        if list.is_empty() {
-            return None;
-        }
-        let at = [mob.position.x, mob.position.y, mob.position.z];
-        self.lend_unspawned(&kind, at, Some(mob), |lent, _| {
-            list.iter().find_map(|attached| {
-                let _guard =
-                    mod_api::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
-                        id: attached.mod_id(),
-                        hook: "spawn_cluster_size",
-                        part: Some(attached.type_name()),
-                    });
-                // Called outside the world (a reload or setup) a refused Host call is no answer.
-                match mod_api::__private::contain_outside_world(|| {
-                    attached
-                        .part()
-                        .spawn_cluster_size(self, lent, reason, spawner, vanilla)
-                }) {
-                    Ok(answer) => answer,
-                    Err(refusal) => {
-                        refusal.report();
-                        None
-                    }
-                }
+        let kind = mob.kind.clone();
+        mod_api::dispatch_spawn_cluster_size(&kind.id, |mut parts| {
+            let at = [mob.position.x, mob.position.y, mob.position.z];
+            self.lend_unspawned(&kind.id, at, Some(mob), |lent, _| {
+                parts.find_map(|part| {
+                    part.invoke(|part| {
+                        part.spawn_cluster_size(self, lent, reason, spawner, vanilla)
+                    })?
+                })
             })
-        })
+        })?
     }
     /// The shared finalization decision for a mob type the game keeps apart
     /// from mobs (the dragon), before the entity joins the level: its lend has

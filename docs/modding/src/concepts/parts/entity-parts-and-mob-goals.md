@@ -154,10 +154,17 @@ The part's `spawn_cluster_size` changes how large a natural spawn group of the t
 (`Mob.getMaxSpawnClusterSize`); [controlling spawns](../../how-to/world/spawning.md#changing-how-large-a-spawn-group-grows)
 shows it.
 
-`is_shearable` and `on_sheared` make the type shearable, as NeoForge's `IShearable` does: shears in a player's
-hand and a dispenser's ask `is_shearable` first, and the part that says `Some(true)` shears the entity in
-`on_sheared` and returns the drops, which the game spawns before damaging the shears. `Some(false)` keeps the
-entity unsheared, and `None` leaves it to the species (a sheep keeps shearing as vanilla's does).
+`is_shearable` and `on_sheared` follow NeoForge's `IShearable`. The first `is_shearable`
+to answer wins. `Some(true)` selects that same Part's `on_sheared` to perform the shearing
+and return drops. `Some(false)` leaves the entity unsheared. `None` lets the next Part answer;
+if none do, the entity keeps its usual behavior. The game places the returned drops before
+damaging the shears. Both callbacks take the actual tool as `ItemStackView<'_>`: read the item,
+count or damage in place, or call `project()` for components or an owned copy.
+
+Use `#[mod_api::sunrise_part]` on the `EntityPart` implementation. Each callback goes only to the
+Parts of that type that implement it, in dependency and registration order. A panic disables
+that mod's callback for that moment for the session and shows an error; a refused call is reported
+but can run again at the next moment.
 
 ## Equipped durability
 

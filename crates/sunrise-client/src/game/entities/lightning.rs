@@ -1192,7 +1192,13 @@ mod tests {
                         .unwrap()
                     );
                 } else {
-                    assert!(game.shear_entity((x, 64, 0)).unwrap());
+                    assert!(
+                        game.shear_entity(
+                            (x, 64, 0),
+                            &sunrise_client::items::ItemStack::new("minecraft:shears", 1)
+                        )
+                        .unwrap()
+                    );
                 }
             }
             assert_eq!(pre.load(Ordering::SeqCst), 4);

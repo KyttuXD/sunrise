@@ -187,6 +187,8 @@ pub struct Hook {
     /// result, including its cancellation, rolls back; later listeners still run.
     pub output_validator: Option<String>,
     pub scope: Option<PartScope>,
+    /// A direct scoped callback's return type, including `()` for registrations.
+    pub callable_result: Option<String>,
     pub host: Option<HostAccess>,
     pub context: Option<PhaseContext>,
     pub counterparts: Counterparts,
@@ -337,6 +339,7 @@ struct HookEntry {
     #[serde(default)]
     engine: Vec<(String, String)>,
     stack_count: Option<StackCount>,
+    callable_result: Option<String>,
     #[serde(default)]
     event_per_listener: bool,
     inert: Option<String>,
@@ -400,6 +403,25 @@ impl Hook {
         ) {
             return Err(CatalogError::InvalidContract(name));
         }
+        if let Some(result) = &entry.callable_result
+            && (!scope.as_ref().is_some_and(|scope| {
+                scope.kind == PartKind::Entity
+                    && matches!(entry.engine.as_slice(), [(key, ty)] if *key == scope.key && ty == "& str")
+            }) || entry.dispatch != DispatchStyle::Direct
+                || entry.side != Side::Server
+                || entry.host.is_some()
+                || entry.context.is_some()
+                || entry.stack_count.is_some()
+                || !matches!(
+                    (api.contract, result.as_str()),
+                    (Contract::Listen, "()") | (Contract::Replace, _)
+                ))
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error: "a callable entity hook needs direct server dispatch, an engine-only &str key, and a listen or replace contract".into(),
+            });
+        }
         if let Some(inert) = &entry.inert
             && (!scope
                 .as_ref()
@@ -450,6 +472,8 @@ impl Hook {
         let mut effect_count = false;
         for (param, ty) in &entry.engine {
             match (param.as_str(), ty.as_str()) {
+                // The callable branch above has already checked the engine-only selector.
+                _ if entry.callable_result.is_some() => (),
                 ("ticks", "& mut Ticks") if !effect => engine_ticks = true,
                 ("inert", "& mut bool") if !effect => engine_inert = true,
                 ("tick_count", "i32") if name == "apply_effect_tick" && effect => {
@@ -559,6 +583,7 @@ impl Hook {
             isolate,
             output_validator: api.output_validator,
             scope,
+            callable_result: entry.callable_result,
             host: entry.host,
             context: entry.context,
             counterparts,
@@ -827,6 +852,20 @@ impl Declared {
                                 input.ty.to_token_stream().to_string()
                             ]));
                         }
+                        let callable = entry.remove("callable");
+                        if callable == Some(serde_json::Value::Bool(true)) {
+                            let result = match &function.sig.output {
+                                syn::ReturnType::Default => "()".to_owned(),
+                                syn::ReturnType::Type(_, ty) => ty.to_token_stream().to_string(),
+                            };
+                            entry.insert("callable_result".into(), result.into());
+                        } else if callable.is_some()
+                            || !matches!(function.sig.output, syn::ReturnType::Default)
+                        {
+                            return Err(invalid(format!(
+                                "{name}: only callable hooks declare a return type (callable = true)"
+                            )));
+                        }
                         entry.insert("call".into(), call.into());
                         entry.insert("engine".into(), engine.into());
                         if let Some(doc) = doc(&function.attrs) {
@@ -1029,6 +1068,7 @@ impl Hook {
             cancellable: None,
             call: Vec::new(),
             receiver: Receiver::default(),
+            callable_result: None,
             dispatch: DispatchStyle::default(),
             engine_ticks: false,
             engine_inert: false,
