@@ -9,7 +9,8 @@ binary is exact to the build; the loader's build-id check is unchanged.
 
 The launcher asks, for each enabled native mod of an instance, in this order:
 
-1. **Made for this build?** Then it is built, as always.
+1. **Made for this build?** Then it can be built without comparing a surface. If it names mixins or published
+   loops, `native-check` reads the build data first and reports indexed mixin refusals and unknown loop names.
 2. **Rows no list can judge?** A mod with a `[[native.module]]` or `[[native.bridge]]` row names game code that
    no build data describes, so it works on the build it was made for only. No test runs. (`[[native.state]]` is
    refused on every build, by name: `E_MIXIN_STATE_LAYOUT`.)
@@ -24,8 +25,11 @@ The launcher asks, for each enabled native mod of an instance, in this order:
    - a trait member the mod reaches through a trait it calls (a sub-host trait's method called on
      `&mut dyn ServerHost`) is still reached from that trait.
 
-   And each piece of game code the mod declares must be, in this build's build data (`functions.json`,
-   `internals.json`, `loops.json`, each checked to describe this build), what the list records:
+   And each piece of game code the mod declares must be, in this build's build data, what the list records.
+   `functions.json`, `internals.json` and `loops.json` must all describe this build; the fit check validates the
+   function index and the loop paths just as patching does. If a file is missing, fetch this build's SDK again.
+   An empty loop catalog is valid; a missing `loops.json` is not. If the caller supplies build data and the
+   check reads it, a missing file is an error even when a mod already has an API misfit. To fit:
    - a `[[native.mixin]]` row's target function has the same signature and the same body (a replacement written
      for an old body could undo what the game changed in it);
    - an `internals` entry has the same signature, and a function or method among them the same body too;

@@ -54,10 +54,15 @@ impl Project {
             )
         };
         fs::write(dir.join("internals.json"), text).unwrap();
-        // Update's fit report also reads the function index. These tests need no function bodies.
+        // Update's fit report reads the complete build data. These tests need no bodies or loops.
         fs::write(
             dir.join("functions.json"),
             format!(r#"{{"schema":1,"build":{{"commit":"{revision}"}},"crates":{{}},"functions":{{}},"refused":{{}}}}"#),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("loops.json"),
+            format!(r#"{{"schema":1,"build":{{"commit":"{revision}"}},"loops":[]}}"#),
         )
         .unwrap();
     }

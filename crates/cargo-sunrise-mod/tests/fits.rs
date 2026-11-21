@@ -69,7 +69,7 @@ impl Project {
         project
     }
 
-    /// `build`'s internals catalog and an empty function index, as the fetched SDK's build data.
+    /// `build`'s internals catalog, with no indexed functions or published loops.
     fn build_data(&self, build: &str, internals: &[(&str, &str, &str)]) {
         let dir = self
             .dir
@@ -89,6 +89,11 @@ impl Project {
         fs::write(
             dir.join("functions.json"),
             format!(r#"{{"schema":1,"build":{{"commit":"{build}"}},"crates":{{}},"functions":{{}},"refused":{{}}}}"#),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("loops.json"),
+            format!(r#"{{"schema":1,"build":{{"commit":"{build}"}},"loops":[]}}"#),
         )
         .unwrap();
     }

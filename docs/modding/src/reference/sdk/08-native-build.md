@@ -11,6 +11,11 @@ Native mod authors keep the same code and `sunrise-mod.toml`. On Windows the SDK
 reservation when it links the fixed game executable, not when it links native mod libraries. If your tooling
 inspects the SDK's `sunrise-prebuilt.json` identity, stop reading `link_args`: that field has no replacement.
 
+The format-6 identity uses `package_format`, not `format_version`. A compiled package must carry its build and
+compiler identity, `slices`, `facade_crates`, `game_features`, `registry_lock`, `registry_patches` and `native_links`.
+`native_log` was added within format 6; when absent, the SDK does not export the native log sink.
+The `api` slice's `internals.json` must describe the same build as the `runtime` slice's identity.
+
 The caller does what needs a player or their game: it checks that native code is allowed, fetches and verifies the
 SDK's slices, installs the pinned Rust, chooses the mods and which of them a build leaves out, and installs what the
 tool built. The tool compiles, and nothing else.
@@ -82,7 +87,7 @@ cargo sunrise-mod native-check < plan.json
 | `mods` | A mod's folder, or a folder of mod folders. |
 | `build` | The build id (the game's full commit) the mods are checked against. |
 | `surface` | Optional. The build's `surface.json`, read only for a mod made for another build. |
-| `build_data` | Optional. The build's unpacked build data (`functions.json`, `internals.json`, `loops.json`), read when comparing a mod made for another build that declares game code (a `[[native.mixin]]` or `[[native.loop]]` row, an `internals` list). A same-build mod with `[[native.mixin]]` rows needs `functions.json` to check for indexed refusals. |
+| `build_data` | Optional. The build's complete unpacked build data (`functions.json`, `internals.json`, `loops.json`). The check reads it when comparing a mod made for another build that declares game code (a `[[native.mixin]]` or `[[native.loop]]` row, an `internals` list), or for same-build mixin or loop rows. An omitted folder is reported as `needs` when the verdict depends on it. When read, a supplied folder with a missing file or data for the wrong build is an error even if a misfit is already known. |
 
 The reply is `{"contract": 2, "route": …, "mods": […]}`. `route` is `prebuilt-api` or `prebuilt` for the usable
 mods, `null` when none is. Each of `mods` has:
@@ -96,7 +101,8 @@ mods, `null` when none is. Each of `mods` has:
 
 A `change` is `"removed"`, `"changed"`, `{"lost-impl": trait}`, `{"fields": {gained, at}}`, `{"version": {named, now}}`,
 `{"not-buildable": {at}}`, `{"path": path}` or `{"route": {from, owner}}`. On a mod's own build, an indexed
-mixin refusal appears in `refusal`. When checking its fit on another build, the result remains
+mixin refusal or a loop name absent from the catalog (`E_LOOP_UNKNOWN`) appears in `refusal`.
+When checking a refused mixin's fit on another build, the result remains
 `does-not-fit`: the misfit's `id` is display text with the full target, error code and reason, and its
 `change` is `"changed"`.
 
