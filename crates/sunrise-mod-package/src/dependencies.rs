@@ -753,6 +753,26 @@ mod tests {
     }
 
     #[test]
+    fn manifest_preserves_long_dependency_policy_reasons() {
+        let reason = "Long explanation. ".repeat(64);
+        let source = manifest(
+            "owner",
+            &format!(
+                "[dependencies]\nbase={{version='^1',reason='{reason}'}}\n\
+                 [incompatible]\nbad={{reason='{reason}'}}\n\
+                 [discouraged]\nslow={{reason='{reason}'}}"
+            ),
+        );
+        let dependencies = from_manifest(&source.dependencies, Side::Client);
+        assert_eq!(dependencies[0].reason.as_deref(), Some(reason.as_str()));
+        let active = rules(&source, Side::Client);
+        assert_eq!(active.len(), 2);
+        for rule in active {
+            assert_eq!(rule.reason.as_deref(), Some(reason.as_str()));
+        }
+    }
+
+    #[test]
     fn declaration_boundaries_apply_to_dependencies_and_pair_rules() {
         for table in ["dependencies", "incompatible", "discouraged"] {
             let manifest = |entry: &str| {
@@ -760,23 +780,14 @@ mod tests {
                     "id='owner'\nname='Owner'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n[{table}]\n{entry}"
                 ))
             };
+            let error = manifest("target={version='^1',reason=42}").unwrap_err();
             assert!(
-                manifest(&format!(
-                    "target={{version='^1',reason='{}',url='https://example.test'}}",
-                    "a".repeat(512)
-                ))
-                .is_ok()
+                error.starts_with("sunrise-mod.toml: ") && error.ends_with(" (line 7)"),
+                "{error}"
             );
-            let error = manifest(&format!(
-                "target={{version='^1',reason='{}'}}",
-                "a".repeat(513)
-            ))
-            .unwrap_err();
-            assert!(error.contains("target") && error.contains("reason over 512 bytes"));
-            assert!(
-                manifest("target={version='^1',url='http://example.test'}")
-                    .unwrap_err()
-                    .contains("url is not https://")
+            assert_eq!(
+                manifest("target={version='^1',url='http://example.test'}").unwrap_err(),
+                format!("sunrise-mod.toml: [{table}] entry \"target\": url is not https://")
             );
             assert!(
                 manifest("'bad id'='^1'")

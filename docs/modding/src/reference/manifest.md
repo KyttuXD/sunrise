@@ -41,6 +41,7 @@ folders are unsupported.
 ## `sunrise-mod.toml`
 
 The shared [manifest fields](../how-to/content-mods.md#the-manifest) include `id`, `name`, and `version`.
+The published `sunrise-mod.toml` is bounded as a whole at 32 MiB, uncompressed.
 `version` is semver (`MAJOR.MINOR.PATCH`, with an optional pre-release and build metadata such as
 `3.6.30+refabricated`); an omitted minor or patch is padded (`1` is `1.0.0`, `1.2` is `1.2.0`).
 A non-semver version is refused when the manifest is read, naming the value.
@@ -104,8 +105,8 @@ base = { version = "^1", optional = false, side = "both", order = "after", reaso
 Versions refer to `sunrise-mod.toml`, not Cargo metadata. `optional` defaults to false;
 `side` defaults to `"both"`; `order` is `"after"` (default), `"before"` or `"none"`.
 After means the dependency's listeners/content precede the owner's; before reverses that
-**dispatch** edge; none removes it. Reason is at most 512 bytes and URL must start with
-`https://`. Unknown fields and malformed values refuse the manifest; there is no `kind`
+**dispatch** edge; none removes it. `reason` is a string, and `url` must start with `https://`.
+Unknown fields and malformed values are reported when reading the manifest; there is no `kind`
 key or alternate optional spelling.
 
 Side is the **installation**, not the logical side executing a hook: an integrated server
@@ -121,10 +122,10 @@ inventory enforce physical requirements. Dispatch order, side filters and instan
 remove those requirements or bypass ABI and build identity checks.
 See [Dependencies between mods](../concepts/dependencies.md).
 
-Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only,
-at most 64 keys and 8 KiB (keys and strings by length, 8 bytes per number, 1 per boolean); a table, an array
-or a larger table refuses the package. A mod reads any loaded package's manifest through
-`context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
+Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only.
+A table or array used as a property value is a manifest error. The property table and reason strings in
+dependencies and load rules have no separate quota beyond the whole manifest size. A mod reads any loaded
+package's manifest through `context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
 `issues`, `icon_path`, `kind`, `dependencies` and `property(key)`. Each read-only `PackageDependency`
 exposes `id()`, `version()`, `kind()`, `order()`, `side()`, `reason()` and `url()`. `DependencyKind`
 is `Required`, `Optional`, `Incompatible`, `Discouraged` or `LoadBefore`; `DependencyOrder` is `After`,
@@ -149,8 +150,8 @@ shaders = { version = "*", reason = "Flickers with the water shader", url = "htt
 ```
 
 An `[incompatible]` or `[discouraged]` entry is a semver requirement on the other mod's version, or a
-table with `version` (every version when left out), `reason` (at most 512 bytes), `url` (`https://`
-only) and `side` (`"both"`, the default, `"client"` or `"server"`, the dedicated server). A rule
+table with `version` (every version when left out), `reason` (a string), `url` (`https://` only)
+and `side` (`"both"`, the default, `"client"` or `"server"`, the dedicated server). A rule
 about a mod that isn't loaded holds nothing. A matching incompatible mod refuses startup with the
 owner's reason and link; a matching discouraged mod loads with a warning in the log and on
 both affected installed rows in the Mods page. Every notice remains visible in the scrollable

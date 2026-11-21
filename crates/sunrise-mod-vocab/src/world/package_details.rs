@@ -95,7 +95,7 @@ impl PackageDependency {
     pub fn side(&self) -> crate::Side {
         self.side
     }
-    /// The author's explanation, if provided.
+    /// The author's full explanation from the manifest, if provided.
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
     }

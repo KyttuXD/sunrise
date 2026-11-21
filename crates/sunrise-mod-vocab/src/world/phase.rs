@@ -432,7 +432,7 @@ impl PackageInfo {
     pub fn icon_path(&self) -> Option<&str> {
         self.details.icon_path.as_deref()
     }
-    /// One value of its manifest's `[properties]` table.
+    /// One scalar value of its manifest's `[properties]` table, as declared in the manifest.
     pub fn property(&self, key: &str) -> Option<&crate::PropertyValue> {
         self.details.properties.get(key)
     }

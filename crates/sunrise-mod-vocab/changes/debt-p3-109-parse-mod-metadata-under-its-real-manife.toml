@@ -1,0 +1,3 @@
+ids = ["handle:PackageInfo::property", "handle:PackageDependency::reason"]
+why = "The published sunrise-mod.toml already has a whole-file size limit. It no longer rejects properties for their key count or aggregate size, or dependency policy reasons for their length. Invalid values still fail when the manifest is read, with the schema error. This is Sunrise's own package format; vanilla and NeoForge have no matching boundary."
+migrate = "No change needed: keep writing scalar values in [properties] and text in reason under [dependencies], [incompatible] or [discouraged]. Keep reading them with PackageInfo::property(key) and PackageDependency::reason(). The whole sunrise-mod.toml must still fit the published manifest limit."
