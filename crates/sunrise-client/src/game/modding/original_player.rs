@@ -347,9 +347,8 @@ mod tests {
                 if death {
                     game.guest_respawn(12);
                 } else {
-                    let play = host.play.entry(12).or_default();
-                    play.won_game = true;
-                    play.respawn_requested = true;
+                    host.hub.update_guest(12, |g| g.won_game = true);
+                    host.play.entry(12).or_default().respawn_requested = true;
                     game.handle_server_portal(12);
                 }
                 let heard = heard.lock().unwrap();

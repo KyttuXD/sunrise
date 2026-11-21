@@ -683,7 +683,7 @@ impl Game<'_> {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        if host.play.get(&conn).is_some_and(|play| play.won_game) {
+        if host.hub.guest(conn).is_some_and(|g| g.won_game) {
             if host
                 .play
                 .get(&conn)
@@ -705,8 +705,8 @@ impl Game<'_> {
                 };
                 if let Some(play) = host.play.get_mut(&conn) {
                     play.respawn_requested = false;
-                    play.won_game = false;
                 }
+                host.hub.update_guest(conn, |g| g.won_game = false);
                 // PlayerList.respawn(keepAllPlayerData = true), CHANGED_DIMENSION:
                 // PlayerEvent.Clone with `wasDeath` false.
                 if let Some(g) = host.hub.guest(conn) {
@@ -735,11 +735,11 @@ impl Game<'_> {
                 let Some(host) = self.lan.as_mut() else {
                     return;
                 };
-                let _ = host
-                    .hub
-                    .guests
-                    .update_connection(conn, |g| g.seen_credits = true);
-                host.play.entry(conn).or_default().won_game = true;
+                let _ = host.hub.guests.update_connection(conn, |g| {
+                    g.seen_credits = true;
+                    g.won_game = true;
+                });
+                host.play.entry(conn).or_default().respawn_requested = false;
                 // ClientboundGameEventPacket.WIN_GAME.
                 host.hub.send_to(
                     conn,
@@ -2485,15 +2485,14 @@ mod credits_respawn_tests {
         guest.load_timeout = 0;
         let mut host = game.lan.take().unwrap();
         host.hub.guests.push(guest);
-        let play = host.play.entry(2).or_default();
-        play.won_game = true;
-        play.respawn_requested = true;
+        host.hub.update_guest(2, |g| g.won_game = true);
+        host.play.entry(2).or_default().respawn_requested = true;
         assert!(host.hub.guests[0].client_loaded());
 
         game.lan = Some(host);
         game.handle_server_portal(2);
         let host = game.lan.take().unwrap();
-        assert!(!host.play[&2].won_game, "the credits are over");
+        assert!(!host.hub.guests[0].won_game, "the credits are over");
         let guest = &host.hub.guests[0];
         assert_eq!(guest.load_timeout, 60);
         assert!(guest.loading);
@@ -2598,9 +2597,9 @@ mod credits_respawn_tests {
         use sunrise_client::chunk::Chunk;
         let mut resources = None;
         let (mut game, scratch) = server_with_a_nether_anchor(&mut resources);
-        let play = game.lan.as_mut().unwrap().play.entry(2).or_default();
-        play.won_game = true;
-        play.respawn_requested = true;
+        let host = game.lan.as_mut().unwrap();
+        host.hub.update_guest(2, |g| g.won_game = true);
+        host.play.entry(2).or_default().respawn_requested = true;
 
         game.handle_server_portal(2);
         assert_eq!(

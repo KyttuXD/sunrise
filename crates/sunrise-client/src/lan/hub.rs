@@ -4083,9 +4083,14 @@ impl Hub {
                 | S::ClientTickEnd(_)
                 | S::KeepAlive(_)
                 | S::Pong(_)
-                | S::PingRequest(_) => false,
-                S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
-                S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
+                | S::PingRequest(_)
+                | S::UseItem(_) => false,
+                S::MovePlayerPos(p) => {
+                    !self.guests[i].won_game && self.moved_far(i, [p.x, p.y, p.z])
+                }
+                S::MovePlayerPosRot(p) => {
+                    !self.guests[i].won_game && self.moved_far(i, [p.x, p.y, p.z])
+                }
                 S::PlayerInput(_) => self.guests[i].client_loaded(),
                 _ => true,
             };
@@ -4400,11 +4405,14 @@ impl Hub {
                     events.push(HostEvent::Packet(conn, Box::new(S::UseItemOn(p))));
                     *held = self.move_queued(i);
                 }
-                // handleInteract is the game's too, like handleAttack above: a move queued
-                // behind it waits for the next tick.
+                // handleInteract sets shift in the game before using the entity. Finish
+                // that turn before a later PlayerInput can overwrite the key state.
+                // As for attacks, a move queued behind it waits for the next tick.
                 S::Interact(p) => {
                     events.push(HostEvent::Packet(conn, Box::new(S::Interact(p))));
                     *held = self.move_queued(i);
+                    events.push(HostEvent::InputCredits(credits));
+                    return true;
                 }
                 // ContainerInput's codec (ByIdMap, OutOfBoundsStrategy.ZERO) reads an
                 // unknown click type as PICKUP.
@@ -4469,18 +4477,14 @@ impl Hub {
             return;
         }
         let g = &self.guests[i];
-        // handleMovePlayer: nothing moves before the client has loaded.
-        if g.landing || !g.client_loaded() {
+        // handleMovePlayer checks packet validity (including repeated positions) even
+        // during the credits, but does not apply any part of a valid move then.
+        if g.won_game || g.landing || !g.client_loaded() {
             return;
         }
-        // updateAwaitingTeleport: moves wait for the client to accept the
-        // teleport, which is sent again after 20 ticks without an answer.
-        if let Some((_, at)) = g.awaiting_teleport {
-            if self.ticks - g.teleport_tick > 20 {
-                self.send_position_correction(i, Some(at), 0, [0.0; 3], g.pending_travel_velocity);
-            }
-            // The awaiting check applies the report's rotation and drops its position, its
-            // ground flag and its collision flag. Nothing is counted against the player.
+        if self.update_awaiting_teleport(i) {
+            // Only MovePlayer applies the report's rotation while waiting. The resend,
+            // if due, had the player's rotation before this packet.
             if let Some((yaw, pitch)) = rot {
                 self.guests.update(i, |g| {
                     (g.yaw, g.pitch) = (wrap_degrees(yaw), wrap_degrees(pitch))
@@ -4488,9 +4492,23 @@ impl Hub {
             }
             return;
         }
+        let g = &self.guests[i];
         let to = pos.unwrap_or(g.position);
         let rot = rot.unwrap_or((g.yaw, g.pitch));
         self.position_change(i, to, rot, flags, Hearing::Heard, ctx, events);
+    }
+
+    /// `ServerGamePacketListenerImpl.updateAwaitingTeleport`: while waiting for an ack,
+    /// resend the correction once more than 20 server ticks have elapsed.
+    pub fn update_awaiting_teleport(&mut self, i: usize) -> bool {
+        let guest = &self.guests[i];
+        let Some((_, at)) = guest.awaiting_teleport else {
+            return false;
+        };
+        if self.ticks - guest.teleport_tick > 20 {
+            self.send_position_correction(i, Some(at), 0, [0.0; 3], guest.pending_travel_velocity);
+        }
+        true
     }
 
     /// ServerGamePacketListenerImpl.handlePlayerPositionChange.
@@ -5128,8 +5146,8 @@ impl Hub {
 
 /// A packet Sunrise sends as raw bytes (no fields worth a type).
 /// multiplayer.disconnect.invalid_player_movement.
-/// Mth.wrapDegrees.
-fn wrap_degrees(degrees: f32) -> f32 {
+/// `Mth.wrapDegrees(float)` for serverbound rotations.
+pub fn wrap_degrees(degrees: f32) -> f32 {
     let mut wrapped = degrees % 360.0;
     if wrapped >= 180.0 {
         wrapped -= 360.0;
