@@ -193,6 +193,9 @@ pub struct World {
     /// The chunks changed in bulk (`edit_runs`) since the log was last
     /// drained, kept while `block_log` is: sent to the players whole.
     pub bulk_log: FxHashSet<(i32, i32)>,
+    /// Loaded chunks requested to go whole to clients that already hold them. Unlike
+    /// `bulk_log`, a resend waits for its column's pending full light work.
+    pub chunk_resends: FxHashSet<(i32, i32)>,
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is
     /// (`ChunkHolder.sectionLightChanged`).
@@ -385,6 +388,7 @@ impl World {
             block_log_held: Vec::new(),
             path_writes: None,
             bulk_log: Default::default(),
+            chunk_resends: Default::default(),
             light_log: None,
             moving_piston_fallback: Vec::new(),
             moving_pistons: Vec::new(),

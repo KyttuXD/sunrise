@@ -1,0 +1,10 @@
+ids = [
+    "type:ChunkRefusal",
+    "type:ChunkRefusal.NotInPlace",
+    "type:ChunkRefusal.TooManyChunks",
+    "type:ChunkRefusal.Unavailable",
+    "handle:LevelRef::relight_chunks",
+    "handle:ChunkRef::resend",
+]
+why = "Queue work on the handle's own open level, without a level swap or request quotas. Vanilla 26.3 ServerChunkCache.getChunkNow checks the owning cache's loaded chunks. ThreadedLevelLightEngine.runUpdate batches light work and its waitForPendingTasks orders the send dependency in ChunkMap.waitForLightBeforeSending. ChunkMap.isChunkTracked and NeoForge's PlayerChunkSender.sendChunk attach delivery to the watching client and the actual level. ChunkRefusal reports a local operation, not a wire payload."
+migrate = "Keep calling level.relight_chunks(host, chunks) and chunk.resend(host) on the target handles. Change a stored relight count from u32 to usize; it still counts newly queued columns, not completed work. Remove NotInPlace and TooManyChunks match arms and any level switching or quota-based splitting. An unloaded input no longer queues its neighbours; to refresh a loaded neighbour of an absent chunk, pass that neighbour's own coordinates. Match Unavailable for hosts or phases without world access; Stale, Client and NotLoaded (resend only) still describe real refusals. If sending or storing a refusal, map it to a mod-owned Wire type. A resend waits for pending full light work on its column, so do not assume it sends in the call's tick."

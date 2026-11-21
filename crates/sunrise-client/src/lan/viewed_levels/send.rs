@@ -174,7 +174,7 @@ impl Hub {
             world.light_log = Some(Default::default());
         }
         self.broadcast_light_changes(world);
-        self.broadcast_block_changes(world);
+        self.broadcast_block_changes(world, ctx.streaming);
         self.send_viewed(ctx);
         self.track_entities(ctx);
         true

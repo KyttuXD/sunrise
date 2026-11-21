@@ -1949,14 +1949,7 @@ impl Streaming {
                 }
                 Done::Saved(protos) => self.receive_saved(protos),
                 Done::LightView(x, z, proto, view) => self.receive_light_view(x, z, proto, view),
-                Done::Lit(x, z, sections, seq) => {
-                    if self.lighting.get(&(x, z)) != Some(&seq) {
-                        continue;
-                    }
-                    self.lighting.remove(&(x, z));
-                    let snapshot = self.light_snapshots.remove(&(x, z)).unwrap_or(u64::MAX);
-                    self.apply_lit(world, x, z, sections, snapshot);
-                }
+                Done::Lit(x, z, sections, seq) => self.receive_lit(world, x, z, sections, seq),
                 Done::Meshed(upload) => {
                     self.mesh_jobs = self.mesh_jobs.saturating_sub(1);
                     let MeshUpload { key, seq, .. } = upload;
@@ -2038,6 +2031,7 @@ impl Streaming {
             self.forget_visibility(world, far.iter().copied());
             for key in &far {
                 world.entities_pending.remove(key);
+                world.chunk_resends.remove(key);
                 self.lit.remove(key);
                 self.meshed.remove(key);
                 self.lighting.remove(key);
@@ -2112,10 +2106,6 @@ impl Streaming {
         if paused {
             return (uploads, removed);
         }
-        let mut light = std::mem::take(&mut self.light_scratch);
-        light.clear();
-        let mut gone = std::mem::take(&mut self.gone_scratch);
-        gone.clear();
         let mut candidates = std::mem::take(&mut self.mesh_candidates_scratch);
         candidates.clear();
         let mut columns = std::mem::take(&mut self.mesh_columns_scratch);
@@ -2285,48 +2275,12 @@ impl Streaming {
         hz_laps.lap("st_decorate");
         self.schedule_generation(world, workers);
         hz_laps.lap("st_generate");
-        // Lighting once all neighbours exist, nearest first and only as
-        // much of it as the workers can chew. Vanilla's light engine also
-        // hands a bounded queue to its workers and reschedules what did
-        // not fit by distance; submitted whole, the light jobs of every
-        // unlit column at once — each carrying a 3x3 region snapshot —
-        // grew with the render distance and outlived the columns they
-        // were queued for (#3629). What stays in `dirty_light` is asked
-        // for again, from the current centre, as capacity frees.
-        for &(x, z) in world.dirty_light.iter() {
-            if !world.chunks.contains_key(&(x, z)) {
-                gone.push((x, z));
-            } else if self.light_region_ready(world, x, z) {
-                light.push((self.distance(x, z), x, z));
-            }
-        }
-        for key in gone.drain(..) {
-            world.dirty_light.remove(&key);
-        }
-        let room = (self.workers * 4).saturating_sub(self.lighting.len());
-        nearest_first(&mut light, room);
-        for (_, x, z) in light.drain(..) {
-            let Some(region) = self.light_region(world, x, z) else {
-                continue;
-            };
-            world.dirty_light.remove(&(x, z));
-            self.sequence += 1;
-            self.lighting.insert((x, z), self.sequence);
-            self.light_snapshots
-                .insert((x, z), self.light_edit_sequence);
-            self.submit(
-                Some((x, z)),
-                1,
-                Job::Light(x, z, region, self.sequence, self.sky_light),
-            );
-        }
+        self.schedule_light(world);
         hz_laps.lap("st_light");
         // A server draws nothing: its sections are never meshed.
         if !self.mesh {
             world.dirty_sections.clear();
             self.cover_current = false;
-            self.light_scratch = light;
-            self.gone_scratch = gone;
             self.mesh_candidates_scratch = candidates;
             self.mesh_columns_scratch = columns;
             return (uploads, removed);
@@ -2502,8 +2456,6 @@ impl Streaming {
             }
         }
         self.cover_current = false;
-        self.light_scratch = light;
-        self.gone_scratch = gone;
         self.mesh_candidates_scratch = candidates;
         self.mesh_columns_scratch = columns;
         (uploads, removed)
@@ -2617,8 +2569,11 @@ impl Streaming {
             Self::mark_light_changes(world, &changed);
             Self::relight_beside_unlit(world, &changed);
         }
-        let oldest = self.light_snapshots.values().copied().min();
-        match oldest {
+        self.trim_light_log();
+    }
+
+    fn trim_light_log(&mut self) {
+        match self.light_snapshots.values().copied().min() {
             Some(oldest) => self.light_log.retain(|(seq, _)| *seq > oldest),
             None => self.light_log.clear(),
         }

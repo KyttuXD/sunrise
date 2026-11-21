@@ -2556,6 +2556,7 @@ impl Hub {
             if self.viewed_pass(ctx) {
                 return events;
             }
+            ctx.world.chunk_resends.clear();
             if !self
                 .guests
                 .iter()
@@ -2578,7 +2579,7 @@ impl Hub {
         crate::spans::time("lan_viewed_levels", || self.send_viewed(ctx));
         crate::spans::time("lan_block_changes", || {
             self.broadcast_light_changes(ctx.world);
-            self.broadcast_block_changes(ctx.world);
+            self.broadcast_block_changes(ctx.world, ctx.streaming);
         });
         // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
         // acknowledged after the block changes they made were sent, so a client's predicted
@@ -3077,10 +3078,14 @@ impl Hub {
     /// before the block events: what changed since the last time (the last
     /// tick's block events, entities and block entities, this tick's
     /// scheduled and random ticks), as it is now.
-    pub fn broadcast_changes(&mut self, world: &mut World) {
+    pub fn broadcast_changes(
+        &mut self,
+        world: &mut World,
+        streaming: &crate::streaming::Streaming,
+    ) {
         if self.guests.iter().any(|g| self.here(g)) || self.viewed_here() {
             self.broadcast_light_changes(world);
-            self.broadcast_block_changes(world);
+            self.broadcast_block_changes(world, Some(streaming));
         }
     }
 
@@ -5311,7 +5316,7 @@ mod tests {
             .insert(pos, BlockEntity::Mod(Box::new(machine)));
         world.block_log = Some(vec![pos]);
         // Nobody has the chunk yet: no tag is built, and the fields wait.
-        hub.broadcast_block_changes(&mut world);
+        hub.broadcast_block_changes(&mut world, None);
         assert_eq!(BUILT.load(Ordering::Relaxed), 0);
         assert!(first.try_recv().is_err());
         hub.guests.update(0, |g| _ = g.sent_chunks.insert((0, 0)));
@@ -5355,14 +5360,14 @@ mod tests {
         // The column goes whole in the same broadcast: the change is kept for the fields.
         world.bulk_log.insert((0, 0));
         world.block_log.as_mut().unwrap().extend([pos, pos]);
-        hub.broadcast_block_changes(&mut world);
+        hub.broadcast_block_changes(&mut world, None);
         let once = Tag::Compound(Compound::from([progress.clone(), effect]));
         for viewer in [&first, &second] {
             assert_eq!(tags(viewer), std::slice::from_ref(&once));
         }
         let built = BUILT.load(Ordering::Relaxed);
         world.block_log.as_mut().unwrap().push(pos);
-        hub.broadcast_block_changes(&mut world);
+        hub.broadcast_block_changes(&mut world, None);
         let plain = Tag::Compound(Compound::from([progress.clone()]));
         for viewer in [&first, &second] {
             assert_eq!(tags(viewer), std::slice::from_ref(&plain));
@@ -5373,6 +5378,54 @@ mod tests {
         };
         assert_eq!(machine.revision(), revision);
         assert_eq!(machine.nbt, Compound::from([progress]));
+    }
+
+    #[test]
+    fn resends_wait_for_light_and_go_only_to_the_levels_chunk_holders() {
+        let (mut hub, rx) = hub_with_a_guest();
+        let key = (2, 3);
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        let mut chunk = Chunk::empty(key.0, key.1);
+        chunk.lit = true;
+        world.chunks.insert(key, Arc::new(chunk));
+
+        // A loaded chunk that the guest has not been sent is not sent by a resend.
+        world.chunk_resends.insert(key);
+        hub.broadcast_block_changes(&mut world, None);
+        assert!(rx.try_recv().is_err());
+
+        hub.guests.update(0, |g| _ = g.sent_chunks.insert(key));
+        hub.set_dimension("minecraft:the_nether");
+        world.chunk_resends.insert(key);
+        hub.broadcast_block_changes(&mut world, None);
+        assert!(
+            rx.try_recv().is_err(),
+            "the guest holds the overworld column only"
+        );
+        hub.set_dimension("minecraft:overworld");
+
+        // The guest already has light for this column, but a new full light job is pending.
+        world.dirty_light.insert(key);
+        world.chunk_resends.insert(key);
+        hub.broadcast_block_changes(&mut world, None);
+        assert!(rx.try_recv().is_err(), "the old light must not be resent");
+        world.dirty_light.remove(&key);
+        hub.broadcast_block_changes(&mut world, None);
+        let crate::lan::Out::Packet(body) = rx.try_recv().expect("a full chunk after light work")
+        else {
+            panic!("expected one chunk packet");
+        };
+        let mut r = sunrise_protocol::buf::Reader::new(&body);
+        let id = r.varint().unwrap();
+        let C::LevelChunkWithLight(packet) = C::decode(id, r.rest()).unwrap() else {
+            panic!("expected a chunk with light");
+        };
+        assert_eq!((packet.x, packet.z), key);
+        hub.broadcast_block_changes(&mut world, None);
+        assert!(
+            rx.try_recv().is_err(),
+            "one request sends the column only once"
+        );
     }
 
     #[test]

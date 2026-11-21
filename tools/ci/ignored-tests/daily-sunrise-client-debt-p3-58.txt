@@ -1,0 +1,4 @@
+sunrise-client game::native_chunk_relight_tests::a_mod_queues_the_chunks_it_wrote lib daily child-process
+sunrise-client game::native_chunk_relight_tests::a_resend_resolves_the_parked_levels_loaded_chunk lib daily child-process
+sunrise-client game::native_chunk_relight_tests::large_relight_batches_admit_all_resident_columns lib daily child-process
+sunrise-client game::native_chunk_relight_tests::parked_relight_publishes_only_the_newest_light_on_its_own_level lib daily child-process

@@ -142,7 +142,7 @@ const IDLE_TICKS: u32 = 300;
 /// A level that is not in place: every per-level field of `Game`.
 pub(super) struct Parked {
     pub(super) world: World,
-    streaming: Streaming,
+    pub(super) streaming: Streaming,
     locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
@@ -1610,6 +1610,30 @@ impl Game<'_> {
             .iter()
             .map(|t| (t.chunk, (block_ticking - t.level).max(1)))
             .collect()
+    }
+
+    /// The chunk cache can publish and batch resident light work without a level tick or swap.
+    pub(super) fn advance_idle_chunk_light(&mut self, ticked: &[Dim], viewed: &[Dim]) {
+        let hub = self.lan.as_ref().map(|host| &host.hub);
+        let current = std::iter::once((self.dim, &mut self.streaming, &mut self.world));
+        let parked = self
+            .levels
+            .parked
+            .iter_mut()
+            .map(|(&dim, level)| (dim, &mut level.streaming, &mut level.world));
+        for (dim, streaming, world) in current.chain(parked) {
+            if ticked.contains(&dim) || viewed.contains(&dim) {
+                continue;
+            }
+            streaming.advance_resident_light(world);
+            // With no view pass, only a player newly arrived in this level could hold
+            // its chunks. Otherwise there is no audience for these explicit resends.
+            if !world.chunk_resends.is_empty()
+                && !hub.is_some_and(|hub| hub.guests.iter().any(|g| g.watches_level(dim.id())))
+            {
+                world.chunk_resends.clear();
+            }
+        }
     }
 
     /// Count the parked levels' empty ticks, and save and close the ones

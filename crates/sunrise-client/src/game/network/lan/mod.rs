@@ -2545,7 +2545,7 @@ impl Game<'_> {
     /// it: what the tick writes from there on goes out with the next tick's.
     pub(super) fn lan_broadcast_changes(&mut self) -> Option<usize> {
         if let Some(host) = self.lan.as_mut() {
-            host.hub.broadcast_changes(&mut self.world);
+            host.hub.broadcast_changes(&mut self.world, &self.streaming);
         }
         self.world.block_log.as_ref().map(Vec::len)
     }

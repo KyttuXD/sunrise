@@ -42,25 +42,18 @@ pub trait LevelLightBackendMut {
     #[access(WorldOnly)]
     fn level_check_light(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
-    /// Queues the loaded chunks `chunks` (chunk coordinates) of the level in place, and the loaded
-    /// chunks around them, to be lit again whole from their blocks, for a mod that wrote blocks by
-    /// other means (`edit_blocks` queues the same relight for its own chunks). Accepted at once and
-    /// never lit during the call: the light jobs run at the level's next light update, as those of `edit_blocks` and
-    /// `level_check_light` do, and a column whose eight
-    /// neighbours are not all loaded waits until they are. The light that changed goes to the
-    /// players who see that chunk's border, as any relight's does. There is no completion event
-    /// and no per-call count of finished chunks: a mod that needs the new light reads it on a
-    /// later tick (`level_brightness`), and `chunk_resend` sends the chunk with whatever light has
-    /// landed by the end of that tick. Returns how many columns were queued, the ring included; a
-    /// column not loaded, or already waiting in the queue, is not counted. The queue is bounded
-    /// (4096 columns in all, and 256 chunks a call): a call that would pass either is refused
-    /// whole with `TooManyChunks`, whose `max` is how many chunks a call may take now. Each
-    /// refusal queues nothing and is named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` (a
-    /// level that is not the one being ticked) and `TooManyChunks`.
+    /// Queues the loaded entries in `chunks` (chunk coordinates) and their loaded neighbours for
+    /// full relighting on this open level's light engine, even when its gameplay is not ticking.
+    /// This never opens a level or loads chunks. Work is deduplicated and processed in batches, not
+    /// during the call. Each column waits for the neighbours its light calculation needs, and a new
+    /// request supersedes any older in-flight light result for that column. Light changes follow
+    /// the normal chunk light broadcast. Returns the number of newly queued columns, including
+    /// the ring, not the number finished; there is no completion event. `chunk_resend` waits for
+    /// pending full light work on its column. `Stale`, `Client` and `Unavailable` queue nothing.
     #[access(WorldOnly)]
     fn level_relight_chunks(
         &mut self,
         level: LevelRef,
         chunks: &[[i32; 2]],
-    ) -> Result<u32, ChunkRefusal>;
+    ) -> Result<usize, ChunkRefusal>;
 }

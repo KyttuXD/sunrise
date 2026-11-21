@@ -2,7 +2,7 @@
 //! the players sent those chunks, and, wrapped with the level, to the players whose client views
 //! it (`viewed_levels`).
 use super::{Guest, Hub};
-use crate::{chunk::Chunk, lan::viewed_levels::send::Runs, world::World};
+use crate::{chunk::Chunk, lan::viewed_levels::send::Runs, streaming::Streaming, world::World};
 use sunrise_protocol::{
     packets::play::{self, Clientbound as C},
     viewed_levels::Level,
@@ -14,28 +14,28 @@ impl Hub {
     fn chunk_holders(
         &self,
         key: (i32, i32),
-    ) -> Vec<(
-        usize,
-        Option<Level>,
-        &crate::fast_hash::FxHashSet<(i32, i32)>,
-    )> {
+    ) -> impl Iterator<
+        Item = (
+            usize,
+            Option<Level>,
+            &crate::fast_hash::FxHashSet<(i32, i32)>,
+        ),
+    > {
         let viewed = self.viewed.active();
-        (0..self.guests.len())
-            .filter_map(|i| {
-                let g = &self.guests[i];
-                if self.watches(g) {
-                    g.sent_chunks
-                        .contains(&key)
-                        .then_some((i, None, &g.sent_chunks))
-                } else if viewed {
-                    self.view_here(g)
-                        .filter(|v| v.sent.contains(&key))
-                        .map(|v| (i, Some(v.level), &v.sent))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        (0..self.guests.len()).filter_map(move |i| {
+            let g = &self.guests[i];
+            if self.watches(g) {
+                g.sent_chunks
+                    .contains(&key)
+                    .then_some((i, None, &g.sent_chunks))
+            } else if viewed {
+                self.view_here(g)
+                    .filter(|v| v.sent.contains(&key))
+                    .map(|v| (i, Some(v.level), &v.sent))
+            } else {
+                None
+            }
+        })
     }
 
     /// `body`, a play clientbound packet, to each of `holders`.
@@ -70,7 +70,6 @@ impl Hub {
         for ((x, z), sections) in changes {
             let viewers: Vec<(usize, Option<Level>)> = self
                 .chunk_holders((x, z))
-                .into_iter()
                 .filter(|(_, _, sent)| {
                     (-1..=1).any(|dz| (-1..=1).any(|dx| !sent.contains(&(x + dx, z + dz))))
                 })
@@ -87,10 +86,14 @@ impl Hub {
         }
     }
 
-    pub(in crate::lan) fn broadcast_block_changes(&mut self, world: &mut World) {
+    pub(in crate::lan) fn broadcast_block_changes(
+        &mut self,
+        world: &mut World,
+        streaming: Option<&Streaming>,
+    ) {
         // Chunks changed in bulk (`World::edit_runs`) go whole to those who see them: one packet each, where a
         // change of each block would be thousands (the client lights and meshes them once, on its workers).
-        let bulk: Vec<(i32, i32)> = if world.bulk_log.is_empty() {
+        let mut bulk: Vec<(i32, i32)> = if world.bulk_log.is_empty() {
             Vec::new()
         } else {
             let mut keys: Vec<_> = world.bulk_log.drain().collect();
@@ -112,6 +115,31 @@ impl Hub {
                     crate::lan::handoff::changed(chunk);
                 }
             }
+        }
+        if !world.chunk_resends.is_empty() {
+            // ChunkMap.waitForLightBeforeSending: revalidate the resident column, then
+            // wait for its light results to have landed, not just to have been submitted.
+            world.chunk_resends.retain(|&key| {
+                let Some(chunk) = world.chunks.get(&key) else {
+                    return false;
+                };
+                if self.chunk_holders(key).next().is_none() {
+                    return false;
+                }
+                if !chunk.lit
+                    || !chunk.postprocess.is_empty()
+                    || world.dirty_light.contains(&key)
+                    || streaming.is_some_and(|streaming| streaming.light_in_flight(key))
+                {
+                    return true;
+                }
+                bulk.push(key);
+                false
+            });
+            bulk.sort_unstable();
+            bulk.dedup();
+        }
+        if !bulk.is_empty() {
             let columns: Vec<&Chunk> = bulk
                 .iter()
                 .filter_map(|k| world.chunks.get(k).map(|c| &**c))
@@ -220,7 +248,6 @@ impl Hub {
     /// [`Self::chunk_holders`] without the chunks they were sent.
     fn holders(&self, key: (i32, i32)) -> Vec<(usize, Option<Level>)> {
         self.chunk_holders(key)
-            .into_iter()
             .map(|(i, level, _)| (i, level))
             .collect()
     }

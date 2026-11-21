@@ -34,14 +34,15 @@ impl Game<'_> {
 
     /// A view pass for each level the viewed areas name that `ticked` does not hold.
     pub(super) fn run_view_passes(&mut self, ticked: &[Dim]) -> Result<()> {
-        if !self.lan.as_ref().is_some_and(|h| h.hub.viewed.active()) {
-            return Ok(());
-        }
-        let viewed: Vec<Dim> = Dim::all()
-            .into_iter()
-            .filter(|d| !ticked.contains(d) && self.needs_view_pass(*d))
-            .collect();
-        for dim in viewed {
+        let viewed: Vec<Dim> = if self.lan.as_ref().is_some_and(|h| h.hub.viewed.active()) {
+            Dim::all()
+                .into_iter()
+                .filter(|d| !ticked.contains(d) && self.needs_view_pass(*d))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for &dim in &viewed {
             let _span = sunrise_client::spans::guard("view_pass");
             self.enter_level(dim)?;
             self.update_dedicated_streaming();
@@ -52,6 +53,7 @@ impl Game<'_> {
             self.postprocess_chunks()?;
             self.view_pass_send();
         }
+        self.advance_idle_chunk_light(ticked, &viewed);
         Ok(())
     }
 
@@ -82,7 +84,9 @@ impl Game<'_> {
             border: &self.border,
             streaming: Some(&self.streaming),
         };
-        host.hub.viewed_pass(&mut ctx);
+        if !host.hub.viewed_pass(&mut ctx) {
+            ctx.world.chunk_resends.clear();
+        }
     }
 
     /// The level's entities as `tick_lan` describes them for the tracking pass: nobody is in the
