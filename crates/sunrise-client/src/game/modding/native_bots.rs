@@ -270,7 +270,7 @@ impl Game<'_> {
             CollisionContext::empty(false),
             bounds,
             false,
-            COLLISION_CELLS,
+            Some(COLLISION_CELLS),
         ) else {
             return None;
         };

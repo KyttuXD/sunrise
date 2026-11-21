@@ -132,9 +132,13 @@ where
             {
                 shapes.push(border);
             }
-            for hit in
-                BlockCollisionScan::new(world, request.context, bounds, false, candidate_budget)?
-            {
+            for hit in BlockCollisionScan::new(
+                world,
+                request.context,
+                bounds,
+                false,
+                Some(candidate_budget),
+            )? {
                 shapes.push(hit?.shape);
             }
             Ok(shapes)
@@ -163,7 +167,7 @@ where
         request.context,
         request.bounds,
         false,
-        request.candidate_budget,
+        Some(request.candidate_budget),
     )? {
         return Ok(false);
     }
@@ -220,7 +224,7 @@ where
         CollisionContext::empty(false),
         reach,
         false,
-        1_000_000,
+        Some(1_000_000),
     ) else {
         return false;
     };

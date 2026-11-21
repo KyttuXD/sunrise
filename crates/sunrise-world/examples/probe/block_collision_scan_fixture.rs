@@ -175,7 +175,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 CollisionContext::empty(false),
                 bounds,
                 f["suffocating"].as_bool().unwrap(),
-                1_000_000,
+                Some(1_000_000),
             )?;
             for _ in 0..f["limit"].as_u64().unwrap() {
                 match scan.next() {

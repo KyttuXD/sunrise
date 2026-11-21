@@ -57,7 +57,7 @@ fn visit_limit_retains_queries_and_does_not_report_miss() {
         Vec3::new(3.5, 0.5, 0.5),
         RayBlockMode::Collider,
         RayFluidMode::None,
-        1,
+        Some(1),
     );
     assert!(matches!(
         result,
@@ -74,7 +74,7 @@ fn nonfinite_ray_fails_before_world_reads() {
         Vec3::new(f64::INFINITY, 0., 0.),
         RayBlockMode::Collider,
         RayFluidMode::None,
-        10,
+        Some(10),
     );
     assert!(matches!(
         result,
@@ -94,7 +94,7 @@ fn provider_failure_is_distinct_from_traversal_failure() {
         Vec3::new(1., 0., 0.),
         RayBlockMode::Collider,
         RayFluidMode::None,
-        10,
+        Some(10),
     );
     assert!(matches!(result, Err(RayError::World("fluid unavailable"))));
     assert_eq!(world.reads, 2);

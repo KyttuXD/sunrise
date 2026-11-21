@@ -566,7 +566,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             context,
             bounds,
             f["suffocating"].as_bool().unwrap(),
-            1_000_000,
+            Some(1_000_000),
         )?;
         let mut hits = 0;
         for _ in 0..f["limit"].as_u64().unwrap() {

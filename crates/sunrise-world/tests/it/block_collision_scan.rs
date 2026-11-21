@@ -49,7 +49,7 @@ fn budgets_include_skipped_corners_and_errors_fuse_iteration() {
             CollisionContext::empty(false),
             bounds(),
             false,
-            budget,
+            Some(budget),
         )
         .unwrap();
         assert!(matches!(
@@ -66,7 +66,7 @@ fn budgets_include_skipped_corners_and_errors_fuse_iteration() {
         CollisionContext::empty(false),
         bounds(),
         false,
-        1000,
+        Some(1000),
     )
     .unwrap();
     assert!(matches!(
@@ -89,7 +89,7 @@ fn invalid_or_excessive_domains_fail_before_world_queries() {
                 CollisionContext::empty(false),
                 bounds,
                 false,
-                1000
+                Some(1000)
             ),
             Err(CollisionScanError::InvalidBounds)
         ));
@@ -101,7 +101,7 @@ fn invalid_or_excessive_domains_fail_before_world_queries() {
             CollisionContext::empty(false),
             bounds,
             false,
-            1000
+            Some(1000)
         ),
         Err(CollisionScanError::TooLarge)
     ));
@@ -195,7 +195,7 @@ fn cells_follow_the_cursor_order_without_corners() {
             CollisionContext::empty(false),
             bounds,
             false,
-            1_000_000,
+            Some(1_000_000),
         )
         .unwrap()
         .count();
@@ -238,7 +238,7 @@ fn outer_cells_of_contained_sections_are_not_read() {
             CollisionContext::empty(false),
             bounds,
             false,
-            1_000_000,
+            Some(1_000_000),
         )
         .unwrap()
         .count();
@@ -312,7 +312,7 @@ fn each_section_is_asked_once_and_answers_for_its_column() {
             CollisionContext::empty(false),
             bounds,
             false,
-            1_000_000,
+            Some(1_000_000),
         )
         .unwrap()
         .count();
@@ -345,7 +345,7 @@ fn passed_cells_count_toward_the_budget() {
                 CollisionContext::empty(false),
                 bounds,
                 false,
-                budget,
+                Some(budget),
             )
             .unwrap()
             .map(|hit| hit.map(|_| ()).map_err(|e| e.to_string()))
@@ -428,7 +428,7 @@ fn sparse_scan(
         CollisionContext::empty(false),
         bounds,
         suffocating,
-        budget,
+        Some(budget),
     )
     .unwrap()
     .map(|hit| hit.map(|h| h.position).map_err(|e| e.to_string()))
@@ -492,7 +492,7 @@ fn boolean_collision_scan_matches_first_hit_and_queries() {
                         CollisionContext::empty(false),
                         bounds,
                         only_suffocating,
-                        budget,
+                        Some(budget),
                     )
                     .unwrap()
                     .next()
@@ -505,7 +505,7 @@ fn boolean_collision_scan_matches_first_hit_and_queries() {
                         CollisionContext::empty(false),
                         bounds,
                         only_suffocating,
-                        budget,
+                        Some(budget),
                     )
                     .map_err(|error| error.to_string());
                     assert_eq!(

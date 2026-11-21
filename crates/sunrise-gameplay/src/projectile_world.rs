@@ -32,7 +32,7 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             subject: None,
         };
         let context = sunrise_world::collision_context::CollisionContext::position(from.y);
-        let r = traverse_blocks(from, to, 256, |p: BlockPos| {
+        let r = traverse_blocks(from, to, Some(256), |p: BlockPos| {
             let state = self.w.world.block(p.x, p.y, p.z);
             if self.w.facts.is_air(state) {
                 return None;

@@ -369,11 +369,16 @@ fn displaced_collision_declines_static_rays_and_reaches_the_next_face_cell() {
     let mut scene = RegistryCollisionWorld::new(&binding, &mut scene).unwrap();
     // The box is wholly in the cell west of AT: only the face halo can find this block.
     let probe = Aabb::new(Vec3::new(0.92, 64.2, 2.3), Vec3::new(0.98, 64.4, 2.6));
-    let hits =
-        BlockCollisionScan::new(&mut scene, CollisionContext::empty(false), probe, false, 27)
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+    let hits = BlockCollisionScan::new(
+        &mut scene,
+        CollisionContext::empty(false),
+        probe,
+        false,
+        Some(27),
+    )
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].position, AT);
 }

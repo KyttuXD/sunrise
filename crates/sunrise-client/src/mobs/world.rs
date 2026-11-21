@@ -367,7 +367,7 @@ impl MobWorld<'_> {
             subject: None,
         };
         let mut cache = RaycastBlockCache::new();
-        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+        let result = traverse_blocks(from, to, Some(512), |p: BlockPos| {
             let state = cache.block(self.world, p.x, p.y, p.z);
             if fluids_block && self.facts.get(state).fluid != Fluid::None {
                 return Some(());
@@ -403,7 +403,7 @@ impl MobWorld<'_> {
     pub fn outline_hit(&self, from: Vec3, to: Vec3) -> Option<[i32; 3]> {
         use sunrise_world::collision_context::EntityContextKind;
         let mut cache = RaycastBlockCache::new();
-        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+        let result = traverse_blocks(from, to, Some(512), |p: BlockPos| {
             let state = cache.block(self.world, p.x, p.y, p.z);
             if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
@@ -481,7 +481,7 @@ impl MobWorld<'_> {
             subject: None,
         };
         let mut cache = RaycastBlockCache::new();
-        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+        let result = traverse_blocks(from, to, Some(512), |p: BlockPos| {
             let state = cache.block(self.world, p.x, p.y, p.z);
             if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
@@ -509,7 +509,7 @@ impl MobWorld<'_> {
             subject: None,
         };
         let mut cache = RaycastBlockCache::new();
-        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+        let result = traverse_blocks(from, to, Some(512), |p: BlockPos| {
             let state = cache.block(self.world, p.x, p.y, p.z);
             if cache.section_uniform_air || self.facts.is_air(state) {
                 return None;
@@ -784,7 +784,7 @@ pub fn visual_clip<W: DynamicCollisionWorld>(
     to: Vec3,
 ) -> Option<Option<[i32; 3]>> {
     let full = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
-    let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+    let result = traverse_blocks(from, to, Some(512), |p: BlockPos| {
         let id = state(p.x, p.y, p.z);
         if facts.is_air(id) {
             return None;

@@ -92,7 +92,7 @@ impl Game<'_> {
             binding: self.collision,
             subject: None,
         };
-        traverse_blocks(from, to, 512, |p: BlockPos| {
+        traverse_blocks(from, to, Some(512), |p: BlockPos| {
             let state = self.world.block(p.x, p.y, p.z);
             if self.res.facts().is_air(state) {
                 return None;

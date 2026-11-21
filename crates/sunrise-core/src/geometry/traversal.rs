@@ -19,12 +19,12 @@ impl std::error::Error for TraversalError {}
 /// Visit blocks in vanilla ray order until the visitor returns Some, or the
 /// segment is exhausted. `None` corresponds to vanilla's miss callback.
 ///
-/// Non-finite geometry and exceeding the caller's visit budget return typed
+/// Non-finite geometry and exceeding an optional visit budget return typed
 /// errors. Previously invoked callbacks are not rolled back on a budget error.
 pub fn traverse_blocks<T>(
     start: Vec3,
     end: Vec3,
-    max_visits: usize,
+    mut max_visits: Option<usize>,
     mut visitor: impl FnMut(BlockPos) -> Option<T>,
 ) -> Result<Option<T>, TraversalError> {
     if !start.is_finite() || !end.is_finite() {
@@ -66,12 +66,13 @@ pub fn traverse_blocks<T>(
                 fraction
             }
     });
-    let mut visited = 0;
     loop {
-        if visited == max_visits {
-            return Err(TraversalError::VisitLimit);
+        if let Some(remaining) = &mut max_visits {
+            if *remaining == 0 {
+                return Err(TraversalError::VisitLimit);
+            }
+            *remaining -= 1;
         }
-        visited += 1;
         if let Some(result) = visitor(BlockPos::new(position[0], position[1], position[2])) {
             return Ok(Some(result));
         }
@@ -101,7 +102,7 @@ mod tests {
             traverse_blocks::<()>(
                 Vec3::new(0.5, 0.5, 0.5),
                 Vec3::new(1.5, 1.5, 1.5),
-                10,
+                Some(10),
                 |pos| {
                     visited.push(pos);
                     None
@@ -121,7 +122,7 @@ mod tests {
         let result = traverse_blocks(
             Vec3::new(0.5, 0.5, 0.5),
             Vec3::new(1.5, 1.5, 1.5),
-            10,
+            Some(10),
             |pos| (pos.z == 1).then_some(pos),
         );
         assert_eq!(result, Ok(Some(BlockPos::new(0, 0, 1))));
@@ -130,13 +131,13 @@ mod tests {
     fn miss_zero_identity_and_budget_errors() {
         let mut count = 0;
         assert_eq!(
-            traverse_blocks::<()>(Vec3::ZERO, Vec3::ZERO, 0, |_| panic!(
+            traverse_blocks::<()>(Vec3::ZERO, Vec3::ZERO, Some(0), |_| panic!(
                 "no visits for equal endpoints"
             )),
             Ok(None)
         );
         assert_eq!(
-            traverse_blocks::<()>(Vec3::new(-0.0, 0.0, 0.0), Vec3::ZERO, 10, |_| {
+            traverse_blocks::<()>(Vec3::new(-0.0, 0.0, 0.0), Vec3::ZERO, Some(10), |_| {
                 count += 1;
                 None
             }),
@@ -144,11 +145,11 @@ mod tests {
         );
         assert_eq!(count, 4);
         assert_eq!(
-            traverse_blocks::<()>(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0), 1, |_| None),
+            traverse_blocks::<()>(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0), Some(1), |_| None),
             Err(TraversalError::VisitLimit)
         );
         assert_eq!(
-            traverse_blocks::<()>(Vec3::ZERO, Vec3::new(f64::NAN, 1.0, 1.0), 1, |_| None),
+            traverse_blocks::<()>(Vec3::ZERO, Vec3::new(f64::NAN, 1.0, 1.0), Some(1), |_| None),
             Err(TraversalError::NonFinite)
         );
     }

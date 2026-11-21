@@ -191,12 +191,13 @@ fn main() -> io::Result<()> {
                 let end = input.vector();
                 let stop = input.integer();
                 let mut count = 0;
-                let result = sunrise_core::geometry::traverse_blocks(start, end, 10000, |pos| {
-                    count += 1;
-                    writeln!(out, "visit {} {} {}", pos.x, pos.y, pos.z).expect("write visit");
-                    (count == stop).then_some(pos)
-                })
-                .expect("finite bounded corpus");
+                let result =
+                    sunrise_core::geometry::traverse_blocks(start, end, Some(10000), |pos| {
+                        count += 1;
+                        writeln!(out, "visit {} {} {}", pos.x, pos.y, pos.z).expect("write visit");
+                        (count == stop).then_some(pos)
+                    })
+                    .expect("finite bounded corpus");
                 match result {
                     Some(pos) => writeln!(out, "traverse {} {} {} {count}", pos.x, pos.y, pos.z)?,
                     None => writeln!(out, "traverse none {count}")?,

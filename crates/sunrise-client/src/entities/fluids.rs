@@ -43,7 +43,7 @@ pub fn fall_reset_hit(
     moved: Vec3,
 ) -> bool {
     let to = from.add_vector(moved.normalize().scale(moved.length().min(8.0)));
-    let hit = sunrise_core::geometry::traverse_blocks(from, to, 1_000_000, |p| {
+    let hit = sunrise_core::geometry::traverse_blocks(from, to, Some(1_000_000), |p| {
         let water = water_clip(context, world, fluids, from, to, p);
         let reset = tagged(p)
             && sunrise_core::geometry::VoxelShape::block()

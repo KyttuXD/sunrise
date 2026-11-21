@@ -211,6 +211,6 @@ pub fn fall_reset_ray<W: FallRayWorld>(
         to,
         RayBlockMode::FallDamageResetting,
         RayFluidMode::Water,
-        max_visits,
+        Some(max_visits),
     )
 }

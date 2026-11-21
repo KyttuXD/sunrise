@@ -734,7 +734,7 @@ impl Game<'_> {
             eye.y + dir[1] * 10.0,
             eye.z + dir[2] * 10.0,
         );
-        let hit = traverse_blocks(eye, end, 256, |b: BlockPos| {
+        let hit = traverse_blocks(eye, end, Some(256), |b: BlockPos| {
             let state = self.world.block(b.x, b.y, b.z);
             (!self.res.facts().is_air(state)).then_some([b.x, b.y, b.z])
         });

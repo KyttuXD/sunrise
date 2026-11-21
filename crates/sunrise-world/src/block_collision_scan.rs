@@ -201,7 +201,7 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     /// The cell at `index`, relative to `start` (x fastest, then y, then z).
     cursor: [usize; 3],
     count: usize,
-    budget: usize,
+    budget: Option<usize>,
     /// The last cell's chunk and its section's facts: the cells of a row in one chunk share
     /// them, so most cells need one comparison.
     here: Option<(W::Chunk, SectionFacts)>,
@@ -219,14 +219,14 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
 }
 impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
     /// Finite bounds and a positive-Java-int candidate volume are supported.
-    /// Budget counts every cursor cell, including skipped corners. After an error
-    /// iteration terminates; already performed queries are not rolled back.
+    /// An optional budget counts every cursor cell, including skipped corners.
+    /// After an error, iteration terminates; already performed queries are not rolled back.
     pub fn new(
         world: &'w mut W,
         context: CollisionContext<'c>,
         bounds: Aabb,
         only_suffocating: bool,
-        candidate_budget: usize,
+        candidate_budget: Option<usize>,
     ) -> Result<Self, CollisionScanError<W::Error>> {
         let (start, sizes, count) = cells(bounds).map_err(|error| match error {
             CellError::InvalidBounds => CollisionScanError::InvalidBounds,
@@ -263,7 +263,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
         context: CollisionContext<'c>,
         bounds: Aabb,
         only_suffocating: bool,
-        candidate_budget: usize,
+        candidate_budget: Option<usize>,
     ) -> Result<bool, CollisionScanError<W::Error>> {
         let mut scan = Self::new(world, context, bounds, only_suffocating, candidate_budget)?;
         scan.presence_only = true;
@@ -271,11 +271,11 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
     }
 
     /// The cells after the current one (cell `x` of its row, block x `block_x`) that are in the
-    /// same row and chunk, never more than the budget has left: what can be passed at once.
+    /// same row and chunk, limited by the remaining budget if one was supplied.
     fn rest_in_chunk(&self, x: usize, block_x: i32) -> usize {
-        (self.sizes[0] - 1 - x)
-            .min(15 - (block_x & 15) as usize)
-            .min(self.budget.saturating_sub(self.index))
+        let rest = (self.sizes[0] - 1 - x).min(15 - (block_x & 15) as usize);
+        self.budget
+            .map_or(rest, |budget| rest.min(budget.saturating_sub(self.index)))
     }
 
     /// The chunk and section facts of a cell in another chunk or section than the last one's;
@@ -374,7 +374,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
 
     fn find_next(&mut self) -> Result<Option<BlockCollisionHit>, CollisionScanError<W::Error>> {
         while self.index < self.count {
-            if self.index >= self.budget {
+            if self.budget.is_some_and(|budget| self.index >= budget) {
                 return Err(CollisionScanError::VisitBudget);
             }
             let [width, height, depth] = self.sizes;

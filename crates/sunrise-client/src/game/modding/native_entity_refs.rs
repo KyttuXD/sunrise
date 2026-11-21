@@ -899,7 +899,7 @@ impl Game<'_> {
             Vec3::new(to[0], to[1], to[2]),
             mode,
             fluid,
-            4096,
+            Some(4096),
         )
         .ok()?;
         let h = result.hit;

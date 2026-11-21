@@ -386,7 +386,7 @@ impl Game<'_> {
                     Vec3::new(to[0], to[1], to[2]),
                     RayBlockMode::Visual,
                     RayFluidMode::None,
-                    4096,
+                    Some(4096),
                 )
                 .ok()?;
                 (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])

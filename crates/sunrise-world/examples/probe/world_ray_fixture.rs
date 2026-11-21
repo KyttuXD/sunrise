@@ -171,7 +171,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             vector(&f["to"]),
             block_mode,
             fluid_mode,
-            10000,
+            Some(10000),
         ) {
             Ok(r) => {
                 let h = r.hit;

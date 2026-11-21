@@ -92,7 +92,7 @@ fn pick_fluid<W: RayWorld>(
         RayFluidMode::Water => world.fluid_is_water(state),
     }
 }
-/// Finite rays only, with an explicit traversal budget. Budget/provider failures
+/// Finite rays only, with an optional traversal budget. Budget/provider failures
 /// preserve preceding queries and return an error rather than a fabricated miss.
 pub fn clip_world<W: RayWorld>(
     world: &mut W,
@@ -100,7 +100,7 @@ pub fn clip_world<W: RayWorld>(
     end: Vec3,
     blocks: RayBlockMode,
     fluids: RayFluidMode,
-    max_visits: usize,
+    max_visits: Option<usize>,
 ) -> Result<RayResult, RayError<W::Error>> {
     let result = traverse_blocks(start, end, max_visits, |p| {
         let mut query = || -> Result<Option<BlockHit>, W::Error> {

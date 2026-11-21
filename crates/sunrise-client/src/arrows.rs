@@ -430,7 +430,7 @@ impl ArrowScene<'_, '_> {
         };
         // CollisionContext.of(arrow): scaffolding is open from below.
         let context = sunrise_world::collision_context::CollisionContext::position(from.y);
-        let hit = sunrise_core::geometry::traverse_blocks(from, to, 1024, |p: BlockPos| {
+        let hit = sunrise_core::geometry::traverse_blocks(from, to, Some(1024), |p: BlockPos| {
             if Some(p) == ignored {
                 return None;
             }
@@ -509,7 +509,7 @@ pub fn clip_block_hit(
     };
     // CollisionContext.of(projectile): scaffolding is open from below.
     let context = sunrise_world::collision_context::CollisionContext::position(from.y);
-    let hit = sunrise_core::geometry::traverse_blocks(from, to, 1024, |p: BlockPos| {
+    let hit = sunrise_core::geometry::traverse_blocks(from, to, Some(1024), |p: BlockPos| {
         let state = world.block(p.x, p.y, p.z);
         if facts.is_air(state) {
             return None;

@@ -367,7 +367,8 @@ where
             return (fail, true, stands);
         }
     }
-    let Ok(scan) = BlockCollisionScan::new(world, context, new.deflate(shrink), false, 1 << 20)
+    let Ok(scan) =
+        BlockCollisionScan::new(world, context, new.deflate(shrink), false, Some(1 << 20))
     else {
         return (fail, false, stands);
     };

@@ -226,7 +226,7 @@ fn camera(c: &Value, out: &mut impl Write) -> Result<()> {
                         Vec3::new(to[0], to[1], to[2]),
                         RayBlockMode::Visual,
                         RayFluidMode::None,
-                        usize::MAX,
+                        Some(usize::MAX),
                     ) else {
                         panic!("ray")
                     };

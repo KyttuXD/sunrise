@@ -635,7 +635,7 @@ impl Game<'_> {
             CollisionContext::empty(false),
             cell,
             false,
-            1_000_000,
+            Some(1_000_000),
         ) {
             for hit in scan.flatten() {
                 amount = hit

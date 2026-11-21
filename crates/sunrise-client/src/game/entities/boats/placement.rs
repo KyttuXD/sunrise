@@ -98,7 +98,7 @@ impl Game<'_> {
             end,
             RayBlockMode::Outline,
             RayFluidMode::Any,
-            256,
+            Some(256),
         )
         .ok()?;
         (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])

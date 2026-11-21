@@ -824,7 +824,7 @@ impl Game<'_> {
         let reset = &self.res.motion().fall_reset;
         let fluids = &self.res.motion().fluids;
         let to = from.add_vector(moved.normalize().scale(length.sqrt().min(8.0)));
-        let hit = sunrise_core::geometry::traverse_blocks(from, to, 1_000_000, |p| {
+        let hit = sunrise_core::geometry::traverse_blocks(from, to, Some(1_000_000), |p| {
             // A tagged block clips as a full block, not its collider.
             let name = &self.res.facts().get(self.world.block(p.x, p.y, p.z)).name;
             if reset.contains(&**name) && VoxelShape::block().clip(from, to, p).is_some() {

@@ -394,7 +394,7 @@ pub fn is_occluded(
     let to = centre(dest);
     for direction in Direction::ALL {
         let nudged = from.relative(direction, f64::from(1.0e-5f32));
-        let hit = traverse_blocks(nudged, to, 512, |p| occludes(p).then_some(()));
+        let hit = traverse_blocks(nudged, to, Some(512), |p| occludes(p).then_some(()));
         if !matches!(hit, Ok(Some(()))) {
             return false;
         }

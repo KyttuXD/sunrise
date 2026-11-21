@@ -2025,7 +2025,11 @@ impl crate::auto_jump::AutoJumpWorld for MotionWorld<'_, '_, '_> {
         let context = self.context();
         let mut scene = self.collisions();
         for hit in sunrise_world::block_collision_scan::BlockCollisionScan::new(
-            &mut scene, context, bounds, false, 1_000_000,
+            &mut scene,
+            context,
+            bounds,
+            false,
+            Some(1_000_000),
         )? {
             boxes.extend_from_slice(hit?.shape.boxes());
         }
@@ -2192,7 +2196,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         // block, not their collider; ClipContext.Fluid.WATER: the water's shape.
         // Both shapes are queried for every visited block (the water's first
         // query fixes its cached shape), either one hitting ends the ray.
-        let hit = traverse_blocks(from, to, 1_000_000, |p| {
+        let hit = traverse_blocks(from, to, Some(1_000_000), |p| {
             let water = match self.water_clip(from, to, p) {
                 Ok(hit) => hit,
                 Err(e) => return Some(Err(e)),

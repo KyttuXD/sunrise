@@ -109,7 +109,7 @@ fn have_line_of_sight(level: &ParticleLevel, a: [f64; 3], b: [f64; 3]) -> bool {
         binding: level.collision,
         subject: None,
     };
-    let hit = traverse_blocks(from, to, 512, |p: BlockPos| {
+    let hit = traverse_blocks(from, to, Some(512), |p: BlockPos| {
         let state = level.world.block(p.x, p.y, p.z);
         if level.facts.is_air(state) {
             return None;

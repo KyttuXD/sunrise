@@ -647,7 +647,7 @@ impl Game<'_> {
                         to,
                         RayBlockMode::Collider,
                         RayFluidMode::None,
-                        4096,
+                        Some(4096),
                     )
                     .is_ok_and(|r| r.miss);
                     if missed {
