@@ -134,6 +134,19 @@ mod root {
             Ok(call())
         }
 
+        pub(super) fn isolated_edit(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            call: impl FnOnce(),
+        ) -> bool {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).is_err() {
+                poison(hook, id);
+                return false;
+            }
+            true
+        }
+
         pub(super) fn listening_kind_owner(
             hook: super::HookId,
             kind: &str,

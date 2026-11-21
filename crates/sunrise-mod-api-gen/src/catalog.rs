@@ -518,12 +518,13 @@ impl Hook {
         if isolate
             && (scope.is_some()
                 || !(api.contract == Contract::Cancel
-                    || api.contract == Contract::Collect && answered_by_mod))
+                    || api.contract == Contract::Collect
+                        && (answered_by_mod || api.collect_validator.is_some())))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
                 error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
+                    "isolate requires a global cancel hook or a global collect hook with attributed answers or a validator"
                         .into(),
             });
         }

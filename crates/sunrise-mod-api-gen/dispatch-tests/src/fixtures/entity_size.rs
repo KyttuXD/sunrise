@@ -53,3 +53,52 @@ fn entity_size_without_listeners_preserves_float_bits() {
     );
     assert_eq!(size.map(f32::to_bits), expected);
 }
+
+#[test]
+fn an_invalid_size_or_panic_never_reaches_the_next_listener() {
+    struct NoHeight;
+    #[mod_api::__subscriptions]
+    impl Hooks for NoHeight {
+        fn entity_size(&self, _: &dyn Host, event: &mut EntitySizeEvent<'_>) {
+            event.size[1] = f32::NAN;
+        }
+    }
+    struct Panics;
+    #[mod_api::__subscriptions]
+    impl Hooks for Panics {
+        fn entity_size(&self, _: &dyn Host, event: &mut EntitySizeEvent<'_>) {
+            event.size[1] = 777.0;
+            panic!("size callback panicked after editing its proposal");
+        }
+    }
+    struct Final;
+    #[mod_api::__subscriptions]
+    impl Hooks for Final {
+        fn entity_size(&self, _: &dyn Host, event: &mut EntitySizeEvent<'_>) {
+            if event.size[1] == 1.5 {
+                event.size[2] = 1.0;
+            }
+        }
+    }
+    install(
+        vec![
+            ModEntry::new("no_height", Box::new(NoHeight)),
+            ModEntry::new("panicking_size", Box::new(Panics)),
+            ModEntry::new("final_size", Box::new(Final)),
+        ]
+        .into(),
+    );
+    for _ in 0..2 {
+        let mut size = [0.6, 1.5, 1.27];
+        dispatch_entity_size(
+            &TestHost,
+            EntityRef,
+            generated::mod_api::Pose,
+            size,
+            &mut size,
+        );
+        assert_eq!(size, [0.6, 1.5, 1.0]);
+        assert!(runtime::poisoned(HookId::EntitySize, "panicking_size"));
+        assert!(!runtime::poisoned(HookId::EntitySize, "no_height"));
+    }
+}

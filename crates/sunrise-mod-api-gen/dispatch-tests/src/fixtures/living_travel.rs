@@ -145,6 +145,12 @@ thread_local! {
 mod crate_root {
     mod entity {
         pub(crate) mod types {
+            pub(crate) fn validate_size(_: &str, previous: &[f32; 3], proposed: &mut [f32; 3]) {
+                if proposed.iter().any(|v| !v.is_finite()) {
+                    *proposed = *previous;
+                }
+            }
+
             /// The fixture's validator: input.x past 1.0 or velocity.x past 64.0 is
             /// refused only on replacement. The real budgets are tested in the vocabulary crate.
             pub(crate) fn refused_travel_output(

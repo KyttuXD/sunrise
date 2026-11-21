@@ -1,0 +1,1 @@
+sunrise-client game::entity_sizes::tests::a_pose_fit_queries_only_reached_candidates_and_uses_the_live_scale lib daily resources

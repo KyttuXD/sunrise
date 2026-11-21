@@ -1827,3 +1827,15 @@ mod travel_tests {
         );
     }
 }
+
+/// Refuse only the proposing listener's invalid dimensions, leaving earlier edits alone.
+pub(crate) fn validate_size(mod_id: &str, previous: &[f32; 3], proposed: &mut [f32; 3]) {
+    if proposed.iter().zip(previous).any(|(&v, &old)| {
+        v.to_bits() != old.to_bits() && (!v.is_finite() || !(0.0..=32.0).contains(&v))
+    }) {
+        log::warn!(
+            "mod {mod_id}: entity_size dimensions {proposed:?} refused; expected finite numbers from 0 through 32 blocks"
+        );
+        *proposed = *previous;
+    }
+}

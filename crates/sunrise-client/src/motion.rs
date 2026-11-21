@@ -3,10 +3,12 @@
 //! powder snow's block-inside effects and freezing. Entity lifecycle, other
 //! block-inside effects and audiovisual event consumers remain separate work.
 mod player_init;
+mod pose_tick;
 use crate::{
     Result, assets::Assets, collisions::SceneCollisions, living_attributes::attribute_error,
     world::World,
 };
+pub use pose_tick::MotionTick;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
@@ -475,8 +477,6 @@ pub struct PlayerMotion {
     /// What `entity_size` answered for this body's pose and vanilla size (see
     /// `game/modding/entity_sizes.rs`); `refresh_dimensions` keeps it while it holds.
     pub size_answer: Option<crate::pose::SizeAnswer>,
-    /// Standing, crouching and swimming answers resolved before motion; cloned with replay state.
-    pub pose_fit_sizes: [Option<crate::pose::SizeAnswer>; 3],
     /// The `minecraft:scale` the dimensions were last built with
     /// (`Entity.refreshDimensions`), for the poses the body takes before it
     /// next refreshes.
@@ -1238,20 +1238,53 @@ impl MotionWorld<'_, '_, '_> {
         self.player.speed = self.player.attribute("minecraft:movement_speed")? as f32;
         Ok(())
     }
-    /// Resident simulation phases in native order. Enclosing entity/world tick
-    /// services are still incomplete; this composes clocks, movement and hunger.
-    pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
-        self.player.health.advance_clock();
-        self.fluid_base_tick()?;
-        self.simulation_tick_with_fluids(direction, jumping)
+    /// LocalPlayer.aiStep after the old-input crouch check, through movement and
+    /// LivingEntity's dirty attribute refresh. Pose selection follows this phase.
+    #[sunrise_mod_api_macros::replaceable]
+    pub fn apply_local_input(
+        &mut self,
+        mut keys: crate::sprint::Keys,
+        sprint_window: i32,
+        replay_sprinting: Option<bool>,
+    ) -> Result<Vec3> {
+        self.player.was_auto_jump = self.player.auto_jump_time > 0;
+        if self.player.was_auto_jump {
+            self.player.auto_jump_time -= 1;
+            keys.jump = true;
+        }
+        if let Some(sprinting) = replay_sprinting {
+            if self.player.sprinting != sprinting {
+                self.player.set_sprinting(sprinting)?;
+            }
+        } else {
+            self.player
+                .sprint_input_tick_with_window(keys, sprint_window)?;
+        }
+        self.player.shift_key_down = keys.shift;
+        let direction = keys.direction();
+        self.player.move_vector = direction;
+        let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
+            && self.player.moving_slowly()
+        {
+            Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
+        } else {
+            None
+        };
+        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
+        self.player.applied_input = modified;
+        self.move_before_pose(modified, keys.jump)
     }
-    fn simulation_tick_with_fluids(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+
+    fn move_before_pose(&mut self, direction: [f32; 2], jumping: bool) -> Result<Vec3> {
         self.tick_environment_damage()?;
         let previous = self.player.position;
         self.player_movement_tick_with_fluids(direction, jumping)?;
         self.apply_fire_contact()?;
         self.player.refresh_attributes()?;
-        self.update_player_pose()?;
+        Ok(previous)
+    }
+
+    fn finish_simulation_tick(&mut self, previous: Vec3) -> Result<()> {
         // The resident scene accepts the resolved local movement directly.
         // Vanilla dispatches this separately from travel, on packet acceptance.
         self.check_movement_statistics(previous.vector_to(self.player.position))?;
@@ -1268,70 +1301,6 @@ impl MotionWorld<'_, '_, '_> {
             self.health,
             rules,
         )
-    }
-    pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
-        self.controlled_simulation_tick_with_sprint_window(keys, 7)
-    }
-    /// Local simulation with the configured double-tap sprint window.
-    #[sunrise_mod_api_macros::replaceable]
-    pub fn controlled_simulation_tick_with_sprint_window(
-        &mut self,
-        keys: crate::sprint::Keys,
-        sprint_window: i32,
-    ) -> Result<()> {
-        self.local_tick(keys, |player, keys| {
-            player.sprint_input_tick_with_window(keys, sprint_window)
-        })
-    }
-    /// A client's tick played again: the client's own keys, and the sprinting it said it had
-    /// (its ServerboundPlayerCommandPacket comes before the tick's move). It tells the mods nothing
-    /// of what it did (`living_jump`, `living_fall`, `player_flyable_fall`: `replaying`), but
-    /// their answers to what the movement asks (a bounce's restitution, a block's friction) count.
-    pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
-        self.player.replaying = true;
-        let result = self.local_tick(keys, |player, _| {
-            if player.sprinting == sprinting {
-                Ok(())
-            } else {
-                player.set_sprinting(sprinting)
-            }
-        });
-        self.player.replaying = false;
-        result
-    }
-    /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the
-    /// sprint phase.
-    fn local_tick(
-        &mut self,
-        keys: crate::sprint::Keys,
-        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
-    ) -> Result<()> {
-        // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
-        self.player.health.advance_clock();
-        self.fluid_base_tick()?;
-        self.update_local_crouching()?;
-        let mut keys = keys;
-        // LocalPlayer.aiStep: a pending auto-jump presses jump for this tick
-        // (input.makeJump) and keeps the jump from toggling flight.
-        self.player.was_auto_jump = self.player.auto_jump_time > 0;
-        if self.player.was_auto_jump {
-            self.player.auto_jump_time -= 1;
-            keys.jump = true;
-        }
-        sprint(self.player, keys)?;
-        self.player.shift_key_down = keys.shift;
-        let direction = keys.direction();
-        self.player.move_vector = direction;
-        let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
-            && self.player.moving_slowly()
-        {
-            Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
-        } else {
-            None
-        };
-        let modified = crate::input::modify_input(direction, self.player.item_use_speed, sneak);
-        self.player.applied_input = modified;
-        self.simulation_tick_with_fluids(modified, keys.jump)
     }
     pub fn check_movement_statistics(&mut self, delta: Vec3) -> Result<()> {
         movement_statistics::check(self, delta)

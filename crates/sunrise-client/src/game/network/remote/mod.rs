@@ -62,7 +62,7 @@ use sunrise_client::{
     lan::data::{BIOME_REGISTRY, client_biomes},
     menu::Input,
     mobs::{Mob, MobType, Who},
-    motion::{MotionWorld, PlayerMotion},
+    motion::PlayerMotion,
     net::{Event, Session},
     particles::TrackingTarget,
     random_source,

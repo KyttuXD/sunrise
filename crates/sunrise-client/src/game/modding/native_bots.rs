@@ -2,13 +2,14 @@
 //! bots"): a mod that drives a server player itself (a fake client sending its own moves) asks
 //! where the player's movement code would take them in one tick, and which block shapes are in
 //! a box. Nothing runs unless a mod calls it, and neither changes the player or the level.
+use super::entity_sizes::GamePlayerMotion;
 use super::{Game, glide_wear, shield, worn_boots};
 use mod_api::{PlayerInput, SimulatedMove};
 use std::io;
 use std::ops::ControlFlow;
 use sunrise_client::collisions::SceneCollisions;
 use sunrise_client::items::ItemStack;
-use sunrise_client::motion::{MotionWorld, PlayerMotion};
+use sunrise_client::motion::{MotionTick, PlayerMotion};
 use sunrise_client::sprint::Keys;
 use sunrise_core::geometry::{Aabb, Vec3, VoxelShape};
 use sunrise_core::position::{BlockPos, ChunkPos};
@@ -104,20 +105,11 @@ impl Game<'_> {
             self.level_suffocation(),
         );
         let sprinting = sprints(&input) && !body.item_use_slows_sprint;
-        let side = game_side!(self);
-        MotionWorld {
-            side: &side,
+        GamePlayerMotion {
+            game: self,
             entities: &[],
-            player: &mut body,
-            scene: &mut self.world,
-            assets: &self.pack.assets,
-            collision_binding: self.collision,
-            resources: self.motion,
-            health: &self.health_resources,
-            tag_items: Some(world_items!(self)),
-            loop_context: &self.loop_context,
-            damage_hooks: &self.damage_hooks,
-            block_registries: Some(&self.pack.block_registries),
+            sections: None,
+            detached_body: Some(&mut body),
         }
         .replayed_tick(keys, sprinting)
         .ok()?;

@@ -1,8 +1,9 @@
 //! Restore the guest's first body without borrowing another player's RNG.
 use super::*;
+use crate::game::entity_sizes::GamePlayerMotion;
 use sunrise_client::{
     lan::guest::Guest,
-    motion::{MotionResources, PlayerMotion, ServerTravel},
+    motion::{MotionResources, MotionTick, PlayerMotion, ServerTravel},
 };
 use sunrise_core::geometry::Vec3;
 
@@ -34,6 +35,7 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
         return false;
     };
     let mut motion = motion;
+    motion.entity_id = guest.entity_id;
     if let Some(tick_count) = guest.carried_tick_count.take() {
         motion.health.tick_count = tick_count;
     }
@@ -113,6 +115,7 @@ impl Game<'_> {
         }) else {
             return;
         };
+        self.refresh_guest_size(conn);
         let g = self.lan.as_ref().unwrap().hub.guest(conn).unwrap();
         let id = g.entity_id as u32;
         if g.spectator() {
@@ -335,12 +338,23 @@ impl Game<'_> {
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
             // ends with updatePlayerPose — or, for a passenger, the rideTick
             // path that clears a swim (#4509 / #3308).
-            let _ = if riding {
-                w.passenger_pose_tick()
-            } else {
-                w.server_player_pose_tick()
+            let mut motion = GamePlayerMotion {
+                game,
+                entities: &[],
+                sections: None,
+                detached_body: None,
             };
-            let mut events = std::mem::take(&mut w.player.events);
+            let _ = if riding {
+                motion
+                    .refresh_player_size()
+                    .and_then(|()| motion.passenger_pose_tick())
+            } else {
+                motion.server_player_pose_tick()
+            };
+            let mut events = game
+                .player
+                .as_mut()
+                .map_or_else(Vec::new, |player| std::mem::take(&mut player.events));
             if let Some((at, alive)) = rose {
                 game.end_tracked_fall(at, alive);
             }

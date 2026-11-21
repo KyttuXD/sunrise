@@ -1,4 +1,6 @@
 use super::*;
+use crate::game::entity_sizes::GamePlayerMotion;
+use sunrise_client::motion::MotionTick;
 
 impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
@@ -950,8 +952,6 @@ impl Game<'_> {
             player.velocity = Vec3::ZERO;
             player.pitch = 0.0;
         } else if walks {
-            let side = game_side!(self);
-            let _sections = section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
             player.client_side = true;
             // LivingEntity.checkAutoSpinAttack: a Riptide spin that touches a
             // mob ends and bounces back; the server deals the hit.
@@ -964,58 +964,48 @@ impl Game<'_> {
                         .map(|m| (m.id, m.bounds())),
                 );
             }
-            MotionWorld {
-                side: &side,
+            GamePlayerMotion {
+                game: self,
                 entities: &entity_collisions,
-                player,
-                scene: &mut self.world,
-                assets: &self.pack.assets,
-                collision_binding: self.collision,
-                resources: self.motion,
-                health: &self.health_resources,
-                loop_context: &self.loop_context,
-                damage_hooks: &self.damage_hooks,
-                tag_items: None,
-                block_registries: None,
+                sections: section_scope,
+                detached_body: None,
             }
             .controlled_simulation_tick_with_sprint_window(keys, sprint_window)?;
             // LocalPlayer.aiStep's makeJump adds a key press to this tick's input.
-            packet_keys.jump |= player.was_auto_jump;
+            packet_keys.jump |= self
+                .player
+                .as_ref()
+                .is_some_and(|player| player.was_auto_jump);
         } else {
             // LivingEntity.baseTick counts hurtTime down for a dead or riding
             // player too (controlled_simulation_tick does it otherwise): left
             // at 10, the hurt tilt restarted every frame and shook the camera.
             player.health.advance_clock();
             if riding && !dead {
-                let side = game_side!(self);
-                let _sections = section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
                 player.client_side = true;
-                let mut passenger = MotionWorld {
-                    side: &side,
-                    entities: &entity_collisions,
-                    player: &mut *player,
-                    scene: &mut self.world,
-                    assets: &self.pack.assets,
-                    collision_binding: self.collision,
-                    resources: self.motion,
-                    health: &self.health_resources,
-                    loop_context: &self.loop_context,
-                    damage_hooks: &self.damage_hooks,
-                    tag_items: None,
-                    block_registries: None,
-                };
                 // The rider moves from its old seat; the new one is its place after.
-                let seat = passenger.player.position;
+                let seat = player.position;
                 if let Some(from) = old_seat {
-                    passenger.player.position = from;
+                    player.position = from;
                 }
-                passenger.rider_tick(keys.direction())?;
-                sunrise_world::entity_move::EntityMoveWorld::set_position(&mut passenger, seat)?;
-                // LivingEntity.aiStep: a passenger freezes in powder snow too, and the
-                // frostbite overlay shows it (#8156).
-                passenger.passenger_block_effects_tick()?;
+                let mut motion = GamePlayerMotion {
+                    game: self,
+                    entities: &entity_collisions,
+                    sections: section_scope,
+                    detached_body: None,
+                };
+                motion.refresh_player_size()?;
+                motion.rider_tick(keys.direction())?;
+                motion.with_motion(|passenger| {
+                    sunrise_world::entity_move::EntityMoveWorld::set_position(passenger, seat)?;
+                    // LivingEntity.aiStep: a passenger freezes in powder snow too (#8156).
+                    passenger.passenger_block_effects_tick()
+                })?;
             }
         }
+        let Some(player) = self.player.as_mut() else {
+            return Ok(None);
+        };
         // The server decides fire the window cannot predict (blaze fireballs,
         // fire aspect, lightning): Entity.isOnFire reads the synched flag, so
         // the predicted tick's countdown must not end it while it is set.
@@ -1308,10 +1298,7 @@ impl Game<'_> {
         if let Some(player) = player {
             self.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player });
         }
-        self.native_local_player_fit_sizes();
         let result = self.tick_local_player(entity_collisions, sprint_window);
-        // `EntityEvent.Size` for the pose the tick set.
-        self.native_local_player_size();
         if let Some(player) = player {
             self.native_player_tick_post(mod_api::__private::PlayerTickPostCall { player });
         }

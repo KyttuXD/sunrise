@@ -2,8 +2,8 @@
 use super::*;
 use crate::game::native_entity_refs::tests::with_client_game;
 use mod_api::{ClientHost, Hooks, MovementInputUpdateEvent};
-use sunrise_client::motion::MotionTick as _;
 use sunrise_client::motion::PlayerMotion;
+use sunrise_client::motion::{MotionTick as _, MotionWorld};
 use winit::keyboard::KeyCode;
 
 struct Native;
