@@ -4,6 +4,12 @@ Play audio your native mod makes: a music player, a radio, a text reader or prox
 
 Streams use a pool separate from vanilla's streaming slots. They are not sound instances: nothing in `sounds.json` names them, and no sound hooks fire for them.
 
+To change the client's situational music instead of supplying PCM, use the `music` hook with
+a registered sound event in `Music::new`, or a vanilla definition such as `Music::menu()`
+or `Music::game()`. Use `music_layers` to layer sound events over the selected music.
+For a music picker in your mod, choose the definitions and order in your screen and give
+the entries your own translation keys.
+
 ## Pull PCM on demand
 
 Implement `AudioStream` when your mod can generate or decode PCM as the mixer needs it. For example, this source plays an owned clip of mono samples at 48 kHz:

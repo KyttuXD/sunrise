@@ -1,0 +1,8 @@
+ids = ["handle:Music::builtin", "handle:Corner::label"]
+why = """
+Sunrise's Music page owns its own group headings and order, and the HUD settings screen localizes its own corner values. Vanilla Musics and MusicManager.tick, and NeoForge's SelectMusicEvent, deal in sound events, not picker entries. Vanilla OptionInstance uses translatable captions; GuiGraphicsExtractor.guiWidth/guiHeight (also available through NeoForge RenderGuiEvent.getGuiGraphics) provide drawing bounds without naming corners.
+"""
+migrate = """
+Replace Music::builtin() with calls to the vanilla definitions your picker needs: Music::menu(), Music::game(), Music::creative(), Music::under_water(), Music::end(), Music::end_boss(), and Music::credits() in the old order. Define your headings and translation keys in your own screen. For your own event use Music::new(sound_event, min_delay_ticks, max_delay_ticks, replace_current_music); the music and music_layers hooks are unchanged.
+Replace corner.label() with a match on the four Corner variants that returns one of your mod's translation keys. Supply that key to your translated screen text. For placement, calculate the overlay origin from DrawContext::size() and your overlay's width and height, independent of its label.
+"""

@@ -3,6 +3,9 @@
 A HUD layer, a screen or a tooltip hook draws through the `DrawContext` it is handed, in GUI pixels. Each call
 is one of vanilla's `GuiGraphics` calls: `fill`, `text`, `sprite`, `item_stack` and the others. `gui_paint`
 takes a buffer of `GuiDraw` ops for the same calls, with `Push` / `Pop` for the pose.
+To anchor an overlay to a screen edge, calculate its position from `draw.size()` and its
+own width and height. If the player chooses a corner in a setting, the screen supplies
+the value's translation key; the label is not part of the geometry.
 
 `ClientHost::debug_overlay_visible()` reports whether the client draws its debug overlay this frame. In
 `render_gui_post`, use it to leave space for the overlay. Always-on debug entries can make it visible with

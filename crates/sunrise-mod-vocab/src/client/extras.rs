@@ -1,7 +1,8 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
-/// A screen corner for an overlay.
+/// A screen corner for positioning an overlay. The screen showing it as an
+/// option supplies its own translated label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // exhaustive: a closed set the game matches without a wildcard
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -24,14 +25,6 @@ impl Corner {
             Corner::TopRight => "top_right",
             Corner::BottomLeft => "bottom_left",
             Corner::BottomRight => "bottom_right",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Corner::TopLeft => "Top left",
-            Corner::TopRight => "Top right",
-            Corner::BottomLeft => "Bottom left",
-            Corner::BottomRight => "Bottom right",
         }
     }
     // hidden: a game-side helper, not part of the mod surface

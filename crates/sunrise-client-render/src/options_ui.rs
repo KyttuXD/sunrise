@@ -3,7 +3,10 @@
 //! Language and Resource Packs, laid out like vanilla's HeaderAndFooter /
 //! OptionsList screens and drawn with the shared widgets.
 mod draw;
+mod music;
 mod pack_drop;
+
+pub use music::track_groups;
 
 use std::time::Instant;
 
