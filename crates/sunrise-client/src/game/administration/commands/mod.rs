@@ -31,6 +31,7 @@ mod text_commands;
 mod world_cmds;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME, vehicle_teleport::TeleportMotion};
+use mod_api::CommandFeedback;
 use sunrise_client::{
     command::{
         Arg, CommandError, Context, Reader,
@@ -351,7 +352,34 @@ impl Game<'_> {
             self.cart_command_output(cart, message);
             return;
         }
-        self.system_message(message);
+        self.send_command_output(CommandFeedback::Failure, message);
+    }
+    /// `CommandSourceStack.sendSystemMessage`: no success-feedback rule. Unlike `sendSuccess`
+    /// and `sendFailure`, it addresses the executing player when there is one.
+    fn command_system_message(&mut self, message: Text) {
+        if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
+        if self.native_console_source() {
+            let conn = match self.source_entity() {
+                Some(Target::Player) => self.lan_acting,
+                Some(Target::Guest(conn)) => Some(conn),
+                _ => {
+                    self.send_command_output(CommandFeedback::System, message);
+                    return;
+                }
+            };
+            if let Some(conn) = conn {
+                if let Some(host) = &self.lan {
+                    host.hub
+                        .send_to(conn, &super::native_server::system_chat(&message));
+                }
+            } else {
+                self.system_message(message);
+            }
+            return;
+        }
+        self.send_command_output(CommandFeedback::System, message);
     }
     /// `sendSuccess(message, false)`: the source is told (when it takes
     /// success feedback), the operators are not.
@@ -368,13 +396,14 @@ impl Game<'_> {
             return;
         }
         if self.accepts_success() {
-            self.system_message(message);
+            self.send_command_output(CommandFeedback::Success, message);
         }
     }
     /// `CommandSource.acceptsSuccess`: a player's source takes success feedback while
     /// `send_command_feedback` is on; the server console's and an RCON client's always do.
     fn accepts_success(&self) -> bool {
-        self.console_broadcast.is_some()
+        self.native_console_source()
+            || self.console_broadcast.is_some()
             || self
                 .ui
                 .rules
@@ -394,7 +423,7 @@ impl Game<'_> {
             return;
         }
         if self.accepts_success() {
-            self.system_message(message.clone());
+            self.send_command_output(CommandFeedback::Success, message.clone());
         }
         self.broadcast_to_admins(message);
     }

@@ -45,7 +45,10 @@ impl Game<'_> {
         if self.command_source.is_some_and(|s| s.silent) {
             return;
         }
-        self.system_message(message.with_color(text::RED));
+        self.send_command_output(
+            mod_api::CommandFeedback::Failure,
+            message.with_color(text::RED),
+        );
     }
 
     /// `StructureUtils.findTestBlocks`: the test instance blocks within

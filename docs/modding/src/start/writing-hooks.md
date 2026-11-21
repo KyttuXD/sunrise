@@ -59,8 +59,9 @@ In the World phase, a mutable `ServerHost` can open a chest-style menu
 through `MenusServerHost::open_menu` (`host.open_menu(…)`).
 `ServicesServerHost::commands` gives you the `Commands` service: call
 `host.commands().run_command(line)` to execute a server command, or
-`host.commands().run_command_with_output(line)` to keep the feedback.
-Neither operation is available from a client host.
+`host.commands().run_command_with_output(line)` to collect its plain-text feedback.
+Use [`run_command_with_feedback`](../how-to/entities/server-services-and-players.md#console-and-player-limit)
+for a stream of structured success, failure, and system messages. These operations are server-only.
 
 Handles in the event (a player, an entity, a level) have methods of their own.
 Read the method's signature too: a server write on a handle takes a mutable

@@ -1,7 +1,10 @@
 //! The console for native mods: logged lines reach `console_line`, and a command's feedback
 //! comes back from `run_command_with_output`.
 use super::{native_entity_refs::tests::with_game, native_guest_turn_tests::with_guests};
-use mod_api::{CommandResult, ConsoleLineEvent, Hooks, ServerHost};
+use mod_api::{
+    Command, CommandFeedback, CommandResult, Commands, ConsoleLineEvent, Hooks,
+    RegisterCommandsEvent, ServerHost, Text, text::TextContent,
+};
 use std::sync::{Arc, Mutex};
 use sunrise_client::logging::TappedLine;
 
@@ -151,29 +154,93 @@ fn a_blank_line_or_no_server_runs_nothing() {
     });
 }
 
-/// The lines kept are capped: at most `MAX_FEEDBACK_LINES` lines, none above `MAX_FEEDBACK_LINE_BYTES` bytes, cut
-/// at a character boundary (the line below ends in a three-byte character on the cap).
+struct FeedbackCommand;
+
+#[mod_api::__subscriptions]
+impl Hooks for FeedbackCommand {
+    fn register_commands(&self, _: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        event
+            .commands
+            .push(Command::new("feedback_probe").executes(|host, _, _| {
+                let mut text = Text::literal("€".repeat(1500));
+                text.style.bold = Some(true);
+                host.commands().feedback(text).unwrap();
+                for index in 1..300 {
+                    host.commands()
+                        .feedback(Text::literal(format!("line {index}")))
+                        .unwrap();
+                    if index == 150 {
+                        let inner = host
+                            .commands()
+                            .run_command_with_output("time query gametime");
+                        assert!(inner.success);
+                        assert_eq!(inner.feedback.len(), 1);
+                    }
+                }
+                None
+            }));
+    }
+}
+
 #[test]
-fn the_feedback_kept_is_capped() {
-    use sunrise_client::text::Text;
-    let long = Text::literal(format!(
-        "ab{}",
-        "\u{20ac}".repeat(super::native_console::MAX_FEEDBACK_LINE_BYTES)
-    ));
-    let many: Vec<Text> = std::iter::once(long)
-        .chain(
-            (1..super::native_console::MAX_FEEDBACK_LINES + 40)
-                .map(|n| Text::literal(format!("line {n}"))),
-        )
-        .collect();
-    let kept = super::native_console::capped_lines(&many);
-    assert_eq!(kept.len(), 256);
-    assert_eq!(super::native_console::MAX_FEEDBACK_LINE_BYTES, 4096);
-    // "ab" and 1364 whole euro signs (4094 bytes) fit; a 1365th would pass 4096.
-    assert_eq!(kept[0].len(), 2 + 1364 * 3);
-    assert!(kept[0].starts_with("ab\u{20ac}"));
-    assert_eq!(kept[1], "line 1");
-    assert_eq!(kept[255], "line 255");
+#[ignore = "daily"]
+fn native_console_delivers_all_source_feedback_in_order() {
+    use sunrise_client::gamerules::{Value, vanilla::SEND_COMMAND_FEEDBACK};
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new(
+            "feedback_probe",
+            Box::new(FeedbackCommand),
+        )]
+        .into(),
+        || {
+            with_guests(|game| {
+                game.build_registries();
+                game.register_native_commands();
+                assert!(
+                    game.ui
+                        .rules
+                        .set("send_command_feedback", Value::Bool(false))
+                );
+                assert!(!game.ui.rules.bool_at(SEND_COMMAND_FEEDBACK));
+
+                let (send, receive) = std::sync::mpsc::channel();
+                assert!(!Commands::run_command_with_feedback(
+                    game,
+                    "/feedback_probe",
+                    send
+                ));
+                let mut output = receive.into_iter();
+                let long = "€".repeat(1500);
+                let Some(Ok(CommandFeedback::Success(first))) = output.next() else {
+                    panic!("expected the command's first success message");
+                };
+                assert_eq!(first.content, TextContent::Literal(long.clone()));
+                assert_eq!(first.style.bold, Some(true));
+                for index in 1..300 {
+                    let Some(Ok(CommandFeedback::Success(line))) = output.next() else {
+                        panic!("missing success message {index}");
+                    };
+                    assert_eq!(line.content, TextContent::Literal(format!("line {index}")));
+                }
+                let Some(Ok(CommandFeedback::Failure(error))) = output.next() else {
+                    panic!("a failed command must deliver its error after earlier successes");
+                };
+                assert!(error.style.color.is_some(), "the error keeps its color");
+                assert_eq!(
+                    output.next(),
+                    None,
+                    "the nested command's output stays separate"
+                );
+
+                let plain = Commands::run_command_with_output(game, "feedback_probe");
+                assert!(!plain.success);
+                assert_eq!(plain.feedback.len(), 301);
+                assert_eq!(plain.feedback[0], long);
+                assert_eq!(plain.feedback[299], "line 299");
+                assert!(!plain.feedback[300].is_empty());
+            })
+        },
+    );
 }
 
 /// A call made while another capture is open captures its own lines, and the outer capture

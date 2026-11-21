@@ -1,6 +1,7 @@
 //! Host method declarations; access defaults and game forwarders are generated.
 #![allow(unused_variables)]
 use crate::*;
+use std::sync::mpsc::Sender;
 /// The server host's methods of the `services` area, implemented by the game and reached through [`ServerHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait ServicesServerHost {
@@ -146,27 +147,36 @@ pub trait Commands {
         )
     }
     /// Side: server.
-    /// `run_command` with its feedback kept: the same line, source and run
-    /// path (one leading slash is dropped here), answering with whether it
-    /// ran without failing (`success`, what `run_command` returns) and what the
-    /// console would have printed for it as plain text (`feedback`, as a mod
-    /// that answers a remote console wants; Paper's `Server.dispatchCommand`
-    /// with a capturing `CommandSender`). The feedback of the command alone is
-    /// kept, never the lines other code logs meanwhile; a call made while
-    /// another one runs captures its own lines and the outer capture goes on
-    /// unchanged. At most 256 lines of 4096 bytes each
-    /// come back (a longer line is cut at a character boundary). A command that ran and failed
-    /// is `success: false` with its message in `feedback`. A line run where no server
-    /// is open to players, or empty once its whitespace and slash are
-    /// dropped, runs nothing and is `success: false` with no feedback, exactly as
-    /// `run_command` answers `false` for it; no refusal type tells those
-    /// apart from a failed command, as `run_command` has none either. The
-    /// dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`...)
-    /// are not reached: they answer as an unknown command.
+    /// Runs a console command and collects all its source messages as plain text, in order,
+    /// without truncation. For structured text and separate success and failure messages,
+    /// use [`Self::run_command_with_feedback`]. Both methods have the same execution result
+    /// and source routing. A command can fail after already sending success feedback.
     fn run_command_with_output(&mut self, line: &str) -> CommandResult {
         crate::world::phase::unprovided(
             "Commands::run_command_with_output",
             "run_command_with_output",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
+    /// Side: server.
+    /// Runs `line` as the server console, dropping one leading slash, and sends the command
+    /// source's structured messages to `output` in order as they occur. Logs, player messages
+    /// and operator broadcasts are not source feedback. Nested calls have their own output.
+    /// Output is not truncated; the receiver decides what to keep or display. A component that
+    /// cannot be represented is sent as a `TextFormError` in its place. Dropping the receiver
+    /// stops delivery but does not interrupt the command.
+    ///
+    /// Returns whether the command ran without failing. A blank line or no open server runs
+    /// nothing and returns `false` without sending a message. Commands handled only by the
+    /// dedicated console (`stop`, `op`, `whitelist`, `ban`...) are unknown to this dispatcher.
+    fn run_command_with_feedback(
+        &mut self,
+        line: &str,
+        output: Sender<Result<CommandFeedback, TextFormError>>,
+    ) -> bool {
+        crate::world::phase::unprovided(
+            "Commands::run_command_with_feedback",
+            "run_command_with_feedback",
             crate::world::phase::LoadAccess::WorldOnly,
         )
     }

@@ -215,8 +215,37 @@ sets how many players may be on. Server only.
 | Call | Behavior |
 |---|---|
 | `console_line` hook | Observe operator-visible log lines on dedicated and integrated servers: `level` (`INFO`, `WARN` or `ERROR`), `thread`, and `message` without the log prefix. The tap starts on the first tick with an enabled listener; when idle it does not capture lines, allocate a queue or take the queue lock. Lines from every logging thread arrive in order on the server thread at the start of the next tick. The queue keeps the oldest 4096 lines and drops newer ones until it drains. `dropped` gives the count of those newer lines on the batch's first event, and is zero on its other events. Each line keeps up to 8192 bytes of `message` and 128 of `thread` at a character boundary. The listener cannot change the log, and its own log calls are not captured. Paper and NeoForge have no matching event. |
-| `host.commands().run_command_with_output(line)` | `run_command` with its feedback kept, on the same run path and source (the console's: one leading slash dropped, permission level 4, from the overworld's spawn): the same `CommandResult` as `entity.run_command_with_output` (see [server commands](server-commands.md)), with `success` (what `run_command` returns) and `feedback`, what the console would print as plain text, at most 256 lines of 4096 bytes each (further lines dropped, a longer one cut at a character boundary). Only the command's own feedback is kept, never lines logged meanwhile. A command that ran and failed is `success: false` with its message in `feedback`. A line run where no server is open to players, or empty once whitespace and the slash are dropped, runs nothing and is `success: false` with no feedback, as `run_command` answers `false` for it; there is no refusal type, as nothing here tells those apart from a failure that `run_command` cannot. The dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`) are not reached and answer as a command that failed. A call made while another one runs captures its own feedback; the outer capture keeps what it had. |
+| `host.commands().run_command_with_output(line)` | Runs as the console and returns `CommandResult { success, feedback, .. }`, collecting every source message as plain text in order, without truncation. This is the same result type as [running a command as an entity](server-commands.md#run-a-command-as-a-player). |
+| `host.commands().run_command_with_feedback(line, send)` | Runs as the same console and sends structured `CommandFeedback` to an `std::sync::mpsc` channel as messages arrive. Success, failure, and direct system messages are distinct. Use the receiver to stream or keep output, or limit what your interface displays. |
 | `host.server_max_players()` / `host.server_set_max_players(n)` | Paper's `Server.getMaxPlayers` and `setMaxPlayers`: the live cap used for logins and shown in the server list. The read is `None` where no server is open to players. The write takes effect on the next login and ping; already-connected players stay, and operators flagged `bypassesPlayerLimit` on a dedicated server still bypass the cap. Zero refuses every login without the bypass. This call does not write `server.properties` (a restart restores its value; the management protocol's `max_players` setting does write it). Refuses without changing anything with `PlayerLimitRefusal::NotOpen` or `TooHigh { maximum }` for a limit above `i32::MAX`, vanilla's `int`. |
+
+Both output methods drop one leading slash and run at permission level 4 from the world spawn.
+Blank input or no open server yields `false` with no messages. Dedicated-console-only commands
+such as `stop` and `op` are unknown to this dispatcher. Output goes to the source that issued
+that command, not to an outer command's capture. Chat to other recipients, operator broadcasts,
+and logs are not source messages. The console accepts success feedback even when
+`send_command_feedback` is off for players. A failed run can already have sent success messages.
+
+```rust,ignore
+use mod_api::CommandFeedback;
+
+let (send, receive) = std::sync::mpsc::channel();
+let success = host.commands().run_command_with_feedback(line, send);
+for message in receive {
+    match message {
+        Ok(CommandFeedback::Success(text)) => show_success(text),
+        Ok(CommandFeedback::Failure(text)) => show_error(text),
+        Ok(CommandFeedback::System(text)) => show_system_message(text),
+        Err(error) => report_text_error(error),
+        _ => {} // CommandFeedback is non-exhaustive.
+    }
+}
+```
+
+The call runs synchronously on the server thread; a receiver on another thread can read while
+it runs. Closing the receiver stops output delivery, not execution. The receiver gets a
+`TextFormError` in place of any component that cannot be represented as mod API `Text`.
+
 ## Inventory, ender chest and saved data
 
 For mods that inspect or edit an online player's state (a player-data sync, `/invsee`, `/endersee`). Writes require a server host and refuse stale handles; reads that also have a client view are marked below.

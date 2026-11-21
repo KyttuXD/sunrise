@@ -1227,9 +1227,9 @@ impl Game<'_> {
     /// `VersionCommand`.
     pub(super) fn cmd_version(&mut self) -> R<i32> {
         if !self.command_source.is_some_and(|s| s.silent) {
-            self.system_message(Text::translate("commands.version.header", &[]));
+            self.command_system_message(Text::translate("commands.version.header", &[]));
             for line in self.version_lines() {
-                self.system_message(line);
+                self.command_system_message(line);
             }
         }
         Ok(1)

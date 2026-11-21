@@ -1,0 +1,10 @@
+ids = [
+    "method:Commands::run_command_with_output",
+    "method:Commands::run_command_with_feedback",
+    "type:CommandFeedback",
+    "type:CommandFeedback.Success",
+    "type:CommandFeedback.Failure",
+    "type:CommandFeedback.System",
+]
+why = "The native console now delivers the command source's messages in order without the old guest-console line and byte caps. It follows vanilla 26.3 CommandSourceStack.sendSuccess, sendFailure and sendSystemMessage and RconConsoleSource.sendSystemMessage. NeoForge's Commands.performCommand patch also reports command exceptions to the issuing source via sendFailure, separately from logging."
+migrate = "No change is required for host.commands().run_command_with_output(line): result.success and result.feedback still give the outcome and ordered plain strings, now untruncated. Move any display limit to the code that displays those strings. To keep components and tell success from failure, create (send, receive) with std::sync::mpsc::channel(), replace the call with host.commands().run_command_with_feedback(line, send), and iterate receive for Ok(CommandFeedback::Success(text)), Ok(CommandFeedback::Failure(text)), Ok(CommandFeedback::System(text)), or Err(TextFormError). Use the call's bool in place of result.success."
