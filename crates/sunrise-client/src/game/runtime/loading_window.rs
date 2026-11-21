@@ -342,6 +342,7 @@ pub(super) fn start_game<'a>(
         game.options.no_pause = true;
     }
     game.apply_settings();
+    game.refresh_loop_context()?;
     // Benchmarks measure the game alone.
     if game.options.benchmark.is_none() {
         game.start_mods();
@@ -349,7 +350,6 @@ pub(super) fn start_game<'a>(
     // The initial load's client reload listeners, registered and staged by
     // the loader thread, publish now that the game owns the assets.
     client_reload::apply_client_reload(&game.mod_phase, client_applies);
-    game.refresh_loop_context()?;
     // After the mods: their templates are among the ids it lists.
     game.preload_registries();
     game.start_agent_control()?;

@@ -1,0 +1,54 @@
+ids = [
+    "method:SettingsRegistrar::register_setting",
+    "method:prelude::ConfigHost::setting",
+    "method:prelude::ConfigHost::set_setting",
+    "method:prelude::ConfigClientHost::setting_bool",
+    "method:prelude::ConfigClientHost::setting_choice",
+    "method:prelude::ConfigClientHost::setting_f64",
+    "method:prelude::ConfigClientHost::setting_color",
+    "method:prelude::ConfigClientHost::setting",
+    "method:prelude::ConfigClientHost::set_setting",
+    "method:ChunkDiskHost::setting",
+    "type:SettingKey",
+    "type:SettingWriteError",
+    "type:SettingSpec",
+    "type:SettingError",
+    "hook:setting_changed",
+]
+why = """
+This is Sunrise's Options > Mods, not a vanilla screen. The cache added in 270d620e9d6e kept
+settings reads out of the filesystem but could keep returning an old value after reload. A key now
+carries its actual registration, not a thread-local guess about the caller. One live client store
+loads the published resource generation and supplies both the host and the settings page. Vanilla
+26.3 OptionInstance.set publishes a changed value before its listener (including distinct signed
+zeros), and Options.load/save keep the declared format. NeoForge ModConfigSpec.acceptConfig/afterReload
+refresh the effective values, and ModConfigSpec.save and FML LoadedConfig.save notify the owner after
+saving. A nested write remains live but defers its notification so one mod cannot recurse through the
+change hook and stop unrelated work. The existing per-key on-disk format is unchanged.
+"""
+migrate = """
+Keep the SettingKey returned by registrar.register_setting(spec) in your mod's state rather than
+expecting Ok(()). The constructors and per-key file format are unchanged; the fixed SETTING_KEY_MAX
+limit is gone, and the registered key still has the documented filename spelling.
+
+- host.setting_bool("enabled") -> match host.setting(&enabled) with Some(SettingValue::Toggle(on)).
+- host.setting_choice("mode") -> match host.setting(&mode) with Some(SettingValue::Choice(index));
+  index is usize, so convert it with u32::try_from(index).ok() if your caller needs Option<u32>.
+- host.setting_f64("speed") -> match host.setting(&speed) with Some(SettingValue::Range(value)).
+- host.setting_color("tint") -> match host.setting(&tint) with Some(SettingValue::Color(rgb)).
+- host.setting(mod_id, "enabled") -> client_host.setting(&enabled); match the returned SettingValue
+  rather than parsing a string. For server-side configuration register a server config; Options >
+  Mods settings no longer belong to a shared Host.
+- host.set_setting(mod_id, "enabled", "true") -> client_host.set_setting(&enabled,
+  SettingValue::Toggle(true)) on a mutable ClientHost. Handle Err(SettingWriteError); an invalid
+  value or failed save leaves the live value unchanged and does not notify. Saving the current value
+  does nothing.
+- In a chunk disk callback, host.setting(mod_id, key) now comes from ChunkDiskHost and borrows
+  Option<&str> from the frozen generation. Drop .as_deref(), or use .map(str::to_owned) to keep the
+  text after the callback. Registration, data-load, loop and worldgen snapshot reads are unchanged.
+
+Keep your setting_changed signature; if your manifest pins that hook, select hook_version = 2. It now
+runs for changed values from client host writes and reloads as well as player edits. Read the live
+value through the retained key. A write inside setting_changed queues its notification for the next
+client tick instead of invoking the callback recursively.
+"""

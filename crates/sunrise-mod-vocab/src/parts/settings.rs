@@ -1,15 +1,30 @@
 use super::*;
-/// Owner-bound settings retained for the client's mod pages and typed reads.
-pub fn settings() -> &'static [(&'static str, crate::SettingSpec)] {
-    installed().map_or(&[], |installed| &installed.keys.settings)
+
+// no wire: identifies an in-process registration, not a serialized key.
+/// The owner-bound key returned when a setting is registered. Retain it to read or
+/// write that setting through the client host, without naming a mod or a file.
+#[derive(Clone, Debug)]
+pub struct SettingKey(Arc<SettingRegistration>);
+
+/// The engine's registration row, shared by the registry and its key.
+#[derive(Debug)]
+pub struct SettingRegistration {
+    pub owner: &'static str,
+    pub index: usize,
+    pub spec: crate::SettingSpec,
 }
 
-/// The setting `key` mod `mod_id` registered, if any.
-pub fn setting(mod_id: &str, key: &str) -> Option<&'static crate::SettingSpec> {
-    settings()
-        .iter()
-        .find(|(owner, spec)| *owner == mod_id && spec.key == key)
-        .map(|(_, spec)| spec)
+pub fn make_setting_key(owner: &'static str, index: usize, spec: crate::SettingSpec) -> SettingKey {
+    SettingKey(Arc::new(SettingRegistration { owner, index, spec }))
+}
+
+pub fn setting_registration(key: &SettingKey) -> &SettingRegistration {
+    &key.0
+}
+
+/// Registered settings in registration order.
+pub fn settings() -> &'static [SettingKey] {
+    installed().map_or(&[], |installed| &installed.keys.settings)
 }
 
 /// Registrar operations for settings.
@@ -17,6 +32,10 @@ pub trait SettingsRegistrar {
     /// Register a setting shown on the calling mod's page in Options > Mods (NeoForge's
     /// `ModConfigSpec` entries). Called from `Hooks::register`; client settings only. A setting
     /// [`SettingSpec::check`](crate::SettingSpec::check) refuses, or a key the mod registered
-    /// already, is not registered and comes back as the error.
-    fn register_setting(&mut self, setting: crate::SettingSpec) -> Result<(), crate::SettingError>;
+    /// already, is not registered and comes back as the error. Keep the returned key for
+    /// live reads and writes through [`crate::ClientHost`].
+    fn register_setting(
+        &mut self,
+        setting: crate::SettingSpec,
+    ) -> Result<SettingKey, crate::SettingError>;
 }

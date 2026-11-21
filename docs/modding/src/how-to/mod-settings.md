@@ -7,7 +7,7 @@ A mod keeps its options in one of two ways:
 | Lives in | The game's `config/` folder (on a server, `serverconfig/` per world) | `sunrise-mods/.sunrise-mod-data/<mod id>/`, one file per key |
 | Edited by | The player, in a text editor | The player, on the mod's page in **Options > Mods** |
 | You declare it with | `Hooks::register_configs` | `Registrar::register_setting` |
-| You read it in | `config_loading` and `config_reloading` | `Host::setting` and the typed `setting_*` reads |
+| You read it in | `config_loading` and `config_reloading` | `ClientHost::setting(&key)` |
 | NeoForge counterpart | `ModContainer.registerConfig`, `ModConfigEvent` | `ModConfigSpec` entries on the config screen |
 
 ## Config files
@@ -26,8 +26,8 @@ files `config/<mod id>.<ext>` and `config/<mod id>-<rest>`.
    `config_unloading` drops it after `server_stopping`. `Client` and `Common` configs load once and stay until the
    game quits.
 
-These hooks run in the Config [load phase](../concepts/load-phases.md): settings reads and config files are
-available, world handles and transactions are not. A file outside `config/`, or one already registered, is
+These hooks run in the Config [load phase](../concepts/load-phases.md): config files and client settings
+reads (on the client side) are available, world handles and transactions are not. A file outside `config/`, or one already registered, is
 skipped.
 
 For files the hooks don't manage, `Host::config_files()` gives your mod its own files in `config/`. Paths retain
@@ -61,19 +61,22 @@ Use `ConfigPath::root()` to list your own root, and stop when a page is empty.
 
 ## Settings
 
-Register each setting from `Hooks::register` with `Registrar::register_setting(SettingSpec { … })`: a key
-(`a-z`, `0-9`, `_`, `-` and `.`, not starting with `.`), translation keys for its label and tooltip, and its kind
-with the default. A setting the spec check refuses, or a key you registered already, comes back as the error.
-Settings are client settings and appear on your mod's page in **Options > Mods**, opened from its **Config**
-button.
+Register each setting from `Hooks::register`, for example with
+`r.register_setting(SettingSpec::toggle("show_grid", "example.show_grid", false))`.
+A spec declares a key (`a-z`, `0-9`, `_`, `-` and `.`, not starting with `.`), translation keys for its label
+and optional tooltip, and its kind with the default. Handle the registration error and retain the returned
+`SettingKey` on your mod. The key identifies that registration: no live settings operation takes a mod ID or
+looks at the currently running callback to find the owner. Settings appear on your mod's page in **Options > Mods**.
 
-- Read a setting with `host.setting(mod_id, key)` or a typed read. Typed reads are cached per data folder and key.
-- `host.set_setting(mod_id, key, value)` keeps a value. A successful write updates the cache; a failed one leaves
-  it. This write does not fire `setting_changed`.
-- When the player edits a setting, the value is kept first, then `setting_changed` tells your mod alone.
-
-A mod reads and writes only its own settings: another mod's id, or a key its owner never registered, reads
-`None` and writes nothing.
+- `host.setting(&show_grid)` on a `ClientHost` returns `Option<SettingValue>`; match `Some(SettingValue::Toggle(on))`
+  for this example. The value is the live choice, or the registered default if there is no valid saved value.
+  `None` means the key is not available on that host.
+- `host.set_setting(&show_grid, SettingValue::Toggle(true))` on a mutable `ClientHost` uses the same save path as
+  the settings page. Handle `SettingWriteError`: an invalid value or failed save does not replace the live value.
+- After a value actually changes (an edit in Options > Mods, a mod write, or a reload), `setting_changed` tells
+  only the owner. The new value is already visible to `host.setting`. A write from inside `setting_changed`
+  queues its notification for the next client tick instead of invoking the hook recursively. Opening the mod's
+  page also reloads that mod's files. Load and worker contexts read frozen snapshots, not live client values.
 
 The settings folder is settings only, not bulk storage: ordinary files there are read as setting keys and
 subfolders or unsafe entries still warn during snapshots. Use the bulk services above instead; their files are

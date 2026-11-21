@@ -18,7 +18,7 @@ Each owning thread progresses through `Packages → Registration → Setup → C
 | Registration | Declarations through `RegistrationContext`, with its mod-list, registry and settings reads; no Host. |
 | Setup | Client setup reads, published asset/data queries and registry/settings/mod-list reads; no world handles or transactions. |
 | Config | Settings reads and the mod-scoped `ConfigFiles` service; no world handles, transactions or other game operations. |
-| Reloading | Published asset/data queries, registry facts, settings and mod-list reads, listener registration, and `DataLoadContext` callbacks; no world handles or transactions. |
+| Reloading | Published asset/data queries, registry facts, client settings and mod-list reads, listener registration, and `DataLoadContext` callbacks; no world handles or transactions. |
 | World | The owning game's side-typed `ServerHost` or `ClientHost`. |
 
 `RegistrationContext::instance_dir()` returns `Result<&std::path::Path, RegistrationReadError>`.
@@ -103,8 +103,8 @@ Returning, including after a failed prepare, restores the entering phase. Publis
 queries read the published generation, not pending prepare output: completion callbacks can
 refresh sprite and recipe caches after apply, including on first world open, without gaining world
 handles or transactions. Their rustdoc names their load-phase availability. Server listener
-registration retains `&dyn Host`, restricted to these published facts, registry facts, settings and
-mod-list queries. Callbacks that take `DataLoadContext` use its restricted reads. Neither permits
+registration retains `&dyn Host`, restricted to these published facts, registry facts and mod-list
+queries. Callbacks that take `DataLoadContext` also read its captured settings. Neither permits
 opening a world handle or transaction. The first client registration and prepare run on the loader
 thread; later registration runs on the render thread, prepare on its worker, and apply on the owning
 game thread.
@@ -137,8 +137,9 @@ current side's live registry and merged tags, not pending reload data. Unknown o
 unavailable registries and entries return `None`; an absent tag or a tag that does
 not contain the entry returns `Some(false)`. Enumeration yields each identity once.
 
-`ConfigHost::setting` still returns `Option<String>` on an ordinary `Host`; it is not the
-captured `Option<&str>` read on a load, loop or worldgen context.
+Live Options > Mods values are client-owned. `ClientHost::setting(&key)` returns `Option<SettingValue>`
+using the key from registration; it does not read the captured text used by load, loop or worldgen contexts.
+See [Config files and settings](../how-to/mod-settings.md#settings).
 
 Server world-generation reads use the published decoded owners, including the
 live feature data in worlds without a terrain locator. Invalid source files do

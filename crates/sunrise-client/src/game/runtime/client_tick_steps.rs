@@ -23,6 +23,7 @@ impl Game<'_> {
             sunrise_client::social::set_presence_status(self.presence_status());
             sunrise_client::social::tick();
             // Minecraft.tick: every client tick, paused or not, in menus too.
+            self.notify_nested_setting_changes();
             self.native_client_tick_pre();
             if self.title.is_none() && !self.pause {
                 if let Some(event_loop) = event_loop

@@ -71,10 +71,10 @@ pub(in super::super) fn load_item_data(
     let _reload = phase.reloading()?;
     let inputs = LoadInputs::new(builtin_registry_names(root)?, Game::mod_data_root());
     let inventory = sunrise_mod_package::enabled::EnabledMods::read(root)?;
-    let ids: Vec<_> = if role.is_logical_server() {
+    let ids = if role.is_logical_server() {
         inventory.server_ids().collect()
     } else {
-        inventory.client_ids().collect()
+        crate::game::native_hooks::mod_settings::client_setting_owners(inventory.client_ids())
     };
     let context = owning_load.context(
         role.data_load_origin(),

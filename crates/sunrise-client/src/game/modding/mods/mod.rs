@@ -1655,10 +1655,10 @@ impl Game<'_> {
     ) -> sunrise_client::Result<PreparedLoopContext> {
         let side = self.options.execution_role.loop_side();
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(resources)?;
-        let ids: Vec<_> = if self.is_logical_server() {
+        let ids = if self.is_logical_server() {
             inventory.server_ids().collect()
         } else {
-            inventory.client_ids().collect()
+            super::native_hooks::mod_settings::client_setting_owners(inventory.client_ids())
         };
         let item_data = self.res.core.item_data.context();
         Ok(self.loop_context_readers(item_data.loop_context(side, ids.iter().copied())))
@@ -1692,6 +1692,7 @@ impl Game<'_> {
         if let Some(worldgen) = context.worldgen {
             sunrise_world::native_worldgen_hooks::publish_context(Arc::new(worldgen));
         }
+        self.sync_native_settings();
     }
 
     /// Stage a fresh root when admission changes or registered conditions need reevaluation.

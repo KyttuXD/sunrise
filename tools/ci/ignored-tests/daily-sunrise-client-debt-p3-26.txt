@@ -1,0 +1,2 @@
+# Loads the prepared client resources for a settings host and Options > Mods fixture.
+sunrise-client game::native_hooks::mod_settings::tests::mod_page_host_and_reload_share_the_live_values lib daily resources

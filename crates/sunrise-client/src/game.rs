@@ -3969,6 +3969,8 @@ struct Game<'a> {
     held_out: Vec<u32>,
     /// Native mods' config files this game loaded (game/modding/native_configs.rs).
     native_configs: native_configs::NativeConfigs,
+    /// Authoritative live settings for this client; load hooks borrow frozen snapshots.
+    native_settings: native_hooks::mod_settings::NativeSettings,
     mod_phase: mod_api::__private::PhaseOwner,
     /// Private custom-book connection and placement state.
     native_net: native_net::NativeNet,
@@ -13695,6 +13697,7 @@ impl<'a> Game<'a> {
             lent_mobs: Default::default(),
             held_out: Vec::with_capacity(4),
             native_configs: Default::default(),
+            native_settings: Default::default(),
             mod_phase,
             native_net: Default::default(),
             native_mod_screen: None,

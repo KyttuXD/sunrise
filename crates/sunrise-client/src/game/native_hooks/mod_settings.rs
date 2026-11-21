@@ -1,121 +1,361 @@
-use super::*;
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+//! The client window owns live mod settings. Resource readers keep their separate,
+//! immutable load inputs; a newly installed client generation supplies the live values.
+use super::Game;
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::{Dir, OpenOptions};
+use mod_api::{
+    __private::{game::CallbackOwner, setting_registration},
+    SettingKey, SettingKind, SettingSpec, SettingValue, SettingWriteError,
+};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{self, ErrorKind, Write},
+    path::{Path, PathBuf},
+    ptr,
+};
+use sunrise_client::mod_list::{NativeSetting, NativeSettingValue};
 
-/// The typed values read so far, by the mod's data folder and the key: a read resolves the
-/// setting and its file once, and a write (`set_setting`) forgets the key.
-static READ: LazyLock<Mutex<HashMap<(PathBuf, String), mod_api::SettingValue>>> =
-    LazyLock::new(Default::default);
+#[derive(Default)]
+pub(in crate::game) struct NativeSettings {
+    root: PathBuf,
+    entries: Vec<Entry>,
+    callbacks: HashMap<&'static str, CallbackOwner>,
+    notifying: bool,
+    nested_changes: Vec<SettingKey>,
+}
 
-/// The typed reads of the settings a mod registered (`Registrar::register_setting`), for the
-/// mod whose hook or part is running (`crash::current_native_mod`): a mod reads only its own.
-// Native mods use these; nothing in Sunrise does.
+struct Entry {
+    key: SettingKey,
+    value: SettingValue,
+}
+
+impl NativeSettings {
+    fn load<'a>(
+        root: PathBuf,
+        keys: &[SettingKey],
+        read: impl Fn(&str, &str) -> Option<&'a str>,
+    ) -> Self {
+        let mut settings = Self {
+            root,
+            ..Self::default()
+        };
+        for key in keys {
+            let registration = setting_registration(key);
+            let spec = &registration.spec;
+            settings.entries.push(Entry {
+                key: key.clone(),
+                value: spec.read(read(registration.owner, &spec.key)),
+            });
+            settings
+                .callbacks
+                .entry(registration.owner)
+                .or_insert_with(|| CallbackOwner::for_mod(registration.owner));
+        }
+        settings
+    }
+
+    fn refresh<'a>(
+        &mut self,
+        only_owner: Option<&str>,
+        read: impl Fn(&str, &str) -> Option<&'a str>,
+    ) -> Vec<SettingKey> {
+        let mut changed = Vec::new();
+        for entry in &mut self.entries {
+            let registration = setting_registration(&entry.key);
+            if only_owner.is_some_and(|owner| owner != registration.owner) {
+                continue;
+            }
+            let spec = &registration.spec;
+            let value = spec.read(read(registration.owner, &spec.key));
+            if changed_value(entry.value, value) {
+                entry.value = value;
+                changed.push(entry.key.clone());
+            }
+        }
+        changed
+    }
+
+    fn setting(&self, key: &SettingKey) -> Option<SettingValue> {
+        let registration = setting_registration(key);
+        self.entries
+            .get(registration.index)
+            .filter(|entry| ptr::eq(setting_registration(&entry.key), registration))
+            .map(|entry| entry.value)
+    }
+
+    fn write(&mut self, key: &SettingKey, value: SettingValue) -> Result<bool, SettingWriteError> {
+        let registration = setting_registration(key);
+        let owner = registration.owner;
+        let spec = &registration.spec;
+        let Some(entry) = self
+            .entries
+            .get_mut(registration.index)
+            .filter(|entry| ptr::eq(setting_registration(&entry.key), registration))
+        else {
+            log::warn!("mod {owner} setting {}: unavailable registration", spec.key);
+            return Err(SettingWriteError::Unavailable);
+        };
+        if !changed_value(entry.value, value) {
+            return Ok(false);
+        }
+        let Some(encoded) = spec.store(value) else {
+            log::warn!("mod {owner} setting {}: invalid value {value:?}", spec.key);
+            return Err(SettingWriteError::InvalidValue);
+        };
+        if let Err(error) = persist(&self.root, owner, &spec.key, &encoded) {
+            log::warn!("mod {owner} setting {}: could not save: {error}", spec.key);
+            return Err(SettingWriteError::SaveFailed);
+        }
+        entry.value = value;
+        Ok(true)
+    }
+}
+
+// OptionInstance.set compares boxed Doubles, for which the sign of zero matters.
+// SettingSpec rejects non-finite ranges at the input boundary.
+fn changed_value(before: SettingValue, after: SettingValue) -> bool {
+    match (before, after) {
+        (SettingValue::Range(before), SettingValue::Range(after)) => {
+            before.to_bits() != after.to_bits()
+        }
+        _ => before != after,
+    }
+}
+
+/// Keep the original per-key format. The registered owner and filename are already
+/// checked; use the same no-follow directory boundary as the reload's snapshot.
+fn persist(root: &Path, owner: &str, key: &str, encoded: &str) -> io::Result<()> {
+    let (Some(parent), Some(name)) = (root.parent(), root.file_name()) else {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "missing settings directory",
+        ));
+    };
+    fs::create_dir_all(parent)?;
+    let mut dir = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
+    for component in [name, owner.as_ref()] {
+        match dir.create_dir(component) {
+            Ok(()) => (),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => (),
+            Err(error) => return Err(error),
+        }
+        dir = dir.open_dir_nofollow(component)?;
+    }
+    match dir.symlink_metadata(key) {
+        Ok(meta) if !meta.is_file() => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "not a regular settings file",
+            ));
+        }
+        Ok(_) => (),
+        Err(error) if error.kind() == ErrorKind::NotFound => (),
+        Err(error) => return Err(error),
+    }
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .follow(FollowSymlinks::No);
+    dir.open_with(key, &options)?.write_all(encoded.as_bytes())
+}
+
+/// Both initial client loading and reload capture enough input for every registered
+/// settings owner, including a built-in native mod without a content package.
+pub(in crate::game) fn client_setting_owners<'a>(
+    ids: impl Iterator<Item = &'a str>,
+) -> Vec<&'a str> {
+    ids.chain(
+        mod_api::__private::settings()
+            .iter()
+            .map(|key| setting_registration(key).owner),
+    )
+    .collect()
+}
+
+fn ui_value(spec: &SettingSpec, value: SettingValue) -> NativeSettingValue {
+    match (&spec.kind, value) {
+        (_, SettingValue::Toggle(on)) => NativeSettingValue::Toggle(on),
+        (SettingKind::Choice { options, .. }, SettingValue::Choice(index)) => {
+            NativeSettingValue::Choice {
+                options: options.clone(),
+                index,
+            }
+        }
+        (SettingKind::Range { min, max, step, .. }, SettingValue::Range(value)) => {
+            NativeSettingValue::Range {
+                min: *min,
+                max: *max,
+                step: *step,
+                value,
+            }
+        }
+        (_, SettingValue::Color(rgb)) => NativeSettingValue::Color(rgb),
+        _ => unreachable!("the live value was validated against this setting's spec"),
+    }
+}
+
 impl Game<'_> {
-    /// The calling mod's setting `key` as kept in its data folder, or its default.
-    fn own_setting(&self, key: &str) -> Option<mod_api::SettingValue> {
-        let mod_id = mod_api::content::crash::current_native_mod()?;
-        read_typed(&self.native_data_dir(mod_id), mod_id, key)
+    pub(in crate::game) fn setting(&self, key: &SettingKey) -> Option<SettingValue> {
+        self.native_settings.setting(key)
     }
-    /// The calling mod's toggle `key`: the player's choice, else its default.
-    pub(in crate::game) fn setting_bool(&self, key: &str) -> Option<bool> {
-        match self.own_setting(key)? {
-            mod_api::SettingValue::Toggle(on) => Some(on),
-            _ => None,
-        }
-    }
-    /// The option the player picked for the calling mod's choice `key`, else its default.
-    pub(in crate::game) fn setting_choice(&self, key: &str) -> Option<u32> {
-        match self.own_setting(key)? {
-            mod_api::SettingValue::Choice(index) => u32::try_from(index).ok(),
-            _ => None,
-        }
-    }
-    /// The calling mod's range `key`, or its default.
-    pub(in crate::game) fn setting_f64(&self, key: &str) -> Option<f64> {
-        match self.own_setting(key)? {
-            mod_api::SettingValue::Range(value) => Some(value),
-            _ => None,
-        }
-    }
-    /// The calling mod's colour `key`, `0xRRGGBB`, or its default.
-    pub(in crate::game) fn setting_color(&self, key: &str) -> Option<u32> {
-        match self.own_setting(key)? {
-            mod_api::SettingValue::Color(rgb) => Some(rgb),
-            _ => None,
-        }
-    }
-}
 
-// All raw file access goes through the registered owner/key boundary.
-pub(super) fn read_raw(dir: &Path, owner: &str, key: &str) -> Option<String> {
-    mod_api::__private::setting(owner, key)?;
-    sunrise_world::native_load_context::read_setting(dir, key)
-}
-pub(super) fn store(dir: &Path, owner: &str, key: &str, value: &str) -> bool {
-    if mod_api::__private::setting(owner, key).is_none() {
-        return false;
+    pub(in crate::game) fn set_setting(
+        &mut self,
+        key: &SettingKey,
+        value: SettingValue,
+    ) -> Result<(), SettingWriteError> {
+        let changed = self.native_settings.write(key, value)?;
+        if changed {
+            self.publish_native_setting(key);
+        }
+        Ok(())
     }
-    if fs::create_dir_all(dir)
-        .and_then(|()| fs::write(dir.join(key), value))
-        .is_err()
-    {
-        return false;
+
+    pub(in crate::game) fn sync_native_settings(&mut self) {
+        if !self.options.execution_role.is_client() {
+            return;
+        }
+        let context = &self.loop_context;
+        if self.native_settings.entries.is_empty() {
+            self.native_settings = NativeSettings::load(
+                Self::mod_data_root(),
+                mod_api::__private::settings(),
+                |owner, key| context.setting(owner, key),
+            );
+            return;
+        }
+        for key in self
+            .native_settings
+            .refresh(None, |owner, key| context.setting(owner, key))
+        {
+            self.publish_native_setting(&key);
+        }
     }
-    if let Ok(mut read) = READ.lock() {
-        read.remove(&(dir.to_path_buf(), key.to_owned()));
+
+    pub(super) fn native_page_settings(&self, owner: &str) -> Vec<NativeSetting> {
+        self.native_settings
+            .entries
+            .iter()
+            .map(|entry| (setting_registration(&entry.key), entry.value))
+            .filter(|(registration, _)| registration.owner == owner)
+            .map(|(registration, value)| {
+                let spec = &registration.spec;
+                NativeSetting {
+                    key: spec.key.clone(),
+                    label: spec.label.clone(),
+                    tooltip: spec.tooltip.clone(),
+                    value: ui_value(spec, value),
+                }
+            })
+            .collect()
     }
-    true
-}
-fn read_typed(dir: &Path, owner: &str, key: &str) -> Option<mod_api::SettingValue> {
-    let at = (dir.to_path_buf(), key.to_owned());
-    if let Some(value) = READ.lock().ok()?.get(&at) {
-        return Some(*value);
+
+    /// Opening a page rereads that owner's files and publishes any external edit.
+    pub(in crate::game) fn native_settings_refresh(&mut self, i: usize) {
+        let Some(row) = self
+            .settings
+            .mods
+            .installed
+            .get(i)
+            .filter(|row| row.native.is_some())
+        else {
+            return;
+        };
+        let captured = sunrise_world::native_load_context::capture_settings(
+            &self.native_settings.root,
+            [row.id.as_str()],
+        );
+        for key in self.native_settings.refresh(Some(&row.id), |owner, key| {
+            captured.get(owner)?.get(key).map(String::as_str)
+        }) {
+            self.publish_native_setting(&key);
+        }
     }
-    let spec = mod_api::__private::setting(owner, key)?;
-    let value = spec.read(read_raw(dir, owner, key).as_deref());
-    READ.lock().ok()?.insert(at, value);
-    Some(value)
+
+    /// Widgets propose a typed value. A failed save restores the displayed live value.
+    pub(in crate::game) fn native_setting_event(&mut self, i: usize, j: usize) {
+        let Some(row) = self.settings.mods.installed.get(i) else {
+            return;
+        };
+        let Some(setting) = row.native.as_ref().and_then(|page| page.settings.get(j)) else {
+            return;
+        };
+        let Some(entry) = self.native_settings.entries.iter().find(|entry| {
+            let registration = setting_registration(&entry.key);
+            registration.owner == row.id && registration.spec.key == setting.key
+        }) else {
+            return;
+        };
+        let key = entry.key.clone();
+        let previous = entry.value;
+        let value = match &setting.value {
+            NativeSettingValue::Toggle(on) => SettingValue::Toggle(*on),
+            NativeSettingValue::Choice { index, .. } => SettingValue::Choice(*index),
+            NativeSettingValue::Range { value, .. } => SettingValue::Range(*value),
+            NativeSettingValue::Color(rgb) => SettingValue::Color(*rgb),
+        };
+        if self.set_setting(&key, value).is_err()
+            && let Some(setting) = self
+                .settings
+                .mods
+                .installed
+                .get_mut(i)
+                .and_then(|row| row.native.as_mut())
+                .and_then(|page| page.settings.get_mut(j))
+        {
+            setting.value = ui_value(&setting_registration(&key).spec, previous);
+        }
+    }
+
+    fn publish_native_setting(&mut self, key: &SettingKey) {
+        let registration = setting_registration(key);
+        let owner = registration.owner;
+        let spec = &registration.spec;
+        let value = self.native_settings.entries[registration.index].value;
+        if let Some(widget) = self
+            .settings
+            .mods
+            .installed
+            .iter_mut()
+            .find(|row| row.id == owner)
+            .and_then(|row| row.native.as_mut())
+            .and_then(|page| {
+                page.settings
+                    .iter_mut()
+                    .find(|setting| setting.key == spec.key)
+            })
+        {
+            widget.value = ui_value(spec, value);
+        }
+        if self.native_settings.notifying {
+            // A listener can save a setting. Do not let a chain of those writes recurse
+            // through callbacks and exhaust the stack before unrelated work can run.
+            self.native_settings.nested_changes.push(key.clone());
+        } else {
+            self.notify_setting_change(key);
+        }
+    }
+
+    pub(in crate::game) fn notify_nested_setting_changes(&mut self) {
+        for key in std::mem::take(&mut self.native_settings.nested_changes) {
+            self.notify_setting_change(&key);
+        }
+    }
+
+    fn notify_setting_change(&mut self, key: &SettingKey) {
+        let registration = setting_registration(key);
+        let owner = registration.owner;
+        let callback = self.native_settings.callbacks[owner].clone();
+        self.native_settings.notifying = true;
+        let _ = callback.call("setting_changed", "setting_changed", || {
+            self.native_setting_changed(owner, &registration.spec.key);
+        });
+        self.native_settings.notifying = false;
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mod_api::{Hooks, ModEntry, Registrar, RegistrationContext, SettingSpec, SettingValue};
-    struct Settings;
-    #[mod_api::__subscriptions]
-    impl Hooks for Settings {
-        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            r.register_setting(SettingSpec::toggle("on", "test.on", false))
-                .unwrap();
-        }
-    }
-    #[test]
-    fn registered_settings_confine_files_and_cache_successful_writes() {
-        let mods: mod_api::Mods = vec![ModEntry::new("a", Box::new(Settings))].into();
-        mod_platform::testing::with_mods(mods.clone(), || {
-            mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
-            let root = std::env::temp_dir().join(format!("settings-carry-{}", std::process::id()));
-            fs::create_dir_all(root.join("b")).unwrap();
-            fs::write(root.join("b/secret"), "secret").unwrap();
-            let a = root.join("a");
-            assert!(!store(&a, "a", "../b/secret", "stolen"));
-            assert_eq!(read_raw(&a, "a", "../b/secret"), None);
-            assert_eq!(fs::read_to_string(root.join("b/secret")).unwrap(), "secret");
-            assert!(store(&a, "a", "on", "true"));
-            assert_eq!(read_typed(&a, "a", "on"), Some(SettingValue::Toggle(true)));
-            fs::write(a.join("on"), "false").unwrap();
-            assert_eq!(read_typed(&a, "a", "on"), Some(SettingValue::Toggle(true)));
-            assert_eq!(
-                read_typed(&root.join("other"), "a", "on"),
-                Some(SettingValue::Toggle(false))
-            );
-            assert!(store(&a, "a", "on", "false"));
-            assert_eq!(read_typed(&a, "a", "on"), Some(SettingValue::Toggle(false)));
-            fs::remove_file(a.join("on")).unwrap();
-            fs::create_dir(a.join("on")).unwrap();
-            assert!(!store(&a, "a", "on", "true"));
-            assert_eq!(read_typed(&a, "a", "on"), Some(SettingValue::Toggle(false)));
-            fs::remove_dir_all(root).unwrap();
-        });
-    }
-}
+mod tests;

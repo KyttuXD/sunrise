@@ -80,14 +80,15 @@ pub struct ChunkDiskFailure {
 /// A disk callback's shared Host. It has no live backend and is never a
 /// `ServerHost`: live handle methods refuse, and world writes do not compile.
 /// Registry and settings reads use the frozen resource generation retained by
-/// the disk worker. Neither getter reads files. The inherited
-/// [`ConfigHost::setting`](prelude::ConfigHost::setting) still returns an owned `Option<String>`.
+/// the disk worker. Neither getter reads files or provides access to live client settings.
 pub trait ChunkDiskHost: Host {
     /// Borrow the captured world, dimension, chunk, representation and phase.
     fn job(&self) -> &ChunkDiskContext;
     /// Borrows registry names in ID order for the lifetime of the host borrow,
     /// or returns `None` if the registry is unavailable in the captured generation.
     fn registry(&self, name: &str) -> Option<&[String]>;
+    /// Borrow a setting input from the captured generation, not the live client store.
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str>;
 }
 
 // no wire: a borrowed worker-only Host.
@@ -108,7 +109,7 @@ impl<'a> OwningChunkDisk<'a> {
 }
 
 impl Host for OwningChunkDisk<'_> {}
-crate::impl_host_areas!(OwningChunkDisk<'_>, except(levels, config));
+crate::impl_host_areas!(OwningChunkDisk<'_>, except(levels));
 impl prelude::LevelsHost for OwningChunkDisk<'_> {
     fn is_loaded(&self, id: &str) -> bool {
         self.resources.mods().get(id).is_some()
@@ -117,17 +118,15 @@ impl prelude::LevelsHost for OwningChunkDisk<'_> {
         None
     }
 }
-impl prelude::ConfigHost for OwningChunkDisk<'_> {
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        self.resources.setting(mod_id, key).map(str::to_owned)
-    }
-}
 impl ChunkDiskHost for OwningChunkDisk<'_> {
     fn job(&self) -> &ChunkDiskContext {
         self.job
     }
     fn registry(&self, name: &str) -> Option<&[String]> {
         self.resources.registry(name)
+    }
+    fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
+        self.resources.setting(mod_id, key)
     }
 }
 

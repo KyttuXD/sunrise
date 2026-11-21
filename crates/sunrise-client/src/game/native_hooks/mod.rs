@@ -94,7 +94,7 @@ use sunrise_client::{
     keybinds,
     merchant::MerchantOffer,
     mobs::Who,
-    mod_list::{self, Installed, KeyMapping, NativePage, NativeSetting, NativeSettingValue},
+    mod_list::{self, Installed, KeyMapping, NativePage},
     music::{Music, MusicLayer},
     particles::{ParticleOptions, ParticleType},
     text::Text,
@@ -369,7 +369,7 @@ mod mob_split;
 mod mod_block_entity_payload_tests;
 mod mod_configs;
 mod mod_mismatch;
-mod mod_settings;
+pub(super) mod mod_settings;
 mod model_baking_completed;
 mod movement_input;
 mod muffle_sounds;
