@@ -7,13 +7,14 @@ ids = [
     "handle:BiomeRef::key",
     "handle:BiomeKey::id",
     "handle:BiomeKey::data",
-    "method:KeysHost::biome_key",
-    "method:KeysHost::biome",
+    "method:prelude::KeysHost::biome_key",
+    "method:prelude::KeysHost::biome",
     "method:GenerationContext::noise_biome",
     "type:SectionVisibilityInput",
-    "method:SectionVisibilityInput::biome",
-    "type:SectionVisibilityEvent",
+    "handle:SectionVisibilityInput::biome",
+    "type:SectionVisibilityEvent.input",
     "hook:section_visibility",
+    "hook:section_visibility.input",
 ]
 why = """
 Vanilla 26.3 separates the name (ResourceKey.create and ResourceKey.identifier) from a
@@ -45,7 +46,8 @@ migrate = """
   or retain/compare `biome.key()`. An unregistered slot gives `None`; section reads
   also give `None` for a missing column. For explicit input type annotations use
   `SectionVisibilityInput<'_>`; rebuild `section_visibility` listeners for hook version 3.
-- Remove attempts to encode biome slots or generations with `Wire`. In a mod-owned packet or
-  saved record, encode the canonical `key.id()` text instead, then resolve it with
-  `host.biome(name)` when an installed server registry is available. Handle an absent name normally.
+- Remove biome slots or generations from `Wire` payloads. In a mod-owned packet or saved record,
+  replace the field with a `String` and write `key.id().to_owned()` at that boundary. On read,
+  resolve it with `host.biome(&name)` when an installed server registry is available and handle
+  `Ok(None)` as an absent name.
 """
