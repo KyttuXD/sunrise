@@ -61,6 +61,26 @@ pub trait GuiLayerRegistrar {
     fn wrap_layer(&mut self, id: &str, wrap: Box<GuiLayerWrapper>) -> bool;
 }
 
+// no wire: the ID and geometry describe one client HUD extraction, not a payload.
+/// The bounds of one HUD layer's submitted geometry for the current frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GuiLayerBounds {
+    /// The same namespaced ID used when registering or observing the layer.
+    pub layer: &'static str,
+    /// Bounding rectangle `[x, y, width, height]` in scaled GUI pixels, within the window.
+    /// This describes geometry, not per-pixel visibility through other layers or textures.
+    pub rect: [f32; 4],
+}
+
+impl GuiLayerBounds {
+    // hidden: only extraction supplies the current frame's geometry bounds.
+    #[doc(hidden)]
+    pub const fn new(layer: &'static str, rect: [f32; 4]) -> Self {
+        Self { layer, rect }
+    }
+}
+
 /// Where a mod's HUD layer goes, the four orderings of `RegisterGuiLayersEvent`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: NeoForge's four orderings, matched without a wildcard

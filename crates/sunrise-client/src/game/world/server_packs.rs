@@ -547,13 +547,8 @@ impl Game<'_> {
     }
 
     /// System toasts, each in a free 32-pixel slot of the `ToastManager`.
-    /// Hidden toasts still time out. A mod's HUD veto cannot hide an audio failure notice.
-    pub(super) fn draw_pack_toasts(
-        &mut self,
-        batch: &mut HudBatch,
-        hidden: bool,
-        gui_canceled: bool,
-    ) {
+    /// Hidden toasts still time out. This pass is independent of the HUD's veto.
+    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = self.settings.notification_display_time;
         self.add_server_report_toasts();
         // A mod cannot veto the notice reporting its failed callback.
@@ -575,7 +570,7 @@ impl Game<'_> {
             .chain(std::iter::once(&mut packs.load_fail))
             .chain(packs.chunk_io.iter_mut())
             .chain(packs.server_errors.iter_mut())
-            .map(|toast| (toast, hidden || gui_canceled))
+            .map(|toast| (toast, hidden))
             .chain(
                 packs
                     .mod_audio_errors
@@ -781,7 +776,7 @@ mod tests {
                 assert!(window.title.is_some());
                 assert!(window.server_packs.chunk_io[2].is_none());
                 let mut batch = HudBatch::scratch([640, 480]);
-                window.draw_pack_toasts(&mut batch, true, false);
+                window.draw_pack_toasts(&mut batch, true);
                 let toast = window.server_packs.chunk_io[2].as_ref().unwrap();
                 assert_eq!(
                     toast.title.translation_key(),
@@ -868,7 +863,7 @@ mod tests {
 
                 let mut batch = HudBatch::scratch([640, 480]);
                 with_client_game(|other| {
-                    other.draw_pack_toasts(&mut batch, true, false);
+                    other.draw_pack_toasts(&mut batch, true);
                     assert!(other.server_packs.server_errors.is_empty());
                     assert!(
                         observed.lock().unwrap().is_empty(),
@@ -876,7 +871,7 @@ mod tests {
                     );
                 });
 
-                window.draw_pack_toasts(&mut batch, true, false);
+                window.draw_pack_toasts(&mut batch, true);
                 let [Some(toast)] = window.server_packs.server_errors.as_slice() else {
                     panic!("only the accepted notice should reach the queue");
                 };
@@ -886,7 +881,7 @@ mod tests {
                     toast.message.as_ref().unwrap().component()["with"][0]["text"],
                     ACCEPTED,
                 );
-                window.draw_pack_toasts(&mut batch, true, false);
+                window.draw_pack_toasts(&mut batch, true);
                 assert_eq!(observed.lock().unwrap().as_slice(), [ACCEPTED, CANCELLED]);
             });
         });

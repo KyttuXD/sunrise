@@ -54,7 +54,7 @@ Each feature is built from what it visibly does, never from another client's or 
 
 ## HUD widgets (each default off)
 
-Boxes in the screen corners, placed like mods' boxes (`extras_hud::Corners`), each in a corner of
+Boxes in the screen corners, each in a corner of
 its own, with an optional dark background (on by default). F3's debug screen takes the top corners as it does from
 mods' boxes. Code: `crates/sunrise-client-render/src/pvp_hud.rs` (lines, cache, layout) and `game/extras/pvp.rs`.
 

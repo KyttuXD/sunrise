@@ -30,5 +30,6 @@ also offers a system toast there, only in the owning client's window. Editing or
 it does not change the server's error log. Candidates produced during the initial resource
 loading screen wait until the game can invoke the hook with a `ClientHost`. The pause screen's
 persistent song label is HUD content, not a queued toast, and is not filtered by this hook.
-Audio stream panic notices use the same toast slots but cannot be vetoed by `toast_add` or
-`render_gui_pre`. The player's hide-GUI setting still hides them.
+The toast pass is separate from the HUD: `render_gui_pre` does not veto it. Audio stream panic
+notices use the same toast slots but cannot be vetoed by `toast_add`. The player's hide-GUI
+setting still hides them.

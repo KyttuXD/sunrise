@@ -91,12 +91,10 @@ impl Game<'_> {
     pub(super) fn zoom_turn_scale(&self) -> f64 {
         self.zoom_now().2
     }
-    /// The PvP HUD widgets and mods' corner panels, in the HUD layer (hidden with F1
-    /// by the caller).
+    /// The built-in PvP HUD widgets and Sunrise platform HUD layers.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
         self.draw_pvp_hud(batch, &mut corners);
-        self.native_render_gui_post(batch);
         // The layers crates registered (`sunrise_hooks::hud`): none, no canvas.
         let layers = sunrise_hooks::hud::engine::all();
         if !layers.is_empty() {

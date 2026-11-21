@@ -1,3 +1,3 @@
 ids = ["hook:render_gui_pre"]
 why = "An audio pull failure notice must still be drawn when a mod cancels the HUD. In vanilla 26.3, Gui.extractRenderState calls ToastManager.extractRenderState separately from the HUD, and the toast manager checks the player's hide-GUI setting. NeoForge's GuiLayerManager.render limits RenderGuiEvent.Pre cancellation to GUI layers. Audio failure notices continue using the same system toast slots and respect the player's hide-GUI setting."
-migrate = "Keep returning Flow::Cancel from Hooks::render_gui_pre to hide the HUD and ordinary toasts. It no longer hides audio pull failure notices. No source change is needed; remove any assumption that the HUD veto hides those notices."
+migrate = "Keep returning Flow::Cancel from Hooks::render_gui_pre to hide the HUD. It does not hide audio pull failure notices. No source change is needed; remove any assumption that the HUD veto hides those notices."

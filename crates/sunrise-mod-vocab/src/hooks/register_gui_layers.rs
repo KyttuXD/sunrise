@@ -31,8 +31,9 @@ body does not fire layer hooks again.
 A vanilla layer Sunrise does not draw this frame (the crosshair in third person, the mount's
 health off a mount) still keeps its place: the inserted layers around it draw in order, at the
 next layer that is drawn. F1 and a canceled `Hooks::render_gui_pre` hide all inserted layers;
-a replacement or wrapper inherits its slot's draw conditions. A mod that needs a foreground
-pass regardless of F1 uses `Hooks::gui_render_post`."#]
+a replacement or wrapper inherits its slot's draw conditions. `Hooks::render_gui_post` runs
+at the end of the HUD pass even under F1, unless Pre cancels. Focused chat belongs to the
+chat screen, not the `minecraft:chat` HUD slot."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",

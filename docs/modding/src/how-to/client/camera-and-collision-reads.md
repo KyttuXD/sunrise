@@ -127,7 +127,8 @@ The server-side world still reports its edits through `block_changed`. A level a
 viewing (below) is not told. A section update tells each of its blocks, so keep the listener cheap:
 mark the chunk and redraw it later.
 sunrise-org/sunrise-minimap is such a mod: it redraws a marked chunk into its map's dynamic texture and draws
-the map in `render_gui_post`.
+the map in `render_gui_post`. Use [`event.layers`](hud-drawing.md#drawing-after-the-hud) to leave room
+for the active-effect icons.
 
 ## Viewed levels
 

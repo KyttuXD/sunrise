@@ -214,6 +214,28 @@ impl HudBatch {
             inline_profiles: Vec::new(),
         }
     }
+    /// Bounds of submitted layer geometry in GUI pixels, intersected with the GUI viewport.
+    pub fn layer_bounds_since(&self, start: usize) -> Option<[f32; 4]> {
+        let mut bounds: Option<[f32; 4]> = None;
+        // HUD geometry is a triangle list. Intersect each triangle's bounds before taking the
+        // union so a layer that draws only off either side of the window reports no extent.
+        for triangle in self.vertices[start..].as_chunks::<3>().0 {
+            let [[ax, ay], [bx, by], [cx, cy]] = triangle.map(|v| v.pos);
+            let left = ax.min(bx).min(cx).max(0.0);
+            let top = ay.min(by).min(cy).max(0.0);
+            let right = ax.max(bx).max(cx).min(self.width);
+            let bottom = ay.max(by).max(cy).min(self.height);
+            if left >= right || top >= bottom || (bx - ax) * (cy - ay) == (cx - ax) * (by - ay) {
+                continue;
+            }
+            bounds = Some(match bounds {
+                Some([l, t, r, b]) => [l.min(left), t.min(top), r.max(right), b.max(bottom)],
+                None => [left, top, right, bottom],
+            });
+        }
+        bounds.map(|[left, top, right, bottom]| [left, top, right - left, bottom - top])
+    }
+
     /// Start tracking one callback's writes to this batch without copying existing paint.
     pub fn paint_checkpoint(&self) -> HudPaintCheckpoint {
         let start = self.vertices.len();

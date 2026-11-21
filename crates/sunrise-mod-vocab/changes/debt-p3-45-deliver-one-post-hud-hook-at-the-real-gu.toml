@@ -1,0 +1,44 @@
+ids = [
+    "hook:gui_render_post",
+    "hook:gui_render_post.batch",
+    "hook:gui_render_post.gui_hidden",
+    "hook:gui_render_post.focused",
+    "method:Hooks::gui_render_post",
+    "type:GuiRenderPostEvent",
+    "type:GuiRenderPostEvent.batch",
+    "type:GuiRenderPostEvent.gui_hidden",
+    "type:GuiRenderPostEvent.focused",
+    "hook:render_gui_post",
+    "hook:render_gui_post.corners",
+    "hook:render_gui_post.layers",
+    "type:RenderGuiPostEvent",
+    "type:RenderGuiPostEvent.corners",
+    "type:RenderGuiPostEvent.layers",
+    "type:GuiLayerBounds",
+    "type:GuiLayerBounds.layer",
+    "type:GuiLayerBounds.rect",
+    "hook:render_gui_pre",
+    "hook:gui_layer_pre",
+    "hook:gui_layer_post",
+    "type:Corner",
+    "type:Corner.TopLeft",
+    "type:Corner.TopRight",
+    "type:Corner.BottomLeft",
+    "type:Corner.BottomRight",
+    "handle:Corner::ALL",
+    "handle:Corner::name",
+    "handle:Corner::label",
+    "handle:Corner::top",
+    "handle:Corner::left",
+    "type:Corners",
+    "handle:Corners::new",
+    "handle:Corners::place",
+]
+why = "NeoForge GuiLayerManager.render posts RenderGuiEvent.Pre before the HUD layers and Post after them, even when F1 hides ordinary paint; it returns without running either the layers or Post on a veto. Vanilla Gui.extractRenderState draws screens and toasts separately, and Hud.extractChat is only the background chat slot. The two previous Post hooks fired halfway through that HUD or after screen paint. Keep just render_gui_post at the HUD boundary and lend current layer rectangles instead of allocating corner space across mods. Hud.extractEffects and BlitRenderState.getBounds anchor the rectangles in the submitted GUI-scaled geometry, not a prediction from active status effects."
+migrate = """
+Rename `Hooks::gui_render_post` to `Hooks::render_gui_post`, `GuiRenderPostEvent` to `RenderGuiPostEvent`, and `event.batch` to `event.draw`. Replace `event.gui_hidden` with `host.hud_mode() != HudMode::AllVisible`, and `event.focused` with `host.window_focused()`. Replace any `HookId::GuiRenderPost` or `gui_render_post` declaration in your hook list with `RenderGuiPost` or `render_gui_post`, respectively. To draw above an open screen (including title menus and focused chat), move that paint to `screen_render_post` using `event.draw`; there is no post-all-GUI hook.
+
+In `render_gui_post`, replace `event.corners.place(corner, w, h)` with GUI pixel positions computed from `let [width, height] = event.draw.size()`: for a right or bottom edge use `width - margin - w` or `height - margin - h`. Use `event.layers.iter().find(|layer| layer.layer == "minecraft:effects")` and its `[left, top, width, height]` rectangle to place a panel below `top + height` when their horizontal spans intersect. A hidden, empty or canceled layer has no entry. Keep your own corner enum, preference names and offsets if you have them. Advance an offset after each of your own panels rather than using `Corners`; neither `Corner` nor `Corners` (or their Wire codecs) is part of the mod API now.
+
+Pre and Post run on the in-world HUD pass even when F1 hides ordinary paint. Pre's `Flow::Cancel` skips HUD slots and Post, but does not skip screens or their focused chat, or the later toast pass. `gui_layer_pre`/`gui_layer_post` and registered replacements for `minecraft:chat` only affect the background HUD slot. Use screen drawing hooks for work tied to the focused chat screen instead.
+"""

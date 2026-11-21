@@ -1036,7 +1036,6 @@ one of these moments has to move that logic into a client native mod.
 | `gather_effect_screen_tooltips.rs` | `gather_effect_screen_tooltips` |
 | `gather_skipped_attribute_tooltips.rs` | `gather_skipped_attribute_tooltips` |
 | `get_arm_pose.rs` | `get_arm_pose` |
-| `gui_render_post.rs` | `gui_render_post` |
 | `hand_drawn.rs` | `hand_drawn` |
 | `input_key.rs` | `input_key` |
 | `item_model_property.rs` | `item_model_property` |

@@ -12,7 +12,7 @@ again restores vanilla's behaviour completely.
 | Settings, parsing and saving | `crates/sunrise-client-render/src/extras.rs` |
 | FPS and click counters (for native mods) | `extras.rs` (pure logic, unit tested) |
 | Dynamic lights: item glow, nearest sources | `crates/sunrise-client-render/src/dynamic_light.rs` (unit tested), `game/interface/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
-| HUD drawing (mods' panels, corner stacking) | `crates/sunrise-client/src/extras_hud.rs` |
+| Built-in HUD panels and corner stacking | `crates/sunrise-client/src/extras_hud.rs` |
 | Auto-reconnect: its setting, its row, the policy and the backoff | crate `sunrise-reconnect`, which the official executable registers ([forking.md](forking.md#modding-and-rendering)); the engine shows its countdown and connects again when it asks (`Hooks::retry`, `game/network/remote/connection.rs`) |
 | Game glue (input hooks, per-frame update) | `crates/sunrise-client/src/game/interface/extras.rs`; each extra's own glue in a child module, `game/interface/extras/` |
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
@@ -245,7 +245,7 @@ Splitscreen is temporarily unavailable; it returns as an official mod.
   the world, like vanilla's HUD. Extras in the top left corner give way to the
   debug screen (F3), which shows the FPS anyway.
 - Corners stack: extras placed in the same corner stack downward (top corners)
-  or upward (bottom corners) in the order the PvP HUD widgets, then mods' panels. The top
+  or upward (bottom corners) in the built-in HUD widget order. The top
   right corner starts below the status effect icons.
 
 ## Perf budget

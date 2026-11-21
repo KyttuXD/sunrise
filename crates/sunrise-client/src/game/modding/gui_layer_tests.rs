@@ -411,3 +411,149 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
         });
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn post_hud_follows_layers_before_screens_with_this_frames_paint_bounds() {
+    use mod_api::{GuiLayerBounds, RenderGuiPostEvent, RenderGuiPreEvent, ScreenRenderPostEvent};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    crate::game::in_own_process(
+        "game::gui_layer_tests::post_hud_follows_layers_before_screens_with_this_frames_paint_bounds",
+        || {
+            struct PostHud {
+                canceled: Arc<AtomicBool>,
+                bounds: Arc<Mutex<Vec<GuiLayerBounds>>>,
+            }
+            #[mod_api::__subscriptions]
+            impl Hooks for PostHud {
+                fn register_gui_layers(
+                    &self,
+                    _: &RegistrationContext,
+                    event: &mut RegisterGuiLayersEvent<'_>,
+                ) {
+                    for (id, color) in [
+                        ("post_test:skip", 0xFF00_FFFF),
+                        ("post_test:top", 0xFF00_FF00),
+                    ] {
+                        assert!(event.layers.register(
+                            id.into(),
+                            GuiLayerPlacement::AboveAll,
+                            Box::new(move |_, draw| {
+                                log(id);
+                                draw.fill([-2.0, 18.0, 22.0, 10.0], color);
+                            }),
+                        ));
+                    }
+                }
+                fn render_gui_pre(&self, _: &dyn ClientHost, _: &mut RenderGuiPreEvent) -> Flow {
+                    log("hud pre");
+                    if self.canceled.load(Ordering::Relaxed) {
+                        Flow::Cancel
+                    } else {
+                        Flow::Continue
+                    }
+                }
+                fn gui_layer_pre(
+                    &self,
+                    _: &dyn ClientHost,
+                    event: &mut GuiLayerPreEvent<'_>,
+                ) -> Flow {
+                    if event.layer == "post_test:skip" {
+                        event.draw.fill([240.0, 150.0, 20.0, 10.0], 0xFF00_00FF);
+                        return Flow::Cancel;
+                    }
+                    Flow::Continue
+                }
+                fn gui_layer_post(&self, _: &dyn ClientHost, event: &mut GuiLayerPostEvent<'_>) {
+                    if event.layer == "minecraft:tab_list"
+                        || event.layer == "minecraft:sleep_overlay"
+                    {
+                        log(event.layer);
+                    }
+                    if event.layer == "post_test:top" {
+                        event.draw.fill([200.0, 150.0, 20.0, 10.0], 0xFF00_00FF);
+                        log("top post");
+                    }
+                }
+                fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
+                    self.bounds.lock().unwrap().extend_from_slice(event.layers);
+                    log("hud post");
+                }
+                fn screen_render_post(
+                    &self,
+                    _: &dyn ClientHost,
+                    _: &mut ScreenRenderPostEvent<'_>,
+                ) {
+                    log("screen post");
+                }
+            }
+            with_client_game(|game| {
+                let canceled = Arc::new(AtomicBool::new(false));
+                let bounds = Arc::new(Mutex::new(Vec::new()));
+                mod_platform::__private::install(
+                    vec![ModEntry::new(
+                        "post_hud",
+                        Box::new(PostHud {
+                            canceled: Arc::clone(&canceled),
+                            bounds: Arc::clone(&bounds),
+                        }),
+                    )]
+                    .into(),
+                );
+                mods::register_gui_layers(ExecutionRole::Client);
+                game.title = None;
+                game.screen = super::Screen::Paused;
+                game.ui.hide_gui = false;
+                for id in ["speed", "poison"] {
+                    let effect = sunrise_client::brewing::effect(id).unwrap();
+                    game.potions
+                        .effects
+                        .add(sunrise_client::effects::EffectInstance::new(
+                            effect.id, 200, 0,
+                        ));
+                }
+                game.hud([320, 240]);
+                assert_eq!(
+                    take(),
+                    [
+                        "hud pre",
+                        "minecraft:sleep_overlay",
+                        "minecraft:tab_list",
+                        "post_test:top",
+                        "top post",
+                        "hud post",
+                        "screen post",
+                    ]
+                );
+                let visible = std::mem::take(&mut *bounds.lock().unwrap());
+                let rect = |id| visible.iter().find(|b| b.layer == id).map(|b| b.rect);
+                // Vanilla: a beneficial and a harmful 24x24 icon, 26 GUI pixels between rows.
+                assert_eq!(rect("minecraft:effects"), Some([295.0, 1.0, 24.0, 50.0]));
+                assert_eq!(rect("post_test:top"), Some([0.0, 18.0, 20.0, 10.0]));
+                assert_eq!(rect("post_test:skip"), None);
+
+                game.ui.hide_gui = true;
+                game.hud([320, 240]);
+                assert_eq!(
+                    take(),
+                    [
+                        "hud pre",
+                        "minecraft:sleep_overlay",
+                        "hud post",
+                        "screen post"
+                    ]
+                );
+                assert!(bounds.lock().unwrap().is_empty());
+
+                canceled.store(true, Ordering::Relaxed);
+                game.ui.hide_gui = false;
+                game.hud([320, 240]);
+                assert_eq!(take(), ["hud pre", "screen post"]);
+            });
+        },
+    );
+}

@@ -4,7 +4,8 @@ A screen can show a living entity standing in a box, turned toward the cursor or
 page in a recipe viewer, an entity icon, the mob of a data model. This is vanilla's
 `InventoryScreen.renderEntityInInventoryFollowsMouse` and `renderEntityInInventory`. Draw it with
 `DrawContext::entity` from a menu screen's `with_draw(|host, frame, draw| ...)` callback or
-from `render_gui_post`. For a menu screen, use `frame.origin` and the current pointer
+from `render_gui_post` for an in-world overlay or `screen_render_post` over an open screen.
+For a menu screen, use `frame.origin` and the current pointer
 (`frame.pointer.map(|axis| axis as f32)`) rather than capturing a fixed frame at open.
 
 ```rust,ignore

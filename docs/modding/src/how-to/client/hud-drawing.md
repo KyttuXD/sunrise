@@ -54,8 +54,43 @@ wrapper omitted the previous body. If a retained painter or wrapper panics or is
 paint is discarded. A wrapper's completed `draw_previous()` calls keep their paint in order,
 without being called again. A panic disables just the offending callback for this session; a
 disabled wrapper leaves the previous body to draw directly. If Pre cancels the slot, neither the
-installed body nor Post runs. For work that must happen even when the HUD is hidden, use the independent foreground
-`render_gui_post` hook.
+installed body nor its `gui_layer_post` runs.
+
+## Drawing after the HUD
+
+`render_gui_post` runs once after the whole in-world HUD layer sequence, including layers
+registered `AboveAll`, and before the open screen draws. `render_gui_pre` can cancel the whole
+HUD pass; then there is no Post. F1 hides ordinary layers but does not by itself skip these two
+hooks. For paint over an open screen, use [`screen_render_post`](screens.md) instead.
+
+Use `event.draw.size()` for the scaled GUI window size. `event.layers` contains a rectangle for
+each layer that submitted geometry this frame. Rectangles are `[x, y, width, height]` in GUI
+pixels, in paint order. A hidden, empty or canceled layer has no entry. Replacement and wrapper
+paint counts as part of the slot; drawings made in the layer's event listeners do not.
+
+For example, keep two panels from the same mod below the active-effect icons where they overlap.
+Each renderer lays out its own panels; placement doesn't reserve space for other mods.
+
+```rust,ignore
+fn render_gui_post(&self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
+    if host.hud_mode() != HudMode::AllVisible {
+        return;
+    }
+    let [width, _] = event.draw.size();
+    let x = width - 92.0;
+    let mut y = 2.0;
+    if let Some(effects) = event.layers.iter().find(|bounds| bounds.layer == "minecraft:effects") {
+        let [left, top, width, height] = effects.rect;
+        if x < left + width && x + 90.0 > left {
+            y = top + height + 2.0;
+        }
+    }
+    for height in [18.0, 12.0] {
+        event.draw.fill([x, y, 90.0, height], 0xCC10_1020);
+        y += height + 2.0;
+    }
+}
+```
 
 ## Status rows and fixed text positions
 

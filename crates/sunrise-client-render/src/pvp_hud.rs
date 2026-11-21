@@ -1,5 +1,5 @@
 //! The PvP & HUD page's HUD widgets (`docs/pvp.md`): boxes of lines in the screen corners,
-//! placed by `extras_hud::Corners` beside mods' boxes. Each widget keeps its lines, their
+//! placed by Sunrise's built-in corner layout. Each widget keeps its lines, their
 //! text and widths, and rebuilds them only when what it shows changes, so a frame that
 //! changes nothing allocates nothing.
 use crate::text::Text;

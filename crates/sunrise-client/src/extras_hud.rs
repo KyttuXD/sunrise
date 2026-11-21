@@ -1,5 +1,4 @@
-//! HUD boxes in the corners: mods' panels, small boxes in GUI pixels stacked per corner
-//! (`docs/extras.md`), and the layers crates above the engine register (`sunrise_hooks::hud`).
+//! Built-in HUD panels stacked per corner (`docs/extras.md`) and the platform HUD layers.
 use crate::{
     extras::Corner,
     hud::{HudAtlas, HudBatch, rgba},
@@ -47,7 +46,7 @@ impl Corners {
 
 const BACKGROUND: u32 = 0x7800_0000;
 
-/// A box of text lines (a mod's HUD panel): `(text, 0xRRGGBB)` each.
+/// A built-in HUD panel of text lines: `(text, 0xRRGGBB)` each.
 pub fn draw_lines(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -73,8 +72,8 @@ pub fn draw_lines(
     }
 }
 
-/// Draws the HUD layers crates registered with the HUD ([`hud::Stage::Hud`]), after the extras'
-/// and mods' boxes, which they stack with. `shown`: whether each corner of `Corner::ALL` shows
+/// Draws platform HUD layers ([`hud::Stage::Hud`]) after the built-in panels.
+/// `shown`: whether each corner of `Corner::ALL` shows
 /// (the debug screen covers some).
 pub fn draw_layers(
     layers: &[&dyn hud::Layer],

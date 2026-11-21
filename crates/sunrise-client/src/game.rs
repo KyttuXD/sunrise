@@ -3461,6 +3461,9 @@ struct Game<'a> {
     debug_renderers_version: Option<u64>,
     /// Next undrawn mod layer in HUD `gui_layers::order`; `None` while hidden or outside its pass.
     hud_layer_next: Option<usize>,
+    /// Reused paint bounds for this HUD pass, collected only for `render_gui_post` listeners.
+    hud_layer_bounds: Vec<mod_api::GuiLayerBounds>,
+    measure_hud_layers: bool,
     /// The mod block entities' view distances, asked of the parts once (`native_block_entity_draw`).
     mod_view_distances: std::cell::OnceCell<native_block_entity_draw::ViewDistances>,
     /// `item_level` for one frame, game time, day time and dimension.
@@ -7199,7 +7202,7 @@ impl Game<'_> {
             self.draw_screen_with_post_hook(&mut batch);
             self.draw_toasts(&mut batch, false);
             self.draw_tutorial_toasts(&mut batch, false);
-            self.draw_pack_toasts(&mut batch, false, false);
+            self.draw_pack_toasts(&mut batch, false);
             self.draw_music_toast(&mut batch, false);
             return batch;
         }
@@ -7232,7 +7235,7 @@ impl Game<'_> {
             self.draw_title_screen_with_post_hook(&mut batch);
             self.draw_toasts(&mut batch, false);
             self.draw_tutorial_toasts(&mut batch, false);
-            self.draw_pack_toasts(&mut batch, false, false);
+            self.draw_pack_toasts(&mut batch, false);
             self.draw_music_toast(&mut batch, false);
             return batch;
         }
@@ -7241,7 +7244,7 @@ impl Game<'_> {
         // The ToastManager draws over every screen: a server's packs
         // download while the connection screen shows.
         if self.remote_overlay(&mut batch) {
-            self.draw_pack_toasts(&mut batch, false, false);
+            self.draw_pack_toasts(&mut batch, false);
             self.draw_music_toast(&mut batch, false);
             return batch;
         }
@@ -7250,13 +7253,13 @@ impl Game<'_> {
         // the sleep overlay, debug screen and open screens still draw.
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
+        // NeoForge's layer manager posts Pre even when F1 hides the normal layers.
         let mut gui_canceled = false;
-        if !self.ui.hide_gui {
-            self.native_render_gui_pre(&mut gui_canceled);
-        }
-        // RenderGuiEvent.Pre can hide the HUD without changing the player's hide-GUI setting.
+        self.native_render_gui_pre(&mut gui_canceled);
         let hide_hud = self.ui.hide_gui || self.replay.playing();
         let show_hud = !hide_hud && !gui_canceled;
+        self.measure_hud_layers =
+            !gui_canceled && mod_api::__private::listened(mod_api::HookId::RenderGuiPost);
         // Hud.extractRenderState asks `Screen.isInGameUi` twice: such a screen
         // defers the subtitles over itself, and keeps them while F1 hides the
         // rest of the HUD.
@@ -7481,14 +7484,16 @@ impl Game<'_> {
             }
         }
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
-        let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
-        self.gui_layer(
-            VanillaGuiLayer::SleepOverlay,
-            &mut batch,
-            &mut |g, batch| {
-                hud_layout::paint(batch, &g.gui.atlas, &draws);
-            },
-        );
+        if !gui_canceled {
+            self.gui_layer(
+                VanillaGuiLayer::SleepOverlay,
+                &mut batch,
+                &mut |g, batch| {
+                    let draws = hud_overlays::sleep_overlay(wi, hi, g.sleep_timer as i32);
+                    hud_layout::paint(batch, &g.gui.atlas, &draws);
+                },
+            );
+        }
         if show_hud {
             self.gui_layer(
                 VanillaGuiLayer::OverlayMessage,
@@ -7516,7 +7521,7 @@ impl Game<'_> {
                     },
                 );
             }
-        } else if subtitles == Subtitles::Deferred {
+        } else if !gui_canceled && subtitles == Subtitles::Deferred {
             // F1 hid the HUD, but an in-game screen still shows the subtitles.
             self.gui_layer(
                 VanillaGuiLayer::SubtitleOverlay,
@@ -7534,11 +7539,8 @@ impl Game<'_> {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
-        // The chat screen draws the focused chat itself; F1 hides the rest.
-        if self.screen == Screen::Chat {
-            // The mod layers under the chat stay under the focused chat.
-            self.draw_mod_gui_layers(Some(VanillaGuiLayer::Chat), &mut batch);
-        } else if show_hud {
+        // The chat screen draws focused chat after the HUD; this slot draws background chat only.
+        if show_hud && self.screen != Screen::Chat {
             if !self.overlay_holds_view() {
                 self.gui_layer(VanillaGuiLayer::Chat, &mut batch, &mut |g, batch| {
                     g.draw_chat(batch)
@@ -7551,6 +7553,12 @@ impl Game<'_> {
         // The mod layers above the last vanilla layer drawn.
         self.draw_mod_gui_layers(None, &mut batch);
         self.hud_layer_next = None;
+        // GuiLayerManager.render posts once after all HUD layers, before Gui extracts screens.
+        if self.measure_hud_layers {
+            self.measure_hud_layers = false;
+            self.native_render_gui_post(&mut batch);
+            self.hud_layer_bounds.clear();
+        }
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
         batch.blur_at = batch.vertices.len() as u32;
@@ -7623,7 +7631,7 @@ impl Game<'_> {
         // after this point and so over what a mod drew.
         self.draw_screen_with_post_hook(&mut batch);
         self.draw_saving_indicator(&mut batch);
-        self.draw_every_toast(&mut batch, hide_hud, gui_canceled);
+        self.draw_every_toast(&mut batch, hide_hud);
         if self.server_packs.prompt.is_none() {
             self.remote_hud(&mut batch);
             self.draw_sign_editor(&mut batch);
@@ -13398,6 +13406,8 @@ impl<'a> Game<'a> {
             debug_renderers: Vec::new(),
             debug_renderers_version: None,
             hud_layer_next: None,
+            hud_layer_bounds: Vec::new(),
+            measure_hud_layers: false,
             mod_view_distances: Default::default(),
             item_level_cache: Default::default(),
             world_frames: 0,
