@@ -564,6 +564,18 @@ impl ServerEntity {
         }
     }
 
+    fn sends_changes_at_pairing(&self, e: &EntityState, ranges: &[(i32, i32)]) -> bool {
+        self.added
+            && if e.kind == "minecraft:player" {
+                e.sync_velocity
+            } else {
+                !self.arrow
+                    && ranges
+                        .iter()
+                        .any(|&(after, through)| e.id > after && e.id <= through)
+            }
+    }
+
     /// `ServerEntity.sendChanges` up to its `tickCount++`: see [`Self::send_changes`].
     fn send_update(&mut self, e: &EntityState, riding: &Riding, out: &mut Vec<play::Clientbound>) {
         if let Some(steps) = &e.minecart_steps {
@@ -1130,6 +1142,9 @@ pub struct Entities {
     /// them, the send pass skips them without looking their state up again.
     /// Thousands of items frozen past the simulation distance cost a flag each.
     quiet: Vec<bool>,
+    /// Marks consumed by `ServerEntity.sendChanges` during this pass. When an
+    /// idle entity is not updated, its simulation must keep the mark.
+    sync_velocity_sent: Vec<i32>,
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
     bodies: Bodies,
@@ -1303,6 +1318,14 @@ impl Entities {
         self.tick
     }
 
+    pub(super) fn sync_velocity_sent(&self) -> &[i32] {
+        &self.sync_velocity_sent
+    }
+
+    pub(super) fn drain_sent_sync_velocity(&mut self) -> impl Iterator<Item = i32> + '_ {
+        self.sync_velocity_sent.drain(..)
+    }
+
     /// Whether the entity `id` is tracked (it was in the last tick's pass).
     pub fn tracks(&self, id: i32) -> bool {
         self.states.contains_key(&id)
@@ -1372,6 +1395,7 @@ impl Entities {
         self.tick = self.tick.wrapping_add(1);
         let now = self.tick;
         self.probes.clear();
+        self.sync_velocity_sent.clear();
         self.chunks.clear();
         self.chunk_index.clear();
         for members in &mut self.chunk_members {
@@ -1686,13 +1710,8 @@ impl Entities {
             // tracking it, those just paired with it included. Arrows wait for the
             // next tick's send_changes so impact updates (e.g. IN_GROUND) arrive after
             // the client's first tick (#7461).
-            let synced = s.added
-                && e.kind != "minecraft:player"
-                && !s.arrow
-                && self
-                    .synced
-                    .iter()
-                    .any(|&(after, through)| e.id > after && e.id <= through);
+            let synced = s.sends_changes_at_pairing(e, &self.synced);
+            let mut self_motion = false;
             if !s.added || synced {
                 // ChunkMap.tick: sendChanges for an entity that changed
                 // section, needs sync or is in entity-ticking range. An idle
@@ -1701,6 +1720,10 @@ impl Entities {
                     s.send_leash(e, &mut self.packets);
                 } else {
                     s.send_changes(e, riding, &mut self.packets);
+                    self_motion = e.sync_velocity;
+                    if self_motion {
+                        self.sync_velocity_sent.push(e.id);
+                    }
                 }
             }
             s.added = false;
@@ -1712,7 +1735,15 @@ impl Entities {
             let mut pairing: Option<Option<Bodies>> = None;
             for (v, flags) in viewers.iter_mut().zip(&self.flags) {
                 let f = flags[index];
-                if f & TRACKS != 0 {
+                if self_motion && v.entity_id == e.id {
+                    // `sendToTrackingPlayersAndSelf`: only the final marked
+                    // motion goes to the player it is about, not its other changes.
+                    if !encoded {
+                        self.bodies.encode(&self.packets);
+                        encoded = true;
+                    }
+                    v.out.extend(self.bodies.to(v).last().cloned());
+                } else if f & TRACKS != 0 {
                     if self.packets.is_empty() {
                         continue;
                     }
@@ -1776,6 +1807,7 @@ impl Entities {
             changes: Bodies,
             pairing: Option<Bodies>,
             synced: bool,
+            sync_velocity: Option<i32>,
         }
         let Self {
             states,
@@ -1784,6 +1816,7 @@ impl Entities {
             synced: synced_ranges,
             flags,
             probes,
+            sync_velocity_sent,
             ..
         } = self;
         let mut made: Vec<Made> = states
@@ -1796,6 +1829,7 @@ impl Entities {
                 changes: Bodies::default(),
                 pairing: None,
                 synced: false,
+                sync_velocity: None,
             })
             .collect();
         let (pairs, is_moved, synced_ranges) = (&*pairs, &*is_moved, &*synced_ranges);
@@ -1806,17 +1840,13 @@ impl Entities {
                 packets.clear();
                 // As in `send_in_order`: paired as it joined, its first changes go out with
                 // the pairing; an idle one sends only its leash.
-                m.synced = s.added
-                    && e.kind != "minecraft:player"
-                    && !s.arrow
-                    && synced_ranges
-                        .iter()
-                        .any(|&(after, through)| e.id > after && e.id <= through);
+                m.synced = s.sends_changes_at_pairing(e, synced_ranges);
                 if !s.added || m.synced {
                     if e.idle && !is_moved[m.index] && !e.needs_sync {
                         s.send_leash(e, &mut packets);
                     } else {
                         s.send_changes(e, riding, &mut packets);
+                        m.sync_velocity = e.sync_velocity.then_some(e.id);
                     }
                 }
                 s.added = false;
@@ -1832,6 +1862,7 @@ impl Entities {
                 }
             }
         });
+        sync_velocity_sent.extend(made.iter().filter_map(|m| m.sync_velocity));
         // Nothing to send and nobody to pair with.
         made.retain(|m| !m.changes.all.is_empty() || m.pairing.is_some());
         let made = &made;
@@ -1840,7 +1871,9 @@ impl Entities {
             for (v, flags) in part {
                 for m in made {
                     let f = flags[m.index];
-                    if f & TRACKS != 0 {
+                    if m.sync_velocity == Some(v.entity_id) {
+                        v.out.extend(m.changes.to(v).last().cloned());
+                    } else if f & TRACKS != 0 {
                         v.out.extend(m.changes.to(v).iter().cloned());
                     } else if f & SEES != 0
                         && let Some(pairing) = &m.pairing
