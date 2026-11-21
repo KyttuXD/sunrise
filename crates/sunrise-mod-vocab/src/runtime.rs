@@ -184,6 +184,26 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
         .store(false, std::sync::atomic::Ordering::Release);
 }
 
+/// Run one isolated listener while its mod and operation are still attributed.
+pub(crate) fn invoke_isolated_listen<T>(
+    hook: generated::HookId,
+    id: &'static str,
+    operation: &'static str,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    match crate::callback_owner::contain_unwind(call) {
+        Ok(value) => Some(value),
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod {id}: {operation} listener panicked and is disabled for this session: {message}"
+            );
+            crate::callback_owner::record_callback_panic(id, "hook", operation, message);
+            None
+        }
+    }
+}
+
 /// Whether `id`'s listener of `hook` is poisoned for the session.
 pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
     // One atomic load on the usual path: the sets only fill on a panic.

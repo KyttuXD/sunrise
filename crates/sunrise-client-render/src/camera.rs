@@ -576,15 +576,14 @@ pub fn view_matrix(yaw: f32, pitch: f32) -> glam::Mat4 {
 }
 
 /// `GameRenderer.projectPointToScreen`: world point `at` seen from a camera at `position` facing
-/// `yaw`/`pitch` through column-major `projection` (the frame's reversed-Z perspective), as
+/// `[yaw, pitch, roll]` through column-major `projection` (the frame's reversed-Z perspective), as
 /// normalised device x and y (-1 to 1 across the screen) and depth z. The view is the camera's
 /// rotation only, without bob or spin, as vanilla's. None for a point at or behind the camera and
 /// for a non-finite `at`, where vanilla returns a mirrored or NaN point.
 pub fn project_point(
     projection: &[f32; 16],
     position: [f64; 3],
-    yaw: f32,
-    pitch: f32,
+    [yaw, pitch, roll]: [f32; 3],
     at: [f64; 3],
 ) -> Option<[f32; 3]> {
     if !at.iter().all(|v| v.is_finite()) {
@@ -596,8 +595,9 @@ pub fn project_point(
         (at[1] - position[1]) as f32,
         (at[2] - position[2]) as f32,
     );
-    let clip =
-        glam::Mat4::from_cols_array(projection) * view_matrix(yaw, pitch) * offset.extend(1.0);
+    let clip = glam::Mat4::from_cols_array(projection)
+        * view_matrix_rolled(yaw, pitch, roll)
+        * offset.extend(1.0);
     if clip.w.is_nan() || clip.w <= 0.0 {
         return None;
     }
@@ -607,6 +607,9 @@ pub fn project_point(
 
 /// `view_matrix` with a roll about the view direction, in degrees.
 pub fn view_matrix_rolled(yaw: f32, pitch: f32, roll: f32) -> glam::Mat4 {
+    if roll == 0.0 {
+        return view_matrix(yaw, pitch);
+    }
     let q = Quat::rotation_yxz(
         PI - yaw * DEG_TO_RAD,
         -pitch * DEG_TO_RAD,
@@ -690,6 +693,7 @@ pub struct Camera {
     pub position: [f64; 3],
     pub x_rot: f32,
     pub y_rot: f32,
+    pub roll: f32,
     pub rotation: Quat,
     pub forwards: [f32; 3],
     pub up: [f32; 3],
@@ -710,6 +714,7 @@ impl Default for Camera {
             position: [0.0; 3],
             x_rot: 0.0,
             y_rot: 0.0,
+            roll: 0.0,
             rotation: Quat::IDENTITY,
             forwards: [0.0, 0.0, -1.0],
             up: [0.0, 1.0, 0.0],
@@ -735,9 +740,17 @@ impl Camera {
     }
     /// `Camera.setRotation`.
     pub fn set_rotation(&mut self, y_rot: f32, x_rot: f32) {
+        self.set_rotation_rolled(y_rot, x_rot, 0.0);
+    }
+    fn set_rotation_rolled(&mut self, y_rot: f32, x_rot: f32, roll: f32) {
         self.x_rot = x_rot;
         self.y_rot = y_rot;
-        self.rotation = Quat::rotation_yxz(PI - y_rot * DEG_TO_RAD, -x_rot * DEG_TO_RAD, 0.0);
+        self.roll = roll;
+        self.rotation = Quat::rotation_yxz(
+            PI - y_rot * DEG_TO_RAD,
+            -x_rot * DEG_TO_RAD,
+            if roll == 0.0 { 0.0 } else { -roll * DEG_TO_RAD },
+        );
         self.forwards = self.rotation.transform([0.0, 0.0, -1.0]);
         self.up = self.rotation.transform([0.0, 1.0, 0.0]);
         self.left = self.rotation.transform([-1.0, 0.0, 0.0]);
@@ -777,20 +790,32 @@ impl Camera {
         camera_type: CameraType,
         clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
     ) {
-        self.align_with_entity_distance(entity, partial, camera_type, |distance| distance, clip);
+        self.align_with_entity_distance(
+            entity,
+            partial,
+            camera_type,
+            None,
+            |distance| distance,
+            clip,
+        );
     }
     /// Adjust the detached distance after entity/mount scaling, before collision clipping.
     /// Only finite overrides in 0..=1024 blocks are accepted (within the game's ray budget).
-    /// First-person views do not call `adjust_distance`.
+    /// First-person views do not call `adjust_distance`. `angles` overrides the initial
+    /// camera rotation only; the entity eye always keeps its own rotation.
     pub fn align_with_entity_distance(
         &mut self,
         entity: &CameraEntity,
         partial: f32,
         camera_type: CameraType,
+        angles: Option<[f32; 3]>,
         adjust_distance: impl FnOnce(f32) -> f32,
         mut clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
     ) {
-        self.set_rotation(entity.view_y_rot(partial), entity.view_x_rot(partial));
+        self.eye_rotation = [entity.view_y_rot(partial), entity.view_x_rot(partial)];
+        let [yaw, pitch, roll] =
+            angles.unwrap_or([self.eye_rotation[0], self.eye_rotation[1], 0.0]);
+        self.set_rotation_rolled(yaw, pitch, roll);
         let p = f64::from(partial);
         self.position = [
             lerp_d(p, entity.previous[0], entity.position[0]),
@@ -799,11 +824,10 @@ impl Camera {
             lerp_d(p, entity.previous[2], entity.position[2]),
         ];
         self.eye = self.position;
-        self.eye_rotation = [self.y_rot, self.x_rot];
         self.detached = !camera_type.is_first_person();
         if self.detached {
             if camera_type.is_mirrored() {
-                self.set_rotation(self.y_rot + 180.0, -self.x_rot);
+                self.set_rotation_rolled(self.y_rot + 180.0, -self.x_rot, -self.roll);
             }
             let (mut distance, mut scale) = (4.0f32, 1.0f32);
             if let Some(living) = &entity.living {
@@ -1166,7 +1190,7 @@ mod tests {
     fn project(at: [f64; 3]) -> Option<[f32; 3]> {
         let projection =
             glam::Mat4::perspective_rh(70f32.to_radians(), 16.0 / 9.0, 512.0, 0.05).to_cols_array();
-        super::project_point(&projection, [0.0, 64.0, 0.0], 0.0, 0.0, at)
+        super::project_point(&projection, [0.0, 64.0, 0.0], [0.0; 3], at)
     }
 
     #[test]
@@ -1315,6 +1339,7 @@ mod tests {
                 &entity,
                 1.0,
                 kind,
+                None,
                 |distance| {
                     assert_eq!(distance, 12.0);
                     8.0
@@ -1326,6 +1351,7 @@ mod tests {
                 &entity,
                 1.0,
                 kind,
+                None,
                 |distance| {
                     calls += 1;
                     assert_eq!(distance, 12.0);
@@ -1359,6 +1385,7 @@ mod tests {
                 &entity,
                 1.0,
                 CameraType::ThirdPersonBack,
+                None,
                 |_| distance,
                 |_, _| None,
             );
@@ -1369,6 +1396,7 @@ mod tests {
             &entity,
             1.0,
             CameraType::ThirdPersonBack,
+            None,
             |_| 0.0,
             |_, _| None,
         );
@@ -1377,6 +1405,7 @@ mod tests {
             &entity,
             1.0,
             CameraType::FirstPerson,
+            None,
             |_| panic!("first person has no detached distance"),
             |_, _| None,
         );

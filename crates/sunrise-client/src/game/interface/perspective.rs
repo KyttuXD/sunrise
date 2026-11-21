@@ -316,6 +316,20 @@ impl Game<'_> {
     /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        self.setup_camera(partial, false)
+    }
+
+    /// The world frame's actual camera setup, including the scoped camera events. Position and
+    /// angles are installed in the camera before any render consumer uses them.
+    pub(super) fn setup_camera(
+        &mut self,
+        partial: f32,
+        frame: bool,
+    ) -> Option<(glam::DVec3, f32, f32)> {
+        if frame {
+            self.posed_rotation = None;
+            self.apply_requested_camera_type();
+        }
         if self.studio.flying() {
             return Some((
                 self.studio.freecam.position,
@@ -325,26 +339,45 @@ impl Game<'_> {
         }
         // Minecraft.cameraEntity: a server's spectator camera on a mob or
         // another player.
-        let (entity, descending, entity_kind) = match self.spectated_camera_snapshot() {
-            Some(e) => (
-                e,
-                false,
-                sunrise_world::collision_context::EntityContextKind::Living,
-            ),
-            None => {
-                let mut entity = self.player_camera_entity()?;
-                if let Some(position) = self.remote_minecart_rider_position(partial) {
-                    // Already evaluated at partial: do not linearly interpolate
-                    // between tick endpoints across a corner a second time.
-                    entity.position = position;
-                    entity.previous = position;
+        let (entity, descending, entity_kind, minecart, spectating) =
+            match self.spectated_camera_snapshot() {
+                Some(e) => (
+                    e,
+                    false,
+                    sunrise_world::collision_context::EntityContextKind::Living,
+                    false,
+                    true,
+                ),
+                None => {
+                    let mut entity = self.player_camera_entity()?;
+                    let minecart_position = self.remote_minecart_rider_position(partial);
+                    if let Some(position) = minecart_position {
+                        // Already evaluated at partial: do not linearly interpolate
+                        // between tick endpoints across a corner a second time.
+                        entity.position = position;
+                        entity.previous = position;
+                    }
+                    (
+                        entity,
+                        self.player.as_ref()?.shift_key_down,
+                        sunrise_world::collision_context::EntityContextKind::Player,
+                        minecart_position.is_some(),
+                        false,
+                    )
                 }
-                (
-                    entity,
-                    self.player.as_ref()?.shift_key_down,
-                    sunrise_world::collision_context::EntityContextKind::Player,
-                )
-            }
+            };
+        let hooks = frame && !self.shows_panorama();
+        let angles = if hooks
+            && !minecart
+            && mod_api::__private::listened(mod_api::HookId::ComputeCameraAngles)
+        {
+            let original = [entity.view_y_rot(partial), entity.view_x_rot(partial), 0.0];
+            let mut angles = original;
+            self.native_compute_camera_angles(partial, &mut angles);
+            self.apply_requested_camera_type();
+            (angles != original).then_some(angles)
+        } else {
+            None
         };
         let mut view = self.view;
         let kind = self.camera_type;
@@ -375,6 +408,7 @@ impl Game<'_> {
             &entity,
             partial,
             kind,
+            angles,
             |mut distance| {
                 self.native_camera_distance(partial, kind.is_mirrored(), &entity, &mut distance);
                 distance
@@ -392,6 +426,15 @@ impl Game<'_> {
                 (!hit.miss).then_some([hit.hit.location.x, hit.hit.location.y, hit.hit.location.z])
             },
         );
+        if hooks {
+            let original = view.position;
+            self.native_camera_position(partial, &mut view.position);
+            if spectating || angles.is_some() || view.position != original {
+                self.posed_rotation = Some((view.y_rot, view.x_rot, view.roll));
+            }
+        } else if frame && spectating {
+            self.posed_rotation = Some((view.y_rot, view.x_rot, view.roll));
+        }
         self.view = view;
         Some((
             glam::DVec3::from_array(view.position),
@@ -405,10 +448,15 @@ impl Game<'_> {
         if self.studio.flying() {
             return self.camera_orientation();
         }
-        let (yaw, pitch) = self
-            .posed_rotation
-            .unwrap_or((self.view.y_rot, self.view.x_rot));
-        super::camera_rotation(CameraType::FirstPerson, yaw, pitch)
+        let (yaw, pitch, roll) =
+            self.posed_rotation
+                .unwrap_or((self.view.y_rot, self.view.x_rot, self.view.roll));
+        let rotation = super::camera_rotation(CameraType::FirstPerson, yaw, pitch);
+        if roll == 0.0 {
+            rotation
+        } else {
+            rotation * glam::Quat::from_rotation_z(-roll.to_radians())
+        }
     }
     /// The player as `Camera.alignWithEntity` sees it.
     pub(super) fn player_camera_entity(&mut self) -> Option<CameraEntity> {

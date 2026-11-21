@@ -49,7 +49,7 @@ has no such rule: Sunrise adds it.
 
 ## Camera snapshots and perspective
 
-The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, angles, final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame. `block_collision(pos)` returns block-local `[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context; unloaded blocks and collision errors give no boxes.
+The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, yaw, pitch, roll, final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame. `block_collision(pos)` returns block-local `[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context; unloaded blocks and collision errors give no boxes.
 
 `ClientHost::project(at)` places a world point on this frame's screen, as vanilla's
 `GameRenderer.projectPointToScreen`: normalised device x and y (-1 to 1, x right, y up) and a
@@ -69,13 +69,36 @@ next tick. NaN or infinity returns `NotFinite` and changes nothing; outside a wo
 `calculate_player_turn` changes how far the mouse turns the view; `set_local_rotation` sets it directly.
 
 `ClientHost::set_camera_type(type)` is a queued client-only effect and takes `&self`, so
-shared callbacks such as `camera_pose` can request a perspective. `camera_type()` reports
-the latest request immediately; several requests coalesce to the last one. Requests before
-or during `camera_pose` apply before that frame's final camera, FOV and spectator post effects.
-The pose hook runs only once: its explicit position or angle overrides survive a refreshed
-vanilla camera. Requests from later render callbacks apply at the next frame's extraction.
-Setting a type never emits `camera_type_cycle`; F5 alone cycles, and its final event choice
-wins over requests made inside the cycle callback.
+shared callbacks can request a perspective. `camera_type()` reports the latest request immediately;
+several requests coalesce to the last one. Requests before or during `compute_camera_angles` apply
+before that frame's third-person placement, FOV and spectator post effects. Requests from later
+callbacks apply at the next camera setup. Setting a type never emits `camera_type_cycle`; F5 alone
+cycles, and its final event choice wins over requests made inside the cycle callback.
+
+## Editing the render camera
+
+The three client hooks lend only the value owned by their stage. Listeners see earlier accepted
+edits; expired borrows cannot be retained. These hooks do not change player movement or targeting.
+
+- **`compute_camera_angles`** is NeoForge's `ViewportEvent.ComputeCameraAngles`. Edit
+  `*event.angles` as `[yaw, pitch, roll]` in degrees at `Camera.alignWithEntity`'s entity rotation
+  assignment. Roll starts at zero. The front view subsequently mirrors it, a bed can set its own
+  orientation, and the new-movement minecart branch does not run the event.
+- **`camera_position`** starts with the world-space position after eye, bed or detached third-person
+  placement. Edit `*event.position` as `[x, y, z]` in blocks. Rendering, fog and the sound listener
+  follow the result; the entity's eye, first-person hand origin and chunk loading do not. Use
+  `host.set_camera_entity(entity)` instead to select a different entity as the viewpoint.
+- **`view_transform`** lends the column-major `*event.transform` after the normal hurt tilt and
+  view bob, before the world projection's spin effect. Post-multiply it by a view-space translation
+  or rotation to affect the world and first-person hand without changing position, orientation,
+  picking or audio. Read `host.graphics_options().screen_effect_scale` to respect Distortion Effects:
+  scale your effect's inputs if desired, before building the matrix. Nothing scales them for you.
+
+An invalid edit (a non-finite value or a view transform without a finite inverse) is reported and
+leaves the preceding value intact. A panic disables just that mod's callback for this session and
+raises an error toast. The title panorama and Replay Studio free camera are not entity camera setup.
+`ClientHost::project` follows the effective position, yaw, pitch and roll without view effects, just
+as the vanilla projection helper excludes bob and spin.
 
 ## The fluid the camera is in
 

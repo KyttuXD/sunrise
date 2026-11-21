@@ -349,7 +349,7 @@ fn vanillas_clouds_shaders_draw_a_cell_above_the_camera() {
         color: [0.8, 0.8, 0.8, 1.0],
         height: crate::clouds::CLOUD_HEIGHT,
     };
-    let view = crate::gfx::View::screen(0.0, -90.0, 70.0, 1.0, 1024.0);
+    let view = crate::gfx::View::screen([0.0, -90.0, 0.0], 70.0, 1.0, 1024.0);
     let far = 1.0e9;
     let vanilla = crate::gfx::core_lines::uniforms(
         [0; 48],

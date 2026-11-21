@@ -73,7 +73,7 @@ remains visible: relative centres `(0,2.11,3)`, `(0,-2.2,3)`, `(3.8,0,3)`.
 An independent no-orb control proves nonzero added green sprite pixels in each intended
 edge region, rather than accepting two empty images as a successful comparison.
 
-A separate executable loads one native trait mod that observes `camera_pose` and asserts
+A separate executable loads one native trait mod that observes `compute_camera_angles` and asserts
 that one mod is registered. It repeats the nine views above against the ordinary baseline:
 all nine full-frame pairs also have zero changed pixels. This checks the loaded-mod path;
 FPS samples use ordinary executables without mods.

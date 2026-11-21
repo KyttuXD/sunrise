@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -546,6 +547,12 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
+            } else if isolated_listen
+                && rollback
+                    .last()
+                    .is_some_and(|(field, by_ref)| field == name && *by_ref)
+            {
+                inits.push(format!("{name}: &mut __proposed_{name}"));
             } else if hook.event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
@@ -597,6 +604,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if isolated_listen {
+            "// no wire: the event lends in-process callback outputs.\n"
         } else {
             ""
         };
@@ -946,7 +955,8 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener || isolated_collect || isolated_listen
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -969,7 +979,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if hook.event_per_listener || isolated_listen {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
@@ -1225,6 +1235,43 @@ pub(super) fn emit<'a>(
         };
         let inert_owner = fresh_name("disabled_owner", &mut used);
         let (lookup, calls) = match &scoped {
+            None if isolated_listen => {
+                if hook.output_validator.is_some() && rollback.is_empty() {
+                    return Err(format!("{name}: output_validator needs a mutable output"));
+                }
+                // A mod edits its own stack-local proposal. Only a complete accepted call
+                // commits, so a panic or refusal never undoes another listener's work.
+                let proposal = rollback
+                    .iter()
+                    .filter(|(_, by_ref)| *by_ref)
+                    .map(|(field, _)| format!("let mut __proposed_{field} = *{field};"))
+                    .collect::<String>();
+                let outputs: Vec<_> = rollback
+                    .iter()
+                    .map(|(field, by_ref)| (field, if *by_ref { "*" } else { "" }))
+                    .collect();
+                let commit = outputs
+                    .iter()
+                    .filter(|(_, deref)| *deref == "*")
+                    .map(|(field, _)| format!("*{field} = *{event}.{field};"))
+                    .collect::<String>();
+                let commit = format!("{commit} {local_write_back}");
+                let accept = hook.output_validator.as_ref().map_or_else(|| commit.clone(), |validator| {
+                    let before = outputs.iter().map(|(field, _)| format!("&*{field}"));
+                    let after = outputs.iter().map(|(field, deref)| format!("&{deref}{event}.{field}"));
+                    let args = before.chain(after).collect::<Vec<_>>().join(", ");
+                    let changed = outputs.iter().map(|(field, deref)| {
+                        format!("*{field} != {deref}{event}.{field}")
+                    }).collect::<Vec<_>>().join(" || ");
+                    format!("if ({changed}) {{ match {validator}({args}) {{ Ok(()) => {{ {commit} }}, Err(field) => log::warn!(\"mod {{}} hook {name} refused {{field}}\", {mod_entry}.id), }} }}")
+                });
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {proposal} {local_event} match super::runtime::invoke_isolated_listen(HookId::{hook_id}, {mod_entry}.id, \"{name}\", || super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{ Some(Ok(())) => {{ {accept} }}, Some(Err(refusal)) => refusal.report_each(), None => {{}} }} }} }}"
+                    ),
+                )
+            }
             None if declaration.is_some() => (
                 String::new(),
                 format!(

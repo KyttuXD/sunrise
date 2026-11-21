@@ -30,8 +30,7 @@ impl Game<'_> {
         sunrise_client::camera::project_point(
             &camera.projection,
             camera.position,
-            camera.yaw,
-            camera.pitch,
+            [camera.yaw, camera.pitch, camera.roll],
             at,
         )
     }

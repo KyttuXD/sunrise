@@ -266,7 +266,7 @@ mod tests {
     /// does, view bob and TAA jitter included.
     #[test]
     fn the_pack_matrices_put_the_outline_where_vs_line_does() {
-        let view = super::super::View::screen(37.0, -21.0, 70.0, 16.0 / 9.0, 256.0);
+        let view = super::super::View::screen([37.0, -21.0, 0.0], 70.0, 16.0 / 9.0, 256.0);
         let pose =
             Mat4::from_rotation_z(0.02) * Mat4::from_translation(Vec3::new(0.01, -0.03, 0.0));
         let jitter = Mat4::from_translation(Vec3::new(0.0004, -0.0002, 0.0));

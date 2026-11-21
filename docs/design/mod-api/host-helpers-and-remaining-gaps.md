@@ -118,7 +118,7 @@ to fire arbitrary vanilla triggers.
 The following catalog hooks are not in the trait:
 
 - `player_command`, `item_decorations`,
-  `client_resources_reloaded`, `camera_shake`, `screen_key_pressed_pre`, `screen_char_typed_pre`,
+  `client_resources_reloaded`, `view_transform`, `screen_key_pressed_pre`, `screen_char_typed_pre`,
   `screen_mouse_scrolled_pre`, `use_duration`, `use_animation`, `can_eat`,
   `living_entity_use_item_start`, `living_entity_use_item_finish`, `render_hand`, `shader_params`
   and `block_highlight`.

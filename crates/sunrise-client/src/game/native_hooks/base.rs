@@ -800,15 +800,6 @@ impl Game<'_> {
     ) {
         self.fire_render_fog(partial, camera, fog_type, fog);
     }
-    /// The camera shake native mods ask for in this frame, `partial` ticks
-    /// past the last tick (0 to 1): add your pitch, yaw and roll in degrees
-    /// and your offset in blocks, along the camera's right, up and back, to
-    /// `shake`, so several mods' shakes add up. Read while playing only;
-    /// Sunrise scales the sum by Distortion Effects and bounds it
-    /// (`native_shake_matrix`).
-    pub(in crate::game) fn native_camera_shake(&self, partial: f32, shake: &mut Shake) {
-        self.fire_camera_shake(partial, shake);
-    }
     /// Final scaled third-person camera distance, before visual-shape collision clipping.
     /// `entity` includes its living scale/distance and optional mount scale/distance.
     /// Only finite requests in 0..=1024 blocks replace the vanilla distance.

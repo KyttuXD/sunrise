@@ -36,17 +36,6 @@ pub struct BlockEdit {
     pub filters: Vec<StatePredicate>,
     pub runs: Vec<BlockRun>,
 }
-/// The camera shake native mods ask for (`camera_shake`): turns in
-/// degrees, and an offset in blocks along the camera's right, up and back.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Shake {
-    pub pitch: f32,
-    pub yaw: f32,
-    pub roll: f32,
-    pub offset: [f32; 3],
-}
 /// `PlayerSpawnPhantomsEvent.Result`: whether the phantom spawner tries a spawn near a player.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

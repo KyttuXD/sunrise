@@ -15,6 +15,7 @@ impl Game<'_> {
             vsync: s.vsync,
             fullscreen: s.fullscreen,
             view_bobbing: s.view_bobbing,
+            screen_effect_scale: self.screen_effect_scale(),
             smooth_lighting: s.smooth_lighting,
             particles: s.particles,
             entity_distance: s.entity_distance as f32,

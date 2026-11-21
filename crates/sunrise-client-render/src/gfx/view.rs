@@ -28,9 +28,9 @@ pub struct View {
 impl View {
     /// The flat-screen view: vanilla's camera rotation and a symmetric
     /// vertical field of view.
-    pub fn screen(yaw: f32, pitch: f32, fov_degrees: f32, aspect: f32, far: f32) -> Self {
+    pub fn screen([yaw, pitch, roll]: [f32; 3], fov_degrees: f32, aspect: f32, far: f32) -> Self {
         Self {
-            view: crate::camera::view_matrix(yaw, pitch),
+            view: crate::camera::view_matrix_rolled(yaw, pitch, roll),
             projection: super::world_projection(fov_degrees, aspect, far),
             aspect,
             tan_half_fov: (fov_degrees.to_radians() / 2.0).tan(),
@@ -82,8 +82,7 @@ impl Renderer {
     pub fn views(&self, frame: &Frame) -> ViewSet {
         ViewSet::single(self.screen_view(
             frame.fov_degrees,
-            frame.yaw,
-            frame.pitch,
+            [frame.yaw, frame.pitch, frame.roll],
             frame.depth_far,
         ))
     }
@@ -94,12 +93,11 @@ impl Renderer {
         &mut self,
         camera: DVec3,
         fov_degrees: f32,
-        yaw: f32,
-        pitch: f32,
+        angles: [f32; 3],
         bob: Mat4,
         depth_far: f32,
     ) -> JoinedFrusta {
-        let views = ViewSet::single(self.screen_view(fov_degrees, yaw, pitch, depth_far));
+        let views = ViewSet::single(self.screen_view(fov_degrees, angles, depth_far));
         let planes = frustum(views.cull().view_proj(bob));
         self.ask_world_views(camera, depth_far, Frustum::from_planes(planes))
     }
@@ -110,20 +108,19 @@ impl Renderer {
     pub fn camera_frustum_with_jitter(
         &self,
         fov_degrees: f32,
-        yaw: f32,
-        pitch: f32,
+        angles: [f32; 3],
         bob: Mat4,
         depth_far: f32,
     ) -> JoinedFrusta {
-        let views = ViewSet::single(self.screen_view(fov_degrees, yaw, pitch, depth_far));
+        let views = ViewSet::single(self.screen_view(fov_degrees, angles, depth_far));
         let size = self
             .world_post
             .taa_render_size([self.config.width, self.config.height]);
         self.asked_world_views(taa_frustum(views.cull().view_proj(bob), size))
     }
-    fn screen_view(&self, fov_degrees: f32, yaw: f32, pitch: f32, far: f32) -> View {
+    fn screen_view(&self, fov_degrees: f32, angles: [f32; 3], far: f32) -> View {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        View::screen(yaw, pitch, fov_degrees, aspect, far)
+        View::screen(angles, fov_degrees, aspect, far)
     }
 }
 
@@ -199,7 +196,7 @@ mod tests {
             (30.0, 359.9, -90.0, 4.0 / 3.0, 96.0),
             (82.333, 12.5, 7.75, 1.0, 1024.0),
         ] {
-            let view = View::screen(yaw, pitch, fov, aspect, far);
+            let view = View::screen([yaw, pitch, 0.0], fov, aspect, far);
             for pose in poses() {
                 let old = legacy_view_proj(fov, yaw, pitch, pose, aspect, far);
                 let new = view.view_proj(pose);
@@ -220,7 +217,7 @@ mod tests {
 
     #[test]
     fn a_single_view_set_draws_and_culls_with_its_view() {
-        let view = View::screen(45.0, 10.0, 70.0, 16.0 / 9.0, 512.0);
+        let view = View::screen([45.0, 10.0, 0.0], 70.0, 16.0 / 9.0, 512.0);
         let set = ViewSet::single(view);
         assert_eq!(set.views(), &[view]);
         assert_eq!(*set.primary(), view);

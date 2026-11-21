@@ -24,6 +24,7 @@ pub(super) struct Sequence {
     reply: Sender<String>,
     /// What must stay as it was at the start (`Game::sequence_scene`).
     scene: String,
+    camera: Option<([u64; 3], [u32; 3])>,
     pack: Value,
 }
 
@@ -96,8 +97,7 @@ impl Game<'_> {
     /// What a sequence's frames must share: the world, the camera, the settings, the pack and
     /// the window's size.
     fn sequence_scene(&mut self) -> Result<String> {
-        let view = self.camera_view(1.0).ok_or("no camera")?;
-        let (position, yaw, pitch) = self.native_camera_pose_now(1.0, view);
+        let (position, yaw, pitch) = self.camera_view(1.0).ok_or("no camera")?;
         let renderer = self.renderer.as_ref().ok_or("no renderer")?;
         Ok(format!(
             "{:?}",
@@ -159,6 +159,7 @@ impl Game<'_> {
             path,
             reply: reply.clone(),
             scene,
+            camera: None,
             pack: json!({
                 "kind": kind.unwrap_or("none"),
                 "name": (!picked.is_empty()).then_some(picked),
@@ -235,6 +236,26 @@ impl Game<'_> {
             renderer.screenshot_result = None;
         }
         let drawn = self.render_frame();
+        // The preflight probe does not dispatch camera events. Compare what was actually drawn
+        // before accepting the frame or saving its PNG.
+        if matches!(&drawn, Ok(true))
+            && let Some(camera) = &self.native_camera_frame
+        {
+            let stamp = (
+                camera.position.map(f64::to_bits),
+                [camera.yaw, camera.pitch, camera.roll].map(f32::to_bits),
+            );
+            let sequence = self
+                .screenshot_sequence
+                .as_mut()
+                .expect("a running sequence");
+            if *sequence.camera.get_or_insert(stamp) != stamp {
+                self.end_screenshot_sequence(
+                    Err("the rendered camera changed while it ran".into()),
+                );
+                return Ok(true);
+            }
+        }
         let renderer = self.renderer.as_mut().ok_or("no renderer")?;
         // Still queued when the frame wasn't drawn, or when the PNG is to be taken
         // again smaller (out of memory): not this sequence's frame.

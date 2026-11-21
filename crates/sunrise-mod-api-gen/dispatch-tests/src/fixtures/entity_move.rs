@@ -130,6 +130,14 @@ mod root {
         pub(super) fn outside_world() -> bool {
             false
         }
+        pub(super) fn invoke_isolated_listen<T>(
+            _: super::HookId,
+            _: &'static str,
+            _: &'static str,
+            call: impl FnOnce() -> T,
+        ) -> Option<T> {
+            Some(call())
+        }
         pub(super) fn refusable<T>(_: bool, call: impl FnOnce() -> T) -> Result<T, Refusal> {
             Ok(call())
         }

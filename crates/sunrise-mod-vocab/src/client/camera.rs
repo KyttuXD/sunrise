@@ -1,6 +1,34 @@
 //! Moved here from the game so mods can name it.
 #[allow(unused_imports)]
 use crate::*;
+pub(crate) fn validate_angles(_: &[f32; 3], angles: &[f32; 3]) -> Result<(), &'static str> {
+    angles
+        .iter()
+        .all(|angle| angle.is_finite())
+        .then_some(())
+        .ok_or("non-finite camera angles")
+}
+
+pub(crate) fn validate_position(_: &[f64; 3], position: &[f64; 3]) -> Result<(), &'static str> {
+    position
+        .iter()
+        .all(|coord| coord.is_finite())
+        .then_some(())
+        .ok_or("non-finite camera position")
+}
+
+pub(crate) fn validate_transform(_: &[f32; 16], transform: &[f32; 16]) -> Result<(), &'static str> {
+    let matrix = glam::Mat4::from_cols_array(transform);
+    if !matrix.is_finite() {
+        return Err("non-finite view transform");
+    }
+    let determinant = matrix.determinant();
+    if !determinant.is_finite() || determinant == 0.0 || !matrix.inverse().is_finite() {
+        return Err("view transform with no finite inverse");
+    }
+    Ok(())
+}
+
 /// `Mth.lerp(float, float, float)`.
 pub fn lerp(alpha: f32, p0: f32, p1: f32) -> f32 {
     p0 + alpha * (p1 - p0)

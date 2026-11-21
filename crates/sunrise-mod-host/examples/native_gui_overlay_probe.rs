@@ -4,7 +4,7 @@
 //! Every world frame turns the camera 90 degrees; GUI callbacks assert that
 //! ClientHost::camera already sees that frame. A magenta square stays above menus/F1.
 use mod_api::{
-    CameraPoseEvent, ClientHost, GuiRenderPostEvent, Hooks, ModEntry, RenderGuiPostEvent,
+    ClientHost, ComputeCameraAnglesEvent, GuiRenderPostEvent, Hooks, ModEntry, RenderGuiPostEvent,
     ScreenRenderPostEvent,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -43,10 +43,10 @@ impl Probe {
 
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
-    fn camera_pose(&self, _: &dyn ClientHost, event: &mut CameraPoseEvent<'_>) {
+    fn compute_camera_angles(&self, _: &dyn ClientHost, event: &mut ComputeCameraAnglesEvent<'_>) {
         let frame = self.frame.fetch_add(1, Ordering::SeqCst);
-        event.yaw = [0.0_f32, 90.0, 180.0, -90.0][frame as usize % 4];
-        self.yaw.store(event.yaw.to_bits(), Ordering::SeqCst);
+        event.angles[0] = [0.0_f32, 90.0, 180.0, -90.0][frame as usize % 4];
+        self.yaw.store(event.angles[0].to_bits(), Ordering::SeqCst);
     }
 
     fn render_gui_post(&self, host: &dyn ClientHost, _: &mut RenderGuiPostEvent<'_>) {

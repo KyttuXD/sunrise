@@ -2351,7 +2351,7 @@ pub(crate) use launch_options::Options;
 pub use native_block_entity_draw::BlockEntityDraw;
 pub use native_configs::ConfigFile;
 pub use native_data_maps::DataMapType;
-pub use native_hooks::{PhantomSpawnResult, Shake, SleepProblem};
+pub use native_hooks::{PhantomSpawnResult, SleepProblem};
 pub use native_mob_draw::{MobRender, PlayerRender};
 use std::{
     cell::RefCell,
@@ -3787,9 +3787,9 @@ struct Game<'a> {
     /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
     locator_camera: Option<([f64; 3], f32, f32, f32)>,
     native_camera_frame: Option<mod_api::Camera>,
-    /// The yaw and pitch a native mod's camera drew the last frame from (`native_camera_pose`),
+    /// The effective yaw, pitch and roll for a modded or spectated frame camera,
     /// none when it drew from vanilla's.
-    posed_rotation: Option<(f32, f32)>,
+    posed_rotation: Option<(f32, f32, f32)>,
     /// `LocalPlayer.postEffects`: the chains the server has the screen run
     /// (`ClientboundPostEffectsPacket`), in order.
     post_effects: Vec<String>,
@@ -7695,8 +7695,14 @@ impl Game<'_> {
         }
         match self.posed_rotation {
             // The frame's camera, already turned round in front view.
-            Some((yaw, pitch)) => {
-                camera_rotation(sunrise_client::camera::CameraType::FirstPerson, yaw, pitch)
+            Some((yaw, pitch, roll)) => {
+                let rotation =
+                    camera_rotation(sunrise_client::camera::CameraType::FirstPerson, yaw, pitch);
+                if roll == 0.0 {
+                    rotation
+                } else {
+                    rotation * glam::Quat::from_rotation_z(-roll.to_radians())
+                }
             }
             None => camera_rotation(self.camera_type, self.yaw, self.pitch),
         }
@@ -10655,22 +10661,12 @@ impl Game<'_> {
         // Camera.getCameraEntityPartialTicks: the view, the hand and the
         // player's own model stay smooth while the level is frozen.
         let camera_alpha = self.clock.camera_fraction();
-        self.apply_requested_camera_type();
-        let vanilla = self.camera_view(camera_alpha as f32);
-        let view = vanilla.map(|view| {
-            if self.shows_panorama() || self.studio.flying() {
-                view
-            } else {
-                self.native_camera_pose_now(camera_alpha as f32, view)
-            }
-        });
-        // What faces the camera (particles, item sprites, block entity text) faces a mod's.
-        // A spectated entity's view is not the local player's yaw and pitch
-        // (`Camera.setup` reads the camera entity), so it is kept too.
-        let spectating = self.spectated_camera_snapshot().is_some();
-        self.posed_rotation = view
-            .filter(|posed| spectating || Some(*posed) != vanilla)
-            .map(|(_, yaw, pitch)| (yaw, pitch));
+        let view = self.setup_camera(camera_alpha as f32, true);
+        let view_roll = if view.is_some() && !self.studio.flying() {
+            self.view.roll
+        } else {
+            0.0
+        };
         let eye = view.map(|_| {
             (
                 glam::DVec3::from_array(self.view.eye),
@@ -10693,7 +10689,7 @@ impl Game<'_> {
         };
         pr.lap("pr_camera");
         self.audio
-            .set_listener([camera.x, camera.y, camera.z], view_yaw, view_pitch);
+            .set_listener(camera.to_array(), [view_yaw, view_pitch, view_roll]);
         self.follow_audio_stream_entities();
         pr.lap("pr_listener");
         let block = [
@@ -10881,7 +10877,7 @@ impl Game<'_> {
         let view = if self.studio.flying() {
             glam::Mat4::from_quat(self.camera_orientation().conjugate())
         } else {
-            sunrise_client::camera::view_matrix(view_yaw, view_pitch)
+            sunrise_client::camera::view_matrix_rolled(view_yaw, view_pitch, view_roll)
         };
         let at = camera.to_array();
         // GameRenderer.render3dHud: the debug crosshair, first person with the HUD shown.
@@ -10959,6 +10955,7 @@ impl Game<'_> {
         } else {
             (view_yaw, view_pitch)
         };
+        let roll = if title { 0.0 } else { view_roll };
         let fov_degrees = if title {
             85.0
         } else {
@@ -10990,10 +10987,11 @@ impl Game<'_> {
                 partial_tick: partial,
                 yaw,
                 pitch,
+                roll,
                 fov_degrees,
                 near: 0.05,
                 far: depth_far,
-                view: (bob * spin * sunrise_client::camera::view_matrix(yaw, pitch))
+                view: (bob * spin * sunrise_client::camera::view_matrix_rolled(yaw, pitch, roll))
                     .to_cols_array(),
                 projection: glam::Mat4::perspective_rh(
                     fov_degrees.to_radians(),
@@ -11057,7 +11055,7 @@ impl Game<'_> {
                 depth_far,
                 0.05,
             ),
-            model_view: bob * spin * sunrise_client::camera::view_matrix(yaw, pitch),
+            model_view: bob * spin * sunrise_client::camera::view_matrix_rolled(yaw, pitch, roll),
             sun_angle: sun_angle.to_radians() - std::f32::consts::FRAC_PI_2,
             day_time: day_time.rem_euclid(24000) as f32,
             delta_time: delta_ticks,
@@ -11067,11 +11065,16 @@ impl Game<'_> {
         let core_globals = self.reads_poly_globals().then(poly_globals);
         self.give_poly_globals(core_globals.as_ref());
         self.expression_frame = frame;
-        self.view_frustum =
-            self.world_view_frustum(camera, [fov_degrees, yaw, pitch], bob * spin, depth_far);
+        self.view_frustum = self.world_view_frustum(
+            camera,
+            fov_degrees,
+            [yaw, pitch, roll],
+            bob * spin,
+            depth_far,
+        );
         let billboard_frustum = if self.settings.sunrise.taa {
             self.renderer.as_ref().map(|r| {
-                r.camera_frustum_with_jitter(fov_degrees, yaw, pitch, bob * spin, depth_far)
+                r.camera_frustum_with_jitter(fov_degrees, [yaw, pitch, roll], bob * spin, depth_far)
             })
         } else {
             self.view_frustum
@@ -11146,7 +11149,7 @@ impl Game<'_> {
         // GameRenderer.render3dHud: the screen effects after the hand, in
         // its pass (the hand pass draws with `bob * view`).
         if !title {
-            let view = bob * sunrise_client::camera::view_matrix(yaw, pitch);
+            let view = bob * sunrise_client::camera::view_matrix_rolled(yaw, pitch, roll);
             let aspect = size[0] as f32 / size[1].max(1) as f32;
             self.item_activation_geometry(camera_alpha as f32, view, aspect, &mut hand);
         }
@@ -11243,6 +11246,7 @@ impl Game<'_> {
             camera,
             yaw,
             pitch,
+            roll,
             fov_degrees,
             eye: eye.filter(|_| !title).map_or(camera, |e| e.0),
             eye_rotation: eye.filter(|_| !title).map_or([yaw, pitch], |e| e.1),

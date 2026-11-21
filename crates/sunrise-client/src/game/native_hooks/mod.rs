@@ -34,7 +34,7 @@ use mod_api::__private::game::{
 };
 use mod_api::GameMode;
 use mod_api::GameTests;
-pub use mod_api::game::{PhantomSpawnResult, Shake, SleepProblem};
+pub use mod_api::game::{PhantomSpawnResult, SleepProblem};
 use mod_api::{
     self, Answered, BlockPlacement, BlockTintSources, CauldronFluidContents, CauldronInteractions,
     ClientAudioOptions, ClientChatOptions, ClientGraphicsOptions, ClientGuiOptions,
@@ -167,9 +167,10 @@ mod bounce_restitution;
 mod break_progress_positions;
 mod build_creative_mode_tab_contents;
 mod calculate_player_turn;
-mod camera_pose;
-mod camera_pose_tests;
 mod camera_read;
+mod camera_setup;
+#[cfg(test)]
+mod camera_setup_tests;
 mod camera_submersion;
 mod camera_type;
 mod can_be_connected_to;
@@ -478,6 +479,7 @@ mod render_frame_pre;
 mod render_gui_post;
 mod render_gui_pre;
 mod render_hand;
+pub(super) use render_hand::hand_pose_matrix;
 mod render_item_in_frame;
 mod render_level_stage;
 mod render_living_post;

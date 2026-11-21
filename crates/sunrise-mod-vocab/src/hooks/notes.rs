@@ -1165,14 +1165,12 @@ with the causing-entity table, is the book's "Setting off an explosion" (how-to/
   limit. Refused with an `ExplodeError`, doing nothing; the book lists when.
 - A blast set off inside `explosion_detonate` runs that hook again, so a mod that chains blasts keeps its own guard.
 
-### Camera shake
+### Camera setup and presentation
 
-`camera_shake(partial, shake)` (client) asks every frame for the camera shake a mod wants: `pitch`, `yaw` and `roll`
-in degrees and an `offset` in blocks along the camera's right, up and back. Add to `shake` rather than set it, so two
-mods' shakes add up. Sunrise reads it only while playing, scales the sum by Distortion Effects (a player who turns
-that to 0% sees no shake), bounds it to 10 degrees and half a block on each axis, and multiplies it into the view
-after the hurt tilt and view bobbing. A mod keeps its own shake's time and decay, from `partial` and its tick hooks;
-it moves only what the player sees, not where they are or aim.
+`compute_camera_angles` changes the render yaw, pitch and roll at the entity rotation assignment.
+`camera_position` lends the placed render camera without moving the entity. `view_transform` edits
+only the pose applied after hurt tilt and view bob, before the projection's spin. Mods choose whether
+to scale their own effects with `host.graphics_options().screen_effect_scale`.
 
 ### A player's motion
 
@@ -1817,10 +1815,6 @@ still go on each event or registrar.
 - [falling blocks](#falling-blocks) for server mods: `native_spawn_falling_block(dimension, state, pos, velocity, falling)`
   throws a block that flies, lands and places itself as sand does, for debris and collapsing structures.
 
-- Camera shake for client mods: `camera_shake(partial, shake)` asks each frame for turns in degrees and an
-  offset in blocks, which add up across mods and multiply into the view after its bobbing. Sunrise scales the sum by
-  Distortion Effects and bounds it to 10 degrees and half a block on each axis.
-
 - Client sounds: `ClientHost::play_local_sound(sound, after)` plays a `SoundPlay`, vanilla's event or the mod's own
   from its `assets/<id>/sounds.json`, for this player only: an interface sound (`SoundPlay::ui`) or one at a place
   (`SoundPlay::at`), now or up to a minute later, so a client mod can click its own buttons or time a blast's sound
@@ -2372,7 +2366,7 @@ registration path.
   camera type (`Minecraft.handleKeybinds`), with `previous` and vanilla's `next` (first person, third person behind, third
   person in front); a mod may set `next` to skip or keep a type, and the camera entity's post effect follows the answer.
   `camera_type()` reads the type and `set_camera_type(type)` sets it as F5 does, without a cycle, for a freelook mod that
-  switches to third person and back; with `camera_pose` moving the drawn camera, that is a camera independent of the
+  switches to third person and back; with `camera_position` moving the drawn camera, that is a camera independent of the
   player. The game's two copies of `CameraType` are now one, `mod_api::CameraType`. Client side.
 
 - A client tick's two moments, as NeoForge's `ClientTickEvent.Pre` and `.Post`: `client_tick_pre(host, event)` runs at the start of every client tick (`Minecraft.tick`), paused or not and on the title screen too, and `client_tick_post` at its end. They replace the single `tick` hook, which also fired on a server's own `Game`: the server's tick is `server_tick` (`ServerTickEvent`), so a mod that implemented `tick` implements `client_tick_pre` and, for a server, `server_tick`. Window only, client side; a tick with no listener costs one branch.

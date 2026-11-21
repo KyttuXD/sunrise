@@ -225,6 +225,8 @@ pub struct Camera {
     pub yaw: f32,
     /// The vertical rotation in degrees; negative looks up.
     pub pitch: f32,
+    /// The roll around the viewing axis, in degrees.
+    pub roll: f32,
     /// The vertical field of view in degrees.
     pub fov_degrees: f32,
     /// The near clip distance in blocks.
@@ -283,6 +285,8 @@ pub struct ClientGraphicsOptions {
     pub fullscreen: bool,
     /// Whether the view bobs while walking.
     pub view_bobbing: bool,
+    /// Vanilla's Distortion Effects preference (`Options.screenEffectScale`).
+    pub screen_effect_scale: f32,
     /// Whether smooth lighting is on.
     pub smooth_lighting: bool,
     /// Particle setting: 0 all, 1 decreased, 2 minimal.

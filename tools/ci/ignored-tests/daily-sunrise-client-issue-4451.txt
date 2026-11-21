@@ -1461,7 +1461,6 @@ sunrise-client game::native_hooks::block_landing::landing_crossing_tests::landin
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen lib daily resources
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::entering_inventory_requests_catalogue_for_preinstalled_bound_screen lib daily resources
 sunrise-client game::native_hooks::camera_type::camera_type_tests::a_client_mod_picks_the_camera_type_f5_cycles_to lib daily resources
-sunrise-client game::native_hooks::camera_type::camera_type_tests::shared_camera_pose_requests_apply_before_frame_consumers lib daily resources
 sunrise-client game::native_hooks::can_be_connected_to_tests::the_block_beside_a_fence_answers_whether_it_connects lib daily resources
 sunrise-client game::native_hooks::client_chunk_hooks_tests::a_client_tells_a_chunk_packet_and_its_forget_once lib daily resources
 sunrise-client game::native_hooks::client_chunk_hooks_tests::every_route_that_frees_a_column_tells_its_unload lib daily resources

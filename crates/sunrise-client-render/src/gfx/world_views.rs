@@ -407,7 +407,7 @@ mod tests {
             native_render::WorldView::new(1, camera, yaw, pitch, 70.0, [320, 180])
         };
         let here = ViewCamera::new(&at(frame_camera, 30.0, 10.0), frame_camera, 512.0);
-        let screen = super::super::View::screen(30.0, 10.0, 70.0, 320.0 / 180.0, 512.0);
+        let screen = super::super::View::screen([30.0, 10.0, 0.0], 70.0, 320.0 / 180.0, 512.0);
         assert!(
             here.view_proj
                 .abs_diff_eq(screen.view_proj(Mat4::IDENTITY), 1e-6)
