@@ -3,7 +3,7 @@
 //! Every player in range hears or sees them, as `ServerLevel.playSound` and
 //! `sendParticles` send them. They return false on a client, for a handle of
 //! an earlier open, or for arguments the network can't carry.
-use super::native_hooks::{mod_particles_ok, mod_sound_ok};
+use super::native_hooks::{mod_particles_ok, sound_id};
 use super::{Game, creatures::NativeSound, lan_particles::QueuedParticle};
 use mod_api::{LevelRef, PlayerRef, PlayerWorldRefusal, SoundSource};
 use sunrise_client::particles::ParticleOptions;
@@ -19,9 +19,8 @@ impl Game<'_> {
     /// within range (16 blocks, times the volume above 1), as
     /// `ServerLevel.playSound(except, ...)` does, under `source`'s volume
     /// slider, leaving out `except`'s client (a fake player has none, so it
-    /// leaves out no one; a stale one queues nothing). A `minecraft:` event
-    /// must be registered; a mod's goes by name and is heard where its
-    /// resources define it. True means queued, not heard.
+    /// leaves out no one; a stale one queues nothing). Registry entries are sent by ID, and
+    /// other valid keys by name. True means queued, not heard.
     pub(super) fn level_play_sound(
         &mut self,
         level: LevelRef,
@@ -58,7 +57,7 @@ impl Game<'_> {
         except: Option<u32>,
     ) -> Option<&mut NativeSound> {
         let dimension = self.native_level_dimension(level)?;
-        if !mod_sound_ok(sound, at, source.index(), volume, pitch) {
+        if !sound_id(sound) {
             return None;
         }
         // `Level.playSound` draws `soundSeedGenerator.nextLong` at the call;

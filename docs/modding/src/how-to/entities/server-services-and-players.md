@@ -128,11 +128,26 @@ Reads accept `Host`; writes accept `ServerHost`.
 | `text_filtering(host)` | Reads the option announced by the player's client. |
 | `sleep_ignored(host)` | Reads the sleep-count exclusion setting. |
 | `counts_for_sleep(host)` | Reports whether the player counts toward the night skip. |
-| `sleep_timer(host)` / `set_sleep_timer(host, ticks)` | Reads or writes `Player.sleepCounter`, from 0 to 109; 100 means slept long enough. The write refuses larger values, fake players, guests in another level and stale players. |
+| `sleep_timer(host)` / `set_sleep_timer(host, ticks)` | Reads or writes the signed `Player.sleepCounter`. The write does not move the player or change bed occupancy; the normal tick handles the sleep and wake thresholds. |
 
 A second disconnect on a guest already leaving is a no-op and keeps the first reason.
 
 Vetoing a player's movement: the `player_move` hook hears each validated movement report whose position or rotation differs from the player's last reported location, after the server's own checks and before the report is committed, with the exact `from`, `to` and both rotations. The last reported location is kept on the player's connection, apart from the accepted position: it is the position given to the listener before it runs, and the destination of every server-side teleport (a join, a teleport in the level, a level change, a respawn, the resend of an unconfirmed teleport and the correction after a veto); `from` is that location. Set `cancel` and the report is not applied; the client is sent back to the accepted position and rotation. The report was already seen by the server's own checks before the hook, so what a violation of those would have done still happens. The engine applies no threshold, so a mod that wants to ignore small moves compares the two positions itself (`(to - from).length() < 1.0 / 16.0` skips anything under 1/16 of a block). A held report is ruled on in the same tick; that player's later packets (further reports, the end of the client tick, pongs) wait in order behind it, then go on in that tick, so each later report is heard from the one before. A report is out of time at its 21st tick, counting the tick it was held at as the first: it is dropped with the correction, never committed, even when a ruling arrives after that; a disconnect, teleport or level change drops it cleanly. Not heard: the first tick in a level (the tick after a join or a level change; the second is heard), a player riding something (`vehicle_moved` hears the vehicle), any teleport (its confirmation's own position is validated from the teleport's target and committed without the hook, and so is the veto's own correction; a report that arrives while a teleport is unconfirmed is not heard either) and a passage crossing (its caller reads the position at once, so the report is committed in place). The first report after a teleport that passed validation is heard, with the teleport's destination as its `from`. With no listener nothing is held or copied; with one, the cost is a held report for each moving player a tick. A native listener that never returns is out of scope: it blocks the game thread like any native code, and the 20-tick deadline covers only a report held pending across ticks.
+
+## Experience and abilities
+
+`player.give_experience_points(host, points)` takes a signed `i32`; use a negative value to remove
+points. The write never repairs an item: Mending stays at orb pickup. `set_total_experience` writes
+the signed total without moving the bar or changing the level. `set_abilities` stores both speeds
+exactly as supplied, independently of the game-mode flags.
+
+## Server sound writes
+
+Pass a namespaced event key to `PlayerRef::play_sound`, `EntityRef::play_sound`,
+`EntityRef::play_bound_sound` or `LevelRef::play_sound`. The server sends a registered event by
+its ID or an inline event by name, regardless of namespace. Success means the sound was accepted
+for delivery; a client can only play an event defined in its sound resources. Volume and pitch
+are sent as supplied and processed by the recipient's sound engine.
 
 ## Text conversions
 

@@ -1,0 +1,3 @@
+sunrise-client game::native_player_food::tests::signed_points_bypass_mending lib daily resources
+sunrise-client game::native_player_food::tests::the_signed_total_is_set_alone lib daily resources
+sunrise-client game::xp_repair_ratio_tests::orb_pickup_repairs_through_the_part lib daily resources

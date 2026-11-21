@@ -141,8 +141,8 @@ pub trait ProjectilesBackendMut {
         level: i8,
     ) -> Result<(), PierceLevelError>;
     /// Side: server.
-    /// `AbstractArrow.setBaseDamage`. False for a stale handle, a projectile
-    /// that is not an arrow, or a value that is not finite.
+    /// `AbstractArrow.setBaseDamage`: stores the given double as supplied. False for a stale
+    /// handle or a projectile without an arrow's base damage.
     #[access(WorldOnly)]
     fn projectile_set_base_damage(&mut self, projectile: ProjectileRef, damage: f64) -> bool;
     /// Side: server.

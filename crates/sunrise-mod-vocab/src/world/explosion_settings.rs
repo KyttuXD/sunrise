@@ -128,8 +128,7 @@ pub enum ExplodeError {
     /// that is not finite, or the block particles' weights total past
     /// `i32::MAX`.
     InvalidParticle,
-    /// The sound is not a sound event id, or is a `minecraft:` one the
-    /// server does not have.
+    /// The sound is not a valid namespaced sound event key.
     UnknownSound,
 }
 

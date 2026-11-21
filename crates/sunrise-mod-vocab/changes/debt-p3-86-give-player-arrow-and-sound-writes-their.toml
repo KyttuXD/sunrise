@@ -1,0 +1,14 @@
+ids = [
+    "handle:PlayerRef::give_experience_points",
+    "handle:PlayerRef::sleep_timer",
+    "handle:PlayerRef::set_sleep_timer",
+    "hook:play_level_sound_at_position",
+    "hook:play_level_sound_at_entity",
+    "hook:xp_repair_ratio",
+]
+why = "Direct writes follow vanilla 26.3 Player.giveExperiencePoints, ServerPlayer.setExperiencePoints, Player.totalExperience and Player.tick's signed sleep counter, Abilities.setFlyingSpeed/setWalkingSpeed, and AbstractArrow.setBaseDamage. Mending remains at ExperienceOrb.playerTouch/repairPlayerItems, including NeoForge's item repair callback. Level sounds follow ServerLevel.playSeededSound and ClientboundSoundPacket's registered or inline holder, NeoForge's PlayLevelSoundEvent, and the receiving SoundManager/SoundEngine rather than wrapper limits or namespace rules."
+migrate = """
+Pass an i32 instead of a u32 to PlayerRef::give_experience_points; convert checked unsigned values at the caller and use a negative amount to take points. To give XP, call the method directly; to have Mending spend XP, let the player pick up an experience orb. xp_repair_ratio now runs at pickup, not on direct grants. PlayerRef::set_experience_points uses the engine's progress clamp; PlayerRef::set_total_experience stores a signed total without touching level or progress.
+PlayerRef::sleep_timer now returns Option<i32>, and set_sleep_timer takes an i32. Pass the signed counter directly, not as a u32; use the living sleep/wake actions to change bed occupancy or pose. PlayerRef::set_abilities and ProjectileRef::set_base_damage keep their signatures and store the supplied floats. Check your own inputs before calling if you relied on a refusal for a non-finite value.
+Keep calling PlayerRef::play_sound, EntityRef::play_sound, EntityRef::play_bound_sound, LevelRef::play_sound, LevelWriteHost::play_sound, HitHost::play_sound_at, and HitHost::play_sound_from with a valid namespaced key. Registered sounds go by ID and other valid keys go inline in every namespace. A successful call means accepted for delivery, not that the client has the sound. ExplodeError::UnknownSound now denotes a malformed sound key, not a missing vanilla entry. Sound volume and pitch go to playback without the old admission check. In play_level_sound_at_position and play_level_sound_at_entity, return Flow::Cancel to suppress the sound rather than setting an invalid gain or pitch.
+"""

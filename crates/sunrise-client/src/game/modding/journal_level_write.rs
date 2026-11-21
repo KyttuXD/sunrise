@@ -221,9 +221,7 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
         volume: f32,
         pitch: f32,
     ) -> bool {
-        if self.game.lan.is_none()
-            || !super::native_hooks::mod_sound_ok(sound, at, source, volume, pitch)
-        {
+        if self.game.lan.is_none() || !super::native_hooks::mod_sound_ok(sound, source) {
             return false;
         }
         self.queue(PendingWrite::Sound(NativeSound {

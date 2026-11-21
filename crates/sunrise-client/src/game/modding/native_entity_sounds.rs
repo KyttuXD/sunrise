@@ -61,8 +61,7 @@ impl Game<'_> {
     /// the entity under its sound source, for the players within range. A
     /// silent mob plays nothing, as vanilla's check is `isSilent`; a player
     /// (`Player.playSound`) doesn't hear it themself, their own client plays
-    /// it. True means queued, not heard; false for an unknown `minecraft:`
-    /// event or a volume or pitch that isn't a finite non-negative number.
+    /// it. True means queued, not heard. Registered events go by ID and other valid keys by name.
     pub(super) fn entity_play_sound(
         &mut self,
         entity: EntityRef,
@@ -216,11 +215,11 @@ mod tests {
             assert_eq!(sound.at, [1.5, 64.0, 2.5]);
             assert_eq!(sound.source as usize, SoundSource::Neutral.index());
             assert_eq!((sound.volume, sound.pitch, sound.except), (0.5, 1.5, None));
-            // A silent mob plays nothing; a bad pitch is refused.
+            // A silent mob plays nothing; a malformed event key is refused.
             game.mobs[0].silent = true;
             assert!(!game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 1.0, 1.0));
             game.mobs[0].silent = false;
-            assert!(!game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 1.0, f32::NAN));
+            assert!(!game.entity_play_sound(cow, "invalid key", 1.0, 1.0));
             assert_eq!(game.creatures.lan_sounds.len(), 1);
             // A player doesn't hear their own sound, silent or not.
             game.as_guest(12, |game| {

@@ -914,7 +914,7 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
         volume: f32,
         pitch: f32,
     ) -> bool {
-        super::native_hooks::mod_sound_ok(sound, at, source.index(), volume, pitch)
+        super::native_hooks::sound_id(sound)
             && self
                 .0
                 .hit_effects()
@@ -934,8 +934,7 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
         let Some((id, at, _)) = hit.entity(entity) else {
             return false;
         };
-        super::native_hooks::mod_sound_ok(sound, at, source.index(), volume, pitch)
-            && hit.play(sound, at, source, volume, pitch, Some(id))
+        super::native_hooks::sound_id(sound) && hit.play(sound, at, source, volume, pitch, Some(id))
     }
     fn entity_next_float(&mut self, entity: mod_api::EntityRef) -> Option<f32> {
         use sunrise_core::random::RandomSource;

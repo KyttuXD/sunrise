@@ -1691,9 +1691,9 @@ pub trait LevelRandomHost: LevelHost {
 pub trait HitHost: LevelRandomHost {
     /// `Level.playSound(null, x, y, z, sound, source, volume, pitch)`: plays sound event
     /// `sound` at `at` for every player in this level within range (16 blocks, times the
-    /// volume above 1), under `source`'s volume slider. A `minecraft:` event must be
-    /// registered; a mod's goes by name. True means queued, not heard; false for an event
-    /// or a position, volume or pitch the network can't carry, and where no sound can be sent.
+    /// volume above 1), under `source`'s volume slider. Registered events go by ID and other
+    /// valid keys by name, with volume and pitch as supplied. True means queued, not heard;
+    /// false for a malformed event key or where no sound can be sent.
     fn play_sound_at(
         &mut self,
         _sound: &str,
@@ -1776,7 +1776,8 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
     ) -> bool {
         unimplemented!("LevelWriteHost::set_block_property")
     }
-    /// Play a sound for nearby players through `play_sound`.
+    /// Queue a sound for nearby players. Registered events go by ID and other valid keys by
+    /// name, with volume and pitch as supplied.
     fn play_sound(
         &mut self,
         _sound: &str,

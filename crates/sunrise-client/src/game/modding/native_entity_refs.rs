@@ -3008,8 +3008,8 @@ pub(super) mod tests {
             assert_eq!(game.player_game_mode(player), Some(GameMode::Survival));
             let abilities = game.player_abilities(player).unwrap();
             assert!(!abilities.invulnerable && !abilities.may_fly && !abilities.instabuild);
-            // A write sticks, is refused for a speed that is not a number, and a
-            // mode change sets the flags again (the speeds stay).
+            // The Abilities setters store both floats as supplied; a mode change only
+            // sets the flags again.
             let mut written = abilities;
             written.may_build = false;
             written.walk_speed = 0.2;
@@ -3017,14 +3017,17 @@ pub(super) mod tests {
             assert!(game.player_set_abilities(player, written));
             assert_eq!(game.player_abilities(player), Some(written));
             assert_eq!(game.player_may_build(player), Some(false));
-            let mut bad = written;
-            bad.walk_speed = f32::NAN;
-            assert!(!game.player_set_abilities(player, bad));
-            assert_eq!(game.player_abilities(player), Some(written));
+            written.walk_speed = f32::NAN;
+            written.fly_speed = f32::INFINITY;
+            assert!(game.player_set_abilities(player, written));
+            let stored = game.player_abilities(player).unwrap();
+            assert!(stored.walk_speed.is_nan());
+            assert_eq!(stored.fly_speed, f32::INFINITY);
             assert!(game.player_set_game_mode(player, GameMode::Creative));
             let abilities = game.player_abilities(player).unwrap();
             assert!(abilities.may_build && abilities.instabuild && abilities.may_fly);
-            assert_eq!((abilities.walk_speed, abilities.fly_speed), (0.2, 0.1));
+            assert!(abilities.walk_speed.is_nan());
+            assert_eq!(abilities.fly_speed, f32::INFINITY);
             assert!(game.player_set_game_mode(player, GameMode::Survival));
             let stale = mod_api::__private::game::player_ref(
                 mod_api::EntityRef::new(mod_api::WorldEpoch::new(0), player.fields().entity.id()),

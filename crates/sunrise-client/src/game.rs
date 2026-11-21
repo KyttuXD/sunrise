@@ -9830,6 +9830,9 @@ impl Game<'_> {
     /// `Player.giveExperiencePoints`: `add_experience_levels` runs once for each
     /// level gained or lost, and the mods hear of the level change once.
     pub(super) fn give_experience_points(&mut self, points: i32) {
+        if points == 0 {
+            return;
+        }
         let Some(points) = self.xp_change(points) else {
             return;
         };
@@ -14147,18 +14150,15 @@ fn player_arms(
     })
 }
 
-/// The most `Player.sleepCounter` reaches: 100 asleep, then up to here over the
-/// waking fade.
-const MAX_SLEEP_TIMER: i32 = 109;
-
 // Player.tick: cap the sleeping fade at 100, then fade out over 10 waking ticks.
 fn tick_sleep_timer(timer: i32, sleeping: bool) -> i32 {
     if sleeping {
-        (timer + 1).min(100)
-    } else if (1..MAX_SLEEP_TIMER).contains(&timer) {
-        timer + 1
+        timer.wrapping_add(1).min(100)
+    } else if timer > 0 {
+        let next = timer.wrapping_add(1);
+        if next >= 110 { 0 } else { next }
     } else {
-        0
+        timer
     }
 }
 

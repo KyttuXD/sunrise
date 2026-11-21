@@ -624,8 +624,8 @@ impl Game<'_> {
         });
     }
 
-    /// Native sounds wait until the server host is available. An unknown
-    /// `minecraft:` event is dropped; a mod's goes by name (`sound_packet`).
+    /// Native sounds wait until the server host is available. The sound packet uses the
+    /// registry ID when present, or carries the event inline by name.
     /// Each is asked of the mods first (`play_level_sound_at_entity` when
     /// bound to an entity, `_at_position` otherwise). One at a position also
     /// goes wrapped to its level's viewers (`Hub::send_viewed_sound`).
@@ -647,14 +647,6 @@ impl Game<'_> {
                 continue;
             };
             let Some(host) = &self.lan else { return };
-            if heard.name.starts_with("minecraft:")
-                && host
-                    .hub
-                    .registry_id("minecraft:sound_event", &heard.name)
-                    .is_none()
-            {
-                continue;
-            }
             let packet = host.hub.sound_packet(
                 &heard.name,
                 sound.at,
