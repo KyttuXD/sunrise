@@ -210,34 +210,6 @@ impl Wire for crate::ConfigPath {
         }
     }
 }
-impl Wire for crate::SpawnerKey {
-    layout_fields!(ordinary_only "validated-spawner-key:v1"; "text" => String);
-    const MIN: usize = 4;
-    fn put(&self, out: &mut Writer) {
-        if out.ordinary_only() {
-            out.put_str(self.as_str());
-        }
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        input.ordinary_only()?;
-        Self::new(input.take_str()?).ok_or(WireError::Invalid("invalid spawner key"))
-    }
-}
-impl Wire for crate::CustomSpawners {
-    layout_fields!(ordinary_only "unique-spawner-entries:v1"; "entries" => Vec<crate::SpawnerEntry>);
-    const MIN: usize = 4;
-    fn put(&self, out: &mut Writer) {
-        if out.ordinary_only() {
-            crate::SpawnerEntry::put_list(self.entries(), out);
-        }
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        input.ordinary_only()?;
-        Self::try_from(input.take::<Vec<crate::SpawnerEntry>>()?)
-            .map_err(|_| WireError::Invalid("duplicate spawner"))
-    }
-}
-
 impl Wire for crate::BlockStateRange {
     layout_fields!("first" => crate::BlockState, "len" => u32);
     const MIN: usize = 10;

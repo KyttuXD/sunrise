@@ -184,6 +184,34 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
         .store(false, std::sync::atomic::Ordering::Release);
 }
 
+/// Run a listener against its scoped inputs. A panic disables only this listener;
+/// a phase refusal is reported without changing whether the listener can run again.
+pub(crate) fn isolate_listener(
+    hook: generated::HookId,
+    id: &'static str,
+    operation: &'static str,
+    invoke: impl FnOnce(),
+) -> bool {
+    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    use crate::world::phase_refusal::contain_refusal;
+
+    match contain_unwind(|| contain_refusal(id, invoke)) {
+        Ok(Ok(())) => true,
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            false
+        }
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod {id}: hook {operation} panicked and is disabled for this session: {message}"
+            );
+            record_callback_panic(id, "hook", operation, message);
+            false
+        }
+    }
+}
+
 /// Whether `id`'s listener of `hook` is poisoned for the session.
 pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
     // One atomic load on the usual path: the sets only fill on a panic.

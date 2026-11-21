@@ -354,23 +354,45 @@ The wither and the ender dragon override `checkDespawn` in vanilla, so the event
 
 ## Adding or removing a custom spawner
 
-The level's custom spawners (phantoms, patrols, cats, village sieges, the wandering trader) are a list a mod edits once, in `modify_custom_spawners`. A mod's own spawner is a key plus `custom_spawner_tick`, which runs every tick while mob spawning is on:
+Implement `CustomSpawner` and add a fresh instance in `modify_custom_spawners`. The logical server
+fires the event when it opens a level, before `level_load`, even if `spawn_mobs` is off. The Overworld
+starts with the built-in spawners; other dimensions start empty. You can remove a built-in by kind.
 
 ```rust,ignore
-fn modify_custom_spawners(&self, _: &dyn mod_api::Host, event: &mut mod_api::ModifyCustomSpawnersEvent<'_>) {
-    // no phantoms in this world
-    event.spawners.remove(&mod_api::SpawnerEntry::Builtin(mod_api::SpawnerKind::Phantom));
-    event.spawners.add(mod_api::SpawnerKey::new("mymod:rat_swarm").unwrap());
+use mod_api::{CustomSpawner, DimensionKey, Host, LevelRef, ModifyCustomSpawnersEvent, ServerHost, SpawnerKind};
+
+struct Swarm {
+    ticks: u32,
 }
 
-fn custom_spawner_tick(&self, host: &mut dyn mod_api::ServerHost, event: &mut mod_api::CustomSpawnerTickEvent<'_>) {
-    if event.key.as_str() == "mymod:rat_swarm" && event.spawn_enemies {
-        // spawn through `host`
+impl CustomSpawner for Swarm {
+    fn tick(&mut self, host: &mut dyn ServerHost, level: LevelRef, spawn_enemies: bool) {
+        if !spawn_enemies {
+            return;
+        }
+        self.ticks += 1;
+        if self.ticks == 200 {
+            self.ticks = 0;
+            // Choose a position in `level`, then use `level.spawn_mob(host, ...)`.
+        }
+    }
+}
+
+// In the mod's Hooks implementation:
+fn modify_custom_spawners(&self, _: &dyn Host, event: &mut ModifyCustomSpawnersEvent<'_>) {
+    if event.level.dimension() == DimensionKey::OVERWORLD {
+        event.spawners.remove(SpawnerKind::Phantom);
+        event.spawners.add(Swarm { ticks: 0 });
     }
 }
 ```
 
-Every mod is asked about every key, so a mod ignores keys it does not own. See [the custom spawner contracts](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/hooks/custom_spawners.rs).
+The level calls each registered object's `tick` in registration order while `spawn_mobs` is on.
+`spawn_enemies` also checks `spawn_monsters` and difficulty; peaceful spawners can act even when it
+is false. Each object keeps its own state while the level is open and is dropped when that level
+closes. A panic is logged and shown in an error toast; it disables only the panicking callback.
+A phase refusal is reported without disabling the callback. If a registration listener panics or
+its Host call is refused, its edits are discarded and later listeners still run.
 
 ## Spawning from a level
 

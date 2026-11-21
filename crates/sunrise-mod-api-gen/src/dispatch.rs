@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -199,7 +200,7 @@ pub(super) fn emit<'a>(
                     param,
                 )
             });
-        if isolated_collect
+        if (isolated_collect || isolated_listen)
             && (hook.context.is_some()
                 || host.as_ref().is_some_and(|(_, host)| {
                     host.ty.starts_with("&mut ")
@@ -207,7 +208,7 @@ pub(super) fn emit<'a>(
                 }))
         {
             return Err(format!(
-                "{name}: an isolated collector needs a read-only world Host"
+                "{name}: isolated listeners and collectors need a read-only world Host"
             ));
         }
         // A block notice may identify a watching block entity. Its Parts receive
@@ -399,6 +400,7 @@ pub(super) fn emit<'a>(
         let mut fields = String::new();
         let mut inits = Vec::new();
         let mut write_back = String::new();
+        let mut commit_edits = String::new();
         // The fields an isolated dispatch rolls back to the requested values on a listener's
         // unwind (#2414 ruling), each with whether the event holds it behind a `&mut`.
         let mut rollback: Vec<(String, bool)> = Vec::new();
@@ -474,6 +476,14 @@ pub(super) fn emit<'a>(
                 continue;
             }
             let ty_tokens = ty.to_token_stream().to_string();
+            if isolated_listen && ty_tokens == "& mut mod_api :: __private :: LevelCustomSpawners" {
+                // The game lends the resident list; the listener gets only a staged editor.
+                lifetimes.a = true;
+                fields.push_str(&format!("pub {name}: mod_api::CustomSpawners<'a>,\n"));
+                inits.push(format!("{name}: {name}.edit(mod_id, level)"));
+                commit_edits.push_str(&format!("{event}.{name}.commit();"));
+                continue;
+            }
             let mutable_entity = ty_tokens == "& mut ModBlockEntity";
             let optional_mutable_entity = ty_tokens == "Option < & mut ModBlockEntity >";
             // An answered collect hook's mods each push plain entries into their own batch;
@@ -504,6 +514,12 @@ pub(super) fn emit<'a>(
                 if matches!(&field_ty, Type::Reference(reference) if matches!(*reference.elem, Type::TraitObject(_)))
                 {
                     surfaces.push(name.clone());
+                }
+                if isolated_listen {
+                    return Err(format!(
+                        "{}: an isolated listener may write only through a staged editor, not {name}",
+                        hook.name
+                    ));
                 }
                 if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
                     return Err(format!(
@@ -597,6 +613,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if !commit_edits.is_empty() {
+            "// no wire: this event lends an in-process registration editor.\n"
         } else {
             ""
         };
@@ -1255,6 +1273,22 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_listen => {
+                let invoke = format!(
+                    "super::runtime::isolate_listener(HookId::{hook_id}, mod_id, \"{name}\", || {mod_item}.{name}({invoke}))"
+                );
+                let invoke = if commit_edits.is_empty() {
+                    format!("{invoke};")
+                } else {
+                    format!("if {invoke} {{ {commit_edits} }}")
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {invoke} }} }}",
+                    ),
+                )
+            }
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.

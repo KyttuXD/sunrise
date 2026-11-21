@@ -1,0 +1,2 @@
+sunrise-client game::custom_spawners::tests::custom_spawner_tick_distinguishes_panics_from_phase_refusals lib daily resources
+sunrise-client game::custom_spawners::tests::custom_spawners_follow_level_lifetime_and_tick_only_the_listed_objects lib daily resources

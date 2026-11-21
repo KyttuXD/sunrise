@@ -9002,7 +9002,7 @@ impl Game<'_> {
         self.player_spawn = None;
         self.creatures.reset_trader();
         self.creatures.cat = Default::default();
-        self.creatures.custom_spawners.clear();
+        self.creatures.custom_spawners = Default::default();
         self.portals = Default::default();
         self.experience = Experience {
             level: self.level.xp_level,

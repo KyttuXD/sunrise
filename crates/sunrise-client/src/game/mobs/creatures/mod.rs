@@ -272,8 +272,8 @@ pub(super) struct Creatures {
     pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner (`CatSpawner`): its countdown.
     pub cat: super::cat_spawner::CatSpawner,
-    /// Each level's custom spawners, built when its first tick asks (game/mobs/custom_spawners.rs).
-    pub custom_spawners: std::collections::HashMap<super::Dim, mod_api::CustomSpawners>,
+    /// Custom spawners for the level in place; swapped with its other state when parked.
+    pub custom_spawners: mod_api::__private::LevelCustomSpawners,
     /// Native sounds waiting for the server host to be available.
     pub lan_sounds: Vec<NativeSound>,
     /// Particles from a guest's turn, waiting for it to end.

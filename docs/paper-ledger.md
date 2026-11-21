@@ -766,7 +766,7 @@ Scope = the four `base.rs` hooks below: two world-border notifications, the serv
 ## Event counterparts: chunk watching, spawners and misc entity hooks (#1015)
 
 Paper API 26.3 (paper-api `26.3.build.244-stable`), public Javadoc only; Sunrise cited by function name, never by line number.
-Scope: the twenty misc-chunk hooks below, from `chunk_unwatch` to `entity_change_block_pre`.
+Scope: the misc-chunk hooks below, from `chunk_unwatch` to `entity_change_block_pre`.
 
 | Sunrise hook | Paper event / status | Evidence and porting boundary |
 |---|---|---|
@@ -781,8 +781,7 @@ Scope: the twenty misc-chunk hooks below, from `chunk_unwatch` to `entity_change
 | `crop_grow_post` | **Gap:** none (nearest [`BlockGrowEvent`][paper-BlockGrowEvent]) | `BlockGrowEvent` fires before a block grows (cancelling prevents it) and carries only the new state; no Paper event reports the crop after it grew or the original and current states the hook passes. No key. |
 | `crop_grow_pre` | **Partial:** [`BlockGrowEvent`][paper-BlockGrowEvent] | `BlockGrowEvent` matches the about-to-grow moment and its cancel maps to `result = False`, but it fires only once growth is determined, cannot force growth (`result = True`) and reports the new state rather than the growing state. No key. |
 | `custom_click_action` | **Partial:** [`PlayerCustomClickEvent`][paper-PlayerCustomClickEvent] | Both report custom clicks with an identifier and optional tag payload on the server. Paper exposes a common connection (including configuration connections) and is non-cancellable; `custom_click_action` carries a play-phase player and a cancel result. No key. |
-| `custom_spawner_tick` | **Gap:** none (nearest [`PreSpawnerSpawnEvent`][paper-PreSpawnerSpawnEvent]) | `PreSpawnerSpawnEvent` fires only when a block spawner is about to spawn an entity, at the spawner's location; the hook is a per-tick callback for a mod-registered spawner key that runs the spawner's own logic and may spawn nothing. No key. |
-| `modify_custom_spawners` | **Gap:** none | Paper has no event through which a mod adds custom spawner entries to a level's spawner list; the listed spawn events are per spawn and cannot register a spawner. No key. |
+| `modify_custom_spawners` | **Gap:** none | Paper has no event through which a mod adds owned spawners to a server level. The nearest [`PreSpawnerSpawnEvent`][paper-PreSpawnerSpawnEvent] fires for a block spawner attempting an individual spawn; it cannot register a level spawner. No key. |
 | `effect_particle_modification` | **Gap:** none (nearest [`EntityPotionEffectEvent`][paper-EntityPotionEffectEvent]) | The potion events fire when an effect is added, removed or ticks, not when its particles are chosen for a viewer, and neither [`EntityEffectTickEvent`][paper-EntityEffectTickEvent] nor the other candidates exposes the particle options or the visible flag. No key. |
 | `enchanted_block_loot` | **Gap:** none (nearest [`BlockDispenseLootEvent`][paper-BlockDispenseLootEvent]) | The event reports a block dispensing loot from its designated loot table, such as a vault, and permits replacing the dispensed loot or cancelling. `enchanted_block_loot` instead modifies each enchantment level read during a block-drop roll with tool and state; there is no event here for that mid-roll query. No key. |
 | `enchanted_entity_loot` | **Gap:** none (nearest [`LootGenerateEvent`][paper-LootGenerateEvent]) | `LootGenerateEvent`'s Javadoc says it is not called for an entity's loot table, and no other supplied event exposes the enchantment level read mid-roll with the entity, source and attacker. No key. |

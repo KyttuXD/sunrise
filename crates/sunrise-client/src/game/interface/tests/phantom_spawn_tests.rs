@@ -56,6 +56,7 @@ fn game<'a>(root: &std::path::Path, resources: &'a mut Option<Arc<Resources>>) -
     )
     .unwrap();
     game.build_registries();
+    game.native_level_opened(game.dim);
     game.set_allow_commands(true);
     assert!(game.run_command("difficulty hard"));
     for x in -1..=0 {

@@ -292,7 +292,10 @@ impl Game<'_> {
             || !rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MONSTERS)
             || !rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_PHANTOMS)
             || self.dim != Dim::Overworld
-            || !self.has_custom_spawner(mod_api::SpawnerKind::Phantom)
+            || !self
+                .creatures
+                .custom_spawners
+                .contains(mod_api::SpawnerKind::Phantom)
         {
             return;
         }
@@ -425,6 +428,7 @@ mod tests {
     fn fake_players_do_not_advance_phantom_rng() {
         use sunrise_core::random::RandomSource;
         super::super::native_entity_refs::tests::with_game(|game| {
+            game.native_level_opened(game.dim);
             super::super::bossbars::audience_tests::add_real_and_fake(game);
             game.player = None;
             game.world.day_time = 18000;
