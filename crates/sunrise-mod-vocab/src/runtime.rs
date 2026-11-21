@@ -184,6 +184,25 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
         .store(false, std::sync::atomic::Ordering::Release);
 }
 
+/// Contain one flat listener without rolling back the live surface it was lent.
+pub(crate) fn invoke_isolated_listener(
+    hook: generated::HookId,
+    mod_id: &'static str,
+    operation: &'static str,
+    invoke: impl FnOnce(),
+) {
+    use crate::callback_owner::{contain_unwind, report_callback_panic};
+    use crate::world::phase_refusal::contain_refusal;
+    match contain_unwind(|| contain_refusal(mod_id, invoke)) {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => refusal.report_each(),
+        Err(message) => {
+            poison(hook, mod_id);
+            report_callback_panic(mod_id, "hook", operation, message);
+        }
+    }
+}
+
 /// Whether `id`'s listener of `hook` is poisoned for the session.
 pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
     // One atomic load on the usual path: the sets only fill on a panic.

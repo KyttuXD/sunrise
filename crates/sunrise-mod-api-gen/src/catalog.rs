@@ -175,11 +175,10 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global cancel hook, or a global collect hook answered by mod, whose dispatch runs every
-    /// listener inside `catch_unwind`: one that unwinds is switched off for this hook for the
-    /// session. A cancel hook rolls outputs back to the requested values and stops (#2414).
-    /// A collector receives at most one returned value per registration, and later listeners
-    /// still run after a failure.
+    /// A global listen, cancel, or collect hook answered by mod: a listener that panics is
+    /// switched off for this hook for the session. A listen hook keeps completed surface edits
+    /// and continues. A cancel hook rolls outputs back and stops (#2414). A collector accepts
+    /// at most one returned answer per registration and continues after a failure.
     pub isolate: bool,
     /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
     /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
@@ -512,19 +511,16 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
-        // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
         let isolate = api.isolate.unwrap_or(false);
         if isolate
             && (scope.is_some()
-                || !(api.contract == Contract::Cancel
+                || !(matches!(api.contract, Contract::Listen | Contract::Cancel)
                     || api.contract == Contract::Collect && answered_by_mod))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
+                error: "isolate is for a global listen, cancel, or collect hook answered by mod"
+                    .into(),
             });
         }
         if let Some(validator) = &api.output_validator

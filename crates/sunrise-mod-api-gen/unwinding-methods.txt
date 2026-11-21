@@ -415,8 +415,6 @@ items::container_size
 items::container_stack
 items::creative_search_items
 items::creative_stack_key
-items::creative_tab_change
-items::creative_tab_entries
 items::dispense_default
 items::dispense_with_remainder
 items::drop_at

@@ -121,6 +121,12 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
+        if isolated_listen && (hook.owner.is_some() || hook.context.is_some()) {
+            return Err(format!(
+                "{name}: an isolated listen hook cannot have an owner filter or phase context"
+            ));
+        }
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +511,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && !isolated_listen
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -555,6 +565,11 @@ pub(super) fn emit<'a>(
                 inits.push(name.clone());
             }
         }
+        if isolated_listen && rollback.iter().any(|(field, _)| !surfaces.contains(field)) {
+            return Err(format!(
+                "{name}: an isolated listen hook can only write to borrowed trait surfaces"
+            ));
+        }
         if mod_cancel {
             if args.iter().any(|(arg, _)| arg == "cancelled") {
                 return Err(format!(
@@ -597,6 +612,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if !surfaces.is_empty() {
+            "// no wire: this event borrows live callback surfaces.\n"
         } else {
             ""
         };
@@ -1253,6 +1270,12 @@ pub(super) fn emit<'a>(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.{owner} {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
                     owner = hook.owner.as_deref().unwrap(),
+                ),
+            ),
+            None if isolated_listen => (
+                String::new(),
+                format!(
+                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} super::runtime::invoke_isolated_listener(HookId::{hook_id}, {mod_entry}.id, \"{name}\", || {mod_item}.{name}({invoke})); }} }}"
                 ),
             ),
             None if isolated_collect => (
