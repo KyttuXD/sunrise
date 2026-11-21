@@ -17,13 +17,28 @@ ids = [
     "type:BounceOnEvent.kind",
     "type:LandingWrite",
     "type:LandingEntity",
-    "handle:FallOnEvent::request",
-    "handle:FallOnEvent::after_landing",
-    "handle:BounceOnEvent::after_bounce",
+    "method:FallOnEvent::request",
+    "method:FallOnEvent::after_landing",
+    "method:BounceOnEvent::after_bounce",
 ]
 why = """
 Retires `LandingWrite` and its encoded command batch, sibling rollback, and engine-side unchanged-block replay gate. Vanilla `Block.fallOn(Level, BlockState, BlockPos, Entity, double)` and its overrides (`HayBlock`, `HoneyBlock`, `SlimeBlock`, `PowderSnowBlock`, `PointedDripstoneBlock`, `FarmlandBlock`, `TurtleEggBlock`) and `Block.bounceOn(Level, BlockState, BlockPos, Entity, double)` (`ShelfMushroomBlock`) receive the live `Entity` directly so overrides can inspect `Entity.isSuppressingBounce()` / `isShiftKeyDown()`, `isCrouching()`, `getBbWidth()`/`getBbHeight()`, position, velocity, and fall distance, and adjust entity motion directly (`Entity.setDeltaMovement`, `Entity.resetFallDistance`). NeoForge's `IBlockExtension.getBounceRestitution` only returns a restitution factor and has no separate landing write batch. Lending a scoped `LandingEntity` at both `fall_on` and `bounce_on` gives mods direct access to the falling/bouncing entity (players, mobs, and dropped items) alongside the admissible synchronous level operations (`LevelRandomHost`), while replacing the closed `LandingWrite` reply program with owned native callbacks (`FallOnEvent::after_landing` and `BounceOnEvent::after_bounce`) that run against `&mut dyn ServerHost` once the entity batch finishes, with local state checks owned by each callback and per-mod panic containment via `CallbackOwner`.
 """
 migrate = """
-`BlockPart::fall_on` bumps to `hook_version = 3` and `BlockPart::bounce_on` bumps to `hook_version = 2`. Replace reads of `event.entity` (formerly `i32`) and `event.kind` (formerly `&str`) with `event.entity.id()` and `event.entity.kind()` on the lent `LandingEntity<'_>`, which also provides `position()`, `block_position()`, `velocity()`, `fall_distance()`, `on_ground()`, `is_crouching()`, `is_suppressing_bounce()`, `dimensions()`, `set_velocity(...)`, and `reset_fall_distance()`. Replace `event.request(LandingWrite::SetBlock(state))` and `event.request(LandingWrite::DestroyBlock { drop })` with `event.after_landing(move |host| { ... })` (and `event.after_bounce(move |host| { ... })` in `bounce_on`), calling `host.level(dimension)` and `level.set_block` or `level.destroy_block` directly; if the action should only apply when the landed block is still unchanged, check `level.block_state(host, pos) == Some(expected)` inside the callback.
+Both `BlockPart::fall_on` and `BlockPart::bounce_on` bump to `hook_version = 3`. Replace reads of `event.entity` (formerly `i32`) and `event.kind` (formerly `&str`) with `event.entity.id()` and `event.entity.kind()` on the lent `LandingEntity<'_>`. Other reads are `position()`, `block_position()`, `velocity()`, `fall_distance()`, `on_ground()`, `is_crouching()`, `is_suppressing_bounce()`, and `dimensions()`. In `fall_on`, use `event.entity.set_velocity(v)` and `event.entity.reset_fall_distance()`; player motion edits are sent to the controlling client. In `bounce_on`, `event.entity` is shared and reads the pre-bounce entity. Write `*event.movement = v` to set the final bounce velocity, not `event.entity.set_velocity(v)`.
+
+Replace either `event.request(LandingWrite::SetBlock(state))` or `event.writes.push(LandingWrite::SetBlock(state))` with the following. `dimension` and `pos` are owned copies so the callback does not borrow the event:
+
+```rust
+let dimension = event.dimension.to_owned();
+let pos = [event.pos.x, event.pos.y, event.pos.z];
+event.after_landing(move |host| {
+    if let Some(level) = host.level(&dimension) {
+        let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+        let _ = level.set_block(host, pos, state, flags);
+    }
+});
+```
+
+For `LandingWrite::DestroyBlock { drop }`, capture `drop` and call `level.destroy_block(host, pos, drop, None, false)` instead. Use `after_bounce` to queue work after the bounce batch. Inspect `level.block_state(host, pos) == Some(expected)` inside the callback only if that action depends on an unchanged block. Inspection, mutation and clearing of the old `event.writes` batch are removed; decide which actions to enqueue in the part rather than editing its queued actions afterward.
 """

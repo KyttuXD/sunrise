@@ -153,6 +153,7 @@ mod tests {
         Replace,
         ReplaceDuringLift,
         MoveBystander,
+        ObserveLanding,
     }
 
     #[derive(Clone, Copy)]
@@ -170,15 +171,38 @@ mod tests {
         Write(mod_api::BlockState),
         GameEvent([f64; 3], Option<u32>, Option<mod_api::BlockState>),
         Fall(f32, f64, mod_api::BlockState),
+        PartLanding(i32, [i32; 3], mod_api::BlockState, mod_api::BlockState),
     }
 
     type Trace = Arc<Mutex<Vec<Moment>>>;
+
+    #[derive(Clone)]
+    struct FarmlandPart(Trace);
+
+    #[mod_api::sunrise_part]
+    impl BlockPart for FarmlandPart {
+        fn fall_on(&self, host: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+            let at = [event.pos.x, event.pos.y, event.pos.z];
+            self.0.lock().unwrap().push(Moment::PartLanding(
+                event.entity.id(),
+                at,
+                event.state,
+                host.block_state(at).unwrap(),
+            ));
+        }
+    }
 
     // This observer listens to the effects, not to farmland_trample. It can be
     // installed on both sides of the allow/no-listener comparison.
     struct Observe(Trace, Choice);
     #[mod_api::__subscriptions]
     impl Hooks for Observe {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            if self.1 == Choice::ObserveLanding {
+                let farmland = r.block_key("minecraft:farmland");
+                r.block_part(farmland, FarmlandPart(self.0.clone()));
+            }
+        }
         fn entity_entering_section(
             &self,
             host: HostSide<'_>,
@@ -319,7 +343,7 @@ mod tests {
                     panic!("trample listener trapped");
                 }
                 Choice::Allow | Choice::ReplaceDuringLift => Flow::Continue,
-                Choice::Absent | Choice::MoveBystander => unreachable!(),
+                Choice::Absent | Choice::MoveBystander | Choice::ObserveLanding => unreachable!(),
             }
         }
     }
@@ -351,14 +375,22 @@ mod tests {
             "trample-observer",
             Box::new(Observe(trace.clone(), choice)),
         )];
-        let listens = !matches!(choice, Choice::Absent | Choice::MoveBystander);
+        let listens = !matches!(
+            choice,
+            Choice::Absent | Choice::MoveBystander | Choice::ObserveLanding
+        );
         if listens {
             mods.push(ModEntry::new(
                 "gardener",
                 Box::new(Gardener(choice, trace.clone())),
             ));
         }
-        mod_platform::testing::with_mods(mods.into(), || {
+        let mods: Mods = mods.into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            if choice == Choice::ObserveLanding {
+                crate::game::api_values::install_parts(&mods).unwrap();
+                let _ = sunrise_client::block_contact::HOOKS.set(super::super::BLOCK_CONTACT_HOOKS);
+            }
             with_game(|game| {
                 if player || choice == Choice::MoveBystander {
                     // The live-bounds case needs a server console for its teleport.
@@ -475,7 +507,11 @@ mod tests {
                 if player {
                     game.guest_server_tick(1, true);
                 } else {
-                    game.tick_creature_entities().unwrap();
+                    sunrise_client::block_contact::in_level(
+                        sunrise_client::parallel::TickThread::mint(),
+                        Some(game.dim.id()),
+                        || game.tick_creature_entities().unwrap(),
+                    );
                 }
                 if choice == Choice::Cancel {
                     assert_eq!(game.dropped.len(), drops);
@@ -554,6 +590,14 @@ mod tests {
                         Some(api_state(floor)),
                     ));
                 }
+                if choice == Choice::ObserveLanding {
+                    expected.push(Moment::PartLanding(
+                        LANDING as i32,
+                        FIELD,
+                        api_state(farmland),
+                        api_state(dirt),
+                    ));
+                }
                 if damage != 0.0 {
                     expected.push(Moment::Fall(damage, y_after, api_state(floor)));
                 }
@@ -569,6 +613,12 @@ mod tests {
         for body in [WALKING, Body::Pig] {
             land(body, Choice::Absent);
         }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_trampling_mob_notifies_the_original_farmland_part() {
+        land(Body::Pig, Choice::ObserveLanding);
     }
 
     #[test]

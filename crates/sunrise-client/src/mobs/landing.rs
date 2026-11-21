@@ -53,9 +53,6 @@ impl mod_api::LandingEntityAccess for MobLandingEntity<'_> {
         [self.0.width(), self.0.height()]
     }
     fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
-        if !velocity.iter().all(|v| v.is_finite()) {
-            return false;
-        }
         self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
         true
     }
@@ -70,7 +67,8 @@ pub(super) struct MobLanding<'a, 'w, 'l> {
     pub w: &'a MobWorld<'w>,
     pub level: &'a mut DamageLevel<'l>,
     pub events: &'a mut Vec<MobEvent>,
-    pub pos: [i32; 3],
+    pub pos: BlockPos,
+    pub state: BlockStateId,
     pub mod_fall_pending: &'a mut bool,
 }
 impl MobLanding<'_, '_, '_> {
@@ -164,7 +162,7 @@ impl BlockLandingWorld for MobLanding<'_, '_, '_> {
         source: DamageKind,
     ) -> Result<bool, String> {
         *self.mod_fall_pending = false;
-        let contact = Some((self.w, self.pos));
+        let contact = Some((self.w, self.state, self.pos));
         Ok(self.mob.cause_fall_damage_at(
             self.w.loop_context,
             self.level,

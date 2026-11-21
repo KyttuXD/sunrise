@@ -127,6 +127,7 @@ mod landing_tests {
         fn bounce_on(&self, _: &mut dyn LevelRandomHost, event: &mut BounceOnEvent<'_>) {
             assert_eq!(event.entity.id(), 7);
             assert!(!event.entity.is_suppressing_bounce());
+            assert_eq!(event.entity.velocity(), [0.0, -1.0, 0.0]);
             event.movement[1] = 0.75;
             let observed = self.observed.clone();
             event.after_bounce(move |_host| {
@@ -141,6 +142,8 @@ mod landing_tests {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
             let farmland = r.block_key("minecraft:farmland");
             r.block_part(farmland, self.0.clone());
+            let slime = r.block_key("minecraft:slime_block");
+            r.block_part(slime, self.0.clone());
         }
     }
 
@@ -160,6 +163,99 @@ mod landing_tests {
             let farmland = r.block_key("minecraft:farmland");
             r.block_part(farmland, PanickingPart);
         }
+    }
+
+    #[derive(Clone)]
+    struct KickOnLanding;
+
+    #[mod_api::sunrise_part]
+    impl BlockPart for KickOnLanding {
+        fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+            assert_eq!(event.entity.kind(), "minecraft:player");
+            assert!(event.entity.set_velocity([0.5, 0.0, 0.0]));
+        }
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for KickOnLanding {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            let stone = r.block_key("minecraft:stone");
+            r.block_part(stone, self.clone());
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn harmless_player_landing_publishes_motion_to_the_controlling_client() {
+        use crate::game::native_item_places::tests::open_to_lan;
+        use crate::game::native_sound_refs::tests::{guest, packets};
+        use sunrise_client::{chunk::Chunk, lan::guest::InboxItem, motion::PlayerMotion};
+        use sunrise_core::geometry::Vec3;
+        use sunrise_protocol::packets::{Empty, play, play::Serverbound as S};
+
+        let mods: mod_api::Mods =
+            vec![ModEntry::new("landing_kick", Box::new(KickOnLanding))].into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            let _ = sunrise_client::block_contact::HOOKS.set(super::super::BLOCK_CONTACT_HOOKS);
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                open_to_lan(game);
+                game.streaming
+                    .insert_remote(&mut game.world, Chunk::empty(0, 0));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.set(1, 64, 1, stone).unwrap();
+                let at = [1.5, 65.25, 1.5];
+                let (mut player, rx) = guest(20, 20, at);
+                let mut body =
+                    PlayerMotion::new(game.motion, Vec3::new(at[0], at[1], at[2])).unwrap();
+                body.fall_distance = 1.0;
+                player.motion = Some(Box::new(body));
+                player.loaded = true;
+                player.loading = false;
+                player.load_timeout = 0;
+                player.first_good = at;
+                let health = player.health;
+                player.inbox.push_back(InboxItem::Packet(
+                    S::MovePlayerPos(play::MovePlayerPos {
+                        x: 1.5,
+                        y: 65.0,
+                        z: 1.5,
+                        flags: 1,
+                    }),
+                    None,
+                ));
+                player
+                    .inbox
+                    .push_back(InboxItem::Packet(S::ClientTickEnd(Empty), None));
+                game.lan.as_mut().unwrap().hub.guests.push(player);
+                game.entity_section_joined(20, at);
+                game.tick_lan_packets();
+                assert_eq!(
+                    game.lan
+                        .as_ref()
+                        .unwrap()
+                        .hub
+                        .guest(20)
+                        .unwrap()
+                        .moves
+                        .len(),
+                    1
+                );
+                let _ = packets(&rx);
+                game.guest_server_tick(20, true);
+                let owner = game.lan.as_ref().unwrap().hub.guest(20).unwrap();
+                assert_eq!(owner.health, health);
+                assert_eq!(owner.position, [1.5, 65.0, 1.5]);
+                assert!(packets(&rx).iter().any(|packet| {
+                    matches!(packet, play::Clientbound::SetEntityMotion(p) if p.id == 20 && p.velocity[0] > 0.0)
+                }));
+            });
+        });
     }
 
     /// `fall_on` and `bounce_on` lend the scoped falling entity directly and queue owned
@@ -277,23 +373,37 @@ mod landing_tests {
                 );
                 assert_eq!(game.world.block(1, 64, 1), dirt);
 
-                let mut entity_bounce = TestEntity {
-                    suppressing_bounce: false,
-                    ..entity_second
+                use sunrise_client::{
+                    block_contact, health::LentLevel, mobs::Mob, parallel::TickThread,
                 };
-                let mut movement = [0.0, 0.4, 0.0];
-                let mut bounce_deferred = Vec::new();
-                HitLevel(level.level()).native_bounce_on(super::super::fire::BounceOnCall {
-                    dimension: "minecraft:overworld",
-                    entity: LandingEntity::new(&mut entity_bounce),
-                    state: farmland,
-                    pos: BlockPos::new(1, 64, 1),
-                    fall_distance: 4.0,
-                    movement: &mut movement,
-                    deferred: mod_api::__private::LandingDeferred::new(&mut bounce_deferred),
+                use sunrise_core::geometry::Vec3;
+                let slime = state("minecraft:slime_block");
+                game.world.set(1, 64, 1, slime).unwrap();
+                let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+                let mut mob = Mob::new(7, kind, Vec3::new(1.5, 65.0, 1.5), 0.0);
+                mob.supporting = Some([1, 64, 1]);
+                mob.velocity = Vec3::new(0.0, -1.0, 0.0);
+                let _ = block_contact::HOOKS.set(super::super::BLOCK_CONTACT_HOOKS);
+                let mut lent = LentLevel::take(&mut game.world);
+                block_contact::in_level(TickThread::mint(), Some(game.dim.id()), || {
+                    let world = game.mob_world_base(&[]);
+                    let mut level = DamageLevel::lent(
+                        &game.world,
+                        game.pack.assets.registry,
+                        &mut lent,
+                        Some(game.items()),
+                        Some(&game.pack.block_registries),
+                        &game.damage_hooks,
+                    );
+                    mob.restitute_movement(
+                        &world,
+                        &mut level,
+                        Vec3::new(0.0, -1.0, 0.0),
+                        Vec3::ZERO,
+                    );
                 });
-                assert_eq!(movement, [0.0, 0.75, 0.0]);
-                sunrise_client::block_contact::defer_landing(bounce_deferred);
+                lent.give_back(&mut game.world);
+                assert_eq!(mob.velocity, Vec3::new(0.0, 0.75, 0.0));
                 game.drain_entity_inside();
                 assert_eq!(
                     *part.observed.lock().unwrap(),

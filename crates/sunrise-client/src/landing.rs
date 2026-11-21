@@ -59,10 +59,8 @@ impl mod_api::LandingEntityAccess for PlayerLandingEntity<'_> {
         [self.0.dimensions.width, self.0.dimensions.height]
     }
     fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
-        if !velocity.iter().all(|v| v.is_finite()) {
-            return false;
-        }
         self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        self.0.health.sync_velocity = true;
         true
     }
     fn reset_fall_distance(&mut self) {
@@ -103,9 +101,6 @@ impl mod_api::LandingEntityAccess for ItemLandingEntity<'_> {
         [size, size]
     }
     fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
-        if !velocity.iter().all(|v| v.is_finite()) {
-            return false;
-        }
         self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
         self.0.needs_sync = true;
         true

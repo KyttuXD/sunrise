@@ -119,7 +119,7 @@ mod tests {
         item.id = 2;
         item.stuck = Vec3::new(0.5, 0.5, 0.5);
         let moved = |item: &mut ItemEntity, no_physics: bool| {
-            item.tick_move_before_block_effects(
+            item.tick_move_until_fall(
                 &world,
                 &facts,
                 &collision,

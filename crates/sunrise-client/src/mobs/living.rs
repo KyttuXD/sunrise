@@ -1444,8 +1444,9 @@ impl Mob {
         events: &mut Vec<MobEvent>,
         pause: bool,
     ) -> Option<FarmlandTrample> {
-        let pos = self.block_on_legacy(w);
-        let state = w.world.block(pos[0], pos[1], pos[2]);
+        let [x, y, z] = self.block_on_legacy(w);
+        let pos = BlockPos::new(x, y, z);
+        let state = w.world.block(x, y, z);
         let species = self.species();
         let entity = if super::doors::is_zombie(species) {
             LandingEntityKind::Zombie
@@ -1465,10 +1466,11 @@ impl Mob {
                 level,
                 events,
                 pos,
+                state,
                 mod_fall_pending: &mut mod_fall_pending,
             },
             state,
-            BlockPos::new(pos[0], pos[1], pos[2]),
+            pos,
             entity,
             distance,
             pause,
@@ -1478,7 +1480,7 @@ impl Mob {
             Ok(None) => {
                 if mod_fall_pending {
                     // Some landing rules (slime, powder snow) never call causeFallDamage.
-                    self.mod_block_fall(level, Some((w, pos)), distance, 0.0);
+                    self.mod_block_fall(level, Some((w, state, pos)), distance, 0.0);
                 }
                 None
             }
@@ -1490,7 +1492,7 @@ impl Mob {
                     distance,
                     1.0,
                     events,
-                    Some((w, pos)),
+                    Some((w, state, pos)),
                     super::DamageKind::Fall,
                 );
                 None
@@ -1507,14 +1509,14 @@ impl Mob {
         events: &mut Vec<MobEvent>,
         trample: FarmlandTrample,
     ) {
-        let p = trample.position;
         let mut mod_fall_pending = crate::block_contact::fall_listens(trample.state);
         let _ = trample.finish_fall(&mut super::landing::MobLanding {
             mob: self,
             w,
             level,
             events,
-            pos: [p.x, p.y, p.z],
+            pos: trample.position,
+            state: trample.state,
             mod_fall_pending: &mut mod_fall_pending,
         });
         self.fall_distance = 0.0;
@@ -1522,13 +1524,11 @@ impl Mob {
     fn mod_block_fall(
         &mut self,
         level: &mut DamageLevel<'_>,
-        contact: Option<(&MobWorld, [i32; 3])>,
+        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
         distance: f64,
         multiplier: f32,
     ) -> (f64, f32) {
-        contact.map_or((distance, multiplier), |(w, p)| {
-            let state = w.world.block(p[0], p[1], p[2]);
-            let position = sunrise_core::position::BlockPos::new(p[0], p[1], p[2]);
+        contact.map_or((distance, multiplier), |(_, state, position)| {
             let mut entity = super::landing::MobLandingEntity(self);
             crate::block_contact::fall(level, &mut entity, state, position, distance, multiplier)
         })
@@ -1570,7 +1570,7 @@ impl Mob {
         distance: f64,
         modifier: f32,
         events: &mut Vec<MobEvent>,
-        contact: Option<(&MobWorld, [i32; 3])>,
+        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
         source: super::DamageKind,
     ) -> bool {
         // Breeze.causeFallDamage: a landing from higher than three blocks.
@@ -1672,11 +1672,15 @@ impl Mob {
     /// `LivingEntity.playBlockFallSound`: the block 0.2 below the feet plays
     /// its fall sound at half its volume and three quarters of its pitch,
     /// unless the mob is silent or the block is air.
-    fn block_fall_sound(&self, contact: Option<(&MobWorld, [i32; 3])>, events: &mut Vec<MobEvent>) {
+    fn block_fall_sound(
+        &self,
+        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
+        events: &mut Vec<MobEvent>,
+    ) {
         if self.silent {
             return;
         }
-        if let Some((w, _)) = contact {
+        if let Some((w, _, _)) = contact {
             let pos = self.on_pos(0.2);
             let state = w.world.block(pos[0], pos[1], pos[2]);
             if !w.facts.is_air(state) {

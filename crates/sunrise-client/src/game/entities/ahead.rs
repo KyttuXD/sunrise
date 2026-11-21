@@ -64,7 +64,7 @@ impl ItemTables<'_> {
         let heights = item.push_by_fluid(self.world, &self.motion.fluids, self.context);
         item.water_entry(heights.0 > 0.0, item.ticks == 0, before, splash);
         item.lava_fall(heights.1 > 0.0);
-        let mut step = item.tick_move_before_block_effects(
+        let step = item.tick_move_until_fall(
             self.world,
             self.facts,
             self.collision,
@@ -76,7 +76,7 @@ impl ItemTables<'_> {
             Some(&self.motion.blocks),
             self.context,
         );
-        item.check_fall(&mut step, |fall, from, moved| {
+        let _ = item.check_fall(&step, |fall, from, moved| {
             if fall == 0.0 || moved.length_squared() < 1.0 {
                 return fall;
             }
@@ -91,6 +91,7 @@ impl ItemTables<'_> {
             );
             if hit { 0.0 } else { fall }
         });
+        item.finish_move_restitution(&step);
         step
     }
     /// The rest of the move after its vertical contact: block effects, bubble columns, settling

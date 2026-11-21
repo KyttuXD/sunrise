@@ -5155,12 +5155,8 @@ impl Game<'_> {
     /// `LandingEntity`, through the same `block_contact::fall` as a player's and a mob's
     /// landing. An item takes no fall damage. Nothing is lent or built unless a Part of
     /// that block listens.
-    fn item_fall_on(
-        &mut self,
-        item: &mut ItemEntity,
-        on: sunrise_core::position::BlockPos,
-        distance: f64,
-    ) {
+    fn item_fall_on(&mut self, item: &mut ItemEntity, on: sunrise_core::position::BlockPos) {
+        let distance = item.fall_distance;
         let state = self.world.block(on.x, on.y, on.z);
         if !sunrise_client::block_contact::fall_listens(state) {
             return;

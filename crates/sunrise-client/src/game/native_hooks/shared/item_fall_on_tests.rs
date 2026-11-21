@@ -10,6 +10,10 @@ struct Lands(Arc<Mutex<Vec<(i32, String, BlockPos, f64, f32)>>>);
 #[mod_api::sunrise_part]
 impl BlockPart for Lands {
     fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+        assert_eq!(event.entity.fall_distance(), 5.0);
+        assert_eq!(event.entity.velocity(), [0.0, -0.5, 0.0]);
+        assert!(event.entity.on_ground());
+        assert!(event.entity.set_velocity([0.0, -0.25, 0.0]));
         self.0.lock().unwrap().push((
             event.entity.id(),
             event.entity.kind().to_owned(),
@@ -148,7 +152,7 @@ fn item_fall_on_returns_progressed_level_loan_after_part_panic() {
                         sunrise_client::parallel::TickThread::mint(),
                         Some(game.dim.id()),
                         || {
-                            game.item_fall_on(&mut item, pos, 5.0);
+                            game.item_fall_on(&mut item, pos);
                         },
                     );
                 }))
@@ -212,11 +216,12 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
             let level = game.level(game.dim.id()).unwrap();
             let stack = ItemStack::new("minecraft:apple", 1);
             let item = game
-                .level_spawn_item(level, 1.5, 70.0, 1.5, stack, 10)
+                .level_spawn_item(level, 1.5, 65.25, 1.5, stack, 10)
                 .unwrap();
-            if let Some(i) = game.dropped.iter_mut().find(|i| i.id == item.id()) {
-                i.velocity = sunrise_core::geometry::Vec3::ZERO;
-            }
+            let falling = game.dropped.iter_mut().find(|i| i.id == item.id()).unwrap();
+            falling.no_gravity = true;
+            falling.fall_distance = 4.75;
+            falling.velocity = sunrise_core::geometry::Vec3::new(0.0, -0.5, 0.0);
             // The part's write destroys the stone after the batch; it is put back at once,
             // so the item rests on it again and must not be heard landing twice.
             let mut destructions = 0;
@@ -231,6 +236,12 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
                 );
                 if game.world.block(1, 64, 1) == air {
                     destructions += 1;
+                    let landed = game.dropped.iter().find(|i| i.id == item.id()).unwrap();
+                    assert_eq!(landed.fall_distance, 0.0);
+                    assert_eq!(
+                        landed.velocity.y, 0.0,
+                        "stone cancels the edited downward velocity"
+                    );
                     game.world.set(1, 64, 1, stone).unwrap();
                     let heard = heard.0.lock().unwrap();
                     assert_eq!(heard.len(), 1, "the write landed after the batch");
@@ -243,8 +254,8 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
             assert_eq!(*entity, item.id() as i32);
             assert_eq!(kind, "minecraft:item");
             assert_eq!(*pos, BlockPos::new(1, 64, 1));
-            // From rest at y 70 onto the stone's top at 65.
-            assert!((distance - 5.0).abs() < 1e-3, "fell {distance}");
+            // The actual final move adds 0.25 to the 4.75 stored before it.
+            assert_eq!(*distance, 5.0);
             assert_eq!(*damage, 0.0);
         });
     });

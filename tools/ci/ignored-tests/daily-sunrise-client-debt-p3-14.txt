@@ -1,0 +1,2 @@
+sunrise-client game::native_hooks::block_landing::landing_tests::harmless_player_landing_publishes_motion_to_the_controlling_client lib daily resources
+sunrise-client game::native_hooks::farmland_trample::tests::a_trampling_mob_notifies_the_original_farmland_part lib daily resources

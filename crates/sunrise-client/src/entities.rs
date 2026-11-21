@@ -411,20 +411,14 @@ impl crate::entity_rules::EntityRules for ArmorStand {
 #[derive(Clone, Copy)]
 pub struct ItemStep {
     old_velocity: Vec3,
-    landed: Option<(BlockPos, f64)>,
     movement: Option<Vec3>,
     pub vertical_contact: Option<BlockPos>,
     /// `Entity.move` with physics: where it started, what it moved, and
     /// whether the move was applied. `None` while idle or without physics,
     /// where `checkFallDamage` does not run.
-    pub fall_move: Option<(Vec3, Vec3, bool)>,
-    prior_fall: f64,
-}
-impl ItemStep {
-    /// The landing position and accumulated fall distance, before block contact.
-    pub fn landed(&self) -> Option<(BlockPos, f64)> {
-        self.landed
-    }
+    fall_move: Option<(Vec3, Vec3, bool)>,
+    /// Wanted motion and whether the pre-fall effect state bounces.
+    collision: Option<(Vec3, bool)>,
 }
 #[cfg(test)]
 impl ItemEntity {

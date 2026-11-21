@@ -1956,7 +1956,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: sunrise_client::block_contact::Hooks =
             HitLevel(level.reborrow()).native_bounce_on(
                 crate::game::native_hooks::fire::BounceOnCall {
                     dimension,
-                    entity: mod_api::LandingEntity::new(entity),
+                    entity: &mod_api::LandingEntity::new(entity),
                     state,
                     pos,
                     fall_distance,

@@ -970,7 +970,7 @@ impl Game<'_> {
             item.push_by_fluid(&self.world, &self.res.motion().fluids, &self.loop_context);
         item.water_entry(heights.0 > 0.0, item.ticks == 0, before, splash);
         item.lava_fall(heights.1 > 0.0);
-        let mut step = item.tick_move_before_block_effects(
+        let step = item.tick_move_until_fall(
             &self.world,
             self.res.facts(),
             self.collision,
@@ -982,12 +982,13 @@ impl Game<'_> {
             Some(&self.res.motion().blocks),
             &self.loop_context,
         );
-        item.check_fall(&mut step, |fall, from, moved| {
+        let landed = item.check_fall(&step, |fall, from, moved| {
             self.vehicle_fall_reset(fall, from, moved)
         });
-        if !client && let Some((on, distance)) = step.landed() {
-            self.item_fall_on(item, on, distance);
+        if !client && let Some(on) = landed {
+            self.item_fall_on(item, on);
         }
+        item.finish_move_restitution(&step);
         if !client {
             // `Entity.applyEffectsFromBlocks`' checkInsideBlocks, at the batch.
             self.sweep_item_inside(item);

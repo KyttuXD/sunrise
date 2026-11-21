@@ -20,7 +20,7 @@ impl ItemEntity {
         blocks: Option<&sunrise_world::movement_properties::BoundMovementProperties>,
         context: &sunrise_world::native_load_context::LoopContext,
     ) -> ItemStep {
-        let step = self.tick_move_before_block_effects(
+        let step = self.tick_move_until_fall(
             world,
             facts,
             collision,
@@ -32,15 +32,16 @@ impl ItemEntity {
             blocks,
             context,
         );
+        let _ = self.check_fall(&step, |fall, _, _| fall);
+        self.finish_move_restitution(&step);
         self.finish_move_block_effects(world, facts, no_physics, blocks, step, context);
         step
     }
 
-    /// `Entity.move`: resolve the item's move before the owner handles block
-    /// contact and resumes block effects. `escape_speed`: with `no_physics`
-    /// on a server, the speed of `Entity.moveTowardsClosestSpace`
-    /// (`nextFloat() * 0.2 + 0.1`).
-    pub fn tick_move_before_block_effects(
+    /// Resolve the item's move, stopping before `Entity.checkFallDamage` and
+    /// collision restitution. `escape_speed`: with `no_physics` on a server,
+    /// the speed of `Entity.moveTowardsClosestSpace` (`nextFloat() * 0.2 + 0.1`).
+    pub fn tick_move_until_fall(
         &mut self,
         world: &World,
         facts: &BlockFacts,
@@ -58,7 +59,6 @@ impl ItemEntity {
         if self.pickup_delay > 0 && !self.has_infinite_pickup_delay() {
             self.pickup_delay -= 1;
         }
-        let prior_fall = self.fall_distance;
         let old_velocity = self.velocity;
         // Entity.updateInWaterStateAndDoFluidPushing: touching water resets the fall.
         if water_height > 0.0 {
@@ -146,22 +146,8 @@ impl ItemEntity {
                     self.position.z + moved.z,
                 );
             }
-            let mut landed = None;
             if !no_physics {
                 self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
-                // Entity.checkFallDamage: the move's drop counts out of water, and a landing
-                // hands the whole fall to the block below (`getOnPosLegacy`).
-                if water_height <= 0.0 && moved.y < 0.0 {
-                    self.fall_distance -= f64::from(moved.y as f32);
-                }
-                if self.on_ground {
-                    if self.fall_distance > 0.0 {
-                        let below = Vec3::new(0.0, -f64::from(0.2_f32), 0.0);
-                        let on = BlockPos::containing(self.position.add_vector(below));
-                        landed = Some((on, self.fall_distance));
-                    }
-                    self.fall_distance = 0.0;
-                }
             }
             // Entity.move: what the move was stopped on. They outlive the
             // tick, as vanilla's fields do, for the tracker that sends the
@@ -170,34 +156,19 @@ impl ItemEntity {
             // `Mth.equal` on x and z (1e-5 as a float), exact on y.
             let differs = |a: f64, b: f64| (b - a).abs() >= 9.999_999_747_378_752e-6;
             self.horizontal_collision = differs(moved.x, wanted.x) || differs(moved.z, wanted.z);
-            if moved.x != wanted.x {
-                self.velocity.x = 0.0;
-            }
-            if moved.z != wanted.z {
-                self.velocity.z = 0.0;
-            }
-            let vertical_contact = if self.vertical_collision && !no_physics {
-                let contact = self.vertical_contact(world, collision, blocks, moved);
-                let slime =
-                    self.on_ground && contact.is_some_and(|pos| slime_at(world, facts, pos));
-                self.velocity.y = vertical_collision_velocity(
-                    wanted.y,
-                    moved.y,
-                    ITEM_GRAVITY,
-                    self.on_ground,
-                    slime,
-                );
-                contact
-            } else {
-                None
-            };
+            let vertical_contact = (self.vertical_collision && !no_physics)
+                .then(|| self.vertical_contact(world, collision, blocks, moved))
+                .flatten();
+            // `Entity.move` captures the effect state before `fallOn`, even if
+            // the block then changes. Restitution uses the velocity left by `fallOn`.
+            let slime =
+                self.on_ground && vertical_contact.is_some_and(|pos| slime_at(world, facts, pos));
             return ItemStep {
                 old_velocity,
                 vertical_contact,
                 movement: Some(moved),
-                landed,
-                prior_fall,
                 fall_move: (!no_physics).then_some((from, moved, applied)),
+                collision: (!no_physics).then_some((wanted, slime)),
             };
         }
         // applyEffectsFromBlocksForLastMovements: still lift/drag while idle.
@@ -206,11 +177,36 @@ impl ItemEntity {
         }
         ItemStep {
             old_velocity,
-            landed: None,
             vertical_contact: None,
             movement: None,
-            prior_fall,
             fall_move: None,
+            collision: None,
+        }
+    }
+
+    /// Finish `Entity.checkFallDamage` and `restituteMovementAfterCollisions`
+    /// after the landing block has acted on the live item.
+    pub fn finish_move_restitution(&mut self, step: &ItemStep) {
+        let (Some(moved), Some((wanted, slime))) = (step.movement, step.collision) else {
+            return;
+        };
+        if self.on_ground {
+            self.fall_distance = 0.0;
+        }
+        if moved.x != wanted.x {
+            self.velocity.x = 0.0;
+        }
+        if moved.z != wanted.z {
+            self.velocity.z = 0.0;
+        }
+        if self.vertical_collision {
+            self.velocity.y = vertical_collision_velocity(
+                self.velocity.y,
+                moved.y,
+                ITEM_GRAVITY,
+                self.on_ground,
+                slime,
+            );
         }
     }
 

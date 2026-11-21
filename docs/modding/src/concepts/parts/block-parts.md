@@ -152,15 +152,18 @@ template block writes still call the rotation Part at their placed world positio
 ## Landing and bounce callbacks
 
 `BlockPart::fall_on` (hook version 3, `Block.fallOn`) and `BlockPart::bounce_on`
-(hook version 2, `Block.bounceOn`) run synchronously inside the entity's move on a
+(hook version 3, `Block.bounceOn`) run synchronously inside the entity's move on a
 read-only `LevelRandomHost` (reads blocks, draws the level's live random stream in
 vanilla's order, and accesses attachments).
 
-Both events lend the falling or bouncing entity directly as `event.entity: LandingEntity<'_>`,
+Both events lend the falling or bouncing entity directly as `event.entity`,
 exposing its id, type kind, position, block position, velocity, fall distance, ground state,
 `is_crouching()`, `is_suppressing_bounce()` (matching `Entity.isSuppressingBounce` /
-`Entity.isShiftKeyDown` as checked by `SlimeBlock.fallOn`), and bounding-box dimensions,
-plus direct `set_velocity` (rejecting non-finite components) and `reset_fall_distance`.
+`Entity.isShiftKeyDown` as checked by `SlimeBlock.fallOn`), and bounding-box dimensions.
+At `fall_on`, the view also supports direct `set_velocity` (rejecting non-finite components) and
+`reset_fall_distance`. The server publishes player velocity edits to the controlling client.
+At `bounce_on`, the entity is shared and its velocity describes the pre-bounce entity;
+write through `event.movement` to set the movement the bounce actually leaves.
 
 `fall_on` exposes writable `event.distance` and `event.damage_multiplier`, not calculated
 damage. Vanilla blocks supply their own pair: hay uses 0.2, beds 0.5, slime 0,
