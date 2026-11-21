@@ -1,3 +1,39 @@
-ids = ["type:RuntimeGenerator", "type:RuntimeLevel", "type:RuntimeLevelError", "type:RuntimeLevelError.OutsideNamespace", "type:RuntimeLevelError.NoiseUnsupported", "type:RuntimeLevelError.CapReached", "type:RuntimeLevelError.UnknownStem", "handle:RuntimeLevel::new", "handle:RuntimeLevel::flat", "handle:RuntimeLevel::void", "handle:RuntimeLevel::from_stem", "method:RuntimeLevels::open", "method:RuntimeLevels::unload", "method:RuntimeLevels::delete", "type:DimensionSettings", "handle:DimensionSettings::invalid_biome_source"]
-why = "Runtime instances now reuse a registered stem's dimension type, generator, settings and biome source without substituting the generator or inventing options. This follows vanilla LevelStem.CODEC, ChunkGenerator.CODEC, BiomeSource.CODEC and ChunkMap's non-noise RandomState, and NeoForge's LevelStem.CODEC composition. Runtime lifecycle remains Sunrise-only; the namespace gate and artificial level count are gone. Registered chunk generators can use non-fixed biome sources."
-migrate = "Replace RuntimeLevel::new(type, RuntimeGenerator::Flat, seed) with RuntimeLevel::flat(type, seed) and RuntimeGenerator::Void with RuntimeLevel::void(type, seed). Replace RuntimeLevel::new(type, RuntimeGenerator::Mod(generator), seed) with RuntimeLevel::from_stem(stem_id, seed): declare that stem at startup via register_dimension (put generator, biome source and noise settings on that DimensionSettings) or provide the matching dimension entry in a data pack. If you attempted RuntimeGenerator::Noise, use from_stem with a registered noise stem. Replace field access with matching RuntimeLevel::{Flat,Void,Stem}; Stem has stem and seed, not separate type and generator fields. RuntimeLevel and RuntimeLevelError no longer implement Wire. Stop matching OutsideNamespace, CapReached and NoiseUnsupported; handle UnknownStem when the named stem is absent and UnknownGenerator when its generator is unsupported. open, unload and delete still take the instance id, which need not be in the calling mod's namespace; reserved ids and lifecycle refusals remain. Remove sunrise-max-runtime-levels from server properties. For a custom generator, choose the normal DimensionSettings biome_source and its settings, or mod_biome_source; no fixed-biome restriction remains."
+ids = [
+    "type:RuntimeGenerator",
+    "type:RuntimeGenerator.Flat",
+    "type:RuntimeGenerator.Void",
+    "type:RuntimeGenerator.Mod",
+    "type:RuntimeGenerator.Noise",
+    "type:RuntimeLevel",
+    "type:RuntimeLevel.dimension_type",
+    "type:RuntimeLevel.generator",
+    "type:RuntimeLevel.seed",
+    "type:RuntimeLevel.Flat",
+    "type:RuntimeLevel.Void",
+    "type:RuntimeLevel.Stem",
+    "handle:RuntimeLevel::new",
+    "handle:RuntimeLevel::flat",
+    "handle:RuntimeLevel::void",
+    "handle:RuntimeLevel::from_stem",
+    "type:RuntimeLevelError",
+    "type:RuntimeLevelError.OutsideNamespace",
+    "type:RuntimeLevelError.NoiseUnsupported",
+    "type:RuntimeLevelError.CapReached",
+    "type:RuntimeLevelError.UnknownStem",
+    "type:RuntimeLevelError.UnknownGenerator",
+    "type:RuntimeLevelError.UnknownDimensionType",
+    "type:RuntimeLevelError.NotOpen",
+    "method:RuntimeLevels::open",
+    "method:RuntimeLevels::unload",
+    "method:RuntimeLevels::delete",
+    "type:DimensionSettings.biome_source",
+    "handle:DimensionSettings::invalid_biome_source",
+]
+why = "Vanilla LevelStem.CODEC and NeoForge's LevelStem.CODEC patch keep a dimension type and its complete generator together. Vanilla ChunkGenerator.doCreateBiomes delegates to the configured BiomeSource; ChunkMap uses NoiseRouterData.none() for a non-noise generator. Startup and runtime stems can now use compatible non-fixed biome sources with a registered generator. CommonPlayerSpawnInfo uses DimensionType.STREAM_CODEC, so a runtime instance needs an already registered dimension type. Vanilla has no runtime open or close API: Sunrise keeps its queued lifecycle, but drops the unimplemented generator option, caller namespace gate and artificial level count."
+migrate = """
+- Replace `RuntimeLevel::new(type_id, RuntimeGenerator::Flat, seed)` with `RuntimeLevel::flat(type_id, seed)`, and `RuntimeLevel::new(type_id, RuntimeGenerator::Void, seed)` with `RuntimeLevel::void(type_id, seed)`.
+- Replace `RuntimeLevel::new(type_id, RuntimeGenerator::Mod(generator_id), seed)` with `RuntimeLevel::from_stem(stem_id, seed)`. Declare that stem with `register_dimension` or a dimension data pack. Put the generator id, biome source and any noise settings in that declaration; pass its level id, not its generator id, to `from_stem`. For noise, use `from_stem` with a registered noise stem instead of `RuntimeGenerator::Noise`.
+- Replace direct `.dimension_type`, `.generator` and `.seed` reads with a match on the request (`RuntimeLevel::Flat { dimension_type, seed }`, `RuntimeLevel::Void { dimension_type, seed }`, `RuntimeLevel::Stem { stem, seed }`, and a catch-all arm). The `Stem` variant has the stem id, not separate type and generator identifiers. `RuntimeLevel` and `RuntimeLevelError` are in-process values and no longer implement `Wire`.
+- Remove `OutsideNamespace`, `CapReached` and `NoiseUnsupported` from `RuntimeLevelError` matches and remove `sunrise-max-runtime-levels` from server properties. Handle `UnknownStem` if the source stem is absent, `UnknownGenerator` if the stem's generator is unsupported, and `UnknownDimensionType` if the type name does not resolve. `open`, `unload` and `delete` keep taking the instance id, in any namespace; reserved ids, unsafe paths and the existing lifecycle checks still refuse. Observe `is_open` after the queue runs; a stem that cannot be built is logged and its instance is not published.
+- Keep using `DimensionSettings::biome_source` or `mod_biome_source` at startup. Custom generators no longer require `Fixed`. A custom stem in a data pack or save must include a valid `generator.biome_source`; write `{ "type": "minecraft:fixed", "biome": "minecraft:plains" }` explicitly if that is the intended source. A terrain-only generator does not need noise settings.
+"""

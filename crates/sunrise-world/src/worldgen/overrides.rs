@@ -434,6 +434,11 @@ impl WorldgenOverrides {
         };
         i32::try_from(settings["sea_level"].as_i64()?).ok()
     }
+    /// The winning entry named `id` in this bundle, if a mod or pack supplies it.
+    pub fn entry(&self, bundle: &str, id: &str) -> Option<&str> {
+        self.entries.get(bundle)?.get(id).map(String::as_str)
+    }
+
     /// The entries packs give `bundle`.
     pub fn entries(&self, bundle: &str) -> impl Iterator<Item = (&str, &str)> {
         self.entries

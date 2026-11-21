@@ -1,2 +1,3 @@
 sunrise-client game::runtime_levels_tests::runtime_ids_can_cross_namespaces_but_must_be_safe_and_unreserved lib daily resources
 sunrise-client game::runtime_levels_tests::delete_accepts_other_namespaces_but_protects_builtin_levels_and_unsafe_paths lib daily resources
+sunrise-client game::world_loading::tests::a_pack_can_compose_non_fixed_biomes_with_registered_generators lib daily resources

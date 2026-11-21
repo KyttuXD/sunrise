@@ -2769,7 +2769,17 @@ impl OverworldGenerator {
         if stem["generator"]["type"].as_str() != Some("minecraft:noise") {
             return Err(resource(format!("{dimension} is not a noise generator")));
         }
-        Self::from_stem(data, seed, &stem, with_structures, regions, None)
+        Self::for_noise_stem(data, seed, &stem, with_structures, regions)
+    }
+    /// Build a stem already selected as a noise generator against the world's registries.
+    pub fn for_noise_stem(
+        data: Arc<GeneratorData>,
+        seed: i64,
+        stem: &Value,
+        with_structures: bool,
+        regions: Option<Arc<RegionLayout>>,
+    ) -> Result<Self, GeneratorError> {
+        Self::from_stem(data, seed, stem, with_structures, regions, None)
     }
     /// The pipeline of level `stem` over its noise settings, with a mod's `terrain` in place of
     /// the noise when it has one.

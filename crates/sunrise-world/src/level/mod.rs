@@ -268,6 +268,14 @@ pub fn register_sea_level(level: LevelKey, sea_level: i32) {
         .insert(level, sea_level);
 }
 
+/// Remove a closed level's generator-specific sea level along with the level.
+pub fn remove_sea_level(level: LevelKey) {
+    SEA_LEVELS
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&level);
+}
+
 /// The sea level a mod's level was registered with, if it has one.
 pub fn registered_sea_level(level: LevelKey) -> Option<i32> {
     SEA_LEVELS

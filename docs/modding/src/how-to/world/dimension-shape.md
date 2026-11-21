@@ -86,8 +86,12 @@ The level's biomes are the one `biome` everywhere unless `biome_source` says oth
 erosion, depth and weirdness, and an `offset` from 0 to 1. The biome whose point is nearest to the level's
 climate at a position wins, as in a data pack's `minecraft:multi_noise` source with an inline `biomes` list;
 the biomes can be the mod's own or vanilla's. A mod's points shape its own level only: placing a mod's biomes
-among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md). A registered chunk generator can use the same biome sources as vanilla noise. `mod_biome_source` names a [biome source](#biome-sources) a
-mod registered instead, for either generator.
+among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md).
+A registered chunk generator can use the same biome sources as vanilla noise. One that uses no
+vanilla stages does not need noise settings: multi-noise and the End source read zero-valued
+climate and erosion channels, as with vanilla's non-noise generators. A generator that runs
+vanilla stages uses the stem's configured noise settings. `mod_biome_source` names a
+[biome source](#biome-sources) a mod registered instead, for either generator.
 
 A dimension in an unowned namespace, an empty name, a name that is not a folder of the world
 (lowercase letters, digits and `_ . -` only, with `/` between segments that are not empty, `.` or
@@ -98,8 +102,8 @@ may come from a mod that loads later.
 
 A registered dimension is the level stem and dimension type a data pack would give, below every
 data pack: a pack with `data/mymod/dimension/pocket.json` or `data/mymod/dimension_type/pocket.json`
-replaces that half of it, in the worlds that have the pack.
-
+replaces that half of it, in the worlds that have the pack. To reuse that composition under a new
+level id, pass the registered stem id to [`RuntimeLevel::from_stem`](runtime-levels.md).
 
 ## Sending a player to a dimension
 

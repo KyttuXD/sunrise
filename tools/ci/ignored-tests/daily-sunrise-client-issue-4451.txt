@@ -2640,7 +2640,6 @@ sunrise-client game::world_fluids_tests::a_second_pickup_of_one_source_in_a_tran
 sunrise-client game::world_fluids_tests::an_aborted_placement_over_a_skull_leaves_it_and_drops_nothing lib daily resources
 sunrise-client game::world_fluids_tests::the_call_time_answer_stands_when_the_block_changes_before_the_commit lib daily resources
 sunrise-client game::world_loading::tests::a_loaded_missing_biome_survives_a_game_save_with_an_enabled_biome_pack lib daily resources
-sunrise-client game::world_loading::tests::a_stem_naming_a_mods_generator_opens_on_mod_terrain lib daily resources
 sunrise-client game::world_loading::tests::a_world_saved_with_other_mod_versions_fires_mod_mismatch lib daily resources
 sunrise-client game::world_loading::tests::both_server_roles_record_regions_before_world_generation lib daily resources
 sunrise-client game::world_loading::tests::creation_rule_selection_reaches_the_saved_world lib daily resources

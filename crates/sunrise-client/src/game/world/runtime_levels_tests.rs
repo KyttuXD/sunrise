@@ -13,12 +13,11 @@ fn flat() -> RuntimeLevel {
     RuntimeLevel::flat("minecraft:overworld", 1)
 }
 
-fn prepared_flat(id: &str, seed: i64) -> OpenLevel {
+fn prepared_flat(seed: i64) -> OpenLevel {
     OpenLevel::resolve(
-        Default::default(),
-        id,
+        &Default::default(),
         RuntimeLevel::flat("minecraft:overworld", seed),
-        |_| false,
+        &Default::default(),
     )
     .unwrap()
 }
@@ -28,7 +27,7 @@ fn the_runtime_table_does_not_limit_the_number_of_levels() {
     let mut table = RuntimeTable::default();
     for n in 0..65 {
         let id = format!("instances:l{n}");
-        assert!(table.queue_open("test", &id, prepared_flat(&id, 1)).is_ok());
+        assert!(table.queue_open("test", &id, prepared_flat(1)).is_ok());
     }
     assert_eq!(table.seeds().len(), 65);
 }
@@ -36,18 +35,14 @@ fn the_runtime_table_does_not_limit_the_number_of_levels() {
 #[test]
 fn an_id_is_open_once_and_each_open_has_its_own_generation() {
     let mut table = RuntimeTable::default();
-    let first = table
-        .queue_open("test", "gen:a", prepared_flat("gen:a", 1))
-        .unwrap();
+    let first = table.queue_open("test", "gen:a", prepared_flat(1)).unwrap();
     assert_eq!(
-        table.queue_open("test", "gen:a", prepared_flat("gen:a", 1)),
+        table.queue_open("test", "gen:a", prepared_flat(1)),
         Err(RuntimeLevelError::AlreadyOpen)
     );
     assert_eq!(table.generation_of("gen:a"), first);
     table.remove("gen:a");
-    let second = table
-        .queue_open("test", "gen:a", prepared_flat("gen:a", 1))
-        .unwrap();
+    let second = table.queue_open("test", "gen:a", prepared_flat(1)).unwrap();
     assert_ne!(first, second);
     assert_eq!(table.generation_of("gen:a"), second);
     assert_eq!(table.generation_of("minecraft:the_nether"), 0);
@@ -57,7 +52,7 @@ fn an_id_is_open_once_and_each_open_has_its_own_generation() {
 fn a_level_is_open_after_its_request_is_applied_and_until_its_close_is() {
     let mut table = RuntimeTable::default();
     table
-        .queue_open("test", "state:a", prepared_flat("state:a", 1))
+        .queue_open("test", "state:a", prepared_flat(1))
         .unwrap();
     assert!(!table.is_open("state:a"));
     assert_eq!(
@@ -789,9 +784,7 @@ fn a_delete_of_a_level_still_waiting_to_open_is_refused() {
 #[test]
 fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() {
     let mut table = RuntimeTable::default();
-    table
-        .queue_open("test", "del:a", prepared_flat("del:a", 1))
-        .unwrap();
+    table.queue_open("test", "del:a", prepared_flat(1)).unwrap();
     assert_eq!(
         table.queue_delete("test", "del:a"),
         Err(RuntimeLevelError::AlreadyOpen)
@@ -804,7 +797,7 @@ fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() 
         Err(RuntimeLevelError::NotOpen)
     );
     assert_eq!(
-        table.queue_open("test", "del:a", prepared_flat("del:a", 1)),
+        table.queue_open("test", "del:a", prepared_flat(1)),
         Err(RuntimeLevelError::AlreadyOpen),
         "no reopen until the delete is applied"
     );
@@ -1316,7 +1309,7 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
         let key = sunrise_core::LevelKey::parse("cycle:a").unwrap();
         let mut first = None;
         for seed in [1, 2, 3, i64::MIN, i64::MAX] {
-            let level = prepared_flat("cycle:a", seed);
+            let level = prepared_flat(seed);
             game.levels
                 .runtime
                 .queue_open("cycle", "cycle:a", level)

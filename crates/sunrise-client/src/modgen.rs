@@ -21,7 +21,7 @@ use sunrise_world::{
         biome_source::ResolvedBiomeSource,
         climate::ClimateSampler,
         mod_biome_sources::{LevelBiomeSource, ModBiomeSources},
-        mod_generators::{ChunkAccess, ModChunkGenerator, ModChunkGenerators},
+        mod_generators::{ChunkAccess, ModChunkGenerator},
         structure::legacy::block_state,
     },
 };
@@ -49,80 +49,63 @@ enum Biomes {
 }
 
 impl ModTerrain {
-    /// The terrain of the level `level` with stem `stem`, if `generators` has the
-    /// generator it names and it asks for no vanilla stage. Resolve its biome source against
-    /// the world's registries; a source or a biome the world lacks refuses the level.
-    pub fn for_stem(
+    /// Pair a terrain-only generator with its biome source, resolving the source against the
+    /// world's registries before any worker can use it.
+    pub fn new(
         level: &str,
-        stem: &serde_json::Value,
-        generators: &ModChunkGenerators,
+        source: &serde_json::Value,
+        generator: Arc<dyn ModChunkGenerator>,
         sources: &ModBiomeSources,
         registry: &'static BlockRegistry,
         biome_id: impl Fn(&str) -> Option<u16>,
         shape: LevelShape,
         seed: i64,
         resolve_builtin: impl FnOnce(&serde_json::Value) -> Result<ResolvedBiomeSource, String>,
-    ) -> Option<Result<Self, String>> {
-        let generator = generators.get(stem["generator"]["type"].as_str()?)?.clone();
-        if generator.vanilla_stages().any() {
-            return None;
-        }
-        let source = &stem["generator"]["biome_source"];
-        let Some(kind) = source["type"]
+    ) -> Result<Self, String> {
+        let kind = source["type"]
             .as_str()
             .and_then(|name| Identifier::parse(name).ok())
-        else {
-            return Some(Err("missing biome source type".into()));
-        };
+            .ok_or("missing or invalid biome source type")?;
         let biomes = match (kind.namespace(), kind.path()) {
             ("minecraft", "fixed") => {
-                let Some(biome) = source["biome"]
+                let biome = source["biome"]
                     .as_str()
                     .and_then(|name| Identifier::parse(name).ok())
-                else {
-                    return Some(Err("fixed biome source has no biome".into()));
-                };
-                match biome_id(&biome.to_string()) {
-                    Some(id) => Biomes::Fixed(id),
-                    None => return Some(Err(format!("unknown biome {biome}"))),
-                }
+                    .ok_or("fixed biome source has no valid biome id")?;
+                Biomes::Fixed(
+                    biome_id(&biome.to_string()).ok_or_else(|| format!("unknown biome {biome}"))?,
+                )
             }
             ("minecraft", "checkerboard" | "multi_noise" | "the_end") => {
-                let source = match resolve_builtin(source) {
-                    Ok(source) => source,
-                    Err(error) => return Some(Err(error)),
-                };
+                let source = resolve_builtin(source)?;
                 let mut ids = BTreeMap::new();
                 for name in source.possible_biomes() {
-                    let Some(id) = biome_id(name) else {
-                        return Some(Err(format!(
-                            "biome source {kind} names the unknown biome {name}"
-                        )));
-                    };
+                    let id = biome_id(name).ok_or_else(|| {
+                        format!("biome source {kind} names the unknown biome {name}")
+                    })?;
                     ids.insert(name.to_owned(), id);
                 }
                 if ids.is_empty() {
-                    return Some(Err(format!("biome source {kind} has no biomes")));
+                    return Err(format!("biome source {kind} has no biomes"));
                 }
                 Biomes::BuiltIn {
                     source: Box::new(source),
                     ids,
                 }
             }
-            _ => match LevelBiomeSource::resolve(&kind.to_string(), sources, seed, &biome_id) {
-                Some(Ok(source)) => Biomes::Registered(source),
-                Some(Err(refusal)) => return Some(Err(refusal)),
-                None => return Some(Err(format!("unknown biome source {kind}"))),
-            },
+            _ => Biomes::Registered(
+                LevelBiomeSource::resolve(&kind.to_string(), sources, seed, &biome_id)
+                    .ok_or_else(|| format!("unknown biome source {kind}"))??,
+            ),
         };
-        Some(Ok(Self {
+        Ok(Self {
             generator,
             registry,
             shape,
             biomes,
             level: level.into(),
             seed,
-        }))
+        })
     }
 }
 
@@ -208,7 +191,7 @@ impl ChunkGenerator for ModTerrain {
                     }))
                 });
                 let mut resolver = source.resolver(&ZERO_CLIMATE, &ConstantSampler(0.0));
-                let mut context = SamplerContext::cached();
+                let mut context = SamplerContext::default();
                 fill_biomes(&mut chunk, cx, cz, |quart| {
                     let name = resolver
                         .sample(&mut context, quart)
@@ -236,6 +219,7 @@ impl ChunkGenerator for ModTerrain {
 mod tests {
     use super::*;
     use serde_json::json;
+    use sunrise_world::worldgen::mod_generators::ModChunkGenerators;
     use sunrise_world::worldgen::{mod_biome_sources::ModBiomeSource, overrides::ModDimension};
 
     const STONE: BlockStateId = BlockStateId(1);
@@ -319,7 +303,9 @@ mod tests {
         ModTerrain::new(
             "test:pocket",
             &stem["generator"]["biome_source"],
-            generators().get(stem["generator"]["type"].as_str()?)?.clone(),
+            generators()
+                .get(stem["generator"]["type"].as_str()?)?
+                .clone(),
             &sources,
             registry(),
             biome_id,
@@ -327,7 +313,7 @@ mod tests {
             seed,
             |_| unreachable!("fixed or registered source"),
         )
-        .map(Result::unwrap)
+        .ok()
     }
 
     fn oasis_stem() -> serde_json::Value {
@@ -384,7 +370,6 @@ mod tests {
                 |_| unreachable!("fixed or registered source"),
             )
             .unwrap()
-            .unwrap()
         };
         let (alpha, beta) = (
             chunk(&open("test:alpha"), 0, 0),
@@ -423,26 +408,19 @@ mod tests {
         assert_eq!(chunk.block(0, 319, 0), BEDROCK);
     }
 
-    #[test]
-    fn a_checkerboard_source_fills_the_biomes_of_terrain_only_chunks() {
+    fn terrain_with_builtin_source(source: &serde_json::Value) -> ModTerrain {
         use sunrise_world::worldgen::biome_source::BiomeSourceCatalog;
 
-        let mut stem = stem("test:slab");
-        stem["generator"]["biome_source"] = json!({
-            "type": "minecraft:checkerboard",
-            "biomes": ["minecraft:plains", "minecraft:desert"],
-            "scale": 0,
-        });
         let catalog = BiomeSourceCatalog::new(
             &["minecraft:plains".to_owned(), "minecraft:desert".to_owned()].into(),
             &Default::default(),
             &Default::default(),
         )
         .unwrap();
-        let terrain = ModTerrain::new(
+        ModTerrain::new(
             "test:pocket",
-            &stem["generator"]["biome_source"],
-            generators()["test:slab"].clone(),
+            source,
+            Arc::new(Slab),
             &sources(&[]),
             registry(),
             biome_id,
@@ -457,18 +435,45 @@ mod tests {
             },
         )
         .unwrap()
-        .unwrap();
+    }
+
+    #[test]
+    fn a_checkerboard_source_fills_the_biomes_of_terrain_only_chunks() {
+        let terrain = terrain_with_builtin_source(&json!({
+            "type": "minecraft:checkerboard",
+            "biomes": ["minecraft:plains", "minecraft:desert"],
+            "scale": 0,
+        }));
         // At scale 0 each checker cell is one chunk; negative cells wrap by floor modulus.
         assert_eq!(chunk(&terrain, 0, 0).biome(0, -64, 0), 0);
         assert_eq!(chunk(&terrain, 1, 0).biome(15, 319, 15), 3);
         assert_eq!(chunk(&terrain, -1, 0).biome(0, 0, 0), 3);
     }
 
+    #[test]
+    fn a_terrain_only_generator_samples_zero_climate() {
+        let point = |biome, temperature| {
+            json!({
+                "biome": biome,
+                "parameters": {
+                    "temperature": temperature, "humidity": 0, "continentalness": 0,
+                    "erosion": 0, "depth": 0, "weirdness": 0, "offset": 0,
+                },
+            })
+        };
+        let terrain = terrain_with_builtin_source(&json!({
+            "type": "minecraft:multi_noise",
+            "biomes": [point("minecraft:plains", 1), point("minecraft:desert", 0)],
+        }));
+        assert_eq!(chunk(&terrain, 0, 0).biome(0, -64, 0), 3);
+        assert_eq!(chunk(&terrain, -10, 20).biome(15, 319, 15), 3);
+    }
+
     /// The oasis cell of chunk 3 -2 at seed 2 is blocks 52..56, 28..32 and
     /// -28..-24: chunk columns 4..8, and plains around it.
     #[test]
     fn a_registered_sources_biome_is_what_the_chunk_gets_at_its_quart_cell() {
-        let terrain = terrain(&oasis_stem(), LevelShape::OVERWORLD, 2).unwrap();
+        let terrain = terrain(&oasis_stem(), LevelShape::NETHER, 2).unwrap();
         let chunk = chunk(&terrain, 3, -2);
         for [x, y, z] in [[4, 28, 4], [7, 31, 7], [5, 30, 6]] {
             assert_eq!(chunk.biome(x, y, z), 3, "{x} {y} {z}");
@@ -479,7 +484,7 @@ mod tests {
             [4, 27, 4],
             [4, 32, 4],
             [4, 28, 8],
-            [0, -64, 0],
+            [0, 0, 0],
         ] {
             assert_eq!(chunk.biome(x, y, z), 0, "{x} {y} {z}");
         }
@@ -501,7 +506,6 @@ mod tests {
                 0,
                 |_| unreachable!("fixed or registered source"),
             )
-            .unwrap()
             .err()
         };
         assert_eq!(
@@ -541,7 +545,6 @@ mod tests {
             2,
             |_| unreachable!("fixed or registered source"),
         )
-        .unwrap()
         .unwrap();
         let chunk = chunk(&terrain, 3, -2);
         let tables = crate::save::SaveTables::new(&assets);
@@ -567,76 +570,5 @@ mod tests {
         assert_eq!(name(8, 28, 4), "minecraft:plains");
         assert_eq!(name(4, 32, 4), "minecraft:plains");
         assert_eq!(name(0, -64, 0), "minecraft:plains");
-    }
-
-    /// A generator whose stages are all off makes the chunk it makes today,
-    /// its own blocks and nothing else; one that asks for any vanilla stage is
-    /// left to the vanilla pipeline.
-    #[test]
-    fn only_a_generator_without_vanilla_stages_makes_the_mods_terrain_alone() {
-        use sunrise_world::worldgen::mod_generators::VanillaStages;
-        struct Staged(VanillaStages);
-        impl ModChunkGenerator for Staged {
-            fn build_terrain(&self, chunk: &mut dyn ChunkAccess) {
-                Slab.build_terrain(chunk);
-            }
-            fn vanilla_stages(&self) -> VanillaStages {
-                self.0
-            }
-        }
-        let for_stem = |stages| {
-            let generators = ModChunkGenerators::from([(
-                "test:slab".to_owned(),
-                Arc::new(Staged(stages)) as Arc<dyn ModChunkGenerator>,
-            )]);
-            let stem = stem("test:slab");
-            ModTerrain::for_stem(
-                "test:pocket",
-                &stem,
-                &generators,
-                &sources(&["minecraft:plains"]),
-                registry(),
-                biome_id,
-                LevelShape::OVERWORLD,
-                5,
-                |_| unreachable!("fixed or registered source"),
-            )
-        };
-        let off = for_stem(VanillaStages::default()).unwrap().unwrap();
-        let chunk = chunk(&off, 3, -2);
-        assert_eq!(chunk.block(9, -60, 4), BlockStateId(0));
-        assert_eq!(chunk.block(9, -59, 4), STONE);
-        assert_eq!(chunk.block(9, -58, 4), BlockStateId(0));
-        assert_eq!(chunk.block(9, 63, 4), BlockStateId(0));
-        assert_eq!(chunk.block(0, 319, 0), BEDROCK);
-        for stages in [
-            VanillaStages {
-                surface: true,
-                ..Default::default()
-            },
-            VanillaStages {
-                carvers: true,
-                ..Default::default()
-            },
-            VanillaStages {
-                structures: true,
-                ..Default::default()
-            },
-            VanillaStages {
-                features: true,
-                ..Default::default()
-            },
-        ] {
-            assert!(for_stem(stages).is_none(), "{stages:?}");
-        }
-    }
-
-    /// Both stay on the game's own generator: noise as it always was, and a
-    /// generator nobody registered to its error.
-    #[test]
-    fn only_a_registered_generator_makes_mod_terrain() {
-        for generator in ["minecraft:noise", "test:gone"] {
-            assert!(terrain(&stem(generator), LevelShape::OVERWORLD, 0).is_none());
-        }
     }
 }

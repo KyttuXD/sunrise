@@ -276,6 +276,22 @@ impl VanillaTerrain {
         )?;
         Self::assemble(resources, generator, seed, preset, dimension)
     }
+    /// A runtime instance of a registered noise stem. The selected stem is already known,
+    /// so the instance uses the same worldgen registries without registering another entry.
+    pub fn for_noise_stem(
+        resources: TerrainResources<'_>,
+        overrides: &WorldgenOverrides,
+        seed: i64,
+        dimension: &str,
+        stem: &serde_json::Value,
+        structures: bool,
+        regions: Option<Arc<RegionLayout>>,
+    ) -> crate::Result<Self> {
+        let data = shared_resource_data(resources, overrides)?;
+        let generator = OverworldGenerator::for_noise_stem(data, seed, stem, structures, regions)?;
+        Self::assemble(resources, generator, seed, "minecraft:normal", dimension)
+    }
+
     /// A superflat overworld with the structures its settings allow
     /// (`FlatLevelSource`: its layers, `structure_overrides` and the fixed biome).
     pub fn for_flat(

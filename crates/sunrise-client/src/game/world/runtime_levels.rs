@@ -11,14 +11,14 @@ use super::{Dim, Game};
 use mod_api::{LevelRef, RuntimeLevel, RuntimeLevelError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use sunrise_client::chunk::{ExtraLevel, LevelShape};
-use sunrise_core::LevelKey;
+use sunrise_core::{LevelKey, identifier::Identifier};
 use sunrise_world::{
     dimension_type::DimensionFacts,
     worldgen::{
-        mod_generators::mod_chunk_generators,
-        overrides::{DIMENSIONS, WorldgenOverrides},
+        mod_generators::{ModChunkGenerator, ModChunkGenerators, mod_chunk_generators},
+        overrides::{DIMENSION_TYPES, DIMENSIONS, LevelHeight, WorldgenOverrides, mod_dimensions},
     },
 };
 
@@ -44,6 +44,7 @@ enum Request {
 }
 
 /// The runtime levels of one world open: pure bookkeeping, which the game applies.
+#[derive(Default)]
 pub(in crate::game) struct RuntimeTable {
     entries: BTreeMap<String, Entry>,
     /// Ids whose level is closed but whose files a delete could not all remove: not open, and not
@@ -56,21 +57,6 @@ pub(in crate::game) struct RuntimeTable {
     pub(super) fail_open_after_publication: bool,
     #[cfg(test)]
     pub(super) fail_erase: bool,
-}
-
-impl Default for RuntimeTable {
-    fn default() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-            erasing: BTreeSet::new(),
-            queue: Vec::new(),
-            last_generation: 0,
-            #[cfg(test)]
-            fail_open_after_publication: false,
-            #[cfg(test)]
-            fail_erase: false,
-        }
-    }
 }
 
 impl RuntimeTable {
@@ -297,69 +283,88 @@ pub(super) struct OpenLevel {
 
 impl OpenLevel {
     pub(super) fn resolve(
-        mut overrides: WorldgenOverrides,
-        id: &str,
+        overrides: &WorldgenOverrides,
         level: RuntimeLevel,
-        known_generator: impl Fn(&str) -> bool,
+        generators: &ModChunkGenerators,
     ) -> Result<Self, RuntimeLevelError> {
-        let (ty, generate, seed) = match level {
+        let (dimension_type, mut generate, seed) = match level {
             RuntimeLevel::Flat {
                 dimension_type,
                 seed,
-            } => (
-                serde_json::Value::String(dimension_type),
-                Generate::Flat,
-                seed,
-            ),
+            } => (dimension_type, Generate::Flat, seed),
             RuntimeLevel::Void {
                 dimension_type,
                 seed,
-            } => (
-                serde_json::Value::String(dimension_type),
-                Generate::Void,
-                seed,
-            ),
+            } => (dimension_type, Generate::Void, seed),
             RuntimeLevel::Stem { stem, seed } => {
-                let stem: serde_json::Value = overrides
-                    .entries(DIMENSIONS)
-                    .find(|(key, _)| *key == stem)
-                    .and_then(|(_, json)| serde_json::from_str(json).ok())
+                let id = Identifier::parse(&stem)
+                    .map_err(|_| RuntimeLevelError::UnknownStem)?
+                    .to_string();
+                let mut stem: serde_json::Value = overrides
+                    .entry(DIMENSIONS, &id)
+                    .and_then(|json| serde_json::from_str(json).ok())
                     .ok_or(RuntimeLevelError::UnknownStem)?;
-                if !stem["generator"]["type"]
+                let dimension_type = stem["type"]
                     .as_str()
-                    .is_some_and(|name| name == "minecraft:noise" || known_generator(name))
-                {
-                    return Err(RuntimeLevelError::UnknownGenerator);
-                }
-                (stem["type"].clone(), Generate::Stem(stem), seed)
+                    .ok_or(RuntimeLevelError::UnknownDimensionType)?
+                    .to_owned();
+                let generator_id = stem["generator"]["type"]
+                    .as_str()
+                    .and_then(|name| Identifier::parse(name).ok())
+                    .ok_or(RuntimeLevelError::UnknownGenerator)?
+                    .to_string();
+                stem["generator"]["type"] = serde_json::Value::String(generator_id.clone());
+                let generate = if generator_id == "minecraft:noise" {
+                    Generate::Noise(stem)
+                } else {
+                    let generator = generators
+                        .get(&generator_id)
+                        .ok_or(RuntimeLevelError::UnknownGenerator)?
+                        .clone();
+                    let sea_level = mod_dimensions()
+                        .iter()
+                        .find(|registered| registered.id == id)
+                        .and_then(|registered| registered.sea_level);
+                    Generate::Custom {
+                        stem,
+                        generator,
+                        sea_level,
+                    }
+                };
+                (dimension_type, generate, seed)
             }
             _ => return Err(RuntimeLevelError::UnknownGenerator),
         };
-        let dimension_type = ty
-            .as_str()
-            .ok_or(RuntimeLevelError::UnknownDimensionType)?
-            .to_owned();
-        overrides.set(DIMENSIONS, id, serde_json::json!({"type": ty}).to_string());
-        let shape = overrides
-            .level_height(id)
-            .and_then(|height| {
-                LevelShape::new(
-                    height.min_y,
-                    height.height,
-                    height.logical_height,
-                    height.has_skylight,
-                    height.has_ceiling,
-                )
-                .ok()
-            })
-            .ok_or(RuntimeLevelError::UnknownDimensionType)?;
-        let facts = overrides
-            .level_facts(id)
-            .and_then(Result::ok)
-            .ok_or(RuntimeLevelError::UnknownDimensionType)?;
-        let type_json = overrides
-            .level_type_json(id)
-            .map(|(_, json)| json.to_string());
+        let dimension_type = Identifier::parse(&dimension_type)
+            .map_err(|_| RuntimeLevelError::UnknownDimensionType)?
+            .to_string();
+        if let Generate::Noise(stem) | Generate::Custom { stem, .. } = &mut generate {
+            stem["type"] = serde_json::Value::String(dimension_type.clone());
+        }
+        let type_json = overrides.entry(DIMENSION_TYPES, &dimension_type);
+        let (height, facts) = if let Some(json) = type_json {
+            let definition =
+                serde_json::from_str(json).map_err(|_| RuntimeLevelError::UnknownDimensionType)?;
+            let height =
+                LevelHeight::of_json(&definition).ok_or(RuntimeLevelError::UnknownDimensionType)?;
+            let base = DimensionFacts::base_for_type(&dimension_type);
+            let facts = DimensionFacts::patched(base, &dimension_type, &definition)
+                .map_err(|_| RuntimeLevelError::UnknownDimensionType)?;
+            (height, facts)
+        } else {
+            let height = LevelHeight::vanilla(&dimension_type)
+                .ok_or(RuntimeLevelError::UnknownDimensionType)?;
+            let facts = DimensionFacts::base_for_type(&dimension_type).clone();
+            (height, facts)
+        };
+        let shape = LevelShape {
+            min_y: height.min_y,
+            height: height.height,
+            logical_height: height.logical_height,
+            sky_light: height.has_skylight,
+            has_ceiling: height.has_ceiling,
+        };
+        let type_json = type_json.map(str::to_owned);
         Ok(Self {
             dimension_type,
             shape,
@@ -559,8 +564,14 @@ pub(in crate::game) enum Generate {
     Flat,
     /// Air.
     Void,
-    /// A registered stem, including the generator and its biome source.
-    Stem(serde_json::Value),
+    /// A registered noise stem, including its noise settings and biome source.
+    Noise(serde_json::Value),
+    /// A registered stem and the custom generator it names.
+    Custom {
+        stem: serde_json::Value,
+        generator: Arc<dyn ModChunkGenerator>,
+        sea_level: Option<i32>,
+    },
 }
 
 impl Dim {
@@ -628,9 +639,7 @@ impl Game<'_> {
         if let Some(generator) = &self.level.generator {
             generator.merge_dimensions(&mut overrides);
         }
-        let level = OpenLevel::resolve(overrides, id, level, |name| {
-            mod_chunk_generators().contains_key(name)
-        })?;
+        let level = OpenLevel::resolve(&overrides, level, mod_chunk_generators())?;
         let generation = self.levels.runtime.queue_open(owner, id, level)?;
         let epoch = self
             .native_lifecycle
@@ -919,6 +928,7 @@ impl Game<'_> {
         }
         if let Ok(key) = LevelKey::parse(id) {
             DimensionFacts::remove_level(key);
+            sunrise_world::level::remove_sea_level(key);
         }
     }
 
@@ -937,6 +947,16 @@ mod tests {
 
     #[test]
     fn a_runtime_instance_uses_the_registered_stem_without_substituting_its_generator() {
+        struct Empty;
+        impl ModChunkGenerator for Empty {
+            fn build_terrain(
+                &self,
+                _: &mut dyn sunrise_world::worldgen::mod_generators::ChunkAccess,
+            ) {
+            }
+        }
+        let registered: Arc<dyn ModChunkGenerator> = Arc::new(Empty);
+        let generators = ModChunkGenerators::from([("terrain:arena".into(), registered.clone())]);
         let mut overrides = WorldgenOverrides::default();
         let stem = json!({
             "type": "minecraft:the_nether",
@@ -948,18 +968,42 @@ mod tests {
         });
         overrides.set(DIMENSIONS, "maps:arena", stem.to_string());
         let level = OpenLevel::resolve(
-            overrides,
-            "instances:round_one",
+            &overrides,
             RuntimeLevel::from_stem("maps:arena", 42),
-            |id| id == "terrain:arena",
+            &generators,
         )
         .unwrap();
         assert_eq!(level.dimension_type, "minecraft:the_nether");
         assert!(!level.shape.sky_light);
         assert_eq!(level.seed, 42);
-        let Generate::Stem(generator) = level.generate else {
-            panic!("expected a registered stem")
+        let Generate::Custom {
+            stem: bound_stem,
+            generator,
+            ..
+        } = level.generate
+        else {
+            panic!("expected a registered custom generator")
         };
-        assert_eq!(generator, stem);
+        assert_eq!(bound_stem, stem);
+        assert!(Arc::ptr_eq(&registered, &generator));
+
+        assert_eq!(
+            OpenLevel::resolve(
+                &overrides,
+                RuntimeLevel::from_stem("maps:missing", 42),
+                &generators,
+            )
+            .err(),
+            Some(RuntimeLevelError::UnknownStem),
+        );
+        assert_eq!(
+            OpenLevel::resolve(
+                &overrides,
+                RuntimeLevel::from_stem("maps:arena", 42),
+                &ModChunkGenerators::new(),
+            )
+            .err(),
+            Some(RuntimeLevelError::UnknownGenerator),
+        );
     }
 }

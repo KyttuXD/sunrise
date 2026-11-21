@@ -25,9 +25,11 @@ event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
 - **`RuntimeLevel::from_stem(stem, seed)`** uses the complete configuration of a registered level
   (`mymod:pocket` in the example). Declare it at startup with
   [`register_dimension`](dimension-shape.md#registering-a-dimension) or a dimension data pack.
-  The stem supplies the registered dimension type, the chunk generator, the biome source and the
-  generator's settings together. It must name a registered dimension type and use vanilla noise
-  or a registered chunk generator. An absent stem is `UnknownStem`.
+  The stem supplies the dimension type, generator, biome source and generator settings together;
+  the runtime instance does not substitute its generator or choose a biome source from its type.
+  It must name a registered dimension type (not an inline definition) and use vanilla noise or
+  a registered chunk generator. An absent stem is `UnknownStem`; an unsupported generator is
+  `UnknownGenerator`.
 - **`RuntimeLevel::flat(dimension_type, seed)`** and **`RuntimeLevel::void(dimension_type, seed)`**
   use the default superflat layers or air, respectively, over plains. Both take an existing
   dimension type, not a stem id.
@@ -54,8 +56,9 @@ firing `level_load` before the next is available. The server then validates and 
 saved tickets and waits for the ticketed chunks before `server_started`, even if no player
 visits those levels.
 
-Success means queue admission, not apply completion. Apply failures are logged with the
-requesting mod and level id. A failed open rolls back publication and frees the id for retry;
+Success means queue admission, not apply completion. If the stem cannot be built (for example,
+its biome source refers to an unknown biome), the open fails when applied. Apply failures are
+logged with the requesting mod and level id. A failed open rolls back publication and frees the id for retry;
 a failed unload leaves the level open for another unload request. Observe `is_open` after
 the queue runs rather than treating the returned result as completion.
 
@@ -79,8 +82,8 @@ it stays open: `is_open` still says true, and the level opens again from its fol
 structure references the game keeps beside the world for it
 (`data/sunrise_structure_references_<namespace>_<path>.json`, kept if another id would share that
 file and its level exists: `a_b:c` and `a:b_c` do), then the folders those leave empty. The folder
-comes from the validated id alone. A vanilla or other startup level cannot be deleted.
-
+comes from the validated id alone. As with `open` and `unload`, the caller's namespace is not
+checked. A vanilla or other startup level cannot be deleted.
 
 - A level that is **open** is unloaded first, as by `unload` (saved, `level_unload` fires), and
   its files are removed in the same pass. It refuses with `PlayersInside` while a player or an

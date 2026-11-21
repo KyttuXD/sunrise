@@ -1,6 +1,13 @@
 //! Prepare local worlds without blocking the window's event loop.
 use super::*;
 use sunrise_client::vanillagen::TerrainResources;
+use sunrise_world::worldgen::{
+    mod_biome_sources::mod_biome_sources,
+    mod_generators::{ModChunkGenerators, mod_chunk_generators},
+    overrides::{DIMENSIONS, WorldgenOverrides},
+};
+
+use super::runtime_levels::Generate;
 
 pub(super) struct WorldRequest {
     pub save_root: PathBuf,
@@ -861,84 +868,77 @@ enum ModLevel {
     Staged(VanillaTerrain),
 }
 
-/// The generation of a level whose stem names a generator a mod registered, the
-/// stem being read as the game's own generator reads it: a pack's or mod's,
-/// else the saved one. A stem naming any other generator is left to that
-/// generator, which refuses all but noise. A biome source a mod registered
-/// that names a biome the world lacks refuses the level, and so does a stage
-/// the generator asks for that the level cannot supply. `structures` is the
-/// world's `generate_structures`.
+/// Build a custom generator with the source named by its winning stem. Runtime requests
+/// already selected their generator; startup levels use the pack's stem, then the saved one.
 fn mod_terrain(
-    world_root: &std::path::Path,
-    resources: &std::path::Path,
-    additional: &[Arc<sunrise_client::datapack::DataPack>],
-    enabled_features: &[String],
-    terrain_resources: TerrainResources<'_>,
-    biomes: &sunrise_client::biome::Biomes,
+    terrain: TerrainResources<'_>,
+    overrides: &WorldgenOverrides,
+    generators: &ModChunkGenerators,
     dim: Dim,
     shape: sunrise_client::chunk::LevelShape,
     seed: i64,
     structures: bool,
-    runtime_stem: Option<&serde_json::Value>,
+    runtime: Option<&Generate>,
     saved_stem: Option<&sunrise_core::nbt::Tag>,
 ) -> Option<std::result::Result<ModLevel, String>> {
-    use sunrise_world::worldgen::{
-        mod_biome_sources::mod_biome_sources, mod_generators::mod_chunk_generators,
-        overrides::DIMENSIONS,
+    let packed_or_saved;
+    let (stem, generator) = match runtime {
+        Some(Generate::Custom {
+            stem, generator, ..
+        }) => (stem, generator),
+        Some(_) => return None,
+        None => {
+            packed_or_saved = match overrides.entry(DIMENSIONS, dim.id()) {
+                Some(json) => serde_json::from_str(json).ok(),
+                None => saved_stem.map(sunrise_client::scoreboard::tag_to_json),
+            }?;
+            let kind = sunrise_core::identifier::Identifier::parse(
+                packed_or_saved["generator"]["type"].as_str()?,
+            )
+            .ok()?;
+            (&packed_or_saved, generators.get(&kind.to_string())?)
+        }
     };
-    let generators = mod_chunk_generators();
-    if generators.is_empty() {
-        return None;
-    }
-    let (overrides, _) =
-        worldgen_overrides_of(world_root, resources, biomes, enabled_features, additional);
-    let stem = runtime_stem.cloned().or_else(|| {
-        overrides
-            .entries(DIMENSIONS)
-            .find(|(level, _)| *level == dim.id())
-            .and_then(|(_, stem)| serde_json::from_str(stem).ok())
-            .or_else(|| saved_stem.map(sunrise_client::scoreboard::tag_to_json))
-    })?;
-    if let Some(generator) = stem["generator"]["type"]
-        .as_str()
-        .and_then(|id| generators.get(id))
-        && generator.vanilla_stages().any()
-    {
-        let staged = VanillaTerrain::for_mod(
-            terrain_resources,
-            &overrides,
+    let result = if generator.vanilla_stages().any() {
+        VanillaTerrain::for_mod(
+            terrain,
+            overrides,
             seed,
             dim.id(),
-            &stem,
+            stem,
             generator.clone(),
             structures,
-        );
-        return Some(
-            staged
-                .map(ModLevel::Staged)
-                .map_err(|e| format!("{}: {e}", dim.id())),
-        );
-    }
-    sunrise_client::modgen::ModTerrain::for_stem(
-        dim.id(),
-        &stem,
-        generators,
-        mod_biome_sources(),
-        terrain_resources.registry,
-        |biome| biomes.contains(biome).then(|| biomes.id(biome)),
-        shape,
-        seed,
-        |source| {
-            sunrise_world::worldgen::generator::GeneratorData::resolve_terrain_biome_source(
-                terrain_resources.dir,
-                &overrides,
-                source,
-                seed,
-            )
-            .map_err(|e| format!("{}: {e}", dim.id()))
-        },
-    )
-    .map(|terrain| terrain.map(ModLevel::Terrain))
+        )
+        .map(ModLevel::Staged)
+        .map_err(|e| e.to_string())
+    } else {
+        sunrise_client::modgen::ModTerrain::new(
+            dim.id(),
+            &stem["generator"]["biome_source"],
+            generator.clone(),
+            mod_biome_sources(),
+            terrain.registry,
+            |name| {
+                terrain
+                    .biomes
+                    .contains(name)
+                    .then(|| terrain.biomes.id(name))
+            },
+            shape,
+            seed,
+            |source| {
+                sunrise_world::worldgen::generator::GeneratorData::resolve_terrain_biome_source(
+                    terrain.dir,
+                    overrides,
+                    source,
+                    seed,
+                )
+                .map_err(|e| e.to_string())
+            },
+        )
+        .map(ModLevel::Terrain)
+    };
+    Some(result.map_err(|e| format!("{}: {e}", dim.id())))
 }
 
 /// The file beside the world that keeps the structure references of the level `id`. An id with a
@@ -979,7 +979,7 @@ pub(super) fn make_streaming(
     seed: i64,
     level: &Level,
     biomes: Arc<Biomes>,
-    runtime: Option<&super::runtime_levels::Generate>,
+    runtime: Option<&Generate>,
     chunk_reports: Arc<sunrise_client::chunk_io::Reports>,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
     use sunrise_client::save::WorldGen;
@@ -1077,14 +1077,12 @@ pub(super) fn make_streaming(
     if flat.is_some() || flat_vanilla.is_some() {
         register_sea_level(-63);
     }
-    let mut streaming = if let Some(generate) =
-        runtime.filter(|generate| !matches!(generate, super::runtime_levels::Generate::Stem(_)))
-    {
+    let mut streaming = if let Some(Generate::Flat | Generate::Void) = runtime {
         // A level a mod opened with the default layers or with air alone.
-        let flat = matches!(generate, super::runtime_levels::Generate::Flat);
+        let flat = matches!(runtime, Some(Generate::Flat));
         let inner = sunrise_client::flatgen::FlatTerrain::of_layers(
             pack.assets.registry,
-            res.biomes(),
+            &biomes,
             shape,
             flat,
         )
@@ -1157,122 +1155,141 @@ pub(super) fn make_streaming(
             pack.context_with(biomes.clone()),
             res.threads(),
         )
-    } else if let Some(level) = mod_terrain(
-        world_root,
-        &options.resources,
-        &pack.additional_data,
-        enabled_features,
-        terrain_resources,
-        &biomes,
-        dim,
-        shape,
-        seed,
-        automatic_structures,
-        match runtime {
-            Some(super::runtime_levels::Generate::Stem(stem)) => Some(stem),
-            _ => None,
-        },
-        saved_stem,
-    )
-    .transpose()?
-    {
-        match level {
-            ModLevel::Terrain(inner) => Streaming::new(
-                Arc::new(Persistent {
-                    inner: Arc::new(inner),
-                    save: save.clone(),
-                    registry: pack.assets.clone(),
-                    biomes: biomes.clone(),
-                }),
-                pack.context_with(biomes.clone()),
-                res.threads(),
-            ),
-            ModLevel::Staged(mut inner) => {
-                inner.add_mod_signs(res.facts());
-                register_sea_level(inner.sea_level());
-                let inner = Arc::new(inner);
-                inner.load_structure_mobs_behind();
-                keep_structure_references(&inner, world_root, dim, &save);
-                locator = Some(inner.clone());
-                Streaming::new(
-                    Arc::new(Persistent {
-                        inner,
-                        save: save.clone(),
-                        registry: pack.assets.clone(),
-                        biomes: biomes.clone(),
-                    }),
-                    pack.context_with(biomes.clone()),
-                    res.threads(),
-                )
-            }
-        }
     } else {
-        // WorldOptions.generateStructures, from the world's settings.
-        let structures = automatic_structures;
-        let preset = WorldGen::noise_preset(generator);
-        let mut overrides = world_worldgen_overrides(
+        let overrides = world_worldgen_overrides(
             world_root,
             &options.resources,
             &biomes,
             enabled_features,
             &pack.additional_data,
         );
-        if let Some(super::runtime_levels::Generate::Stem(stem)) = runtime {
-            overrides.set(
-                sunrise_world::worldgen::overrides::DIMENSIONS,
-                dim.id(),
-                stem.to_string(),
-            );
-        }
-        let saved_stem = saved_stem.map(sunrise_client::scoreboard::tag_to_json);
-        let regions = sunrise_client::save::biome_regions::layout(world_root, dim.id())
-            .map_err(|e| format!("Failed to read the world's biome regions: {e}"))?;
-        let mut inner = VanillaTerrain::for_world_with_settings(terrain_resources, &overrides, seed, preset, dim.id(), structures, saved_stem.as_ref(), regions).map_err(|e| {
+        if let Some(level) = mod_terrain(
+            terrain_resources,
+            &overrides,
+            mod_chunk_generators(),
+            dim,
+            shape,
+            seed,
+            automatic_structures,
+            runtime,
+            saved_stem,
+        )
+        .transpose()?
+        {
+            match level {
+                ModLevel::Terrain(inner) => {
+                    if let Some(Generate::Custom {
+                        sea_level: Some(sea_level),
+                        ..
+                    }) = runtime
+                    {
+                        register_sea_level(*sea_level);
+                    }
+                    Streaming::new(
+                        Arc::new(Persistent {
+                            inner: Arc::new(inner),
+                            save: save.clone(),
+                            registry: pack.assets.clone(),
+                            biomes: biomes.clone(),
+                        }),
+                        pack.context_with(biomes.clone()),
+                        res.threads(),
+                    )
+                }
+                ModLevel::Staged(mut inner) => {
+                    inner.add_mod_signs(res.facts());
+                    register_sea_level(inner.sea_level());
+                    let inner = Arc::new(inner);
+                    inner.load_structure_mobs_behind();
+                    keep_structure_references(&inner, world_root, dim, &save);
+                    locator = Some(inner.clone());
+                    Streaming::new(
+                        Arc::new(Persistent {
+                            inner,
+                            save: save.clone(),
+                            registry: pack.assets.clone(),
+                            biomes: biomes.clone(),
+                        }),
+                        pack.context_with(biomes.clone()),
+                        res.threads(),
+                    )
+                }
+            }
+        } else {
+            let structures = automatic_structures;
+            let regions = sunrise_client::save::biome_regions::layout(world_root, dim.id())
+                .map_err(|e| format!("Failed to read the world's biome regions: {e}"))?;
+            let terrain = if let Some(Generate::Noise(stem)) = runtime {
+                VanillaTerrain::for_noise_stem(
+                    terrain_resources,
+                    &overrides,
+                    seed,
+                    dim.id(),
+                    stem,
+                    structures,
+                    regions,
+                )
+            } else {
+                let preset = WorldGen::noise_preset(generator);
+                let saved_stem = saved_stem.map(sunrise_client::scoreboard::tag_to_json);
+                VanillaTerrain::for_world_with_settings(
+                    terrain_resources,
+                    &overrides,
+                    seed,
+                    preset,
+                    dim.id(),
+                    structures,
+                    saved_stem.as_ref(),
+                    regions,
+                )
+            };
+            let mut inner = terrain.map_err(|e| {
                 if overrides.is_empty() {
                     format!("{e}\nPrepare the worldgen bundle with the launcher, or: sunrise-prepare --prepare")
                 } else {
                     format!("{e}\nThe world's data packs change its world generation: one of them may not be made for this version")
                 }
             })?;
-        inner.add_mod_signs(res.facts());
-        register_sea_level(inner.sea_level());
-        let inner = Arc::new(inner);
-        // The first mob a fresh chunk generates needs the mob data: read it now,
-        // off the server's tick (#13857). The End's chunks generate none.
-        if dim != Dim::End {
-            inner.load_structure_mobs_behind();
+            inner.add_mod_signs(res.facts());
+            register_sea_level(inner.sea_level());
+            let inner = Arc::new(inner);
+            // The first mob a fresh chunk generates needs the mob data: read it now,
+            // off the server's tick (#13857). The End's chunks generate none.
+            if dim != Dim::End {
+                inner.load_structure_mobs_behind();
+            }
+            if dim == Dim::Overworld && structures {
+                inner.search_rings_behind();
+            }
+            // Chunks an older version saved: the new chunks around them blend in.
+            if dim == Dim::Overworld {
+                let old = Arc::new(sunrise_client::old_world::SavedOldWorld::new(
+                    save.clone(),
+                    pack.assets.clone(),
+                    res.biomes().clone(),
+                    inner.generator_data().clone(),
+                ));
+                // Saves of this folder take the old chunks' calculated blending data when
+                // they are requested; a weak link, as the old world holds the folder.
+                let weak = Arc::downgrade(&old);
+                save.set_blending_lookup(Box::new(move |x, z| {
+                    weak.upgrade().and_then(|old| old.calculated(x, z))
+                }));
+                inner.set_old_world(old);
+            }
+            keep_structure_references(&inner, world_root, dim, &save);
+            locator = Some(inner.clone());
+            Streaming::new(
+                Arc::new(Persistent {
+                    inner,
+                    save: save.clone(),
+                    registry: pack.assets.clone(),
+                    biomes: biomes.clone(),
+                }),
+                pack.context_with(biomes.clone()),
+                res.threads(),
+            )
         }
-        if dim == Dim::Overworld && structures {
-            inner.search_rings_behind();
-        }
-        // Chunks an older version saved: the new chunks around them blend in.
-        if dim == Dim::Overworld {
-            let old = Arc::new(sunrise_client::old_world::SavedOldWorld::new(
-                save.clone(),
-                pack.assets.clone(),
-                res.biomes().clone(),
-                inner.generator_data().clone(),
-            ));
-            // Saves of this folder take the old chunks' calculated blending data when
-            // they are requested; a weak link, as the old world holds the folder.
-            let weak = Arc::downgrade(&old);
-            save.set_blending_lookup(Box::new(move |x, z| {
-                weak.upgrade().and_then(|old| old.calculated(x, z))
-            }));
-            inner.set_old_world(old);
-        }
-        keep_structure_references(&inner, world_root, dim, &save);
-        locator = Some(inner.clone());
-        Streaming::new(
-            Arc::new(Persistent {
-                inner,
-                save: save.clone(),
-                registry: pack.assets.clone(),
-                biomes: biomes.clone(),
-            }),
-            pack.context_with(biomes.clone()),
-            res.threads(),
-        )
     };
     if options.execution_role.is_client() {
         streaming.load_forced(
@@ -1868,37 +1885,40 @@ mod tests {
         assert_eq!(shapes.overworld, LevelShape::OVERWORLD);
     }
 
-    /// A registered level's stem finds its generator through the world's
-    /// worldgen entries; the Overworld's noise stays the game's. Ignored as it
-    /// installs the process-wide tables.
+    /// A data pack composes a checkerboard source with registered generators, whether or
+    /// not they use vanilla stages. No process-wide registrations are needed by the fixture.
     #[test]
     #[ignore = "daily"]
-    fn a_stem_naming_a_mods_generator_opens_on_mod_terrain() {
+    fn a_pack_can_compose_non_fixed_biomes_with_registered_generators() {
         use sunrise_client::streaming::ChunkGenerator as _;
-        use sunrise_world::worldgen::{
-            mod_generators::{
-                ChunkAccess, ModChunkGenerator, ModChunkGenerators, install_mod_chunk_generators,
-            },
-            overrides::{ModDimension, install_mod_dimensions},
+        use sunrise_world::worldgen::mod_generators::{
+            ChunkAccess, ModChunkGenerator, VanillaStages,
         };
-        struct Floor;
+        struct Floor(VanillaStages);
         impl ModChunkGenerator for Floor {
             fn build_terrain(&self, chunk: &mut dyn ChunkAccess) {
                 let stone = chunk.state("stone");
-                chunk.set_block([0, chunk.min_y(), 0], stone);
+                let pos = chunk.pos();
+                chunk.set_block([pos.x * 16, 60, pos.z * 16], stone);
+            }
+            fn vanilla_stages(&self) -> VanillaStages {
+                self.0
             }
         }
-        install_mod_dimensions(vec![ModDimension {
-            id: "test:pocket".into(),
-            stem: r#"{"type":"test:pocket","generator":{"type":"test:floor"}}"#.into(),
-            dimension_type: r#"{"min_y":-128,"height":448,"logical_height":448}"#.into(),
-            sea_level: None,
-        }])
-        .unwrap();
-        let floor: Arc<dyn ModChunkGenerator> = Arc::new(Floor);
-        install_mod_chunk_generators(ModChunkGenerators::from([("test:floor".to_owned(), floor)]))
-            .map_err(|_| "installed twice")
-            .unwrap();
+        let generators: ModChunkGenerators = [
+            (
+                "test:floor".to_owned(),
+                Arc::new(Floor(VanillaStages::default())) as Arc<dyn ModChunkGenerator>,
+            ),
+            (
+                "test:staged".to_owned(),
+                Arc::new(Floor(VanillaStages {
+                    surface: true,
+                    ..VanillaStages::default()
+                })) as Arc<dyn ModChunkGenerator>,
+            ),
+        ]
+        .into();
 
         let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
         let biomes = sunrise_client::biome::Biomes::load(
@@ -1908,10 +1928,41 @@ mod tests {
         let registry = sunrise_client::assets::Assets::load(&root)
             .unwrap()
             .registry;
-        let world =
-            std::env::temp_dir().join(format!("sunrise-mod-terrain-{}", std::process::id()));
-        std::fs::create_dir_all(&world).unwrap();
-        let (overrides, _) = worldgen_overrides_of(&world, &root, &biomes, &[], &[]);
+        let world = tempfile::tempdir().unwrap();
+        let pack = world.path().join("datapacks/terrain");
+        let dimensions = pack.join("data/test/dimension");
+        std::fs::create_dir_all(&dimensions).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"Mixed worldgen","min_format":[121,0],"max_format":[121,0]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            world.path().join("datapacks.json"),
+            r#"{"enabled":["vanilla","file/terrain"],"disabled":[]}"#,
+        )
+        .unwrap();
+        for (name, generator) in [
+            ("plain", serde_json::json!({"type": "test:floor"})),
+            (
+                "staged",
+                serde_json::json!({"type": "test:staged", "settings": "minecraft:overworld"}),
+            ),
+        ] {
+            let mut stem =
+                serde_json::json!({"type": "minecraft:overworld", "generator": generator});
+            stem["generator"]["biome_source"] = serde_json::json!({
+                "type": "minecraft:checkerboard",
+                "scale": 0,
+                "biomes": ["minecraft:plains", "minecraft:desert"],
+            });
+            std::fs::write(dimensions.join(format!("{name}.json")), stem.to_string()).unwrap();
+        }
+        let (overrides, warnings) = worldgen_overrides_of(world.path(), &root, &biomes, &[], &[]);
+        assert!(
+            overrides.entry(DIMENSIONS, "test:plain").is_some(),
+            "{warnings:?}"
+        );
         let shapes = shapes_of(&overrides);
         use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
         let inputs = LoadInputs::new(Default::default(), root.join("settings"));
@@ -1933,12 +1984,9 @@ mod tests {
         let open = |dim: Dim| {
             let shape = shapes.get(dim.id());
             mod_terrain(
-                &world,
-                &root,
-                &[],
-                &[],
                 resources,
-                &biomes,
+                &overrides,
+                &generators,
                 dim,
                 shape,
                 0,
@@ -1947,17 +1995,22 @@ mod tests {
                 None,
             )
         };
-        let pocket = Dim::Extra(mod_api::__private::dimension_key("test:pocket"));
-        let Some(Ok(ModLevel::Terrain(terrain))) = open(pocket) else {
-            panic!("the stem names a registered generator that asks for no stage");
+        let plain = Dim::Extra(mod_api::__private::dimension_key("test:plain"));
+        let Some(Ok(ModLevel::Terrain(plain))) = open(plain) else {
+            panic!("a terrain-only generator does not need noise settings");
         };
-        let chunk = terrain.finish(terrain.proto(&mut (), 0, 0));
-        assert_eq!(
-            chunk.block(0, -128, 0),
-            registry.default_state("minecraft:stone").unwrap()
-        );
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let column = plain.finish(plain.proto(&mut (), 1, 0));
+        assert_eq!(column.block(0, 60, 0), stone);
+        assert_eq!(biomes.name(column.biome(0, 60, 0)), "minecraft:desert");
+
+        let staged = Dim::Extra(mod_api::__private::dimension_key("test:staged"));
+        let Some(Ok(ModLevel::Staged(staged))) = open(staged) else {
+            panic!("the staged generator must retain the same biome source");
+        };
+        let column = staged.finish(staged.proto(&mut staged.worker(), 1, 0));
+        assert_eq!(biomes.name(column.biome(0, 60, 0)), "minecraft:desert");
         assert!(open(Dim::Overworld).is_none());
-        let _ = std::fs::remove_dir_all(world);
     }
 
     #[test]

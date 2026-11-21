@@ -110,7 +110,8 @@ pub struct DimensionSettings {
     pub noise_settings: String,
     /// The one biome the level has, with the `Fixed` biome source.
     pub biome: String,
-    /// How the level chooses its biomes independently of the chunk generator. Not read when
+    /// How the level chooses its biomes independently of the chunk generator. A custom generator
+    /// without vanilla stages has zero-valued climate and erosion channels. Not read when
     /// `mod_biome_source` is set.
     pub biome_source: BiomeSourceKind,
     /// A biome source a mod registered with `register_biome_source` (`mymod:chaos`), which then

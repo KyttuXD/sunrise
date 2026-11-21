@@ -237,13 +237,14 @@ pub trait Players {
 /// leaves the id unpublished and free to retry; a failed unload keeps it open for retry.
 pub trait RuntimeLevels {
     /// Side: server.
-    /// Open the level `id` (`mymod:instance/ab`) as `level`
-    /// describes. The request is checked now and applied after this server tick's levels have
-    /// ticked, never inside a level's tick: the level is not open, and `is_open` says false, until
+    /// Open the level `id` (`mymod:instance/ab`) as `level` describes. The id does not need to
+    /// belong to the calling mod's namespace. The request is checked now and the level is built
+    /// after this server tick's levels have ticked: the level is not open, and `is_open` says false, until
     /// then. The handle names this open of the level and never a later one. A folder that
     /// exists under the id is reopened as it was saved. `level_load` fires when it opens.
     /// Refused with [`RuntimeLevelError`] for an invalid or reserved id, an id already
-    /// open or waiting, or an unknown stem, dimension type or unsupported generator.
+    /// open or waiting, or an unknown stem, dimension type or unsupported generator. An invalid
+    /// biome source or generator configuration fails when the level is built, before `level_load`.
     fn open(&mut self, id: &str, level: RuntimeLevel) -> Result<LevelRef, RuntimeLevelError> {
         crate::world::phase::unprovided(
             "RuntimeLevels::open",
