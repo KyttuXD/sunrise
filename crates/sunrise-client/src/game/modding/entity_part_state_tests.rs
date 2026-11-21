@@ -3,8 +3,9 @@
 use std::{collections::HashSet, panic::AssertUnwindSafe, sync::Arc};
 
 use mod_api::{
-    AttachmentType, EntityPart, EntityPartState, EntityRef, Hooks, HostTransaction, PartStateError,
-    Registrar, ServerHost, WorldEpoch, edit_part_state, read_state,
+    AttachmentType, EntityPart, EntityPartState, EntityRef, EntityResidency, Hooks,
+    HostTransaction, PartStateError, Registrar, ServerHost, WorldEpoch, edit_part_state,
+    read_state,
 };
 use sunrise_client::chunk::Chunk;
 use sunrise_core::{
@@ -199,6 +200,7 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
             mob(game, "minecraft:cow", 12),
         );
         // Reads insert nothing: an entity no edit reached keeps no map at all.
+        assert_eq!(a.residency(game), EntityResidency::InPlace);
         assert_eq!(Charge::state(game, a), Ok(0));
         assert_eq!(stored(game, a), None);
         assert!(!game.entity_attachments.contains_key(&a.id()));
@@ -212,6 +214,7 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
 
         // A handle of another world open is refused, and creates nothing.
         let foreign = EntityRef::new(WorldEpoch::new(a.epoch().get() + 1), b.id());
+        assert_eq!(foreign.residency(game), EntityResidency::Gone);
         assert_eq!(Charge::state(game, foreign), Err(PartStateError::Stale));
         assert_eq!(
             Charge::edit_state(game, foreign, |_, n| *n = 1),
@@ -289,6 +292,7 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
 
         // A mob out of its list for its own tick can't be reached until it is back.
         let taken = game.mobs.lift();
+        assert_eq!(a.residency(game), EntityResidency::Busy);
         assert_eq!(Charge::state(game, a), Err(PartStateError::HolderBusy));
         assert_eq!(
             Charge::edit_state(game, a, |_, n| *n = 1),
@@ -302,6 +306,7 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
 
         // A handle answers only in its own level.
         game.enter_level(Dim::Nether).unwrap();
+        assert_eq!(a.residency(game), EntityResidency::OtherLevel);
         assert_eq!(Charge::state(game, a), Err(PartStateError::OtherLevel));
         assert_eq!(
             Charge::edit_state(game, a, |_, n| *n = 1),
@@ -339,6 +344,7 @@ fn a_removed_or_unloaded_entity_is_stale_and_a_reloaded_one_reads_its_saved_valu
         assert_eq!(Charge::edit_state(game, gone, |_, n| *n = 3), Ok(()));
         assert!(game.entity_discard(gone));
         game.native_removals_flush();
+        assert_eq!(gone.residency(game), EntityResidency::Gone);
         assert_eq!(Charge::state(game, gone), Err(PartStateError::Stale));
         let again = mob(game, "minecraft:cow", 22);
         assert_ne!(again.id(), gone.id());

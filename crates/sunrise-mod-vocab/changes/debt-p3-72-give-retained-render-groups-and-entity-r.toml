@@ -1,0 +1,3 @@
+ids = ["method:prelude::EntitiesHost::entity_residency"]
+why = "Residency describes a particular entity, not the host. The same live-world checks now hang off EntityRef. Vanilla Entity.isRemoved observes removal on the entity itself; NeoForge ServerLevel.EntityCallbacks.onTrackingEnd reports that same entity in EntityLeaveLevelEvent. An entity temporarily out of its tick list still isn't gone."
+migrate = "Replace host.entity_residency(entity) or EntitiesHost::entity_residency(host, entity) with entity.residency(host). The EntityResidency variants and Part state errors are unchanged."

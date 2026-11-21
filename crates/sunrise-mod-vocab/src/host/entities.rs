@@ -13,14 +13,6 @@ pub trait EntitiesHost {
     #[access(WorldOnly)]
     fn entity(&self, id: u32) -> Option<EntityRef>;
     /// Side: both.
-    /// Where the entity `entity` names is now, as its Part state (`EntityPartState`) checks it:
-    /// resident in the level this host is in, out of its lists for its own tick, resident in
-    /// another level, or gone (removed or its removal pending, unloaded, moved under a new
-    /// id, or a handle of another world open). On a client, in place for an entity the
-    /// client has in the level it shows.
-    #[access(WorldOnly)]
-    fn entity_residency(&self, entity: EntityRef) -> EntityResidency;
-    /// Side: both.
     /// The level `dimension` (`minecraft:the_nether`) as a handle: on a client,
     /// the level it shows, whatever the server calls it, and each level the
     /// server opened for viewing (`sunrise:levels`) while that view is open. A
@@ -37,6 +29,16 @@ pub trait EntitiesHost {
     /// dimension the server hasn't loaded. API 373.
     #[access(WorldOnly)]
     fn level(&self, dimension: &str) -> Option<LevelRef>;
+}
+/// Engine reads behind entity handles.
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntitiesBackend {
+    /// Where this resident entity is, or `None` when its handle no longer resolves.
+    #[access(WorldOnly)]
+    #[manual_handle]
+    fn entity_residency(&self, entity: EntityRef) -> Option<EntityResidency>;
 }
 /// The server host's methods of the `entities` area, implemented by the game and reached through [`ServerHost`].
 #[sunrise_mod_api_macros::host_area]

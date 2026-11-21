@@ -79,8 +79,7 @@ pub trait EntityPartState: EntityPart + Sized {
     }
 }
 
-/// Where the entity an [`EntityRef`] names is now, as its Part state checks it
-/// ([`EntitiesHost::entity_residency`]).
+/// Where the entity an [`EntityRef`] names is now, as reported by [`EntityRef::residency`].
 // no wire: residency is a momentary observation in the current host.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -97,9 +96,21 @@ pub enum EntityResidency {
     Gone,
 }
 
+impl EntityRef {
+    /// Where this entity is relative to the host's level, as its Part state checks it.
+    /// On a client, an entity in the displayed level is [`EntityResidency::InPlace`].
+    /// Removed, unloaded or replaced entities and handles from another world open return
+    /// [`EntityResidency::Gone`], as does a host with no entity backend.
+    pub fn residency(self, host: &dyn Host) -> EntityResidency {
+        crate::backend::backend_of(host)
+            .and_then(|backend| backend.entity_residency(self))
+            .unwrap_or(EntityResidency::Gone)
+    }
+}
+
 impl PartStateHolder for EntityRef {
     fn part_state_holder(self, host: &dyn Host) -> Result<Holder, PartStateError> {
-        match host.entity_residency(self) {
+        match self.residency(host) {
             EntityResidency::InPlace => Ok(Holder::Entity(self.id())),
             EntityResidency::Busy => Err(PartStateError::HolderBusy),
             EntityResidency::OtherLevel => Err(PartStateError::OtherLevel),

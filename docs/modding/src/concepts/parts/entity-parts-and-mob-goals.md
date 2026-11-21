@@ -121,7 +121,8 @@ let full = Robot::edit_state(host, robot, |_, charge| {
 
 - `state` and `state_existing` read a snapshot and insert nothing; `edit_state` runs in a nested
   transaction of its own, as for block entities.
-- Every call checks the handle first:
+- Every call checks `entity.residency(host)` first. A mod can call the same read directly to
+  distinguish `InPlace`, `Busy`, `OtherLevel` and `Gone`:
   - a handle of another world open, or of an entity that was removed (or whose removal waits for
     the root commit), unloaded or moved under a new id, gives `PartStateError::Stale`, and
     `edit_state` creates no map;

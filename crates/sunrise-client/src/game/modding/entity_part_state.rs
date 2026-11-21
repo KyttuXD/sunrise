@@ -9,23 +9,22 @@ impl Game<'_> {
     /// handle's, then the residency table (the same one `with_resident_slot` resolves through)
     /// finds the entity and its level. A removal, pending or done, an unload and a move under a
     /// new id all leave the id unresolved. On a client, in place for an entity the client has.
-    pub(super) fn entity_residency(&self, entity: EntityRef) -> EntityResidency {
-        if self.native_lifecycle.epoch() != Some(entity.epoch()) {
-            return EntityResidency::Gone;
-        }
+    pub(super) fn entity_residency(&self, entity: EntityRef) -> Option<EntityResidency> {
         if !self.is_logical_server() {
-            return match self.native_client_entity_target(entity) {
-                Some(_) => EntityResidency::InPlace,
-                None => EntityResidency::Gone,
-            };
+            return self
+                .native_client_entity_target(entity)
+                .map(|_| EntityResidency::InPlace);
+        }
+        if self.native_lifecycle.epoch() != Some(entity.epoch()) {
+            return None;
         }
         match self.server_resident_entity(entity.id()) {
             EntityLookup::Found { location, .. } if location.owner.dimension != self.dim.key() => {
-                EntityResidency::OtherLevel
+                Some(EntityResidency::OtherLevel)
             }
-            EntityLookup::Found { .. } => EntityResidency::InPlace,
-            EntityLookup::Taken => EntityResidency::Busy,
-            EntityLookup::Missing => EntityResidency::Gone,
+            EntityLookup::Found { .. } => Some(EntityResidency::InPlace),
+            EntityLookup::Taken => Some(EntityResidency::Busy),
+            EntityLookup::Missing => None,
         }
     }
 }
