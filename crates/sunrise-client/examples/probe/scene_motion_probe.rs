@@ -6,6 +6,7 @@ use std::{
     io::{BufRead, Write},
     path::PathBuf,
 };
+use sunrise_client::motion::MotionTick as _;
 use sunrise_client::{
     Result,
     assets::Assets,

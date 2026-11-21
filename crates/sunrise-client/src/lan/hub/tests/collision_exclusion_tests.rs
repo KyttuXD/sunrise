@@ -4,6 +4,7 @@
 use super::*;
 use crate::motion::{MotionWorld, PlayerMotion};
 use crate::sprint::Keys;
+use sunrise_client::motion::MotionTick as _;
 use sunrise_core::geometry::Vec3;
 
 /// The opening: the wall's block column at x 22, z 20, from the floor up two blocks.

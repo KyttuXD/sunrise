@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use sunrise_client::motion::MotionTick as _;
 use sunrise_client::motion::{MotionWorld, PlayerMotion};
 use sunrise_core::geometry::Vec3;
 

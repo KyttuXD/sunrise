@@ -7,6 +7,7 @@ use crate::motion::{MotionWorld, PlayerMotion};
 use crate::native_client_hooks::test_hooks::{COLLISION_ANSWER, install, loop_context};
 use crate::sprint::Keys;
 use std::rc::Rc;
+use sunrise_client::motion::MotionTick as _;
 use sunrise_core::geometry::Vec3;
 use sunrise_world::part_collision::InParts;
 
