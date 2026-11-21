@@ -645,7 +645,7 @@ fn sorted_textures(source: &crate::resource_source::ResourceSource) -> Vec<Strin
 }
 
 /// The sprites of the atlases a mod registered, each atlas listed from its own definition and
-/// asked of the mods under its own id: two atlases sharing a definition get an answer each. An
+/// asked of the mods under its texture slot id. An
 /// atlas whose definition doesn't decode is left out. Once per client prepare, by the staging of
 /// the mods' atlases; the game's atlases are [`Listing`]'s.
 pub fn registered(
@@ -666,9 +666,25 @@ pub fn registered(
         .collect()
 }
 
+/// The definition ids and texture locations in vanilla's `AtlasManager.KNOWN_ATLASES`.
+pub const BUILTIN_ATLASES: [(&str, &str); 12] = [
+    ("banner_patterns", "textures/atlas/banner_patterns.png"),
+    ("blocks", "textures/atlas/blocks.png"),
+    ("items", "textures/atlas/items.png"),
+    ("chests", "textures/atlas/chest.png"),
+    ("decorated_pot", "textures/atlas/decorated_pot.png"),
+    ("gui", "textures/atlas/gui.png"),
+    ("map_decorations", "textures/atlas/map_decorations.png"),
+    ("paintings", "textures/atlas/paintings.png"),
+    ("particles", "textures/atlas/particles.png"),
+    ("shield_patterns", "textures/atlas/shield_patterns.png"),
+    ("shulker_boxes", "textures/atlas/shulker_boxes.png"),
+    ("celestials", "textures/atlas/celestials.png"),
+];
+
 /// Sprite listings of the engine atlases (`AtlasManager.KNOWN_ATLASES`). A definition on its own
 /// does not register an atlas. Mod-registered atlases are listed under their own IDs by
-/// [`registered`], even when several atlas IDs use the same definition.
+/// [`registered`].
 #[derive(Debug, Default)]
 pub struct Listing {
     atlases: BTreeMap<String, Listed>,
@@ -676,31 +692,33 @@ pub struct Listing {
 impl Listing {
     /// The listing of `source`, asking `mods` for each entry of a registered type.
     pub fn build(source: &crate::resource_source::ResourceSource, mods: &dyn ModSources) -> Self {
+        Self::with_texture_slots(source, mods, &BTreeMap::new())
+    }
+
+    fn with_texture_slots(
+        source: &crate::resource_source::ResourceSource,
+        mods: &dyn ModSources,
+        textures_by_slot: &BTreeMap<Identifier, Listed>,
+    ) -> Self {
         let textures = sorted_textures(source);
-        let atlases = [
-            "banner_patterns",
-            "blocks",
-            "items",
-            "chests",
-            "decorated_pot",
-            "gui",
-            "map_decorations",
-            "paintings",
-            "particles",
-            "shield_patterns",
-            "shulker_boxes",
-            "celestials",
-        ]
-        .into_iter()
-        .filter_map(|atlas| {
-            let id = Identifier::parse(atlas).expect("known engine atlas id");
-            let sources = definition(source, mods, &id)?;
-            Some((
-                id.to_string(),
-                list_atlas(source, &textures, mods, &id, &sources),
-            ))
-        })
-        .collect();
+        let atlases = BUILTIN_ATLASES
+            .into_iter()
+            .filter_map(|(atlas, slot)| {
+                let id = Identifier::parse(atlas).expect("known engine atlas id");
+                let slot = Identifier::parse(slot).expect("known engine texture slot");
+                let listed = match textures_by_slot.get(&slot) {
+                    Some(listed) => listed.clone(),
+                    None => list_atlas(
+                        source,
+                        &textures,
+                        mods,
+                        &id,
+                        &definition(source, mods, &id)?,
+                    ),
+                };
+                Some((id.to_string(), listed))
+            })
+            .collect();
         Self { atlases }
     }
     /// The sprites `atlas` lists; none for an atlas without a definition.
@@ -784,6 +802,16 @@ pub fn shared(
     mods: &dyn ModSources,
 ) -> Arc<Listing> {
     source.cached(|| Listing::build(source, mods))
+}
+
+/// Publish the listing of the engine's slots for a registered generation, before any of its
+/// consumers start. A slot registered later in the same generation replaces its old listing.
+pub fn publish_texture_slots(
+    source: &crate::resource_source::ResourceSource,
+    mods: &dyn ModSources,
+    replacements: &BTreeMap<Identifier, Listed>,
+) {
+    source.cached(|| Listing::with_texture_slots(source, mods, replacements));
 }
 
 /// [`shared`] with the native mods' sources: what the game's readers of the atlases take.

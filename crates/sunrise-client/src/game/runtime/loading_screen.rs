@@ -50,6 +50,7 @@ pub(super) fn run_event_loop(mut game: Game<'_>) -> Result<()> {
 pub(super) struct Loading {
     pub(super) window: Option<Arc<Window>>,
     pub(super) renderer: Option<Renderer>,
+    pub(super) device_limits: Option<std::sync::mpsc::SyncSender<u32>>,
     /// The boot screen's atlas, until the pack's GUI atlas replaces it.
     pub(super) boot: sunrise_client::hud::HudAtlas,
     pub(super) gui: Option<UiResources>,
@@ -117,6 +118,7 @@ impl Loading {
             attributes, "sunrise", "sunrise",
         );
         // `--offscreen` renders into a texture: its window would only show white.
+        let device_limits = self.device_limits.take();
         let window_step = startup::step("window.create");
         let window = match event_loop.create_window(
             attributes
@@ -172,7 +174,12 @@ impl Loading {
             None,
             self.settings.sunrise.api,
         ) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(r) => {
+                if let Some(limits) = device_limits {
+                    let _ = limits.send(r.device.limits().max_texture_dimension_2d);
+                }
+                self.renderer = Some(r);
+            }
             Err(e) => {
                 #[cfg(target_os = "windows")]
                 if let Some(stop) = &boot_paint_stop {

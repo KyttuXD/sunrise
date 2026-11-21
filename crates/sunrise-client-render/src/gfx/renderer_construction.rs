@@ -26,6 +26,12 @@ impl Renderer {
         request: output::FrameRequest,
         display: output::DisplayReading,
     ) -> Result<Self> {
+        // Only the terrain layers, never the optional overlay suffix, are required to
+        // select a drawing device. The overlay table has an entry per base layer.
+        let base_layers = prepared
+            .as_ref()
+            .filter(|p| !p.emissive.is_empty())
+            .map_or(layers, |p| p.emissive.len() as u32);
         let Opened {
             instance,
             surface,
@@ -40,7 +46,7 @@ impl Renderer {
             // window.
             Some(renderer) => {
                 describe_adapter(&renderer.adapter);
-                check_layers(&renderer.adapter, layers)?;
+                check_layers(&renderer.adapter, base_layers)?;
                 Opened {
                     surface: if offscreen {
                         None
@@ -65,11 +71,23 @@ impl Renderer {
             }
             None => {
                 let _step = crate::spans::startup::step("renderer.open_device");
-                open_device(&window, offscreen, api, layers).await?
+                open_device(&window, offscreen, api, base_layers).await?
             }
         };
         // Computed once: the sprite arrays, the shaders' constants and the
         // shader pack atlas all cut the sprites by it.
+        let mut prepared = prepared;
+        let layers = if base_layers == layers {
+            layers
+        } else {
+            let retained = layers.min(device::sprite_capacity(&adapter, layers));
+            if retained < layers
+                && let Some(prepared) = &mut prepared
+            {
+                prepared.truncate_overlays(layers, retained);
+            }
+            retained
+        };
         let split = check_layers(&adapter, layers)?;
         let info = adapter.get_info();
         surface_setup::log_sprite_split(&info, split, layers);
@@ -242,6 +260,15 @@ impl Renderer {
                     vf,
                     wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    13,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -818,6 +845,17 @@ impl Renderer {
                 )
             })
             .collect();
+        let retained_animations;
+        let animations = if animations.iter().any(|animation| animation.layer >= layers) {
+            retained_animations = animations
+                .iter()
+                .filter(|a| a.layer < layers)
+                .cloned()
+                .collect::<Vec<_>>();
+            &retained_animations
+        } else {
+            animations
+        };
         let material_animations = animations
             .iter()
             .filter(|a| a.has_materials())
@@ -880,6 +918,8 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let emissive_overlays =
+            super::prepared_textures::upload_emissive(&device, &queue, prepared.emissive);
         let emission_stats =
             hdr_stats::EmissionStats::new(&device, split, sprite_textures.len() as u32);
         let group = terrain_group(
@@ -892,6 +932,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let fluid_sampler = device.create_sampler(&fluid::SAMPLER);
         let fluid_group = terrain_group(
@@ -904,6 +945,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let terrain_model_sampler = device.create_sampler(&terrain_model::MOVING_BLOCK_SAMPLER);
         let terrain_model_group = terrain_group(
@@ -916,6 +958,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let crosshair_group = terrain_group(
             &device,
@@ -927,6 +970,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let mirror_group = terrain_group(
             &device,
@@ -938,6 +982,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let index_quads = 1 << 16;
         let indices = Self::quad_indices(&device, index_quads);
@@ -2341,6 +2386,7 @@ impl Renderer {
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
+            emissive_overlays,
             terrain_sprites: sprite_constants.map(|(_, v)| v),
             sprite_split: split,
             sprite_sampler,

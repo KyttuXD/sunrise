@@ -23,7 +23,7 @@ pub struct HudAtlas {
     /// The packed names no GUI lookup of an id the GUI list lacks answers with: the model atlases'
     /// sprites and the walked files a GUI entry stands on.
     pub non_gui: HashSet<String>,
-    /// A registered atlas's sprites by their GUI names (`mymod:gui/atlases/icons/mymod/heart`),
+    /// A registered atlas's sprites by their GUI names (`mymod:gui/atlases/5/icons/mymod/heart`),
     /// each packed under a key of its own so that no model or GUI sprite can take its place.
     pub registered: HashMap<String, Rect>,
     /// The live (dynamic) textures by GUI id, a lane of their own: the GUI lookup reads it first,
@@ -396,7 +396,7 @@ impl HudAtlas {
     /// The atlas of a resource root that layers packs over `defaults` (the
     /// game's own resources), whose textures give the sprites' GUI sizes.
     pub fn build_over(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
-        Self::build_over_with_dynamic_textures(root, defaults, defaults, false)
+        Self::build_over_with_dynamic_textures(root, defaults, defaults, false, None)
     }
     /// The atlas above, with the pool of slots for client mods' dynamic textures
     /// (`dynamic_textures::DYNAMIC_TEXTURE_SLOTS` of each class, 10.5 MiB of texels) only when
@@ -409,8 +409,16 @@ impl HudAtlas {
         defaults: &ResourceSource,
         game: &ResourceSource,
         pool: bool,
+        texture_limit: Option<u32>,
     ) -> Result<Self> {
-        let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
+        let mut atlas = Self::pack(
+            root,
+            defaults,
+            WALKED_TEXTURE_FOLDERS,
+            true,
+            pool,
+            texture_limit.unwrap_or(MAX_ATLAS_SIZE),
+        )?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
         pack_text::load_shaders(&mut atlas, root, game);

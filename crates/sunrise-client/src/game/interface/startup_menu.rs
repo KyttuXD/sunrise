@@ -395,6 +395,7 @@ pub(super) fn spawn_loader(
     vanilla_root: &std::path::Path,
     started: Instant,
     progress: &Progress,
+    texture_limit: impl FnOnce() -> Result<Option<u32>> + Send + 'static,
 ) -> Result<(Receiver<LoaderMsg>, JoinHandle<()>)> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let settings = settings.clone();
@@ -433,6 +434,7 @@ pub(super) fn spawn_loader(
                             let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
                         },
                         &mod_sources,
+                        texture_limit,
                     )
                 })
                 .map(|mut loaded| {
@@ -1506,6 +1508,10 @@ impl Loading {
         }
         self.progress = Progress::new();
         let options = self.options.as_ref().ok_or("loading already finished")?;
+        let limit = self
+            .renderer
+            .as_ref()
+            .map(|r| r.device.limits().max_texture_dimension_2d);
         let (receiver, handle) = spawn_loader(
             options,
             &self.settings,
@@ -1513,6 +1519,7 @@ impl Loading {
             &self.vanilla_root,
             self.started,
             &self.progress,
+            move || Ok(limit),
         )?;
         self.receiver = receiver;
         self.handle = Some(handle);
@@ -1567,6 +1574,7 @@ mod tests {
         Loading {
             window: None,
             renderer: None,
+            device_limits: None,
             boot: sunrise_client::hud::HudAtlas::boot(),
             gui: None,
             settings: Settings::default(),

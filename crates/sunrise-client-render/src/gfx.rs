@@ -571,6 +571,7 @@ pub struct Renderer {
     /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
     mipmaps: u32,
     terrain_layout: wgpu::BindGroupLayout,
+    emissive_overlays: wgpu::TextureView,
     /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`, for a shader pack's terrain.
     terrain_sprites: [f64; 2],
     sprite_sampler: wgpu::Sampler,
@@ -893,10 +894,7 @@ fn layer_split(
     requested: Option<u32>,
     layers: u32,
 ) -> std::result::Result<u32, String> {
-    let mut split = requested.unwrap_or(SPRITE_SPLIT).min(max_layers).max(1);
-    if split > 1 && array_layers(split, gl) > max_layers {
-        split -= 1;
-    }
+    let split = available_layer_split(max_layers, gl, requested);
     if layers > split * SPRITE_ARRAYS {
         return Err(format!(
             "GPU supports {max_layers} texture layers per array; {layers} block textures need \
@@ -904,6 +902,14 @@ fn layer_split(
         ));
     }
     Ok(split)
+}
+fn available_layer_split(max_layers: u32, gl: bool, requested: Option<u32>) -> u32 {
+    let split = requested.unwrap_or(SPRITE_SPLIT).min(max_layers).max(1);
+    if split > 1 && array_layers(split, gl) > max_layers {
+        split - 1
+    } else {
+        split
+    }
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
 const SPRITE_ARRAYS: u32 = 8;
@@ -984,6 +990,7 @@ fn terrain_group(
     lightmap: &wgpu::TextureView,
     lightmap_sampler: &wgpu::Sampler,
     emission_thresholds: &wgpu::TextureView,
+    emissive_overlays: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let view = |binding, view| wgpu::BindGroupEntry {
         binding,
@@ -1015,6 +1022,7 @@ fn terrain_group(
             view(10, &sprites[6]),
             view(11, &sprites[7]),
             view(12, emission_thresholds),
+            view(13, emissive_overlays),
         ],
     })
 }
@@ -1259,6 +1267,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
         self.fluid_group = terrain_group(
             &self.device,
@@ -1270,6 +1279,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
         self.terrain_model_group = terrain_group(
             &self.device,
@@ -1281,6 +1291,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
     }
     /// Block sprite layers per array on this device: a sprite's array is its layer over it, its

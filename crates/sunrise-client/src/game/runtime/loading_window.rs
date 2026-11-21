@@ -14,6 +14,7 @@ pub(super) fn prepare_renderer_textures(
         &assets.sprite_mips,
         (&pack.forcefield.2, pack.forcefield.0),
     )
+    .with_emissive(&assets.emissive)
     .with_pbr(
         &assets.pbr_normals,
         &assets.pbr_specular,

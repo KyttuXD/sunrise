@@ -1,0 +1,20 @@
+ids = [
+    "hook:register_texture_atlases",
+    "type:TextureAtlasRegistration",
+    "handle:TextureAtlasRegistration::sprite_name",
+    "hook:emissive",
+    "hook:emissive.layers",
+    "method:Hooks::emissive",
+    "type:EmissiveEvent",
+    "type:EmissiveEvent.layers",
+    "hook:register_emissive_sprites",
+    "method:Hooks::register_emissive_sprites",
+    "type:RegisterEmissiveSpritesEvent",
+    "handle:RegisterEmissiveSpritesEvent::register",
+]
+why = "NeoForge RegisterTextureAtlasesEvent.register rejects duplicate definition IDs, and vanilla AtlasManager plus TextureManager.register replace a texture at its location. TextureAtlas.maxSupportedTextureSize and SpriteLoader.stitch use the drawable dimensions, not registration counts. Sunrise now uses generation-local typed declarations without namespace or count quotas, reports missing or unstitchable assets without discarding unrelated atlases, and reports and disables a registrar on panic. The Sunrise-only emissive feature now resolves typed keys at resource bake with a GPU layer lookup instead of static names and a bounded per-frame table."
+migrate = """
+Keep calling `event.register(TextureAtlasRegistration { atlas, definition })` with owned `Identifier`s. Use an unused definition ID; to reuse the source list of an existing definition, put that list in your own definition file at a new ID. A later registration with a different definition replaces the texture slot at `atlas`. To replace a built-in atlas use its texture location, for example `minecraft:textures/atlas/gui.png`, not the definition ID `minecraft:gui`. Replace hand-built `gui/atlases/...` names with `registration.sprite_name(&sprite)` and look the sprite up again after each stitch. `TextureAtlasRegistration` is now in-process only; pass the two IDs to `event.register`, not an encoded registration.
+
+Replace `Hooks::emissive(&self, host: &dyn ClientHost, event: &mut EmissiveEvent<'_>)` with `Hooks::register_emissive_sprites(&self, context: &RegistrationContext, event: &mut RegisterEmissiveSpritesEvent<'_>)`. Replace `event.layers.push((base_str, overlay_str))` with `event.register((base_id, overlay_id))`, using owned `Identifier`s (e.g. `minecraft:block/stone` and `mymod:light/stone` for `assets/mymod/textures/light/stone.png`). Move frame-dependent selection to resource declaration and submit registrations again each time the hook runs. Replace the manifest hook key `emissive` with `register_emissive_sprites`.
+"""

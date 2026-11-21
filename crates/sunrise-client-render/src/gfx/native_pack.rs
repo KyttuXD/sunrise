@@ -446,8 +446,8 @@ file = \"material.wgsl\"
     /// The terrain's group 0 as the renderer makes it (`Renderer::new`), and an empty layout
     /// for the other groups.
     fn terrain_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
-        // Its uniform, the 10 sampled textures (_terrain.wgsl_'s 8 sprite arrays, the
-        // lightmap and the emission thresholds) and two samplers.
+        // Its uniform, the sprite arrays, lightmap, emission thresholds and emissive
+        // layer lookup, and the two samplers.
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -476,7 +476,17 @@ file = \"material.wgsl\"
         ]
         .into_iter()
         .chain((5..=11).map(|binding| (binding, array)))
-        .chain([(12, plain)])
+        .chain([
+            (12, plain),
+            (
+                13,
+                wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+            ),
+        ])
         .map(|(binding, ty)| entry(binding, ty))
         .collect::<Vec<_>>();
         let globals = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

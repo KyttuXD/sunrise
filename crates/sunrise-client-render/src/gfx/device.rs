@@ -197,6 +197,15 @@ pub(crate) fn check_layers(adapter: &wgpu::Adapter, layers: u32) -> Result<u32> 
         layers,
     )?)
 }
+/// Number of sprite layers the renderer can actually address on this adapter.
+pub(super) fn sprite_capacity(adapter: &wgpu::Adapter, desired: u32) -> u32 {
+    let info = adapter.get_info();
+    available_layer_split(
+        adapter.limits().max_texture_array_layers,
+        info.backend == wgpu::Backend::Gl,
+        adapter_requested_split(&info, requested_split(), desired),
+    ) * SPRITE_ARRAYS
+}
 /// Whether the swapchain can take a window of `width` x `height`: each side from 1 to the
 /// device's `max_texture_dimension_2d` (`max`), else `Surface::configure` panics. 0 is a
 /// minimized window. Past `max`: Windows lets a program size a window up to 65535 pixels

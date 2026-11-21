@@ -152,11 +152,35 @@ from the provider for the id you want (`mymod:panel`, or `minecraft:container/sl
 valid `<namespace>:<path>` identifier (including `minecraft:`) is accepted, later registrations replace earlier ones
 (last-writer-wins), and registering a built-in vanilla source type overrides it when decoding atlas definitions. The
 GUI atlas is one of the engine atlases that run bound providers; others (for example `particles`)
-run their own listed sources. A mod-registered atlas runs its definition under the atlas's registered ID,
-even when another atlas uses the same definition. An unused definition does not run any sources.
+run their own listed sources. An unused definition does not run any sources.
 The GUI atlas publishes each sprite by its id: `gui_sprite`, `DrawContext::sprite` and the GUI's own draws find it there,
 with the animation and nine-slice metadata of the file it names when an entry is an alias (a generated sprite has
 none), and the bound provider runs again each time resources load. A GUI id its list has a sprite for is the list's:
 `create_dynamic_texture` refuses it as taken, and a sprite the list removed draws the missing sprite, never a model's
 sprite of the same id. After each load, ask `gui_sprite` again (`texture_atlas_stitched` for the GUI atlas): a region
 from before a reload may have moved.
+
+### Register an atlas
+
+In `Hooks::register_texture_atlases`, call `event.register(TextureAtlasRegistration { atlas, definition })`.
+Both fields are `Identifier`s. `definition` names `assets/<namespace>/atlases/<path>.json`, read from the
+active pack stack. A definition id can only be registered once, including definitions already registered
+by the game. A later registration with a different definition for the same `atlas` texture slot replaces
+the previous one. The slot need not use the declaring mod's namespace. To replace a built-in
+slot, use its texture location, such as `minecraft:textures/atlas/gui.png`, not `minecraft:gui`.
+
+Use `registration.sprite_name(&sprite)` to get the key for `gui_sprite` or `DrawContext::sprite`; do not
+construct the key by hand. Read a new region after `texture_atlas_stitched` for `TextureAtlas::Gui`.
+Submit registrations again on reload. The GUI sheet is constrained by the device's texture dimensions,
+not a declaration count. Failed definitions, textures and stitches are reported and do not prevent
+unrelated atlases from loading.
+
+### Register a full-bright terrain overlay
+
+In `Hooks::register_emissive_sprites`, call `event.register((base, overlay))`, with two owned `Identifier`s.
+The base names a baked terrain sprite, for example `minecraft:block/stone`. The overlay names a texture
+without the root or extension, for example `mymod:glow/stone` for `assets/mymod/textures/glow/stone.png`.
+Overlay alpha marks full-bright material without casting gameplay light. The current generation resolves
+both keys once when resources bake. A later usable overlay for that base wins; a missing or invalid overlay
+is reported without removing another usable one. If the device cannot fit an overlay's texture layer,
+the base still draws. Re-submit the pairs on each resource reload.

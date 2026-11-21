@@ -172,6 +172,10 @@ pub fn isolated_failures() -> u64 {
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     let (entered, trapped) = LISTENER_SERIAL.get();
     LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    disable_panicking_listener(hook, id);
+}
+
+fn disable_panicking_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -182,6 +186,28 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
     installed
         .poison_free
         .store(false, std::sync::atomic::Ordering::Release);
+}
+
+/// Call a listener with its own event. Only a completed callback publishes its edits.
+pub(crate) fn run_isolated_listener(
+    hook: generated::HookId,
+    id: &'static str,
+    name: &'static str,
+    call: impl FnOnce() -> Result<(), crate::world::phase_refusal::PhaseRefusal>,
+) -> bool {
+    match crate::callback_owner::contain_unwind(call) {
+        Ok(Ok(())) => true,
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            false
+        }
+        Err(message) => {
+            // This listener owns no action to roll back, so do not signal a cancel-hook failure.
+            disable_panicking_listener(hook, id);
+            crate::callback_owner::report_callback_panic(id, "hook", name, message);
+            false
+        }
+    }
 }
 
 /// Whether `id`'s listener of `hook` is poisoned for the session.

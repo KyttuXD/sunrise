@@ -177,6 +177,24 @@ mod root {
             pub(super) static POISONED: std::cell::RefCell<std::collections::HashSet<(usize, &'static str)>> =
                 std::cell::RefCell::new(std::collections::HashSet::new());
         }
+        pub(super) fn run_isolated_listener(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            invoke: impl FnOnce() -> Result<(), Refusal>,
+        ) -> bool {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(invoke)) {
+                Ok(Ok(())) => true,
+                Ok(Err(refusal)) => {
+                    refusal.report_each();
+                    false
+                }
+                Err(_) => {
+                    poison(hook, id);
+                    false
+                }
+            }
+        }
         pub(super) fn poison(hook: super::HookId, id: &'static str) {
             POISONED.with(|poisoned| poisoned.borrow_mut().insert((hook as usize, id)));
         }

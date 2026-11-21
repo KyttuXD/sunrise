@@ -145,24 +145,27 @@ pub enum TextureAtlas {
 /// `register_texture_atlases` declares it: its id and the atlas definition listing its sprites.
 /// Sunrise stitches its sprites into the GUI atlas, each under [`Self::sprite_name`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+// no wire: an in-process declaration for one client resource generation.
 // exhaustive: mods submit declarations by value
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct TextureAtlasRegistration {
-    /// The atlas's id, in the mod's own namespace (`mymod:icons`).
+    /// The texture slot, in any namespace. A later registration for this slot replaces it.
+    /// Use the texture location, not the definition id, to replace a built-in slot:
+    /// for example `minecraft:textures/atlas/gui.png`.
     pub atlas: Identifier,
     /// Its definition, `assets/<namespace>/atlases/<path>.json` (`mymod:icons`): a `sources` list
     /// like vanilla's atlas definitions (`directory`, `single`, `filter`, `unstitch`,
-    /// `paletted_permutations`), which resource packs can change like theirs.
+    /// `paletted_permutations`), which resource packs can change like theirs. The definition
+    /// id must not already be registered, including by the game.
     pub definition: Identifier,
 }
 
 impl TextureAtlasRegistration {
-    /// The GUI atlas name of this atlas's sprite `sprite` (`mymod:heart` in `mymod:icons` is
-    /// `mymod:gui/atlases/icons/mymod/heart`): what `gui_sprite` looks it up by and
-    /// `DrawContext::sprite` draws.
+    /// The GUI key of this atlas's `sprite`, for `gui_sprite` and `DrawContext::sprite`.
+    /// Derive it here rather than constructing a path by hand. Read the region again after reload.
     pub fn sprite_name(&self, sprite: &Identifier) -> Identifier {
         let path = format!(
-            "gui/atlases/{}/{}/{}",
+            "gui/atlases/{}/{}/{}/{}",
+            self.atlas.path().len(),
             self.atlas.path(),
             sprite.namespace(),
             sprite.path()

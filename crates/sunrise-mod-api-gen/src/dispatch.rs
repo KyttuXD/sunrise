@@ -1264,6 +1264,13 @@ pub(super) fn emit<'a>(
                     o = out.unwrap()
                 ),
             ),
+            None if hook.owned_answer_batch && registration_append.is_some() => (
+                String::new(),
+                format!(
+                    "for {binding} in {each} {{ if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} if super::runtime::run_isolated_listener(HookId::{hook_id}, mod_id, \"{name}\", || super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{ {o}.extend({event}.{o}.drain(..).map(|answer| Answered {{ answer, mod_id }})); }} else {{ {clear_batch} }} }}",
+                    o = out.unwrap()
+                ),
+            ),
             None if mod_cancel && hook.isolate => (
                 String::new(),
                 format!(

@@ -18,7 +18,7 @@ impl HudAtlas {
             if wide_enough {
                 for first_fit in [false, true] {
                     let (placements, glyph_region) = Self::shelves(images, width, first_fit);
-                    if glyph_region + GLYPH_ROWS <= max {
+                    if (glyph_region + GLYPH_ROWS).next_multiple_of(1024) <= max {
                         return Ok((width, placements, glyph_region));
                     }
                 }
@@ -69,6 +69,7 @@ impl HudAtlas {
         folders: &[&str],
         full: bool,
         pool: bool,
+        max_side: u32,
     ) -> Result<Self> {
         let textures = "assets/minecraft/textures";
         let mut files = Vec::new();
@@ -199,7 +200,10 @@ impl HudAtlas {
                 }
             };
             // LabPBR's maps beside a texture are the world's (sprites.rs), not images to draw.
-            if let Some(base) = name.strip_suffix("_n").or_else(|| name.strip_suffix("_s"))
+            let relative = name.split_once(':').map_or(name.as_str(), |(_, path)| path);
+            let registered = relative.starts_with("gui/atlases/");
+            if !registered
+                && let Some(base) = name.strip_suffix("_n").or_else(|| name.strip_suffix("_s"))
                 && root.contains(&crate::atlas_sources::texture_resource(base, "textures"))
             {
                 return None;
@@ -246,16 +250,17 @@ impl HudAtlas {
                     maps.iter().any(Option::is_some).then(|| Box::new(maps))
                 })
                 .flatten();
-            (gw <= 1024
-                && (gh <= 512
-                    || matches!(
-                        name.as_str(),
-                        "gui/title/background/panorama_0"
-                            | "gui/title/background/panorama_2"
-                            | "gui/title/background/panorama_3"
-                            | "gui/presets/isles"
-                    )
-                    || name.starts_with("font/")))
+            (registered
+                || (gw <= 1024
+                    && (gh <= 512
+                        || matches!(
+                            name.as_str(),
+                            "gui/title/background/panorama_0"
+                                | "gui/title/background/panorama_2"
+                                | "gui/title/background/panorama_3"
+                                | "gui/presets/isles"
+                        )
+                        || name.starts_with("font/"))))
             .then_some(((name, w, h, pixels), flags, gui_size, animated, maps))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -383,26 +388,66 @@ impl HudAtlas {
                 decode_bytes(include_bytes!("../jei_recipes/config_button.png"))?;
             images.push(("sunrise/recipes/settings".to_owned(), width, height, rgba));
         }
+        // Stitch the game's HUD first. A mod atlas that exceeds the shared sheet's capacity
+        // must not cause the game to drop its packs or downscale unrelated model textures.
+        let mut registered = std::collections::BTreeMap::<String, Vec<PackedImage>>::new();
+        images.retain_mut(|image| {
+            let Some(key) = image.0.strip_prefix(REGISTERED_KEY) else {
+                return true;
+            };
+            let (namespace, path) = key.split_once(':').unwrap_or(("minecraft", key));
+            let Some((length, rest)) = path
+                .strip_prefix("gui/atlases/")
+                .and_then(|p| p.split_once('/'))
+            else {
+                return true;
+            };
+            let Some((atlas, _)) = length
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| rest.split_at_checked(n))
+                .filter(|(_, sprite)| sprite.starts_with('/'))
+            else {
+                return true;
+            };
+            registered
+                .entry(format!("{namespace}:{atlas}"))
+                .or_default()
+                .push(std::mem::take(image));
+            false
+        });
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)
-                .or_else(|error| -> Result<_> {
-                    let models = reducible_model_sprites(root, &images, &bordered);
-                    let layout = Self::layout_reducing_models(
-                        &mut images,
-                        &mut gui_sizes,
-                        &models,
-                        MAX_ATLAS_SIZE,
-                    )?;
-                    log::warn!(
-                        "reduced HUD model texture resolution to keep the resource pack: {error}"
-                    );
-                    Ok(layout)
-                })?;
+        let mut layout = Self::layout_leaving_out(&mut images, &mut animated, &cit_names, max_side)
+            .or_else(|error| -> Result<_> {
+                let models = reducible_model_sprites(root, &images, &bordered);
+                let layout =
+                    Self::layout_reducing_models(&mut images, &mut gui_sizes, &models, max_side)?;
+                log::warn!(
+                    "reduced HUD model texture resolution to keep the resource pack: {error}"
+                );
+                Ok(layout)
+            })?;
+        for (atlas, group) in registered {
+            let names: HashSet<_> = group.iter().map(|image| image.0.clone()).collect();
+            images.extend(group);
+            images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+            match Self::layout(&images, max_side) {
+                Ok(stitched) => layout = stitched,
+                Err(error) => {
+                    images.retain(|image| !names.contains(&image.0));
+                    animated.retain(|name| !names.contains(name));
+                    log::warn!("texture atlas {atlas} did not fit the GUI sheet: {error}");
+                }
+            }
+        }
+        let (width, placements, glyph_region) = layout;
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
         let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        let image_bytes = usize::try_from(u64::from(width) * u64::from(height) * 4)?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(image_bytes)?;
+        pixels.resize(image_bytes, 0u8);
         let mut sprites = HashMap::new();
         let mut translucent = HashSet::new();
         for ((name, w, h, data), (px, py)) in images.iter().zip(placements) {

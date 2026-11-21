@@ -402,6 +402,11 @@ impl Game<'_> {
         // registering mod for crash attribution.
         let client_listeners = self.register_client_reload_listeners();
         let texture_atlases = super::client_reload::collect_texture_atlases();
+        let texture_limit = self
+            .renderer
+            .as_ref()
+            .map(|r| r.device.limits().max_texture_dimension_2d);
+        let emissive = super::client_reload::collect_emissive_sprites();
         super::mods::register_fluid_models(self.options.execution_role);
         let stage = move |progress: &crate::game::Progress| {
             stage_pack(
@@ -411,6 +416,7 @@ impl Game<'_> {
                 &mod_sources,
                 client_listeners,
                 &texture_atlases,
+                (&emissive, texture_limit),
                 &assets,
                 &res,
                 &context,
@@ -686,7 +692,8 @@ pub(super) fn stage_pack(
     server: &[Pack],
     mod_sources: &super::mods::ModsState,
     client_listeners: mod_api::ClientListenerRegistry,
-    texture_atlases: &[mod_api::TextureAtlasRegistration],
+    texture_atlases: &[mod_api::Answered<mod_api::TextureAtlasRegistration>],
+    (emissive, texture_limit): (&sunrise_client::native_emissive::Registrations, Option<u32>),
     assets: &Arc<Assets>,
     res: &Resources,
     context: &WorkerContext,
@@ -718,7 +725,7 @@ pub(super) fn stage_pack(
             let game = sunrise_assets::resource_source::ResourceSource::directory(
                 vanilla_root.to_path_buf(),
             );
-            HudAtlas::build_over_with_dynamic_textures(&source, &source, &game, pool)
+            HudAtlas::build_over_with_dynamic_textures(&source, &source, &game, pool, texture_limit)
                 .map_err(|e| e.to_string())
         });
         let panorama = super::resource_load::named_scope(s, "pack-assets", || {
@@ -731,7 +738,7 @@ pub(super) fn stage_pack(
             )
         });
         (
-            assets.reload(&resource_root),
+            assets.reload_with_models(&resource_root, None, emissive),
             atlas.join(),
             panorama.join(),
             small

@@ -91,6 +91,7 @@ fn startup_recipe_uses_registered_condition() {
                 &crate::game::Progress::new(),
                 &mut |_, _| unreachable!(),
                 &crate::game::mods::ModsState::default(),
+                || Ok(None),
             )
             .expect("startup must accept a mod-registered condition in a recipe");
             assert!(

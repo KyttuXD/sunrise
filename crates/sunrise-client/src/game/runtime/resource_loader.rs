@@ -285,6 +285,7 @@ pub(super) fn run_loading(
     started: Instant,
 ) -> Result<()> {
     let progress = Progress::new();
+    let (device_limits, limits) = std::sync::mpsc::sync_channel(1);
     let (receiver, loader) = startup_menu::spawn_loader(
         &options,
         &settings,
@@ -292,11 +293,13 @@ pub(super) fn run_loading(
         &vanilla_root,
         started,
         &progress,
+        move || limits.recv().map(Some).map_err(Into::into),
     )?;
     let menu = startup_menu::StartupMenu::new(&options, pack_error.as_deref())?;
     let loading = Loading {
         window: None,
         renderer: None,
+        device_limits: Some(device_limits),
         boot: sunrise_client::hud::HudAtlas::boot(),
         gui: None,
         settings,

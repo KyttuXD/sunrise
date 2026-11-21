@@ -14077,6 +14077,7 @@ pub(crate) fn run_with(
         &Progress::new(),
         &mut |_, _| {},
         &options.mods,
+        || Ok(None),
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();

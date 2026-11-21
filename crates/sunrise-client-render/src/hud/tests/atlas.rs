@@ -161,10 +161,11 @@ fn the_dynamic_texture_pool_exists_only_when_a_mod_is_loaded() {
         Path::new("/nonexistent/sunrise-test-assets").to_path_buf(),
     );
     let plain = HudAtlas::build(&root).unwrap();
-    let without = HudAtlas::build_over_with_dynamic_textures(&root, &root, &root, false).unwrap();
+    let without =
+        HudAtlas::build_over_with_dynamic_textures(&root, &root, &root, false, None).unwrap();
     assert!(plain.dynamic_texture_pool.is_none() && without.dynamic_texture_pool.is_none());
     assert_eq!((without.width, without.height), (plain.width, plain.height));
-    let with = HudAtlas::build_over_with_dynamic_textures(&root, &root, &root, true).unwrap();
+    let with = HudAtlas::build_over_with_dynamic_textures(&root, &root, &root, true, None).unwrap();
     let pool = with.dynamic_texture_pool.as_ref().expect("the pool");
     assert_eq!(pool.slots(), dynamic_textures::DYNAMIC_TEXTURE_SLOTS);
     assert!(
@@ -464,18 +465,18 @@ fn two_gui_ids_of_one_walked_name_and_a_model_only_id_keep_their_own_results() {
 fn a_gui_filter_never_erases_a_registered_atlas_sprite_of_its_name() {
     let root = model_atlas_root("gui-registered", r#"{"sources":[]}"#, r#"{"sources":[]}"#);
     write_pixel(
-        &root.join("assets/demo/textures/gui/atlases/icons/demo/heart.png"),
+        &root.join("assets/demo/textures/gui/atlases/5/icons/demo/heart.png"),
         [0, 200, 0, 255],
     );
     std::fs::write(
         root.join("assets/minecraft/atlases/gui.json"),
         r#"{"sources":[
-            {"type":"minecraft:single","resource":"demo:item/sheet","sprite":"demo:gui/atlases/icons/demo/heart"},
-            {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"gui/atlases/icons/demo/heart"}}]}"#,
+            {"type":"minecraft:single","resource":"demo:item/sheet","sprite":"demo:gui/atlases/5/icons/demo/heart"},
+            {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"gui/atlases/5/icons/demo/heart"}}]}"#,
     )
     .unwrap();
     let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
-    let name = "demo:gui/atlases/icons/demo/heart";
+    let name = "demo:gui/atlases/5/icons/demo/heart";
     let packed = *atlas
         .registered
         .get(name)
@@ -491,7 +492,7 @@ fn a_gui_filter_never_erases_a_registered_atlas_sprite_of_its_name() {
 /// model lookup its own.
 #[test]
 fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
-    let name = "demo:gui/atlases/icons/demo/heart";
+    let name = "demo:gui/atlases/5/icons/demo/heart";
     let items = format!(
         r#"{{"sources":[{{"type":"minecraft:single","resource":"demo:item/sheet","sprite":"{name}"}}]}}"#
     );
@@ -499,7 +500,7 @@ fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
     write_vanilla_gui_definition(&root);
     // The staged file of the registered atlas's sprite, as its projection lays it down: two
     // frames (green, blue), played from the second.
-    let staged = root.join("assets/demo/textures/gui/atlases/icons/demo/heart.png");
+    let staged = root.join("assets/demo/textures/gui/atlases/5/icons/demo/heart.png");
     std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
     let mut encoder = png::Encoder::new(std::fs::File::create(&staged).unwrap(), 1, 2);
     encoder.set_color(png::ColorType::Rgba);
@@ -514,7 +515,7 @@ fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
         r#"{"animation":{"width":1,"height":1,"frames":[1,0]}}"#,
     )
     .unwrap();
-    let raw_name = "gui/atlases/icons/demo/raw";
+    let raw_name = "gui/atlases/5/icons/demo/raw";
     let raw_file = root.join(format!("assets/minecraft/textures/{raw_name}.png"));
     write_pixel(&raw_file, [200, 100, 0, 255]);
     std::fs::write(
@@ -1586,6 +1587,34 @@ fn one_oversized_texture_leaves_the_others_in() {
     let _ = fs::remove_dir_all(&root);
     let names: Vec<_> = added.iter().map(|(i, _, _)| i.0.as_str()).collect();
     assert_eq!(names, ["sunrise_cit:minecraft/optifine/cit/b"]);
+}
+
+#[test]
+fn an_unstitchable_registered_atlas_does_not_discard_other_atlases() {
+    let root = model_atlas_root(
+        "registered-device-limit",
+        r#"{"sources":[]}"#,
+        r#"{"sources":[]}"#,
+    );
+    for (name, width) in [
+        ("3/bad/test/wide", 8193),
+        ("3/bad/test/icon", 2),
+        ("4/good/test/wide", 1200),
+    ] {
+        let file = root.join(format!("assets/test/textures/gui/atlases/{name}.png"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        write_strip(&file, width, 1, &[[3, 91, 7, 255]], None);
+    }
+    let source = ResourceSource::directory(root.clone());
+    let atlas =
+        HudAtlas::build_over_with_dynamic_textures(&source, &source, &source, false, Some(8192))
+            .unwrap();
+    let good = atlas.gui_rect("test:gui/atlases/4/good/test/wide").unwrap();
+    assert_eq!(good.w, 1200);
+    assert_eq!(texel_at(&atlas, *good, 0, 0), [3, 91, 7, 255]);
+    assert!(atlas.gui_rect("test:gui/atlases/3/bad/test/wide").is_none());
+    assert!(atlas.gui_rect("test:gui/atlases/3/bad/test/icon").is_none());
+    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
