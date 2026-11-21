@@ -77,15 +77,19 @@ Register callbacks inside `Hooks::register` (the counterpart to NeoForge's `Cras
 | `r.crash_section("caches", Arc::new(Caches))` | `<mod id>: caches: <value>` after Sunrise's system details |
 | `r.crash_header(Arc::new(Banner))` | `<mod id>: <value>` under the report title |
 
-Both callbacks implement `CrashSection`. The report calls `value()` once when it is written,
-not during registration. Return `None` to omit a line.
+Both callbacks implement `CrashSection`. The report calls `value()` when it is written, not during
+registration. Return `None` to omit the entry. The report includes the full label and value, even
+for a callback registered by the mod named in the crash. Continuation lines start with `| ` after
+the entry's indent so the text cannot look like a new entry. Control characters that could change
+the display, such as carriage returns, are escaped.
 
-- Lines follow registration order on clients and dedicated servers.
-- Callbacks run on a separate thread. The report waits at most two seconds for headers and
-  another two seconds for system-detail sections.
-- A callback that panics or times out produces `~~ERROR~~`; the report is written.
-- Callbacks belonging to the mod blamed for the crash are not called.
-- Control characters become spaces, and each value is limited to 4096 bytes on one line.
+Callbacks run in registration order within each section, on a separate thread. The report waits
+for the callbacks to return, so read your own diagnostic state without waiting on the game thread
+or a lock it may hold.
+
+A failed entry starts with `~~ERROR~~` and includes the diagnostic. A panic is logged with the
+mod's ID, queues an error toast, and disables only that callback for the session. Other failures
+are reported each time and do not disable the callback.
 
 ## Converted-package attribution
 
