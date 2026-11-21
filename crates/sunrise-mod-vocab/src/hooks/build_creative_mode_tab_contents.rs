@@ -15,6 +15,7 @@ pub trait Hooks {
     /// Invalid edits return typed errors and are logged. Both-list edits check and change parent
     /// before search without undoing parent on a search error. A panicking listener is reported
     /// and disabled for this session; completed edits stand and the next listener still runs.
+    /// The panic does not abort the action that requested the catalog.
     #[hook(
         dispatch = "flat",
         side = "both",

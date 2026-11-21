@@ -529,6 +529,75 @@ fn creative_catalog_builds_lazily_and_edits_before_filtering_on_both_sides() {
 }
 
 #[test]
+#[ignore = "daily"]
+fn a_creative_listener_panic_does_not_abort_farmland_trampling() {
+    use mod_api::{FarmlandTrampleEvent, Flow, HookId, ServerHost};
+    use sunrise_client::{chunk::Chunk, mobs::Mob};
+    use sunrise_core::geometry::Vec3;
+
+    struct Gardener;
+    #[mod_api::__subscriptions]
+    impl Hooks for Gardener {
+        fn farmland_trample(
+            &self,
+            host: &mut dyn ServerHost,
+            _: &mut FarmlandTrampleEvent,
+        ) -> Flow {
+            assert_eq!(host.built_creative_tabs(), Ok(None));
+            let tabs = host.creative_tabs(CreativeTabPermissions::Normal).unwrap();
+            assert!(tabs.tab("minecraft:building_blocks").is_some());
+            Flow::Continue
+        }
+    }
+
+    struct BrokenEditor;
+    #[mod_api::__subscriptions]
+    impl Hooks for BrokenEditor {
+        fn build_creative_mode_tab_contents(
+            &self,
+            _: HostSide<'_>,
+            _: &mut BuildCreativeModeTabContentsEvent<'_>,
+        ) {
+            panic!("creative build listener trapped");
+        }
+    }
+
+    let mods = vec![
+        ModEntry::new("gardener", Box::new(Gardener)),
+        ModEntry::new("broken_editor", Box::new(BrokenEditor)),
+    ];
+    mod_platform::testing::with_mods(mods.into(), || {
+        let _world = PhaseOwner::scope(ModPhase::World);
+        with_game_role(fixture_root(), ExecutionRole::DedicatedServer, |game| {
+            game.options.dedicated = Some(Vec::new());
+            install_dedicated_holders(game, 2);
+            game.streaming
+                .insert_remote(&mut game.world, Chunk::empty(0, 0));
+            let registry = game.pack.assets.registry;
+            let farmland = registry.default_state("minecraft:farmland").unwrap();
+            let dirt = registry.default_state("minecraft:dirt").unwrap();
+            game.world.set(1, 63, 1, farmland).unwrap();
+            let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut mob = Mob::new(20, pig, Vec3::new(1.5, 64.125, 1.5), 0.0);
+            mob.ai.goals = Default::default();
+            mob.ai.targets = Default::default();
+            mob.fall_distance = 6.0;
+            mob.velocity.y = -0.5;
+            game.mobs.push(mob);
+            game.entity_section_joined(20, [1.5, 64.125, 1.5]);
+
+            game.tick_creature_entities().unwrap();
+
+            assert_eq!(
+                mod_api::__private::poisoned_listeners(HookId::BuildCreativeModeTabContents),
+                1,
+            );
+            assert_eq!(game.world.block(1, 63, 1), dirt);
+        });
+    });
+}
+
+#[test]
 fn a_tab_reads_back_its_title_as_a_translatable_with_the_title_as_fallback() {
     let catalog = Catalog::parse(&serde_json::json!({
         "schema":4, "item_features":{}, "potion_features":{},
