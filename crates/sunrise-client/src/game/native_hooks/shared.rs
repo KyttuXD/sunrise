@@ -627,11 +627,6 @@ impl Game<'_> {
     }
 }
 
-/// `Level.setBlock`'s flags, for the `native_set_block_property` helpers:
-/// `flags::UPDATE_CLIENTS` as a vanilla crop grows, `flags::UPDATE_ALL` as a
-/// furnace sets its `lit`.
-pub(super) use sunrise_world::level::flags;
-
 /// A mod's camera (`native_camera_pose`): each value that isn't finite keeps vanilla's from `view`.
 fn posed_camera(
     view: (glam::DVec3, f32, f32),

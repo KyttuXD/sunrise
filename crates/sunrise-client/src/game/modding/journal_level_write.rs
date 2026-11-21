@@ -10,7 +10,7 @@ use mod_api::{
     AttachmentBatch, AttachmentStore, BlockEntityRef, BlockKey, BlockPos, BlockSide, BlockState,
     BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStack, LevelHost,
     LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer, PartStateError,
-    ParticleOptions, RandomDraw, Tags,
+    ParticleOptions, RandomDraw, SoundSource, Tags,
 };
 use sunrise_core::ticks::TickPriority;
 use sunrise_world::{
@@ -203,7 +203,13 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             };
         self.write_block(pos, replacement, flags)
     }
-    fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+    fn set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: BlockUpdateFlags,
+    ) -> bool {
         let [x, y, z] = pos;
         super::native_hooks::with_property(
             self.game.pack.assets.registry,
@@ -211,26 +217,24 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             key,
             value,
         )
-        .is_some_and(|state| self.write_block(pos, state, flags))
+        .is_some_and(|state| self.write_block(pos, state, flags.bits()))
     }
     fn play_sound(
         &mut self,
         sound: &str,
         at: [f64; 3],
-        source: usize,
+        source: SoundSource,
         volume: f32,
         pitch: f32,
     ) -> bool {
-        if self.game.lan.is_none()
-            || !super::native_hooks::mod_sound_ok(sound, at, source, volume, pitch)
-        {
+        if self.game.lan.is_none() || !super::native_hooks::mod_sound_ok(sound, at, volume, pitch) {
             return false;
         }
         self.queue(PendingWrite::Sound(NativeSound {
             dimension: self.level.dimension_id(),
             sound: sound.to_owned(),
             at,
-            source: source as i32,
+            source: source.index() as i32,
             volume,
             pitch,
             seed: 0,

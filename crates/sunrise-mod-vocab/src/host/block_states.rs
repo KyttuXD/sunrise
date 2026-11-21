@@ -68,18 +68,16 @@ pub trait BlockStatesServerHost {
     #[access(WorldOnly)]
     fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str) -> bool;
     /// Side: server.
-    /// `native_set_block_property` with `Level.setBlock`'s `flags`, as a
-    /// brewing stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
-    /// Players get the write when `UPDATE_CLIENTS` is set; false when this
-    /// window isn't a server, and in each case `native_set_block_property`
-    /// returns false.
+    /// Like [`Self::set_block_property`], with explicit `Level.setBlock` flags.
+    /// For example, a brewing stand updates its bottles with [`BlockUpdateFlags::CLIENTS`].
+    /// Returns false when not on the server or when no block state changes.
     #[access(WorldOnly)]
     fn set_block_property_with(
         &mut self,
         pos: [i32; 3],
         key: &str,
         value: &str,
-        flags: i32,
+        flags: BlockUpdateFlags,
     ) -> bool;
 }
 /// The handles' reads of the `block_states` area, implemented by the game and reached through [`Backend`].

@@ -1414,9 +1414,11 @@ impl TriState {
 /// ```
 /// A client-side level cannot write:
 /// ```compile_fail
-/// use mod_api::LevelSide;
+/// use mod_api::{BlockUpdateFlags, LevelSide};
 /// fn write(side: LevelSide<'_>) {
-///     if let LevelSide::Client(level) = side { level.set_block_property([0, 0, 0], "a", "b", 0); }
+///     if let LevelSide::Client(level) = side {
+///         level.set_block_property([0, 0, 0], "a", "b", BlockUpdateFlags::NONE);
+///     }
 /// }
 /// ```
 pub trait LevelHost {
@@ -1766,22 +1768,22 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
     fn remove_block(&mut self, _pos: [i32; 3], _moved: bool) -> bool {
         unimplemented!("LevelWriteHost::remove_block")
     }
-    /// Change a block property through `native_set_block_property`.
+    /// Change a block property with the same [`BlockUpdateFlags`] as [`Self::set_block`].
     fn set_block_property(
         &mut self,
         _pos: [i32; 3],
         _key: &str,
         _value: &str,
-        _flags: i32,
+        _flags: BlockUpdateFlags,
     ) -> bool {
         unimplemented!("LevelWriteHost::set_block_property")
     }
-    /// Play a sound for nearby players through `play_sound`.
+    /// Queue a level sound for nearby players under the given [`SoundSource`].
     fn play_sound(
         &mut self,
         _sound: &str,
         _at: [f64; 3],
-        _source: usize,
+        _source: SoundSource,
         _volume: f32,
         _pitch: f32,
     ) -> bool {

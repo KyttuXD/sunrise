@@ -58,7 +58,7 @@ impl Game<'_> {
         except: Option<u32>,
     ) -> Option<&mut NativeSound> {
         let dimension = self.native_level_dimension(level)?;
-        if !mod_sound_ok(sound, at, source.index(), volume, pitch) {
+        if !mod_sound_ok(sound, at, volume, pitch) {
             return None;
         }
         // `Level.playSound` draws `soundSeedGenerator.nextLong` at the call;

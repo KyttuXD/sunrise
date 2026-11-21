@@ -25,19 +25,10 @@ pub(in crate::game) fn level_sound_playable(at: [f64; 3], volume: f32, pitch: f3
     position_ok && gain_ok
 }
 
-/// Whether a native mod's sound can be sent: a namespaced event, a sound
-/// source, a position inside the world's range and a finite, non-negative
-/// volume and pitch.
-pub(in crate::game) fn mod_sound_ok(
-    sound: &str,
-    at: [f64; 3],
-    source: usize,
-    volume: f32,
-    pitch: f32,
-) -> bool {
-    sound_id(sound)
-        && source < sunrise_client::settings::SOUND_SOURCES.len()
-        && level_sound_playable(at, volume, pitch)
+/// Whether a native mod's sound can be sent: a namespaced event, a position
+/// inside the world's range and a finite, non-negative volume and pitch.
+pub(in crate::game) fn mod_sound_ok(sound: &str, at: [f64; 3], volume: f32, pitch: f32) -> bool {
+    sound_id(sound) && level_sound_playable(at, volume, pitch)
 }
 
 /// Whether `play_local_sound` takes this sound: a sound event's id (`sound_id`, as

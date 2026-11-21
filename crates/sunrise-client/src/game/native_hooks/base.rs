@@ -4228,19 +4228,20 @@ impl Game<'_> {
         key: &str,
         value: &str,
     ) -> bool {
-        self.set_block_property_with(pos, key, value, flags::UPDATE_ALL)
+        self.set_block_property_with(
+            pos,
+            key,
+            value,
+            BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS,
+        )
     }
-    /// `native_set_block_property` with `Level.setBlock`'s `flags`, as a
-    /// brewing stand's tick sets its bottles with `flags::UPDATE_CLIENTS`.
-    /// Players get the write when `UPDATE_CLIENTS` is set; false when this
-    /// window isn't a server, and in each case `native_set_block_property`
-    /// returns false.
+    /// Like `set_block_property`, with explicit `Level.setBlock` flags.
     pub(in crate::game) fn set_block_property_with(
         &mut self,
         pos: [i32; 3],
         key: &str,
         value: &str,
-        flags: i32,
+        flags: BlockUpdateFlags,
     ) -> bool {
         // As `native_set_block`: a window that isn't a server holds a copy.
         if self.serving.is_none() && self.options.dedicated.is_none() {
@@ -4251,7 +4252,7 @@ impl Game<'_> {
             return false;
         };
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags))
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags.bits()))
     }
     /// Sends clients the block at `pos` and its block entity's update tag
     /// (`native_block_entity_update_tag`) again, as `Level.sendBlockUpdated`

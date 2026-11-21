@@ -71,9 +71,7 @@ impl Game<'_> {
         let Some(at) = self.target_position(target) else {
             return false;
         };
-        if !mod_sound_ok(sound, at, source.index(), volume, pitch)
-            || !self.native_sound_known(sound)
-        {
+        if !mod_sound_ok(sound, at, volume, pitch) || !self.native_sound_known(sound) {
             return false;
         }
         let seed = self.world.random.next_long();

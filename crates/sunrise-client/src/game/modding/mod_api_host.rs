@@ -914,7 +914,7 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
         volume: f32,
         pitch: f32,
     ) -> bool {
-        super::native_hooks::mod_sound_ok(sound, at, source.index(), volume, pitch)
+        super::native_hooks::mod_sound_ok(sound, at, volume, pitch)
             && self
                 .0
                 .hit_effects()
@@ -934,7 +934,7 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
         let Some((id, at, _)) = hit.entity(entity) else {
             return false;
         };
-        super::native_hooks::mod_sound_ok(sound, at, source.index(), volume, pitch)
+        super::native_hooks::mod_sound_ok(sound, at, volume, pitch)
             && hit.play(sound, at, source, volume, pitch, Some(id))
     }
     fn entity_next_float(&mut self, entity: mod_api::EntityRef) -> Option<f32> {
@@ -1348,16 +1348,22 @@ impl<'a: 'b, 'b, T: std::ops::DerefMut<Target = Ticks>> mod_api::LevelWriteHost
         self.level.remove_block_write(&mut self.ticks, pos, moved)
     }
 
-    fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+    fn set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: mod_api::BlockUpdateFlags,
+    ) -> bool {
         self.level
-            .native_set_block_property(&mut self.ticks, pos, key, value, flags)
+            .native_set_block_property(&mut self.ticks, pos, key, value, flags.bits())
     }
 
     fn play_sound(
         &mut self,
         sound: &str,
         at: [f64; 3],
-        source: usize,
+        source: mod_api::SoundSource,
         volume: f32,
         pitch: f32,
     ) -> bool {
