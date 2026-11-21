@@ -392,8 +392,14 @@ Every mod is asked about every key, so a mod ignores keys it does not own. See [
 
 A general row can move to another position in its level through `EntityRef::teleport_to`. A row teleported on its own dismounts; a teleported vehicle takes its riders with it. Removing the vehicle dismounts its riders and leaves them in the level. `EntityRef::set_rotation` turns a general row without moving or dismounting it; the new angles reach clients through ordinary tracking.
 
-In `declare_general_entity`, pass `pickable` after `summonable`. Pass `false` for
-vanilla's plain `Entity.isPickable` default. With `true`, the crosshair can hit
+In `Registrar::declare_general_entity`, pass a validated `Identifier`, for example
+`Identifier::from_parts("mymod", "robot")?`, and keep the returned `EntityTypeKey`
+if you need it to compare entity kinds. The namespace names the type; it does not have
+to match the mod's ID. An existing entity type cannot be overwritten. For the vanilla
+builder's default features, pass `&[FeatureFlag::Vanilla]`; `&[]` requires no feature.
+Keep mod dependencies in `sunrise-mod.toml`.
+
+Pass `pickable` after `summonable`. Pass `false` for vanilla's plain `Entity.isPickable` default. With `true`, the crosshair can hit
 the declared box once the row is shown. The ordinary use and attack packets name
 that row, and the existing `entity_interact` and `attack_entity` hooks receive
 its id and declared kind. Without a listener's response, use on the row passes

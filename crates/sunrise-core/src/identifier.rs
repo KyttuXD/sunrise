@@ -3,8 +3,8 @@ use crate::java_hash_map::JavaKey;
 use std::{cmp::Ordering, fmt, sync::Arc};
 #[derive(Debug, PartialEq, Eq)]
 struct Data {
-    namespace: Box<str>,
-    path: Box<str>,
+    name: Box<str>,
+    namespace_len: usize,
     hash: i32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,8 +39,8 @@ impl Identifier {
             return Err(IdentifierError::Path);
         }
         Ok(Self(Arc::new(Data {
-            namespace: namespace.into(),
-            path: path.into(),
+            name: format!("{namespace}:{path}").into_boxed_str(),
+            namespace_len: namespace.len(),
             hash: hash(namespace).wrapping_mul(31).wrapping_add(hash(path)),
         })))
     }
@@ -63,11 +63,15 @@ impl Identifier {
             path,
         )
     }
+    /// The fully qualified name without allocating.
+    pub fn as_str(&self) -> &str {
+        &self.0.name
+    }
     pub fn namespace(&self) -> &str {
-        &self.0.namespace
+        &self.0.name[..self.0.namespace_len]
     }
     pub fn path(&self) -> &str {
-        &self.0.path
+        &self.0.name[self.0.namespace_len + 1..]
     }
     pub fn hash_code(&self) -> i32 {
         self.0.hash
@@ -87,7 +91,7 @@ impl PartialOrd for Identifier {
 }
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.namespace(), self.path())
+        f.write_str(self.as_str())
     }
 }
 impl JavaKey for Identifier {

@@ -6,11 +6,16 @@ use crate::lan::Body;
 use mod_api::{GeneralEntityCategory, GeneralSavePolicy};
 use sunrise_protocol::buf::Reader;
 
-struct Declare;
+struct Declare {
+    extra: Option<&'static str>,
+}
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Declare {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
-        for (path, chunks, interval) in [("near", 2, 1), ("far", 8, 10), ("wide", 320, 3)] {
+        for (path, chunks, interval) in [("near", 2, 1), ("far", 8, 10), ("wide", 320, 3)]
+            .into_iter()
+            .chain(self.extra.map(|path| (path, 2, 1)))
+        {
             r.declare_general_entity(
                 mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 GeneralEntityCategory::Misc,
@@ -34,10 +39,14 @@ impl mod_api::Hooks for Declare {
 /// `test` with `mymod:near` (2 chunks, every tick), `mymod:far` (8 chunks, every 10 ticks) and
 /// `mymod:wide` (320 chunks) declared.
 fn with_types(test: impl FnOnce()) {
+    with_extra_type(None, test);
+}
+
+fn with_extra_type(extra: Option<&'static str>, test: impl FnOnce()) {
     mod_platform::__private::initialize().expect("test registration requires the mod API runtime");
     // A general type is declared only while the registration phase is current.
     let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
-    let declare = || vec![mod_api::ModEntry::new("mymod", Box::new(Declare))];
+    let declare = || vec![mod_api::ModEntry::new("mymod", Box::new(Declare { extra }))];
     mod_platform::testing::with_mods(declare().into(), || {
         mod_platform::__private::part_tests::install_parts_fixture(&declare()).unwrap();
         test()
@@ -46,6 +55,10 @@ fn with_types(test: impl FnOnce()) {
 
 /// A live general row of type `kind` at x.
 fn row(id: i32, kind: &str, x: f64) -> EntityState {
+    let declaration = mod_api::__private::general_entity_type_declarations()
+        .iter()
+        .find(|entry| entry.id.as_str() == kind)
+        .unwrap();
     EntityState {
         id,
         uuid: 0x1000 + id as u128,
@@ -54,7 +67,7 @@ fn row(id: i32, kind: &str, x: f64) -> EntityState {
         yaw: 45.0,
         pitch: -10.0,
         velocity: [0.125, 0.0, 0.0],
-        general: true,
+        general: Some(declaration.into()),
         ..EntityState::default()
     }
 }
@@ -215,7 +228,7 @@ fn a_reading_client_in_range_gets_one_spawn_and_another_client_nothing() {
             [general_entity::Message::Spawn {
                 id: 7,
                 uuid: 0x1007,
-                type_key: "mymod:far".into(),
+                type_key: mod_api::Identifier::parse("mymod:far").unwrap(),
                 position: [4.5, 64.0, 0.5],
                 rotation: [45.0, -10.0],
                 velocity: [0.125, 0.0, 0.0],
@@ -237,7 +250,7 @@ fn a_quarantined_record_with_a_declared_key_is_never_paired() {
     with_types(|| {
         let [sunrise, vanilla] = run([0.5, 64.0, 0.5], 3, |_| {
             vec![EntityState {
-                general: false,
+                general: None,
                 ..row(7, "mymod:far", 4.5)
             }]
         });
@@ -328,12 +341,13 @@ fn leaving_range_removes_the_row_and_coming_back_spawns_it_afresh() {
     });
 }
 
-/// A key the protocol spawn message cannot carry (past `general_entity::MAX_KEY`): no client is
-/// introduced to the row, so none is recorded as tracking it or sent its moves.
+/// A registered key longer than the wire string: no client is introduced to the row or
+/// recorded as tracking it, and no client gets its moves.
 #[test]
 fn a_row_whose_spawn_cannot_be_written_is_tracked_by_nobody() {
-    with_types(|| {
-        let long = format!("mymod:{}", "l".repeat(general_entity::MAX_KEY));
+    static LONG_PATH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| "l".repeat(32_767));
+    with_extra_type(Some(LONG_PATH.as_str()), || {
+        let long = format!("mymod:{}", LONG_PATH.as_str());
         let [sunrise, _] = run([0.5, 64.0, 0.5], 3, |tick| {
             vec![row(7, &long, 0.5 + f64::from(tick))]
         });

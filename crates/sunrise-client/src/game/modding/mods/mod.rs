@@ -1181,11 +1181,17 @@ pub(in crate::game) fn register_iterated_registries(
     let path = Builtin::find(root).ok_or("registries.json not found")?;
     let builtin = Builtin::load(&path)?;
     if let Some(ids) = builtin.get("minecraft:entity_type") {
+        let general = super::general::general_type_catalog();
+        if let Some(slot) = ids.names.iter().find_map(|name| general.slot(name)) {
+            let declared = general.declaration(slot);
+            return Err(format!(
+                "mod {}: general entity type {} duplicates a registered entity type",
+                declared.mod_id, declared.id,
+            )
+            .into());
+        }
         mod_api::__private::resolve_entity_types(
-            ids.names
-                .iter()
-                .map(String::as_str)
-                .chain(super::general::general_type_catalog().keys()),
+            ids.names.iter().map(String::as_str).chain(general.keys()),
         )
         .map_err(|errors| errors.join("\n"))?;
     }

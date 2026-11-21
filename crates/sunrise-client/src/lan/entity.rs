@@ -112,7 +112,30 @@ pub struct EntityState {
     /// `sunrise:general_entity` at its declaration's range and interval. Set by
     /// that producer alone, never from the key: a quarantined record keeps its
     /// type's key and is no row.
-    pub general: bool,
+    pub general: Option<GeneralTracking>,
+}
+
+/// Pairing metadata from a live general entity's registered type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeneralTracking {
+    id: &'static mod_api::Identifier,
+    range: i32,
+    interval: u32,
+}
+
+impl From<&'static mod_api::__private::GeneralEntityTypeDeclaration> for GeneralTracking {
+    fn from(declaration: &'static mod_api::__private::GeneralEntityTypeDeclaration) -> Self {
+        // The broadcast percentage scales the wide range before the view distance limits it.
+        // Vanilla's i32::MAX interval means no updates.
+        Self {
+            id: &declaration.id,
+            range: declaration.tracking_chunks.max(0),
+            interval: match declaration.update_interval {
+                i32::MAX => 0,
+                interval => u32::try_from(interval).unwrap_or(0),
+            },
+        }
+    }
 }
 
 impl EntityState {
@@ -148,7 +171,7 @@ impl EntityState {
         self.spectator = false;
         self.watching = false;
         self.hidden = None;
-        self.general = false;
+        self.general = None;
     }
 }
 
@@ -262,13 +285,13 @@ enum Kind {
     Type(i32),
     /// A native mod's general row (#792), whose type no client registry holds: a
     /// `sunrise:general_entity` spawn, to the clients that read it.
-    General,
+    General(&'static mod_api::Identifier),
 }
 
 impl Viewer<'_> {
     /// Whether this client may be paired with an entity introduced as `kind`.
     fn pairs_with(&self, kind: Kind) -> bool {
-        kind != Kind::General || self.general_entity
+        !matches!(kind, Kind::General(_)) || self.general_entity
     }
 }
 
@@ -402,9 +425,11 @@ impl ServerEntity {
     fn new(e: &EntityState, kind: Option<i32>, riding: &Riding) -> Self {
         // A live general row takes its declaration's settings, which may reach past a
         // vanilla type's byte; any other entity its type's, whatever its key.
-        let ((range, interval, track_deltas), kind) = if e.general {
-            let declared = tracking::general(&e.kind).unwrap_or((5, 3, true));
-            (declared, Some(Kind::General))
+        let ((range, interval, track_deltas), kind) = if let Some(general) = e.general {
+            (
+                (general.range, general.interval, true),
+                Some(Kind::General(general.id)),
+            )
         } else {
             let (range, interval, deltas) = tracking::settings(&e.kind);
             ((i32::from(range), interval, deltas), kind.map(Kind::Type))
@@ -469,19 +494,18 @@ impl ServerEntity {
                 head_yaw: pack_degrees(e.head_yaw),
                 data: e.data,
             })),
-            Kind::General => {
+            Kind::General(type_key) => {
                 // Where the clients that already track it were last told it is: the next
                 // move is a delta from there (VecDeltaCodec's base), for this client too.
                 let spawn = general_entity::Message::Spawn {
                     id: e.id,
                     uuid: e.uuid,
-                    type_key: e.kind.clone(),
+                    type_key: type_key.clone(),
                     position: self.base,
                     rotation: [e.yaw, e.pitch],
                     velocity: e.velocity,
                 };
-                // Registration bounds the key as the codec does, and a row's values are
-                // finite; one that still breaks them is introduced to nobody.
+                // A valid registry id can still be too long for the network string.
                 match general_entity::encode(&spawn) {
                     Ok(data) => out.push(play::Clientbound::CustomPayload(CustomPayload {
                         channel: general_entity::CHANNEL.into(),
@@ -1237,7 +1261,7 @@ impl Entities {
                 spectator: e.spectator,
                 watching: e.watching,
                 hidden: e.hidden,
-                general: e.general,
+                general: e.general.is_some(),
             };
             let chunks = [(
                 (e.position[0].floor() as i32) >> 4,
@@ -1438,7 +1462,7 @@ impl Entities {
                 spectator: e.spectator,
                 watching: e.watching,
                 hidden: e.hidden,
-                general: e.general,
+                general: e.general.is_some(),
             });
         }
         self.states.end();
@@ -1905,7 +1929,7 @@ mod tests {
             spectator: false,
             watching: false,
             hidden: None,
-            general: false,
+            general: None,
         }
     }
 

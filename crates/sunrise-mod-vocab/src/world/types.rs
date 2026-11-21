@@ -509,9 +509,9 @@ pub enum LightLayer {
 ///
 /// Used by general entity declarations (`EntityType.Builder.requiredFeatures`) and checked
 /// against a world's [`FeatureFlags`] (`EntityType.isEnabled`) at spawn and load.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+// no wire: feature ids are parsed at world and protocol boundaries; declarations use native flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum FeatureFlag {
     /// `minecraft:vanilla` (`FeatureFlags.VANILLA`).
     Vanilla,
@@ -1005,9 +1005,9 @@ impl Difficulty {
 /// Each hook supplies only the variants its NeoForge counterpart can produce:
 /// `finalize_spawn` (`Either<BlockEntity, Entity>`) supplies `Block`, `Trial` and `Minecart`,
 /// while `mob_spawn_position_check` (`BaseSpawner`) supplies `Block` and `Minecart`.
+// no wire: this identity can carry a live spawner minecart lent to a native callback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum Spawner {
     /// A monster spawner block (`SpawnerBlockEntity`).
     Block {

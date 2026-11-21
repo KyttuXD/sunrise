@@ -4,8 +4,8 @@ use super::*;
 impl Game<'_> {
     /// `MobSpawnEvent.SpawnPlacementCheck`: after `SpawnPlacements.checkSpawnRules`,
     /// `default_result` is the effective predicate result, including native registrations
-    /// even for vanilla types. `spawner` is the block that asked, if any. `random` is the
-    /// same live stream the predicate used, lent only for the call. `Default` keeps the
+    /// even for vanilla types. `random` is the same live stream the predicate used, lent
+    /// only for the call. `Default` keeps the
     /// predicate result; `Succeed` and `Fail` override it without undoing draws. Server-side.
     pub(in crate::game) fn native_mob_spawn_placement_check(
         &self,
@@ -15,8 +15,9 @@ impl Game<'_> {
     }
     /// `MobSpawnEvent.PositionCheck`: the freshly created mob of type `kind`
     /// may stand at `pos` in `level` for `reason` (`Mob.checkSpawnRules` and
-    /// `checkSpawnObstruction`). `spawner` is the block that asked, if one
-    /// did; `mob` is the mob itself, lent for the call. `result` starts as
+    /// `checkSpawnObstruction`). `spawner` is the monster spawner block or minecart
+    /// behind `BaseSpawner`, if one asked; trial spawners don't fire this event.
+    /// `mob` is the mob itself, lent for the call. `result` starts as
     /// `Default`: vanilla's two checks decide; `Succeed` or `Fail` skips them.
     /// Server-side.
     pub(in crate::game) fn native_mob_spawn_position_check(

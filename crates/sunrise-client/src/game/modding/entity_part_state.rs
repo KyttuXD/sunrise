@@ -43,7 +43,7 @@ pub(in crate::game) fn refuse_entity_part_state_kinds(
         .filter_map(|declaration| {
             let reason = declaration.kind_refusal(
                 &mob,
-                |kind| general.iter().any(|declared| declared.id == kind),
+                |kind| general.iter().any(|declared| declared.id.as_str() == kind),
                 |kind| mod_api::__private::resolved_entity_type_key(kind).is_some(),
             )?;
             Some(format!(

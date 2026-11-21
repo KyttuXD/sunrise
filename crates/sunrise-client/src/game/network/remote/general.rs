@@ -185,9 +185,9 @@ impl Game<'_> {
         } = message;
         // Both sides froze the same declarations (general types come from both-side
         // packages): a key this client lacks comes from a server that does not match it.
-        let Some(type_slot) = general_type_catalog().slot(&type_key) else {
+        let Some(type_slot) = general_type_catalog().slot(type_key.as_str()) else {
             if let Some(r) = self.remote.as_mut()
-                && r.general.unknown.insert(type_key.clone())
+                && r.general.unknown.insert(type_key.as_str().to_owned())
             {
                 log::warn!(
                     "Sunrise: the server sent general entity type {type_key}, not installed here"
@@ -448,7 +448,7 @@ mod tests {
             data: general_entity::encode(&Message::Spawn {
                 id,
                 uuid: 0x77,
-                type_key: key.into(),
+                type_key: mod_api::Identifier::parse(key).unwrap(),
                 position: at,
                 rotation: [yaw, 0.0],
                 velocity: [0.0; 3],

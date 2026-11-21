@@ -17,13 +17,10 @@ use sunrise_core::vanilla_bytes::Writer;
 /// The custom payload channel, clientbound only.
 pub const CHANNEL: &str = "sunrise:general_entity";
 /// The channel's exact declaration version in the negotiated table.
-pub const VERSION: &str = "1";
+pub const VERSION: &str = "2";
 /// The longest type key, in Java UTF-16 code units: vanilla's `Identifier.STREAM_CODEC` /
 /// `ByteBufCodecs.STRING_UTF8` (`FriendlyByteBuf.DEFAULT_MAX_STRING_LENGTH`).
-pub const MAX_KEY: usize = 32_767;
-/// The largest clientbound custom payload message, in bytes: vanilla's
-/// `ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE` (1 MiB).
-pub const MAX_MESSAGE: usize = crate::packets::custom_payload::CLIENTBOUND_LIMIT;
+const MAX_KEY: usize = 32_767;
 
 /// What the server tells a client about a general row.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,7 +29,7 @@ pub enum Message {
     Spawn {
         id: i32,
         uuid: u128,
-        type_key: String,
+        type_key: Identifier,
         position: [f64; 3],
         /// Yaw, then pitch, in degrees.
         rotation: [f32; 2],
@@ -41,8 +38,8 @@ pub enum Message {
     },
 }
 
-/// A message's payload; an error for a key that is not a namespaced identifier of at most
-/// [`MAX_KEY`] UTF-16 code units, or a value that is not finite.
+/// A message's payload; an error for a name too long for the wire string or a non-finite value.
+/// The enclosing custom payload packet owns its payload size check.
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
     let mut w = Writer::new();
     match message {
@@ -54,35 +51,32 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
             rotation,
             velocity,
         } => {
-            check_key(type_key)?;
+            // A validated identifier is ASCII, so its byte and UTF-16 lengths agree.
+            if type_key.as_str().len() > MAX_KEY {
+                return Err(Error::new("general entity: type identifier is too long"));
+            }
             check_finite(position, rotation, velocity)?;
             w.varint(0);
             w.varint(*id);
             w.uuid(*uuid);
-            w.string(type_key);
+            w.string(type_key.as_str());
             position.iter().for_each(|&v| w.f64(v));
             rotation.iter().for_each(|&v| w.f32(v));
             velocity.iter().for_each(|&v| w.f64(v));
         }
     }
-    if w.data.len() > MAX_MESSAGE {
-        return Err(Error::new("general entity: a message past the cap"));
-    }
     Ok(w.data)
 }
 
-/// A payload's message; an error for one that is malformed or breaks a bound.
+/// Decode a client's spawn message, resolving the wire string to an identifier once.
 pub fn decode(data: &[u8]) -> Result<Message> {
-    if data.len() > MAX_MESSAGE {
-        return Err(Error::new("general entity: a message past the cap"));
-    }
     let mut r = Reader::new(data);
     let message = match r.varint()? {
         0 => {
             let id = r.varint()?;
             let uuid = r.uuid()?;
-            let type_key = r.string(MAX_KEY)?;
-            check_key(&type_key)?;
+            let type_key = Identifier::parse(&r.string(MAX_KEY)?)
+                .map_err(|error| Error::new(format!("general entity: {error}")))?;
             let position = [r.f64()?, r.f64()?, r.f64()?];
             let rotation = [r.f32()?, r.f32()?];
             let velocity = [r.f64()?, r.f64()?, r.f64()?];
@@ -104,18 +98,6 @@ pub fn decode(data: &[u8]) -> Result<Message> {
     Ok(message)
 }
 
-fn check_key(key: &str) -> Result<()> {
-    if key.encode_utf16().count() > MAX_KEY
-        || Identifier::parse_namespaced(key).is_none()
-        || !key.contains(':')
-    {
-        return Err(Error::new(
-            "general entity: the type key is not an identifier",
-        ));
-    }
-    Ok(())
-}
-
 fn check_finite(position: &[f64; 3], rotation: &[f32; 2], velocity: &[f64; 3]) -> Result<()> {
     let finite = position.iter().chain(velocity).all(|v| v.is_finite())
         && rotation.iter().all(|v| v.is_finite());
@@ -133,7 +115,7 @@ mod tests {
         Message::Spawn {
             id: 4321,
             uuid: 0x0123_4567_89ab_cdef_0011_2233_4455_6677,
-            type_key: "test:missile".into(),
+            type_key: Identifier::parse("test:missile").unwrap(),
             position: [1.5, 70.0, -3.25],
             rotation: [90.0, -12.5],
             velocity: [0.25, 0.0, -0.5],
@@ -175,33 +157,31 @@ mod tests {
     }
 
     #[test]
-    fn a_key_that_is_not_an_identifier_or_too_long_is_refused() {
-        for key in ["missile", "Test:Missile", "test:", ":missile", "test:a b"] {
-            let mut m = spawn();
-            let Message::Spawn { type_key, .. } = &mut m;
-            *type_key = key.into();
-            assert!(encode(&m).is_err(), "{key}");
-        }
-        // Keys longer than the removed 256-byte cap still round-trip up to vanilla's string bound.
-        let mut long_valid = spawn();
-        let Message::Spawn { type_key, .. } = &mut long_valid;
-        *type_key = format!("test:{}", "a".repeat(300));
-        assert_eq!(decode(&encode(&long_valid).unwrap()).unwrap(), long_valid);
-
-        let mut m = spawn();
-        let Message::Spawn { type_key, .. } = &mut m;
-        *type_key = format!("test:{}", "a".repeat(MAX_KEY));
-        assert!(encode(&m).is_err());
-        // Past the encoder: a long key on the wire.
-        let mut w = Writer::new();
-        w.varint(0);
-        w.varint(1);
-        w.uuid(1);
-        w.string(&format!("test:{}", "a".repeat(MAX_KEY)));
-        (0..3).for_each(|_| w.f64(0.0));
-        (0..2).for_each(|_| w.f32(0.0));
-        (0..3).for_each(|_| w.f64(0.0));
-        assert!(decode(&w.data).is_err());
+    fn identifier_length_is_checked_at_the_wire_boundary() {
+        let wire = |key: &str| {
+            let mut w = Writer::new();
+            w.varint(0);
+            w.varint(1);
+            w.uuid(1);
+            w.string(key);
+            (0..3).for_each(|_| w.f64(0.0));
+            (0..2).for_each(|_| w.f32(0.0));
+            (0..3).for_each(|_| w.f64(0.0));
+            w.data
+        };
+        let name = format!("test:{}", "a".repeat(32_762));
+        let mut message = spawn();
+        let Message::Spawn { type_key, .. } = &mut message;
+        *type_key = Identifier::parse(&name).unwrap();
+        assert_eq!(decode(&encode(&message).unwrap()).unwrap(), message);
+        let name = format!("{name}a");
+        let Message::Spawn { type_key, .. } = &mut message;
+        *type_key = Identifier::parse(&name).unwrap();
+        assert!(encode(&message).is_err());
+        assert!(decode(&wire(&name)).is_err());
+        assert!(decode(&wire("test:Missile")).is_err());
+        let Message::Spawn { type_key, .. } = decode(&wire("pig")).unwrap();
+        assert_eq!(type_key.as_str(), "minecraft:pig");
     }
 
     #[test]
@@ -216,6 +196,5 @@ mod tests {
         let mut other = bytes;
         other[0] = 1;
         assert!(decode(&other).is_err());
-        assert!(decode(&vec![0; MAX_MESSAGE + 1]).is_err());
     }
 }

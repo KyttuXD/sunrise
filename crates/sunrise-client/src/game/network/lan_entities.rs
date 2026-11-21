@@ -830,18 +830,18 @@ impl Game<'_> {
         let catalog = super::general::general_type_catalog();
         let rows = self.resident_entities.general.rows.iter();
         for row in rows.filter(|row| row.id > after) {
-            let kind = catalog.key(row.type_slot);
+            let declaration = catalog.declaration(row.type_slot);
             let e = out.add(
                 row.id as i32,
                 sunrise_client::lan::playerdata::ints_uuid(row.uuid),
-                kind,
+                declaration.id.as_str(),
             );
             let (p, v) = (row.position, row.velocity);
             e.position = [p.x, p.y, p.z];
             e.velocity = [v.x, v.y, v.z];
             [e.yaw, e.pitch] = row.rotation;
             e.head_yaw = row.rotation[0];
-            e.general = true;
+            e.general = Some(declaration.into());
         }
     }
 

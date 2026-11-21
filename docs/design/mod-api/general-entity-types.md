@@ -9,17 +9,17 @@ Provisional answer to [#792](https://github.com/arismoko/horizon/issues/792): re
 ## Implemented stage 2 API
 
 `Hooks::register` receives `&mut dyn Registrar`, whose `GeneralTypesRegistrar`
-supertrait provides `declare_general_entity(path, category, width, height,
+supertrait provides `declare_general_entity(id, category, width, height,
 passenger_attachment, save_policy, summonable, pickable, piston_push_reaction,
 tracking_chunks, update_interval, payload_version, required_features)` returning
 `Result<EntityTypeKey, GeneralEntityRegistrationError>`. Use `GeneralEntityCategory::Misc`,
 `GeneralSavePolicy::{Save, NoSave}` and `FeatureFlag` values for `required_features`
 (`EntityType.Builder.requiredFeatures`, enforced via `EntityType.isEnabled` at spawn and load).
-The path must belong to the declaring mod's namespace, with no synthetic 256-byte cap at
-registration (network strings are bounded only at the protocol boundary by vanilla's 32,767
-UTF-16 code-unit `ByteBufCodecs.STRING_UTF8` limit). Registration is only available during the
-registration phase, requires a both-side package, and refuses invalid ids, duplicates and
-non-finite dimensions with `GeneralEntityRegistrationError` while recording a refusal.
+`id` is a validated `Identifier`. Its namespace is independent of the declaring mod; an
+existing entity type's ID cannot be declared again. There is no length limit at registration.
+The protocol alone applies vanilla's `ByteBufCodecs.STRING_UTF8` limit. Registration is only
+available during the registration phase, requires a both-side package, and refuses empty
+namespace or path, duplicates and non-finite dimensions while recording a refusal.
 
 Dimensions and passenger attachment coordinates must be finite. A passenger
 attachment is a vehicle-local point in blocks, rotated with the vehicle's yaw.

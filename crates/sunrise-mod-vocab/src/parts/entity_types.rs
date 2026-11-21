@@ -53,12 +53,12 @@ pub enum GeneralSavePolicy {
 /// to any hand-kept engine list.
 #[derive(Clone, Debug)]
 // exhaustive: only registration builds it; the game reads it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: this declaration is installed in the process-local registry.
 pub struct GeneralEntityTypeDeclaration {
     /// The declaring mod's id: the first key of the registry's sort order.
     pub mod_id: String,
     /// The type's namespaced id (`mymod:robot`).
-    pub id: String,
+    pub id: crate::Identifier,
     /// The type's spawn category.
     pub category: GeneralEntityCategory,
     /// The type's finite width in blocks, as supplied to the vanilla builder.
@@ -89,34 +89,11 @@ pub struct GeneralEntityTypeDeclaration {
     pub required_features: Vec<crate::FeatureFlag>,
 }
 
-/// A placeholder to build a declaration from: empty ids, a miscellaneous type that saves, vanilla's
-/// default player-sized box and no requirements. Registration validates what a mod sets.
-impl Default for GeneralEntityTypeDeclaration {
-    fn default() -> Self {
-        Self {
-            mod_id: String::new(),
-            id: String::new(),
-            category: GeneralEntityCategory::Misc,
-            width: 0.6,
-            height: 1.8,
-            passenger_attachment: None,
-            save_policy: GeneralSavePolicy::Save,
-            summonable: true,
-            pickable: false,
-            piston_push_reaction: crate::PushReaction::PushPull,
-            tracking_chunks: 5,
-            update_interval: 3,
-            payload_version: 1,
-            required_features: Vec::new(),
-        }
-    }
-}
-
 /// Why a mod's general entity type declaration was refused
 /// ([`Registrar::declare_general_entity`](GeneralTypesRegistrar::declare_general_entity)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: the native registrar returns refusals directly.
 pub enum GeneralEntityRegistrationError {
     /// The registry is frozen: declarations are only accepted while the game
     /// is still in its registration phase, before any world or connection
@@ -125,13 +102,14 @@ pub enum GeneralEntityRegistrationError {
     /// Only both-side packages may declare entity types, which the network
     /// names.
     WrongSide,
-    /// The type's id is malformed, empty or in a namespace the declaring mod
-    /// does not own (a vanilla type's included).
+    /// The identifier has an empty namespace or path, so it cannot name a registry entry.
     InvalidId,
-    /// Another declaration already covers the type.
+    /// This identifier already names an entity type.
     Duplicate,
     /// A dimension or passenger attachment component is NaN or infinite.
     NotFinite,
+    /// The registry has no free representable slot.
+    RegistrySlotsExhausted,
 }
 
 /// The general entity types mods declared.
@@ -143,8 +121,8 @@ pub fn general_entity_type_declarations() -> &'static [GeneralEntityTypeDeclarat
 /// namespaced types, filled before worlds or connections open.
 pub trait GeneralTypesRegistrar {
     /// Declare a general entity type of the mod's own (vanilla's
-    /// `EntityType` builder, NeoForge's `RegisterEvent`): `path` in the mod's
-    /// namespace (`robot` of `mymod` is `mymod:robot`), its category, its
+    /// `EntityType` builder, NeoForge's `RegisterEvent`): a validated `id`
+    /// (`mymod:robot`), its category, its
     /// finite `width` and `height` in blocks, its passenger attachment, its save and
     /// summon policy, whether it is pickable, its signed integer tracking distance and
     /// update interval, its payload schema version and the Minecraft feature flags
@@ -162,16 +140,16 @@ pub trait GeneralTypesRegistrar {
     /// blocks, rotated with the vehicle's yaw. `None` uses `[0.0, height, 0.0]`.
     ///
     /// Every flag in `required_features` must be enabled in a world (`EntityType.isEnabled`)
-    /// for instances of the type to spawn or load there. Mod dependencies belong in
-    /// `sunrise-mod.toml`, not `required_features`.
+    /// for instances of the type to spawn or load there. Pass `&[FeatureFlag::Vanilla]`
+    /// for the vanilla builder default, or `&[]` to require no flags. Mod dependencies
+    /// belong in `sunrise-mod.toml`, not `required_features`.
     ///
-    /// An id outside the mod's manifest-owned namespaces, a malformed id, a
-    /// duplicate of this mod's or another's, a non-finite dimension or attachment,
-    /// or a declaration after the registry froze (the registration phase has ended)
-    /// refuses, naming the mod, without panicking. Invalid input is refused, never clamped.
+    /// An empty namespace or path, a duplicate of an existing type's id, a non-finite
+    /// dimension or attachment, or a declaration after registration ends refuses,
+    /// naming the mod. An explicit namespace does not have to match the mod id.
     fn declare_general_entity(
         &mut self,
-        path: &str,
+        id: crate::Identifier,
         category: GeneralEntityCategory,
         width: f64,
         height: f64,
