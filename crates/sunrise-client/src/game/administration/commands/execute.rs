@@ -283,7 +283,7 @@ impl Game<'_> {
     /// Run a leaf command and report its outcome to the `store` callbacks.
     pub(in crate::game) fn run_leaf(&mut self, id: &str, ctx: &Context) -> R<i32> {
         self.exec.callback = None;
-        let store = self.command_source.and_then(|s| s.store);
+        let store = self.command_source.as_ref().and_then(|s| s.store);
         let result = self.execute_command(id, ctx);
         let custom = self.exec.callback.take();
         let outcome = match (&result, custom) {
@@ -356,7 +356,11 @@ impl Game<'_> {
             self.ui
                 .rules
                 .int_at(sunrise_client::gamerules::vanilla::MAX_COMMAND_FORKS) as usize;
-        let mut sources = vec![self.command_source.unwrap_or_else(|| self.player_source())];
+        let mut sources = vec![
+            self.command_source
+                .clone()
+                .unwrap_or_else(|| self.player_source()),
+        ];
         let mut c = ctx;
         // A fork modifier (as, at, positioned as, rotated as, facing entity,
         // on, a non-terminal if/unless) makes later errors silent
@@ -1134,14 +1138,20 @@ impl Game<'_> {
             let p = self
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
-            let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+            let dimension = self
+                .command_source
+                .as_ref()
+                .map_or(self.dim, |s| s.dimension);
             return Ok(flag(
                 dimension == self.dim
                     && p.is_some_and(|p| self.command_chunk_loaded(p[0] >> 4, p[2] >> 4)),
             ));
         }
         if c.has("dimension") {
-            let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+            let dimension = self
+                .command_source
+                .as_ref()
+                .map_or(self.dim, |s| s.dimension);
             return Ok(flag(matches!(c.get("dimension"), Some(Arg::Resource(d))
                 if d.as_str() == dimension.id())));
         }

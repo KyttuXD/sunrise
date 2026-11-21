@@ -340,15 +340,15 @@ impl Game<'_> {
     }
     /// CommandSourceStack.sendFailure: red text.
     pub(super) fn command_failure(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
         let message = Text::empty().append(message).with_color(text::RED);
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_output(block, message);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_output(cart, message);
             return;
         }
@@ -357,7 +357,7 @@ impl Game<'_> {
     /// `CommandSourceStack.sendSystemMessage`: no success-feedback rule. Unlike `sendSuccess`
     /// and `sendFailure`, it addresses the executing player when there is one.
     fn command_system_message(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
         if self.native_console_source() {
@@ -384,14 +384,14 @@ impl Game<'_> {
     /// `sendSuccess(message, false)`: the source is told (when it takes
     /// success feedback), the operators are not.
     pub(super) fn feedback_unbroadcast(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_success(block, message, false);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_success(cart, message, false);
             return;
         }
@@ -411,14 +411,14 @@ impl Game<'_> {
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_success(block, message, true);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_success(cart, message, true);
             return;
         }
@@ -490,7 +490,7 @@ impl Game<'_> {
         }
         // getDisplayName: the entity the command runs as (`execute as`), or
         // the server's own source, "Server".
-        let who = match self.command_source.and_then(|s| s.entity) {
+        let who = match self.command_source.as_ref().and_then(|s| s.entity) {
             Some(entity) => self.target_name(entity),
             None if self.console_broadcast.is_some() => self.server_name(),
             None => self.player_display_name(),
@@ -533,6 +533,7 @@ impl Game<'_> {
     }
     pub(super) fn source_rotation(&self) -> [f32; 2] {
         self.command_source
+            .as_ref()
             .map_or([self.yaw, self.pitch], |s| s.rot)
     }
     /// LocalCoordinates use the anchored position; world coordinates the position.
@@ -1954,7 +1955,7 @@ impl Game<'_> {
         };
         // Entity.lookAt: from the source's anchor (the feet, unless `anchored
         // eyes`) on the teleported entity, so the eyes depend on the target.
-        let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+        let anchored_eyes = self.command_source.as_ref().is_some_and(|s| s.eyes);
         let look_at = |this: &Self, t: Target, at: [f64; 3]| {
             let f = facing?;
             let eye = if anchored_eyes {
@@ -1967,7 +1968,7 @@ impl Game<'_> {
         // A server's player in another level than the source's (`execute
         // in`, the console's Overworld) moves there (ServerPlayer.teleport
         // into another level), after the command.
-        let source_level = match self.command_source.and_then(|s| s.level) {
+        let source_level = match self.command_source.as_ref().and_then(|s| s.level) {
             Some(level) => level,
             None if self.source_entity().is_none() => super::Dim::Overworld,
             None => self.dim,
@@ -3004,7 +3005,10 @@ impl Game<'_> {
     }
     fn clone_levels(&mut self, ctx: &Context) -> R<i32> {
         let here = self.dim;
-        let source_level = self.command_source.map_or(self.dim, |s| s.dimension);
+        let source_level = self
+            .command_source
+            .as_ref()
+            .map_or(self.dim, |s| s.dimension);
         // The coordinates, from the command's own source, before any level moves.
         let position = |name: &str| -> R<[i32; 3]> {
             let c = self
@@ -3574,7 +3578,10 @@ impl Game<'_> {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
             _ => [0.0, 0.0],
         };
-        let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+        let dimension = self
+            .command_source
+            .as_ref()
+            .map_or(self.dim, |s| s.dimension);
         let [yaw, pitch] = self.set_world_spawn(dimension, pos, rot);
         let args = [
             Text::literal(pos[0].to_string()),

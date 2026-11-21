@@ -492,7 +492,10 @@ impl Game<'_> {
     /// `TestCommand.trackAndStartRunner`: command summaries retain their
     /// original source. Test-block actions and verify keep their existing path.
     pub(super) fn track_and_start_command_runner(&mut self, infos: Vec<Info>, grid: Grid) {
-        let mut source = self.command_source.unwrap_or_else(|| self.player_source());
+        let mut source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let recipient = if self.console_broadcast.is_some() {
             None
         } else {

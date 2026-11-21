@@ -317,7 +317,7 @@ impl Game<'_> {
     }
     /// `/teammsg`: the executor's team hears the message.
     pub(super) fn cmd_teammsg(&mut self, ctx: &Context) -> R<i32> {
-        let entity = match self.command_source {
+        let entity = match self.command_source.as_ref() {
             Some(s) => s.entity,
             None => Some(Target::Player),
         };

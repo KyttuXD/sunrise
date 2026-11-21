@@ -83,6 +83,7 @@ impl Game<'_> {
 
     pub(super) fn native_console_source(&self) -> bool {
         self.command_source
+            .as_ref()
             .is_some_and(|source| source.native_console)
     }
 

@@ -42,7 +42,7 @@ fn rotation_for_steps(steps: i32) -> Option<Rotation> {
 impl Game<'_> {
     /// `CommandSourceStack.sendFailure`.
     fn test_failure(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
         self.send_command_output(

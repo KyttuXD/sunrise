@@ -553,7 +553,10 @@ impl Game<'_> {
                         self.world.random.next_float() < chance
                     }
                     _ => {
-                        let source = self.command_source.unwrap_or_else(|| self.player_source());
+                        let source = self
+                            .command_source
+                            .clone()
+                            .unwrap_or_else(|| self.player_source());
                         // Scores are read from the holder's board only where
                         // an `entity_scores` leaf may ask.
                         let scored = adv::asks_scores(cond);
