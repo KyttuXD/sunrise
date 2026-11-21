@@ -1,0 +1,3 @@
+ids = ["method:prelude::EffectsClientHost::create_fireworks", "type:FireworksRequest.explosions", "hook:client_fireworks"]
+why = "Vanilla ClientLevel.createFireworks passes the visual list to FireworkParticles.Starter, which NeoForge extends at Starter.tick without adding a list limit. The limit of 256 belongs to the Fireworks item component constructor and codecs, not to direct particle requests. Normal ParticleEngine admission and lifetime still apply."
+migrate = "No call changes are required: keep using ClientHost::create_fireworks(&request). You no longer need to truncate or split this visual list at 256. Keep minecraft:fireworks item component lists at 256 explosions or fewer."

@@ -90,7 +90,9 @@ uses, so the explosions follow each other every other tick as a rocket's do. Wit
 false the sparks and flash draw but the blast and twinkle sounds don't play, as for a
 silent rocket. Nothing reaches the server or other players: a mod's server half tells each
 client half to draw it. The request is refused on a server, without a loaded client player
-and world, for non-finite numbers and for more than 256 explosions.
+and world, or for non-finite numbers. The particle engine handles admission and lifetime as
+usual. The `minecraft:fireworks` item component still allows at most 256 explosions; that
+limit does not apply to the visual request.
 
 ## Bot movement and block collisions
 

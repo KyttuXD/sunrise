@@ -3400,7 +3400,8 @@ impl ParticleEngine {
             return;
         }
         let twinkle = explosions.iter().any(|e| e.twinkle);
-        let lifetime = explosions.len() as i32 * 2 - 1 + if twinkle { 15 } else { 0 };
+        // Count ticks in the list's index type; direct requests aren't item components.
+        let lifetime = explosions.len() * 2 - 1 + if twinkle { 15 } else { 0 };
         let far = (0..3).map(|i| (at[i] - camera[i]).powi(2)).sum::<f64>() >= 256.0;
         self.pending.push(PendingParticle::Starter(Starter {
             at,
@@ -3428,8 +3429,8 @@ impl ParticleEngine {
                 let pitch = 0.95 + self.random.next_float() * 0.1;
                 self.sounds.push((sound, s.at, 20.0, pitch, true));
             }
-            if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
-                let e = s.explosions[(s.life / 2) as usize].clone();
+            if s.life.is_multiple_of(2) && s.life / 2 < s.explosions.len() {
+                let e = s.explosions[s.life / 2].clone();
                 // DyeColor.BLACK.getFireworkColor without colours.
                 let colors = if e.colors.is_empty() {
                     vec![0x1E1B1B]
@@ -4814,8 +4815,8 @@ struct Starter {
     at: [f64; 3],
     v: [f64; 3],
     explosions: Vec<FireworkExplosion>,
-    life: i32,
-    lifetime: i32,
+    life: usize,
+    lifetime: usize,
     twinkle_delay: bool,
     /// `FireworkParticles.Starter.playSound`, with `isFarAwayFromCamera` when
     /// it plays: `None` for a silent rocket.
