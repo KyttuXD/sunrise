@@ -225,8 +225,12 @@ mod tests {
             };
             add(1, "minecraft:cow", 0);
             add(2, "minecraft:sheep", 4);
+            let shears = ItemStack::new("minecraft:shears", 1);
 
-            assert!(game.shear_entity((0, 64, 0)).unwrap(), "the cow is sheared");
+            assert!(
+                game.shear_entity((0, 64, 0), &shears).unwrap(),
+                "the cow is sheared"
+            );
             let leather: Vec<_> = game
                 .dropped
                 .iter()
@@ -235,7 +239,10 @@ mod tests {
                 .collect();
             assert_eq!(leather, [1]);
 
-            assert!(!game.shear_entity((4, 64, 0)).unwrap(), "the sheep refuses");
+            assert!(
+                !game.shear_entity((4, 64, 0), &shears).unwrap(),
+                "the sheep refuses"
+            );
             assert!(!game.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
             assert!(!game.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
         });
@@ -334,7 +341,7 @@ mod tests {
                 assert!(game.dropped.is_empty(), "a refused part drops nothing");
                 // The dispenser's shearing is not a success when the part's performing is refused.
                 assert!(
-                    !game.shear_entity((4, 64, 0)).unwrap(),
+                    !game.shear_entity((4, 64, 0), &shears).unwrap(),
                     "a refused on_sheared shears nothing"
                 );
                 assert!(!game.mobs[1].extra.sheared);

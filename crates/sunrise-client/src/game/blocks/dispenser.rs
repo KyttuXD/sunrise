@@ -1656,7 +1656,7 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
-        let sheared = self.shear_beehive(target)? || self.shear_entity(target)?;
+        let sheared = self.shear_beehive(target)? || self.shear_entity(target, &stack)?;
         if sheared {
             return Ok((self.hurt_and_break(stack, 1), CLICK));
         }
@@ -1794,15 +1794,14 @@ impl Game<'_> {
     }
     /// `ShearsDispenseItemBehavior.tryShearEntity`: the first live, ready
     /// `Shearable` in the block is sheared (an entity part's `IShearable` answer comes first).
-    pub(super) fn shear_entity(&mut self, target: Pos) -> Result<bool> {
-        let shears = ItemStack::new("minecraft:shears", 1);
+    pub(super) fn shear_entity(&mut self, target: Pos, shears: &ItemStack) -> Result<bool> {
         for t in self.targets_at(target) {
             // Entity.shearOffAllLeashConnections comes first, for any entity.
             if self.shear_off_leashes(t) {
                 return Ok(true);
             }
             let Target::Mob(i) = t else { continue };
-            let part = self.part_shearable(i, None, &shears);
+            let part = self.part_shearable(i, None, shears);
             let m = &self.mobs[i];
             if !m.alive() || part.is_some_and(|(_, shearable)| !shearable) {
                 continue;
@@ -1816,7 +1815,7 @@ impl Game<'_> {
             match m.species() {
                 // A refused part shears nothing: no shear event, and the dispenser does not succeed.
                 _ if let Some((part, _)) = part => {
-                    if self.part_shear(i, part, None, &shears).is_err() {
+                    if self.part_shear(i, part, None, shears).is_err() {
                         continue;
                     }
                 }
@@ -1846,7 +1845,7 @@ impl Game<'_> {
                     let drops = self.sequence_loot(
                         "minecraft:shearing/sheep",
                         &format!("minecraft:shearing/sheep/{color}"),
-                        Some(&shears),
+                        Some(shears),
                     );
                     for stack in drops {
                         for _ in 0..stack.count {
@@ -1883,7 +1882,7 @@ impl Game<'_> {
                     let drops = self.sequence_loot(
                         "minecraft:shearing/bogged",
                         "minecraft:shearing/bogged",
-                        Some(&shears),
+                        Some(shears),
                     );
                     for stack in drops {
                         self.spawn_at_location(at, height, stack);
@@ -1901,7 +1900,7 @@ impl Game<'_> {
                     let drops = self.sequence_loot(
                         "minecraft:shearing/snow_golem",
                         "minecraft:shearing/snow_golem",
-                        Some(&shears),
+                        Some(shears),
                     );
                     for stack in drops {
                         self.spawn_at_location(at, eye, stack);
@@ -1925,7 +1924,7 @@ impl Game<'_> {
                     }
                 }
                 Species::Mooshroom if !m.is_baby() => {
-                    self.shear_mooshroom(i, None, &shears);
+                    self.shear_mooshroom(i, None, shears);
                 }
                 _ => continue,
             }
