@@ -40,10 +40,12 @@ player has no client, so it leaves no one out; a stale player handle queues noth
 
 `play_sound` also observes transient playback updates. `event.starting` is true for a
 new sound or loop replay and false for a live playback update. `event.instance` identifies the same engine-local
-instance across those calls. At an update only volume and pitch edits apply;
-`None` stops playback. Invalid edited volume (negative or non-finite) or pitch
-(non-positive or non-finite) refuses that refresh. Updates do not replay the sound,
-resolve a different source, or modify the instance's stored settings.
+instance across those calls. A ticking sound applies volume, pitch and effects edits;
+updates from a category volume change apply volume and pitch. `None` stops playback.
+Finite base volume and pitch edits go through the same final calculations as local sound
+requests, even when negative. Non-finite numeric edits or invalid effects refuse the
+refresh. Updates do not replay the sound, resolve a different source, or modify the
+instance's stored settings.
 
 ## Sounds of viewed levels
 

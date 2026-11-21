@@ -82,11 +82,10 @@ pub fn native_sound_engine_load(context: &sunrise_world::native_load_context::Lo
 // Validate a mod's changed parameters at the playback boundary, leaving vanilla
 // inputs alone. Starts and refreshes use the same contract.
 fn valid_playback_edit(original: &SoundPlay, edited: &SoundPlay) -> bool {
-    (edited.volume.to_bits() == original.volume.to_bits()
-        || edited.volume.is_finite() && edited.volume >= 0.0)
-        && (edited.pitch.to_bits() == original.pitch.to_bits()
-            || edited.pitch.is_finite() && edited.pitch > 0.0)
-        && (edited.effects == original.effects || edited.effects.valid())
+    super::readable_base_edit(
+        [original.volume, original.pitch],
+        [edited.volume, edited.pitch],
+    ) && (edited.effects == original.effects || edited.effects.valid())
 }
 
 #[derive(Clone, Debug)]
@@ -599,6 +598,63 @@ mod tests {
         }
     }
     #[test]
+    fn finite_negative_play_sound_edits_reach_the_local_sound_mixer() {
+        struct Replace(bool);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Replace {
+            fn play_sound(
+                &self,
+                _: &dyn mod_api::LoopContext,
+                event: &mut mod_api::PlaySoundEvent<'_>,
+            ) {
+                if event.starting == self.0 {
+                    let sound = event.sound.as_mut().unwrap();
+                    sound.volume = -0.5;
+                    sound.pitch = -1.0;
+                }
+            }
+        }
+        use crate::sound_engine::{MASTER, PlayResult, TickContext, Ticking};
+        for (at_start, category_refresh) in [(true, false), (false, false), (false, true)] {
+            let mods = vec![mod_api::ModEntry::new(
+                "replace",
+                Box::new(Replace(at_start)),
+            )];
+            mod_platform::testing::with_mods(mods.into(), || {
+                let (mut engine, mut backend) = (engine(), Null::default());
+                let play = SoundPlay::ui("minecraft:block.plain");
+                let mut instance = SoundInstance::from_play(&play, LegacyRandom::new(1));
+                instance.ticking = Ticking::Mod { fade: None };
+                instance.can_start_silent = true;
+                let (id, result) = engine.play_new(instance, true, &mut backend);
+                let channel = engine.channel(id).unwrap();
+                if at_start {
+                    assert_eq!(result, PlayResult::StartedSilently);
+                } else {
+                    assert_eq!(result, PlayResult::Started);
+                    assert_eq!(
+                        (backend.volume[&channel], backend.pitch[&channel]),
+                        (1.0, 1.0)
+                    );
+                    if category_refresh {
+                        engine.refresh_category_volume(MASTER, &mut backend);
+                    } else {
+                        engine.tick(false, &TickContext::default(), &mut backend);
+                    }
+                    let instance = engine.instance(id).unwrap();
+                    assert!(!instance.stopped);
+                    assert!(!backend.stopped[&channel]);
+                    assert_eq!((instance.volume, instance.pitch), (1.0, 1.0));
+                }
+                assert_eq!(
+                    (backend.volume[&channel], backend.pitch[&channel]),
+                    (0.0, 0.5)
+                );
+            });
+        }
+    }
+
+    #[test]
     fn invalid_play_sound_edits_refuse_starts_and_stop_live_channels() {
         struct Poison(bool);
         #[mod_api::__subscriptions]
@@ -611,7 +667,6 @@ mod tests {
                 if event.starting == self.0 {
                     let sound = event.sound.as_mut().unwrap();
                     sound.volume = f32::NAN;
-                    sound.pitch = 0.0;
                 }
             }
         }

@@ -4271,29 +4271,6 @@ impl Game<'_> {
             log.push((pos[0], pos[1], pos[2]));
         }
     }
-    /// Plays `sound` for this player only (`SoundPlay`'s event: `minecraft:ui.button.click`,
-    /// or a mod's own from its `assets/<id>/sounds.json`): nothing is sent to the server, and
-    /// other players don't hear it. It takes `&self`, so a screen, key or mouse hook can play
-    /// one: the sound is queued and starts at the next audio update (once a client tick),
-    /// `after` ticks counted from then (0 to 1200, a minute; `SoundEngine.playDelayed`). `SoundPlay::ui` plays it at the listener as an interface sound
-    /// (`SimpleSoundInstance.forUI`); `SoundPlay::at` at a position in the client's level,
-    /// fading with distance (`volume` past 1 carries farther, 16 blocks times the volume), as
-    /// thunder heard after the flash or a blast heard when its shock wave arrives. Its
-    /// `SoundRef` follows and controls this play: `state`, `stop` and `fade`. None, with nothing
-    /// played, on a server or for a value out of range (`SoundPlay::effects` included, by
-    /// `SoundEffects::valid`); an event the resources don't have plays nothing, as vanilla's,
-    /// and its handle reads `Stopped` once the update has tried it. Its effects stay as given
-    /// unless the sound ticks: a `play_sound` listener can change them on each live refresh.
-    pub(in crate::game) fn play_local_sound(
-        &self,
-        sound: &SoundPlay,
-        after: u32,
-    ) -> Option<SoundRef> {
-        if !self.native_window() || !local_sound_ok(sound, after) {
-            return None;
-        }
-        Some(self.mod_sounds.queue(sound, after))
-    }
     /// The particles alive in the client's level (`ParticleEngine.countParticles`): 0 once
     /// a clear is asked, and on a server.
     pub(in crate::game) fn particle_count(&self) -> u32 {

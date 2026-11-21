@@ -11,7 +11,7 @@
 //! backend through `stopped`.
 use crate::sound_events::{INTENTIONALLY_EMPTY, Sentinel, Sound, SoundRegistry};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 use sunrise_core::random::LegacyRandom;
@@ -147,13 +147,13 @@ pub enum Ticking {
         y_angle: f32,
     },
 }
-/// A mod sound's fade in progress: `step` added to the volume each tick it plays, until
-/// `left` reaches 0 and the volume is `target`.
+/// A mod sound's fade in progress, from `start` to `target` over `ticks` ticks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fade {
-    pub step: f32,
-    pub target: f32,
-    pub left: u32,
+    start: f32,
+    target: f32,
+    ticks: u32,
+    left: u32,
 }
 // The volumes are finite (checked where a mod asks for the fade), so equality is total.
 impl Eq for Fade {}
@@ -710,7 +710,7 @@ impl SoundInstance {
         self.looping = false;
     }
     /// A mod's `SoundRef::fade`: the volume moves to `volume` in equal steps over the next
-    /// `ticks` ticks the sound plays, or at once for 0. A fade to 0 stops the sound when it ends,
+    /// `ticks` ticks the sound plays, or at once for 0. A nonpositive target stops it at the end,
     /// as `LoopSoundInstance.fadeOut` does. Only a mod's sound fades.
     pub fn fade_to(&mut self, volume: f32, ticks: u32) {
         let Ticking::Mod { fade } = &mut self.ticking else {
@@ -724,8 +724,9 @@ impl SoundInstance {
             }
         } else {
             *fade = Some(Fade {
-                step: (volume - self.volume) / ticks as f32,
+                start: self.volume,
                 target: volume,
+                ticks,
                 left: ticks,
             });
         }
@@ -743,7 +744,10 @@ impl SoundInstance {
                     }
                 } else {
                     *fade = Some(f);
-                    self.volume += f.step;
+                    let fraction = f64::from(f.ticks - f.left) / f64::from(f.ticks);
+                    let start = f64::from(f.start);
+                    // The difference of two finite, opposite-signed volumes can overflow f32.
+                    self.volume = (start + (f64::from(f.target) - start) * fraction) as f32;
                 }
             }
             return;
@@ -1065,7 +1069,7 @@ pub struct SoundEngine {
     playback_hook: Option<PlaybackHook>,
     /// `loaded`: the library opened.
     pub loaded: bool,
-    tick_count: i32,
+    tick_count: i64,
     instances: HashMap<InstanceId, SoundInstance>,
     /// Instances their owner still refers to.
     retained: HashMap<InstanceId, ()>,
@@ -1083,8 +1087,8 @@ pub struct SoundEngine {
     removed_scratch: Vec<InstanceId>,
     ticking_scratch: Vec<InstanceId>,
     /// `queuedSounds` (insertion order).
-    queued: Vec<(InstanceId, i32)>,
-    delete_time: HashMap<InstanceId, i32>,
+    queued: Vec<(InstanceId, i64)>,
+    delete_time: HashMap<InstanceId, i64>,
     queued_tickable: Vec<InstanceId>,
     used: [usize; 2],
     pub limits: [usize; 2],
@@ -1099,8 +1103,17 @@ pub struct SoundEngine {
     /// The client's loop context, rebuilt with each resource generation, for the
     /// sound hooks (`hooks`). Absent on a server, which has no sound.
     loop_context: Option<sunrise_world::native_load_context::LoopContext>,
-    unmuffled: Vec<String>,
+    unmuffled: HashSet<String>,
 }
+// Check edited base values without changing untouched engine inputs. Their sign is
+// interpreted by calculate_volume/calculate_pitch after sound-file scaling.
+fn readable_base_edit(original: [f32; 2], edited: [f32; 2]) -> bool {
+    original
+        .into_iter()
+        .zip(edited)
+        .all(|(before, after)| after.is_finite() || before.to_bits() == after.to_bits())
+}
+
 fn handle_channel(h: &Handle) -> Option<ChannelId> {
     h.channel
 }
@@ -1134,11 +1147,11 @@ impl SoundEngine {
             listener_reserve: 0,
             notifications: Vec::new(),
             loop_context: None,
-            unmuffled: Vec::new(),
+            unmuffled: HashSet::new(),
         }
     }
     /// Sound events exempt from muffling, including channels already playing.
-    pub fn set_unmuffled(&mut self, events: Vec<String>, backend: &mut impl Backend) {
+    pub fn set_unmuffled(&mut self, events: HashSet<String>, backend: &mut impl Backend) {
         self.unmuffled = events;
         for (id, handle) in &self.instance_to_channel {
             let (Some(instance), Some(channel)) = (
@@ -1179,12 +1192,7 @@ impl SoundEngine {
             };
             let mut cancel = false;
             hook(&sound, &mut volume, &mut pitch, &mut cancel);
-            let volume_edited = volume.to_bits() != instance.volume.to_bits();
-            let pitch_edited = pitch.to_bits() != instance.pitch.to_bits();
-            if cancel
-                || (volume_edited && (!volume.is_finite() || volume < 0.0))
-                || (pitch_edited && (!pitch.is_finite() || pitch <= 0.0))
-            {
+            if cancel || !readable_base_edit([instance.volume, instance.pitch], [volume, pitch]) {
                 return None;
             }
         }
@@ -1252,7 +1260,7 @@ impl SoundEngine {
     pub fn instance_mut(&mut self, id: InstanceId) -> Option<&mut SoundInstance> {
         self.instances.get_mut(&id)
     }
-    pub fn tick_count(&self) -> i32 {
+    pub fn tick_count(&self) -> i64 {
         self.tick_count
     }
     /// `Options.getFinalSoundSourceVolume`.
@@ -1613,8 +1621,8 @@ impl SoundEngine {
     pub fn queue_ticking(&mut self, id: InstanceId) {
         self.queued_tickable.push(id);
     }
-    /// `playDelayed`.
-    pub fn play_delayed(&mut self, id: InstanceId, delay: i32) {
+    /// `playDelayed`: use a wide tick deadline so a mod's full `u32` delay can be queued.
+    pub fn play_delayed(&mut self, id: InstanceId, delay: i64) {
         let at = self.tick_count + delay;
         if let Some(entry) = self.queued.iter_mut().find(|(i, _)| *i == id) {
             entry.1 = at;
@@ -1727,12 +1735,7 @@ impl SoundEngine {
                     && i.looping
                     && i.delay > 0
                 {
-                    let at = self.tick_count + i.delay;
-                    if let Some(entry) = self.queued.iter_mut().find(|(q, _)| *q == id) {
-                        entry.1 = at;
-                    } else {
-                        self.queued.push((id, at));
-                    }
+                    self.play_delayed(id, i64::from(i.delay));
                 }
                 self.instance_to_channel.remove(index);
                 self.handles.remove(&handle);

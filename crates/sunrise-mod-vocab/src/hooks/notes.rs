@@ -1214,21 +1214,21 @@ game runs, for seasons (a golden autumn, a pale winter) or a world that greens a
 `ClientHost::play_local_sound(sound, after)` (client) plays `sound`, a `SoundPlay`, for this player only. Nothing is sent
 to the server, and other players don't hear it. It takes `&self`, so the screen, key and mouse hooks, where interface
 sounds belong, can call it: the sound is queued and starts at the next audio update (once a client tick), `after` ticks
-counted from then (0 to 1200; `SoundEngine.playDelayed`). The answer is exact: the checks run at the call.
+counted from then on the unpaused sound-engine clock (`SoundEngine.playDelayed`).
 - `SoundPlay::ui(id)` is an interface sound (`SimpleSoundInstance.forUI`): at the listener, on the `Ui` source, not
   fading with distance, as the game's own button clicks play.
 - `SoundPlay::at(id, source, position)` plays at a place in the client's level, fading with distance. A volume past 1
   carries farther, as vanilla's attenuation does.
-- `with_volume`, `with_pitch` and `looping(delay)` (repeating, `delay` ticks between repeats: vanilla's
-  `SoundInstance.getDelay`) change either.
+- `with_volume` and `with_pitch` supply base values to `SoundEngine.calculateVolume` and `calculatePitch`.
+  `looping(delay)` repeats after `delay` ticks if positive or loops automatically otherwise.
 
 It's the same record the `play_sound` hook edits, and it goes through the same mapping into the engine. The event is
 vanilla's (`minecraft:entity.generic.explode`) or the mod's own: a content mod's `assets/<id>/sounds.json` and
 `assets/<id>/sounds/*.ogg` load with the rest of its assets. A client half that hears from its server half (mod
 messages) where something happened can time the sound to the distance, such as a blast heard when its shock wave reaches
-the player: `after = distance / speed`. It answers `None` on a server and for a value out of range (an event id that
-isn't namespaced, a position or volume that isn't finite, a negative volume, pitch or repeat gap, `after` past 1200);
-an event the resources lack plays nothing. Diverges from upstream: horizon-rust/horizon's `native_play_local_sound` takes
+the player: `after = distance / speed`. It answers `None` on a server, for a malformed namespaced event ID, a position
+that cannot be represented as finite mixer coordinates, non-finite volume or pitch, or invalid `SoundEffects`. An event
+the resources lack plays nothing. Diverges from upstream: horizon-rust/horizon's `native_play_local_sound` takes
 `(sound, at, volume, pitch, delay)`.
 
 Otherwise it answers a `SoundRef`, a handle on this one play, never reused. Its methods take the `&dyn ClientHost`, so
@@ -1238,13 +1238,14 @@ computed at the call:
   repeats), `Playing` (`SoundEngine.isActive`) or `Stopped`. It is `None` on a server.
 - `sound.stop(host)` stops it for good: a waiting sound never starts and a looping one never repeats. A stop asked
   since the last update already reads `Stopped`.
-- `sound.fade(host, volume, ticks)` moves its volume to `volume` (at or above 0) in equal steps over the next `ticks`
-  unpaused ticks it plays, or at once for 0. A fade to 0 stops it when the fade ends, as `LoopSoundInstance.fadeOut`
-  does. A `SoundPlay` at volume 0 faded up fades in, and a later fade replaces one in progress. While the game is
-  paused the fade waits, as vanilla's tickable sounds do (`SoundEngine.tick(paused)`): an interface or music sound
-  keeps playing at the volume it had (`pauseAllExcept(MUSIC, UI)`), and any other sound pauses with the game.
+- `sound.fade(host, volume, ticks)` moves its volume to a finite target in equal steps over `ticks` unpaused ticks
+  it plays, or at once for 0. A nonpositive target stops the sound when the fade ends. A later fade replaces one in
+  progress. While paused, the fade waits and any interface or music sound keeps playing at its current volume.
+- `sound.move_to(host, position)` moves the same instance without restarting it, in world blocks or relative to the
+  listener. Each coordinate must be finite in the mixer's float representation (`Channel.setSelfPosition`).
+- `sound.set_pitch(host, pitch)` sets a finite base pitch on the same instance, leaving the final pitch to the engine.
 
-`stop` and `fade` answer false, changing nothing, once the sound is over. Once it ends, is stopped or faded out, or is
+These writes answer false, changing nothing, once the sound is over. Once it ends, is stopped or faded out, or is
 cleared (leaving or changing levels stops every sound), the handle reads `Stopped` and its writes do nothing. It stays
 valid across a change of output device, which reopens the output on the same mixer and keeps the sounds playing.
 Dropping or overwriting the handle doesn't stop the sound: keep a looping sound's handle while it plays (stop it before
@@ -1450,7 +1451,7 @@ The predicate supplied by `IngredientDefinition` takes the matching side's read-
 
 Four client hooks take the `LoopContext` from the sound engine, which has no game at hand and plays sounds from its own loops:
 
-- `play_sound` is `PlaySoundEvent`. It fires at the start of vanilla's `SoundEngine.play`, before the engine's own checks, for every sound the client plays. `original` is the sound as asked for and `sound` is `&mut Option<SoundPlay>`, a copy of it that later mods see edited: change its volume, pitch, source, position, identifier, looping, delay, attenuation, `relative` or `effects`, or set it to `None` to play nothing. `effects` (`SoundEffects`) shapes the sound in the mixer: its own gain, a low-pass and a high-pass on the direct sound and sends to the shared `room`, `hall` and `cavern` reverbs; every change glides over one output buffer, so a listener that moves them on each refresh never clicks. A ticking sound's live refresh (`starting` false) takes the new volume, pitch and effects; a value out of range (`SoundEffects::valid`) refuses the edit as a bad volume does. A changed identifier is resolved again, with its own weighted pick. Only the fields of `SoundPlay` carry over; the engine's random, ticking and resolved sound never leave it. Setting `None` is the mod's own answer (there is no constant): a sound nobody edits plays as before.
+- `play_sound` is `PlaySoundEvent`. It fires at the start of vanilla's `SoundEngine.play`, before the engine's own checks, for every sound the client plays. `original` is the sound as asked for and `sound` is `&mut Option<SoundPlay>`, a copy of it that later mods see edited: change its volume, pitch, source, position, identifier, looping, delay, attenuation, `relative` or `effects`, or assign `*event.sound = None` to cancel or stop playback. A ticking sound's live refresh (`starting` false) takes new volume, pitch and effects; a category volume refresh takes new volume and pitch. At start and on refresh, finite base volume and pitch, including zero and negative values, reach the engine's final calculations. Non-finite volume or pitch edits and invalid effects (`SoundEffects::valid`) refuse playback. `effects` shapes the sound in the mixer: gain, a low-pass and a high-pass on the direct sound and sends to the shared `room`, `hall` and `cavern` reverbs. Every effect change glides over one output buffer. A changed identifier is resolved again at start, with its own weighted pick. Only the fields of `SoundPlay` carry over; the engine's random, ticking and resolved sound never leave it. A sound nobody edits plays as before.
 - `play_sound_source` is `PlaySoundSourceEvent` and `play_streaming_source` is `PlayStreamingSourceEvent`. A sound fires exactly one of them, after the engine started it on a channel: streamed sounds (music, records) the second, every other sound the first. They are notices, and `ChannelRef` is an id only: a mod shapes a sound through `play_sound`'s `effects`, not through the channel.
 - `sound_engine_load` is `SoundEngineLoadEvent`. It fires when the output is open: at window start, after each resource reload (with the new generation's context) and when the output device changes. With no audio (no device, or `SUNRISE_NO_AUDIO`) the engine never loads: this hook and the two source hooks do not fire, while `play_sound` still does, since it comes before the engine's check that it loaded.
 
@@ -1823,8 +1824,8 @@ still go on each event or registrar.
 
 - Client sounds: `ClientHost::play_local_sound(sound, after)` plays a `SoundPlay`, vanilla's event or the mod's own
   from its `assets/<id>/sounds.json`, for this player only: an interface sound (`SoundPlay::ui`) or one at a place
-  (`SoundPlay::at`), now or up to a minute later, so a client mod can click its own buttons or time a blast's sound
-  to its shock wave. Its `SoundRef` answers whether it plays, and stops or fades it.
+  (`SoundPlay::at`), immediately at the audio update or after the requested delay, so a client mod can click its own
+  buttons or time a blast's sound to its shock wave. Its `SoundRef` follows and controls the individual play.
 
 - Values for a mod's own shader pack: `shader_params(partial, params)` asks each frame for eight `vec4`s that
   every stage of a Sunrise shader pack reads as `frame.mods`, so a mod can tell the pack it bundles where and when
