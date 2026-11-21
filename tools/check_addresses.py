@@ -265,9 +265,9 @@ def base_config(base):
     merge_base = subprocess.run(["git", "merge-base", base, "HEAD"], capture_output=True, text=True, cwd=ROOT)
     if merge_base.returncode != 0:
         return None
-    shown = subprocess.run(["git", "show", f"{merge_base.stdout.strip()}:{CONFIG_PATH}"], capture_output=True,
-                           text=True, cwd=ROOT)
-    return json.loads(shown.stdout) if shown.returncode == 0 else None
+    # A baseline that is there but can't be read stops the check (merge_base.text_at).
+    text = _merge_base().text_at(merge_base.stdout.strip(), CONFIG_PATH, ROOT)
+    return json.loads(text) if text is not None else None
 
 
 def _merge_base():

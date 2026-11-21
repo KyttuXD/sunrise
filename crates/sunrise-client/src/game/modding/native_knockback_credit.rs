@@ -16,9 +16,13 @@ pub(super) struct CreditEntity {
 pub(super) struct CreditPlan {
     victim: i32,
     player: Option<(PlayerCredit, CreditEntity)>,
-    previous_mob: CreditEntity,
+    existing_player_live: bool,
+    /// The mob the victim's hurt memory names, by that recorded id, and the
+    /// entity the credit resolves to now (`LivingRef::kill_credit`'s).
+    previous_mob: (u32, CreditEntity),
     attacking_mob: CreditEntity,
     responsibility: Option<Option<(PlayerCredit, CreditEntity)>>,
+    responsibility_live: bool,
     fixed: CreditEntity,
 }
 
@@ -53,6 +57,20 @@ impl KnockbackCredit for CreditLoan<'_> {
         }
     }
 
+    fn resolve_player_responsible(&mut self, mob: &mut Mob) -> bool {
+        assert_eq!(mob.id as i32, self.plan.victim);
+        let updated = self.plan.responsibility.is_some();
+        self.accepted_mob_hit(mob);
+        if mob.ai.last_hurt_by_player <= 0 {
+            return false;
+        }
+        if updated {
+            self.plan.responsibility_live
+        } else {
+            self.players.contains_key(&mob.id) && self.plan.existing_player_live
+        }
+    }
+
     fn snapshot<'a>(&'a self, pushed: &Hurting<'_>, _: &'a Attack) -> (i32, Option<&'a ItemStack>) {
         let selected = match pushed {
             Hurting::Mob(mob, _) => {
@@ -65,8 +83,8 @@ impl KnockbackCredit for CreditLoan<'_> {
                         Some(Who::Mob(id)) if id as i32 == self.plan.attacking_mob.id => {
                             Some(&self.plan.attacking_mob)
                         }
-                        Some(Who::Mob(id)) if id as i32 == self.plan.previous_mob.id => {
-                            Some(&self.plan.previous_mob)
+                        Some(Who::Mob(id)) if id == self.plan.previous_mob.0 => {
+                            Some(&self.plan.previous_mob.1)
                         }
                         _ => None,
                     }
@@ -79,12 +97,23 @@ impl KnockbackCredit for CreditLoan<'_> {
 }
 
 impl Game<'_> {
+    /// The credited entity and its main hand: in the level in place, or a mob
+    /// a kill credit found in another loaded level.
     fn knockback_credit_entity(&self, id: i32) -> CreditEntity {
-        if id == 0 || self.entity(id as u32).is_none() {
+        if id == 0 {
             return CreditEntity::default();
         }
-        let [main, _] = self.attack_of(id).held;
-        CreditEntity { id, main }
+        if self.entity(id as u32).is_some() {
+            let [main, _] = self.attack_of(id).held;
+            return CreditEntity { id, main };
+        }
+        match self.mob_in_other_level(id as u32) {
+            Some((_, mob)) => CreditEntity {
+                id,
+                main: mob.extra.main_hand_stack().cloned(),
+            },
+            None => CreditEntity::default(),
+        }
     }
 
     fn knockback_player_credit(&self, credit: PlayerCredit) -> (PlayerCredit, CreditEntity) {
@@ -107,9 +136,10 @@ impl Game<'_> {
         let mob = observed
             .then(|| self.mobs.iter().find(|mob| mob.id as i32 == victim))
             .flatten();
-        let player = mob
-            .and_then(|mob| self.last_hurt_by_player.get(&mob.id))
-            .copied();
+        let existing_player = self.last_hurt_by_player.get(&(victim as u32)).copied();
+        let existing_player_live =
+            existing_player.is_some_and(|credit| self.resolve_player_credit(credit).is_some());
+        let player = mob.and(existing_player);
         let responsibility = match attacker {
             Some(Who::Player) => attack.player_uuid.map(|uuid| {
                 Some(PlayerCredit(sunrise_client::lan::playerdata::ints_uuid(
@@ -127,6 +157,9 @@ impl Game<'_> {
                 }),
             None => None,
         };
+        let responsibility_live = responsibility
+            .flatten()
+            .is_some_and(|credit| self.resolve_player_credit(credit).is_some());
         let entity = |id| {
             if observed {
                 self.knockback_credit_entity(id)
@@ -146,6 +179,10 @@ impl Game<'_> {
             .and_then(|who| match who {
                 Who::Mob(id) => Some(id),
                 Who::Player => None,
+            })
+            .map(|id| {
+                let credited = self.credited_entity(id).map_or(0, |e| e.id() as i32);
+                (id, entity(credited))
             });
         let fixed = if observed && mob.is_none() {
             self.entity(victim as u32)
@@ -159,12 +196,14 @@ impl Game<'_> {
         CreditPlan {
             victim,
             player: player.map(credited_player),
-            previous_mob: previous_mob.map(|id| entity(id as i32)).unwrap_or_default(),
+            existing_player_live,
+            previous_mob: previous_mob.unwrap_or_default(),
             attacking_mob: match attacker {
                 Some(Who::Mob(id)) => entity(id as i32),
                 _ => CreditEntity::default(),
             },
             responsibility: responsibility.map(|credit| credit.map(credited_player)),
+            responsibility_live,
             fixed,
         }
     }

@@ -131,8 +131,10 @@ impl Goal for DrinkItem {
         m.extra.using_item = 1;
     }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
-        m.extra.set_main_hand(None);
-        m.extra.using_item = 0;
+        if m.extra.using_item != 0 {
+            m.extra.set_main_hand(None);
+            m.extra.using_item = 0;
+        }
         let pitch = m.random.next_float() * 0.2 + 0.9;
         cx.events
             .push(MobEvent::Sound(self.finish_sound, m.center(), 1.0, pitch));
@@ -157,13 +159,16 @@ impl Goal for DrinkItem {
                     1.0,
                 ));
             } else {
-                m.retain_effects(|_| false);
+                // The milk's effective consumable list owns the clear-all entry.
                 cx.events.push(MobEvent::Sound(
                     "entity.wandering_trader.drink_milk",
                     m.center(),
                     1.0,
                     1.0,
                 ));
+            }
+            if let Some(stack) = m.extra.main_hand_stack().cloned() {
+                cx.events.push(MobEvent::DrinkFinished { mob: m.id, stack });
             }
             m.extra.using_item = 0;
         }

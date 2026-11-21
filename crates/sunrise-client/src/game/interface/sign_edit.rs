@@ -555,10 +555,8 @@ impl Game<'_> {
     /// the block, then the editor, on its client, and the guest may write on it.
     pub(super) fn lan_open_sign_editor(&mut self, conn: u32, edit: SignEditor) {
         let pos = [edit.pos.0, edit.pos.1, edit.pos.2];
-        let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
         if let Some(host) = self.lan.as_mut() {
-            host.hub
-                .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
+            host.hub.send_authoritative_block(conn, &self.world, pos);
             host.hub.send_to(
                 conn,
                 &C::OpenSignEditor(play::OpenSignEditor {
@@ -581,18 +579,6 @@ impl Game<'_> {
         };
         let (uuid, name) = (g.uuid, g.name.clone());
         let key = (p.pos[0], p.pos[1], p.pos[2]);
-        let lines = p.lines.join(" ");
-        if !self.chat_filter_text(
-            conn,
-            &[&lines],
-            sunrise_client::lan::hub::chat_filter::Place::Sign,
-        ) {
-            // The sign stays as it was: the editor closes, as after a sign the server refused.
-            self.world.block_entities.set_sign_editor(key, None);
-            // The player's client shows the text it sent: the sign as it is, again.
-            self.mark_block_entity_updated(key);
-            return;
-        }
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
             return;
         };
@@ -1017,15 +1003,7 @@ impl Game<'_> {
         sunrise_client::widgets::narratable(|| {
             sunrise_client::widgets::Narratable::button(done_label(), [bx, by, 200.0, 20.0], true)
         });
-        batch.sprite_scaled(
-            atlas,
-            "gui/sprites/widget/button",
-            bx,
-            by,
-            200.0,
-            20.0,
-            u32::MAX,
-        );
+        batch.sprite_scaled(atlas, "widget/button", bx, by, 200.0, 20.0, u32::MAX);
         let done = done_label();
         let tw = HudBatch::text_width(atlas, &done);
         batch.text(

@@ -7,8 +7,7 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait PlayerSessionBackend {
     /// Side: server.
-    /// The IP address the player connects from, without the port (behind a
-    /// Velocity proxy, the address the proxy forwards). Displaced connected
+    /// The IP address the player connects from, without the port. Displaced connected
     /// players keep their address; an acting player with no known connection
     /// has an empty address. None for a stale or unavailable player.
     #[access(WorldOnly)]
@@ -72,6 +71,26 @@ pub trait PlayerSessionBackend {
     #[access(WorldOnly)]
     fn player_sees(&self, viewer: PlayerRef, target: PlayerRef)
     -> Result<bool, PlayerWorldRefusal>;
+    /// Side: server.
+    /// The ping the Tab list shows, in milliseconds (`ServerCommonPacketListenerImpl.latency`:
+    /// keep-alive round trips averaged three parts old to one part new). 0 until the first
+    /// keep-alive answer, for a fake player and for an acting player with no known connection.
+    /// Refuses with `PlayerWorldRefusal`: `Client`, and `Stale` for a handle that no longer
+    /// identifies a player.
+    #[access(WorldOnly)]
+    fn player_latency(&self, player: PlayerRef) -> Result<i32, PlayerWorldRefusal>;
+    /// Side: server.
+    /// The permission level `player_hide` set for that player, `None` when they are shown. Kept
+    /// by UUID, so a player who rejoined hidden reads it too, and read as stored in a world
+    /// nobody else can join yet (it applies once the world is opened to others). Refuses with
+    /// `PlayerWorldRefusal`: `Client`, and `Stale` for a handle of an earlier open of the world.
+    #[access(WorldOnly)]
+    fn player_hidden(&self, player: PlayerRef) -> Result<Option<u8>, PlayerWorldRefusal>;
+    /// Side: server.
+    /// The name `player_set_nickname` set for that player, `None` when there is none. Refuses
+    /// with `PlayerWorldRefusal`: `Client`, and `Stale` for a stale or offline player.
+    #[access(WorldOnly)]
+    fn player_nickname(&self, player: PlayerRef) -> Result<Option<String>, PlayerWorldRefusal>;
 }
 /// The handles' writes of the `player_session` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -100,8 +119,7 @@ pub trait PlayerSessionBackendMut {
     /// again. Hovering the shown name gives the real one, which stays in the
     /// log, commands, selectors and the server's events. Kept until a mod
     /// sets it again or the server stops (also if they leave and come back).
-    /// Plain text: the mod checks it (`Messages::text_allowed`, its length,
-    /// other players' names). False when the server list is unavailable,
+    /// Plain text: the mod checks it (its length, other players' names). False when the server list is unavailable,
     /// the handle is stale or the player isn't online.
     #[access(WorldOnly)]
     fn player_set_nickname(&mut self, player: PlayerRef, nickname: Option<&str>) -> bool;

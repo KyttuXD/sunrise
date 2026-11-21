@@ -1594,8 +1594,8 @@ STUDIO_RECORDINGS, STUDIO_BUTTONS = 12, 3
 
 
 EXTRAS_ABOUT = 'Optional additions, all off by default'
-AUTO_RECONNECT = 'Auto-reconnect'
-AUTO_RECONNECT_ABOUT = 'Rejoins a server after a lost connection or a restart'
+PREGEN = 'Chunk pregeneration'
+PREGEN_ABOUT = 'Enables /pregen in your single-player and LAN worlds'
 FIRST_EXTRA = 'Own name tag'
 LAST_MENU_EXTRA = 'Resource pack browser'
 GREYED_EXTRA = 'Sort key'
@@ -1658,13 +1658,13 @@ def extras_shell(args, name):
 
         # Back up the list to a row near its top; the right stick moves the list and the focus stays on it.
         for _ in range(ROW_WALK):
-            if AUTO_RECONNECT in (game.focused_label() or ''):
+            if PREGEN in (game.focused_label() or ''):
                 break
             game.pad('up')
         label = game.focused_label()
-        check(AUTO_RECONNECT in (label or ''), f'the D-pad never came back to {AUTO_RECONNECT}: {label}')
-        check(has_label(game, AUTO_RECONNECT_ABOUT), f'the strip does not follow the row: {labels(game)}')
-        check(AUTO_RECONNECT in (label or '') and label.endswith('Off'), f'{AUTO_RECONNECT} reads {label}')
+        check(PREGEN in (label or ''), f'the D-pad never came back to {PREGEN}: {label}')
+        check(has_label(game, PREGEN_ABOUT), f'the strip does not follow the row: {labels(game)}')
+        check(PREGEN in (label or '') and label.endswith('Off'), f'{PREGEN} reads {label}')
         shot(game, 'extras-described')
         y = game.focus()[1]
         game.stick()
@@ -1673,18 +1673,18 @@ def extras_shell(args, name):
         check(moved and moved[1] < y, f'the stick did not scroll the list: {y} to {moved}')
 
         # A changes the toggle: what the row reads, and the file it is saved in.
-        check('autoReconnect:true' not in extras_saved(game), 'Auto-reconnect began on')
+        check('pregen:true' not in extras_saved(game), 'Chunk pregeneration began on')
         game.pad('south')
         label = game.focused_label()
-        check(label and label.endswith('On'), f'A left {AUTO_RECONNECT} as {label}')
-        check('autoReconnect:true' in extras_saved(game), 'the toggle was not saved to sunrise-extras.txt')
+        check(label and label.endswith('On'), f'A left {PREGEN} as {label}')
+        check('pregen:true' in extras_saved(game), 'the toggle was not saved to sunrise-extras.txt')
         check('Apply' not in declared(game), f'Extras has no Undo, yet a change declared {declared(game)}')
         shot(game, 'extras-toggled')
 
         # B presses Done.
         game.pad('east')
         game.wait_targets()
-        check(not has_label(game, AUTO_RECONNECT), f'B did not leave Extras: {labels(game)}')
+        check(not has_label(game, PREGEN), f'B did not leave Extras: {labels(game)}')
     finally:
         game.quit()
     return check.failures
@@ -3156,8 +3156,22 @@ def craft_lan_guest(args, name):
     return check.failures
 
 
+# A flat creative test server with nobody's account checked.
+PROPERTIES = {
+    'online-mode': 'false',
+    'white-list': 'false',
+    'level-type': 'minecraft\\:flat',
+    'generate-structures': 'false',
+    'gamemode': 'creative',
+    'force-gamemode': 'true',
+    'spawn-protection': '0',
+    'view-distance': '4',
+    'simulation-distance': '4',
+    'max-players': '100',
+}
+
+
 def craft_dedicated(args, name):
-    from anticheat_e2e import PROPERTIES
     from server_bench import DONE, Server
     check = Check()
     folder = Path(tempfile.mkdtemp(prefix=f'pad-menu-{name}-server-'))

@@ -319,7 +319,7 @@ fn block_predicate(r: &mut Reader) -> Result<()> {
     block_properties_and_nbt(r)?;
     component_matchers(r)
 }
-pub(super) fn block_properties_and_nbt(r: &mut Reader) -> Result<()> {
+fn block_properties_and_nbt(r: &mut Reader) -> Result<()> {
     // StatePropertiesPredicate: PropertyMatchers, each a name and an
     // Either<ExactMatcher (value), RangedMatcher (min, max)>.
     optional(r, |r| {
@@ -335,7 +335,7 @@ pub(super) fn block_properties_and_nbt(r: &mut Reader) -> Result<()> {
     })?;
     optional(r, nbt)
 }
-pub(super) fn component_matchers(r: &mut Reader) -> Result<()> {
+fn component_matchers(r: &mut Reader) -> Result<()> {
     // DataComponentExactPredicate: TypedDataComponents, a component type id and its value.
     list(r, |r| {
         let _nested = Nested::enter()?;

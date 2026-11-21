@@ -306,6 +306,7 @@ pub enum Interface {
     Entity,
     WeatheringCopper,
     CaveVines,
+    GameMaster,
 }
 impl Interface {
     pub fn from_java(name: &str) -> Option<Self> {
@@ -318,6 +319,7 @@ impl Interface {
             "EntityBlock" => Self::Entity,
             "WeatheringCopper" => Self::WeatheringCopper,
             "CaveVines" => Self::CaveVines,
+            "GameMasterBlock" => Self::GameMaster,
             _ => return None,
         })
     }

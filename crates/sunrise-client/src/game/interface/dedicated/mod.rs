@@ -39,15 +39,18 @@ use sunrise_core::nbt::{JavaString, Tag};
 use sunrise_perf_format::v1::{StopReason, Trigger};
 use sunrise_protocol::text::translatable;
 
-mod biome_regions;
+pub(super) mod biome_regions;
 mod missing_mods;
 pub(crate) use missing_mods::is_missing_mods_refusal;
 pub(super) mod events;
 mod management;
-mod predicate_graph;
+use sunrise_gameplay::dedicated::predicate_graph;
 pub(super) mod report;
 mod status;
 mod transfer;
+
+#[cfg(test)]
+mod language_tests;
 
 /// What the tick loop tells `ServerWatchdog`: when the tick in progress was
 /// due (`getNextTickTime`), how long a tick is, and whether the server runs.
@@ -162,7 +165,6 @@ struct Setup {
     universe: PathBuf,
     level_name: String,
     port: Option<u16>,
-    started: Instant,
     /// `--allowMissingMods`: open a world whose saved mods are missing (`missing_mods`).
     allow_missing_mods: bool,
 }
@@ -185,130 +187,23 @@ pub(super) fn cached_user_by_id(id: u128) -> Option<NameAndId> {
     USER_CACHE.lock().unwrap().as_mut()?.get_by_id(id)
 }
 
-/// `server.toml`'s `[anticheat]`, beside server.properties when sunrise-server runs the game; the
-/// default (on) without the file or the section, off (with an error logged) when the section is wrong.
-fn load_anticheat() -> sunrise_anticheat::Config {
-    let Ok(text) = std::fs::read_to_string("server.toml") else {
-        return Default::default();
-    };
-    match sunrise_anticheat::Config::from_server_toml(&text) {
-        Ok(config) => {
-            if config.enabled {
-                log(
-                    "INFO",
-                    "Anticheat on (server.toml [anticheat]; enabled = false turns it off)",
-                );
-            }
-            config
-        }
-        Err(e) => {
-            log(
-                "ERROR",
-                &format!("server.toml: {e}; the anticheat stays off"),
-            );
-            sunrise_anticheat::Config {
-                enabled: false,
-                ..Default::default()
-            }
-        }
+/// What the start answers when the server folder still has a `forwarding.secret`.
+const FORWARDING_REMOVED: &str = "Velocity forwarding was removed from Sunrise; delete forwarding.secret from the \
+     server folder (with online-mode=false, anyone who can reach the port then joins under any name)";
+
+/// A `forwarding.secret` in `dir` stops the start: Velocity forwarding is gone, and an owner who relied on it
+/// to keep an offline server closed must not find it silently open.
+fn refuse_forwarding_secret(dir: &std::path::Path) -> std::result::Result<(), String> {
+    if dir.join("forwarding.secret").exists() {
+        return Err(FORWARDING_REMOVED.to_owned());
     }
+    Ok(())
 }
 
-/// `server.toml`'s `[chat_filter]` (docs/chat-filter.md), through the filter the executable installed
-/// (`sunrise_server_files::chat_guard`): none without one.
-fn load_chat_filter() -> Option<Box<dyn sunrise_server_files::chat_guard::ChatGuard>> {
-    let text = std::fs::read_to_string("server.toml").unwrap_or_default();
-    let loaded = sunrise_server_files::chat_guard::load(&text, std::path::Path::new("."));
-    for (level, line) in &loaded.log {
-        log(level, line);
-    }
-    loaded.guard
-}
-
-/// `server.toml`'s `[entities]` (docs/server.md): `villager_lobotomize` and its check interval. Off without
-/// the file or the section, and (with an error logged) when the section is wrong.
-fn load_entities() {
-    let text = std::fs::read_to_string("server.toml").unwrap_or_default();
-    match parse_entities(&text) {
-        Ok((on, interval)) => {
-            if on {
-                log(
-                    "INFO",
-                    &format!(
-                        "villagers that cannot move skip their brain, rechecked every {interval} ticks (server.toml [entities])"
-                    ),
-                );
-            }
-            sunrise_client::mobs::villager::lobotomy::configure(on, interval);
-        }
-        Err(e) => log(
-            "ERROR",
-            &format!("server.toml: {e}; villagers keep their brains"),
-        ),
-    }
-}
-
-/// The `[entities]` section of a `server.toml`: (`villager_lobotomize`, its check interval in ticks). The
-/// section's other keys (`dab`...) belong to other settings, so they are skipped here; `sunrise-server` refuses
-/// typos when it reads the file.
-fn parse_entities(text: &str) -> std::result::Result<(bool, u32), String> {
-    #[derive(serde::Deserialize)]
-    #[serde(default)]
-    struct Entities {
-        villager_lobotomize: bool,
-        villager_lobotomize_check_interval: u32,
-    }
-    impl Default for Entities {
-        fn default() -> Self {
-            Self {
-                villager_lobotomize: false,
-                villager_lobotomize_check_interval:
-                    sunrise_client::mobs::villager::lobotomy::DEFAULT_INTERVAL,
-            }
-        }
-    }
-    let mut table = toml::from_str::<toml::Table>(text).map_err(|e| e.to_string())?;
-    let Some(section) = table.remove("entities") else {
-        return Ok((
-            false,
-            Entities::default().villager_lobotomize_check_interval,
-        ));
-    };
-    let e: Entities = section.try_into().map_err(|e| format!("[entities]: {e}"))?;
-    if e.villager_lobotomize_check_interval == 0 {
-        return Err("[entities]: villager_lobotomize_check_interval must be at least 1".into());
-    }
-    Ok((e.villager_lobotomize, e.villager_lobotomize_check_interval))
-}
-
-/// The secret for Velocity's player information forwarding, from `forwarding.secret` beside server.properties.
-/// No file means no forwarding. A file that is empty or can't be read stops the start, because an empty secret
-/// would let anyone sign a login, and a typo must not leave a server open that was meant to be behind a proxy.
-fn forwarding_secret(online: bool) -> Result<Option<Vec<u8>>> {
-    const FILE: &str = "forwarding.secret";
-    if !std::path::Path::new(FILE).exists() {
-        return Ok(None);
-    }
-    if online {
-        log(
-            "WARN",
-            "forwarding.secret is ignored: the proxy authenticates the players, so set \"online-mode\" to \"false\".",
-        );
-        return Ok(None);
-    }
-    let text = std::fs::read(FILE).map_err(|e| format!("{FILE}: {e}"))?;
-    let secret = text.trim_ascii().to_vec();
-    if secret.is_empty() {
-        return Err(format!(
-            "{FILE} is empty: put the proxy's forwarding secret in it, or remove the file"
-        )
-        .into());
-    }
-    log(
-        "INFO",
-        "Velocity player information forwarding is on (forwarding.secret)",
-    );
-    Ok(Some(secret))
+/// `DedicatedServer.initServer`: elapsed level-load nanoseconds as ROOT `%.3f` seconds.
+fn startup_done(elapsed: Duration) -> String {
+    let seconds = sunrise_core::java_number::format_fixed(elapsed.as_nanos() as f64 / 1e9, 3);
+    format!("Done ({seconds}s)! For help, type \"help\"")
 }
 
 /// `MinecraftServer.runServer`'s overload warning for a server `behind` its
@@ -344,7 +239,7 @@ fn log_from(thread: &str, level: &str, message: &str) {
         "ERROR" => ::log::Level::Error,
         _ => ::log::Level::Info,
     };
-    sunrise_client::logging::write_as(thread, file_level, message);
+    sunrise_client::logging::write_mirrored_as(thread, file_level, message);
     CAPTURE.with_borrow_mut(|lines| {
         if let Some(lines) = lines {
             lines.push(message.to_owned());
@@ -420,7 +315,6 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             _ => return Err(format!("{name} is not a recognized option").into()),
         }
     }
-    let started = Instant::now();
     let settings = PathBuf::from("server.properties");
     let props = ServerProperties::from_file(&settings, &mut SystemEntropy::default())?;
     for w in &props.warnings {
@@ -488,7 +382,6 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             universe,
             level_name,
             port,
-            started,
             allow_missing_mods,
         });
     Ok(true)
@@ -527,38 +420,8 @@ pub(super) struct Lists {
     pub stop: bool,
     /// `MinecraftServer.isAutoSave`: all of Sunrise's server levels share this save flag.
     pub autosave: bool,
-    /// UUID prefixes (lower case, with dashes) that pass the whitelist: `whitelist-bypass.txt`.
-    pub whitelist_bypass: Vec<String>,
 }
 
-/// The lines of `whitelist-bypass.txt`: one UUID prefix each, e.g. `00000000-0000-0000-0009-` for Floodgate's
-/// Bedrock players. `#` starts a comment. A prefix has to be a dashed UUID start of at least 8 characters, so
-/// a typo can't open the whitelist to everybody.
-fn parse_whitelist_bypass(text: &str) -> std::result::Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let line = line
-            .split('#')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-        if line.is_empty() {
-            continue;
-        }
-        if line.len() < 8
-            || line.len() > 36
-            || !line.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-        {
-            return Err(format!(
-                "whitelist-bypass.txt line {}: {line:?} is not a UUID prefix",
-                n + 1
-            ));
-        }
-        out.push(line);
-    }
-    Ok(out)
-}
 impl Lists {
     /// The console's `/ban` of one player (`BanPlayerCommands.banPlayers`): whether they are banned now.
     /// One banned already (`isBanned`) is left as they are, their first reason kept.
@@ -594,24 +457,7 @@ impl Lists {
             player_idle_timeout: 0,
             stop: false,
             autosave: true,
-            whitelist_bypass: Vec::new(),
         };
-        // Sunrise only: players from a proxy's Bedrock bridge (Floodgate) are never on whitelist.json.
-        if let Ok(text) = std::fs::read_to_string("whitelist-bypass.txt") {
-            match parse_whitelist_bypass(&text) {
-                Ok(prefixes) => {
-                    log(
-                        "INFO",
-                        &format!(
-                            "whitelist-bypass.txt: {} UUID prefix(es) skip the whitelist",
-                            prefixes.len()
-                        ),
-                    );
-                    l.whitelist_bypass = prefixes;
-                }
-                Err(e) => log("ERROR", &format!("{e}; the file is ignored")),
-            }
-        }
         // Each list tells the event stream what changes in it, as vanilla's tell their `NotificationService`.
         l.ops.watch(|change| {
             let (kind, e) = listed("operators", change);
@@ -657,16 +503,7 @@ impl Lists {
     }
     /// PlayerList.isWhiteListed.
     fn whitelisted(&self, user: &NameAndId) -> bool {
-        !self.use_whitelist
-            || self.ops.contains(user)
-            || self.white.contains(user)
-            || self.bypasses_whitelist(user.id)
-    }
-    fn bypasses_whitelist(&self, id: u128) -> bool {
-        let id = sunrise_protocol::crypto::uuid_string(id);
-        self.whitelist_bypass
-            .iter()
-            .any(|p| id.starts_with(p.as_str()))
+        !self.use_whitelist || self.ops.contains(user) || self.white.contains(user)
     }
     /// PlayerList.canPlayerLogin before the player count.
     fn can_login(&mut self, address: std::net::SocketAddr, user: &NameAndId) -> Option<Tag> {
@@ -711,8 +548,6 @@ const LEGACY_PRESET_NAMES: [(&str, sunrise_client::save::WorldPreset); 2] = [
     ),
 ];
 
-/// server.properties' line for `server.toml`'s `max_view_distance` (sunrise-server writes it).
-const FAR_PROPERTY: &str = "sunrise-max-view-distance";
 /// A tick slower than this, in milliseconds, enters the slow ring (five ticks' worth, a stall players feel) unless `SUNRISE_SPIKES` names another.
 pub(super) const SLOW_TICK_MS: f32 = 250.0;
 /// `MinecraftServer.OVERLOADED_WARNING_INTERVAL_NANOS` plus 100 ticks: the
@@ -742,6 +577,48 @@ impl std::fmt::Display for DatapacksRefused {
 impl std::error::Error for DatapacksRefused {}
 
 impl Game<'_> {
+    /// Add the adopted packs' English at the dedicated server-starting notice.
+    /// World and registry-load listeners still see only the built-in language.
+    fn start_loaded_dedicated_world(&mut self, packs: &super::functions::PackStack) {
+        use sunrise_client::lang::{self, Language, ResourceSource};
+
+        let layers = self
+            .pack
+            .mod_layers
+            .iter()
+            .chain(
+                packs
+                    .enabled_packs()
+                    .map(sunrise_client::datapack::DataPack::source),
+            )
+            .map(|source| source as &dyn ResourceSource);
+        let language = Language::load_server(&self.ui.vanilla_root, layers, |value| {
+            sunrise_client::text_grammar::build(value, &self.ui.registries, false)
+        });
+        lang::set(language);
+        self.native_server_starting(true);
+    }
+
+    /// `LevelStorageAccess.hasWorldData`: a backup alone still belongs to an
+    /// existing world. Let world loading recover it instead of replacing the
+    /// world's saved generator settings with server.properties. Returns whether
+    /// the world is new.
+    fn prepare_world_metadata(
+        &mut self,
+        dir: &std::path::Path,
+        props: &ServerProperties,
+        allow_missing_mods: bool,
+    ) -> Result<bool> {
+        let new_world = !dir.join("level.dat").exists() && !dir.join("level.dat_old").exists();
+        if new_world {
+            self.write_world_gen(dir, props)?;
+        } else {
+            // Before anything writes the world: a refusal leaves it as it was saved.
+            self.check_missing_mods(dir, allow_missing_mods)?;
+        }
+        Ok(new_world)
+    }
+
     /// DedicatedServerProperties.createDimensions for a world that doesn't
     /// exist yet: `level-type`'s preset, a flat world's `generator-settings`
     /// and `generate-structures`, written before the world opens so that
@@ -986,22 +863,13 @@ impl Game<'_> {
             universe,
             level_name,
             port,
-            started,
             allow_missing_mods,
         } = SETUP
             .get()
             .and_then(|m| m.lock().unwrap().take())
             .ok_or("dedicated server not prepared")?;
-        // Main's WorldLoader: a new world's dimensions come from
-        // server.properties before the server starts.
         let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
-        let new_world = !world_dir.join("level.dat").exists();
-        if new_world {
-            self.write_world_gen(&world_dir, &props)?;
-        } else {
-            // Before anything writes the world: a refusal leaves it as it was saved.
-            self.check_missing_mods(&world_dir, allow_missing_mods)?;
-        }
+        let new_world = self.prepare_world_metadata(&world_dir, &props, allow_missing_mods)?;
         // The console thread starts first, as in initServer.
         let (tx, console) = mpsc::channel();
         std::thread::Builder::new()
@@ -1099,12 +967,10 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         self.server_lists = Some(lists.clone());
         log("INFO", &format!("Preparing level \"{level_name}\""));
+        let level_load_started = Instant::now();
         let folder = world_dir.to_string_lossy().into_owned();
         // The mods' common and server configs, read before the server starts.
         self.native_configs_server_start(&world_dir, true);
-        if !new_world {
-            biome_regions::choose(&world_dir)?;
-        }
         let prepared = self.prepare_world_and_rules(WorldRequest::new(
             &folder,
             Some(&level_name),
@@ -1115,11 +981,10 @@ impl Game<'_> {
         )?)?;
         *startup_began = true;
         self.native_server_about_to_start(true);
-        self.native_server_starting(true);
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
         let sync = super::lan::sync::preload_sync_data(&self.res.core.item_data);
-        self.finish_open_world(prepared)?;
+        let opened_packs = self.finish_open_world(prepared)?;
         // WorldLoader: the world's packs must load before the server starts. The data store is read
         // now rather than at the first tick (reading parses functions; it runs none), and a broken
         // predicate graph stops the start before anything listens (a partial check: predicate_graph.rs).
@@ -1177,6 +1042,7 @@ impl Game<'_> {
         self.streaming.radius = -1;
         self.settle_spawn()?;
         self.prepare_levels()?;
+        let level_load_time = level_load_started.elapsed();
         let gate_lists = lists.clone();
         let gate: LoginGate = Arc::new(move |address, uuid, name| {
             // `ServerActivityMonitor.reportLoginActivity`: a login attempt, however it ends. The management
@@ -1199,20 +1065,22 @@ impl Game<'_> {
         let favicon = std::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
-        // Behind a Velocity proxy: `forwarding.secret` in the server folder, like the proxy's own file.
-        let forwarding_secret = forwarding_secret(online.is_some())?;
+        // Sunrise only: a leftover `forwarding.secret` says that Velocity forwarding is gone.
+        refuse_forwarding_secret(std::path::Path::new("."))?;
         // `[transfer]` on: a player's only way in must be the proxy, or one who joins this server
         // directly finds the older copy of itself that a hand-over left here, and items double.
+        // Velocity forwarding made it so; without it nothing does.
         let transfers = self
             .options
             .transfers
             .clone()
             .map(sunrise_client::lan::arrivals::Transfers::new);
-        if transfers.is_some() && forwarding_secret.is_none() {
-            return Err("server.toml's [transfer] is on, but players can join this server without the proxy: \
-                 turn on Velocity forwarding (forwarding.secret, docs/velocity-forwarding.md) or turn [transfer] off"
+        if transfers.is_some() {
+            return Err("server.toml's [transfer] is on, but players can join this server without the proxy \
+                 (Sunrise has no Velocity forwarding any more): turn [transfer] off"
                 .into());
         }
+        self.start_loaded_dedicated_world(&opened_packs);
         let net = NetConfig {
             bind: (!props.server_ip.is_empty())
                 .then(|| props.server_ip.parse().ok())
@@ -1240,7 +1108,6 @@ impl Game<'_> {
             })),
             gate: Some(gate),
             online,
-            forwarding_secret,
             arrivals: transfers.as_ref().map(|t| t.expected.clone()),
             log: Some(NetLog {
                 write: Arc::new(log_from),
@@ -1256,13 +1123,8 @@ impl Game<'_> {
                 .raw
                 .get(sunrise_client::lan::SUNRISE_CLIENTS_ONLY)
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
-            accept_older_clients: props
-                .raw
-                .get(sunrise_client::lan::ACCEPT_OLDER_CLIENTS)
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
-            older_clients_play: false,
             lod_distance: sunrise_client::lod_net::distance_property(
-                props.raw.get(sunrise_client::lod_net::PROPERTY),
+                props.raw.get(sunrise_client::lod_net::PROPERTY).as_deref(),
             ),
             server_links: if props.bug_report_link.is_empty() {
                 Vec::new()
@@ -1328,29 +1190,8 @@ impl Game<'_> {
             host.hub.transfers = Some(transfers);
         }
         self.sync_ops(&lists);
-        let anticheat = load_anticheat();
-        let anticheat_on = anticheat.enabled;
-        let chat_filter = load_chat_filter();
         self.read_runtime_level_cap(|key| props.raw.get(key));
-        load_entities();
-        // Sunrise's far ring (docs/hosting.md): server.toml's `max_view_distance`.
-        let far = props
-            .raw
-            .get(FAR_PROPERTY)
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .unwrap_or(0)
-            .clamp(0, 32);
-        let (registry, biomes) = (self.pack.assets.registry, self.res.biomes().clone());
         if let Some(host) = self.lan.as_mut() {
-            if far > host.hub.config.view_distance {
-                host.hub.far = Some(sunrise_client::lan::far::Far::new(far, registry, biomes));
-                log(
-                    "INFO",
-                    &format!("Sending saved chunks up to {far} chunks away (max_view_distance)"),
-                );
-            }
-            host.hub.set_anticheat(anticheat);
-            host.hub.set_chat_filter(chat_filter);
             // The viewed areas' chunk caps (#3716): server.toml's `max_viewed_*` settings.
             let (caps, clamped) = viewed::ViewedCaps::from_properties(|key| props.raw.get(key));
             if let Some(asked) = clamped {
@@ -1373,13 +1214,7 @@ impl Game<'_> {
                 .get(ADMIN_FEEDBACK_PROPERTY)
                 .is_none_or(|v| v.trim() != "false");
         }
-        log(
-            "INFO",
-            &format!(
-                "Done ({:.3}s)! For help, type \"help\"",
-                started.elapsed().as_secs_f64()
-            ),
-        );
+        log("INFO", &startup_done(level_load_time));
         // DedicatedServer.initServer ends with saveEverything(false, true, true).
         self.save_game()?;
         self.log_saved_levels();
@@ -1408,15 +1243,9 @@ impl Game<'_> {
             ),
             perf_epoch: Instant::now(),
             sunrise: sunrise_client::server_perf::sunrise_options(
-                if self.lan.as_ref().is_some_and(|h| h.hub.far.is_some()) {
-                    far as u32
-                } else {
-                    0
-                },
                 sunrise_client::lod_net::distance_property(
-                    props.raw.get(sunrise_client::lod_net::PROPERTY),
+                    props.raw.get(sunrise_client::lod_net::PROPERTY).as_deref(),
                 ),
-                anticheat_on,
             ),
             compression: props.network_compression_threshold,
             view: (
@@ -1445,7 +1274,6 @@ impl Game<'_> {
         self.fns.permission = Some(props.function_permission_level.clamp(0, 4) as u8);
         let watchdog = Watchdog::start(props.max_tick_time);
         let _stop_watchdog = StopWatchdog(watchdog.clone());
-        let mut braked = Instant::now();
         let mut overload_warned: Option<Instant> = None;
         // `/stop`, or a stop signal (the shutdown hook's `halt`): either way the players and levels are
         // saved below, after the wait `[transfer]` may make (transfer.rs).
@@ -1562,15 +1390,6 @@ impl Game<'_> {
                 || self.wire_bytes(),
             );
             self.poll_server_memory_snapshot(&mut state);
-            // The far ring's brake, once a second on the average tick.
-            if braked.elapsed() >= Duration::from_secs(1)
-                && let Some(host) = self.lan.as_mut()
-                && let Some(far) = host.hub.far.as_mut()
-            {
-                braked = Instant::now();
-                let mspt = self.clock.average_nanos() as f64 / 1e6;
-                far.brake(mspt, host.hub.config.view_distance);
-            }
             state.ticked(Instant::now());
             // MinecraftServer.runServer: a server more than a second's ticks
             // behind skips them and says so, at most every 15 seconds.
@@ -1651,7 +1470,7 @@ impl Game<'_> {
                 .loading_chunks(|g| super::game_mode::loads_chunks(rule, g.spectator()))
                 .next()
         });
-        if self.is_dedicated_server() {
+        if self.is_dedicated_server() || self.dim != super::Dim::Overworld || guest.is_some() {
             self.streaming.radius = if guest.is_some() {
                 self.settings.render_distance
             } else {
@@ -1833,8 +1652,18 @@ impl Game<'_> {
         self.console_broadcast = Some(inform);
         self.console_command(state, line);
         self.console_broadcast = None;
-        if let Some(host) = self.lan.as_ref() {
-            crash_fixture("hub", || host.hub.guests.iter().any(|g| g.placed));
+        // The fixture panics with the hub out of the game, as a panic in the network tick does.
+        crash_fixture("hub", || {
+            let placed = self
+                .lan
+                .as_ref()
+                .is_some_and(|host| host.hub.guests.iter().any(|g| g.placed));
+            if placed {
+                self.lan = None;
+            }
+            placed
+        });
+        if self.lan.is_some() {
             self.run_level_teleports();
             self.send_admin_feedback(None);
         }
@@ -1842,11 +1671,13 @@ impl Game<'_> {
     }
 
     /// `MinecraftServer.createCommandSourceStack`: the console's source is
-    /// bound to the overworld, whichever level the last server tick left in
-    /// place (the last one ticked, often the nether). Its commands run there
-    /// and the level in place is put back afterwards.
-    pub(super) fn as_console_in_overworld<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let back = console_level(self.dim).and_then(|dim| self.enter_command_level(dim));
+    /// bound to the world spawn's level (`findRespawnDimension`), whichever
+    /// level the last server tick left in place (the last one ticked, often
+    /// the nether). Its commands run there and the level in place is put back
+    /// afterwards.
+    pub(super) fn as_console_in_spawn_level<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let back = console_level(self.dim, self.world_spawn_level())
+            .and_then(|dim| self.enter_command_level(dim));
         let source = super::commands::execute::Source {
             silent: false,
             ..self.server_source()
@@ -1858,6 +1689,22 @@ impl Game<'_> {
             self.enter_command_level(back);
         }
         out
+    }
+
+    /// A console or RCON announcement, logged without adding to the source's command output.
+    pub(super) fn dedicated_console_say(&mut self, message: String) {
+        let name = if self.rcon_source { "Rcon" } else { "Server" };
+        let Some(hidden) = self.chat_hidden_from(|_| (0, name, message.as_str())) else {
+            return;
+        };
+        let held = self.rcon_source.then(|| CAPTURE.take());
+        log("INFO", &format!("[Not Secure] [{name}] {message}"));
+        if let Some(held) = held {
+            CAPTURE.set(held);
+        }
+        if let Some(host) = &self.lan {
+            host.hub.console_say(name, &message, &hidden);
+        }
     }
 
     /// DedicatedServer.handleConsoleInputs: one console line, run as the
@@ -1873,7 +1720,7 @@ impl Game<'_> {
         let lit = |s: &str| Text::literal(s.to_owned());
         #[cfg(feature = "state-digest")]
         if command == "digest-sync" {
-            match self.as_console_in_overworld(|g| g.state_digest_sync(&rest)) {
+            match self.as_console_in_spawn_level(|g| g.state_digest_sync(&rest)) {
                 Ok(()) => log("INFO", "digest-sync done"),
                 Err(e) => log("WARN", &format!("digest-sync: {e}")),
             }
@@ -2045,20 +1892,6 @@ impl Game<'_> {
                 }
             }
             "whitelist" => self.console_whitelist(state, &rest),
-            // The chat filter's (game/interface/chat_filter.rs), on servers that filter.
-            command
-                if super::chat_filter::MUTE_COMMANDS.contains(&command)
-                    && self.lan.as_ref().is_some_and(|h| h.hub.chat_filter_on()) =>
-            {
-                if let Some(mut host) = self.lan.take() {
-                    let words: Vec<&str> = [command].into_iter().chain(rest).collect();
-                    let replies = self.mute_command(&mut host, &words, "Server");
-                    self.lan = Some(host);
-                    for reply in replies {
-                        self.console_reply(reply.text());
-                    }
-                }
-            }
             "ban" if !rest.is_empty() => {
                 let Some(user) = self.resolve(rest[0]) else {
                     return;
@@ -2220,29 +2053,14 @@ impl Game<'_> {
                     ],
                 ));
             }
-            "say" if !rest.is_empty() => {
-                // SayCommand from the console: an unsigned system chat
-                // message of type say_command, logged as not secure.
-                let message = rest.join(" ");
-                // An RCON client's `say` is `[Rcon] message`, and its reply stays empty: the line is
-                // the console's own log, not a message to the source.
-                let name = if self.rcon_source { "Rcon" } else { "Server" };
-                let held = self.rcon_source.then(|| CAPTURE.take());
-                log("INFO", &format!("[Not Secure] [{name}] {message}"));
-                if let Some(held) = held {
-                    CAPTURE.set(held);
-                }
-                if let Some(h) = &self.lan {
-                    h.hub.say(name, &message);
-                }
-            }
+            "say" if !rest.is_empty() => self.dedicated_console_say(rest.join(" ")),
             _ => {
                 // The game's dispatcher, captured for the console.
                 self.chat_capture = Some(Vec::new());
                 // A command a native mod registered goes to the mods first,
                 // looked up by the same first word the match above read.
                 if !self.perform_native_console_command(line.trim()) {
-                    self.as_console_in_overworld(|g| g.run_command(line));
+                    self.as_console_in_spawn_level(|g| g.run_command(line));
                 }
                 for text in self.chat_capture.take().unwrap_or_default() {
                     self.console_reply(text);
@@ -2435,53 +2253,6 @@ impl Game<'_> {
         }
     }
 
-    /// The anticheat bans a player (`HostEvent::Ban`): `banned-players.json` gets it as `/ban` adds it,
-    /// with the anticheat as its source, and the player is sent away with the ban's message.
-    pub(super) fn anticheat_ban(&mut self, uuid: u128, name: &str, reason: &str) {
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        let hub = &mut host.hub;
-        let Some(lists) = &self.server_lists else {
-            // No ban list to add to: the anticheat's kick, so a flagged cheater still doesn't stay.
-            log(
-                "WARN",
-                &format!("Can't ban {name} ({reason}): no ban list; kicked"),
-            );
-            let conns: Vec<u32> = hub
-                .guests
-                .iter()
-                .filter(|g| g.uuid == uuid)
-                .map(|g| g.conn)
-                .collect();
-            for conn in conns {
-                hub.anticheat_kick(conn);
-            }
-            return;
-        };
-        let user = NameAndId {
-            id: uuid,
-            name: name.to_owned(),
-        };
-        lists.lock().unwrap().bans.add(BanEntry::new(
-            user,
-            Some("Sunrise anticheat".into()),
-            None,
-            Some(reason.to_owned()),
-        ));
-        log("INFO", &format!("Banned {name}: {reason}"));
-        let conns: Vec<u32> = hub
-            .guests
-            .iter()
-            .filter(|g| g.uuid == uuid)
-            .map(|g| g.conn)
-            .collect();
-        for conn in conns {
-            hub.kick(conn, translatable("multiplayer.disconnect.banned", &[]));
-        }
-        events::record("ban", name, uuid, serde_json::json!({ "reason": reason }));
-    }
-
     pub(super) fn kick_uuid(&mut self, uuid: u128, reason: Tag) {
         let conns: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
             h.hub
@@ -2575,10 +2346,9 @@ impl Game<'_> {
 /// the tick panics there, to see what crash teardown keeps.
 /// `armed` is asked only when the variable names `point`, so the tick pays one
 /// load of a `OnceLock` without it.
-pub(super) fn crash_fixture(point: &str, armed: impl FnOnce() -> bool) {
-    static FIXTURE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let fixture = FIXTURE.get_or_init(|| std::env::var("SUNRISE_CRASH_FIXTURE").ok());
-    if fixture.as_deref() == Some(point) && armed() {
+pub(super) fn crash_fixture(point: &'static str, armed: impl FnOnce() -> bool) {
+    use sunrise_world::crash_fixture::{CrashFixture, selected};
+    if selected() == Some(CrashFixture::Panic(point)) && armed() {
         panic!("crash fixture at {point}");
     }
 }
@@ -2602,11 +2372,10 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
-/// The level a console command runs in when `active` is in place: always
-/// the overworld (`MinecraftServer.createCommandSourceStack` uses
-/// `overworld()`), so None when it already is.
-fn console_level(active: super::Dim) -> Option<super::Dim> {
-    (active != super::Dim::Overworld).then_some(super::Dim::Overworld)
+/// The level a console line runs in, when it is not `active`, the one in place: the world
+/// spawn's (`MinecraftServer.createCommandSourceStack` uses `findRespawnDimension`).
+fn console_level(active: super::Dim, spawn: super::Dim) -> Option<super::Dim> {
+    (active != spawn).then_some(spawn)
 }
 
 impl Game<'_> {
@@ -2626,18 +2395,7 @@ impl Game<'_> {
         } else {
             log("ERROR", &format!("The server thread panicked: {message}"));
         }
-        let acting = self.lan_acting;
-        let hub_lost = self.lan.is_none();
-        if let (Some(conn), Some(host)) = (acting, self.lan.as_mut()) {
-            host.hub
-                .guests
-                .update_connection(conn, |guest| guest.placed = false);
-        }
-        if hub_lost {
-            warn("The panic interrupted the network tick: players are not saved, only the world");
-        } else if acting.is_some() {
-            warn("The panic interrupted a player's turn: that player keeps the last saved file");
-        }
+        self.exclude_interrupted_players(true, warn);
         if integrated {
             // `IntegratedServer.stopServer`'s steps; `save_guest` skips the guest unplaced above.
             return self.stop_integrated(true);
@@ -2678,7 +2436,8 @@ mod tests {
     }
 
     use super::{
-        capture_log, log, log_from, overload_warning, panic_message, parse_whitelist_bypass,
+        FORWARDING_REMOVED, capture_log, log, log_from, overload_warning, panic_message,
+        refuse_forwarding_secret,
     };
     use std::{
         fs,
@@ -2687,13 +2446,19 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    /// A console line runs in the overworld even after a server tick left the nether in place.
+    /// A console line runs in the world spawn's level whichever level a server tick left in place.
     #[test]
-    fn console_commands_run_in_the_overworld() {
+    fn console_commands_run_in_the_world_spawn_level() {
         use super::super::Dim;
-        assert_eq!(super::console_level(Dim::Nether), Some(Dim::Overworld));
-        assert_eq!(super::console_level(Dim::End), Some(Dim::Overworld));
-        assert_eq!(super::console_level(Dim::Overworld), None);
+        let overworld = Dim::Overworld;
+        assert_eq!(
+            super::console_level(Dim::Nether, overworld),
+            Some(overworld)
+        );
+        assert_eq!(super::console_level(Dim::End, overworld), Some(overworld));
+        assert_eq!(super::console_level(overworld, overworld), None);
+        assert_eq!(super::console_level(overworld, Dim::End), Some(Dim::End));
+        assert_eq!(super::console_level(Dim::End, Dim::End), None);
     }
 
     /// `BanIpCommands.banIp`: the info line names the affected players, one or several, and is
@@ -2759,35 +2524,55 @@ mod tests {
             assert_eq!(game.ip_ban_players("127.0.0.1"), [13]);
         });
     }
-    #[test]
-    fn entities_section_is_off_by_default_and_keeps_the_other_settings_keys() {
-        use super::parse_entities;
-        assert_eq!(parse_entities(""), Ok((false, 100)));
-        assert_eq!(
-            parse_entities(
-                "[entities]\nvillager_lobotomize = true\nvillager_lobotomize_check_interval = 40\n"
-            ),
-            Ok((true, 40))
-        );
-        assert_eq!(
-            parse_entities(
-                "[entities]\ndab = true\nmax_collisions = 8\nvillager_lobotomize = true\n"
-            ),
-            Ok((true, 100))
-        );
-        assert!(parse_entities("[entities]\nvillager_lobotomize_check_interval = 0\n").is_err());
-    }
 
     #[test]
-    fn whitelist_bypass_file_takes_uuid_prefixes_and_refuses_junk() {
-        let ok =
-            parse_whitelist_bypass("# Bedrock\n00000000-0000-0000-0009-  # floodgate\n\n").unwrap();
-        assert_eq!(ok, vec!["00000000-0000-0000-0009-".to_owned()]);
-        assert!(
-            parse_whitelist_bypass("0-").is_err(),
-            "a short prefix would match nearly everyone"
+    #[ignore = "daily"]
+    fn a_missing_level_file_keeps_the_existing_world_generator() {
+        use sunrise_client::save::Level;
+        use sunrise_java_properties::Properties;
+
+        let world = tempfile::tempdir().unwrap();
+        let dir = world.path();
+        Level {
+            seed: 12345,
+            ..Level::default()
+        }
+        .write_without_player(dir)
+        .unwrap();
+        let settings_path = dir.join("data/minecraft/world_gen_settings.dat");
+        assert!(settings_path.is_file(), "test world has no saved generator");
+        fs::rename(dir.join("level.dat"), dir.join("level.dat_old")).unwrap();
+        let mut properties = Properties::default();
+        properties.put("level-seed", "54321".into());
+        let props =
+            super::ServerProperties::new(properties, &mut super::SystemEntropy::default()).unwrap();
+        let resources = std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap().into();
+        crate::game::native_entity_refs::tests::with_game_role(
+            resources,
+            crate::game::execution_role::ExecutionRole::DedicatedServer,
+            |game| {
+                game.prepare_world_metadata(dir, &props, false).unwrap();
+            },
         );
-        assert!(parse_whitelist_bypass("not-a-uuid-at-all").is_err());
+        let generation = sunrise_client::save::read_dat(&settings_path).unwrap();
+        assert_eq!(
+            generation.get("data").and_then(|data| data.get("seed")),
+            Some(&sunrise_core::nbt::Tag::Long(12345)),
+        );
+    }
+
+    /// A server folder that still has the forwarding secret is told what to do.
+    #[test]
+    fn a_leftover_forwarding_secret_says_what_to_do() {
+        let dir = std::env::temp_dir().join(format!("sunrise-forwarding-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(refuse_forwarding_secret(&dir), Ok(()));
+        fs::write(dir.join("forwarding.secret"), "secret\n").unwrap();
+        assert_eq!(
+            refuse_forwarding_secret(&dir),
+            Err(FORWARDING_REMOVED.to_owned())
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// ServerGamePacketListenerImpl.tick: a player idle past `player-idle-timeout` minutes is kicked,
@@ -2822,6 +2607,14 @@ mod tests {
     }
 
     /// Vanilla's words, with how far behind the server is in milliseconds and in whole ticks.
+    #[test]
+    fn done_uses_java_half_up_world_load_seconds() {
+        assert_eq!(
+            super::startup_done(std::time::Duration::from_nanos(2_345_500_000)),
+            "Done (2.346s)! For help, type \"help\""
+        );
+    }
+
     #[test]
     fn the_overload_warning_reads_as_vanilla_s() {
         let tick = std::time::Duration::from_millis(50);
@@ -3006,7 +2799,6 @@ mod tests {
             player_idle_timeout: 0,
             stop: false,
             autosave: true,
-            whitelist_bypass: Vec::new(),
         };
         let alpha = NameAndId {
             id: 0x5ca1ab1e,
@@ -3027,7 +2819,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// A temporary ban (the chat filter's) keeps the player out and says when it ends;
+    /// A temporary ban keeps the player out and says when it ends;
     /// once it has ended, or after `/pardon`, they come in.
     #[test]
     fn a_temporarily_banned_player_is_refused_with_the_end_until_it_has_passed() {
@@ -3046,7 +2838,6 @@ mod tests {
             player_idle_timeout: 0,
             stop: false,
             autosave: true,
-            whitelist_bypass: Vec::new(),
         };
         // Every translation key and string in a message, in the order they come.
         fn words(tag: &super::Tag, out: &mut Vec<String>) {
@@ -3121,7 +2912,7 @@ mod console_source_tests {
     /// Runs `command` as the console does and returns whether it worked and every message it printed.
     fn console(game: &mut Game<'_>, command: &str) -> (bool, String) {
         game.chat_capture = Some(Vec::new());
-        let ok = game.as_console_in_overworld(|g| g.run_command(command));
+        let ok = game.as_console_in_spawn_level(|g| g.run_command(command));
         let said = game.chat_capture.take().unwrap_or_default();
         let said = said
             .iter()

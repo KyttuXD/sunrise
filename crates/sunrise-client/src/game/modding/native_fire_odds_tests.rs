@@ -95,12 +95,13 @@ fn a_block_part_answers_fire_odds_for_one_face() {
                     point: [f64::from(x) + 0.5, 65.0, f64::from(z) + 0.5],
                     inside: false,
                 };
-                let (placed, changes) = game
+                let placed = game
                     .remote_can_place(&hit, &ItemStack::new("minecraft:stone", 1))
                     .expect("stone placement prediction");
-                assert_eq!(placed, BlockPos::new(x, 65, z));
+                assert_eq!(placed.pos, BlockPos::new(x, 65, z));
                 let pos = BlockPos::new(x, 65, 2);
-                let predicted = changes
+                let predicted = placed
+                    .changes
                     .iter()
                     .find(|(at, _)| *at == pos)
                     .map_or(fire, |(_, state)| *state);

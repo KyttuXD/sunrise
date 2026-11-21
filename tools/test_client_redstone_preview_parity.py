@@ -28,8 +28,10 @@ def main():
               'dev.sunriselab.parity.VanillaClientRedstonePreviewOracle'])
     with (work / 'rust.log').open('w', encoding='utf-8') as output:
         base.run(['cargo', 'test', '--locked', '-p', 'sunrise-client', '--lib',
-                  'game::remote::tests::placement_preview_checks_obstruction_without_changing_the_level',
-                  '--', '--exact'], stdout=output)
+                  'game::remote::tests::placement_preview_tests::'
+                  'placement_preview_checks_obstruction_without_changing_the_level',
+                  '--', '--exact', '--ignored'], stdout=output,
+                 env={**os.environ, "SUNRISE_TEST_RESOURCES": str(lab.RESOURCES)})
     if '1 passed; 0 failed' not in (work / 'rust.log').read_text(encoding='utf-8'):
         raise AssertionError('placement preview regression did not run')
     print('Powered client TNT/piston placement guards match vanilla; server controls pass.')

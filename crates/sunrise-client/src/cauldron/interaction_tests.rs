@@ -57,6 +57,37 @@ fn cauldron_no_mod_water_bucket_and_bottle_keep_vanilla_values() {
     assert!(hand.dropped.is_empty());
 }
 #[test]
+fn washing_a_raid_banner_removes_just_its_last_layer() {
+    let banner = crate::mobs::raider::ominous_banner();
+    let mut hand = Hand {
+        stack: Some(banner.clone()),
+        dropped: vec![],
+    };
+    let result = interact(
+        &state("minecraft:water_cauldron", Some(3)),
+        false,
+        false,
+        &mut hand,
+    );
+    assert_eq!(
+        result.block,
+        Some(state("minecraft:water_cauldron", Some(2)))
+    );
+    assert!(hand.dropped.is_empty());
+    let washed = hand.stack.unwrap();
+    assert_eq!(washed.banner_layers(), &banner.banner_layers()[..7]);
+    let original = crate::item_data::encode_extra_components(&banner).unwrap();
+    let washed = crate::item_data::encode_extra_components(&washed).unwrap();
+    for id in [
+        "minecraft:item_name",
+        "minecraft:rarity",
+        "minecraft:tooltip_display",
+    ] {
+        assert_eq!(washed.get(id), original.get(id));
+    }
+}
+
+#[test]
 fn cauldron_prebound_entries_refuse_replacement_and_keep_tag_priority() {
     use interactions::{Dispatcher, Entry};
     let mut table = Dispatcher::<&str>::default();

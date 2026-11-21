@@ -9,8 +9,12 @@ use std::sync::{
 fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
     mod_platform::testing::with_mods(mod_api::Mods::default(), || {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
-            let icon = "gui/sprites/container/slot/shield";
-            assert!(game.gui.atlas.sprites.contains_key(icon));
+            let icon = "minecraft:container/slot/shield";
+            let Some(sunrise_client::hud::GuiSprite::Present { rect, .. }) =
+                game.gui.atlas.gui_lookup(icon)
+            else {
+                panic!("the shield icon must resolve to a real GUI sprite");
+            };
             game.screen = Screen::Inventory;
             game.container = Some((1, 2, 3));
             game.mod_screen = Some(OpenNativeScreen {
@@ -18,7 +22,8 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
                 slot_moves: Default::default(),
                 key: (1, 2, 3),
                 window: 1,
-                block: "test:block".into(),
+                menu: "test:menu".into(),
+                block: Some("test:block".into()),
                 screen: mod_api::Screen {
                     slots: vec![Some(mod_api::ScreenSlot {
                         position: [8.0, 18.0],
@@ -26,14 +31,14 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
                     })],
                     ..Default::default()
                 },
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
             });
             let mut actual = HudBatch::scratch([128, 128]);
             game.draw_slot_item(&mut actual, None, 300, &None, 8.0, 18.0);
             let mut expected = HudBatch::scratch([128, 128]);
-            expected.sprite_scaled(&game.gui.atlas, icon, 8.0, 18.0, 16.0, 16.0, 0xFFFF_FFFF);
-            assert!(!expected.vertices.is_empty());
+            expected.rect_uv(8.0, 18.0, 16.0, 16.0, rect, 0xFFFF_FFFF);
             let geometry = |batch: &HudBatch| {
                 batch
                     .vertices
@@ -63,9 +68,7 @@ fn empty_slot_draws_icon_but_a_filled_slot_does_not() {
 
 struct IconScreen(Arc<AtomicBool>);
 #[mod_api::sunrise_part]
-impl mod_api::BlockPart for IconScreen {}
-#[mod_api::sunrise_part]
-impl mod_api::BlockEntityPart for IconScreen {
+impl mod_api::MenuPart for IconScreen {
     fn screen(
         &self,
         _: &dyn mod_api::Host,
@@ -102,17 +105,12 @@ impl mod_api::Hooks for IconMod {
                 ..Default::default()
             },
         );
-        let kind = r
-            .block_entity_type("machine")
-            .blocks(&["icon_open:machine"])
-            .build();
-        r.block_entity_part(&kind, IconScreen(self.0.clone()))
-            .unwrap();
+        r.menu_part("minecraft:generic_9x1", IconScreen(self.0.clone()));
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new("icon_open:machine", "minecraft:barrel").with_item(false));
+            .register(mod_api::Block::new("icon_open:machine", "minecraft:barrel").with_item(false))
+            .unwrap();
     }
 }
 struct Diagnostics(Mutex<Vec<String>>);

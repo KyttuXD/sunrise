@@ -117,7 +117,6 @@ mod connected_statistics_save_tests {
                 player_idle_timeout: 0,
                 stop: false,
                 autosave: true,
-                whitelist_bypass: Vec::new(),
             },
         )));
         game.set_allow_commands(true);

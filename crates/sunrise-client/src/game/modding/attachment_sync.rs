@@ -81,9 +81,22 @@ impl Game<'_> {
                     .map(|((x, y, z), map)| (Holder::BlockEntity([x, y, z]), map.synced())),
             );
         }
+        // A general row is shown on a client once its first snapshot arrives with it
+        // (`remote/general.rs`), so it gets one even with nothing synced, as a player does.
+        let general = |holder: &Holder| match holder {
+            Holder::Entity(id) => self
+                .resident_entities
+                .general
+                .rows
+                .iter()
+                .any(|row| row.id == *id),
+            _ => false,
+        };
         holders
             .into_iter()
-            .filter(|(holder, changes)| !changes.is_empty() || matches!(holder, Holder::Player(_)))
+            .filter(|(holder, changes)| {
+                !changes.is_empty() || matches!(holder, Holder::Player(_)) || general(holder)
+            })
             .map(|(holder, changes)| Message {
                 holder,
                 replace: true,
@@ -281,6 +294,11 @@ impl Game<'_> {
         for change in message.changes {
             map.apply_sync(change);
         }
+        if let Holder::Entity(id) = message.holder {
+            remote
+                .general
+                .attachments_arrived(id as i32, message.replace, map);
+        }
         self.bind_remote_attachment(message.holder);
     }
 
@@ -326,6 +344,9 @@ impl Game<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "attachment_sync/general_snapshot_tests.rs"]
+mod general_snapshot_tests;
 #[cfg(test)]
 #[path = "attachment_sync/route_cases_tests.rs"]
 mod route_cases_tests;

@@ -129,9 +129,8 @@ def line_count(text):
 
 
 def at(root, rev, path):
-    """`path`'s text at `rev`, or None where it does not exist."""
-    shown = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, encoding="utf-8")
-    return shown.stdout if shown.returncode == 0 else None
+    """`path`'s text at `rev`, or None where it does not exist; a baseline that can't be read stops the check."""
+    return merge_base.text_at(rev, path, root)
 
 
 def problems(root, merge_base):

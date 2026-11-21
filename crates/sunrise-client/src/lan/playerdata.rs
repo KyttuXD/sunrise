@@ -79,9 +79,11 @@ pub fn with_warden(guest: &mut Guest, tracker: Option<Tag>) -> &mut Guest {
 /// between its two renames leaves, `write_dat`).
 pub fn load(guest: &mut Guest, world: &Path) -> bool {
     let file = path(world, guest.uuid);
-    let Some(tag) = read_dat(&file).or_else(|| read_dat(&file.with_extension("dat_old"))) else {
+    let Some(mut tag) = read_dat(&file).or_else(|| read_dat(&file.with_extension("dat_old")))
+    else {
         return false;
     };
+    crate::save::adopt_horizon_player(&mut tag);
     let mut level = Level {
         health: 20.0,
         food: 20,
@@ -191,6 +193,7 @@ pub fn migrate_owner(
         return false;
     }
     if let Some(mut tag) = source {
+        crate::save::adopt_horizon_player(&mut tag);
         // The player file is named after its `UUID` (`PlayerDataStorage.save`).
         put(&mut tag, "UUID", uuid_tag(new_ints));
         if let Err(e) = write_dat(&new_file, tag.clone()) {

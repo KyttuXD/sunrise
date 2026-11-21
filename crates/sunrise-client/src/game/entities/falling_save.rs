@@ -10,21 +10,20 @@ mod tests {
     impl mod_api::Hooks for Observer {
         fn entity_tick_listened(
             &self,
-            _: &mut dyn mod_api::ServerHost,
+            _: mod_api::HostSide<'_>,
             event: &mut mod_api::EntityTickListenedEvent,
         ) {
             event.listened = true;
         }
         fn entity_tick_pre(
             &self,
-            _: &mut dyn mod_api::ServerHost,
+            _: mod_api::HostSide<'_>,
             _: &mut mod_api::EntityTickPreEvent<'_>,
-        ) -> mod_api::Flow {
-            mod_api::Flow::Continue
+        ) {
         }
         fn entity_tick_post(
             &self,
-            _: &mut dyn mod_api::ServerHost,
+            _: mod_api::HostSide<'_>,
             _: &mut mod_api::EntityTickPostEvent<'_>,
         ) {
         }

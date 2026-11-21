@@ -24,18 +24,24 @@ impl GameLevel<'_> {
         state: BlockStateId,
         entity: Option<EntityRef>,
         roll: BlockLootRoll<'_>,
+        source: Option<&sunrise_world::loot::copy::BlockSource>,
     ) -> Vec<ItemStack> {
         let at = [pos.x, pos.y, pos.z];
-        let source = self.pending.source(at).or_else(|| {
-            crate::game::spill::world_source(
-                self.world,
-                at,
-                &self.facts.get(state).name,
-                self.items,
-            )
-        });
+        let captured = source
+            .is_none()
+            .then(|| {
+                self.pending.source(at).or_else(|| {
+                    crate::game::spill::world_source(
+                        self.world,
+                        at,
+                        &self.facts.get(state).name,
+                        |key, entity, block| self.encode_live_block_entity(key, entity, block),
+                    )
+                })
+            })
+            .flatten();
         sunrise_world::loot::copy::with_storage(self.loot_storage.clone(), || {
-            sunrise_world::loot::copy::with_block_source(source.as_deref(), || {
+            sunrise_world::loot::copy::with_block_source(source.or(captured.as_deref()), || {
                 let (items, registry, seed) = (self.items, self.registry, self.seed);
                 if !self.native_authoritative
                     || !mod_api::__private::listened(mod_api::HookId::EnchantedBlockLoot)
@@ -147,7 +153,7 @@ mod tests {
         *game.world.random = LegacyRandom::new(7);
         game.rand_sequences = Default::default();
         let flint = (0..ROLLS)
-            .flat_map(|_| game.block_loot_at(POS, gravel, tool, None))
+            .flat_map(|_| game.block_loot_at(POS, gravel, tool))
             .filter(|stack| &*stack.item == "minecraft:flint")
             .count();
         let seed = game.level.seed;
@@ -216,7 +222,7 @@ mod tests {
             host.entity_id = 7;
             game.player = Some(host);
             with_mods(mods(None), || {
-                game.block_loot_at(POS, gravel, None, None);
+                game.block_loot_at(POS, gravel, None);
             });
             game.player = None;
             assert_eq!(reads.lock().unwrap()[0].entity, Some(7));

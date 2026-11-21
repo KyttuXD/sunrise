@@ -104,12 +104,12 @@ impl Game<'_> {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| ItemStack::new(TOTEM, 1));
-        if let Some(s) = cell.as_mut() {
-            s.count -= 1;
-            if s.count == 0 {
-                *cell = None;
-            }
-        }
+        let slot = if main {
+            self.selected
+        } else {
+            super::shield::OFFHAND_SLOT
+        };
+        self.consume_player_slot(slot, 1);
         self.award_stat("used", &protector.item, 1);
         self.trigger_item("minecraft:used_totem", &protector);
         // ItemStack.causeUseVibration: the totem's use effects make one.
@@ -118,8 +118,9 @@ impl Game<'_> {
         // `DeathProtection.applyEffects`: the component's own `death_effects`,
         // read from the protector copy (the totem's clear-then-effects, or a
         // custom list; `death_protection={}` has none).
+        let user = self.consuming_player_entity();
         for effect in self.death_effects(&protector) {
-            self.apply_consume_effect(&protector, &effect, None);
+            self.apply_consume_effect(&protector, &effect, None, user);
         }
         Some(Body {
             protector: Some(protector),

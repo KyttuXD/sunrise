@@ -3,7 +3,6 @@ use crate::game::api_values::TryIntoApi;
 
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
-#[allow(dead_code)]
 impl Game<'_> {
     /// Playing, with nothing over the world: keys and zoom apply.
     pub(in crate::game) fn playing(&self) -> bool {
@@ -45,15 +44,29 @@ impl Game<'_> {
         self.settings.keys.get(name).hash(&mut binding);
         Some((down, binding.finish()))
     }
+    /// Whether the key or mouse button the vanilla mapping `name` is bound to is physically down.
+    pub(in crate::game) fn mapping_physical_down(
+        &self,
+        name: &str,
+    ) -> Result<Option<bool>, mod_api::LevelReadError> {
+        // The mappings `mapping` and `mapping_state` answer for, and no others.
+        if self.mapping_held(name).is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.is_key_down(self.settings.keys.get(name))))
+    }
     /// Whether the vanilla mapping `name` is held, for `mapping` and `mapping_state`.
     fn mapping_held(&self, name: &str) -> Option<bool> {
         let &(_, key) = MAPPINGS.iter().find(|m| m.0 == name)?;
         Some(match key {
             Some(k) => self.movement_key_held(k),
-            // The button, or the mapping's own held state (a toggle, a pad, `set_mapping_down`).
+            // Attack and use read the logical mapping, not the physical mouse's state.
             None => {
-                let use_key = usize::from(name == "key.use");
-                self.mouse_held()[use_key] || [self.left, self.right][use_key]
+                if name == "key.use" {
+                    self.right
+                } else {
+                    self.left
+                }
             }
         })
     }

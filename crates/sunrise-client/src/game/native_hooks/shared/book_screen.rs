@@ -24,9 +24,7 @@ impl Game<'_> {
         self.shown_native_screen().map(|s| s.screen.height)
     }
     pub(in crate::game) fn native_screen_menu(&self) -> Option<&str> {
-        let screen = self.shown_native_screen()?;
-        self.remote_menu_type()
-            .or_else(|| self.mod_menu_at(screen.key))
+        Some(&self.shown_native_screen()?.menu)
     }
     pub(in crate::game) fn native_screen_toggle(&self) -> Option<mod_api::RecipeBookToggle> {
         self.shown_native_screen()?.screen.recipe_book_toggle
@@ -36,7 +34,7 @@ impl Game<'_> {
             .is_some_and(|screen| screen.screen.recipe_book_big_result)
     }
     pub(in crate::game) fn native_screen_block(&self) -> Option<&str> {
-        Some(&self.shown_native_screen()?.block)
+        self.shown_native_screen()?.block.as_deref()
     }
     /// The explicitly assigned book; declarations bind it to the actual menu.
     pub(in crate::game) fn native_screen_book(&self) -> Option<&mod_api::RecipeBookTypeKey> {

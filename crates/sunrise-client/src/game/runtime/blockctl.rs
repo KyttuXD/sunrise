@@ -148,11 +148,11 @@ impl Game<'_> {
                         .get_mut(&key)
                         .ok_or("no container there")?;
                     let slot = entity
-                        .slots_mut()
-                        .iter_mut()
-                        .find(|s| s.is_none())
+                        .slots()
+                        .iter()
+                        .position(Option::is_none)
                         .ok_or("container is full")?;
-                    *slot = Some(ItemStack {
+                    *entity.slot_mut(slot).unwrap() = Some(ItemStack {
                         item: item.as_str().into(),
                         count,
                         damage: 0,
@@ -165,8 +165,7 @@ impl Game<'_> {
                     .get(&key)
                     .ok_or("no container there")?;
                 let slots: Vec<Value> = entity
-                    .clone()
-                    .slots_mut()
+                    .slots()
                     .iter()
                     .map(|s| {
                         s.as_ref().map_or(

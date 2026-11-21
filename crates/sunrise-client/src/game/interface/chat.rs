@@ -200,50 +200,8 @@ impl Game<'_> {
 /// The local player's name (offline single player).
 pub const PLAYER_NAME: &str = "Player";
 
-/// The Overworld's world clock.
-pub(in crate::game) const OVERWORLD_CLOCK: &str = "minecraft:overworld";
-
-/// ServerClockManager.ServerClockInstance (the total ticks of the one the level in place follows
-/// are the world's day time).
-#[derive(Clone, Copy, Debug)]
-pub struct WorldClock {
-    pub partial: f32,
-    pub rate: f32,
-    pub paused: bool,
-}
-impl Default for WorldClock {
-    fn default() -> Self {
-        Self {
-            partial: 0.0,
-            rate: 1.0,
-            paused: false,
-        }
-    }
-}
-/// A clock time marker from the timelines (ClockTimeMarker); `resolve` is None past `i64::MAX`.
-#[derive(Clone, Copy, Debug)]
-pub struct TimeMarker {
-    pub ticks: i64,
-    pub period: Option<i64>,
-    pub show: bool,
-}
-impl TimeMarker {
-    pub fn occurs_at(&self, total: i64) -> bool {
-        match self.period {
-            Some(p) => self.ticks == total.rem_euclid(p),
-            None => self.ticks == total,
-        }
-    }
-    pub fn resolve(&self, total: i64) -> Option<i64> {
-        match self.period {
-            Some(p) => {
-                let d = self.ticks - total.rem_euclid(p);
-                total.checked_add(if d > 0 { d } else { p + d })
-            }
-            None => Some(self.ticks),
-        }
-    }
-}
+pub(in crate::game) use sunrise_gameplay::world_clock::OVERWORLD_CLOCK;
+pub use sunrise_gameplay::world_clock::{TimeMarker, WorldClock};
 /// `ChatComponent.Draft`: the text the chat box kept, and whether it was a command.
 pub struct ChatDraft {
     pub text: String,
@@ -538,8 +496,9 @@ static BLOCK_PROPERTIES: Mutex<Vec<(usize, Arc<BlockProperties>)>> = Mutex::new(
 /// `BlockProperties` of a block registry, listed once: a registry never
 /// changes once built, and walking its tens of thousands of states took
 /// about 30 ms of every world opening.
-pub(super) fn block_properties(registry: &'static BlockRegistry) -> Arc<BlockProperties> {
-    let key = std::ptr::from_ref(registry) as usize;
+pub(super) fn block_properties(registry: &BlockRegistry) -> Arc<BlockProperties> {
+    // The payload is retained for the process, so equal data shares one table whatever borrows it.
+    let key = registry.payload_identity();
     let mut cache = BLOCK_PROPERTIES.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, properties)) = cache.iter().find(|(cached, _)| *cached == key) {
         return properties.clone();
@@ -874,13 +833,7 @@ impl Game<'_> {
         reg.block_tags.sort();
         reg.blocks = BlockProperties::clone(&block_properties(self.pack.assets.registry));
         reg.summonable = summonable_entities(&ids.entity_types, self.res.mob_types().keys());
-        let mut types = ids.entity_types.clone();
-        if types.is_empty() {
-            types = reg.summonable.clone();
-            types.push("minecraft:player".into());
-            types.sort();
-        }
-        reg.entity_types = types;
+        reg.entity_types.clone_from(&ids.entity_types);
         // The mob effect registry: every effect `/effect` and the
         // `mob_effect` resource arguments accept.
         reg.effects = sunrise_client::brewing::all_effects()
@@ -908,6 +861,22 @@ impl Game<'_> {
             }
         }
         let reg = &mut self.ui.registries;
+        if reg.entity_types.is_empty() {
+            reg.entity_types.clone_from(&reg.summonable);
+            reg.entity_types.push("minecraft:player".into());
+        }
+        reg.entity_types.extend(
+            super::general::general_type_catalog()
+                .keys()
+                .map(str::to_owned),
+        );
+        reg.entity_types.sort();
+        reg.entity_types.dedup();
+        // Selector validation prefers the exported registry entry. Replace its
+        // vanilla IDs with the live list, keeping its tags.
+        if let Some(entry) = reg.by_registry.get_mut("minecraft:entity_type") {
+            entry.ids.clone_from(&reg.entity_types);
+        }
         // Native component names were validated and frozen before resources loaded.
         // The same inventory supplies both wire IDs and command components.
         for (_, name) in sunrise_protocol::item::custom::entries() {
@@ -1453,7 +1422,9 @@ impl Game<'_> {
             }
         }
         if let Some(screen) = self.ui.chat_screen.as_mut() {
-            if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
+            let (x, y) = (f64::from(cursor.0), f64::from(cursor.1));
+            let double_click = screen.live_double_click(x, y);
+            if screen.click(&m, &c, x, y, double_click) {
                 self.notify_chat_suggestion_completion();
                 return;
             }
@@ -1693,6 +1664,15 @@ impl Game<'_> {
         self.ui.chat.queue = self.chat_queue_len();
         if self.ui.hide_gui && !focused {
             return;
+        }
+        let revision = self.inline_images_revision();
+        if self.ui.chat.inline_images_stale(revision) {
+            // Layout borrows a read-only Host while asking listeners.
+            let mut chat = std::mem::take(&mut self.ui.chat);
+            chat.refresh_inline_images(&self.gui.atlas, revision, |text| {
+                self.substitute_inline_images(text)
+            });
+            self.ui.chat = chat;
         }
         self.ui.chat.smooth = self.settings.extras.chat_animation;
         self.ui.chat.hide_indicator = !self.settings.extras.chat_indicator;
@@ -1997,21 +1977,37 @@ impl Game<'_> {
             .ui
             .rules
             .bool_at(sunrise_client::gamerules::vanilla::ADVANCE_TIME);
-        let state = *self.command_clock_state(&active);
         // A paused clock, or `advance_time` off, is a rate of 0 to the guests, as for the Overworld's.
-        let rate = if advancing && !state.paused {
-            state.rate
-        } else {
-            0.0
-        };
-        if let Some(host) = self.lan.as_mut() {
-            if active == OVERWORLD_CLOCK {
-                host.hub.overworld_day = None;
-                host.hub.level_clock = None;
+        let guest_rate = |state: &WorldClock| {
+            if advancing && !state.paused {
+                state.rate
             } else {
-                host.hub.overworld_day = Some(overworld);
-                host.hub.level_clock = Some((active, rate));
+                0.0
             }
+        };
+        let rate = guest_rate(self.command_clock_state(&active));
+        let end_total = self.command_clock_time("minecraft:the_end");
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        // The clocks neither field below covers: the End's and every other the world has met.
+        let others = std::iter::once(("minecraft:the_end", end_total, &self.ui.end_clock)).chain(
+            self.ui
+                .command_clocks
+                .iter()
+                .map(|(name, (total, state))| (name.as_str(), *total, state)),
+        );
+        for (name, total, state) in others {
+            if name != active && name != OVERWORLD_CLOCK {
+                host.hub.set_clock_state(name, total, guest_rate(state));
+            }
+        }
+        if active == OVERWORLD_CLOCK {
+            host.hub.overworld_day = None;
+            host.hub.level_clock = None;
+        } else {
+            host.hub.overworld_day = Some(overworld);
+            host.hub.level_clock = Some((active, rate));
         }
     }
     /// Makes `to` the clock `World.day_time` follows, as the level entered has it as its default
@@ -3038,7 +3034,10 @@ mod enchantment_snapshot_tests {
         game.world_root = dir;
         let stack = game.reload_datapacks(false, &[]).unwrap();
         let root = game.options.resources.clone();
-        game.world_tables = game.stage_world_tables(&stack, false, &root).unwrap().0;
+        game.world_tables = game
+            .stage_world_tables(&stack, false, &root)
+            .unwrap()
+            .tables;
         assert!(
             game.world_tables.is_some(),
             "the real active table container must be available"
@@ -3190,8 +3189,9 @@ mod damage_type_registry_tests {
         .unwrap();
         game.world_root = dir;
         let stack = game.reload_datapacks(false, &[]).unwrap();
-        (game.world_tables, game.health_resources, _) =
-            game.stage_world_tables(&stack, false, &root).unwrap();
+        let staged = game.stage_world_tables(&stack, false, &root).unwrap();
+        game.world_tables = staged.tables;
+        game.health_resources = staged.health;
         game.level.allow_commands = Some(true);
         game.build_registries();
 

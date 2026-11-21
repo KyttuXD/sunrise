@@ -123,21 +123,14 @@ pub(super) fn pack_stack(
     }
 }
 
-/// The world's enabled packs' content files (`recipe/`, `loot_table/`,
-/// `advancement/`, `tags/…`) for the tables to merge over the resource
-/// root's own. Empty when the world has no packs.
-pub(super) fn content_overlay(stack: &PackStack) -> Vec<(String, Vec<Vec<u8>>)> {
-    let packs: Vec<&DataPack> = std::iter::once(&stack.content)
-        .chain(stack.enabled_packs())
-        .collect();
-    if packs.is_empty() {
-        return Vec::new();
-    }
-    DataStore::load(&packs).files.into_iter().collect()
+pub(super) struct OverlayFiles {
+    pub(super) files: Vec<(String, Vec<Vec<u8>>)>,
+    pub(super) read_errors: std::collections::BTreeMap<String, String>,
+    pub(super) priority_layers: Vec<sunrise_world::loot::RecipePriorityLayer>,
 }
 
-/// The files the content tables load from: the world's enabled packs'
-/// (`content_overlay`) with what native mods contribute for this load
+/// The files the content tables load from: the world's enabled packs
+/// with what native mods contribute for this load
 /// (`native_data_pack_files`) below them. `PackOverlay::top` is a path's last
 /// file, so a pack's file still overrides a mod's for the same path, and a
 /// later contribution overrides an earlier one, as packs do. `Game` builds
@@ -146,25 +139,33 @@ pub(super) fn content_overlay(stack: &PackStack) -> Vec<(String, Vec<Vec<u8>>)> 
 pub(super) fn overlay_files(
     stack: &PackStack,
     contributed: Vec<(String, Vec<u8>)>,
-) -> Vec<(String, Vec<Vec<u8>>)> {
-    if contributed.is_empty() {
-        return content_overlay(stack);
-    }
+) -> OverlayFiles {
     // Passive content replaces prepared data, native contributions sit over
     // it, and the world's selected packs retain the highest priority.
-    let mut files = DataStore::load(&[&stack.content]).files;
+    let mut store = DataStore::load(&[&stack.content]);
     for (path, bytes) in contributed {
-        if let Err(e) = serde_json::from_slice::<Box<serde_json::value::RawValue>>(&bytes) {
+        if !sunrise_client::lan::data::is_pack_registry_file(&path)
+            && let Err(e) = serde_json::from_slice::<Box<serde_json::value::RawValue>>(&bytes)
+        {
             log::warn!("Sunrise: a native mod's data pack file {path} is not JSON, skipped: {e}");
             continue;
         }
-        files.entry(path).or_default().push(bytes);
+        store.file_errors.remove(&path);
+        store.files.entry(path).or_default().push(bytes);
     }
     let packs = stack.enabled_packs().collect::<Vec<_>>();
-    for (path, versions) in DataStore::load(&packs).files {
-        files.entry(path).or_default().extend(versions);
+    let world = DataStore::load(&packs);
+    for (path, versions) in world.files {
+        store.file_errors.remove(&path);
+        store.files.entry(path).or_default().extend(versions);
     }
-    files.into_iter().collect()
+    store.file_errors.extend(world.file_errors);
+    store.priority_layers.extend(world.priority_layers);
+    OverlayFiles {
+        files: store.files.into_iter().collect(),
+        read_errors: store.file_errors,
+        priority_layers: store.priority_layers,
+    }
 }
 
 impl FnState {
@@ -279,6 +280,28 @@ impl Game<'_> {
         } else {
             None
         };
+        let initial = if opening_world {
+            // This load warns again about saved attribute bases clamped to their bounds (#3728).
+            sunrise_client::living_attributes::LOAD_CLAMPS.begin_load();
+            let tables = self
+                .stage_world_tables(&stack, false, &resources)
+                .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
+            let wire = super::lan::sync::prepare_world_sync_data(
+                &resources,
+                &self.res.core.item_data,
+                &super::pack_files(&tables.tables),
+                &tables.health.damage,
+                tables
+                    .tables
+                    .as_ref()
+                    .map(|tables| tables.packed_registries.clone()),
+                tables.advancements.clone(),
+            )
+            .map_err(|error| ReloadStageError::DataSource(format!("world registries: {error}")))?;
+            Some((tables, wire))
+        } else {
+            None
+        };
         if let Some(world) = &world {
             prepared.bind_loot(world);
         }
@@ -289,6 +312,7 @@ impl Game<'_> {
             self.options.resources = root.prepared().to_owned();
             self.pack.data_source = root.data().clone();
             self.pack.data_changes = root.data_changes().clone();
+            self.pack.mod_layers = root.mod_layers().clone();
             self.mods.data_switched = true;
         }
         self.install_loop_context(context);
@@ -305,9 +329,10 @@ impl Game<'_> {
         // also install its tables before function admission validates inline holders.
         if let Some(world) = world {
             self.install_world_tables(world);
-        } else if opening_world {
-            self.open_world_tables(&stack, &resources)
+        } else if let Some((initial, wire)) = initial {
+            self.open_world_tables(initial)
                 .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
+            super::lan::sync::install_world_sync_data(wire);
         }
         self.build_native_commands(enabled_features);
         self.apply_server_reload(prepared, &stack);
@@ -328,9 +353,18 @@ impl Game<'_> {
     /// only after substitution, but ordinary lines in a macro file still
     /// have to compile (`CommandFunction.fromLines`).
     pub(super) fn admit_store(&mut self, mut store: DataStore, stack: &PackStack) {
-        // On explicit reload the actual content tables have already refreshed.
-        // The candidate's named predicates/modifiers must also be available to
-        // argument codecs before any of its functions can be exposed.
+        // The installed candidate already selected and checked the same winners
+        // gameplay uses, including the native contributions.
+        if let Some(tables) = &self.world_tables {
+            let copy = |entries: &std::collections::HashMap<String, serde_json::Value>| {
+                entries
+                    .iter()
+                    .map(|(id, value)| (id.clone(), value.clone()))
+                    .collect()
+            };
+            store.predicates = copy(tables.loot.predicates());
+            store.item_modifiers = copy(tables.loot.item_modifiers());
+        }
         self.sync_enchantment_registries();
         // A function's `loot ... loot <id>` names the reloaded packs' tables.
         self.sync_loot_table_ids();
@@ -1232,11 +1266,12 @@ impl Game<'_> {
         let previous_vanilla_disabled = self.cmds.vanilla_disabled;
         // `DataPackCommand.listAvailablePacks`: a feature pack the world's
         // features do not cover is not available.
-        let available: Vec<String> = std::iter::once("vanilla".to_owned())
+        let mut available: Vec<String> = std::iter::once("vanilla".to_owned())
             .chain(self.fns.packs.iter().map(|p| p.id.clone()))
             .filter(|p| !selected.contains(p))
             .filter(|p| self.missing_pack_features(p).is_empty())
             .collect();
+        available.sort_by(|a, b| datapack::compare_ids(a, b));
         let known = |g: &Self, n: &str| n == "vanilla" || g.fns.packs.iter().any(|p| p.id == n);
         match id {
             "datapack.create" => self.create_pack(ctx),
@@ -1471,7 +1506,10 @@ impl Game<'_> {
         let json = if id.starts_with('{') {
             let (tag, _) = sunrise_core::nbt::parse_snbt(id)
                 .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
-            sunrise_client::scoreboard::tag_to_json(&tag)
+            let value = sunrise_client::scoreboard::tag_to_json(&tag);
+            sunrise_world::loot::validate_loot_condition(&value)
+                .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+            value
         } else {
             self.fns.store.predicates.get(id).cloned().ok_or_else(|| {
                 let id = if id.contains(':') {
@@ -1486,19 +1524,7 @@ impl Game<'_> {
             })?
         };
         let source = self.command_source.unwrap_or_else(|| self.player_source());
-        let view = source.entity.map(|t| {
-            let scores = self.holder_name(t).map(|holder| {
-                self.score
-                    .board
-                    .holder_scores(&holder)
-                    .into_iter()
-                    .map(|(objective, value)| (objective.name.clone(), value))
-                    .collect()
-            });
-            let mut view = self.entity_view_asked(t, &json);
-            view.scores = scores;
-            view
-        });
+        let view = source.entity.map(|t| self.entity_view_scored(t, &json));
         Ok(self.command_conditions_hold(&json, view.as_ref(), source.pos))
     }
 }
@@ -2534,9 +2560,11 @@ mod tests {
                     .tags
                     .contains(&"test:feature_marker".to_owned())
             );
-            (game.world_tables, game.health_resources, _) = game
+            let staged = game
                 .stage_world_tables(&stack, false, &game.options.resources.clone())
                 .unwrap();
+            game.world_tables = staged.tables;
+            game.health_resources = staged.health;
             assert!(game.items().item_tags["test:sample"].contains("minecraft:diamond"));
         });
         std::fs::remove_dir_all(root).unwrap();
@@ -2944,7 +2972,10 @@ mod tests {
                 &[],
                 &[],
             );
-            let files = content_overlay(&stack);
+            let OverlayFiles {
+                files, read_errors, ..
+            } = overlay_files(&stack, Vec::new());
+            assert!(read_errors.is_empty());
             let (_, versions) = files.iter().find(|(id, _)| id == "recipe/x:r").unwrap();
             let last = versions.last().unwrap();
             assert_eq!(
@@ -3007,7 +3038,7 @@ mod tests {
             &[],
             &[],
         );
-        let files = overlay_files(
+        let OverlayFiles { files, .. } = overlay_files(
             &stack,
             vec![
                 ("tags/pkg:item/both".to_owned(), tag("pkg:from_mod")),
@@ -3046,7 +3077,7 @@ mod tests {
             ["pkg:only_mod"]
         );
         // The next load asks again: the new contribution, not the first's.
-        let files = overlay_files(
+        let OverlayFiles { files, .. } = overlay_files(
             &stack,
             vec![("tags/pkg:item/mod_only".to_owned(), tag("pkg:second_load"))],
         );
@@ -3057,7 +3088,7 @@ mod tests {
             ["pkg:second_load"]
         );
         // A file that isn't JSON is skipped alone, not the whole load.
-        let files = overlay_files(
+        let OverlayFiles { files, .. } = overlay_files(
             &stack,
             vec![
                 ("tags/pkg:item/mod_only".to_owned(), b"{not json".to_vec()),
@@ -3068,8 +3099,6 @@ mod tests {
         let tags = sunrise_items::items::load_tags(&dir, "item", &overlay).unwrap();
         assert!(!tags.contains_key("pkg:mod_only"));
         assert!(tags["pkg:good"].contains("pkg:good"));
-        // With nothing contributed the overlay is the packs' own.
-        assert_eq!(overlay_files(&stack, Vec::new()), content_overlay(&stack));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

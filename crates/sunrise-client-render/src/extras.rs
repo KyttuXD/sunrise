@@ -8,6 +8,8 @@ use std::{collections::VecDeque, path::Path};
 pub const FILE: &str = "sunrise-extras.txt";
 /// The name the options screen uses while the sort key waits for a key.
 pub const SORT_KEY: &str = "sunrise.sort";
+/// The name the options screen uses while the shader pack key waits for a key.
+pub const SHADER_PACK_KEY: &str = "sunrise.shader_pack_key";
 
 /// A screen corner for an overlay.
 pub use mod_api::client::extras::Corner;
@@ -30,8 +32,6 @@ pub struct Extras {
     /// (`lodDistance`) and the view is actually zoomed. Off by default until
     /// a measurement shows the extra tiles land while the zoom is still held.
     pub lod_zoom_detail: bool,
-    /// Retry lost multiplayer connections (`reconnect`).
-    pub auto_reconnect: bool,
     /// Positional sounds leave a few static sound channels free for UI sounds
     /// and others played to the listener (`sound_engine::HEARD_RESERVE`).
     pub ui_sound_reserve: bool,
@@ -51,6 +51,11 @@ pub struct Extras {
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
     pub sort_key: String,
+    /// A vanilla key name: turns the picked shader pack off and on.
+    pub shader_pack_key: String,
+    /// The last non-empty shader pack pick, for the toggle key to resume. It follows every
+    /// non-empty pick, whether by menu or by key, and turning shaders off keeps it.
+    pub last_shader_pack: String,
     /// A new chat line slides in from the left while it fades in (`Chat::layout`).
     pub chat_animation: bool,
     /// The indicator bar at the left of a chat line (on by default, as vanilla).
@@ -90,7 +95,6 @@ impl Default for Extras {
             fullbright: false,
             dynamic_lights: false,
             lod_zoom_detail: false,
-            auto_reconnect: false,
             ui_sound_reserve: false,
             own_name_tag: false,
             skip_modded_splashes_if_vanilla_modified: true,
@@ -99,6 +103,8 @@ impl Default for Extras {
             mouse_tweaks_wheel: true,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
+            shader_pack_key: "key.keyboard.k".into(),
+            last_shader_pack: String::new(),
             chat_animation: false,
             chat_indicator: true,
             no_ai: false,
@@ -142,7 +148,6 @@ impl Extras {
                 "fullbright" => e.fullbright = flag(e.fullbright),
                 "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
                 "lodZoomDetail" => e.lod_zoom_detail = flag(e.lod_zoom_detail),
-                "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 "uiSoundReserve" => e.ui_sound_reserve = flag(e.ui_sound_reserve),
                 "ownNameTag" => e.own_name_tag = flag(e.own_name_tag),
                 "skipModdedSplashesIfVanillaModified" => {
@@ -158,6 +163,12 @@ impl Extras {
                         e.sort_key = value.to_owned();
                     }
                 }
+                "shaderPackKey" => {
+                    if value.starts_with("key.") {
+                        e.shader_pack_key = value.to_owned();
+                    }
+                }
+                "lastShaderPack" => e.last_shader_pack = value.to_owned(),
                 "chatAnimation" => e.chat_animation = flag(e.chat_animation),
                 "chatIndicator" => e.chat_indicator = flag(e.chat_indicator),
                 sunrise_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
@@ -201,7 +212,6 @@ impl Extras {
         push("fullbright", &bool_text(self.fullbright));
         push("dynamicLights", &bool_text(self.dynamic_lights));
         push("lodZoomDetail", &bool_text(self.lod_zoom_detail));
-        push("autoReconnect", &bool_text(self.auto_reconnect));
         push("uiSoundReserve", &bool_text(self.ui_sound_reserve));
         push("ownNameTag", &bool_text(self.own_name_tag));
         push(
@@ -213,6 +223,8 @@ impl Extras {
         push("mouseTweaksWheel", &bool_text(self.mouse_tweaks_wheel));
         push("sort", &bool_text(self.sort));
         push("sortKey", &self.sort_key);
+        push("shaderPackKey", &self.shader_pack_key);
+        push("lastShaderPack", &self.last_shader_pack);
         push("chatAnimation", &bool_text(self.chat_animation));
         push("chatIndicator", &bool_text(self.chat_indicator));
         push(sunrise_core::no_ai::KEY, &bool_text(self.no_ai));
@@ -238,6 +250,7 @@ impl Extras {
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
         match name {
             SORT_KEY => self.sort_key = value,
+            SHADER_PACK_KEY => self.shader_pack_key = value,
             crate::pvp::HUD_EDITOR_KEY => self.pvp.editor_key = value,
             _ => return false,
         }
@@ -396,7 +409,6 @@ pub enum Item {
     DynamicLights,
     OwnNameTag,
     HideBlockParticles,
-    AutoReconnect,
     UiSoundReserve,
     /// The Music... page on Music & Sounds (`Music page`).
     MusicPage,
@@ -404,6 +416,8 @@ pub enum Item {
     MouseTweaksWheel,
     Sort,
     SortKey,
+    /// Turns the picked shader pack off and on, from the Extras page's key.
+    ShaderPackKey,
     /// A new chat line slides in and fades in (`Chat::layout`).
     ChatAnimation,
     /// The coloured bar at the left of a chat line.
@@ -424,7 +438,8 @@ pub enum Item {
 pub fn rows() -> Vec<Result<Item, &'static str>> {
     use Item::*;
     // Fullbright, Dynamic lights and Hide block-break particles change the picture: they
-    // are on the graphics screen's Quality page (`graphics_ui::rows`), not here.
+    // are on the graphics screen's Quality page (`graphics_ui::rows`), not here. A section a crate
+    // adds joins the group its title names (`sunrise_hooks::pages::Place::Extras`).
     vec![
         Err("sunrise.extras.header.third_person"),
         Ok(OwnNameTag),
@@ -438,8 +453,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(ChatIndicator),
         Err("sunrise.extras.header.world"),
         Ok(Pregen),
+        Ok(ShaderPackKey),
         Err("sunrise.extras.header.multiplayer"),
-        Ok(AutoReconnect),
         Err("sunrise.extras.header.sound"),
         Ok(UiSoundReserve),
         Ok(MusicPage),
@@ -456,13 +471,13 @@ impl Item {
             Item::DynamicLights => "sunrise.extras.dynamic_lights",
             Item::OwnNameTag => "sunrise.extras.own_name_tag",
             Item::HideBlockParticles => "sunrise.extras.hide_block_particles",
-            Item::AutoReconnect => "sunrise.extras.auto_reconnect",
             Item::UiSoundReserve => "sunrise.extras.ui_sound_reserve",
             Item::MusicPage => "sunrise.extras.music_page",
             Item::MouseTweaks => "sunrise.extras.mouse_tweaks",
             Item::MouseTweaksWheel => "sunrise.extras.mouse_tweaks_wheel",
             Item::Sort => "sunrise.extras.sort",
             Item::SortKey => "sunrise.extras.sort_key",
+            Item::ShaderPackKey => "sunrise.extras.shader_pack_key",
             Item::NoAi => "sunrise.extras.no_ai",
             Item::AgentControl => "sunrise.extras.agent_control",
             Item::ReproKeys => "sunrise.extras.repro_keys",
@@ -481,13 +496,13 @@ impl Item {
             Item::DynamicLights => "sunrise.extras.dynamic_lights.tooltip",
             Item::OwnNameTag => "sunrise.extras.own_name_tag.tooltip",
             Item::HideBlockParticles => "sunrise.extras.hide_block_particles.tooltip",
-            Item::AutoReconnect => "sunrise.extras.auto_reconnect.tooltip",
             Item::UiSoundReserve => "sunrise.extras.ui_sound_reserve.tooltip",
             Item::MusicPage => "sunrise.extras.music_page.tooltip",
             Item::MouseTweaks => "sunrise.extras.mouse_tweaks.tooltip",
             Item::MouseTweaksWheel => "sunrise.extras.mouse_tweaks_wheel.tooltip",
             Item::Sort => "sunrise.extras.sort.tooltip",
             Item::SortKey => "sunrise.extras.sort_key.tooltip",
+            Item::ShaderPackKey => "sunrise.extras.shader_pack_key.tooltip",
             Item::NoAi => "sunrise.extras.no_ai.tooltip",
             Item::AgentControl => "sunrise.extras.agent_control.tooltip",
             Item::ReproKeys => "sunrise.extras.repro_keys.tooltip",
@@ -515,13 +530,13 @@ impl Item {
             Item::DynamicLights => "Dynamic lights",
             Item::OwnNameTag => "Own name tag",
             Item::HideBlockParticles => "Hide block-break particles",
-            Item::AutoReconnect => "Auto-reconnect",
             Item::UiSoundReserve => "Keep channels for UI sounds",
             Item::MusicPage => "Music page",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
             Item::Sort => "Sort buttons",
             Item::SortKey => "Sort key",
+            Item::ShaderPackKey => "Shader pack key",
             Item::ChatAnimation => "Smooth chat",
             Item::ChatIndicator => "Message indicator",
             Item::NoAi => "No AI",
@@ -540,11 +555,10 @@ impl Item {
             UiSoundReserve => return None,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            ChatIndicator => ChatAnimation,
             Pvp(o) => return o.parent().map(Pvp),
             Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
-            | AutoReconnect | NoAi | AgentControl | ReproKeys | ChatAnimation
-            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen => {
+            | ChatAnimation | ChatIndicator | NoAi | AgentControl | ReproKeys
+            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen | ShaderPackKey => {
                 return None;
             }
         })
@@ -565,9 +579,6 @@ impl Item {
             Item::HideBlockParticles => {
                 "Hides the debris particles that burst from a broken block and crumble off the one you mine. Other particles stay."
             }
-            Item::AutoReconnect => {
-                "Rejoins a server after a lost connection or a restart, never after a kick or ban."
-            }
             Item::UiSoundReserve => {
                 "Sounds in the world leave 16 of the 247 sound channels free, so a flood of them (a big explosion) can't silence menu clicks."
             }
@@ -585,6 +596,9 @@ impl Item {
             }
             Item::SortKey => {
                 "Sorts the part under the cursor. Click, then press a key; Escape unbinds it."
+            }
+            Item::ShaderPackKey => {
+                "Turns the picked shader pack off and on. Click, then press a key; Escape unbinds it. The pick is remembered across restarts."
             }
             Item::ChatAnimation => {
                 "A new chat line slides in from the left while it fades in, instead of appearing whole."
@@ -619,7 +633,6 @@ impl Item {
             Item::ChatAnimation => Some(Cost::None),
             Item::OwnNameTag
             | Item::HideBlockParticles
-            | Item::AutoReconnect
             | Item::MouseTweaks
             | Item::Sort
             | Item::WheelCyclesSettings
@@ -634,7 +647,6 @@ impl Item {
             Item::DynamicLights => e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles,
-            Item::AutoReconnect => e.auto_reconnect,
             Item::UiSoundReserve => e.ui_sound_reserve,
             Item::MusicPage => e.music_page,
             Item::MouseTweaks => e.mouse_tweaks,
@@ -656,6 +668,7 @@ impl Item {
     pub fn value(self, e: &Extras) -> String {
         match self {
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
+            Item::ShaderPackKey => crate::keybinds::display_name(&e.shader_pack_key).plain(),
             Item::Pvp(o) if o.switch(&e.pvp).is_none() => o.value(&e.pvp).unwrap_or_default(),
             other => match other.switch(e) {
                 Some(true) => crate::lang::get_or("On", "On"),
@@ -671,7 +684,6 @@ impl Item {
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles = !e.hide_block_particles,
-            Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::UiSoundReserve => e.ui_sound_reserve = !e.ui_sound_reserve,
             Item::MusicPage => e.music_page = !e.music_page,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
@@ -686,13 +698,14 @@ impl Item {
             Item::PackBrowser => e.pack_browser = !e.pack_browser,
             Item::Pregen => e.pregen = !e.pregen,
             Item::Pvp(o) => o.cycle(&mut e.pvp, back),
-            Item::SortKey => {}
+            Item::SortKey | Item::ShaderPackKey => {}
         }
     }
     /// The key name the options screen waits on for a key item.
     pub fn key_name(self) -> Option<&'static str> {
         match self {
             Item::SortKey => Some(SORT_KEY),
+            Item::ShaderPackKey => Some(SHADER_PACK_KEY),
             Item::Pvp(crate::pvp::Opt::HudEditorKey) => Some(crate::pvp::HUD_EDITOR_KEY),
             _ => None,
         }
@@ -843,7 +856,6 @@ mod tests {
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
         assert!(!d.fullbright && !d.dynamic_lights);
-        assert!(!d.auto_reconnect);
         assert!(!d.mouse_tweaks && !d.sort && !d.own_name_tag && !d.ui_sound_reserve);
         assert!(!d.hide_block_particles && !d.pregen);
         assert!(!d.music_page && d.music_off.is_empty());
@@ -856,7 +868,6 @@ mod tests {
         Item::DynamicLights.cycle(&mut e, false);
         assert_eq!(Item::DynamicLights.switch(&e), Some(true));
         assert_eq!(Extras::parse(&e.serialize()), e);
-        e.auto_reconnect = true;
         Item::Pregen.cycle(&mut e, false);
         assert_eq!(Item::Pregen.switch(&e), Some(true));
         Item::OwnNameTag.cycle(&mut e, false);
@@ -975,5 +986,32 @@ mod tests {
         for item in rows().into_iter().flatten() {
             assert!(!item.caption().is_empty() && !item.description().is_empty());
         }
+    }
+
+    /// The shader pack key is bound to K out of the box, rebinds through the generic extra-key
+    /// machinery, and the remembered pick round-trips with it.
+    #[test]
+    fn the_shader_pack_key_binds_and_remembers_the_pick() {
+        let mut e = Extras::default();
+        assert_eq!(e.shader_pack_key, "key.keyboard.k");
+        assert_eq!(e.last_shader_pack, "");
+        assert_eq!(Item::ShaderPackKey.key_name(), Some(SHADER_PACK_KEY));
+        assert!(Item::ShaderPackKey.value(&e).contains('K'));
+        assert!(e.set_key(SHADER_PACK_KEY, "key.keyboard.j".into()));
+        assert_eq!(e.shader_pack_key, "key.keyboard.j");
+        assert!(!e.set_key("key.toggleGui", "key.keyboard.j".into()));
+        e.last_shader_pack = "A.zip".into();
+        let back = Extras::parse(&e.serialize());
+        assert_eq!(
+            (
+                back.shader_pack_key.as_str(),
+                back.last_shader_pack.as_str()
+            ),
+            ("key.keyboard.j", "A.zip")
+        );
+        // A bad value is dropped, not kept: the default stays.
+        let bad = Extras::parse("shaderPackKey:foo\n");
+        assert_eq!(bad.shader_pack_key, "key.keyboard.k");
+        assert!(bad.unknown.is_empty());
     }
 }

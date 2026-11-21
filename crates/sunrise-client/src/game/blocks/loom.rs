@@ -247,12 +247,9 @@ impl Game<'_> {
                         );
                     }
                 }
-                ScreenDraw::Sprite { id, x, y, .. } => batch.sprite(
-                    atlas,
-                    &format!("gui/sprites/{id}"),
-                    ox + *x as f32,
-                    oy + *y as f32,
-                ),
+                ScreenDraw::Sprite { id, x, y, .. } => {
+                    batch.sprite(atlas, id, ox + *x as f32, oy + *y as f32)
+                }
                 ScreenDraw::Banner {
                     base,
                     layers,
@@ -328,7 +325,7 @@ impl Game<'_> {
         let result = s
             .result
             .as_ref()
-            .and_then(|r| Some((banner::banner_color(&r.item)?, banner::layers(r))));
+            .and_then(|r| Some((banner::banner_color(&r.item)?, r.banner_layers())));
         let view = LoomView {
             width: 176,
             height: 166,

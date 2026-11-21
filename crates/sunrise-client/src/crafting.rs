@@ -20,6 +20,7 @@ mod cooking;
 mod ingredient;
 pub mod mod_kinds;
 pub mod native_hooks;
+mod priorities;
 #[cfg(test)]
 mod registration_tests;
 mod remainders;
@@ -97,6 +98,7 @@ impl Template {
         if !v.is_object() && !v.is_string() {
             return None;
         }
+        sunrise_world::item_defaults::validate_stack(v).ok()?;
         let components = v.get("components").map(json_tag);
         let (damage, extra) = crate::item_data::decode_components(components.as_ref());
         Some(Self {
@@ -660,7 +662,7 @@ impl Special {
                         Some(c) if c != this => return false,
                         _ => {}
                     }
-                    let layers = banner::layers(s).len();
+                    let layers = s.banner_layers().len();
                     if layers > banner::MAX_LAYERS {
                         return false;
                     }
@@ -688,7 +690,7 @@ impl Special {
                         }
                         patterned = true;
                     } else {
-                        if !tgt.test_in(ctx.context, s) || clear || !banner::layers(s).is_empty() {
+                        if !tgt.test_in(ctx.context, s) || clear || !s.banner_layers().is_empty() {
                             return false;
                         }
                         clear = true;
@@ -941,7 +943,7 @@ impl Special {
             Self::BannerDuplicate { result, .. } => {
                 let source = stacks
                     .iter()
-                    .find(|s| (1..=banner::MAX_LAYERS).contains(&banner::layers(s).len()))?;
+                    .find(|s| (1..=banner::MAX_LAYERS).contains(&s.banner_layers().len()))?;
                 // TransmuteRecipe.createWithOriginalComponents: the source's components.
                 result.over(source, 0)
             }
@@ -963,7 +965,7 @@ impl Special {
                 let data = out.data_mut();
                 data.set_other("!minecraft:base_color", None);
                 data.set_other("!minecraft:banner_patterns", None);
-                data.banner_patterns = banner::layers(banner_stack).to_vec();
+                *data.banner_layers_mut() = banner_stack.banner_layers().to_vec();
                 data.base_color = banner::banner_color(&banner_stack.item).map(Arc::from);
                 out
             }
@@ -1264,7 +1266,7 @@ pub struct Recipes {
     pub crafting: Vec<(String, Recipe)>,
     pub cooking: Vec<Cooking>,
     /// Every effective recipe's file, by recipe type (`minecraft:smelting`,
-    /// `mymod:crusher`), in file order: data packs merged, load conditions held.
+    /// `mymod:crusher`), in priority order: data packs merged, load conditions held.
     pub by_type: HashMap<String, std::sync::Arc<[crate::crafting::RecipeSnapshot]>>,
     /// `category` and `group` of each crafting recipe, by file name.
     pub meta: HashMap<String, (String, String)>,
@@ -1329,23 +1331,40 @@ fn recipe_refused(name: &str, reason: &str) -> String {
     let (namespace, path) = id.split_once(':').unwrap();
     format!("recipes: data/{namespace}/recipe/{path}.json refused: {reason}")
 }
-/// One message for every recipe that failed the load, in registration order
-/// (vanilla collects every element's error, then fails). The error-level
-/// diagnostic naming the files (#1273); the load returns the same message,
-/// which its caller may log again at its own level.
+/// Recipes explicitly refused during a load, distinct from failures to read resources.
+#[derive(Debug)]
+pub struct RecipeLoadRefusals(Vec<(String, String)>);
+
+impl RecipeLoadRefusals {
+    /// Whether exactly this named recipe was refused.
+    pub fn only_recipe(&self, name: &str) -> bool {
+        matches!(self.0.as_slice(), [(refused, _)] if refused == name)
+    }
+}
+
+impl std::fmt::Display for RecipeLoadRefusals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.0.len();
+        write!(
+            f,
+            "{count} {} failed to load:",
+            if count == 1 { "recipe" } else { "recipes" }
+        )?;
+        for (_, failure) in &self.0 {
+            write!(f, "\n  {failure}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RecipeLoadRefusals {}
+
+/// Report every recipe refusal in registration order, then return the same diagnostic to the caller.
 fn load_failed(mut failures: Vec<(String, String)>) -> Box<dyn std::error::Error> {
     failures.sort_by_cached_key(|(name, _)| registration_key(name));
-    let count = failures.len();
-    let mut message = format!(
-        "{count} {} failed to load:",
-        if count == 1 { "recipe" } else { "recipes" }
-    );
-    for (_, failure) in failures {
-        message.push_str("\n  ");
-        message.push_str(&failure);
-    }
-    log::error!("{message}");
-    message.into()
+    let refusals = RecipeLoadRefusals(failures);
+    log::error!("{refusals}");
+    Box::new(refusals)
 }
 
 /// The keys of a minecraft-typed recipe that hold an ingredient: one entry
@@ -1383,7 +1402,8 @@ pub(crate) const INGREDIENT_MAPS: [&str; 2] = ["key", "shapes"];
 pub struct ResolvedRecipe {
     /// The id as `recipe_sources::sources` names it.
     pub name: String,
-    /// The file as written: what mods and clients see.
+    /// The file as written, but with its `type` canonicalized to
+    /// `namespace:path` (`recipe_sources::decode_type`): what mods and clients see.
     pub file: Arc<Value>,
     /// The file with the `ingredient` hook's answers in place, for the tables
     /// to parse. The file itself when it names no mod kind.
@@ -1502,10 +1522,12 @@ impl ResolvedSources {
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
         let context = context.with_fluid_tags(sunrise_items::items::fluid_tag_list(root, overlay)?);
-        Self::resolve_collecting(
-            sunrise_items::recipe_sources::sources(root, overlay)?,
-            &context,
-        )
+        let (mut sources, refused) =
+            sunrise_items::recipe_sources::sources_collecting(root, overlay)?;
+        Self::order_by_priority(&mut sources, root, overlay)?;
+        let mut resolved = Self::resolve_collecting(sources, &context)?;
+        resolved.failures.extend(refused);
+        Ok(resolved)
     }
     /// Whether every recipe resolved; sources with failures are never shared.
     pub fn is_complete(&self) -> bool {
@@ -1528,18 +1550,20 @@ impl ResolvedSources {
     /// types; a mod's recipe types are its own to read).
     /// An unregistered ingredient kind in a known recipe type refuses the
     /// whole load, naming its file and kind.
+    /// The recipes keep vanilla's resource-file registration order.
     pub fn resolve(
-        sources: Vec<(String, Value)>,
+        mut sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
+        sources.sort_by_cached_key(|(name, _)| registration_key(name));
         Self::resolve_collecting(sources, context)?.checked()
     }
+    /// `resolve` for `sources` already in their final order.
     fn resolve_collecting(
         mut sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
-        // Every consumer keeps vanilla's resource-file registration order.
-        sources.sort_by_cached_key(|(name, _)| registration_key(name));
+        sources.retain(|(name, value)| Ingredient::validate_persistence(value, name));
         let listened = mod_api::__private::listened(mod_api::HookId::Ingredient);
         let recipes = sources
             .into_iter()
@@ -1671,6 +1695,8 @@ impl Recipes {
         sources: Vec<(String, Value)>,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
+        let mut sources = sources;
+        ResolvedSources::order_by_priority(&mut sources, root, overlay)?;
         Self::from_resolved(
             root,
             items,
@@ -2450,13 +2476,10 @@ mod tests {
         }
         let items = Items::for_tests(HashMap::new());
         let load = crate::test_resources::server_load();
-        let conditions = sunrise_world::conditions::LoadConditions::new([]).with_lookup(
-            std::collections::BTreeMap::from([("unregistered".into(), "unregistered".into())]),
-            |_, _| None,
-        );
+        let conditions = sunrise_world::conditions::LoadConditions::new([]);
         let overlay = PackOverlay {
-            files: &[],
             conditions: &conditions,
+            ..PackOverlay::default()
         };
         let recipes = Recipes::load(root.path(), &items, &overlay, &load).unwrap();
         assert!(recipes.crafting.is_empty() && recipes.by_type.is_empty());
@@ -2924,7 +2947,7 @@ mod tests {
     }
     fn patterned(item: &str) -> ItemStack {
         let mut s = ItemStack::new(item, 1);
-        s.data_mut().banner_patterns = vec![BannerLayer::new("minecraft:cross", "red")];
+        *s.data_mut().banner_layers_mut() = vec![BannerLayer::new("minecraft:cross", "red")];
         s
     }
     /// About vanilla's count of cooking recipes: four kinds, ingredients of
@@ -3432,7 +3455,7 @@ mod tests {
         let source = patterned("minecraft:white_banner");
         let blank = ItemStack::new("minecraft:white_banner", 1);
         let out = run(&recipe, &[source.clone(), blank.clone()]).expect("copy");
-        assert_eq!(out.data().unwrap().banner_patterns.len(), 1);
+        assert_eq!(out.banner_layers().len(), 1);
         // Two blanks, or two patterned banners, do not match.
         assert!(run(&recipe, &[blank.clone(), blank.clone()]).is_none());
         assert!(run(&recipe, &[source.clone(), source.clone()]).is_none());
@@ -3476,7 +3499,7 @@ mod tests {
         let out = run(&recipe, &[banner.clone(), shield]).expect("decorated");
         let data = out.data().unwrap();
         assert_eq!(data.base_color.as_deref(), Some("red"));
-        assert_eq!(data.banner_patterns.len(), 1);
+        assert_eq!(data.banner_layers().len(), 1);
         // A shield that already has patterns cannot be decorated again.
         assert!(run(&recipe, &[banner, out]).is_none());
     }

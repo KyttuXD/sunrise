@@ -469,7 +469,7 @@ pub fn stored_component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
             (None, None) => true,
             _ => false,
         },
-        "minecraft:banner_patterns" => banner_equal(a, b),
+        "minecraft:banner_patterns" => a.banner_layers() == b.banner_layers(),
         "minecraft:consumable" => {
             a.consumable.as_ref().map(|value| &value.raw)
                 == b.consumable.as_ref().map(|value| &value.raw)
@@ -491,29 +491,6 @@ pub fn stored_component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
 fn stacks_equal(a: &[ItemStack], b: &[ItemStack]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.matches(b))
 }
-fn banner_equal(a: &StackData, b: &StackData) -> bool {
-    match (a.ominous_banner, b.ominous_banner) {
-        (true, true) => true,
-        (false, false) => a.banner_patterns == b.banner_patterns,
-        (true, false) => ominous_layers(&b.banner_patterns),
-        (false, true) => ominous_layers(&a.banner_patterns),
-    }
-}
-fn ominous_layers(layers: &[crate::banner_layer::BannerLayer]) -> bool {
-    layers.len() == OMINOUS_LAYERS.len()
-        && layers
-            .iter()
-            .zip(OMINOUS_LAYERS)
-            .all(|(layer, (pattern, color))| {
-                layer
-                    .pattern
-                    .strip_prefix("minecraft:")
-                    .unwrap_or(&layer.pattern)
-                    == pattern
-                    && layer.color.as_ref() == color
-            })
-}
-
 fn java_is(value: &JavaString, text: &str) -> bool {
     value.0.iter().copied().eq(text.encode_utf16())
 }

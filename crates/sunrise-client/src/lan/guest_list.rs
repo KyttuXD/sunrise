@@ -105,7 +105,7 @@ impl GuestList {
     pub(super) fn tracking_viewers<'a>(
         &'a mut self,
         visible: impl Fn(&Guest) -> bool,
-        outputs: impl IntoIterator<Item = (&'a mut Vec<super::Body>, Option<&'a mut Vec<[f64; 3]>>)>,
+        outputs: impl IntoIterator<Item = &'a mut Vec<super::Body>>,
         take_moved: bool,
     ) -> Vec<super::entity::Viewer<'a>> {
         self.tracking_viewers_and_views(visible, outputs, take_moved, ("", &mut []))
@@ -117,7 +117,7 @@ impl GuestList {
     pub(super) fn tracking_viewers_and_views<'a>(
         &'a mut self,
         visible: impl Fn(&Guest) -> bool,
-        outputs: impl IntoIterator<Item = (&'a mut Vec<super::Body>, Option<&'a mut Vec<[f64; 3]>>)>,
+        outputs: impl IntoIterator<Item = &'a mut Vec<super::Body>>,
         take_moved: bool,
         (dimension, views): (&str, &'a mut [Vec<super::Body>]),
     ) -> Vec<super::entity::Viewer<'a>> {
@@ -127,12 +127,17 @@ impl GuestList {
         let mut viewers = Vec::new();
         for g in self.rows.iter_mut() {
             let (spectator, sunrise) = (g.spectator(), g.is_sunrise());
-            let (chunks, sources, tracker, out, gone, moved) = if visible(g) {
-                let Some((out, gone)) = outputs.next() else {
+            // A general row is shown by its spawn and its first attachment snapshot together,
+            // to a client in the level that reads both; a view of another level carries neither
+            // (`viewed_levels::entities`).
+            let general_entity =
+                visible(g) && g.negotiated_general_entity() && g.negotiated_attachment_sync();
+            let (chunks, sources, tracker, out, moved) = if visible(g) {
+                let Some(out) = outputs.next() else {
                     continue;
                 };
                 let moved = take_moved && std::mem::take(&mut g.moved);
-                (&g.sent_chunks, None, &mut g.tracker, out, gone, moved)
+                (&g.sent_chunks, None, &mut g.tracker, out, moved)
             } else if viewing && tracks_view(g, dimension) {
                 let (Some(out), Some(view)) = (views.next(), g.viewed.views.get_mut(dimension))
                 else {
@@ -144,7 +149,6 @@ impl GuestList {
                     Some(&view.sources[..]),
                     &mut view.tracker,
                     out,
-                    None,
                     true,
                 )
             } else {
@@ -155,6 +159,7 @@ impl GuestList {
                 spectator,
                 permission: g.permission,
                 sunrise,
+                general_entity,
                 moved,
                 position: g.position,
                 view_distance: g.view_distance,
@@ -162,7 +167,6 @@ impl GuestList {
                 sources,
                 tracker,
                 out,
-                gone,
             });
         }
         viewers

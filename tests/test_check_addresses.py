@@ -20,15 +20,15 @@ def strings(source):
 CONFIG = {
     "homes": ["crates/sunrise-addresses/src/lib.rs"],
     "vanilla": {"textures.minecraft.net": "skins"},
-    "not_addresses": {"ddns.net": "a suffix"},
+    "not_addresses": {"discord.com": "a webhook host"},
     "allowed": ["crates/sunrise-telemetry/src/lib.rs telemetry.playsunrise.net"],
 }
 
 
 class HostsTests(unittest.TestCase):
     def test_urls_and_whole_host_strings(self):
-        self.assertEqual(check_addresses.hosts("https://cosmetics.playsunrise.net/v1/presence"),
-                         ["cosmetics.playsunrise.net"])
+        self.assertEqual(check_addresses.hosts("https://telemetry.playsunrise.net/v1/report"),
+                         ["telemetry.playsunrise.net"])
         self.assertEqual(check_addresses.hosts("stun.l.google.com:19302"), ["stun.l.google.com"])
         self.assertEqual(check_addresses.hosts("wss://user:pw@relay.playsunrise.net:443/x"),
                          ["relay.playsunrise.net"])
@@ -72,9 +72,9 @@ class CheckTests(unittest.TestCase):
         return check_addresses.check(CONFIG, set(found), base)
 
     def test_home_vanilla_not_addresses_and_allowed_pass(self):
-        found = [("crates/sunrise-addresses/src/lib.rs", "cosmetics.playsunrise.net"),
+        found = [("crates/sunrise-addresses/src/lib.rs", "playsunrise.net"),
                  ("crates/sunrise-client-render/src/skins.rs", "textures.minecraft.net"),
-                 ("crates/sunrise-client-render/src/bluemap_detect.rs", "ddns.net"),
+                 ("crates/sunrise-server/src/discord.rs", "discord.com"),
                  ("crates/sunrise-telemetry/src/lib.rs", "telemetry.playsunrise.net")]
         self.assertEqual(self.run_check(found), ([], []))
 

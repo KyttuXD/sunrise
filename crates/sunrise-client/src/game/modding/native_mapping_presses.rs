@@ -5,7 +5,6 @@
 //! normal client at the vanilla moments.
 use super::Game;
 use mod_api::MappingError;
-use sunrise_client::held::Source;
 use sunrise_client::keybinds;
 use sunrise_client::keymapping::{SNEAK, SPRINT};
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -117,28 +116,26 @@ impl Game<'_> {
         down: bool,
     ) -> Result<(), MappingError> {
         let default = self.pressable_mapping(key)?;
+        if default == Err(MouseButton::Middle) {
+            return Err(MappingError::ClickOnly { key: key.into() });
+        }
         if down && self.mod_mappings_screen_open() {
             return Ok(());
         }
         match default {
             Err(button) => self.mouse_mapping_set_down(button, down),
-            Ok(key) => match toggle_slot(key) {
-                Some(slot) => {
+            Ok(key) => {
+                if let Some(slot) = toggle_slot(key) {
                     let option = [self.settings.toggle_crouch, self.settings.toggle_sprint][slot];
-                    self.toggles.0[slot].set_down(down, option);
-                    self.sync_toggle(slot);
-                    // The mod holds it, whatever the keyboard's modifier says (`heal_hold_latches`).
-                    if self.toggles.is_down(slot) {
-                        self.keys.press(key, Source::Mod);
+                    if self.toggles.0[slot].needs_toggle(option) {
+                        self.toggles.0[slot].set_down(down, option);
+                        self.keys.resume_device_input(&key);
+                        self.sync_toggle(slot);
+                        return Ok(());
                     }
                 }
-                None if down => {
-                    self.keys.press(key, Source::Mod);
-                }
-                None => {
-                    self.keys.release(&key, Source::Mod);
-                }
-            },
+                self.keys.override_down(key, down);
+            }
         }
         Ok(())
     }

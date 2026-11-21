@@ -1,8 +1,8 @@
 //! `Level.setBlock`, `LevelChunk.setBlockState` and the
 //! `CollectingNeighborUpdater` that orders neighbour and shape updates.
 use super::{
-    LevelAccess, LevelEvent, Signals, Sim, classes::Class, flags, orientation::Orientation,
-    states::BlockId,
+    Behaviours, LevelAccess, LevelEvent, Signals, Sim, classes::Class, flags,
+    orientation::Orientation, states::BlockId,
 };
 use crate::{fluid::FluidState, registry::BlockStateId};
 use sunrise_core::{
@@ -11,6 +11,19 @@ use sunrise_core::{
     random::{LegacyRandom, RandomSource},
     ticks::{ScheduleResult, TickPriority},
 };
+
+impl Behaviours {
+    /// Whether an existing block entity survives this state change. Vanilla's
+    /// `shouldChangedStateKeepBlockEntity` also keeps copper chests and copper
+    /// golem statues across their weathering states.
+    pub fn keeps_block_entity(&self, old: BlockStateId, new: BlockStateId) -> bool {
+        let (old, new) = (self.block(old), self.block(new));
+        let tags = &self.tags;
+        old == new
+            || (tags.copper_chests.contains(old) && tags.copper_chests.contains(new))
+            || (tags.copper_golem_statues.contains(old) && tags.copper_golem_statues.contains(new))
+    }
+}
 
 /// `NeighborUpdater.UPDATE_ORDER`.
 pub(crate) const UPDATE_ORDER: [Direction; 6] = [
@@ -245,9 +258,23 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.level.emit(LevelEvent::Sound {
             pos,
             sound: sound.clone(),
+            source: None,
             volume,
             pitch,
         });
+    }
+    pub(super) fn fence_gate_sound(&mut self, pos: BlockPos, sound: Option<std::sync::Arc<str>>) {
+        // Keep the pitch draw even when the gate has no sound at this site.
+        let pitch = self.random().next_float() * 0.1 + 0.9;
+        if let Some(sound) = sound {
+            self.level.emit(LevelEvent::Sound {
+                pos,
+                sound,
+                source: Some(super::LevelSoundSource::Blocks),
+                volume: 1.0,
+                pitch,
+            });
+        }
     }
     pub fn game_event(&mut self, pos: BlockPos, event: &'static str) {
         self.level.emit(LevelEvent::GameEvent {
@@ -370,9 +397,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if old == state {
             return None;
         }
-        self.level.observe_block_changed(pos, old, state);
+        // A wire's own power and shape feed neither cached wire input, so a
+        // cascade's own writes keep its cache; any other write can change one.
+        let wire = self.b.named.redstone_wire;
+        let (old_wire, new_wire) = (self.b.is_block(old, wire), self.b.is_block(state, wire));
+        if !old_wire || !new_wire {
+            self.ticks.wire_graph.invalidate();
+        } else {
+            // Keep the node's copy of the power in step with the level.
+            let power = self.b.table.int(state, self.b.props.power) as u8;
+            self.ticks.wire_graph.set_power(pos, power);
+        }
         let new_block = self.block_of(state);
         let block_changed = self.block_of(old) != new_block;
+        self.level
+            .observe_block_changed(pos, old, state, update_flags);
         if block_changed && self.b.instance_of(old, super::classes::Class::Comparator) {
             // LevelChunk removes the old ComparatorBlockEntity with its output.
             self.ticks.comparator_outputs.remove(&pos);
@@ -391,7 +430,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             && (self.b.has_flag(old, super::data::state_flags::BLOCK_ENTITY)
                 || self.level.has_native_block_entity(old)
                 || self.level.has_mod_block_entity(pos))
-            && !self.keeps_block_entity(state, old)
+            && !self.b.keeps_block_entity(old, state)
         {
             // BlockEntity.preRemoveSideEffects (unless UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS)
             // and removeBlockEntity, before the neighbours hear of the removal.
@@ -424,14 +463,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.level.ensure_block_entity(pos, landed);
         }
         Some(old)
-    }
-    /// `BlockState.shouldChangedStateKeepBlockEntity(oldState)`: copper chests
-    /// and copper golem statues keep theirs across their weathering states.
-    fn keeps_block_entity(&self, new: BlockStateId, old: BlockStateId) -> bool {
-        let (new, old) = (self.block_of(new), self.block_of(old));
-        let tags = &self.b.tags;
-        (tags.copper_chests.contains(new) && tags.copper_chests.contains(old))
-            || (tags.copper_golem_statues.contains(new) && tags.copper_golem_statues.contains(old))
     }
     /// `MovingPistonBlock.destroy`: a `moving_piston` that goes away takes the
     /// piston base behind it with it when that base is extended (a head that was
@@ -675,7 +706,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
         if !running {
+            // One run is one cascade; the wire cache lives exactly as long.
+            self.ticks.wire_graph.begin();
             self.run_updates();
+            self.ticks.wire_graph.end();
         }
     }
     fn run_updates(&mut self) {

@@ -28,11 +28,21 @@ pub trait LevelChunksBackend {
     #[access(WorldOnly)]
     fn chunk_is_slime_chunk(&self, chunk: ChunkRef) -> Option<bool>;
     /// Side: server.
+    /// The sections of a loaded chunk whose block palette may hold any state of `block`
+    /// (`PalettedContainer.maybeHas`), as section Y coordinates (`SectionPos.y`, block Y `>> 4`)
+    /// from the bottom up, without reading the 4096 blocks of any section. "May": a palette
+    /// keeps a state no block of the section uses any more, so read the blocks of each section
+    /// named to find the ones that are there, and a section of more distinct states than a
+    /// palette holds is named whenever the block exists. The way to find blocks that stand in a
+    /// chunk, such as on `chunk_load`. None for a stale handle, on a client, and for a chunk
+    /// that isn't loaded; it loads nothing.
+    #[access(WorldOnly)]
+    fn chunk_sections_with_block(&self, chunk: ChunkRef, block: BlockKey) -> Option<Vec<i32>>;
+    /// Side: server.
     /// `ChunkMap.getPlayers(pos, false)`: the players watching this chunk, those
     /// it is inside the view of and was sent to, in the order the server keeps
     /// its players. A player watches it from its `chunk_watch` until it leaves
-    /// the view; Sunrise's far-ring columns past the view distance are not
-    /// watched. Fake players watch nothing. Loaded or not, a chunk nobody
+    /// the view. Fake players watch nothing. Loaded or not, a chunk nobody
     /// watches gives an empty list. None on a client and for a stale handle.
     #[access(WorldOnly)]
     fn chunk_watchers(&self, chunk: ChunkRef) -> Option<Vec<PlayerRef>>;

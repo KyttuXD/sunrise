@@ -48,10 +48,13 @@ mod general_handle_tests {
             previous: Vec3::new(0.5, 64.0, 0.5),
             velocity: Vec3::ZERO,
             rotation: [0.0, 0.0],
+            owner: None,
             fall_distance: fall,
             payload_version: 1,
             payload_bytes: Vec::new(),
             mount: None,
+            vehicle_order: 0,
+            boarding_cooldown: 0,
             attachment_lifetime: Default::default(),
         }
     }

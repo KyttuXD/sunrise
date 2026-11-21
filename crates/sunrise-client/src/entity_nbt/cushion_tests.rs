@@ -43,3 +43,42 @@ fn cushion_save_preserves_color_anchor_rotation_and_unknown_data() {
     assert_eq!(loaded.check_interval, 0);
     assert_eq!(loaded.bounds(), cushion.bounds());
 }
+
+#[test]
+fn cushion_saves_the_motion_and_pitch_it_was_loaded_with() {
+    let raw = Tag::compound([
+        (
+            "Motion",
+            Tag::List(vec![
+                Tag::Double(0.5_f64.to_bits()),
+                Tag::Double(20.0_f64.to_bits()),
+                Tag::Double((-0.25_f64).to_bits()),
+            ]),
+        ),
+        (
+            "Rotation",
+            Tag::List(vec![
+                Tag::Float(45.0_f32.to_bits()),
+                Tag::Float(10.0_f32.to_bits()),
+            ]),
+        ),
+    ]);
+    let cushion = Cushion {
+        attachment_lifetime: Default::default(),
+        join: Default::default(),
+        id: 7,
+        position: Vec3::new(0.5, 64.0, 0.5),
+        pos: [0, 64, 0],
+        yaw: 45.0,
+        color: 0,
+        check_interval: 0,
+        custom_name: None,
+    };
+    let saved = cushion_to_nbt(&cushion, [1, 2, 3, 4], Some(&raw));
+    assert_eq!(motion(&saved), Vec3::new(0.5, 0.0, -0.25));
+    assert_eq!(rotation(&saved), [45.0, 10.0]);
+    // A cushion placed in play has no loaded data: zeros.
+    let placed = cushion_to_nbt(&cushion, [1, 2, 3, 4], None);
+    assert_eq!(motion(&placed), Vec3::ZERO);
+    assert_eq!(rotation(&placed), [45.0, 0.0]);
+}

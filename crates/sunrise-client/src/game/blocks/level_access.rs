@@ -50,9 +50,21 @@ impl LevelAccess for GameLevel<'_> {
             self.world.block_entities.insert(key, entity);
         }
     }
-    fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+    fn observe_block_changed(
+        &self,
+        pos: BlockPos,
+        old: BlockStateId,
+        new: BlockStateId,
+        flags: i32,
+    ) {
         if self.native_authoritative {
-            self.native_block_changed(self.dimension, pos, old, new);
+            self.native_block_changed(
+                self.dimension,
+                pos,
+                old,
+                new,
+                mod_api::BlockUpdateFlags::from_bits_retain(flags),
+            );
         }
     }
     fn observes_block_state_change(&self, old: BlockStateId, new: BlockStateId) -> bool {
@@ -116,6 +128,56 @@ impl LevelAccess for GameLevel<'_> {
             self.native_block_spread(self.dimension, kind, from, to, &mut canceled);
         }
         !canceled
+    }
+    fn has_liquid_container_part(&self, state: BlockStateId) -> bool {
+        super::api_values::block_state::block_listens(mod_api::HookId::CanPlaceLiquid, state)
+    }
+    fn can_place_liquid(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        fluid: sunrise_world::fluid::FluidKind,
+        user: sunrise_world::level::LiquidUser,
+    ) -> Option<bool> {
+        if !self.has_liquid_container_part(state) {
+            return None;
+        }
+        let fluid = super::native_world_read::api_fluid_state(
+            sunrise_world::fluid::FluidState::new(fluid, 8, false),
+        )?
+        .fluid;
+        let user = self
+            .api_level
+            .zip(user.entity_id)
+            .map(|(level, id)| mod_api::LivingRef::new(mod_api::EntityRef::new(level.epoch(), id)));
+        let mut answer = None;
+        self.native_can_place_liquid(pos, state, fluid, user, &mut answer);
+        answer
+    }
+    fn has_place_liquid_part(&self, state: BlockStateId) -> bool {
+        self.native_authoritative
+            && super::api_values::block_state::block_listens(mod_api::HookId::PlaceLiquid, state)
+    }
+    fn place_liquid(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        fluid: sunrise_world::fluid::FluidState,
+    ) -> Option<bool> {
+        if !self.has_place_liquid_part(state) || !self.world.is_loaded_at(pos.x, pos.y, pos.z) {
+            return None;
+        }
+        if self.liquid_transaction_open {
+            log::warn!(
+                "Sunrise: refused direct place_liquid during an open transaction at {pos:?}"
+            );
+            return None;
+        }
+        let fluid = super::native_world_read::api_fluid_state(fluid)?;
+        let mut answer = None;
+        self.native_place_liquid(ticks, pos, state, fluid, &mut answer);
+        answer
     }
     fn fluid_place_block(
         &self,
@@ -403,6 +465,11 @@ impl LevelAccess for GameLevel<'_> {
         self.native_authoritative
             && mod_api::__private::has_scoped_hook(mod_api::HookId::ShouldCheckWeakPower)
     }
+    fn has_signal_hook(&self) -> bool {
+        self.native_authoritative
+            && (mod_api::__private::has_scoped_hook(mod_api::HookId::BlockSignal)
+                || mod_api::__private::has_scoped_hook(mod_api::HookId::IsSignalSource))
+    }
     fn adjust_should_check_weak_power(
         &self,
         pos: BlockPos,
@@ -631,45 +698,6 @@ impl LevelAccess for GameLevel<'_> {
                 .previewing(preview)
                 .native_state_for_placement(self.dimension, state, context, fluid, answer);
         }
-    }
-    fn placement_context(
-        &self,
-        item: &str,
-        context: &PlacementContext,
-    ) -> Option<Option<PlacementContext>> {
-        let mut answer = None;
-        self.native_placement_context(item, context, &mut answer);
-        answer.map(|answer| {
-            answer.and_then(|snapshot| {
-                if !snapshot.hit.iter().all(|n| n.is_finite())
-                    || !snapshot.yaw.is_finite()
-                    || !snapshot.pitch.is_finite()
-                {
-                    log::warn!("placement_context: refused {item}: nonfinite hit or rotation");
-                    return None;
-                }
-                if snapshot.item.and_then(mod_api::__private::item_key_id) != Some(item) {
-                    log::warn!("placement_context: refused {item}: replacement changed the item");
-                    return None;
-                }
-                Some(PlacementContext {
-                    pos: snapshot.pos,
-                    hit_pos: snapshot.hit_pos,
-                    face: snapshot.face,
-                    hit: sunrise_core::geometry::Vec3::new(
-                        snapshot.hit[0],
-                        snapshot.hit[1],
-                        snapshot.hit[2],
-                    ),
-                    inside: snapshot.inside,
-                    yaw: snapshot.yaw,
-                    pitch: snapshot.pitch,
-                    sneaking: snapshot.sneaking,
-                    item: context.item.clone(),
-                    replace_clicked: snapshot.replace_clicked,
-                })
-            })
-        })
     }
     fn must_survive(&self, item: &str) -> Option<bool> {
         let mut answer = None;
@@ -1243,9 +1271,12 @@ impl LevelAccess for GameLevel<'_> {
         };
         let name = &block.name;
         let tag = Tag::Compound(nbt);
-        if let Some((key, entity)) = sunrise_client::save::decode_block_entity_for_block(&tag, name)
+        let previous = self.world.block_entities.get(&(pos.x, pos.y, pos.z));
+        if let Some((key, entity)) =
+            sunrise_client::save::decode_block_entity_replacing(&tag, name, previous)
         {
             self.world.block_entities.insert(key, entity);
+            self.notify_block_entity_load_additional(key);
             if tag.get("LootTable").is_some() {
                 self.emit(LevelEvent::ContainerLootTable { pos, tag });
             }

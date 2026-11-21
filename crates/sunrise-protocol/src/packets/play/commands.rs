@@ -256,7 +256,7 @@ impl Codec<Commands> for Commands {
                 name = r.string(32767)?;
             }
             if kind == 2 {
-                let id = crate::adapter::ids::command_argument_type(r.varint()?);
+                let id = r.varint()?;
                 let start = r.position();
                 read_argument_properties(r, id)?;
                 parser = Some((id, r.since(start).to_vec()));

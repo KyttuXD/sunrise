@@ -15,5 +15,7 @@ use std::path::Path;
 /// top pack's file for an id replaces the rest, as
 /// `SimpleJsonResourceReloadListener` sees one resource per id.
 pub fn load_predicates(root: &Path, overlay: &PackOverlay) -> io::Result<HashMap<String, Value>> {
-    super::types::load_files(root, overlay, "predicate")
+    super::types::load_files(root, overlay, "predicate", |bytes| {
+        serde_json::from_slice(bytes)
+    })
 }

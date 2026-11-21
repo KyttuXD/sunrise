@@ -46,7 +46,7 @@ mod tests {
                 .children
                 .push(mod_api::Text::translate("test.tail", vec![]));
             text.children.push(sibling);
-            let host: &dyn mod_api::ClientHost = game;
+            let host: &dyn mod_api::Host = game;
             for (space, tail, expected) in [
                 ("Space", "tail", "Space / Cake + tail"),
                 ("Espace", "fin", "Espace / Cake + fin"),

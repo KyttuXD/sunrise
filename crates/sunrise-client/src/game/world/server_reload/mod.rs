@@ -33,12 +33,9 @@ impl PreparedServerReload {
 }
 
 /// Loads the vanilla function library from `stack`, logging per-file failures.
-fn functions_store(
-    stack: &PackStack,
-    conditions: &sunrise_world::conditions::LoadConditions,
-) -> DataStore {
+fn functions_store(stack: &PackStack) -> DataStore {
     let packs: Vec<_> = stack.builtin.iter().chain(stack.enabled_packs()).collect();
-    let store = DataStore::load_with_conditions(&packs, conditions);
+    let store = DataStore::load(&packs);
     for (id, e) in &store.errors {
         log::warn!("Sunrise: failed to load function {id}: {e}");
     }
@@ -60,7 +57,6 @@ impl Game<'_> {
     pub(super) fn prepare_server_reload(
         &self,
         stack: &PackStack,
-        resources: &std::path::Path,
     ) -> Result<PreparedServerReload, ReloadStageError> {
         let _reload = self
             .mod_phase
@@ -75,16 +71,6 @@ impl Game<'_> {
                 crate::game::api_values::TryIntoApi::try_into_api(&error).unwrap(),
             )
         })?;
-        let inventory = sunrise_mod_package::enabled::EnabledMods::read(resources)
-            .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
-        let conditions = self
-            .registered_load_conditions(
-                &inventory,
-                stack,
-                resources,
-                &super::functions::content_overlay(stack),
-            )
-            .map_err(ReloadStageError::DataSource)?;
         let mut listeners = <mod_api::ServerListenerRegistry as mod_api::__private::game::ServerReloadListenersOrder>::new();
         let loot = super::global_loot_modifiers::register_anchor(&mut listeners)
             .map_err(ReloadStageError::Order)?;
@@ -97,14 +83,11 @@ impl Game<'_> {
             "server_reload_prepare",
             |listener| {
                 (listener.id == VanillaServerListeners::functions())
-                    .then(|| Box::new(functions_store(stack, &conditions)))
+                    .then(|| Box::new(functions_store(stack)))
             },
             |id, converter| stack.reload_context(id, converter),
             ServerReloadListener::prepare,
         )?;
-        conditions
-            .check_errors()
-            .map_err(ReloadStageError::DataSource)?;
         Ok(PreparedServerReload {
             steps,
             resources,

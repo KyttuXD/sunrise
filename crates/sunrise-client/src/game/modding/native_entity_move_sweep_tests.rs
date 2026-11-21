@@ -131,8 +131,11 @@ impl Hooks for DeclareGeneral {
             mod_api::GeneralEntityCategory::Misc,
             0.8,
             1.9,
+            None,
             mod_api::GeneralSavePolicy::NoSave,
             false,
+            false,
+            None,
             8,
             3,
             1,
@@ -237,6 +240,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
                 position: at(11),
                 velocity: [0.5, 0.0, 0.0],
                 rotation: [0.0, 90.0],
+                owner: None,
                 uuid: [11, 12, 13, 14],
                 envelope: crate::game::general::GeneralTypeEnvelope {
                     type_key: "mymod:robot".to_owned(),
@@ -438,6 +442,7 @@ fn the_off_walk_movers_fire_too() {
                 let mut world =
                     std::mem::replace(&mut game.world, sunrise_client::world::World::new(stone, 0));
                 MotionWorld {
+                    side: sunrise_client::motion::dry_side(),
                     entities: &[],
                     player: &mut player,
                     scene: &mut world,

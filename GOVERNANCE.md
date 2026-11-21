@@ -404,7 +404,7 @@ holder or an org owner removes GitHub access when the Team role ends.
 | **Shaders and rendering** | The renderer, shaders, shader packs, OptiFine and Polytone pack formats | Label `rendering`; `crates/horizon-client-render` (gfx), `*.wgsl`, `horizon-shaders`, `horizon-shader-api`, `horizon-optifine`, `horizon-polytone` | #shaders-rendering |
 | **Performance** | Frame rate, memory, server tick, benchmarks | Label `perf`; `horizon-bench`, the benchmark tools | #performance |
 | **Launcher** | The launcher: installs, updates, instances, its pages | Label `launcher`; the sunrise-org/sunrise-launcher repository | #launcher |
-| **Server and SMP** | Dedicated server, hosting, the anticheat, multiplayer, and the official SMP | Labels `server`, `multiplayer`; `horizon-server*`, `horizon-anticheat`, `lan/`, `dedicated*`; horizon-rust/horizon-server | #server-smp (plus #join-server, #server-chat) |
+| **Server and SMP** | Dedicated server, hosting, multiplayer, and the official SMP | Labels `server`, `multiplayer`; `horizon-server*`, `lan/`, `dedicated*`; horizon-rust/horizon-server | #server-smp (plus #join-server, #server-chat) |
 | **Translations** | The game's and the launcher's languages | Label `roadmap:languages`; the launcher's `lang/` in sunrise-org/sunrise-launcher, `crates/horizon-client/assets/horizon/lang/` | #translations and the 🌍 language channels |
 | **Website** | playhorizon.dev | horizon-rust/horizon-site; label `website`. The site's design stays as it is unless the council decides otherwise | #website |
 | **Vanilla accuracy** | Parity with vanilla 26.3: harnesses, oracles, the port ledger | Labels `parity`, `parity-regression`, `full-parity`; `tools/test_*_parity.py`, the Java oracles | #vanilla-accuracy |

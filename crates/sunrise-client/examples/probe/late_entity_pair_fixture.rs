@@ -49,6 +49,7 @@ pub fn main() -> Result<()> {
                 let mut viewers = [Viewer {
                     entity_id: 1,
                     sunrise: true,
+                    general_entity: false,
                     spectator: false,
                     permission: 0,
                     moved: false,
@@ -58,7 +59,6 @@ pub fn main() -> Result<()> {
                     sources: None,
                     tracker: &mut tracker,
                     out: &mut packets,
-                    gone: None,
                 }];
                 let riding = Riding::default();
                 level.tick(&[], &riding, &mut viewers, |_| Some(kind));

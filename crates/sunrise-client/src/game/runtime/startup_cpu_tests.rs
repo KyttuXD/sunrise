@@ -60,10 +60,12 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
     )
     .unwrap();
     std::fs::write(
-        root.join("creative-tabs.json"),
-        r#"[{
-        "id":"minecraft:building_blocks", "items":["minecraft:stone"]
-    }]"#,
+        root.join("creative-inventory.json"),
+        r#"{"schema":4,"item_features":{},"potion_features":{},"tabs":[{
+        "id":"minecraft:building_blocks","title":"Building Blocks","type":"CATEGORY","build":[
+            {"kind":"stack","visibility":"PARENT_AND_SEARCH_TABS","snbt":"{count:1,id:\"minecraft:stone\"}"}
+        ]
+    }]}"#,
     )
     .unwrap();
     let worker_root = root.clone();
@@ -88,10 +90,18 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
     assert!(prepared.arrow_model.is_some());
     assert!(prepared.trident_model.is_some());
     assert!(prepared.armor_stand_assets.main.is_some());
-    assert_eq!(
-        prepared.creative_screen.tabs[0].items[0].item.as_ref(),
-        "minecraft:stone"
+    assert!(!prepared.creative_screen.has_contents());
+    let contents = prepared.creative_screen.catalog().build(
+        sunrise_items::creative_catalog::Parameters {
+            operator: false,
+            features: &[],
+            holders: &Default::default(),
+            items: &sunrise_items::items::Items::empty(),
+        },
+        None,
+        |_, _, _| {},
     );
+    assert_eq!(contents[0].display[0].item.as_ref(), "minecraft:stone");
     // No documents from the old generation remain available to reload.
     assert!(
         GameCpuResources::load(

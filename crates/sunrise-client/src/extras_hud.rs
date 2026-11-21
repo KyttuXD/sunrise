@@ -35,8 +35,9 @@ pub fn draw_lines(
     }
 }
 
-/// Draws the HUD layers crates registered, after the extras' and mods' boxes, which they stack
-/// with. `shown`: whether each corner of `Corner::ALL` shows (the debug screen covers some).
+/// Draws the HUD layers crates registered with the HUD ([`hud::Stage::Hud`]), after the extras'
+/// and mods' boxes, which they stack with. `shown`: whether each corner of `Corner::ALL` shows
+/// (the debug screen covers some).
 pub fn draw_layers(
     layers: &[&dyn hud::Layer],
     batch: &mut HudBatch,
@@ -50,7 +51,29 @@ pub fn draw_layers(
         corners,
         shown,
     };
-    for layer in layers {
+    for layer in layers.iter().filter(|l| l.stage() == hud::Stage::Hud) {
+        layer.draw(&mut canvas);
+    }
+}
+
+/// Draws the layers crates registered over everything ([`hud::Stage::Top`]), last. Nothing is
+/// stacked in a corner there: every corner is hidden. With none, no canvas.
+pub fn draw_top_layers(layers: &[&dyn hud::Layer], batch: &mut HudBatch, atlas: &HudAtlas) {
+    let mut top = layers
+        .iter()
+        .filter(|l| l.stage() == hud::Stage::Top)
+        .peekable();
+    if top.peek().is_none() {
+        return;
+    }
+    let mut corners = Corners::new(batch.width, batch.height, 0.0);
+    let mut canvas = Canvas {
+        batch,
+        atlas,
+        corners: &mut corners,
+        shown: [false; 4],
+    };
+    for layer in top {
         layer.draw(&mut canvas);
     }
 }

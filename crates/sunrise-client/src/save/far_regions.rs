@@ -1,5 +1,4 @@
-//! Saved chunks for far readers: far terrain's sampling threads and a
-//! player's far ring (`lan::far`).
+//! Saved chunks for far terrain's sampling threads.
 //!
 //! A far read stays out of the gameplay region cache: the far view spans
 //! more region files than the cache keeps open, and would push the ones the
@@ -106,7 +105,7 @@ impl SaveDir {
             .get(&(Folder::Region, x, z))
             .map(|(_, record)| record.clone());
         if let Some(record) = pending {
-            return record.tag().map(|tag| (*tag).clone());
+            return record.tag_for_metadata().map(|tag| (*tag).clone());
         }
         let mut root = self.far_region_record(x, z)?;
         self.upgrade_record(Folder::Region, &mut root).ok()?;

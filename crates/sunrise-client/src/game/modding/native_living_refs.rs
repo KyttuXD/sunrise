@@ -679,8 +679,8 @@ impl Game<'_> {
     }
 
     /// `LivingEntity.getKillCredit`: the remembered player takes precedence,
-    /// even if the player cannot be resolved; otherwise the last hurting mob.
-    /// Unlike vanilla, a mob that changed dimension cannot be resolved.
+    /// even if the player cannot be resolved; otherwise the last hurting mob,
+    /// in whichever loaded level it is now (`credited_entity`).
     pub(super) fn living_kill_credit(&self, living: LivingRef) -> Option<EntityRef> {
         let credit = match self.native_living_target(living)? {
             Target::Player => self.combat.player_credit(self.world.game_time),
@@ -710,17 +710,19 @@ impl Game<'_> {
             Target::Player => self
                 .combat
                 .kill_credit(self.world.game_time)
-                .and_then(|id| self.entity(id)),
+                .and_then(|id| self.credited_entity(id)),
             Target::Guest(conn) => self
                 .guest_combat
                 .get(&conn)?
                 .kill_credit(self.world.game_time)
-                .and_then(|id| self.entity(id)),
+                .and_then(|id| self.credited_entity(id)),
             Target::Mob(id) => {
                 let m = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
                 let who = m.recent_hurt_by()?;
                 let attacker = match who {
-                    Who::Mob(id) => Some(id),
+                    Who::Mob(attacker) => {
+                        return self.credited_entity(attacker);
+                    }
                     // A player's hurt carries no id in `Who`: the hit's
                     // record names the player (`last_hurt_by_player`), the
                     // hub the guest's entity. The acting guest is resolved
@@ -751,6 +753,31 @@ impl Game<'_> {
                 self.entity(attacker)
             }
             _ => None,
+        }
+    }
+
+    /// `EntityReference.getEntity` for a kill credit, which looks through
+    /// every level (`getEntityInAnyDimension`): the entity `id` in the level
+    /// in place, else [`Self::credited_elsewhere`].
+    pub(super) fn credited_entity(&self, id: u32) -> Option<EntityRef> {
+        self.entity(id).or_else(|| self.credited_elsewhere(id))
+    }
+
+    /// A credited mob that is not in the level in place under `id`: the same
+    /// id in another loaded level (a vehicle keeps it), or the id the
+    /// dimension changes since gave that same mob (`Levels::travelled`), in
+    /// whichever loaded level it is now. Never another entity holding its UUID.
+    pub(in crate::game) fn credited_elsewhere(&self, id: u32) -> Option<EntityRef> {
+        let epoch = self.native_lifecycle.epoch()?;
+        let mut id = id;
+        loop {
+            if self.mob_in_other_level(id).is_some() {
+                return Some(EntityRef::new(epoch, id));
+            }
+            id = self.levels.travelled(id)?;
+            if let Some(found) = self.entity(id) {
+                return Some(found);
+            }
         }
     }
 
@@ -887,6 +914,7 @@ impl Game<'_> {
                 if let Some(ref broken) = broken {
                     self.award_stat("broken", &broken.item, 1);
                     self.player_equipment_broke(world_equipment_slot(slot), broken);
+                    self.player_item_destroyed(&stack, None);
                 }
                 return broken;
             }
@@ -899,6 +927,12 @@ impl Game<'_> {
         if let Some(ref broken) = broken {
             self.award_stat("broken", &broken.item, 1);
             self.player_equipment_broke(world_equipment_slot(slot), broken);
+            let hand = match slot {
+                EquipmentSlot::MainHand => Some(Hand::Main),
+                EquipmentSlot::OffHand => Some(Hand::Off),
+                _ => None,
+            };
+            self.player_item_destroyed(&stack, hand);
             if armor_index(slot).is_some() {
                 self.apply_equipment();
             }
@@ -1000,7 +1034,12 @@ impl Game<'_> {
             }
             // The stack's attribute modifiers go on the live map at once, so
             // the next read — a hit's armor, a `LivingRef`'s — sees them (#941).
-            self.collect_mob_equipment_attributes(id);
+            let before = if defer {
+                self.snapshot_mob_modifiers(id)
+            } else {
+                None
+            };
+            self.collect_mob_equipment_attributes(id, before);
             return true;
         }
         // `LivingEntity.onEquipItem` for the entities that keep no equip state
@@ -1717,6 +1756,204 @@ mod tests {
             game.mobs[0].age += 101;
             assert_eq!(living.kill_credit(game), None);
         });
+    }
+
+    /// The UUID the transfer tests give their attacker, as `summon` takes it.
+    const ZOMBIE_UUID: [i32; 4] = [7, 8, 9, 10];
+    const ZOMBIE_NBT: &str = "{NoAI:1b,UUID:[I;7,8,9,10]}";
+
+    fn summon_mob(game: &mut super::Game<'_>, kind: &str, nbt: &str) -> u32 {
+        match game
+            .summon_with_nbt(kind, [0.5, 70.0, 0.5], nbt)
+            .unwrap()
+            .unwrap()
+        {
+            Target::Mob(id) => id,
+            other => panic!("{kind} summoned as {other:?}"),
+        }
+    }
+
+    /// A pig hurt by a zombie of [`ZOMBIE_UUID`] in the Overworld, with the
+    /// Nether's spawn chunk forced loaded so it stays parked beside it.
+    fn hurt_pig(game: &mut super::Game<'_>) -> (u32, u32) {
+        use crate::game::Dim;
+        use std::sync::Arc;
+        game.world_root = game.save.root.clone();
+        game.enter_level(Dim::Nether).unwrap();
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+            .unwrap();
+        game.build_registries();
+        assert!(game.as_console(|game| game.run_command("forceload add 0 0")));
+        game.enter_level(Dim::Overworld).unwrap();
+        let pig = summon_mob(game, "minecraft:pig", "{NoAI:1b}");
+        let zombie = summon_mob(game, "minecraft:zombie", ZOMBIE_NBT);
+        let hit = sunrise_client::mobs::Damage::mob(zombie, [0.5, 70.0, 0.5]);
+        assert!(game.mob_hits_mob(pig, 1.0, hit));
+        let living = game.living(game.entity(pig).unwrap()).unwrap();
+        assert_eq!(living.kill_credit(game).map(|e| e.id()), Some(zombie));
+        (pig, zombie)
+    }
+
+    fn send_to_the_nether(game: &mut super::Game<'_>, mob: u32) {
+        use crate::game::{Dim, vehicle_teleport::TeleportMotion};
+        assert!(
+            game.teleport_vehicle_across(
+                Target::Mob(mob),
+                Dim::Nether,
+                [0.5, 70.0, 0.5],
+                None,
+                false,
+                TeleportMotion::Stop,
+            )
+            .unwrap()
+        );
+        assert_eq!(game.dim, Dim::Overworld);
+    }
+
+    /// `EntityReference.getEntity` looks through every level: the zombie that
+    /// hurt the pig keeps the credit after it crossed into the Nether under a
+    /// new id, even with another mob holding its UUID in the pig's level.
+    #[test]
+    #[ignore = "daily"]
+    fn kill_credit_follows_a_mob_that_changed_dimension() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let (pig, zombie) = hurt_pig(game);
+            send_to_the_nether(game, zombie);
+            let living = game.living(game.entity(pig).unwrap()).unwrap();
+            let bystander = summon_mob(game, "minecraft:zombie", ZOMBIE_NBT);
+            // What a mod reads from the pig's level, the Nether still parked.
+            let credit = living.kill_credit(game).expect("credit kept");
+            assert!(![zombie, bystander, pig].contains(&credit.id()));
+            assert_eq!(living.last_attacker(game), Some(credit));
+            assert_eq!(
+                credit.kind(game),
+                mod_api::__private::resolved_entity_type_key("minecraft:zombie")
+            );
+            assert_eq!(
+                credit.uuid(game),
+                Some(sunrise_client::lan::playerdata::ints_uuid(ZOMBIE_UUID))
+            );
+            let nether = game.level("minecraft:the_nether");
+            assert_eq!(credit.level(game), nether);
+            // The same reads from a mod goal of the pig's own tick.
+            let mut actor = game.mobs.iter().find(|m| m.id == pig).unwrap().clone();
+            game.in_goal_view(&mut actor, |view| {
+                assert_eq!(living.kill_credit(view), Some(credit));
+                assert_eq!(
+                    credit.kind(view),
+                    mod_api::__private::resolved_entity_type_key("minecraft:zombie")
+                );
+                // `uuid` takes a `ServerHost`, which a goal view is not.
+                assert_eq!(credit.level(view), nether);
+            });
+        });
+    }
+
+    /// A Nether mob already holds the zombie's UUID, so the zombie's copy is
+    /// refused residency there: the credit names no one, not that other mob.
+    #[test]
+    #[ignore = "daily"]
+    fn a_refused_arrival_hands_the_credit_to_no_other_mob() {
+        use crate::game::Dim;
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let (pig, zombie) = hurt_pig(game);
+            game.enter_level(Dim::Nether).unwrap();
+            summon_mob(game, "minecraft:zombie", ZOMBIE_NBT);
+            game.enter_level(Dim::Overworld).unwrap();
+            send_to_the_nether(game, zombie);
+            let living = game.living(game.entity(pig).unwrap()).unwrap();
+            assert_eq!(living.kill_credit(game), None);
+            assert_eq!(living.last_attacker(game), None);
+        });
+    }
+
+    /// `last_hurt_by_mob` keeps naming a credited mob that is in another
+    /// loaded level: saved through the hundredth tick, not the next, and read
+    /// back to the mob there.
+    #[test]
+    #[ignore = "daily"]
+    fn a_saved_credit_names_a_mob_in_another_level_for_a_hundred_ticks() {
+        use sunrise_core::nbt::Tag;
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let (pig, zombie) = hurt_pig(game);
+            send_to_the_nether(game, zombie);
+            let i = game.mobs.iter().position(|m| m.id == pig).unwrap();
+            let mut saved = |since: i32| {
+                let m = &mut game.mobs[i];
+                m.age = (m.ai.last_hurt_by_time + since) as u32;
+                let mut tag = Tag::Compound(Default::default());
+                game.put_last_hurt_by_mob(&game.mobs[i], &mut tag);
+                tag
+            };
+            let last = saved(100);
+            assert_eq!(
+                last.get("last_hurt_by_mob"),
+                Some(&Tag::IntArray(ZOMBIE_UUID.to_vec()))
+            );
+            assert_eq!(
+                last.get("ticks_since_last_hurt_by_mob"),
+                Some(&Tag::Int(100))
+            );
+            assert_eq!(saved(101).get("last_hurt_by_mob"), None);
+            let nether = game.level("minecraft:the_nether");
+            for (since, credited) in [(100, true), (101, false)] {
+                let nbt = format!(
+                    "{{NoAI:1b,last_hurt_by_mob:[I;7,8,9,10],ticks_since_last_hurt_by_mob:{since}}}"
+                );
+                let read_back = summon_mob(game, "minecraft:pig", &nbt);
+                game.resolve_last_hurt_by_refs();
+                let living = game.living(game.entity(read_back).unwrap()).unwrap();
+                let credit = living.kill_credit(game);
+                assert_eq!(credit.is_some(), credited, "{since} ticks after the hurt");
+                if let Some(credit) = credit {
+                    assert_eq!(credit.level(game), nether);
+                    assert_ne!(credit.id(), zombie);
+                }
+            }
+        });
+    }
+
+    /// `living_knockback`'s kill credit for a push that leaves the pig's credit
+    /// as it was: the zombie now in the Nether, and the sword it holds there.
+    #[test]
+    #[ignore = "daily"]
+    fn a_push_names_the_credited_mob_in_another_level_and_its_main_hand() {
+        use sunrise_client::health::NO_ATTACK;
+        use sunrise_client::items::ItemStack;
+        use sunrise_client::mobs::{Damage, DamageKind};
+        let mut credited = 0;
+        let heard = super::super::native_knockback_tests::heard(|game, _| {
+            let (pig, zombie) = hurt_pig(game);
+            game.mobs
+                .iter_mut()
+                .find(|m| m.id == zombie)
+                .unwrap()
+                .extra
+                .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_sword", 1)));
+            send_to_the_nether(game, zombie);
+            let living = game.living(game.entity(pig).unwrap()).unwrap();
+            credited = living.kill_credit(game).unwrap().id() as i32;
+            let plan = game.prepare_knockback_credit(pig as i32, None, game.combat.attack());
+            let mut credit = plan.lend(&mut game.last_hurt_by_player);
+            let i = game.mobs.iter().position(|m| m.id == pig).unwrap();
+            let mob = &mut game.mobs[i];
+            mob.knockback(
+                crate::game::entity::damage_level_of!(game, &NO_ATTACK, &mut credit, None),
+                0.4,
+                1.0,
+                0.0,
+                &Damage::of(DamageKind::Generic),
+                0.0,
+            );
+        });
+        assert_eq!(
+            heard.credits.last(),
+            Some(&(credited, Some("minecraft:iron_sword".to_owned())))
+        );
     }
 
     #[test]

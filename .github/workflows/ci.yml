@@ -1,90 +1,87 @@
 name: checks
-# verify: a free full check on GitHub's runners for a fork's pull request, one that dyna-checks gives only its cheap
-# checks (format, verify-static): its three parts side by side (below). This repository's own pull requests get those
-# cheap checks alone (root, 2026-11-16: five jobs per push held GitHub's runners, up to 49 minutes' wait, ahead of
-# the Nightly), and their rollups, syncs and main's pushes the heavy gate in dyna-checks (.github/workflows/dyna-ci.yml,
-# tools/ci/pr_gate.py) on Dyna's runners, so the gate never waits on GitHub's runners. A schedule runs verify on
-# main's head every 6 hours, which saves the Rust caches the pull requests' runs read (rust-cache saves only from main)
-# and tries main on the newest stable Rust. A dispatch runs only the by-hand jobs at the end. See docs/release-flow.md.
+# verify: a full check on GitHub's runners of main every 6 hours, of a ref by hand (`gh workflow run checks -f
+# verify=true`), and of a pull request when a maintainer adds the label `ci:verify`. A push to a pull request gets
+# dyna-checks' cheap checks only (format, verify-static), and rollups, syncs and main's pushes its heavy gate on Dyna's
+# runners (.github/workflows/dyna-ci.yml, tools/ci/pr_gate.py): a fork's pull requests ran verify on every push and held
+# the organisation's hosted runners ahead of the release jobs (2026-11-18). The label stays on the pull request: a
+# fork's run gets a read-only token, so nothing here can remove it, and no write token is ever given to a fork's code
+# (no pull_request_target). To run it again, remove the label and add it again. The scheduled run also tries main on the
+# newest stable Rust and saves the Rust caches it reads. A dispatch without `verify` runs only the by-hand jobs at the
+# end. See docs/release-flow.md.
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [labeled]
   schedule:
     - cron: '41 */6 * * *'
   workflow_dispatch:
+    inputs:
+      verify:
+        description: Run verify on this ref instead of the by-hand jobs
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  # A new push to a pull request replaces its running checks.
-  group: checks-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: checks-${{ github.sha }}
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   SUNRISE_TELEMETRY_URL: "off"
 jobs:
+  # Which jobs a maintainer-requested fork check needs, from the complete base/head diff
+  # (tools/ci/rust_changes.py). Every verification part uses this one decision. Missing event commits, an
+  # unavailable diff, or a failed selection keep all parts. Scheduled and manual verification stay full.
+  changes:
+    if: github.event.label.name == 'ci:verify' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      rust_required: ${{ steps.selection.outputs.rust_required }}
+      tooling_required: ${{ steps.selection.outputs.tooling_required }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch this commit's history for selection
+        timeout-minutes: 11
+        env:
+          FETCH_STEP: Fetch this commit's history for selection
+          # The diff reads commits and two trees, which Git fetches when it first reads them (tools/ci/history_fetch.sh).
+          HISTORY_FILTER: tree:0
+        run: bash tools/ci/history_fetch.sh
+      - name: Select the jobs this pull request needs
+        id: selection
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py --all "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
   # verify runs as three jobs side by side, so a run takes as long as its slowest part (the Rust tests), not the sum:
   # one job doing them in turn took 14-21 minutes on GitHub's runners (main's run 43595807302: 859 s). `verify` waits
-  # for the three and passes only when each passed or had nothing to do. It runs even in a cancelled run
+  # for the three and passes only when each passed. It runs even in a cancelled run
   # (`always()`), so it fails there instead of being skipped. A failed part re-runs alone ("Re-run failed jobs").
   #
-  # Where (docs/ci-runners.md): our checks runners (label sunrise-checks: the desktop's, an isolated user, so a fork's
-  # pull request runs there too) take the pull requests whose number ends in 0 or 1, about what their three runners
-  # can do; GitHub's runners take the others and the schedule (which saves the Rust cache GitHub's pull request runs
-  # read), so both pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to
-  # ours, `light` (the desktop paused) or `off` every job to GitHub's. On ours the build folder persists
-  # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
   verify-tree:
     name: verify (tree and tools)
+    needs: changes
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "sunrise-checks"]') || 'ubuntu-24.04' }}
+      !cancelled() && (github.event_name == 'schedule' || inputs.verify ||
+      github.event.label.name == 'ci:verify' && (needs.changes.outputs.tooling_required != 'false' || needs.changes.outputs.rust_required != 'false'))
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v7
-        if: runner.environment == 'github-hosted'
         with:
           python-version: '3.12'
-      # A pull request adds only its own commits to main, so it reads those; the schedule reads every ref's history.
       - name: Keep game artifacts out of Git
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python tools/check_public_tree.py
-          if [ -n "$BASE_SHA" ]; then
-            python tools/check_public_tree.py --range "$BASE_SHA..$HEAD_SHA"
-          else
-            python tools/check_public_tree.py --history
-          fi
-      # Our runners as GitHub's: some Python tests compile Rust with a bare `rustc` (GitHub's image has a default
-      # toolchain, our runners' own rustup homes may not), and the GPU tests find no adapter there, so they return
-      # early. Ours have Mesa's software Vulkan for parity; a backend Linux lacks keeps the tests from it, so a pull
-      # request's verify doesn't depend on which pool took it (#8627: a GPU test that flakes on lavapipe).
-      - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
+          python tools/check_public_tree.py --history
       # docs/layers.md: a crate depends only on its own layer or a lower one; today's exceptions only shrink.
       - name: Crates follow the layers
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 tools/check_layers.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
+        run: python3 tools/check_layers.py
       # docs/layers.md#built-in-addresses: every built-in outside address in the Sunrise layer's home; the rest only shrinks.
       - name: Built-in addresses stay in their home
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 tools/check_addresses.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
+        run: python3 tools/check_addresses.py
       - name: Check the mod API type boundary (including negative control)
         run: python3 tools/ci/check_api_boundary.py --source-only
       - name: Vocabulary state has explicit ownership
@@ -93,105 +90,54 @@ jobs:
         run: python -m unittest discover -s tests -v
   verify-lint:
     name: verify (format and lint)
+    needs: changes
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "sunrise-checks"]') || 'ubuntu-24.04' }}
+      !cancelled() && (github.event_name == 'schedule' || inputs.verify ||
+      github.event.label.name == 'ci:verify' && (needs.changes.outputs.rust_required != 'false'))
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
-      - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: steps.rust.outputs.required != 'false'
-        env:
-          HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies checked by clippy, saved from main's runs (pull requests read main's cache).
+      # Dependencies checked by clippy, saved by the scheduled runs on main.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify-lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting and lint
-        if: steps.rust.outputs.required != 'false'
         run: |
           cargo +stable fmt --all -- --check
           find crates/sunrise-mod-api/src crates/sunrise-mod-vocab/src -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --check --config skip_children=true
           find crates/sunrise-client/src/game -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --config skip_children=true --check
           rustup run stable rustfmt --edition 2024 --check crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*.rs crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs
-          rustup run stable rustfmt --edition 2024 --check crates/sunrise-mod-wasm/wire-loopback/tests/wire_loopback/*.rs
           cargo +stable clippy --workspace --all-targets --locked -- -D warnings
           # The server build (released as sunrise-engine): the game without sound or controllers.
           cargo +stable clippy -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --locked --no-default-features -- -D warnings
       - name: Check generated mod API signatures
-        if: steps.rust.outputs.required != 'false'
         run: python3 tools/ci/check_api_boundary.py
   verify-test:
     name: verify (Rust tests)
+    needs: changes
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "sunrise-checks"]') || 'ubuntu-24.04' }}
+      !cancelled() && (github.event_name == 'schedule' || inputs.verify ||
+      github.event.label.name == 'ci:verify' && (needs.changes.outputs.rust_required != 'false'))
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Does this pull request need Rust checks?
-        if: github.event_name == 'pull_request'
-        id: rust
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
-      - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: steps.rust.outputs.required != 'false'
-        env:
-          HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
+      # Dependencies and the workspace's own build, saved by the scheduled runs on main.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -200,34 +146,20 @@ jobs:
       # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
       - name: Build the runtime holder test actor
-        if: steps.rust.outputs.required != 'false'
         run: cargo +stable build -p sunrise-mod-package --features runtime-process --example holder_actor
-      # A pull request tests the crates it changes, the crates that depend on them, and the crates whose tests read
-      # its files (tools/ci/test_scope.py); a change outside every crate tests the whole workspace. dyna-checks
-      # tests the whole workspace on main's pushes, so a missed crate shows on main.
-      - name: Which crates must the Rust tests cover?
-        if: github.event_name == 'pull_request' && steps.rust.outputs.required != 'false'
-        id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 tools/ci/test_scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Test Rust core and voxel kernel correctness
-        if: steps.rust.outputs.required != 'false'
-        env:
-          PACKAGES: ${{ steps.scope.outputs.packages }}
         run: |
-          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests
+          cargo +stable test --locked --workspace --lib --bins --tests
           # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
           # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
           # recompiling the workspace with a different dependency graph.
-          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
-          cargo +stable test --locked ${PACKAGES:---workspace} --doc
+          cargo +stable test --locked --workspace --lib --bins --tests mod_content::tests:: -- --ignored
+          cargo +stable test --locked --workspace --doc
   verify:
     needs: [verify-tree, verify-lint, verify-test]
-    # Skipped with its parts on this repository's pull requests and on a dispatch; otherwise it runs even in a
+    # Skipped with its parts on a dispatch of the by-hand jobs and on another label; otherwise it runs even in a
     # cancelled run.
-    if: always() && needs.verify-tree.result != 'skipped'
+    if: always() && (github.event_name == 'schedule' || inputs.verify || github.event.label.name == 'ci:verify')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -247,7 +179,7 @@ jobs:
   # 90-minute job. The Nightly builds and checks these binaries on every run.
   windows-arm64:
     name: Windows ARM64 game
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.verify
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 90
     env:
@@ -303,7 +235,7 @@ jobs:
             Write-Output ($output -join "`n")
           }
   jfr-analysis:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.verify
     runs-on: [self-hosted, linux, sunrise-game]
     steps:
       - uses: actions/checkout@v7

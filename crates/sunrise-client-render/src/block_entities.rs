@@ -83,6 +83,8 @@ pub struct BlockEntities {
     pub contents_watches: ContentsWatches,
     generations: FxHashMap<Pos, u64>,
     on_load: std::collections::VecDeque<(Pos, u64)>,
+    data_load_enabled: bool,
+    data_loads: std::collections::VecDeque<(Pos, u64)>,
     on_load_enabled: bool,
     attachments: FxHashMap<Pos, Attachments>,
     attachment_observer: Option<Arc<dyn AttachmentObserver<BlockEntityIdentity>>>,
@@ -303,6 +305,21 @@ impl BlockEntities {
         if !enabled {
             self.on_load.clear();
         }
+    }
+    /// Queue chunk-payload notices only when gameplay has a subscriber.
+    pub fn set_data_load_enabled(&mut self, enabled: bool) {
+        self.data_load_enabled = enabled;
+        if !enabled {
+            self.data_loads.clear();
+        }
+    }
+    /// Whether a promoted chunk has a pending saved-payload notice.
+    pub fn has_pending_data_load(&self) -> bool {
+        !self.data_loads.is_empty()
+    }
+    /// Take the next queued identity. Gameplay verifies it still belongs to the loaded instance.
+    pub fn next_data_load(&mut self) -> Option<(Pos, u64)> {
+        self.data_loads.pop_front()
     }
     /// Whether any attachment notices remain, including possibly retired identities.
     pub fn has_pending_on_load(&self) -> bool {
@@ -705,8 +722,20 @@ impl BlockEntities {
         self.map.get(pos)
     }
     pub fn get_mut(&mut self, pos: &Pos) -> Option<&mut BlockEntity> {
+        self.get_mut_if(pos, |_| true)
+    }
+    /// Wake and borrow a resident row only when the read-only predicate accepts it.
+    pub fn get_mut_if(
+        &mut self,
+        pos: &Pos,
+        accepts: impl FnOnce(&BlockEntity) -> bool,
+    ) -> Option<&mut BlockEntity> {
+        let entity = self.map.get_mut(pos)?;
+        if !accepts(entity) {
+            return None;
+        }
         self.asleep.remove(pos);
-        self.map.get_mut(pos)
+        Some(entity)
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Pos, &mut BlockEntity)> {
         self.asleep.clear();
@@ -965,6 +994,7 @@ impl BlockEntities {
         self.unload_attachments();
         self.generations.clear();
         self.on_load.clear();
+        self.data_loads.clear();
         self.attachments.clear();
         self.map.clear();
         self.mods.clear();
@@ -1008,6 +1038,9 @@ impl BlockEntities {
             }
             if new_is_mod {
                 self.mods.entry(chunk_of(p)).or_default().insert(p);
+                if self.data_load_enabled {
+                    self.data_loads.push_back((p, self.generations[&p]));
+                }
             } else {
                 forget_mod(&mut self.mods, p);
             }

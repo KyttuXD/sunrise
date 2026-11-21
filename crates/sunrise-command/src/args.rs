@@ -7,7 +7,8 @@ use sunrise_client_core::text::Text;
 pub use sunrise_client_core::registries::{
     CustomCompletionAction, Registries, RegistryIds, modify_custom_completions,
 };
-pub use sunrise_core::game_mode::GameMode;
+use sunrise_core::java_float_parse::{parse_java_double, parse_java_float};
+pub use sunrise_core::{game_mode::GameMode, text::parse_java_integer as java_parse_int};
 
 /// How much of the command line a registered custom argument takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -635,11 +636,7 @@ fn parsed_arguments(context: &Context, input: &str, start: usize) -> Vec<ParsedA
 /// The bytes a text occupies in Java modified UTF-8: a tooltip's NBT string limit counts those.
 fn modified_utf8_len(text: &str) -> usize {
     text.encode_utf16()
-        .map(|unit| match unit {
-            1..=0x7f => 1,
-            0..=0x7ff => 2,
-            _ => 3,
-        })
+        .map(sunrise_core::modified_utf8::unit_len)
         .sum()
 }
 
@@ -805,7 +802,7 @@ pub fn read_int_bounds(reader: &mut Reader) -> CmdResult<IntRange> {
 /// MinMaxBounds.Doubles.fromReader.
 pub fn read_double_bounds(reader: &mut Reader) -> CmdResult<DoubleRange> {
     let start = reader.cursor;
-    let b = read_bounds(reader, java_parse_double, "parsing.double.invalid")?;
+    let b = read_bounds(reader, parse_java_double, "parsing.double.invalid")?;
     if let (Some(l), Some(h)) = b
         && l > h
     {
@@ -816,75 +813,7 @@ pub fn read_double_bounds(reader: &mut Reader) -> CmdResult<DoubleRange> {
 }
 /// MinMaxBounds.FloatDegrees.fromReader (no swap check).
 pub fn read_float_bounds(reader: &mut Reader) -> CmdResult<(Option<f32>, Option<f32>)> {
-    read_bounds(
-        reader,
-        |s| java_parse_double(s).map(|v| v as f32),
-        "parsing.float.invalid",
-    )
-}
-/// Integer.parseInt over number characters.
-pub fn java_parse_int(s: &str) -> Option<i32> {
-    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    s.parse().ok()
-}
-/// Double.parseDouble over the characters StringReader reads as a number.
-pub fn java_parse_double(s: &str) -> Option<f64> {
-    let t = s.trim_matches(|c: char| c <= ' ');
-    let body = t.strip_prefix(['-', '+']).unwrap_or(t);
-    if body.is_empty() || body == "." {
-        return None;
-    }
-    let body = body.strip_suffix(['d', 'D', 'f', 'F']).unwrap_or(body);
-    if body == "NaN" || body == "Infinity" {
-        return t.parse::<f64>().ok().or(Some(if t.starts_with('-') {
-            f64::NEG_INFINITY
-        } else if body == "NaN" {
-            f64::NAN
-        } else {
-            f64::INFINITY
-        }));
-    }
-    let mut chars = body.chars().peekable();
-    let mut digits = 0;
-    while chars.peek().is_some_and(char::is_ascii_digit) {
-        chars.next();
-        digits += 1;
-    }
-    if chars.peek() == Some(&'.') {
-        chars.next();
-        while chars.peek().is_some_and(char::is_ascii_digit) {
-            chars.next();
-            digits += 1;
-        }
-    }
-    if digits == 0 {
-        return None;
-    }
-    if matches!(chars.peek(), Some('e' | 'E')) {
-        chars.next();
-        if matches!(chars.peek(), Some('+' | '-')) {
-            chars.next();
-        }
-        let mut exp = 0;
-        while chars.peek().is_some_and(char::is_ascii_digit) {
-            chars.next();
-            exp += 1;
-        }
-        if exp == 0 {
-            return None;
-        }
-    }
-    if chars.next().is_some() {
-        return None;
-    }
-    let clean: String = t
-        .trim_end_matches(['d', 'D', 'f', 'F'])
-        .trim_start_matches('+')
-        .to_owned();
-    clean.parse::<f64>().ok()
+    read_bounds(reader, parse_java_float, "parsing.float.invalid")
 }
 fn parse_coord_int(reader: &mut Reader) -> CmdResult<Coord> {
     if reader.can_read() && reader.peek() == '^' {
@@ -1206,6 +1135,11 @@ fn particle_options(id: &str, t: &sunrise_core::nbt::Tag) -> Result<(), String> 
         };
         let _ = snbt;
         return Err(super::codec::either(first, "Not a string".into()));
+    }
+    if id == "minecraft:item"
+        && let Some(item) = get(map, "item")
+    {
+        sunrise_world::item_defaults::validate_stack_tag(item)?;
     }
     Ok(())
 }

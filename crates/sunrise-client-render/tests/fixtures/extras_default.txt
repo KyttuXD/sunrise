@@ -3,7 +3,6 @@ pregen:false
 fullbright:false
 dynamicLights:false
 lodZoomDetail:false
-autoReconnect:false
 uiSoundReserve:false
 ownNameTag:false
 skipModdedSplashesIfVanillaModified:true
@@ -12,6 +11,8 @@ mouseTweaks:false
 mouseTweaksWheel:true
 sort:false
 sortKey:key.keyboard.unknown
+shaderPackKey:key.keyboard.k
+lastShaderPack:
 chatAnimation:false
 chatIndicator:true
 noAi:false

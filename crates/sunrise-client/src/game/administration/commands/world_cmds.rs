@@ -135,23 +135,22 @@ impl Game<'_> {
 
     // ---- /damage ----------------------------------------------------------------
 
-    /// The `DamageKind` of a damage type id, for the sources the engine's own
-    /// hurt paths take (`DamageCommand`'s, `EntityRef::hurt`'s and a mod
-    /// effect's). A type the engine has no kind of its own for keeps its
-    /// registry id and tags as a `DamageKind::Named`.
+    /// Map an explicit damage type to an engine kind only when the kind
+    /// always resolves back to that id. In particular, the engine's explosion
+    /// factory chooses the type based on the attacker; an explicit registry
+    /// type must not. Other registered types keep their id and tags as `Named`.
     pub(in crate::game) fn damage_kind(catalog: &DamageCatalog, ty: &str) -> DamageKind {
-        match ty.trim_start_matches("minecraft:") {
+        match ty.strip_prefix("minecraft:").unwrap_or(ty) {
             "player_attack" => DamageKind::PlayerAttack,
             "mace_smash" => DamageKind::MaceSmash,
             "spear" => DamageKind::Spear,
             "mob_attack" => DamageKind::MobAttack,
             "mob_attack_no_aggro" => DamageKind::MobAttackNoAggro,
             "arrow" => DamageKind::Arrow,
-            "thrown" | "mob_projectile" => DamageKind::Thrown,
-            "fireball" | "unattributed_fireball" => DamageKind::Fireball,
+            "thrown" => DamageKind::Thrown,
+            "fireball" => DamageKind::Fireball,
             "wither_skull" => DamageKind::WitherSkull,
-            "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
-            "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
+            "fall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
             "in_fire" => DamageKind::InFire,
             "hot_floor" => DamageKind::HotFloor,
@@ -159,7 +158,7 @@ impl Game<'_> {
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
             "dry_out" => DamageKind::DryOut,
-            "magic" | "indirect_magic" | "dragon_breath" => DamageKind::Magic,
+            "magic" => DamageKind::Magic,
             "sting" => DamageKind::Sting,
             "cactus" => DamageKind::Cactus,
             "sweet_berry_bush" => DamageKind::SweetBerryBush,
@@ -248,7 +247,7 @@ impl Game<'_> {
     ) -> bool {
         // Resolve the damage registry at the shared command/API boundary before
         // any target-specific path can mutate state or map it to a DamageKind.
-        if self.motion.health.damage.id(ty).is_none() {
+        if self.health_resources.damage.id(ty).is_none() {
             return false;
         }
         let attacker = cause.or(by).and_then(|t| self.network_entity_id(t));
@@ -264,6 +263,7 @@ impl Game<'_> {
         attacker: i32,
         direct: Option<Target>,
     ) -> sunrise_client::health::Attack {
+        use sunrise_client::health::DirectEntity;
         let mut attack = self.attack_of(attacker);
         attack.direct = Some(
             direct
@@ -279,13 +279,42 @@ impl Game<'_> {
             Some(Target::Trident(id)) => {
                 if let Some(shot) = self.tridents.iter().find(|shot| shot.id == id) {
                     attack.projectile = Some(id as i32);
-                    attack.projectile_is_arrow = true;
+                    attack.projectile_kind = DirectEntity::Arrow;
                     Self::set_projectile_weapon(&mut attack, Some(&shot.stack));
                 }
             }
             _ => {}
         }
+        attack.direct_kind = Some(Self::target_direct_entity(
+            direct,
+            &self.creatures.projectiles,
+        ));
         attack
+    }
+    /// Classify an explicit `/damage` or `EntityRef::hurt` direct entity target.
+    pub(in crate::game) fn target_direct_entity(
+        direct: Option<Target>,
+        projectiles: &[sunrise_client::projectiles::Projectile],
+    ) -> sunrise_client::health::DirectEntity {
+        use sunrise_client::health::DirectEntity;
+        match direct {
+            Some(
+                Target::Player
+                | Target::Guest(_)
+                | Target::Mob(_)
+                | Target::Dragon(_)
+                | Target::Stand(_),
+            ) => DirectEntity::Living,
+            Some(Target::Projectile(id)) => projectiles
+                .iter()
+                .find(|shot| shot.id == id)
+                .map_or(DirectEntity::Projectile, |shot| {
+                    Self::projectile_direct_entity(&shot.kind)
+                }),
+            Some(Target::Trident(_)) => DirectEntity::Arrow,
+            Some(Target::Rocket(_) | Target::Hook(_)) => DirectEntity::Projectile,
+            _ => DirectEntity::Other,
+        }
     }
 
     fn hurt_target_from_source(
@@ -342,7 +371,7 @@ impl Game<'_> {
             Target::Mob(id) => {
                 let attacker = cause.or(by).and_then(|t| match t {
                     Target::Player | Target::Guest(_) => Some(Who::Player),
-                    Target::Mob(i) => Some(Who::Mob(i)),
+                    Target::Mob(i) | Target::Dragon(i) | Target::Stand(i) => Some(Who::Mob(i)),
                     _ => None,
                 });
                 let attacker_species = match attacker {
@@ -350,7 +379,7 @@ impl Game<'_> {
                     _ => None,
                 };
                 let damage = Damage {
-                    kind: Self::damage_kind(&self.motion.health.damage, ty),
+                    kind: Self::damage_kind(&self.health_resources.damage, ty),
                     attacker,
                     from,
                     attacker_species,
@@ -384,7 +413,7 @@ impl Game<'_> {
                 id,
                 amount,
                 ty,
-                Self::damage_kind(&self.motion.health.damage, ty),
+                Self::damage_kind(&self.health_resources.damage, ty),
                 (
                     by,
                     cause.or(by),
@@ -394,7 +423,7 @@ impl Game<'_> {
             Target::Crystal(id) => self.command_damage_crystal(
                 id,
                 ty,
-                Self::damage_kind(&self.motion.health.damage, ty),
+                Self::damage_kind(&self.health_resources.damage, ty),
                 by,
                 cause.or(by),
                 from,
@@ -415,7 +444,7 @@ impl Game<'_> {
         causing: Option<Target>,
         position: Option<[f64; 3]>,
     ) -> bool {
-        let registry = &self.motion.health.damage;
+        let registry = &self.health_resources.damage;
         let Some(kind) = registry.id(damage_type) else {
             return false;
         };
@@ -528,6 +557,7 @@ impl Game<'_> {
         for (mob, target) in reinforcements {
             self.call_reinforcements(mob, target);
         }
+        self.settle_mob_hurt(id);
         // Enderman.hurtServer's teleport, refused hit or not, before the command returns.
         if let Err(e) = self.settle_hurt_teleports() {
             log::warn!("Sunrise: /damage: enderman teleport: {e}");
@@ -1376,10 +1406,13 @@ impl Game<'_> {
                         )))
                     }
                     _ => {
-                        // Permanent entries stay authoritative. The modeled baby
-                        // modifier is transient and absent from that saved store.
-                        let amount =
-                            finalize::modifier_amount(m, attr, &modifier_id).or_else(|| {
+                        // `AttributeInstance.getModifier` finds a permanent or a
+                        // transient modifier: a mod's transient one, then the
+                        // modeled baby modifier, which is transient and absent
+                        // from the saved store.
+                        let amount = finalize::modifier_amount(m, attr, &modifier_id)
+                            .or_else(|| finalize::transient_modifier_amount(m, attr, &modifier_id))
+                            .or_else(|| {
                                 finalize::transient(m, attr)
                                     .filter(|_| modifier_id == "minecraft:baby")
                                     .map(|(amount, _)| amount)
@@ -1417,10 +1450,8 @@ impl Game<'_> {
         attribute: &str,
     ) -> Option<&mut sunrise_world::attributes::entity::EntityAttributes> {
         if let Target::Mob(id) = t
-            && (matches!(
-                attribute,
-                "minecraft:armor" | "minecraft:armor_toughness" | "minecraft:max_absorption"
-            ) || self.sulfur_archetype_attribute(t, attribute))
+            && (matches!(attribute, "minecraft:armor" | "minecraft:armor_toughness")
+                || self.sulfur_archetype_attribute(t, attribute))
         {
             let mob = self.mobs.iter_mut().find(|m| m.id == id)?;
             if mob.extra.armor_attributes.is_none() {
@@ -1475,15 +1506,6 @@ impl Game<'_> {
         };
         let catalog = self.motion.attributes.clone();
         let key = catalog.id(attribute).ok_or_else(no_attribute)?;
-        // A mob's max_absorption counts its Absorption effect's modifier.
-        let absorption_bonus = match target {
-            Target::Mob(mob) if attribute == "minecraft:max_absorption" => self
-                .mobs
-                .iter()
-                .find(|m| m.id == mob)
-                .map(|m| sunrise_client::mobs::armor::absorption_bonus(&m.extra.effects)),
-            _ => None,
-        };
         let map = self
             .generic_attributes(target, attribute)
             .ok_or_else(no_attribute)?;
@@ -1492,12 +1514,7 @@ impl Game<'_> {
         }
         let (message, args, result) = match id {
             "attribute.get" | "attribute.base.get" => {
-                let v = if id == "attribute.get"
-                    && let Some(bonus) = absorption_bonus
-                {
-                    sunrise_client::mobs::armor::max_absorption_of(map, 0.0, bonus)
-                        .ok_or_else(no_attribute)?
-                } else if id == "attribute.get" {
+                let v = if id == "attribute.get" {
                     map.value(key).map_err(|_| no_attribute())?
                 } else {
                     map.base_value(key).map_err(|_| no_attribute())?
@@ -1766,11 +1783,11 @@ impl Game<'_> {
         removed_y: Option<f64>,
         notified: bool,
     ) {
-        let Some(v) = self
-            .mob_object(rider)
-            .filter(|mob| !mob.removed)
-            .and_then(|mob| mob.extra.mount)
-        else {
+        let Some(mob) = self.mob_object(rider) else {
+            return;
+        };
+        let removing_rider = mob.removed;
+        let Some(v) = mob.extra.mount else {
             return;
         };
         if cart.is_some_and(|cart| cart.id != v) {
@@ -1782,7 +1799,7 @@ impl Game<'_> {
         // A callback can remove or remount the rider. Do not overwrite its decision.
         if self
             .mob_object(rider)
-            .is_none_or(|mob| mob.removed || mob.extra.mount != Some(v))
+            .is_none_or(|mob| mob.removed != removing_rider || mob.extra.mount != Some(v))
         {
             return;
         }
@@ -1796,6 +1813,14 @@ impl Game<'_> {
             .map(|m| m.id);
         if let Some(vehicle) = self.mob_object_mut(v) {
             vehicle.extra.rider = remaining;
+        }
+        // LivingEntity.dismountVehicle leaves a removed rider at its own position.
+        if removing_rider {
+            if let Some(mob) = self.mob_object_mut(rider) {
+                mob.extra.passenger = false;
+            }
+            self.release_removed_vehicle(v);
+            return;
         }
         let at = if let Some(y) = removed_y {
             self.mob_object(rider).map(|mob| {
@@ -2297,6 +2322,178 @@ mod allay_owner_damage_tests {
                     assert_eq!(game.world.game_time, before);
                 }
             }
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "registered_damage_tests.rs"]
+mod registered_damage_tests;
+
+#[cfg(test)]
+mod datapack_damage_tests {
+    use crate::game::{commands::Target, native_entity_refs::tests::with_game};
+    use sunrise_client::mobs::Mob;
+    use sunrise_core::geometry::Vec3;
+    use sunrise_world::loot::PackOverlay;
+
+    /// #2647: a damage type a world's datapack declares is in the world's frozen
+    /// registry, and `/damage` with it hurts a mob, as `DamageCommand.damage`
+    /// does with the `Holder` it resolved there. Every hurt path reads the
+    /// world's registry, not the startup catalog, which holds no pack.
+    /// The world's registry with the `dmgtest` pack: `zap` untagged, `boom` in
+    /// `#is_explosion` and `#no_knockback`, `rush` in `#bypasses_cooldown`, `calm` in
+    /// `#no_anger`.
+    fn with_pack(game: &mut crate::game::Game<'_>) {
+        let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let ty = |name: &str| {
+            (
+                format!("damage_type/dmgtest:{name}"),
+                vec![
+                    format!(r#"{{"message_id":"{name}","scaling":"never","exhaustion":0.1}}"#)
+                        .into_bytes(),
+                ],
+            )
+        };
+        let tag = |tag: &str, values: &[&str]| {
+            let values: Vec<String> = values.iter().map(|v| format!("\"dmgtest:{v}\"")).collect();
+            (
+                format!("tags/minecraft:damage_type/{tag}"),
+                vec![format!(r#"{{"values":[{}]}}"#, values.join(",")).into_bytes()],
+            )
+        };
+        let files = vec![
+            ty("zap"),
+            ty("boom"),
+            ty("rush"),
+            ty("calm"),
+            tag("is_explosion", &["boom"]),
+            tag("no_knockback", &["boom"]),
+            tag("bypasses_cooldown", &["rush"]),
+            tag("no_anger", &["calm"]),
+        ];
+        game.health_resources = game
+            .motion
+            .health
+            .with_packs(&root, &PackOverlay::new(&files), false)
+            .unwrap();
+        assert!(game.motion.health.damage.id("dmgtest:zap").is_none());
+    }
+
+    fn pig(game: &mut crate::game::Game<'_>, id: u32, at: Vec3) {
+        let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+        let mut pig = Mob::new(id, kind, at, 0.0);
+        pig.no_ai = true;
+        game.mobs.push(pig);
+    }
+
+    /// #2647: a damage type a world's datapack declares is in the world's frozen
+    /// registry, and `/damage` with it hurts a mob, as `DamageCommand.damage`
+    /// does with the `Holder` it resolved there. Every hurt path reads the
+    /// world's registry, not the startup catalog, which holds no pack.
+    #[test]
+    #[ignore = "daily"]
+    fn a_datapack_damage_type_hurts_a_mob() {
+        with_game(|game| {
+            with_pack(game);
+            pig(game, 1, Vec3::new(0.5, 64.0, 0.5));
+            assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
+            assert_eq!(game.mobs[0].health, 9.0);
+            // A type neither registry holds is still refused.
+            assert!(!game.hurt_target(Target::Mob(1), 1.0, "dmgtest:missing", None, None, None));
+            assert_eq!(game.mobs[0].health, 9.0);
+        });
+    }
+
+    /// A datapack type's tags in the world's registry decide as vanilla's do:
+    /// `#bypasses_cooldown` lets an equal repeat hit land inside the hurt
+    /// cooldown, which the untagged type's is refused; `#no_anger` records no
+    /// attacker on the mob.
+    #[test]
+    #[ignore = "daily"]
+    fn a_datapack_types_tags_reach_the_mob_hurt_path() {
+        with_game(|game| {
+            with_pack(game);
+            pig(game, 1, Vec3::new(0.5, 64.0, 0.5));
+            pig(game, 2, Vec3::new(4.5, 64.0, 0.5));
+            assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
+            assert!(!game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
+            assert_eq!(game.mobs[0].health, 9.0);
+            assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:rush", None, None, None));
+            assert_eq!(game.mobs[0].health, 8.0);
+            // A mob's hit names its attacker, unless the type is in `#no_anger`.
+            pig(game, 3, Vec3::new(8.5, 64.0, 0.5));
+            let attacker = Some(Target::Mob(1));
+            assert!(game.hurt_target(
+                Target::Mob(2),
+                1.0,
+                "dmgtest:calm",
+                attacker,
+                attacker,
+                None
+            ));
+            assert!(game.hurt_target(Target::Mob(3), 1.0, "dmgtest:zap", attacker, attacker, None));
+            let last_hurt_by = |game: &crate::game::Game<'_>, id: u32| {
+                game.mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .ai
+                    .last_hurt_by
+            };
+            assert_eq!(last_hurt_by(game, 2), None, "#no_anger records no attacker");
+            assert!(last_hurt_by(game, 3).is_some(), "the untagged type does");
+        });
+    }
+
+    /// A datapack type in `#is_explosion` takes the End crystal away without
+    /// the crystal's own blast, so a pig beside it is untouched; the untagged
+    /// type sets the blast off. With no player behind it, it still hurts the
+    /// dragon.
+    #[test]
+    #[ignore = "daily"]
+    fn a_datapack_explosion_type_removes_a_crystal_quietly_and_hurts_the_dragon() {
+        with_game(|game| {
+            with_pack(game);
+            let crystal = |game: &mut crate::game::Game<'_>, id: u32| {
+                game.crystals.push(crate::game::dragon::Crystal {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id,
+                    position: Vec3::new(0.5, 64.0, 0.5),
+                    show_bottom: false,
+                    time: 0,
+                    beam: None,
+                    invulnerable: false,
+                    fall: (false, 0.0),
+                });
+            };
+            pig(game, 1, Vec3::new(2.5, 64.0, 0.5));
+            crystal(game, 50);
+            assert!(game.hurt_target(Target::Crystal(50), 1.0, "dmgtest:boom", None, None, None));
+            assert!(game.crystals.is_empty());
+            assert_eq!(game.mobs[0].health, 10.0, "no blast");
+            crystal(game, 51);
+            assert!(game.hurt_target(Target::Crystal(51), 1.0, "dmgtest:zap", None, None, None));
+            assert!(game.crystals.is_empty());
+            assert!(
+                game.mobs.first().is_none_or(|pig| pig.health < 10.0),
+                "the crystal's blast"
+            );
+
+            let dragon = game
+                .spawn_dragon_spawned([0.5, 80.0, 0.5], crate::game::creatures::SpawnSite::Plain)
+                .unwrap();
+            let before = game.dragon.as_ref().unwrap().health;
+            assert!(game.hurt_target(
+                Target::Dragon(dragon),
+                4.0,
+                "dmgtest:boom",
+                None,
+                None,
+                None
+            ));
+            assert!(game.dragon.as_ref().unwrap().health < before);
         });
     }
 }
@@ -2839,6 +3036,10 @@ mod particle_command_tests;
 #[cfg(test)]
 #[path = "attribute_tests.rs"]
 mod attribute_tests;
+
+#[cfg(test)]
+#[path = "effect_attribute_tests.rs"]
+mod effect_attribute_tests;
 
 #[cfg(test)]
 mod attribute_modifier_command_tests {

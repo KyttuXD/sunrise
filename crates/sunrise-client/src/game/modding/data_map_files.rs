@@ -115,7 +115,7 @@ fn decode<T>(
     let mut values = Vec::new();
     for (key, raw) in raw.values {
         let key = Key::decode(&key)?;
-        if !conditions.allows_file(&raw, context) {
+        if !conditions.allows_file_isolated(&raw, context)? {
             continue;
         }
         if let Some(value) = value(&raw)? {
@@ -155,15 +155,20 @@ fn merge_versions<T: Clone>(
     let wanted = format!("data_maps/{namespace}:{directory}/{path}");
     let mut applied = false;
     if let Some((_, versions)) = overlay.files.iter().find(|(key, _)| *key == wanted) {
-        for bytes in versions {
-            let prepared = prepare(bytes, &wanted);
-            match prepared {
+        for (layer, bytes) in versions.iter().enumerate() {
+            let source = format!(
+                "data/{namespace}/data_maps/{directory}/{path}.json (layer {})",
+                layer + 1
+            );
+            match prepare(bytes, &source) {
                 Ok(Some(file)) => {
-                    file.apply(&mut map, tags, &known, &wanted);
+                    file.apply(&mut map, tags, &known, &source);
                     applied = true;
                 }
                 Ok(None) => {}
-                Err(error) => log::warn!("Sunrise: {id} ({directory}): file skipped: {error}"),
+                Err(error) => log::error!(
+                    "Sunrise: data map {id} on minecraft:{directory}: {source}: file skipped: {error}"
+                ),
             }
         }
     }
@@ -217,7 +222,7 @@ fn allows_raw(
         return Ok(true);
     };
     let value: Value = serde_json::from_str(raw.get()).map_err(|error| error.to_string())?;
-    Ok(conditions.allows_file(&serde_json::json!({"neoforge:conditions": value}), context))
+    conditions.allows_file_isolated(&serde_json::json!({"neoforge:conditions": value}), context)
 }
 fn scalar(raw: Box<RawValue>, field: &str) -> Result<Box<RawValue>, String> {
     if !raw.get().trim_start().starts_with('{') {
@@ -298,6 +303,52 @@ mod condition_tests {
     use super::*;
 
     #[test]
+    fn a_bad_value_condition_refuses_the_typed_layer_before_any_mutation() {
+        let files = vec![("data_maps/neoforge:item/fuel".to_owned(), vec![
+            br#"{"values":{"minecraft:stick":2,"minecraft:coal":3}}"#.to_vec(),
+            br#"{"replace":true,"values":{"minecraft:blaze_rod":4,"minecraft:planks":{"value":5,"neoforge:conditions":[{"type":"neoforge:or","values":[{"type":"neoforge:always"},{"type":"absent:fuel"}]}]}},"remove":["minecraft:coal"]}"#.to_vec(),
+            br#"{"values":{"minecraft:lava_bucket":6}}"#.to_vec(),
+        ])];
+        let conditions = sunrise_world::conditions::LoadConditions::new([]);
+        let overlay = sunrise_world::loot::PackOverlay {
+            files: &files,
+            conditions: &conditions,
+            ..sunrise_world::loot::PackOverlay::default()
+        };
+        let expected = BTreeMap::from([
+            ("minecraft:stick".to_owned(), 2),
+            ("minecraft:coal".to_owned(), 3),
+            ("minecraft:lava_bucket".to_owned(), 6),
+        ]);
+        let (values, _) = load(
+            "neoforge:fuel",
+            "item",
+            BTreeMap::new(),
+            &overlay,
+            &Tags::new(),
+            |raw| Ok(entry_value(raw)?.as_i64()),
+            |_| true,
+        );
+        assert_eq!(values, expected);
+        let (values, _) = load_numeric(
+            "neoforge:fuel",
+            "item",
+            BTreeMap::new(),
+            &overlay,
+            &Tags::new(),
+            NumberCodec {
+                field: "burn_time",
+                decode: |raw: &RawValue| {
+                    serde_json::from_str::<i64>(raw.get()).map_err(|error| error.to_string())
+                },
+            },
+            |_| true,
+        );
+        assert_eq!(values, expected);
+        assert_eq!(conditions.check_errors(), Ok(()));
+    }
+
+    #[test]
     fn typed_maps_ignore_file_conditions_and_keep_value_conditions() {
         let files = vec![(
             "data_maps/test:item/fuel".to_owned(),
@@ -305,7 +356,7 @@ mod condition_tests {
         )];
         let overlay = sunrise_world::loot::PackOverlay {
             files: &files,
-            ..sunrise_world::loot::PackOverlay::NONE
+            ..sunrise_world::loot::PackOverlay::default()
         };
         let (values, applied) = load(
             "test:fuel",

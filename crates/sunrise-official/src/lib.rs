@@ -4,15 +4,22 @@
 //! (`game-build.yml`); sunrise-client keeps its own plain executable.
 //!
 //! Each Sunrise crate that runs in the game gives a `&'static` value implementing
-//! `sunrise_platform::hooks::Hooks`, and its settings store and pages if it has any, and
-//! [`register`] adds them. Nothing here depends on an engine crate.
+//! `sunrise_platform::hooks::Hooks`, and its settings store, pages and HUD layers if it has any,
+//! and [`register`] adds them. Nothing here depends on an engine crate.
 #![forbid(unsafe_code)]
 
+// In the SDK this keeps the platform's link to the host dylib, which owns the hook and settings
+// registries. Without it, rustc can link a private copy into the official dylib.
+extern crate sunrise_game as _;
+
+#[cfg(feature = "sunrise-extras")]
+mod mod_audio;
+
 use sunrise_platform::hooks::{self, ClientIdentity, GetTheGame, Hooks};
-use sunrise_platform::{lang, mod_rows, pages, release, settings};
+use sunrise_platform::{hud, lang, mod_rows, pages, release, settings};
 
 /// Every Sunrise part in the game, in the order its hooks run.
-const PARTS: [&dyn Hooks; 6] = [
+const PARTS: &[&dyn Hooks] = &[
     // The anonymous "I'm playing" ping.
     &sunrise_heartbeat::HOOKS,
     // Play with Friends: `friend:` addresses join through its tunnel.
@@ -25,6 +32,12 @@ const PARTS: [&dyn Hooks; 6] = [
     &sunrise_perf_share::HOOKS,
     // The client identity the official Horizon server requires.
     &HORIZON_IDENTITY,
+    // Auto-reconnect: the Disconnected screen connects again.
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_reconnect::HOOKS,
+    // Frames per second and frame times over the game.
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_perf_overlay::HOOKS,
 ];
 /// The game started by hand without its prepared files: start it from the launcher, downloaded
 /// from Sunrise's website.
@@ -95,9 +108,30 @@ static SUNRISE_ROW: mod_rows::Row = mod_rows::Row {
 };
 
 /// Their settings, in the player's settings files.
-const STORES: [&dyn settings::Store; 1] = [&sunrise_discord::SETTING];
-/// Their rows and pages in the options screens.
-const PAGES: [&dyn pages::Page; 1] = [&sunrise_discord::SECTION];
+const STORES: &[&dyn settings::Store] = &[
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_reconnect::SETTING,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SETTING,
+    &sunrise_discord::SETTING,
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_perf_overlay::SETTING,
+];
+/// Their rows and pages in the options screens, in order: auto-reconnect's row above Discord's.
+const PAGES: &[&dyn pages::Page] = &[
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_reconnect::SECTION,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SECTION,
+    &sunrise_discord::SECTION,
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_perf_overlay::SECTION,
+];
+/// What they draw on the HUD.
+const LAYERS: &[&dyn hud::Layer] = &[
+    #[cfg(feature = "sunrise-extras")]
+    &sunrise_perf_overlay::LAYER,
+];
 
 /// The text of Sunrise's own rows, loaded with the game's.
 static LANG: &lang::Files = &[("en_us", include_str!("../assets/lang/en_us.json"))];
@@ -105,11 +139,14 @@ static LANG: &lang::Files = &[("en_us", include_str!("../assets/lang/en_us.json"
 /// Registers Sunrise's in-game parts with the game. The executable calls it before it runs the
 /// game, and so does the launcher's generated executable for native mods.
 pub fn register() {
-    let late = PARTS.into_iter().map(hooks::register);
-    let late = late.chain(STORES.into_iter().map(settings::register));
+    let late = PARTS.iter().copied().map(hooks::register);
+    let late = late.chain(STORES.iter().copied().map(settings::register));
     let late = late.chain(std::iter::once(mod_rows::register(&SUNRISE_ROW)));
     let late = late.chain(std::iter::once(lang::register(LANG)));
-    for result in late.chain(PAGES.into_iter().map(pages::register)) {
+    #[cfg(feature = "sunrise-extras")]
+    let late = late.chain(std::iter::once(lang::register(sunrise_reconnect::LANG)));
+    let late = late.chain(PAGES.iter().copied().map(pages::register));
+    for result in late.chain(LAYERS.iter().copied().map(hud::register)) {
         if let Err(e) = result {
             // The executable registered after starting the game: a bug, not a player's problem.
             log::warn!("Sunrise: an in-game part did not register: {e}");

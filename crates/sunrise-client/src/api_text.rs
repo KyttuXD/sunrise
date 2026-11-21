@@ -490,7 +490,7 @@ fn event_reserved(kind: &str, key: &str) -> bool {
             _ => false,
         }
 }
-fn profile(value: &Value) -> Result<TextProfile, Error> {
+fn profile(value: &Value, keep_metadata: bool) -> Result<TextProfile, Error> {
     fn name(value: &str) -> Result<String, Error> {
         if value.len() > 16 || value.bytes().any(|b| b <= 32 || b >= 127) {
             return Err(Error::Malformed);
@@ -552,35 +552,37 @@ fn profile(value: &Value) -> Result<TextProfile, Error> {
                 {
                     return Err(Error::Malformed);
                 }
-                let extra = metadata(
-                    record
-                        .iter()
-                        .filter(|(k, _)| !["name", "value", "signature"].contains(&k.as_str()))
-                        .map(|(k, v)| (k.as_str(), v)),
-                    0,
-                )?;
                 let mut property = TextProfileProperty::default();
                 property.name = name.into();
                 property.value = value.into();
                 property.signature = signature.map(str::to_owned);
-                property.metadata = extra;
+                if keep_metadata {
+                    property.metadata = metadata(
+                        record
+                            .iter()
+                            .filter(|(k, _)| !["name", "value", "signature"].contains(&k.as_str()))
+                            .map(|(k, v)| (k.as_str(), v)),
+                        0,
+                    )?;
+                }
                 properties.push(property);
             }
         }
         _ => return Err(Error::Malformed),
     }
-    let metadata = metadata(
-        fields
-            .iter()
-            .filter(|(k, _)| !["name", "id", "properties"].contains(&k.as_str()))
-            .map(|(k, v)| (k.as_str(), v)),
-        0,
-    )?;
     let mut profile = TextProfile::default();
     profile.name = name;
     profile.id = id;
     profile.properties = properties;
-    profile.metadata = metadata;
+    if keep_metadata {
+        profile.metadata = metadata(
+            fields
+                .iter()
+                .filter(|(k, _)| !["name", "id", "properties"].contains(&k.as_str()))
+                .map(|(k, v)| (k.as_str(), v)),
+            0,
+        )?;
+    }
     Ok(profile)
 }
 fn take_data(tag: std::sync::Arc<Tag>) -> Result<Tag, Error> {
@@ -772,7 +774,7 @@ fn captured_shallow(node: &Node<'_>) -> Result<Text, Error> {
             hat,
             ..
         } => TextContent::Object(TextObject::Player {
-            profile: profile(value)?,
+            profile: profile(value, true)?,
             hat: *hat,
             fallback: None,
         }),
@@ -1025,9 +1027,17 @@ fn object_or_empty(value: Option<Value>) -> Map<String, Value> {
         None => Map::new(),
     }
 }
-fn profile_json(profile: &TextProfile, payloads: &Payloads<'_>) -> Value {
-    let mut out = filter_metadata(payloads.object(&profile.metadata), |k| {
-        ["name", "id", "properties"].contains(&k)
+/// A component codec drops fields outside the profile schema; engine text capture,
+/// on the other hand, round-trips that metadata.
+pub(crate) fn decoded_profile_json(value: &Value) -> Option<Value> {
+    Some(profile_json(&profile(value, false).ok()?, None))
+}
+
+fn profile_json(profile: &TextProfile, payloads: Option<&Payloads<'_>>) -> Value {
+    let mut out = payloads.map_or_else(Map::new, |payloads| {
+        filter_metadata(payloads.object(&profile.metadata), |k| {
+            ["name", "id", "properties"].contains(&k)
+        })
     });
     if let Some(name) = &profile.name {
         out.insert("name".into(), name.clone().into());
@@ -1044,7 +1054,8 @@ fn profile_json(profile: &TextProfile, payloads: &Payloads<'_>) -> Value {
     }
     if !profile.properties.is_empty() {
         let unsigned = profile.properties.iter().all(|p| {
-            p.signature.is_none() && matches!(&p.metadata, Tag::Compound(m) if m.is_empty())
+            p.signature.is_none()
+                && (payloads.is_none() || matches!(&p.metadata, Tag::Compound(m) if m.is_empty()))
         });
         let use_map = unsigned
             && (profile.properties.len() > 16
@@ -1070,8 +1081,10 @@ fn profile_json(profile: &TextProfile, payloads: &Payloads<'_>) -> Value {
                     .properties
                     .iter()
                     .map(|p| {
-                        let mut fields = filter_metadata(payloads.object(&p.metadata), |k| {
-                            ["name", "value", "signature"].contains(&k)
+                        let mut fields = payloads.map_or_else(Map::new, |payloads| {
+                            filter_metadata(payloads.object(&p.metadata), |k| {
+                                ["name", "value", "signature"].contains(&k)
+                            })
                         });
                         fields.insert("name".into(), p.name.clone().into());
                         fields.insert("value".into(), p.value.clone().into());
@@ -1277,7 +1290,7 @@ fn emitted_node<'a>(
                 } => {
                     out.extend([
                         ("object".into(), "player".into()),
-                        ("player".into(), profile_json(profile, payloads)),
+                        ("player".into(), profile_json(profile, Some(payloads))),
                         ("hat".into(), (*hat).into()),
                     ]);
                     fallback

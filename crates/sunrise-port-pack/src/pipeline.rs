@@ -181,6 +181,7 @@ pub fn carry(
     let in_pack = |m: &str| in_pack.contains(m) || shared.contains(m);
     let pack = carry::Pack {
         loaded: &loaded,
+        minecraft: &minecraft,
         mods: &in_pack,
     };
     let mut done = 0;

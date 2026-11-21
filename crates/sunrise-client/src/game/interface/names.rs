@@ -294,11 +294,6 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            let marks = self.hooks_name_marks(m, Some(m.id) == own_id);
-            let at = match marks.top {
-                Some(top) => p + glam::DVec3::Y * cosmetic_lift(top, m.model_scale()),
-                None => p,
-            };
             // A player's scores and team go by name, a mob's by UUID.
             let holder = if player {
                 Some(name.clone())
@@ -365,7 +360,6 @@ impl Game<'_> {
                         lines: vec![(text, 0.0)],
                         light: l,
                         discrete,
-                        marks: Marks::default(),
                     });
                 }
                 continue;
@@ -417,11 +411,10 @@ impl Game<'_> {
                 m.position.z.floor() as i32,
             );
             tags.push(NameTag {
-                at,
+                at: p,
                 lines,
                 light: l,
                 discrete,
-                marks,
             });
         }
         drop(player_ids);
@@ -517,7 +510,6 @@ impl Game<'_> {
                 lines,
                 light: l,
                 discrete: false,
-                marks: Marks::default(),
             });
         }
         // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
@@ -580,7 +572,6 @@ impl Game<'_> {
                         center.z.floor() as i32,
                     ),
                     discrete: false,
-                    marks: Marks::default(),
                 });
             }
         }
@@ -620,7 +611,6 @@ impl Game<'_> {
                     light,
                     NAME_TAG_UNIT,
                     out,
-                    tag.marks,
                     Some(&mut layouts),
                 ));
                 continue;
@@ -638,7 +628,6 @@ impl Game<'_> {
                 light,
                 NAME_TAG_UNIT,
                 out,
-                tag.marks,
                 Some(&mut layouts),
             ));
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
@@ -651,7 +640,6 @@ impl Game<'_> {
                 0,
                 NAME_TAG_UNIT,
                 see_through,
-                tag.marks,
                 Some(&mut layouts),
             ));
         }
@@ -684,14 +672,11 @@ impl Game<'_> {
             light,
             unit,
             out,
-            Marks::default(),
             None,
         )
     }
 
-    /// [`Self::name_tag_quads`] on a `background` of its own (ARGB, none when its alpha is 0),
-    /// with Sunrise's marks on the last line (the name): the Sunrise player's mark before the
-    /// text, a name tag style's badge after it and its line under the background.
+    /// [`Self::name_tag_quads`] on a `background` of its own (ARGB, none when its alpha is 0).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn styled_name_tag_quads(
         &self,
@@ -703,7 +688,6 @@ impl Game<'_> {
         light: u32,
         unit: f32,
         out: &mut Vec<Vertex>,
-        marks: Marks,
         mut layouts: Option<&mut NameTagLayouts>,
     ) -> Vec<sunrise_client::font::Patch> {
         // SubmitNodeCollection.submitNameTag turns the tag by the camera's orientation
@@ -719,8 +703,7 @@ impl Game<'_> {
                 unicode: false,
             },
         );
-        let last = lines.len().saturating_sub(1);
-        for (n, (text, lift)) in lines.iter().enumerate() {
+        for (text, lift) in lines {
             let o = (o + glam::DVec3::new(0.0, *lift, 0.0)).as_vec3();
             let (r, u) = (right.as_vec3() * unit, up.as_vec3() * unit);
             // Text space: x right, y down (scale 0.025, -0.025).
@@ -750,39 +733,6 @@ impl Game<'_> {
                     background,
                 ),
             };
-            if let Some(mark) = marks.mark.filter(|_| n == last) {
-                let x = -self.gui.atlas.font.width_text(text) / 2.0 - 10.0;
-                // 8 text pixels square, a pixel left of the background.
-                for &(mx, my, w, h, argb) in mark {
-                    let a = text_alpha * (argb >> 24) / 255;
-                    batch.fill(
-                        &self.gui.atlas,
-                        x + f32::from(mx),
-                        y0 + f32::from(my),
-                        f32::from(w),
-                        f32::from(h),
-                        sunrise_client::hud_layout::abgr(a << 24 | argb & 0xFF_FFFF),
-                    );
-                }
-            }
-            if let Some(style) = marks.style.filter(|_| n == last) {
-                let width = self.gui.atlas.font.width_text(text);
-                let x = -width / 2.0;
-                let alpha = text_alpha << 24;
-                // The badge, 8 text pixels square, a pixel right of the background.
-                batch.rect_uv(x + width + 2.0, y0, 8.0, 8.0, style.mark, alpha | 0xFF_FFFF);
-                // The line, a pixel tall, under the background (which runs from -1 to 9).
-                batch.fill(
-                    &self.gui.atlas,
-                    x - 1.0,
-                    y0 + 9.0,
-                    width + 1.0,
-                    1.0,
-                    // The batch takes RGBA: the line as ARGB, swapped.
-                    sunrise_client::hud_layout::abgr(alpha | style.line),
-                );
-            }
-
             for (i, quad) in batch.vertices.as_chunks::<6>().0.iter().enumerate() {
                 let shift = if i * 6 < behind {
                     away
@@ -897,20 +847,6 @@ pub(super) fn name_tag_at(m: &Mob, alpha: f64) -> glam::DVec3 {
     )
 }
 
-/// Sunrise: how far a player's name tag goes up so that it clears the tallest cosmetic drawn on
-/// them, `top` pixels above the model's neck (`Item::top`) on a player of `scale`
-/// (`LivingEntity.getScale`); 0 when the item stays under vanilla's tag. Measured standing: the
-/// model's neck is 1.501 blocks up, times `AvatarRenderer.scale`'s 0.9375 and `scale`; the tag's
-/// lowest pixel (the style's line under the background, 10 text pixels under the anchor) is at
-/// 1.8 + 0.5 - 10 × 0.025 = 2.05 blocks, and the lift leaves one text pixel between them. Other
-/// poses keep the same lift: crouching lowers the model more (0.39 blocks) than the tag (0.3).
-pub(super) fn cosmetic_lift(top: f32, scale: f32) -> f64 {
-    let item = f64::from(scale) * 0.9375 * (1.501 + f64::from(top) / 16.0);
-    let unit = f64::from(NAME_TAG_UNIT);
-    let bottom = 1.8 + 0.5 - 10.0 * unit;
-    (item + unit - bottom).max(0.0)
-}
-
 /// A name tag: where it hangs, its lines (text, lift), the packed light at
 /// the entity and whether it is discrete.
 struct NameTag {
@@ -918,27 +854,6 @@ struct NameTag {
     lines: Vec<(Text, f64)>,
     light: u8,
     discrete: bool,
-    marks: Marks,
-}
-
-/// What a hook draws by a player's name (`sunrise_hooks::players::NameDecoration`): a mark
-/// before it (Sunrise's: they play Sunrise) and a name tag style.
-#[derive(Clone, Copy, Default)]
-pub(super) struct Marks {
-    pub mark: Option<sunrise_hooks::players::Mark>,
-    pub style: Option<TagStyle>,
-    /// How high the cosmetics drawn on their body get above the neck, in model pixels: the tag
-    /// goes up over a tall one (`cosmetic_lift`).
-    pub top: Option<f32>,
-}
-
-/// A cosmetic name tag style: a badge after the name and a line under it.
-#[derive(Clone, Copy)]
-pub(super) struct TagStyle {
-    /// The mark's place in the GUI atlas.
-    pub mark: sunrise_client::hud::Rect,
-    /// The line's colour, `0xrrggbb`.
-    pub line: u32,
 }
 
 /// `Entity.DATA_CUSTOM_NAME` of a mob named `name`: its component with its style (a name

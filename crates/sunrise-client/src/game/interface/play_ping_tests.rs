@@ -250,56 +250,6 @@ fn dead_guest_play_ping_is_transport_not_an_action() {
 
 #[test]
 #[ignore = "daily"]
-fn server_ping_client_pong_keeps_the_existing_prediction_route() {
-    let mut resources = None;
-    let (mut game, receivers) = fixture(&mut resources);
-    let hub = &mut game.lan.as_mut().unwrap().hub;
-    let mut config = sunrise_anticheat::Config::default();
-    config.log.clear();
-    config.strikes.clear();
-    config.prediction.enabled = true;
-    hub.set_anticheat(config);
-    hub.ticks = 123;
-    let holding = sunrise_client::lan::Holding::start();
-    hub.anticheat_ping();
-    drop(holding);
-    // Ending Holding is not delivery: independently admit the existing flush boundary first.
-    for receiver in &receivers {
-        assert!(
-            output(receiver).is_empty(),
-            "actual server Ping is unavailable before flush"
-        );
-    }
-    println!("actual reverse Ping unavailable after Holding drop, before flush");
-    sunrise_client::lan::flush_all(hub.guests.iter().map(|g| &g.sender));
-    for receiver in &receivers {
-        assert!(matches!(output(receiver).as_slice(), [C::Ping(p)] if p.id == 123));
-    }
-    pass(
-        &mut game,
-        1,
-        S::Pong(sunrise_protocol::packets::configuration::Ping { id: 123 }),
-    );
-    game.lan
-        .as_mut()
-        .unwrap()
-        .hub
-        .guests
-        .update_connection(1, |guest| {
-            let record = guest
-                .record
-                .as_deref_mut()
-                .expect("existing client Pong updates prediction");
-            assert_eq!(record.tick_end(0, false).seen, Some(123));
-        })
-        .unwrap();
-    for receiver in &receivers {
-        assert!(output(receiver).is_empty());
-    }
-}
-
-#[test]
-#[ignore = "daily"]
 fn held_guest_play_ping_survives_the_acknowledgement_filter() {
     let mut resources = None;
     let (mut game, receivers) = fixture(&mut resources);

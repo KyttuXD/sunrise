@@ -184,15 +184,16 @@ pub enum Evaluator {
     Amphibious { prefers_shallow: bool },
 }
 
+pub mod heap;
+
 #[derive(Clone, Debug)]
 pub struct Node {
     pub x: i32,
     pub y: i32,
     pub z: i32,
-    heap: i32,
+    heap: heap::Key,
     g: f32,
     h: f32,
-    f: f32,
     came_from: Option<u32>,
     pub closed: bool,
     walked: f32,
@@ -205,10 +206,9 @@ impl Node {
             x,
             y,
             z,
-            heap: -1,
+            heap: heap::Key::default(),
             g: 0.0,
             h: 0.0,
-            f: 0.0,
             came_from: None,
             closed: false,
             walked: 0.0,
@@ -226,6 +226,18 @@ impl Node {
     }
     fn manhattan(&self, x: i32, y: i32, z: i32) -> f32 {
         ((x - self.x).abs() + (y - self.y).abs() + (z - self.z).abs()) as f32
+    }
+}
+
+impl std::borrow::Borrow<heap::Key> for Node {
+    fn borrow(&self) -> &heap::Key {
+        &self.heap
+    }
+}
+
+impl std::borrow::BorrowMut<heap::Key> for Node {
+    fn borrow_mut(&mut self) -> &mut heap::Key {
+        &mut self.heap
     }
 }
 
@@ -318,7 +330,7 @@ struct Target {
 pub struct FinderBuffers {
     pub nodes: Vec<Node>,
     pub index: FxHashMap<(i32, i32, i32), u32>,
-    pub heap: Vec<u32>,
+    pub heap: heap::OpenSet,
     pub types: FxHashMap<(i32, i32, i32), PathType>,
     pub statics: std::cell::RefCell<FxHashMap<(i32, i32, i32), PathType>>,
     pub collisions: FxHashMap<[u64; 6], bool>,
@@ -329,7 +341,7 @@ impl FinderBuffers {
         Self {
             nodes: Vec::with_capacity(256),
             index: FxHashMap::default(),
-            heap: Vec::with_capacity(256),
+            heap: heap::OpenSet::with_capacity(256),
             types: FxHashMap::default(),
             statics: std::cell::RefCell::new(FxHashMap::default()),
             collisions: FxHashMap::default(),
@@ -357,7 +369,7 @@ pub struct Finder<'a, 'w> {
     eval: Evaluator,
     nodes: Vec<Node>,
     index: FxHashMap<(i32, i32, i32), u32>,
-    heap: Vec<u32>,
+    heap: heap::OpenSet,
     types: FxHashMap<(i32, i32, i32), PathType>,
     /// `path_type` of each position asked during this query: it reads up to
     /// 26 blocks, and overlapping mob boxes ask for the same positions.
@@ -424,7 +436,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 (
                     Vec::with_capacity(128),
                     FxHashMap::default(),
-                    Vec::with_capacity(128),
+                    heap::OpenSet::with_capacity(128),
                     FxHashMap::default(),
                     std::cell::RefCell::new(FxHashMap::default()),
                     FxHashMap::default(),
@@ -1308,89 +1320,6 @@ impl<'a, 'w> Finder<'a, 'w> {
             && m(self, west_down);
         push(self, swd, ok, out);
     }
-    // --- binary heap (vanilla BinaryHeap) --------------------------------
-    fn heap_insert(&mut self, n: u32) {
-        let i = self.heap.len();
-        self.heap.push(n);
-        self.nodes[n as usize].heap = i as i32;
-        self.up_heap(i);
-    }
-    fn heap_pop(&mut self) -> u32 {
-        let popped = self.heap[0];
-        let last = self.heap.pop().unwrap_or(popped);
-        if !self.heap.is_empty() {
-            self.heap[0] = last;
-            self.nodes[last as usize].heap = 0;
-            self.down_heap(0);
-        }
-        self.nodes[popped as usize].heap = -1;
-        popped
-    }
-    fn change_cost(&mut self, n: u32, cost: f32) {
-        let old = self.nodes[n as usize].f;
-        self.nodes[n as usize].f = cost;
-        let i = self.nodes[n as usize].heap as usize;
-        if cost < old {
-            self.up_heap(i);
-        } else {
-            self.down_heap(i);
-        }
-    }
-    fn up_heap(&mut self, mut i: usize) {
-        let node = self.heap[i];
-        let cost = self.nodes[node as usize].f;
-        while i > 0 {
-            let parent_i = (i - 1) >> 1;
-            let parent = self.heap[parent_i];
-            if cost >= self.nodes[parent as usize].f {
-                break;
-            }
-            self.heap[i] = parent;
-            self.nodes[parent as usize].heap = i as i32;
-            i = parent_i;
-        }
-        self.heap[i] = node;
-        self.nodes[node as usize].heap = i as i32;
-    }
-    fn down_heap(&mut self, mut i: usize) {
-        let node = self.heap[i];
-        let cost = self.nodes[node as usize].f;
-        let size = self.heap.len();
-        loop {
-            let left_i = 1 + (i << 1);
-            let right_i = left_i + 1;
-            if left_i >= size {
-                break;
-            }
-            let left = self.heap[left_i];
-            let left_cost = self.nodes[left as usize].f;
-            let (right, right_cost) = if right_i >= size {
-                (u32::MAX, f32::INFINITY)
-            } else {
-                (
-                    self.heap[right_i],
-                    self.nodes[self.heap[right_i] as usize].f,
-                )
-            };
-            if left_cost < right_cost {
-                if left_cost >= cost {
-                    break;
-                }
-                self.heap[i] = left;
-                self.nodes[left as usize].heap = i as i32;
-                i = left_i;
-            } else {
-                if right_cost >= cost {
-                    break;
-                }
-                self.heap[i] = right;
-                self.nodes[right as usize].heap = i as i32;
-                i = right_i;
-            }
-        }
-        self.heap[i] = node;
-        self.nodes[node as usize].heap = i as i32;
-    }
     // --- PathFinder.findPath ------------------------------------------------
     fn best_h(&self, n: u32, targets: &mut [Target]) -> f32 {
         let mut best = f32::MAX;
@@ -1434,9 +1363,8 @@ impl<'a, 'w> Finder<'a, 'w> {
         self.nodes[from as usize].g = 0.0;
         let h = self.best_h(from, &mut targets);
         self.nodes[from as usize].h = h;
-        self.nodes[from as usize].f = h;
         self.heap.clear();
-        self.heap_insert(from);
+        self.heap.insert(&mut self.nodes, from, h);
         let mut count = 0;
         let mut neighbors = Vec::with_capacity(32);
         let (fx, fy, fz) = {
@@ -1448,7 +1376,7 @@ impl<'a, 'w> Finder<'a, 'w> {
             if count >= max_visited {
                 break;
             }
-            let current = self.heap_pop();
+            let current = self.heap.pop(&mut self.nodes).expect("nonempty open set");
             self.nodes[current as usize].closed = true;
             let mut any = false;
             for t in targets.iter_mut() {
@@ -1480,7 +1408,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 let walked = cw + distance;
                 self.nodes[neighbor as usize].walked = walked;
                 let tentative = cg + distance + self.nodes[neighbor as usize].cost_malus;
-                let in_open = self.nodes[neighbor as usize].heap >= 0;
+                let in_open = self.nodes[neighbor as usize].heap.is_open();
                 if walked < max_path_length
                     && (!in_open || tentative < self.nodes[neighbor as usize].g)
                 {
@@ -1489,10 +1417,10 @@ impl<'a, 'w> Finder<'a, 'w> {
                     let h = self.best_h(neighbor, &mut targets) * 1.5;
                     self.nodes[neighbor as usize].h = h;
                     if in_open {
-                        self.change_cost(neighbor, tentative + h);
+                        self.heap
+                            .change_cost(&mut self.nodes, neighbor, tentative + h);
                     } else {
-                        self.nodes[neighbor as usize].f = tentative + h;
-                        self.heap_insert(neighbor);
+                        self.heap.insert(&mut self.nodes, neighbor, tentative + h);
                     }
                 }
             }

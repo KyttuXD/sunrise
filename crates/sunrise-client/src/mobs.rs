@@ -6,7 +6,6 @@
 pub mod ai;
 mod ai_pause;
 pub mod allay;
-pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
@@ -29,7 +28,6 @@ pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
-pub mod dab;
 pub mod data;
 pub mod dolphin;
 pub mod doors;
@@ -125,9 +123,10 @@ pub mod wither;
 
 #[cfg(test)]
 mod invisible_follow_tests;
+#[cfg(test)]
+mod template_mob_tests;
 mod world;
 pub use world::{TargetInfo, single_player_pos, visual_clip};
-pub mod dragon_contacts;
 pub mod zombie_villager;
 /// A mob's stored active effect with its registry index resolved once at creation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,8 +178,7 @@ use sunrise_world::block_collision::BlockCollisionRegistry;
 use sunrise_world::native_load_context::LoopContext;
 
 mod model;
-use model::ModelNormals;
-pub use model::{Part, Polygon};
+pub use model::{ModelNormals, Part, Polygon};
 
 /// Kept for callers of the earlier simple AI; species now select behaviour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +231,8 @@ pub struct MobType {
     /// The bounds `finalize`'s attribute record clamps to, from the catalog.
     pub attribute_bounds: finalize::AttrBounds,
     pub gravity: f64,
+    /// The type's `safe_fall_distance`: the base of a mob's attribute when
+    /// `attributes` has no row for it (`finalize::base_value`).
     pub safe_fall_distance: f64,
     pub fall_damage_multiplier: f64,
     pub water_efficiency: f64,
@@ -261,6 +261,11 @@ pub struct MobType {
     pub passenger_attachments: Vec<[f32; 3]>,
 }
 impl MobType {
+    /// `EntityType.isAllowedInPeaceful`, including a living mod type's override.
+    pub fn allowed_in_peaceful(&self) -> bool {
+        !self.flags.not_in_peaceful
+    }
+
     pub fn inventory_stack_limit(&self, stack: &crate::items::ItemStack) -> u32 {
         stack
             .data()
@@ -386,6 +391,7 @@ impl MobTypes {
             .transpose()?;
         let entity_type_tags =
             crate::items::load_tags(root, "entity_type", &sunrise_world::loot::PackOverlay::NONE)?;
+        let burn_in_daylight = entity_type_tags.get("minecraft:burn_in_daylight");
         let empty_model = Arc::new(Part::parse("root", &Value::Null));
         let item_tags =
             crate::items::load_tags(root, "item", &sunrise_world::loot::PackOverlay::NONE)
@@ -488,9 +494,13 @@ impl MobTypes {
             }
             let category = t["category"].as_str().unwrap_or("creature").to_owned();
             let mut flags = def.flags(t["fire_immune"].as_bool().unwrap_or(false));
+            if let Some(allowed) = t["allowed_in_peaceful"].as_bool() {
+                flags.not_in_peaceful = !allowed;
+            }
             flags.powder_snow_walkable = entity_type_tags
                 .get("minecraft:powder_snow_walkable_mobs")
                 .is_some_and(|members| members.contains(&id));
+            flags.burns_in_day = burn_in_daylight.is_some_and(|members| members.contains(&id));
             let passenger_attachments =
                 riders::parse_passenger_attachments(&t["passenger_attachments"]);
             out.insert(
@@ -560,12 +570,11 @@ impl MobTypes {
     }
 }
 pub use sunrise_client_core::who::Who;
-/// A native damage type's registry name and the tags consumed by mob combat.
+/// A damage type's registry name and the tags consumed by mob combat.
 ///
-/// Native code supplies a static name and flags matching its data-pack damage
-/// tags; `NamedDamage::registered` builds both from a damage registry entry,
-/// interning its name. Register the same name/data for player damage, death
-/// messages and loot predicates. Unset tags are false.
+/// `NamedDamage::registered` builds both from a registry entry, interning
+/// its name. Code constructing a source directly supplies a static name and
+/// flags matching its registry entry. Unset tags are false.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NamedDamage {
     pub name: &'static str,
@@ -583,9 +592,16 @@ impl NamedDamage {
     pub const IS_EXPLOSION: u32 = 1 << 8;
     pub const IS_FALL: u32 = 1 << 9;
     pub const BYPASSES_ENCHANTMENTS: u32 = 1 << 10;
+    pub const BYPASSES_COOLDOWN: u32 = 1 << 11;
+    pub const DAMAGES_HELMET: u32 = 1 << 12;
+    pub const IS_FREEZING: u32 = 1 << 13;
+    pub const WITCH_RESISTANT_TO: u32 = 1 << 14;
+    pub const NO_ANGER: u32 = 1 << 15;
+    pub const BYPASSES_WOLF_ARMOR: u32 = 1 << 16;
+    pub const SULFUR_CUBE_WITH_BLOCK_IMMUNE_TO: u32 = 1 << 17;
 
     /// Each flag with the damage tag it stands for.
-    const TAG_FLAGS: [(u32, &'static str); 11] = [
+    const TAG_FLAGS: [(u32, &'static str); 18] = [
         (Self::IS_FIRE, "minecraft:is_fire"),
         (Self::BYPASSES_ARMOR, "minecraft:bypasses_armor"),
         (Self::NO_KNOCKBACK, "minecraft:no_knockback"),
@@ -602,6 +618,16 @@ impl NamedDamage {
         (
             Self::BYPASSES_ENCHANTMENTS,
             "minecraft:bypasses_enchantments",
+        ),
+        (Self::BYPASSES_COOLDOWN, "minecraft:bypasses_cooldown"),
+        (Self::DAMAGES_HELMET, "minecraft:damages_helmet"),
+        (Self::IS_FREEZING, "minecraft:is_freezing"),
+        (Self::WITCH_RESISTANT_TO, "minecraft:witch_resistant_to"),
+        (Self::NO_ANGER, "minecraft:no_anger"),
+        (Self::BYPASSES_WOLF_ARMOR, "minecraft:bypasses_wolf_armor"),
+        (
+            Self::SULFUR_CUBE_WITH_BLOCK_IMMUNE_TO,
+            "minecraft:sulfur_cube_with_block_immune_to",
         ),
     ];
 
@@ -639,7 +665,7 @@ impl NamedDamage {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
-    /// A registered native damage type; vanilla kinds keep their existing tags.
+    /// An exact registry type and its tags, vanilla or modded.
     Named(NamedDamage),
     PlayerAttack,
     /// `mace_smash`: a mace hit after a fall (the player attack tags too).
@@ -712,6 +738,15 @@ pub enum DamageKind {
     WitherSkull,
 }
 impl DamageKind {
+    /// DamageTypeTags.IS_EXPLOSION.
+    fn is_explosion(self) -> bool {
+        match self {
+            Self::Named(named) => named.has(NamedDamage::IS_EXPLOSION),
+            Self::Explosion | Self::Fireworks => true,
+            _ => false,
+        }
+    }
+
     /// DamageTypeTags.BYPASSES_INVULNERABILITY
     pub fn bypasses_invulnerability(self) -> bool {
         if let Self::Named(named) = self {
@@ -739,6 +774,47 @@ impl DamageKind {
             return named.has(NamedDamage::BYPASSES_ENCHANTMENTS);
         }
         matches!(self, DamageKind::SonicBoom)
+    }
+    /// DamageTypeTags.BYPASSES_COOLDOWN: empty in vanilla.
+    pub fn bypasses_cooldown(self) -> bool {
+        matches!(self, Self::Named(named) if named.has(NamedDamage::BYPASSES_COOLDOWN))
+    }
+    /// DamageTypeTags.DAMAGES_HELMET: falling anvils, blocks and stalactites.
+    pub fn damages_helmet(self) -> bool {
+        if let Self::Named(named) = self {
+            return named.has(NamedDamage::DAMAGES_HELMET);
+        }
+        matches!(
+            self,
+            DamageKind::FallingBlock | DamageKind::FallingAnvil | DamageKind::FallingStalactite
+        )
+    }
+    /// DamageTypeTags.IS_FREEZING: `freeze` alone in vanilla.
+    pub fn is_freezing(self) -> bool {
+        if let Self::Named(named) = self {
+            return named.has(NamedDamage::IS_FREEZING);
+        }
+        self == DamageKind::Freeze
+    }
+    /// DamageTypeTags.WITCH_RESISTANT_TO: magic, indirect magic, sonic boom and thorns.
+    pub fn witch_resistant_to(self) -> bool {
+        if let Self::Named(named) = self {
+            return named.has(NamedDamage::WITCH_RESISTANT_TO);
+        }
+        matches!(
+            self,
+            DamageKind::Magic
+                | DamageKind::IndirectMagic
+                | DamageKind::SonicBoom
+                | DamageKind::Thorns
+        )
+    }
+    /// DamageTypeTags.NO_ANGER: `mob_attack_no_aggro` alone in vanilla, a goat's ram.
+    pub fn no_anger(self) -> bool {
+        if let Self::Named(named) = self {
+            return named.has(NamedDamage::NO_ANGER);
+        }
+        self == DamageKind::MobAttackNoAggro
     }
 }
 /// `source.getEntity()` of a blow, as `SulfurCube.knockback` reads it: `getEyePosition()`,
@@ -842,6 +918,7 @@ impl Damage {
         !matches!(
             self.kind,
             DamageKind::Fall
+                | DamageKind::FlyIntoWall
                 | DamageKind::Drown
                 | DamageKind::DryOut
                 | DamageKind::Generic
@@ -1141,6 +1218,10 @@ pub struct Extra {
     pub swing_stab: bool,
     pub flag: bool,
     pub flag2: bool,
+    /// `Bat.DATA_ID_FLAGS` without bit 0 (resting, which is `flag`): bits only
+    /// a save or summon sets, which `Bat.setResting` leaves alone and the bat
+    /// saves back.
+    pub bat_flags: u8,
     /// `AbstractHorse`'s `Bred` save flag: nothing sets it at runtime (no
     /// vanilla code calls `setBred` outside `readAdditionalSaveData`), so only
     /// a save or `/summon` gives it, and `followMommy` reads it.
@@ -1492,8 +1573,6 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
-    /// The mobs it pushed this turn, kept while the collision cap is on (`push::Cap`).
-    pub pushed: Vec<u32>,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
     pub sync_position: bool,
@@ -1585,6 +1664,8 @@ pub struct Mob {
     /// checks made outside the mob world (minecarts, boats).
     pub on_climbable: bool,
     pub fire_ticks: i32,
+    /// Unsaved fire immunity granted on this logical side.
+    pub mod_fire_immune: bool,
     pub ticks_frozen: i32,
     /// `Entity.isInPowderSnow` as of the last mob tick, for the skeleton's
     /// freezing tracker read at save time.
@@ -1630,9 +1711,6 @@ pub struct Mob {
     /// `PlayerSkin.cape`: a player's cape texture, once every download of
     /// its skin is ready.
     pub cape: Option<String>,
-    /// A pose laid over this player's body after the vanilla animation (`anim::setup`), timed on
-    /// `age`, given by a hook (`sunrise_hooks::players::BodyPose`). Visual only.
-    pub emote: Option<Arc<dyn anim::BodyPose>>,
     /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<sunrise_protocol::entity_data::Profile>,
@@ -1702,6 +1780,11 @@ pub enum MobEvent {
     ForPlayer {
         conn: Option<u32>,
         event: Box<MobEvent>,
+    },
+    /// A finished drink whose item effects still need the world's living Host.
+    DrinkFinished {
+        mob: u32,
+        stack: crate::items::ItemStack,
     },
     /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
     SquidCycle {
@@ -2540,7 +2623,7 @@ pub enum MobEvent {
         at: [f64; 3],
         radius: f64,
     },
-    /// A creaking bound to the heart at `home` was hurt (`creakingHurt` when a player did it).
+    /// A tick's Creaking hit, delivered after the borrowed mob pass.
     CreakingHurt {
         home: [i32; 3],
         by_player: bool,
@@ -2701,12 +2784,20 @@ impl Mob {
             .sum();
         (base - 0.15 * f64::from(protection)).max(0.0)
     }
+    /// The mob type's fire immunity or a live grant. Species-specific hurt rules
+    /// (such as the Creaking's heart-bound damage gate) stay on their own paths.
+    pub fn fire_immune(&self) -> bool {
+        self.kind.flags.fire_immune || self.mod_fire_immune
+    }
     /// Entity.isOnFire: fire-immune mobs never count as burning, even on the
     /// tick a sun or fire check set their timer before `base_tick` clears it.
     pub fn is_on_fire(&self) -> bool {
-        !self.kind.flags.fire_immune && self.fire_ticks > 0
+        self.fire_ticks > 0 && !self.fire_immune()
     }
     pub fn ignite_for_ticks(&mut self, ticks: i32) {
+        if self.mod_fire_immune {
+            return;
+        }
         self.fire_ticks = self
             .fire_ticks
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
@@ -2814,7 +2905,6 @@ impl Mob {
             is_vehicle: equine::is_vehicle(m),
             still: m.species() == Species::HappyGhast && happy_ghast::on_still_timeout(m),
             carrying: m.rider.is_some() || m.extra.rider.is_some(),
-            collisions: 0,
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra
@@ -3218,6 +3308,8 @@ pub struct MobWorld<'a> {
     /// What the motion value hooks are given: the loop context of the side that
     /// ticks these mobs.
     pub loop_context: &'a sunrise_world::native_load_context::LoopContext,
+    /// The side's level data beyond blocks: weather, features, tags and block entities.
+    pub side: &'a dyn crate::motion::SideLevel,
     pub world: &'a World,
     pub registry: &'a sunrise_world::registry::BlockRegistry,
     pub facts: &'a BlockFacts,
@@ -3251,6 +3343,8 @@ pub struct MobWorld<'a> {
     pub live_mobs: Option<&'a dyn LiveMobs>,
     /// The separately simulated dragon, visible to revenge and melee goals.
     pub dragon: Option<(u32, TargetInfo)>,
+    /// The separately simulated armor stands (`LivingEntity` causes for `Warden.hurtServer`).
+    pub armor_stands: &'a [crate::entities::ArmorStand],
     /// The boats and rafts a lead can hang on (`Holder::Boat`): id and state.
     pub leash_boats: &'a [(u32, leash::HolderState)],
     /// `others` by position, when the caller keeps one (the mob ticks).
@@ -3384,22 +3478,6 @@ impl MobWorld<'_> {
             && let Some(selection) = self.player_selection
             && selection.has_switched()
             && let Some(player) = selection.selected()
-        {
-            return MobEvent::ForPlayer {
-                conn: player.connection,
-                event: Box::new(event),
-            };
-        }
-        event
-    }
-
-    /// An action directed at the player already bound at tick start, such as
-    /// retaliation against the attacker, must not follow a later target change.
-    pub fn route_initial_player_event(&self, event: MobEvent) -> MobEvent {
-        if event.targets_player()
-            && let Some(selection) = self.player_selection
-            && selection.has_switched()
-            && let Some(player) = selection.initial()
         {
             return MobEvent::ForPlayer {
                 conn: player.connection,
@@ -3581,7 +3659,6 @@ impl Mob {
         random: LegacyRandom,
     ) -> Self {
         let mut mob = Self {
-            emote: None,
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,
@@ -3601,7 +3678,6 @@ impl Mob {
             horizontal_collision: false,
             vertical_collision_below: false,
             needs_sync: false,
-            pushed: Vec::new(),
             sync_position: false,
             movement_emission: None,
             gear_knockback_resistance: None,
@@ -3642,6 +3718,7 @@ impl Mob {
             climbing: false,
             on_climbable: false,
             fire_ticks: 0,
+            mod_fire_immune: false,
             ticks_frozen: 0,
             in_powder_snow: false,
             was_in_powder_snow: false,
@@ -3896,6 +3973,7 @@ impl Mob {
         // follows `super.hurtServer` whatever it answered (a hurt cooldown, a
         // dead enderman), its hurt sound's pitch included.
         let enderman = self.species() == Species::Enderman;
+        let warden = self.species() == Species::Warden;
         let mut passed_invulnerability = false;
         let hurt = self.hurt_server(
             level,
@@ -3905,7 +3983,13 @@ impl Mob {
             &mut passed_invulnerability,
         );
         if enderman && passed_invulnerability {
-            enderman::after_hurt(self, &source);
+            enderman::after_hurt(self, &source, level.attack().direct.is_some());
+        }
+        // `Warden.hurtServer` runs its own anger/targeting reaction after
+        // `super.hurtServer` regardless of whether `super.hurtServer` accepted
+        // the hit (e.g. when the hit was rejected on hurt cooldown).
+        if warden && !self.extra.client_side {
+            warden::hurt(self, &source, level.attack());
         }
         hurt
     }
@@ -3934,13 +4018,20 @@ impl Mob {
         if self.extra.client_side {
             return false;
         }
-        let reflected = self.reflected_fireball(&source);
+        let reflected = self.reflected_fireball(&source, level.attack());
         if self.invulnerable_to_attempt(level, &source) {
             return reflected;
         }
         *passed_invulnerability = true;
         if !self.alive() {
-            return false;
+            return reflected;
+        }
+        if self.species() == Species::Creaking {
+            match creaking::hurt_server(self, &source, level) {
+                creaking::HurtOutcome::Proceed => {}
+                creaking::HurtOutcome::Reacted => return true,
+                creaking::HurtOutcome::Refused => return false,
+            }
         }
         if !self.attacker_allows_damage(&source)
             || !ai::accepts_damage(self, &source, amount, level.attack())
@@ -3992,15 +4083,11 @@ impl Mob {
         amount -= blocked;
         container.record_block(blocked);
         // #damages_helmet: falling anvils, blocks and stalactites.
-        if matches!(
-            source.kind,
-            DamageKind::FallingBlock | DamageKind::FallingAnvil | DamageKind::FallingStalactite
-        ) && self.extra.head_id().is_some()
-        {
+        if source.kind.damages_helmet() && self.extra.head_id().is_some() {
             amount *= 0.75;
         }
         // LivingEntity.hurtServer: `#freeze_hurts_extra_types` take five times.
-        if source.kind == DamageKind::Freeze
+        if source.kind.is_freezing()
             && matches!(
                 self.species(),
                 Species::Strider | Species::Blaze | Species::MagmaCube
@@ -4015,10 +4102,13 @@ impl Mob {
         // with `lastHurt` by this incoming amount, before armor and Resistance,
         // and `actuallyHurt` gets only what it adds.
         let incoming = amount;
-        let cooldown = self.invulnerable as f32 > 10.0;
+        // `#bypasses_cooldown` skips the comparison.
+        let cooldown = self.invulnerable as f32 > 10.0 && !source.kind.bypasses_cooldown();
         if cooldown {
             if incoming <= self.last_hurt {
-                return false;
+                // `Ghast.hurtServer` returns true for a reflected large fireball
+                // even when `super.hurtServer` refuses it on hurt cooldown.
+                return reflected;
             }
             amount = incoming - self.last_hurt;
         }
@@ -4098,13 +4188,7 @@ impl Mob {
         if witch {
             if source.attacker == Some(Who::Mob(self.id)) {
                 amount = 0.0;
-            } else if matches!(
-                source.kind,
-                DamageKind::Magic
-                    | DamageKind::IndirectMagic
-                    | DamageKind::SonicBoom
-                    | DamageKind::Thorns
-            ) {
+            } else if source.kind.witch_resistant_to() {
                 amount *= 0.15;
             }
         }
@@ -4287,7 +4371,9 @@ impl Mob {
         }
         // Squid.hurtServer (also GlowSquid's result): parent health damage has
         // happened, but without a last living attacker the subclass returns false.
-        success
+        // Ghast.hurtServer returns true for a reflected large fireball whatever
+        // super.hurtServer did.
+        (success || reflected)
             && (!matches!(self.species(), Species::Squid | Species::GlowSquid)
                 || self.ai.last_hurt_by.is_some())
     }
@@ -4322,21 +4408,24 @@ impl Mob {
     fn wolf_armor_absorbs(&self, source: &Damage) -> bool {
         self.species() == Species::Wolf
             && self.extra.body_id() == Some("minecraft:wolf_armor")
-            && !matches!(
-                source.kind,
-                DamageKind::Drown
-                    | DamageKind::Magic
-                    | DamageKind::IndirectMagic
-                    | DamageKind::InWall
-                    | DamageKind::Thorns
-                    | DamageKind::OutOfWorld
-                    | DamageKind::Cramming
-                    | DamageKind::Generic
-                    | DamageKind::GenericKill
-                    | DamageKind::OutsideBorder
-                    | DamageKind::Starve
-                    | DamageKind::Wither
-            )
+            && !match source.kind {
+                DamageKind::Named(named) => named.has(NamedDamage::BYPASSES_WOLF_ARMOR),
+                kind => matches!(
+                    kind,
+                    DamageKind::Drown
+                        | DamageKind::Magic
+                        | DamageKind::IndirectMagic
+                        | DamageKind::InWall
+                        | DamageKind::Thorns
+                        | DamageKind::OutOfWorld
+                        | DamageKind::Cramming
+                        | DamageKind::Generic
+                        | DamageKind::GenericKill
+                        | DamageKind::OutsideBorder
+                        | DamageKind::Starve
+                        | DamageKind::Wither
+                ),
+            }
     }
     /// `Wolf.actuallyHurt`: the armor loses `ceil(damage)` durability, cracks
     /// at `Crackiness.WOLF_ARMOR` steps and breaks at its maximum.
@@ -4384,9 +4473,10 @@ impl Mob {
         w: &MobWorld,
         level: &mut DamageLevel<'_>,
         events: &mut Vec<MobEvent>,
+        trample: &mut Option<ai::MobTrample>,
     ) -> ai::TickProgress {
         self.prepare_tick();
-        neutral_anger::tick_until_consumption(self, w, level, events)
+        neutral_anger::tick_until_consumption(self, w, level, events, trample)
     }
     fn prepare_tick(&mut self) {
         self.track_section();
@@ -4478,10 +4568,17 @@ impl Mob {
             absorption_removed |= !keep && e.id == "minecraft:absorption";
             keep
         });
+        // `removeModifier` dirties `max_absorption` only when the modifier
+        // is there, permanent or a mod's transient one with its id: a loaded
+        // Absorption, which added none, clamps nothing.
+        let (cap, absorption_id) = (finalize::Attr::MaxAbsorption, "minecraft:effect.absorption");
+        let cap_removed = absorption_removed
+            && (finalize::modifier_amount(self, cap, absorption_id).is_some()
+                || finalize::has_transient_modifier(self, cap, absorption_id));
         for effect in removed {
             self.set_effect_modifiers(effect, None);
         }
-        if absorption_removed {
+        if cap_removed {
             // LivingEntity.onAttributeUpdated clamps to the remaining maximum;
             // removing Absorption does not subtract the hearts it granted.
             self.absorption = self.absorption.min(armor::max_absorption(self));
@@ -4581,16 +4678,19 @@ impl Mob {
         if !active.visible {
             self.extra.hidden_effects.push(effect);
         }
+        // `onEffectAdded` for a new effect, `onEffectUpdated(_, true, _)` for a
+        // changed one: the modifiers follow the active amplifier.
+        if changed {
+            self.set_effect_modifiers(effect, Some(active.amplifier));
+        }
+        // Then `MobEffectInstance.onEffectStarted`, for every `addEffect`:
+        // `AbsorptionMobEffect` raises the amount within the maximum the
+        // modifier above set.
         if effect == "minecraft:absorption" {
             self.absorption = self
                 .absorption
                 .max(4.0 * (incoming.amplifier + 1) as f32)
                 .clamp(0.0, armor::max_absorption(self));
-        }
-        // `onEffectAdded` for a new effect, `onEffectUpdated(_, true, _)` for a
-        // changed one: the modifiers follow the active amplifier.
-        if changed {
-            self.set_effect_modifiers(effect, Some(active.amplifier));
         }
         self.effects_dirty |= changed;
         changed
@@ -4963,27 +5063,41 @@ pub fn render_model(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
-    visit(
+    render_model_filtered(
         part,
-        base,
-        ModelNormals::new(base),
-        pose_for,
+        (base, ModelNormals::new(base)),
+        &|p| Some(pose_for(p)),
         uv,
         light,
         overlay,
         out,
     );
+}
+
+/// Draw a posed model, skipping a part and its descendants when its pose is `None`.
+pub fn render_model_filtered(
+    part: &Part,
+    base: (glam::Mat4, ModelNormals),
+    pose_for: &impl Fn(&Part) -> Option<[f32; 9]>,
+    uv: [f32; 4],
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
+    visit(part, base.0, base.1, pose_for, uv, light, overlay, out);
     fn visit(
         part: &Part,
         parent: glam::Mat4,
         normals: ModelNormals,
-        pose_for: &dyn Fn(&Part) -> [f32; 9],
+        pose_for: &impl Fn(&Part) -> Option<[f32; 9]>,
         uv: [f32; 4],
         light: u32,
         overlay: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let p = pose_for(part);
+        let Some(p) = pose_for(part) else {
+            return;
+        };
         let m = parent
             * glam::Mat4::from_translation(glam::Vec3::new(p[0], p[1], p[2]) / 16.0)
             * glam::Mat4::from_quat(glam::Quat::from_euler(
@@ -5285,13 +5399,14 @@ mod teams_tests {
         }
     }
 }
-#[cfg(test)]
-pub(crate) mod sensor_scan_tests {
+#[cfg(any(test, feature = "test-mob-kind"))]
+#[cfg_attr(not(test), allow(dead_code))] // only kind() is used by the gameplay crates' tests
+pub mod sensor_scan_tests {
     use super::*;
     use serde_json::json;
     use sunrise_core::geometry::Vec3;
 
-    pub(crate) fn kind() -> Arc<MobType> {
+    pub fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             shadow: None,
             id: "minecraft:cow".into(),
@@ -5311,7 +5426,13 @@ pub(crate) mod sensor_scan_tests {
             armor_toughness: 0.0,
             knockback_resistance: 0.0,
             jump_strength: 0.42,
-            attributes: Arc::default(),
+            // `LivingEntity.createLivingAttributes`: every living entity has
+            // the attributes an effect's modifier changes on a mob (#1988).
+            attributes: Arc::new(HashMap::from([
+                ("minecraft:safe_fall_distance".to_owned(), 3.0),
+                ("minecraft:max_absorption".to_owned(), 0.0),
+                ("minecraft:waypoint_transmit_range".to_owned(), 0.0),
+            ])),
             item_stack_limits: Default::default(),
             attribute_bounds: Default::default(),
             gravity: 0.08,
@@ -5816,24 +5937,136 @@ mod fire_resistance_damage_tests {
     }
 
     #[test]
-    fn reflected_ghast_fireball_still_reports_success_when_fire_resistance_refuses_health_damage() {
+    fn reflected_ghast_fireball_checks_large_fireball_and_player_not_damage_type() {
         let mut test_level = crate::health::TestLevel::new(0);
-        let level = &mut test_level.level();
-        let mut mob = pig();
-        let kind = Arc::make_mut(&mut mob.kind);
-        kind.id = "minecraft:ghast".into();
-        kind.species = Species::Ghast;
-        kind.flags.fire_immune = true;
-        mob.add_effect("minecraft:fire_resistance", -1, 0);
-        let source = Damage {
-            kind: DamageKind::Fireball,
-            attacker: Some(Who::Player),
-            from: None,
-            attacker_species: None,
+        let ghast = || {
+            let mut mob = pig();
+            let kind = Arc::make_mut(&mut mob.kind);
+            kind.id = "minecraft:ghast".into();
+            kind.species = Species::Ghast;
+            kind.flags.fire_immune = true;
+            mob
         };
-        assert!(mob.damage(level, 1.0, source));
-        assert_eq!(mob.health, 10.0);
-        assert_eq!(mob.invulnerable, 0);
+        let large_fireball = crate::health::Attack {
+            attacker: 7,
+            direct: Some(15),
+            direct_kind: Some(crate::health::DirectEntity::LargeFireball),
+            ..Default::default()
+        };
+        let small_fireball = crate::health::Attack {
+            attacker: 7,
+            direct: Some(16),
+            direct_kind: Some(crate::health::DirectEntity::Projectile),
+            ..Default::default()
+        };
+        let player_direct = crate::health::Attack {
+            attacker: 7,
+            direct: Some(7),
+            direct_kind: Some(crate::health::DirectEntity::Living),
+            ..Default::default()
+        };
+        let unattributed = DamageKind::Named(NamedDamage::new(
+            "minecraft:unattributed_fireball",
+            NamedDamage::IS_FIRE,
+        ));
+        let custom_fire =
+            DamageKind::Named(NamedDamage::new("example:flame", NamedDamage::IS_FIRE));
+
+        // Varying damage type with fixed LargeFireball + Player still counts as reflected:
+        // bypasses fire immunity, deals 1000 damage, and reports success even under Fire Resistance.
+        for kind in [
+            DamageKind::Fireball,
+            unattributed,
+            DamageKind::InFire,
+            custom_fire,
+            DamageKind::Generic,
+        ] {
+            let source = Damage {
+                kind,
+                attacker: Some(Who::Player),
+                from: None,
+                attacker_species: None,
+            };
+            let mut mob = ghast();
+            assert!(
+                mob.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source
+                ),
+                "LargeFireball + Player must hurt ghast for {kind:?}"
+            );
+            assert_eq!(
+                mob.health, 0.0,
+                "reflected LargeFireball deals 1000 damage for {kind:?}"
+            );
+
+            if source.is_fire() {
+                let mut resistant = ghast();
+                resistant.add_effect("minecraft:fire_resistance", -1, 0);
+                assert!(resistant.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source,
+                ));
+                assert_eq!(resistant.health, 10.0);
+                assert_eq!(resistant.invulnerable, 0);
+            }
+
+            // Even when `super.hurtServer` refuses on hurt cooldown, `Ghast.hurtServer` still
+            // reports success for a reflected large fireball.
+            let mut cooling = ghast();
+            cooling.invulnerable = 20;
+            cooling.last_hurt = 2000.0;
+            assert!(
+                cooling.damage(
+                    &mut test_level.level().attacked_by(&large_fireball),
+                    1.0,
+                    source,
+                ),
+                "reflected LargeFireball must return true on hurt cooldown for {kind:?}"
+            );
+            assert_eq!(cooling.health, 10.0);
+        }
+
+        // Varying entities with fixed fireball damage type: non-LargeFireball direct entity or
+        // non-player cause does NOT bypass fire immunity or trigger the 1000-damage reflection.
+        for kind in [DamageKind::Fireball, unattributed] {
+            let by_player = Damage {
+                kind,
+                attacker: Some(Who::Player),
+                from: None,
+                attacker_species: None,
+            };
+            for attack in [&small_fireball, &player_direct, &crate::health::NO_ATTACK] {
+                let mut mob = ghast();
+                assert!(
+                    !mob.damage(&mut test_level.level().attacked_by(attack), 1.0, by_player),
+                    "non-LargeFireball must not bypass ghast fire immunity for {kind:?}"
+                );
+                assert_eq!(mob.health, 10.0);
+            }
+
+            let by_mob = Damage {
+                kind,
+                attacker: Some(Who::Mob(5)),
+                from: None,
+                attacker_species: None,
+            };
+            let mob_fireball = crate::health::Attack {
+                attacker: 5,
+                direct: Some(15),
+                direct_kind: Some(crate::health::DirectEntity::LargeFireball),
+                ..Default::default()
+            };
+            let mut mob = ghast();
+            assert!(!mob.damage(
+                &mut test_level.level().attacked_by(&mob_fireball),
+                1.0,
+                by_mob
+            ));
+            assert_eq!(mob.health, 10.0);
+        }
     }
 }
 
@@ -6921,6 +7154,26 @@ mod named_damage_tests {
         assert_eq!(still.velocity, Vec3::ZERO);
     }
     #[test]
+    fn named_damage_uses_the_wolf_armor_bypass_tag() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
+        for (tags, health, armor_damage) in
+            [(0, 10.0, 2), (NamedDamage::BYPASSES_WOLF_ARMOR, 8.0, 0)]
+        {
+            let mut wolf = pig();
+            Arc::make_mut(&mut wolf.kind).species = Species::Wolf;
+            wolf.extra.set_body(Some("minecraft:wolf_armor".into()));
+            let kind = DamageKind::Named(NamedDamage::new(
+                "example:hit",
+                NamedDamage::BYPASSES_ARMOR | tags,
+            ));
+            assert!(wolf.damage(level, 2.0, Damage::of(kind)));
+            assert_eq!(wolf.health, health);
+            assert_eq!(wolf.extra.body_damage(), armor_damage);
+        }
+    }
+
+    #[test]
     fn named_tags_control_resistance_and_specialist_enchantments() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -7346,19 +7599,10 @@ mod hidden_speed_mob_tick_tests {
 
     #[test]
     fn consume_effect_removal_clamps_absorption_to_remaining_maximum() {
-        use sunrise_world::attributes::entity::Catalog;
-        let bits = |v: f64| format!("{:016x}", v.to_bits());
-        let catalog = Arc::new(
-            Catalog::from_json(&serde_json::json!({
-                "data_version": sunrise_world::DATA_VERSION,
-                "attributes": [
-                    {"id":"minecraft:max_absorption", "default":bits(0.0), "min":bits(0.0), "max":bits(2048.0), "syncable":true}
-                ],
-                "entities": {"minecraft:pig":{"minecraft:max_absorption":bits(0.0)}}
-            }))
-            .unwrap(),
-        );
-        let key = catalog.id("minecraft:max_absorption").unwrap();
+        // A mob whose `max_absorption` base is `base`.
+        let with_base = |m: &mut Mob, base: f64| {
+            finalize::set_base(m, finalize::Attr::MaxAbsorption, base);
+        };
 
         let mut kind = (*sensor_scan_tests::kind()).clone();
         kind.id = "minecraft:pig".into();
@@ -7383,11 +7627,7 @@ mod hidden_speed_mob_tick_tests {
         // Case 2: Base 20 mob with Absorption I (granting 4.0 absorption hearts, max_absorption 24.0).
         // On ClearAllEffects, max_absorption becomes 20.0; amount 4.0 is <= 20.0, so it keeps 4.0.
         let mut m20 = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
-        let mut attrs = catalog.create("minecraft:pig").unwrap();
-        attrs.edit(key, |value, observer| {
-            value.set_base_value(20.0, observer).unwrap();
-        });
-        m20.extra.armor_attributes = Some(Box::new(attrs));
+        with_base(&mut m20, 20.0);
         m20.add_effect("absorption", 600, 0);
         assert_eq!(armor::max_absorption(&m20), 24.0);
         assert_eq!(m20.absorption, 4.0);
@@ -7404,11 +7644,7 @@ mod hidden_speed_mob_tick_tests {
         // On RemoveEffects(["minecraft:absorption"]), remaining max_absorption is 20.0,
         // so amount 24.0 is clamped to 20.0.
         let mut m20_clamp = Mob::new(3, kind.clone(), Vec3::ZERO, 0.0);
-        let mut attrs3 = catalog.create("minecraft:pig").unwrap();
-        attrs3.edit(key, |value, observer| {
-            value.set_base_value(20.0, observer).unwrap();
-        });
-        m20_clamp.extra.armor_attributes = Some(Box::new(attrs3));
+        with_base(&mut m20_clamp, 20.0);
         m20_clamp.add_effect("absorption", 600, 0);
         m20_clamp.absorption = 24.0;
         m20_clamp.apply_consume_effect(
@@ -7438,11 +7674,7 @@ mod hidden_speed_mob_tick_tests {
         // The shared command/expiry removal path must obey the same contract.
         for (base, amount, expected) in [(20.0, 8.0, 8.0), (20.0, 24.0, 20.0), (0.0, 4.0, 0.0)] {
             let mut m = Mob::new(5, kind.clone(), Vec3::ZERO, 0.0);
-            let mut attrs = catalog.create("minecraft:pig").unwrap();
-            attrs.edit(key, |value, observer| {
-                value.set_base_value(base, observer).unwrap();
-            });
-            m.extra.armor_attributes = Some(Box::new(attrs));
+            with_base(&mut m, base);
             m.add_effect("absorption", 600, 1);
             m.absorption = amount;
             m.effects_dirty = false;

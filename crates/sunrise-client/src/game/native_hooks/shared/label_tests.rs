@@ -14,12 +14,14 @@ fn inventory_label_default_follows_image_height_not_inventory_slots() {
                 slot_moves: Default::default(),
                 key: (1, 2, 3),
                 window: 1,
-                block: "test:block".into(),
+                menu: "test:menu".into(),
+                block: Some("test:block".into()),
                 screen: mod_api::Screen {
                     width: 176.0,
                     own_background: true,
                     ..Default::default()
                 },
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
             });

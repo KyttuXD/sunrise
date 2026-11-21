@@ -3,6 +3,9 @@ use super::*;
 #[cfg(test)]
 #[path = "menus/book_tests.rs"]
 mod book_tests;
+#[cfg(test)]
+#[path = "menus/screen_tests.rs"]
+mod screen_tests;
 
 impl MenusRegistrar for PartRegistrar {
     fn menu_recipe_book(
@@ -40,6 +43,19 @@ impl MenusRegistrar for PartRegistrar {
             if screen.recipe_book.as_ref() != Some(book) {
                 return Err("screen book differs from menu book".into());
             }
+            if let Some(other) = self
+                .parts
+                .menus
+                .get(menu)
+                .into_iter()
+                .flatten()
+                .find(|other| other.mod_id != self.mod_id && lays_out_screen(&*other.part))
+            {
+                return Err(format!(
+                    "recipe-book screen conflicts with {} of mod {}",
+                    other.type_name, other.mod_id
+                ));
+            }
             self.menu_recipe_books.insert(
                 menu.into(),
                 MenuBookDeclaration {
@@ -59,6 +75,34 @@ impl MenusRegistrar for PartRegistrar {
         })
     }
     fn attach_menu_part(&mut self, menu: &str, kind: &'static str, part: Arc<dyn MenuPart>) {
+        if lays_out_screen(&*part) {
+            if let Some(book) = self.menu_recipe_books.get(menu)
+                && book.owner != self.mod_id
+            {
+                self.refused.push(format!(
+                    "{kind} of mod {} conflicts with the recipe-book screen on menu {menu:?} owned by mod {}",
+                    self.mod_id, book.owner
+                ));
+                return;
+            }
+            // One part owns a screen: a second would split its layout, drawing and clicks.
+            if let Some(other) = self
+                .parts
+                .menus
+                .get(menu)
+                .into_iter()
+                .flatten()
+                .find(|other| {
+                    lays_out_screen(&*other.part) && screens_shared(menu, other.mod_id, self.mod_id)
+                })
+            {
+                self.refused.push(format!(
+                    "{kind} of {} and {} of {} both lay out menu type {menu}'s screen",
+                    self.mod_id, other.type_name, other.mod_id
+                ));
+                return;
+            }
+        }
         self.attach(|p| &mut p.menus, kind, menu, part);
     }
 }

@@ -17,12 +17,13 @@ fn counts(packets: &[String]) -> [usize; 3] {
 }
 
 /// A player's burst between two ticks, keys and buttons: the number key selects at the tick's
-/// pick, the click punches, then the drop keys and the swap act in the order pressed, the first
-/// drop telling the server of the new slot (`ensureHasSentCarriedItem`). One press of each a tick
-/// for twenty ticks acts once a tick, on its own tick.
+/// pick, then `handleKeybinds` swaps before it drops, whatever the press order, and both before
+/// the click's punch; the first drop tells the server of the new slot
+/// (`ensureHasSentCarriedItem`), the swap doesn't. One press of each a tick for twenty ticks acts
+/// once a tick, on its own tick, the drop before the punch.
 #[test]
 #[ignore = "daily"]
-fn a_players_burst_acts_on_the_next_tick_in_the_order_pressed() {
+fn a_players_burst_acts_on_the_next_tick_in_handle_keybinds_order() {
     with_pressing_game(|game, packets, _| {
         game.set_mode_id(1);
         game.forced_hit = None;
@@ -42,11 +43,11 @@ fn a_players_burst_acts_on_the_next_tick_in_the_order_pressed() {
         assert_eq!(
             sent(packets),
             [
-                "minecraft:punch",
+                "minecraft:player_action",
                 "minecraft:set_carried_item",
                 "minecraft:player_action",
                 "minecraft:player_action",
-                "minecraft:player_action"
+                "minecraft:punch"
             ]
         );
         assert_eq!(game.selected, 1);
@@ -58,7 +59,7 @@ fn a_players_burst_acts_on_the_next_tick_in_the_order_pressed() {
             game.remote_handle_input();
             assert_eq!(
                 sent(packets),
-                ["minecraft:punch", "minecraft:player_action"]
+                ["minecraft:player_action", "minecraft:punch"]
             );
         }
     });

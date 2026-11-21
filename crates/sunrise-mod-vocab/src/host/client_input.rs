@@ -76,15 +76,30 @@ pub trait ClientInputClientHost {
     #[access(ClientSetup)]
     fn mapping_state(&self, name: &str) -> Option<(bool, u64)>;
     /// Side: client.
+    /// Whether the key or mouse button the vanilla mapping `name` is bound to is physically down
+    /// (`InputConstants.isKeyDown`, or the window's mouse button, on `KeyMapping.getKey`), where
+    /// `mapping` reads the logical `KeyMapping.isDown`. It follows the player's binding and
+    /// ignores the toggle option, the conflict context, the modifiers and any `set_mapping_down`
+    /// write, so a mod that let go of a mapping can hand back what the player still holds:
+    /// `set_mapping_down(key, mapping_physical_down(key) == Ok(Some(true)))`. False for a mapping
+    /// bound to no key, `Ok(None)` for a mapping `mapping` doesn't answer for, and
+    /// `Err(Unavailable)` where a client read is not allowed. Allocates nothing.
+    #[access(ClientSetup)]
+    fn mapping_physical_down(&self, name: &str) -> Result<Option<bool>, LevelReadError>;
+    /// Side: client.
     /// Holds the vanilla gameplay mapping `key` down or lets it go (`KeyMapping.setDown`): the
-    /// held state its key gives it, without the click a press adds. `key` is a mapping of the
-    /// movement, gameplay or inventory category (`key.attack`, `key.use`, `key.sprint`,
+    /// held state its key gives it, without the click a press adds. For a hold-style mapping
+    /// this replaces its logical state until the next input for that mapping. It does not press
+    /// or release the physical key or add a separate hold that can outlast its release.
+    /// `key` is a mapping of the movement, gameplay or inventory category
+    /// (`key.attack`, `key.use`, `key.sprint`,
     /// `key.forward`, `key.hotbar.1`...); a toggled mapping (sneak, sprint, attack, use with their
     /// toggle option on) flips on `true`, as `ToggleKeyMapping.setDown` does. The client tick's
     /// key step acts on it with all its checks: a held use repeats every four ticks, a held attack
     /// goes on breaking the block. With a screen or overlay open a press does nothing, and opening
     /// one lets go of every mapping, as `KeyMapping.releaseAll` does. `key_mapping_pre` is not
-    /// asked: it is about physical keys.
+    /// asked: it is about physical keys. `key.pickItem` is click-only; this call returns
+    /// [`MappingError::ClickOnly`] for it.
     #[access(WorldOnly)]
     fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError>;
     /// Side: client.

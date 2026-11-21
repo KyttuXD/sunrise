@@ -12,6 +12,7 @@ use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
+use sunrise_core::{java_number::format_fixed, jmath::round as java_round};
 
 /// `LocalSampleLogger.CAPACITY`.
 pub const CAPACITY: usize = 240;
@@ -386,7 +387,7 @@ impl Chart {
                 shaded(
                     out,
                     font,
-                    &format!("{tps:.1} tps"),
+                    &format!("{} tps", format_fixed(f64::from(tps), 1)),
                     left + 1,
                     bottom - CHART_HEIGHT + 1,
                 );
@@ -406,8 +407,10 @@ impl Chart {
     /// `toDisplayString`.
     fn display(self, sample: f64) -> String {
         match self {
-            Chart::Fps { .. } | Chart::Tps { .. } => format!("{} ms", java_round(sample / 1.0e6)),
-            Chart::Ping => format!("{} ms", java_round(sample)),
+            Chart::Fps { .. } | Chart::Tps { .. } => {
+                format!("{} ms", java_round(sample / 1.0e6) as i32)
+            }
+            Chart::Ping => format!("{} ms", java_round(sample) as i32),
             Chart::Bandwidth => bandwidth_display(sample * 20.0),
         }
     }
@@ -438,9 +441,9 @@ impl Chart {
 /// `BandwidthDebugChart.toDisplayStringInternal`.
 fn bandwidth_display(bytes_per_second: f64) -> String {
     if bytes_per_second >= MEGABYTE {
-        format!("{:.1} MiB/s", bytes_per_second / MEGABYTE)
+        format!("{} MiB/s", format_fixed(bytes_per_second / MEGABYTE, 1))
     } else if bytes_per_second >= 1024.0 {
-        format!("{:.1} KiB/s", bytes_per_second / 1024.0)
+        format!("{} KiB/s", format_fixed(bytes_per_second / 1024.0, 1))
     } else {
         format!("{} B/s", bytes_per_second.floor() as i64)
     }
@@ -449,10 +452,6 @@ fn bandwidth_display(bytes_per_second: f64) -> String {
 /// the top.
 fn bandwidth_height(bytes_per_second: f64) -> i32 {
     java_round((bytes_per_second + 1.0).ln() * 60.0 / MEGABYTE.ln()) as i32
-}
-/// `Math.round(double)`: halves round up.
-fn java_round(v: f64) -> i64 {
-    (v + 0.5).floor() as i64
 }
 /// `AbstractDebugChart.getSampleColor(sample, min, minColor, mid, ...)`.
 fn gradient(

@@ -123,16 +123,18 @@ pub trait LivingBackend {
     fn living_alive(&self, living: LivingRef) -> Option<bool>;
     /// Side: server.
     /// `LivingEntity.getKillCredit`: the remembered player takes precedence,
-    /// even if the player cannot be resolved; otherwise the last hurting mob.
-    /// Unlike vanilla, a mob that changed dimension cannot be resolved.
+    /// even if the player cannot be resolved; otherwise the last hurting mob,
+    /// as [`Self::living_last_attacker`] finds it.
     #[access(WorldOnly)]
     fn living_kill_credit(&self, living: LivingRef) -> Option<EntityRef>;
     /// Side: server.
     /// `LivingEntity.getLastHurtByMob`: the entity that last hurt this one,
     /// within a hundred ticks of the hurt (the window of
     /// `CombatTracker.getKiller`'s credit and a mob's hurt-by memory, as
-    /// `armadillo.rs` reads it). None for a stale handle, a window that has
-    /// passed, an attacker that is gone, an armor stand, the dragon or a
+    /// `armadillo.rs` reads it), in whichever loaded level it is now: a mob
+    /// that changed dimension since is named by the id it arrived with, never
+    /// another entity holding its UUID. None for a stale handle, a window that
+    /// has passed, an attacker that is gone, an armor stand, the dragon or a
     /// client.
     #[access(WorldOnly)]
     fn living_last_attacker(&self, living: LivingRef) -> Option<EntityRef>;

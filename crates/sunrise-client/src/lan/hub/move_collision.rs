@@ -2,6 +2,7 @@
 //! guest's collision exclusions (#3717): a mod's boxes in which the level's blocks don't stop the
 //! player are the same boxes its client moves it through.
 use super::{Guest, Hub, TickCtx};
+use crate::entity_solids::{Mover as Rule, Side, Solids};
 use crate::{
     collisions::{EntityCollisions, SceneCollisions},
     world::World,
@@ -42,14 +43,13 @@ impl Hub {
         binding: &BlockCollisionRegistry<'_>,
         entities: &[Aabb],
     ) -> Option<[f64; 3]> {
-        self.settle_in(
-            self.guests.connection_index(conn)?,
-            from,
-            to,
-            world,
-            binding,
-            entities,
-        )
+        let i = self.guests.connection_index(conn)?;
+        // The guest's move, as the entity a moving collider is asked about: the player is never
+        // stopped by a collider of its own vehicle stack. `settle`, the carried check's, names
+        // the collider that carries the guest instead, so `settle_in` names no one.
+        sunrise_client_render::moving_colliders::as_mover(self.guests[i].entity_id as u32, || {
+            self.settle_in(i, from, to, world, binding, entities)
+        })
     }
 
     /// [`Self::settle`] through `world` and its collision data, `None` when the level cannot
@@ -103,6 +103,43 @@ impl Hub {
         done.map(|done| [from[0] + done.x, from[1] + done.y, from[2] + done.z])
     }
 
+    /// Fills `out` with the boxes of the solid entities the guest, moving from `from` to `to`,
+    /// may meet: those the player rule takes that meet the swept box widened by the step height.
+    fn solid_boxes(&self, g: &Guest, from: [f64; 3], to: [f64; 3], out: &mut Vec<Aabb>) {
+        out.clear();
+        if self.move_solids.is_empty() {
+            return;
+        }
+        let d = g.dimensions();
+        let half = f64::from(d.width) / 2.0;
+        let at = |p: [f64; 3]| {
+            Aabb::new(
+                Vec3::new(p[0] - half, p[1], p[2] - half),
+                Vec3::new(p[0] + half, p[1] + f64::from(d.height), p[2] + half),
+            )
+        };
+        // The step's reach above, and `EntityGetter`'s 1e-7 on every side.
+        let swept = at(from)
+            .union_bounds(at(to))
+            .inflate(Vec3::new(1.0e-7, 0.6 + 1.0e-7, 1.0e-7));
+        let solids = Solids::new(
+            Rule::Player {
+                feet_y: from[1],
+                riding: None,
+                // The server's rule: a ghast is solid only while held still
+                // (`HappyGhast.canBeCollidedWith`, its `isClientSide` branch is the client's).
+                side: Side::Server,
+            },
+            Some(swept),
+        );
+        out.extend(
+            self.move_solids
+                .iter()
+                .filter(|c| solids.accepts(c, || None))
+                .map(|c| c.bounds),
+        );
+    }
+
     /// The collision part of handlePlayerPositionChange: whether the move
     /// counts as moved wrongly (logged), and whether it is refused (the
     /// player is sent back where they were).
@@ -127,10 +164,20 @@ impl Hub {
         if g.spectator() || g.sleeping {
             return (false, false, false);
         }
-        let mut scene = SceneCollisions {
-            world: ctx.world,
-            binding,
-            subject: None,
+        // The solid entities (`Entity.collide`'s `getEntityCollisions`) meeting the move's swept
+        // box: a few tests of the level's few boats and shulkers, no level-wide query, into a
+        // buffer the hub keeps. Every guest judged here is in the level in place (the packet
+        // drain takes only those), whose entities `move_solids` holds.
+        let mut entities = self.move_boxes.lock().unwrap_or_else(|e| e.into_inner());
+        self.solid_boxes(g, from, to, &mut entities);
+        let mut scene = EntityCollisions {
+            blocks: SceneCollisions {
+                world: ctx.world,
+                binding,
+                subject: None,
+            },
+            entities: &entities,
+            border: None,
         };
         // A Player-cause move through the move gate (#2414); the gate records the movement
         // unchanged and its delta is what the collision resolves.
@@ -306,6 +353,20 @@ where
     let Ok(old_shape) = VoxelShape::from_box(old.deflate(shrink)) else {
         return (fail, false, stands);
     };
+    // `getPreMoveCollisions` lists the solid entities' shapes before the blocks': one the old
+    // box did not already overlap is new as well (a creative guest, which skips the distance test,
+    // is caught here).
+    let Ok(entities) = world.entity_collisions(EntityIdentity(0), new.deflate(shrink)) else {
+        return (fail, false, stands);
+    };
+    for shape in entities {
+        if !shape
+            .join_is_not_empty(&old_shape, ShapeOp::AND)
+            .unwrap_or(true)
+        {
+            return (fail, true, stands);
+        }
+    }
     let Ok(scan) = BlockCollisionScan::new(world, context, new.deflate(shrink), false, 1 << 20)
     else {
         return (fail, false, stands);

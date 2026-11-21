@@ -852,6 +852,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.emit(LevelEvent::Sound {
                 pos,
                 sound: "minecraft:block.piston.extend".into(),
+                source: None,
                 volume: 0.5,
                 pitch,
             });
@@ -921,6 +922,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.emit(LevelEvent::Sound {
                 pos,
                 sound: "minecraft:block.piston.contract".into(),
+                source: None,
                 volume: 0.5,
                 pitch,
             });

@@ -144,7 +144,7 @@ fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
 
 /// A window joined to a server through memory, with the sounds it plays
 /// recorded: the client half of a pickup (`ClientPacketListener`).
-fn with_remote_game<R>(f: impl FnOnce(&mut Game<'_>) -> R) -> R {
+pub(in crate::game) fn with_remote_game<R>(f: impl FnOnce(&mut Game<'_>) -> R) -> R {
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
     let loaded = load_resources(

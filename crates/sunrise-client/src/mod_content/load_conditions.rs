@@ -187,8 +187,8 @@ pub fn build_with_conditions(
     let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
-    let mut modifiers = Vec::new();
-    let mut structure_modifiers = Vec::new();
+    let mut modifier_files = BTreeMap::new();
+    let mut modifier_order = 0;
     let mut namespaces: std::collections::BTreeSet<String> = mods
         .iter()
         .flat_map(|m| m.content.namespaces.iter().cloned())
@@ -216,13 +216,20 @@ pub fn build_with_conditions(
                     namespaces.insert(namespace.to_owned());
                 }
                 let is_tag = file.contains("/tags/") && file.ends_with(".json");
-                if !is_tag
-                    && (file.starts_with(&declarations)
-                        || (!biomes::is_modifier(&file)
-                            && !structures::is_modifier(&file)
-                            && worldgen_entry(&file).is_none()))
-                {
-                    continue;
+                if !is_tag {
+                    if file.starts_with(&declarations) {
+                        continue;
+                    }
+                    let structure = structures::is_modifier(&file);
+                    if structure || biomes::is_modifier(&file) {
+                        // Registry JSON has one winning source; don't even read a loser.
+                        modifier_files.insert(file, (modifier_order, &m.id, layer, structure));
+                        modifier_order += 1;
+                        continue;
+                    }
+                    if worldgen_entry(&file).is_none() {
+                        continue;
+                    }
                 }
                 let bytes = layer.data.read(&file).ok_or_else(|| {
                     std::io::Error::new(
@@ -230,17 +237,6 @@ pub fn build_with_conditions(
                         format!("{}: {file}", layer.assets.id),
                     )
                 })?;
-                // Modifier files take whole-file conditions; tag files do not.
-                // Evaluate before parsing required modifier fields.
-                if biomes::is_modifier(&file) || structures::is_modifier(&file) {
-                    let doc: J = serde_json::from_slice(&bytes)
-                        .map_err(|e| format!("mod {}: {file}: {e}", m.id))?;
-                    let allowed = conditions.allows_file(&serde_json::to_value(&doc)?, &file);
-                    conditions.check_errors()?;
-                    if !allowed {
-                        continue;
-                    }
-                }
                 if is_tag {
                     let doc: J =
                         serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
@@ -255,33 +251,44 @@ pub fn build_with_conditions(
                     if let Some((_, remove)) = merge.layers.last_mut() {
                         remove.extend(tag_list(&doc, "remove").iter().cloned());
                     }
-                } else if !file.starts_with(&declarations) {
-                    if structures::is_modifier(&file) {
-                        let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
-                        structure_modifiers.extend(structures::Modifier::read(
-                            &m.id,
-                            &file,
-                            &text,
-                            &mut warnings,
-                        )?);
-                    } else if biomes::is_modifier(&file) {
-                        let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
-                        modifiers.extend(biomes::Modifier::read(
-                            &m.id,
-                            &file,
-                            &text,
-                            &mut warnings,
-                        )?);
-                    } else if let Some((bundle, id)) = worldgen_entry(&file) {
-                        let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
-                        let entries = worldgen.entry(bundle).or_default();
-                        match Addition::read(bundle, &text).map_err(|e| format!("{file}: {e}"))? {
-                            Some(addition) => additions.entry(bundle).or_default().push(addition),
-                            None => entries.push((id, text)),
-                        }
+                } else if let Some((bundle, id)) = worldgen_entry(&file) {
+                    let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
+                    let entries = worldgen.entry(bundle).or_default();
+                    match Addition::read(bundle, &text).map_err(|e| format!("{file}: {e}"))? {
+                        Some(addition) => additions.entry(bundle).or_default().push(addition),
+                        None => entries.push((id, text)),
                     }
                 }
             }
+        }
+    }
+    let mut winners: Vec<_> = modifier_files.into_iter().collect();
+    winners.sort_by_key(|(_, (order, ..))| *order);
+    let mut accepted = Vec::new();
+    for (file, (_, owner, layer, structure)) in winners {
+        let bytes = layer
+            .data
+            .read(&file)
+            .ok_or_else(|| format!("mod {owner}: {file}: unreadable"))?;
+        let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
+        let doc = serde_json::from_str(&text).map_err(|e| format!("mod {owner}: {file}: {e}"))?;
+        if conditions.allows_file(&doc, &file) {
+            accepted.push((file, owner, text, structure));
+        }
+    }
+    conditions.check_errors()?;
+    let mut modifiers = Vec::new();
+    let mut structure_modifiers = Vec::new();
+    for (file, owner, text, structure) in accepted {
+        if structure {
+            structure_modifiers.extend(structures::Modifier::read(
+                owner,
+                &file,
+                &text,
+                &mut warnings,
+            )?);
+        } else {
+            modifiers.extend(biomes::Modifier::read(owner, &file, &text, &mut warnings)?);
         }
     }
     // A tag naming an id nobody registers fails as a whole in vanilla, and
@@ -295,7 +302,7 @@ pub fn build_with_conditions(
     let known = Known::new(base, &plan, &tags, mod_biomes)?;
     for (file, merge) in &mut tags {
         for (values, _) in &mut merge.layers {
-            values.retain(|v| known.keeps(file, v));
+            values.retain(|v| known.keeps(file, v, &mut warnings));
         }
     }
     let mut bundles: Vec<(&str, J)> = Vec::new();
@@ -506,7 +513,6 @@ pub fn build_with_conditions(
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     )?;
     overlay.write(GENERATED_FILES, &generated)?;
-    conditions.check_errors()?;
     let _ = fs::remove_dir_all(out);
     fs::rename(&tables_root, out)?;
     Ok(warnings)

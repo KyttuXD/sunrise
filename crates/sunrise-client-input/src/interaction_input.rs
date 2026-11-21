@@ -50,6 +50,9 @@ pub trait InteractionWorld {
     /// every click of the tick reads, even after one of them changed the
     /// block it names (a creative break, then a use that replaces it).
     fn pick_hit_result(&mut self);
+    /// handleKeybinds' keys between the number keys and the clicks (the inventory key, swap
+    /// hands, drop), which act before any attack, use or pick of the tick.
+    fn handle_keys(&mut self) {}
     /// The tick's clicks are done: later picks follow the crosshair again.
     fn release_hit_result(&mut self);
     fn using_item(&self) -> bool;
@@ -84,6 +87,10 @@ impl InteractionInput {
     pub fn press(&mut self, button: Button) {
         self.clicks[button as usize].press();
     }
+    /// The clicks of `button` waiting for a tick.
+    pub fn queued(&self, button: Button) -> u32 {
+        self.clicks[button as usize].count()
+    }
     /// Take the pending input, leaving empty callback queues with the same refusal latches.
     /// The owner must merge callback input back after the tick. Clearing or temporarily taking
     /// input must not restart diagnostics during the lifetime of the owning Remote.
@@ -104,6 +111,7 @@ impl InteractionInput {
     }
     pub fn tick(&mut self, world: &mut impl InteractionWorld, attack_down: bool, use_down: bool) {
         world.pick_hit_result();
+        world.handle_keys();
         let mut instant = false;
         if world.using_item() {
             if !use_down {

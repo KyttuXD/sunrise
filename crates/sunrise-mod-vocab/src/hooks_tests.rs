@@ -866,6 +866,15 @@ fn spawn_policy_writes_take_a_server_host(
         [0.5, 64.0, 0.5],
         SpawnReason::Command,
     );
+    let mut spawn = EntitySpawn::new(SpawnBody::Living {
+        reason: SpawnReason::Command,
+    });
+    spawn.velocity = [0.0, 0.5, 0.0];
+    let _: Option<EntityRef> =
+        level.spawn_entity(server, "minecraft:zombie", [0.5, 64.0, 0.5], &spawn);
+    let missile = EntitySpawn::new(SpawnBody::General);
+    let shot = level.spawn_entity(server, "mymod:missile", [0.5, 65.0, 0.5], &missile);
+    let _: Option<EntityRef> = shot.and_then(|shot| shot.owner(read));
 }
 
 /// Compile-only: a passage is registered and removed through its level on a server host.

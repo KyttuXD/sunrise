@@ -1,6 +1,6 @@
 //! Behavioural proofs of the broadcast events around scoped interaction Parts.
-#[path = "interaction_event_wasm_tests.rs"]
-mod interaction_event_wasm_tests;
+#[path = "interaction_matrix_tests.rs"]
+mod interaction_matrix_tests;
 #[path = "item_fallthrough_tests.rs"]
 mod item_fallthrough_tests;
 #[path = "item_used_on_block_tests.rs"]
@@ -36,6 +36,12 @@ use sunrise_client::{
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Tag;
 use sunrise_protocol::{connection::Pipe, packets::configuration::ClientInformation};
+
+impl Game<'_> {
+    pub(in crate::game) fn set_sent_sneak_for_test(&mut self) {
+        self.remote.as_mut().unwrap().last_input |= super::SHIFT_INPUT;
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
@@ -194,7 +200,7 @@ impl Hooks for Observer {
             let slot = player.selected_slot(host).unwrap();
             let resource = ItemResource::of(event.click.stack.unwrap());
             host.transaction(|host, tx| {
-                assert_eq!(items.extract(host, tx, slot, &resource, 1), 1);
+                assert_eq!(items.extract_at(host, tx, slot, &resource, 1), 1);
                 Ok::<_, ()>(())
             })
             .unwrap();

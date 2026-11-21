@@ -2,8 +2,7 @@
 """The daily run's summary (.github/workflows/daily.yml): the `daily-green` tag and one issue per failing test.
 
 Reads this run's jobs (names, conclusions and step names from the Actions API, never a log) and the legs' verdict
-files (tools/ci/ignored_tests.py --report, and tools/ci/cargo_test_verdict.py for the wasm fixture's own tests: test
-identity, kind, panic location, policy file), then:
+files (tools/ci/ignored_tests.py --report: test identity, kind, panic location, policy file), then:
 - every leg green: moves the tag `daily-green` to the commit;
 - a failing test: files `Daily: <crate> <test>` (label `bug`) with its panic location, this run as the first that
   saw it and as suspects the pull requests merged since the previous daily run that changed its package's folders
@@ -16,9 +15,10 @@ identity, kind, panic location, policy file), then:
   why each run stopped as its verdict file says (signal or exit status, memory peak and limit, wall time, the tests
   still running past 60 s; stopped_text); a leg whose red asks for an action is titled as that action (ACTIONS:
   `Daily: update the machine sample for the mod API change`);
-- a failed check of the SDK a leg just built (SDK_CHECKS: the native linkage probe, the API-source check): one issue
-  per check and platform, `Daily: sdk <check> (<platform>)`, closed only by a run in which that step passed; when a
-  Linux SDK leg failed, fn-replace-check's missing input is said on that leg's issue, not filed again;
+- a failed check of the SDK a leg just built (SDK_CHECKS: the native linkage probe, the API-source check, the source
+  stage): one issue per check and platform, `Daily: sdk <check> (<platform>)`, closed only by a run in which that step
+  passed; when a Linux SDK leg failed, the missing input of the legs that read it (fn-replace-check, book-quickstart) is
+  said on that leg's issue, not filed again;
 - a test (or leg) green again: closes its open issue with a comment.
 A job cancelled before any of its steps ran (one still waiting for a runner) never ran, so it is neither red nor
 green, and nor is a leg whose call was cancelled with only such jobs: nothing is filed or closed for it. A run cancelled
@@ -32,7 +32,8 @@ write, completes what is missing). `daily_summary.py --seen SHA` prints a comple
 same way: not `success` files or comments on `Daily: JOB did not complete`, naming its failed steps; `success` closes
 it. The parity leg holds global green but not sdk_green. It files one issue per failing harness, with the pull
 requests merged since the last green daily as suspects, and closes issues only on complete coverage.
-Only a run on refs/heads/main with DRY_RUN=false writes; otherwise it prints what it would do to the job summary.
+Only a run on refs/heads/main or the release branch with DRY_RUN=false writes; otherwise it prints what it would do to
+the job summary. The release branch's issues are titled apart (WRITING_REFS) and it never moves the tag.
 Lookups come first and fail the job on any API error (a rate limit included), so a failed lookup never files
 duplicates.
 
@@ -56,11 +57,18 @@ from tools.ci import ignored_shards  # noqa: E402
 TAG = "daily-green"
 LABEL = "bug"
 PREFIX = "Daily: "
+# The refs whose real runs write, and the title prefix of their issues: the release line's daily runs (a break-glass
+# release's follow-up among them) file and close their own issues, apart from main's. Only main moves `daily-green`.
+WRITING_REFS = {"refs/heads/main": PREFIX, "refs/heads/release/26.3": "Daily (release/26.3): "}
 UNFINISHED = " did not complete"
 DISCLOSURE = "> 🤖 Filed by Aria's agent swarm, Dyna, not by Aria."
-# daily.yml's leg jobs (each a called workflow), and the called workflows' own routing jobs, which test nothing.
+# The daily's legs are the jobs its summary needs (RESULTS), each a called workflow: daily_legs().
 PARITY = "parity"
-LEGS = ("shards", "wasm-mods", "fn-replace-check", "windows-runtime-leases", "machine-sample", "sdk", PARITY)
+# The parity steps whose failure is the harness result the verdict already reports: a run that found a red
+# harness, and the job that turns the shares' verdicts into the run's one answer. Every other failed step in a
+# parity job is infrastructure — a share that wrote its verdict and then died still has to be visible beside a
+# harness failure from another share.
+PARITY_RESULT_STEPS = ("Run every automatic harness", "Fail unless every share reported and no harness failed")
 # The legs sdk-publish waits for (output sdk_green) until a runner with prepared data exists (owner, 2026-11-16).
 SDK_LEGS = ("sdk", "machine-sample", "fn-replace-check")
 # Legs whose red is an action for someone, not a break: their one issue is titled as the action, and says what to do.
@@ -80,23 +88,25 @@ FRESH = "sdk / fresh"
 # Steps whose reports name failing tests. Failures outside those steps still need a job-level issue.
 WINDOWS_ROWS_JOB = "windows-runtime-leases / runtime-leases"
 WINDOWS_ROWS_STEP = "The Windows-only daily rows"
-FIXTURE_TESTS_STEPS = ("Validate and load the fixture", "Run the client tests that load the compiled fixture")
 # The SDK legs' checks of the SDK they just built (prebuilt-game-build.yml), by step: a failed one is its own issue per
 # check and platform, `Daily: sdk <check> (<platform>)`, closed only by a run in which that step passed.
 SDK_BUILD = "sdk / build "
 SDK_CHECKS = {
     "Two mod libraries share the game's exact Rust state": "native linkage probe",
-    "The starter mod checks against the API source alone, host and wasm32": "API-source check",
+    "The starter mod checks against the API source alone": "API-source check",
+    "The source stages with this commit's build data": "source stage",
 }
 SDK_CHECK = "sdk-check"
-# fn-replace-check reads the Linux legs' SDK: when one of those failed, its only failures are the missing input, which
-# the Linux leg's own issue already accounts for.
+# The legs that read the Linux legs' SDK: when one of those failed, a reader whose only failures are the missing input
+# is accounted for by the Linux leg's own issue.
 LINUX_SDK_JOBS = ("sdk / build linux", "sdk / build linux-server")
 # The Linux legs' call's own result, kept apart from the sdk leg's (PART_OF): its `fresh` can fail with no published
 # SDK to reuse, and then no Linux build job runs at all.
 LINUX_SDK_CALL = "sdk (Linux legs)"
 FN_REPLACE_JOB = "fn-replace-check / fn-replace-check"
-FN_REPLACE_INPUT_STEPS = ("Run actions/download-artifact@v4", "The Linux legs are here")
+BOOK_QUICKSTART_JOB = "book-quickstart / quickstart"
+LINUX_SDK_READERS = (FN_REPLACE_JOB, BOOK_QUICKSTART_JOB)
+LINUX_SDK_INPUT_STEPS = ("Run actions/download-artifact@v4", "The Linux legs are here")
 # A pull request merged on its own (`Merge pull request #N from`) or as a rollup's member (`Merge #N at <sha>`).
 MERGE = re.compile(r"^Merge (?:pull request #(\d+) from |#(\d+) at )")
 MAX_PAGES = 100
@@ -153,6 +163,13 @@ def pages(call, path, key=None):
     sys.exit(f"::error::{path} has more than {MAX_PAGES * 100} items; refusing to act on a partial listing")
 
 
+def daily_legs(needs):
+    """The legs of this run: every call the summary job needs (toJSON(needs)) but `resolve`, a call that is part of
+    another leg (PART_OF) counting as that leg. A leg added to daily.yml's summary needs is judged with no other entry;
+    a job of a leg missing there is one the summary does not know, and holds green."""
+    return tuple(name for name in needs if name != "resolve" and name not in PART_OF)
+
+
 def leg_results(needs):
     """Each leg's call result from RESULTS (toJSON(needs)), a leg made of several calls (PART_OF) taking the first that
     did not succeed."""
@@ -164,10 +181,10 @@ def leg_results(needs):
     return results
 
 
-def leg_jobs(jobs):
+def leg_jobs(jobs, legs):
     """This run's leg jobs (`<leg> / <job>`), without the called workflows' routing jobs."""
     return [job for job in jobs
-            if job["name"].split(" / ", 1)[0] in LEGS and " / " in job["name"]
+            if job["name"].split(" / ", 1)[0] in legs and " / " in job["name"]
             and job["name"].split(" / ", 1)[1] not in HELPERS]
 
 
@@ -184,9 +201,9 @@ def never_started(job):
         step.get("conclusion") not in (None, "skipped") for step in job.get("steps") or [])
 
 
-def unstarted_legs(jobs, results):
+def unstarted_legs(jobs, results, legs):
     """The legs whose call was cancelled and none of whose jobs, routing jobs included, started."""
-    return {leg for leg in LEGS if results.get(leg, {}).get("result") == "cancelled"
+    return {leg for leg in legs if results.get(leg, {}).get("result") == "cancelled"
             and all(never_started(job) for job in jobs if job["name"].partition(" / ")[0] == leg)}
 
 
@@ -195,12 +212,12 @@ def job_green(job, fresh_ok):
         job["conclusion"] == "skipped" and job["name"].startswith("sdk / ") and fresh_ok)
 
 
-def failed_helpers(jobs):
+def failed_helpers(jobs, legs):
     """leg -> its routing or helper jobs that did not succeed (whose failure skips the leg's real jobs)."""
     failed = {}
     for job in jobs:
         leg, _, rest = job["name"].partition(" / ")
-        if leg in LEGS and rest in HELPERS and job["conclusion"] not in ("success", "skipped") and not never_started(job):
+        if leg in legs and rest in HELPERS and job["conclusion"] not in ("success", "skipped") and not never_started(job):
             failed.setdefault(leg, []).append(job["name"])
     return failed
 
@@ -211,25 +228,21 @@ def failed_steps(job):
 
 
 def report_for(job, reports):
-    """Match a verdict to its job by shard, by the Windows rows marker, or by the fixture's `needs` variable."""
+    """Match a verdict to its job by shard or by the Windows rows marker."""
     name = job["name"]
     for report in reports:
         if any(name.endswith(f"({shard})") for shard in report.get("shards", ())):
             return report
         if name == WINDOWS_ROWS_JOB and report.get("windows_rows") is True:
             return report
-    fixture = [report for report in reports if report.get("needs")] if name == "wasm-mods / fixture" else []
-    if not fixture:
-        return None
-    return {key: [entry for report in fixture for entry in report.get(key, ())]
-            for key in ("problems", "passed", "incomplete")}
+    return None
 
 
-def known(name):
+def known(name, legs):
     """daily.yml's own jobs and its legs' jobs; any other job is one the summary cannot judge."""
     return (name in ("resolve", "schedule-dispatch", "sdk-publish-report")
             or name.startswith(("summary ", "nightly / ", "sdk-publish / "))
-            or name.split(" / ", 1)[0] in LEGS and " / " in name)
+            or name.split(" / ", 1)[0] in legs and " / " in name)
 
 
 # A run's name and a test's name as ignored_tests.py writes them; anything else in a report is not shown.
@@ -286,20 +299,21 @@ def named(problem):
     return not problem["test"].startswith("identity withheld")
 
 
-def verdicts(jobs, reports, results, legs, parity_report):
-    """(failing tests, unfinished legs, passing tests, green legs) of this run.
+def verdicts(jobs, reports, results, legs, parity_report, all_legs):
+    """(failing tests, unfinished legs, passing tests, green legs) of this run. `legs` are those that must pass,
+    `all_legs` every leg the run called (parity too where it may be left out).
 
     A failing test is a dict of package, test, kind, panic, policy and leg; an unfinished leg is (leg, conclusion,
     failed steps, reason). Green means every leg job and every called workflow concluded success."""
     tests, unfinished, passed, green_legs = [], [], set(), set()
     fresh_ok = any(job["name"] == FRESH and job["conclusion"] == "success" for job in jobs)
-    helpers = failed_helpers(jobs)
-    unstarted = unstarted_legs(jobs, results)
+    helpers = failed_helpers(jobs, all_legs)
+    unstarted = unstarted_legs(jobs, results, all_legs)
     linux_sdk_red = {job["name"] for job in jobs if job["name"] in LINUX_SDK_JOBS and not job_green(job, fresh_ok)}
     if results.get(LINUX_SDK_CALL, {}).get("result", "success") != "success":
         linux_sdk_red.add("sdk")  # the leg's own item (its failed `fresh`, say) is the Linux legs' too
-    fn_replace_blocked = False
-    for job in leg_jobs(jobs):
+    blocked = []  # the legs that read the Linux SDK and failed only for its missing input
+    for job in leg_jobs(jobs, all_legs):
         if never_started(job) or job["name"].startswith(f"{PARITY} / "):
             continue  # parity uses its own verdict, including when the job passed
         report = report_for(job, reports)
@@ -327,16 +341,15 @@ def verdicts(jobs, reports, results, legs, parity_report):
                           if report["incomplete"] else
                           "failed tests whose names are withheld" if problems else "failed outside its tests")
                 unfinished.append((job["name"], job["conclusion"], steps, reason))
-        elif ((job["name"] == "wasm-mods / fixture" and len(steps) == 1 and steps[0] in FIXTURE_TESTS_STEPS)
-              or (job["name"] == WINDOWS_ROWS_JOB and WINDOWS_ROWS_STEP in steps)) and (
-                  by_name or (report or {}).get("incomplete")):
+        elif job["name"] == WINDOWS_ROWS_JOB and WINDOWS_ROWS_STEP in steps and (
+                by_name or (report or {}).get("incomplete")):
             tests += by_name
             # A command that failed without naming a test (a build failure beside a named one) is the leg's item too.
             if report["incomplete"] or len(by_name) < len(problems):
                 unfinished.append((job["name"], job["conclusion"], steps, "a test run did not complete: " + ". ".join(
                     stopped_text(entry if isinstance(entry, dict) else {}) for entry in report["incomplete"])
                     if report["incomplete"] else "failed tests whose names are withheld"))
-            elif job["name"] == WINDOWS_ROWS_JOB and (outside := [step for step in steps if step != WINDOWS_ROWS_STEP]):
+            elif outside := [step for step in steps if step != WINDOWS_ROWS_STEP]:
                 unfinished.append((job["name"], job["conclusion"], outside, "failed outside its tests"))
         elif job["name"].startswith(SDK_BUILD) and any(step in SDK_CHECKS for step in steps):
             platform = job["name"][len(SDK_BUILD):]
@@ -344,24 +357,24 @@ def verdicts(jobs, reports, results, legs, parity_report):
                        "panic": None, "policy": None, "leg": job["name"]} for step in steps if step in SDK_CHECKS]
             if outside := [step for step in steps if step not in SDK_CHECKS]:
                 unfinished.append((job["name"], job["conclusion"], outside, "failed outside its checks"))
-        elif job["name"] == FN_REPLACE_JOB and linux_sdk_red and steps and set(steps) <= set(FN_REPLACE_INPUT_STEPS):
-            fn_replace_blocked = True  # not green, and the Linux SDK leg's item says why
+        elif job["name"] in LINUX_SDK_READERS and linux_sdk_red and steps and set(steps) <= set(LINUX_SDK_INPUT_STEPS):
+            blocked.append(job["name"].split(" / ", 1)[0])  # not green, and the Linux SDK leg's item says why
         else:
             unfinished.append((job["name"], job["conclusion"], steps, "failed at the steps named"))
     for job in jobs:
-        if not known(job["name"]) and not never_started(job):
+        if not known(job["name"], all_legs) and not never_started(job):
             unfinished.append((job["name"], job["conclusion"], [], "did not report: a job the summary does not know"))
     names = {job["name"] for job in jobs}
-    if "shards" not in helpers and "shards" not in unstarted:
+    if "shards" in all_legs and "shards" not in helpers and "shards" not in unstarted:
         for expected in expected_shards():
             if expected not in names:
                 unfinished.append((expected, "missing", [], "did not report: the daily matrix has this shard, but "
                                    "no job of that name ran"))
-    seen = {job["name"].split(" / ", 1)[0] for job in leg_jobs(jobs)}
+    seen = {job["name"].split(" / ", 1)[0] for job in leg_jobs(jobs, all_legs)}
     for leg in legs:
         result = results.get(leg, {}).get("result", "missing")
         accounted = any(item["leg"].split(" / ", 1)[0] == leg for item in tests) or any(
-            entry[0].split(" / ", 1)[0] == leg for entry in unfinished) or (leg == "fn-replace-check" and fn_replace_blocked)
+            entry[0].split(" / ", 1)[0] == leg for entry in unfinished) or leg in blocked
         if leg in unstarted:
             continue
         if leg == PARITY:
@@ -369,19 +382,26 @@ def verdicts(jobs, reports, results, legs, parity_report):
             failures = parity_report["failed"] if parity_report else []
             tests.extend({"package": PARITY, "test": name, "leg": PARITY, "kind": PARITY,
                           "panic": None, "policy": None} for name in failures)
-            # A completed harness failure is not an infrastructure failure. The two can also coexist.
+            # A completed harness failure is not an infrastructure failure. The two can also coexist: a share
+            # can write a complete verdict, fail while saving its private logs, and still upload, while another
+            # share reports a red harness.
+            inside = [f"{job['name']}: {step}" for job in parity_jobs
+                      for step in failed_steps(job) if step in PARITY_RESULT_STEPS]
+            outside = [f"{job['name']}: {step}" for job in parity_jobs
+                       for step in failed_steps(job) if step not in PARITY_RESULT_STEPS]
             if not parity_jobs or not parity_report:
                 reason = "no verdict from this run attempt"
             elif not parity_report["complete"]:
                 reason = "the harness run did not finish"
-            elif result != ("failure" if failures else "success") or any(j["conclusion"] != result for j in parity_jobs):
+            elif result != ("failure" if failures else "success"):
                 reason = "the parity call did not finish with the reported harness result"
+            elif outside:
+                reason = "failed outside its harness results"
             else:
                 passed |= {(PARITY, name) for name in parity_report["passed"]}
                 green_legs.add(leg)  # the harness run completed; close any infrastructure issue
                 continue
-            steps = [f"{job['name']}: {step}" for job in parity_jobs for step in failed_steps(job)]
-            unfinished.append((leg, result, steps, reason))
+            unfinished.append((leg, result, outside or inside, reason))
         elif leg in helpers:
             unfinished.append((leg, result, [], "did not complete: " + ", ".join(f"`{name}`" for name in helpers[leg])
                                + " failed, so its jobs did not run"))
@@ -391,12 +411,13 @@ def verdicts(jobs, reports, results, legs, parity_report):
             unfinished.append((leg, result, [], "did not complete, and no job or test of it says why"))
         elif result == "success" and not accounted:
             green_legs.add(leg)  # a whole leg that reported and passed closes its leg-level issue
-    if fn_replace_blocked:
-        blocked = "`fn-replace-check` could not run: it needs this leg's SDK"
+    if blocked:
+        note = (" and ".join(f"`{leg}`" for leg in blocked) + " could not run: "
+                + ("it needs" if len(blocked) == 1 else "they need") + " this leg's SDK")
         for item in tests:
             if item["leg"] in linux_sdk_red:
-                item["blocks"] = blocked
-        unfinished = [(leg, conclusion, steps, f"{reason}. {blocked}" if leg in linux_sdk_red else reason)
+                item["blocks"] = note
+        unfinished = [(leg, conclusion, steps, f"{reason}. {note}" if leg in linux_sdk_red else reason)
                       for leg, conclusion, steps, reason in unfinished]
     green = legs_green(legs, jobs, results, tests, unfinished) and not tests and not unfinished
     failing = {(item["package"], item["test"]) for item in tests}
@@ -407,7 +428,7 @@ def legs_green(legs, jobs, results, tests, unfinished):
     """Whether every one of `legs` ran and passed: its call succeeded, each of its jobs is green, and no failing test
     or unfinished item is its own."""
     fresh_ok = any(job["name"] == FRESH and job["conclusion"] == "success" for job in jobs)
-    mine = [job for job in leg_jobs(jobs) if job["name"].split(" / ", 1)[0] in legs]
+    mine = leg_jobs(jobs, legs)
     return (all(results.get(leg, {}).get("result") == "success" for leg in legs)
             and {job["name"].split(" / ", 1)[0] for job in mine} >= set(legs)
             and all(job_green(job, fresh_ok) for job in mine)
@@ -456,8 +477,10 @@ def previous_run(commit, call, git):
         if run["id"] == current or run["conclusion"] not in ("success", "failure"):
             continue
         jobs = pages(call, f"actions/runs/{run['id']}/jobs?filter=latest", "jobs")
+        # A break-glass run's summary ran only some legs: it says nothing of the others.
         tested = [job["name"].split()[1] for job in jobs if job["name"].startswith("summary ")
-                  and job["conclusion"] in ("success", "failure") and len(job["name"].split()) > 1]
+                  and job["conclusion"] in ("success", "failure") and len(job["name"].split()) > 1
+                  and "(break-glass legs)" not in job["name"]]
         if tested and tested[0] != commit and git("merge-base", "--is-ancestor", tested[0], commit) is not None:
             return tested[0], run["html_url"], {job["name"]: job["conclusion"] for job in jobs}
     return None
@@ -511,13 +534,13 @@ def suspect_line(numbers, commit):
     return f"Suspects, merged since the last green daily (`{TAG}`..`{commit[:9]}`): " + ", ".join(f"#{n}" for n in numbers)
 
 
-def test_title(item):
-    return f"{PREFIX}{item['package']} {item['test']}"
+def test_title(item, prefix=PREFIX):
+    return f"{prefix}{item['package']} {item['test']}"
 
 
-def leg_title(leg):
+def leg_title(leg, prefix=PREFIX):
     action = ACTIONS.get(leg.split(" / ", 1)[0])
-    return f"{PREFIX}{action[0]}" if action else f"{PREFIX}{leg}{UNFINISHED}"
+    return f"{prefix}{action[0]}" if action else f"{prefix}{leg}{UNFINISHED}"
 
 
 def detail(item):
@@ -541,17 +564,20 @@ def leg_detail(leg, conclusion, steps, reason):
             + f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}.")
 
 
-def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes=None, lines=None):
+def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes=None, lines=None,
+         prefix=PREFIX):
     """Every write this run makes, in order: ("tag", sha) / ("create", title, body) / ("comment", number, title, body)
     / ("close", number, title, body). `fixes` (fixes_after) holds the closed issues whose fix this commit predates;
-    `lines` a failing test's own suspects line by title (test_suspect_line), else every red gets `numbers`' line."""
+    `lines` a failing test's own suspects line by title (test_suspect_line), else every red gets `numbers`' line.
+    `prefix` titles the issues (WRITING_REFS); only main's (PREFIX) green moves the tag."""
     fixes = fixes or {}
     lines = lines or {}
     actions = []
-    if green:
+    if green and prefix == PREFIX:
         actions.append(("tag", commit))
-    reds = [(test_title(item), detail(item)) for item in tests]
-    reds += [(leg_title(leg), leg_detail(leg, conclusion, steps, reason)) for leg, conclusion, steps, reason in unfinished]
+    reds = [(test_title(item, prefix), detail(item)) for item in tests]
+    reds += [(leg_title(leg, prefix), leg_detail(leg, conclusion, steps, reason))
+             for leg, conclusion, steps, reason in unfinished]
     filed = set()
     for title, text in reds:
         if title in filed:
@@ -574,7 +600,7 @@ def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_iss
     for title, number in sorted(open_issues.items()):
         if title in filed:
             continue
-        rest = title[len(PREFIX):]
+        rest = title[len(prefix):]
         acted = [leg for leg, (action, _) in ACTIONS.items() if action == rest]
         if acted:
             back = acted[0] in green_legs or any(name.startswith(f"{acted[0]} / ") for name in green_legs)
@@ -651,8 +677,12 @@ def git(*args):
 def main(call=api, run_git=git, query=graphql):
     env = os.environ
     commit = env["COMMIT"]
-    # Only main writes, whatever the input says: a branch's run is always a dry run.
-    writes = env.get("GITHUB_REF") == "refs/heads/main" and env.get("DRY_RUN") == "false"
+    needs = json.loads(env["RESULTS"])
+    selected = needs.get("resolve", {}).get("outputs", {}).get("legs")
+    # Only main and the release branch write, whatever the input says: another branch's run is always a dry run. A
+    # break-glass run (daily.yml `break_glass`, its legs selected) files and closes no issue either.
+    prefix = WRITING_REFS.get(env.get("GITHUB_REF"), PREFIX)
+    writes = env.get("GITHUB_REF") in WRITING_REFS and env.get("DRY_RUN") == "false" and not selected
     run_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
     reports_dir = Path(env["REPORTS"])
     reports = [json.loads(path.read_text()) for path in sorted(reports_dir.glob("*/*.json")) if path.name != "parity.json"]
@@ -663,24 +693,31 @@ def main(call=api, run_git=git, query=graphql):
             "run_id": env["GITHUB_RUN_ID"], "run_attempt": attempt, "commit": commit}:
         parity_report = None
     jobs = pages(call, f"actions/runs/{env['GITHUB_RUN_ID']}/jobs?filter=latest", "jobs")
-    results = leg_results(json.loads(env["RESULTS"]))
+    all_legs, results = daily_legs(needs), leg_results(needs)
     # Only a run that writes nothing may leave parity out: a writing run's skipped parity holds green and the tag.
     parity_not_applicable = (not writes and results.get("resolve", {}).get("outputs", {}).get("parity_required") == "false"
                              and results.get(PARITY, {}).get("result") == "skipped")
-    legs = tuple(leg for leg in LEGS if leg != PARITY or not parity_not_applicable)
-    tests, unfinished, passed, green_legs, green = verdicts(jobs, reports, results, legs, parity_report)
+    legs = tuple(leg for leg in all_legs if leg != PARITY or not parity_not_applicable)
+    if selected:
+        # A break-glass run (daily.yml `break_glass`) ran only these legs: the others, and their skipped jobs, are no
+        # part of its verdict.
+        chosen = set(json.loads(selected))
+        all_legs = legs = tuple(leg for leg in legs if leg in chosen)
+        jobs = [job for job in jobs if job["name"].partition(" / ")[0] not in set(daily_legs(needs)) - chosen]
+    tests, unfinished, passed, green_legs, green = verdicts(jobs, reports, results, legs, parity_report, all_legs)
     open_issues = {issue["title"]: issue["number"]
                    for issue in pages(call, f"issues?state=open&labels={LABEL}")
-                   if "pull_request" not in issue and issue["title"].startswith(PREFIX)}
+                   if "pull_request" not in issue and issue["title"].startswith(prefix)}
     # Resolve the prior green before planning or applying any writes, including the tag move.
     numbers = suspects(commit, run_git) if tests or unfinished else []
-    reds = {test_title(item) for item in tests} | {leg_title(leg) for leg, *_ in unfinished}
+    reds = {test_title(item, prefix) for item in tests} | {leg_title(leg, prefix) for leg, *_ in unfinished}
     fixes = fixes_after(commit, reds - open_issues.keys(), call, query, run_git)
     other_tests = [item for item in tests if item["kind"] not in (PARITY, SDK_CHECK)]
     previous = previous_run(commit, call, run_git) if other_tests else None
-    lines = {test_title(item): line for item in other_tests
+    lines = {test_title(item, prefix): line for item in other_tests
              if (line := test_suspect_line(item, previous, commit, run_git))}
-    actions = plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes, lines)
+    actions = plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes, lines,
+                   prefix)
     sdk_green = legs_green(SDK_LEGS, jobs, results, tests, unfinished)
     text = render(actions, writes) + (
         f"\nSDK legs ({', '.join(SDK_LEGS)}): {'green' if sdk_green else 'not green'}; "
@@ -702,22 +739,23 @@ def after(name, result, call=api, run_git=git, query=graphql):
     """Reports the job `name` that ran after the summary, which concluded `result` (`needs.<name>.result`): one
     issue for it while it fails, closed by its next success. Writes only where the summary would."""
     env = os.environ
-    writes = env.get("GITHUB_REF") == "refs/heads/main" and env.get("DRY_RUN") == "false"
+    prefix = WRITING_REFS.get(env.get("GITHUB_REF"), PREFIX)
+    writes = env.get("GITHUB_REF") in WRITING_REFS and env.get("DRY_RUN") == "false" and env.get("PARTIAL") != "true"
     run_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
     commit = env["COMMIT"]
     open_issues = {issue["title"]: issue["number"]
                    for issue in pages(call, f"issues?state=open&labels={LABEL}")
-                   if "pull_request" not in issue and issue["title"] == leg_title(name)}
+                   if "pull_request" not in issue and issue["title"] == leg_title(name, prefix)}
     if result == "success":
-        actions = plan(commit, run_url, [], [], set(), {name}, False, open_issues, [])
+        actions = plan(commit, run_url, [], [], set(), {name}, False, open_issues, [], prefix=prefix)
     else:
         jobs = pages(call, f"actions/runs/{env['GITHUB_RUN_ID']}/jobs?filter=latest", "jobs")
         steps = [f"{job['name']}: {step}" for job in jobs if job["name"].startswith(f"{name} / ")
                  for step in failed_steps(job)]
         unfinished = [(name, result, steps, "nothing was published, so no Nightly follows")]
-        fixes = fixes_after(commit, {leg_title(name)} - open_issues.keys(), call, query, run_git)
+        fixes = fixes_after(commit, {leg_title(name, prefix)} - open_issues.keys(), call, query, run_git)
         actions = plan(commit, run_url, [], unfinished, set(), set(), False, open_issues,
-                       suspects(commit, run_git), fixes)
+                       suspects(commit, run_git), fixes, prefix=prefix)
     text = render(actions, writes)
     print(text)
     if env.get("GITHUB_STEP_SUMMARY"):

@@ -4,7 +4,7 @@ impl Game<'_> {
     /// `Minecraft.startUseItem`'s entity turn for `hand`: Interact goes to
     /// the server, and whether the click ends there is what this client's
     /// copy of the entity answers (`MultiPlayerGameMode.interact`).
-    pub(super) fn remote_use_entity(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_entity(&mut self, hand: Hand) -> bool {
         // A menu this use opens (a chest minecart's) is no clicked block's.
         if let Some(r) = self.remote.as_mut() {
             r.use_target = None;
@@ -86,13 +86,14 @@ impl Game<'_> {
                 && (sneaking
                     || self.riding.is_some_and(|r| r as i32 == hit.id)
                     || self
-                        .mobs
-                        .iter()
-                        .any(|m| m.extra.mount.is_some_and(|r| r as i32 == hit.id)));
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.has_passengers(hit.id as u32)));
             // EndCrystal and EnderDragonPart keep Entity.interact's PASS.
             let crystal_passes = self.crystals.iter().any(|c| c.id as i32 == hit.id)
                 || self.level_dragon_part(hit.id as u32).is_some();
-            let passes = is_painting
+            let passes = self.shown_remote_general(hit.id).is_some()
+                || is_painting
                 || frame_passes
                 || boat_passes
                 || cart_passes
@@ -178,7 +179,7 @@ impl Game<'_> {
     }
     /// MultiPlayerGameMode.useItemOn for `hand`: whether the click ends there
     /// (the block reacts, or a block item is placed).
-    pub(super) fn remote_use_item_on(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_item_on(&mut self, hand: Hand) -> bool {
         let held = self.with_hand(hand, |g| g.held().cloned());
         let held_block = held
             .as_ref()
@@ -222,9 +223,8 @@ impl Game<'_> {
             // Player.isSecondaryUseActive with something in either hand
             // keeps the block from reacting by default; an explicit block
             // allow overrides that skip, and False always skips the block.
-            let sneaking = self.remote_shift_down();
-            let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
-            let block_used = canceled.is_none() && use_block.or(!(sneaking && hands_full));
+            let block_used =
+                canceled.is_none() && use_block.or(!self.remote_secondary_use_skips_block());
             let item_forced = use_item == TriState::True;
             let item_used = canceled.is_none()
                 && use_item.or(true)
@@ -270,10 +270,15 @@ impl Game<'_> {
             } else {
                 // useItemOn runs for the off hand too (useWithoutItem doesn't):
                 // RespawnAnchorBlock.useItemOn charges an anchor with its
-                // glowstone, SUCCESS.
+                // glowstone, SUCCESS; the blocks of `client_block_answer` answer too.
                 let charges = vanilla_block && self.anchor_takes(hit.pos, held.as_ref());
                 let result = if charges {
                     InteractionResult::Success
+                } else if let Some(answer) = (vanilla_block && !spectator)
+                    .then(|| self.client_block_answer(&hit, held.as_ref()))
+                    .flatten()
+                {
+                    answer
                 } else {
                     InteractionResult::Pass
                 };
@@ -455,7 +460,9 @@ impl Game<'_> {
                 // Either way no UseItem follows, so the server does not spawn
                 // a second mob from the fluid ray. ItemStack.useOn's adventure
                 // predicate was checked before selecting this phase.
-                if self.spawn_egg_allowed(&stack.item) {
+                if sunrise_client::block_entity_item::item_entity_data(stack, self.res.items())
+                    .is_some_and(|data| self.spawn_egg_allowed(&data.kind))
+                {
                     self.with_hand(hand, Game::swing_arm);
                 }
                 return true;
@@ -485,7 +492,7 @@ impl Game<'_> {
                 if let Some(mud) = self.pack.assets.registry.default_state("minecraft:mud") {
                     let pos =
                         sunrise_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
-                    self.predict_blocks(&vec![(pos, mud)], seq);
+                    self.predict_blocks(&[(pos, mud)], seq);
                 }
                 self.with_hand(hand, |g| {
                     g.filled_result(ItemStack::new("minecraft:glass_bottle", 1))
@@ -524,19 +531,9 @@ impl Game<'_> {
                 {
                     self.with_hand(hand, |g| g.start_eating(info));
                 }
-                if let Some(placed) = &placed {
-                    self.predict_place(placed, seq);
-                    if let Some(stack) = &held {
-                        let pos = placed.0;
-                        self.apply_predicted_item([pos.x, pos.y, pos.z], stack);
-                        self.with_hand(hand, |g| g.consume_placed(stack));
-                    }
-                } else if let Some(r) = self.remote.as_mut() {
-                    // BlockItem.place plays its sound only once the block is set: the
-                    // server's resend of the target it refused is no placement.
-                    r.placing = None;
-                }
-                if placed.is_some() {
+                if let Some((placed, stack)) = placed.as_ref().zip(held.as_ref()) {
+                    self.predict_place(placed, stack, seq);
+                    self.with_hand(hand, |g| g.consume_placed(stack));
                     self.with_hand(hand, Game::swing_arm);
                 }
                 // BlockItem.place returns FAIL when placement is rejected:
@@ -546,5 +543,81 @@ impl Game<'_> {
             return reacts;
         }
         false
+    }
+
+    /// `Item.useOn` on this client's level for the items whose effects are
+    /// the clicker's own (`Level.levelEvent(player, ...)` and
+    /// `playSound(player, ...)`: the server sends them to the others only):
+    /// honeycomb waxing copper, and an axe, hoe or shovel transforming a
+    /// block (stripping, scraping, removing wax, tilling, making a path).
+    /// A cushion succeeds where it may be placed and spawns on the server, a
+    /// firework rocket wherever it may be used, and the server launches it.
+    /// Whether the item's use succeeded, which ends the click.
+    /// The caller has selected Item.useOn after cooldown and adventure gates.
+    pub(in crate::game) fn predict_item_on_block(
+        &mut self,
+        stack: &ItemStack,
+        hit: &crate::game::Hit,
+    ) -> bool {
+        // FireworkRocketItem.useOn: SUCCESS unless gliding, when Item.use
+        // boosts instead. The phase's cooldown/adventure gates already ran.
+        if &*stack.item == "minecraft:firework_rocket" {
+            return !self.player.as_ref().is_some_and(|p| p.fall_flying);
+        }
+        let at = [
+            f64::from(hit.pos[0]) + 0.5,
+            f64::from(hit.pos[1]) + 0.5,
+            f64::from(hit.pos[2]) + 0.5,
+        ];
+        if &*stack.item == "minecraft:honeycomb" {
+            // HoneycombItem.useOn.
+            let registry = self.pack.assets.registry;
+            let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let old = registry.state(clicked);
+            let waxes = old
+                .and_then(|old| self.res.transformers().waxed(registry, old))
+                .is_some();
+            if waxes {
+                self.level_event_at(3003, hit.pos, 0);
+                self.play_client_local_sound(
+                    LevelSound::new("minecraft:item.honeycomb.wax_on", at, 1.0, 1.0)
+                        .in_source(mod_api::SoundSource::Blocks),
+                );
+                // The other half of a double chest: its particles, and a second
+                // sound from the clicked block.
+                if let Some(other) =
+                    old.and_then(|old| crate::game::storage::chest_connected_pos(old, hit.pos))
+                {
+                    self.level_event_at(3003, other, 0);
+                    self.play_client_local_sound(
+                        LevelSound::new("minecraft:item.honeycomb.wax_on", at, 1.0, 1.0)
+                            .in_source(mod_api::SoundSource::Blocks),
+                    );
+                }
+            }
+            waxes
+        } else if let Some((_, sound, _, _, particle, _)) = self.block_transform(stack, hit) {
+            self.transform_particle(&particle, hit.pos);
+            self.play_client_local_sound(
+                LevelSound::new(&sound, at, 1.0, 1.0).in_source(mod_api::SoundSource::Blocks),
+            );
+            true
+        } else if self
+            .res
+            .items()
+            .get(&stack.item)
+            .is_some_and(|i| i.cushion_color.is_some())
+        {
+            // CushionItem.useOn on a client level: SUCCESS once
+            // `canBePlacedAt` holds, before the server's own checks.
+            self.cushion_spawn(hit).is_some()
+        } else if &*stack.item == "minecraft:painting" {
+            // HangingEntityItem.useOn on a client level: SUCCESS once
+            // `Painting.create` finds a surviving variant, before the
+            // server spawns it.
+            self.painting_fits(hit, stack)
+        } else {
+            false
+        }
     }
 }

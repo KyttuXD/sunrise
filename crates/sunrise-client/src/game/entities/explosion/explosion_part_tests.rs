@@ -315,15 +315,39 @@ impl BlockPart for Drops {
         (event.pos.x == 2).then_some(self.0).flatten()
     }
 }
+#[derive(Clone)]
+struct DropSave(Arc<AtomicI32>);
+#[mod_api::sunrise_part]
+impl BlockPart for DropSave {}
+#[mod_api::sunrise_part]
+impl mod_api::BlockEntityPart for DropSave {
+    fn block_entity_save_additional(
+        &self,
+        _: &dyn LevelHost,
+        event: &mut mod_api::BlockEntitySaveAdditionalEvent<'_>,
+    ) {
+        assert_eq!(
+            event.tag.get(&"generation".into()),
+            Some(&mod_api::Tag::Int(4))
+        );
+        self.0.fetch_add(1, Ordering::Relaxed);
+        event.tag.insert("generation".into(), mod_api::Tag::Int(5));
+    }
+}
+
 #[derive(Clone, Default)]
 struct Answers {
     dirt: Resist,
     obsidian: Resist,
     rail: Resist,
+    saved: Arc<AtomicI32>,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Answers {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+        let kind = r.block_entity_type("drop_save").build();
+        r.block_entity_part(&kind, DropSave(self.saved.clone()))
+            .unwrap();
         for (name, part) in [
             ("minecraft:dirt", &self.dirt),
             ("minecraft:obsidian", &self.obsidian),
@@ -472,7 +496,13 @@ fn block_parts_answer_explosion_resistance() {
 #[test]
 #[ignore = "daily"]
 fn block_parts_answer_drops_from_explosions() {
-    with_answers(&Answers::default(), |game| {
+    use sunrise_client::containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields};
+    let answers = Answers::default();
+    with_answers(&answers, |game| {
+        mod_api::__private::resolve_block_entity_types(["explosion_answers:drop_save"], |_| {
+            Some(())
+        })
+        .unwrap();
         let registry = game.pack.assets.registry;
         let [dirt, tnt, infested] = [
             "minecraft:dirt",
@@ -486,6 +516,21 @@ fn block_parts_answer_drops_from_explosions() {
             let mut drops = ExplosionDrops::default();
             for x in 2..=3 {
                 game.world.set(x, 64, z, state).unwrap();
+                if state == dirt {
+                    game.world.block_entities.insert(
+                        (x, 64, z),
+                        BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                            "explosion_answers:drop_save".into(),
+                            ModBlockEntityFields {
+                                nbt: mod_api::Compound::from([(
+                                    "generation".into(),
+                                    mod_api::Tag::Int(4),
+                                )]),
+                                ..Default::default()
+                            },
+                        ))),
+                    );
+                }
                 game.explosion_hit_block(
                     [x, 64, z],
                     4.0,
@@ -506,6 +551,11 @@ fn block_parts_answer_drops_from_explosions() {
             .map(|(at, stack)| (*at, stack.count))
             .collect();
         assert_eq!(dirt_drops, [([3, 64, 1], 1)]);
+        assert_eq!(
+            answers.saved.load(Ordering::Relaxed),
+            1,
+            "only the admitted roll serializes"
+        );
         // TNT answering true drops one TNT item and still primes; unanswered it only primes.
         let primed = game.tnts.len();
         let stacks = hit(game, tnt, 3);

@@ -9,9 +9,7 @@ struct SlotTip {
     calls: Arc<AtomicUsize>,
 }
 #[mod_api::sunrise_part]
-impl mod_api::BlockPart for SlotTip {}
-#[mod_api::sunrise_part]
-impl mod_api::BlockEntityPart for SlotTip {
+impl mod_api::MenuPart for SlotTip {
     fn screen_tooltip(
         &self,
         _: &dyn mod_api::ClientHost,
@@ -71,18 +69,13 @@ impl mod_api::Hooks for Listener {
         let item = r.item_key("minecraft:stone");
         r.item_part(item, Image(self.painted.clone()));
         if self.enabled {
-            let kind = r
-                .block_entity_type("screen")
-                .blocks(&["minecraft:chest"])
-                .build();
-            r.block_entity_part(
-                &kind,
+            r.menu_part(
+                "minecraft:generic_9x3",
                 SlotTip {
                     mode: self.mode.clone(),
                     calls: self.calls.clone(),
                 },
-            )
-            .unwrap();
+            );
         }
     }
     fn item_tooltip(&self, _: &dyn mod_api::ClientHost, event: &mut mod_api::ItemTooltipEvent<'_>) {
@@ -144,7 +137,9 @@ fn filled_slot_tooltip_replaces_lines_but_keeps_item_image_and_visibility() {
                     slot_moves: Default::default(),
                     key: (1, 2, 3),
                     window: 1,
-                    block: "minecraft:chest".into(),
+                    menu: "minecraft:generic_9x3".into(),
+                    block: Some("tips:chest".into()),
+                    mod_type: None,
                     data: Vec::new(),
                     extra: None,
                     screen: mod_api::Screen {

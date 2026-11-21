@@ -44,6 +44,17 @@ pub enum PlayerWorldRefusal {
     },
     /// `place_block` of the state already standing there: `setBlock` writes nothing.
     Unchanged,
+    /// The origin or a cell the placement would write directly is held by a carrier transfer.
+    Fenced,
+    /// This placement completes a wither pattern and cannot run inside a Host transaction.
+    InTransaction,
+}
+
+/// A wrong-phase call refuses as `Stale`: no player is in reach there.
+impl crate::AccessRefusal for PlayerWorldRefusal {
+    fn unavailable() -> Self {
+        Self::Stale
+    }
 }
 
 impl crate::NoBackend for PlayerWorldRefusal {

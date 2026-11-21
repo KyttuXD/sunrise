@@ -18,6 +18,7 @@ use sunrise_core::{
 };
 
 const CRATE: &str = "placed_probe:crate";
+const SKULL: &str = "minecraft:wither_skeleton_skull";
 
 #[derive(Debug, PartialEq)]
 struct Notice {
@@ -114,6 +115,10 @@ impl ItemPart for Probe {
                     .expect("shulker entity exists");
                 assert_eq!(entity.name(host).as_deref(), Some("Shulker"));
             }
+            SKULL => {
+                assert_eq!(event.state.block().id(host), "minecraft:air");
+                crate::game::dispense_fixture::record(|| "item notice".into());
+            }
             _ => panic!("unsubscribed item {item}"),
         }
         self.notices.lock().unwrap().push(Notice {
@@ -132,15 +137,15 @@ impl Hooks for Probe {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         let kind = r.block_entity_type("crate").blocks(&[CRATE]).build();
         r.block_entity_part(&kind, Crate).unwrap();
-        for item in [CRATE, "minecraft:red_bed", "minecraft:shulker_box"] {
+        for item in [CRATE, "minecraft:red_bed", "minecraft:shulker_box", SKULL] {
             let key = r.item_key(item);
             r.item_part(key, self.clone());
         }
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(CRATE, "minecraft:stone"));
+            .register(mod_api::Block::new(CRATE, "minecraft:stone"))
+            .unwrap();
     }
     fn entity_place(
         &self,
@@ -335,5 +340,45 @@ fn block_items_notify_after_setup_and_before_consumption() {
         assert_eq!(game.world.block(4, 64, 2), stone);
         assert_eq!(game.held().unwrap().count, 1);
         assert_eq!(probe.notices.lock().unwrap().len(), 3);
+
+        // Completing a wither clears its pattern in setPlacedBy. Ordinary
+        // placement effects must not drain with those callback effects.
+        game.ui.difficulty = 2;
+        let skull = game.pack.assets.registry.default_state(SKULL).unwrap();
+        let soul = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:soul_sand")
+            .unwrap();
+        for (x, y, state) in [
+            (9, 66, skull),
+            (11, 66, skull),
+            (9, 65, soul),
+            (10, 65, soul),
+            (11, 65, soul),
+            (10, 64, soul),
+        ] {
+            game.world.set(x, y, 12, state).unwrap();
+        }
+        let before = game.mobs.len();
+        crate::game::dispense_fixture::start_recording();
+        place(game, [10, 66, 12], ItemStack::new(SKULL, 1));
+        let effects = crate::game::dispense_fixture::stop_recording();
+        let cleared = effects
+            .iter()
+            .rposition(|line| line.starts_with("L 2001 "))
+            .unwrap();
+        let notice = effects
+            .iter()
+            .position(|line| line == "item notice")
+            .unwrap();
+        let placed = effects
+            .iter()
+            .position(|line| line == "G 10,66,12 minecraft:block_place")
+            .unwrap();
+        assert!(cleared < notice && notice < placed, "{effects:?}");
+        assert_eq!(game.mobs.len(), before + 1);
+        assert_eq!(game.held(), None);
     });
 }

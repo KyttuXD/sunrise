@@ -1,8 +1,10 @@
 use super::*;
-use crate::game::native_entity_refs::tests::with_game_role;
+use crate::game::{
+    native_connection_groups::ReceivedGroup, native_entity_refs::tests::with_game_role,
+};
 use mod_api::{
-    BlockPart, BlockState, CanSurviveEvent, CanSustainPlantEvent, Hooks, LevelSide,
-    MayPlaceOnEvent, Registrar, StateForPlacementEvent,
+    BlockPart, BlockState, CanSurviveEvent, CanSustainPlantEvent, FenceGateInWallEvent, Hooks,
+    LevelSide, MayPlaceOnEvent, Registrar, StateForPlacementEvent,
 };
 
 /// Every answer below is a client's: the hooks are asked by its placement prediction.
@@ -123,11 +125,77 @@ fn client_placement_prediction_asks_placement_and_survival_parts() {
             game.world.set(x, 64, 0, below).unwrap();
             let preview = game.remote_can_place(&top_of(x, 0), &ItemStack::new(held, 1));
             assert_eq!(
-                preview.map(|(pos, _)| pos),
+                preview.map(|placed| placed.pos),
                 placed.then(|| sunrise_core::position::BlockPos::new(x, 65, 0)),
                 "{held} on {ground}"
             );
         }
+    });
+}
+
+struct BedInstead;
+#[mod_api::sunrise_part]
+impl BlockPart for BedInstead {
+    fn state_for_placement(
+        &self,
+        level: LevelSide<'_>,
+        _: &mut StateForPlacementEvent<'_>,
+    ) -> Option<Option<BlockState>> {
+        let LevelSide::Client(level) = level else {
+            panic!("asked on a server");
+        };
+        Some(level.block_state_id("minecraft:red_bed"))
+    }
+}
+
+struct BedPlacementMod;
+#[mod_api::__subscriptions]
+impl Hooks for BedPlacementMod {
+    fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+        let furnace = r.block_key("minecraft:furnace");
+        r.block_part(furnace, BedInstead);
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn predicts_the_selected_beds_component_adjusted_head() {
+    use sunrise_core::nbt::{Compound, Tag};
+    let mods = vec![mod_api::ModEntry::new(
+        "placement_bed",
+        Box::new(BedPlacementMod),
+    )]
+    .into();
+    on_a_client(mods, |game| {
+        let registry = game.pack.assets.registry;
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let air = registry.default_state("minecraft:air").unwrap();
+        let mut stack = ItemStack::new("minecraft:furnace", 1);
+        stack.data_mut().set_other(
+            "minecraft:block_state",
+            Some(Tag::Compound(Compound::from([
+                ("facing".into(), Tag::String("east".into())),
+                ("occupied".into(), Tag::String("not_a_boolean".into())),
+            ]))),
+        );
+        game.world.set(5, 64, 5, stone).unwrap();
+        game.world.set(6, 64, 5, stone).unwrap();
+        game.world.set(5, 65, 4, stone).unwrap(); // would block the default north head
+        let placed = game
+            .remote_can_place(&top_of(5, 5), &stack)
+            .expect("east-facing bed");
+        game.predict_place(&placed, &stack, 9);
+        let foot = registry.state(game.world.block(5, 65, 5)).unwrap();
+        let head = registry.state(game.world.block(6, 65, 5)).unwrap();
+        for part in [foot, head] {
+            assert_eq!(part.name, "minecraft:red_bed");
+            assert_eq!(part.properties["facing"], "east");
+            assert_eq!(part.properties["occupied"], "false");
+        }
+        assert_eq!(foot.properties["part"], "foot");
+        assert_eq!(head.properties["part"], "head");
+        assert_eq!(game.world.block(5, 65, 4), stone);
+        assert_eq!(game.world.block(5, 65, 6), air);
     });
 }
 
@@ -216,11 +284,12 @@ fn a_neighbour_s_survival_part_reads_the_prediction_s_blocks() {
         game.world
             .set(0, 65, 0, state(game, "minecraft:dandelion"))
             .unwrap();
-        let (_, changes) = game
+        let placed = game
             .remote_can_place(&top_of(1, 0), &ItemStack::new("minecraft:cobblestone", 1))
             .expect("the cobblestone is placed");
         let at = |x| {
-            changes
+            placed
+                .changes
                 .iter()
                 .find(|(pos, _)| *pos == sunrise_core::position::BlockPos::new(x, 65, 0))
                 .map(|&(_, state)| state)
@@ -261,12 +330,12 @@ fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
             ],
             "dependent notice precedes support notice; both read the completed shape writes"
         );
-        game.server_block([1, 65, 0], cobblestone.0 as i32);
-        game.end_predictions(6);
+        game.server_block([1, 65, 0], cobblestone.0 as i32, None);
+        game.end_predictions(6).unwrap();
         assert_eq!(game.world.block(1, 65, 0), air);
         assert_eq!(game.world.block(0, 65, 0), air, "the Part saw the break");
 
-        game.end_predictions(7);
+        game.end_predictions(7).unwrap();
         assert_eq!(game.world.block(1, 65, 0), cobblestone);
         assert_eq!(
             game.world.block(0, 65, 0),
@@ -274,7 +343,7 @@ fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
             "the dependent write rolled back too"
         );
 
-        game.server_block([1, 65, 0], air.0 as i32);
+        game.server_block([1, 65, 0], air.0 as i32, None);
         assert_eq!(game.world.block(1, 65, 0), air);
         assert_eq!(
             game.world.block(0, 65, 0),
@@ -355,7 +424,7 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
                 .collect::<Vec<_>>()
         };
         game.world.set(1, 65, 0, support).unwrap();
-        game.server_block([0, 65, 0], oak.0 as i32);
+        game.server_block([0, 65, 0], oak.0 as i32, None);
         let Some(BlockEntity::Sign(sign)) = game.world.block_entities.get_mut(&pos) else {
             panic!("wall sign was not created");
         };
@@ -382,7 +451,7 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
         assert!(game.world.block_entities.get(&pos).is_none());
         assert!(attachment_values(game).is_empty());
         // A denied break need not come with block or block entity packets.
-        game.end_predictions(7);
+        game.end_predictions(7).unwrap();
         assert_eq!(game.world.block(0, 65, 0), oak);
         let Some(BlockEntity::Sign(restored)) = game.world.block_entities.get(&pos) else {
             panic!("wall sign was not restored");
@@ -393,14 +462,25 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
         // A different authoritative block must not inherit the old data, even if
         // its block entity has the same type.
         game.predict_break([1, 65, 0], support, 8);
-        game.server_block([0, 65, 0], spruce.0 as i32);
-        game.end_predictions(8);
+        game.server_block([0, 65, 0], spruce.0 as i32, None);
+        game.end_predictions(8).unwrap();
         assert_eq!(game.world.block(0, 65, 0), spruce);
         let Some(BlockEntity::Sign(replacement)) = game.world.block_entities.get(&pos) else {
             panic!("replacement wall sign was not created");
         };
         assert_eq!(replacement, &Default::default());
         assert!(attachment_values(game).is_empty());
+
+        // A bare verification can supersede the block state, not the last explicit group.
+        let cell = [0, 65, 0];
+        game.server_block(cell, spruce.0 as i32, Some(ReceivedGroup(Some(23))));
+        game.predict_break([1, 65, 0], support, 9);
+        game.server_block(cell, spruce.0 as i32, Some(ReceivedGroup(None)));
+        game.server_block(cell, spruce.0 as i32, None);
+        assert_eq!(game.world.connection_group(0, 65, 0), Some(23));
+        game.end_predictions(9).unwrap();
+        assert_eq!(game.world.block(0, 65, 0), spruce);
+        assert_eq!(game.world.connection_group(0, 65, 0), None);
     });
 }
 
@@ -429,6 +509,20 @@ impl BlockPart for CountedSurvival {
     }
 }
 
+struct CountedWall;
+#[mod_api::sunrise_part]
+impl BlockPart for CountedWall {
+    fn fence_gate_in_wall(
+        &self,
+        level: LevelSide<'_>,
+        _: &mut FenceGateInWallEvent,
+    ) -> Option<bool> {
+        client(level);
+        GUIDE_ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(true)
+    }
+}
+
 struct GuideMod;
 #[mod_api::__subscriptions]
 impl Hooks for GuideMod {
@@ -437,11 +531,13 @@ impl Hooks for GuideMod {
         r.block_part(dirt, Counted);
         let dandelion = r.block_key("minecraft:dandelion");
         r.block_part(dandelion, CountedSurvival);
+        let glass = r.block_key("minecraft:glass");
+        r.block_part(glass, CountedWall);
     }
 }
 
-/// The controller guide's look at what a click would do (place a block, flip a lever) asks no
-/// placement or survival part; the click does.
+/// The controller guide's look at what a click would do asks no placement, survival or
+/// fence-gate wall-height part; the click does.
 #[test]
 #[ignore = "daily"]
 fn the_guide_s_look_asks_no_placement_or_survival_part_and_the_click_does() {
@@ -499,6 +595,26 @@ fn the_guide_s_look_asks_no_placement_or_survival_part_and_the_click_does() {
         let (result, _) = game.remote_block_reacts(&hit, None, true);
         assert!(result.consumes_action());
         assert!(GUIDE_ASKS.load(Ordering::Relaxed) > 0);
+
+        // Glass isn't a wall, but its Part lowers the predicted gate next to it.
+        game.yaw = 0.0; // Face south, so the gate checks its west and east neighbours.
+        game.world.set(8, 64, 0, stone).unwrap();
+        let glass = registry.default_state("minecraft:glass").unwrap();
+        game.world.set(9, 65, 0, glass).unwrap();
+        let gate = ItemStack::new("minecraft:oak_fence_gate", 1);
+        let hit = top_of(8, 0);
+        GUIDE_ASKS.store(0, Ordering::Relaxed);
+        assert!(game.remote_would_place(&hit, &gate));
+        assert_eq!(GUIDE_ASKS.load(Ordering::Relaxed), 0);
+        let placed = game
+            .remote_can_place(&hit, &gate)
+            .expect("the gate is placed");
+        let &(_, state) = placed
+            .changes
+            .iter()
+            .find(|(pos, _)| *pos == placed.pos)
+            .expect("the gate's predicted write");
+        assert_eq!(registry.state(state).unwrap().properties["in_wall"], "true");
     });
 }
 
@@ -676,4 +792,150 @@ fn a_prediction_asks_the_live_level_over_its_writes() {
     assert_eq!(ask(&guess), Some(true));
     guess.asks_mods = false;
     assert_eq!(ask(&guess), None);
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_active_vault_ends_a_held_item_s_click_on_the_client() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let (mut peer, _writer) = super::tests::connect_menu_test(game);
+        peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
+            .unwrap();
+        game.set_mode_id(0);
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+        game.sync_tick_chunks();
+        let hit = top_of(0, 0);
+        game.forced_hit = Some(hit);
+        let registry = game.pack.assets.registry;
+        let vault = |state: &str| {
+            registry
+                .resolve(&sunrise_world::chunk::BlockState {
+                    name: "minecraft:vault".into(),
+                    properties: [
+                        ("facing", "north"),
+                        ("ominous", "false"),
+                        ("vault_state", state),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect(),
+                })
+                .unwrap()
+        };
+        // VaultBlock.useItemOn: SUCCESS_SERVER for any held item on an ACTIVE vault, so the
+        // click ends with UseItemOn and the hand swings only when the server says so.
+        game.world.set(0, 64, 0, vault("active")).unwrap();
+        for (hand, expected) in [
+            (Hand::Main, &[(0, 1)][..]),
+            (Hand::Off, &[(0, 1), (1, 2)][..]),
+        ] {
+            for item in ["minecraft:trial_key", "minecraft:stick"] {
+                game.inventory[game.selected] =
+                    (hand == Hand::Main).then(|| ItemStack::new(item, 1));
+                game.offhand = (hand == Hand::Off).then(|| ItemStack::new(item, 1));
+                let sequence = game.remote.as_ref().unwrap().sequence;
+                let swings = game.swings_started;
+                game.remote_use(mod_api::InteractionAttempt::Press);
+                let mut uses = Vec::new();
+                while let Ok((id, body)) = peer.recv() {
+                    match S::decode(id, &body).unwrap() {
+                        S::UseItemOn(packet) => {
+                            assert_eq!(packet.pos, hit.pos);
+                            uses.push((packet.hand, packet.sequence - sequence));
+                        }
+                        S::UseItem(_) => panic!("unexpected UseItem for {hand:?} {item}"),
+                        _ => {}
+                    }
+                }
+                assert_eq!(uses.as_slice(), expected, "{hand:?} {item}");
+                assert_eq!(
+                    game.remote.as_ref().unwrap().sequence - sequence,
+                    expected.len() as i32
+                );
+                assert_eq!(game.swings_started, swings, "{hand:?} {item}");
+            }
+        }
+        // TRY_WITH_EMPTY_HAND otherwise: the vault has no useWithoutItem, so the click goes on.
+        let (empty, _) = game.remote_block_reacts(&hit, None, true);
+        assert!(!empty.consumes_action());
+        game.world.set(0, 64, 0, vault("unlocking")).unwrap();
+        let key = ItemStack::new("minecraft:trial_key", 1);
+        let (unlocking, _) = game.remote_block_reacts(&hit, Some(&key), true);
+        assert!(!unlocking.consumes_action());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn blocks_answer_a_held_item_s_click_on_the_client_as_vanilla() {
+    on_a_client(Vec::new().into(), |game| {
+        let registry = game.pack.assets.registry;
+        let state = |name: &str, properties: &[(&str, &str)]| {
+            registry
+                .resolve(&sunrise_world::chunk::BlockState {
+                    name: name.into(),
+                    properties: properties
+                        .iter()
+                        .map(|(key, value)| ((*key).into(), (*value).into()))
+                        .collect(),
+                })
+                .unwrap()
+        };
+        let click = |game: &mut Game<'_>, item: &str| {
+            let held = ItemStack::new(item, 1);
+            game.remote_block_reacts(&top_of(0, 0), Some(&held), true).0
+        };
+        // RedStoneOreBlock.useItemOn: SUCCESS, unless a block item would go on top (PASS).
+        game.world
+            .set(
+                0,
+                64,
+                0,
+                state("minecraft:redstone_ore", &[("lit", "false")]),
+            )
+            .unwrap();
+        assert!(click(game, "minecraft:stick").should_swing());
+        assert!(!click(game, "minecraft:cobblestone").consumes_action());
+        // PumpkinBlock.useItemOn: shears are SUCCESS; anything else goes on.
+        game.world
+            .set(0, 64, 0, state("minecraft:pumpkin", &[]))
+            .unwrap();
+        assert!(click(game, "minecraft:shears").should_swing());
+        assert!(!click(game, "minecraft:stick").consumes_action());
+        // WeatheringCopperGolemStatueBlock.useItemOn: an axe on an unaffected statue is SUCCESS.
+        game.world
+            .set(
+                0,
+                64,
+                0,
+                state(
+                    "minecraft:copper_golem_statue",
+                    &[
+                        ("copper_golem_pose", "standing"),
+                        ("facing", "north"),
+                        ("waterlogged", "false"),
+                    ],
+                ),
+            )
+            .unwrap();
+        assert!(click(game, "minecraft:iron_axe").should_swing());
+        // BeehiveBlock.useItemOn on a client level: a full hive takes a glass bottle; its
+        // shears are the server's, so they go on.
+        game.world
+            .set(
+                0,
+                64,
+                0,
+                state(
+                    "minecraft:beehive",
+                    &[("facing", "north"), ("honey_level", "5")],
+                ),
+            )
+            .unwrap();
+        assert!(click(game, "minecraft:glass_bottle").consumes_action());
+        assert!(!click(game, "minecraft:shears").consumes_action());
+    });
 }

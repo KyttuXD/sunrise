@@ -13,7 +13,7 @@ again restores vanilla's behaviour completely.
 | FPS and click counters (for native mods) | `extras.rs` (pure logic, unit tested) |
 | Dynamic lights: item glow, nearest sources | `crates/sunrise-client-render/src/dynamic_light.rs` (unit tested), `game/interface/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
 | HUD drawing (mods' panels, corner stacking) | `crates/sunrise-client/src/extras_hud.rs` |
-| Reconnect policy and backoff | `crates/sunrise-client/src/reconnect.rs`; its game glue (connect, join, leave, the countdown) in `game/interface/extras/reconnect.rs` |
+| Auto-reconnect: its setting, its row, the policy and the backoff | crate `sunrise-reconnect`, which the official executable registers ([forking.md](forking.md#modding-and-rendering)); the engine shows its countdown and connects again when it asks (`Hooks::retry`, `game/network/remote/connection.rs`) |
 | Game glue (input hooks, per-frame update) | `crates/sunrise-client/src/game/interface/extras.rs`; each extra's own glue in a child module, `game/interface/extras/` |
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
 | Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
@@ -72,10 +72,16 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable (numbers in the pull request, #814).
 
+### Mod audio streams (`modAudioStreams`, default on)
+- Mods can play audio they make (`ClientHost::open_audio_stream`, [the how-to](modding/src/how-to/client/audio-streams.md)).
+  Off, every stream plays on unheard: the engine mixes none of it and only takes each stream's audio in at its own pace.
+- The one extra that is on by default; its line is written to `sunrise-extras.txt` only while it is off. It lives in
+  `crates/sunrise-official/src/mod_audio.rs` and sets the engine's mod-stream gain (`sunrise_platform::sound`).
+
 ### Moved to native mods
 
 The **FPS counter**, **Keystrokes** and **Zoom** are official native mods now (in
-horizon-rust/horizon-mods under `native/<name>/`, [mods.md](modding/src/start/installing.md#sunrises-official-mods)), with the same look and
+horizon-rust/horizon-mods under `native/<name>/`, [mods.md](modding/src/players/installing-mods.md#sunrises-own-mods)), with the same look and
 options. Players install them from the launcher's Mods page, and the launcher builds them into the game
 ([modding/src/how-to/native-mods.md](modding/src/how-to/native-mods.md)). The game keeps
 the hook points they use (`crates/sunrise-client/src/game/native_hooks/`). The Extras page keeps a **Zoom** row: the mod's switch and Settings button when
@@ -113,6 +119,8 @@ it is built in, else a note saying to install it from the Mods page.
 - Online-mode servers: the retry joins with the account the game signed in
   with, held in memory for the whole run (`auth::current()`); nothing is
   written to disk.
+- Only in the official executable (`sunrise-official`), which registers it: sunrise-client's own executable has
+  no such row or setting, and never connects again by itself.
 
 ### Keep channels for UI sounds (`uiSoundReserve`, default off)
 - Positional sounds (a block breaking, a mob, an explosion) start only while at
@@ -170,6 +178,15 @@ and the container screen tests are unchanged).
 - Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
   server accepts it; a unit test replays the planned clicks through the menu
   engine on random chests.
+
+### Shader pack key (`shaderPackKey`, `K` by default; `lastShaderPack`, none picked)
+
+- The Extras page's key for the Shader Packs pick: press it and the running pack turns off, press it again and
+  the same pack runs again. Click the row, then press a key to rebind it (Escape unbinds); it is not a vanilla
+  key binding, so it never collides with one (Replay Studio keeps physical `K` for its camera keyframe).
+- Turning off writes the pick to `lastShaderPack`, so the pack stays off across restarts until the key is
+  pressed again. The menu's second click on the picked pack does the same through the same pick.
+- A pack whose owning mod is off can't run: the key reports that instead of claiming it turned on.
 
 ### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
 - A new chat line slides in from the left while it fades in over a quarter of

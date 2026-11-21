@@ -8,8 +8,6 @@
 //! exit portal, the egg and the next gateway; and its rendering and boss bar.
 #[path = "dragon/death.rs"]
 mod death;
-#[path = "dragon/rays.rs"]
-mod rays;
 #[path = "dragon/residency.rs"]
 mod residency;
 #[path = "dragon/save_lending.rs"]
@@ -24,7 +22,6 @@ use super::{
     potions::{Victim, mob_can_be_affected},
 };
 use mod_api::DragonPhase;
-use rays::dragon_rays;
 use sunrise_client::{
     health::{DamageContainer, DamageLevel, HurtSource, Reduction},
     hud::HudBatch,
@@ -37,10 +34,12 @@ use sunrise_client::{
     text::Text,
 };
 use sunrise_client_core::nbt_value;
+use sunrise_client_gameplay::dragon_render::{dissolve_color, dissolve_mask, dragon_rays};
 use sunrise_core::nbt::Tag;
 use sunrise_core::position::BlockPos;
 use sunrise_core::{
     geometry::{Aabb, Vec3, trig},
+    jmath,
     random::{LegacyRandom, RandomSource},
 };
 use sunrise_protocol::entity_data::Value;
@@ -527,49 +526,6 @@ fn shrugs(direct: Option<&ProjectileKind>) -> bool {
         Some(ProjectileKind::Arrow { .. } | ProjectileKind::Trident | ProjectileKind::WindCharge)
     )
 }
-/// `#minecraft:no_knockback` by the damage type's id: `dealDefaultKnockback` skips these.
-fn is_no_knockback_type(ty: &str) -> bool {
-    matches!(
-        ty.trim_start_matches("minecraft:"),
-        "explosion"
-            | "player_explosion"
-            | "bad_respawn_point"
-            | "in_fire"
-            | "lightning_bolt"
-            | "on_fire"
-            | "lava"
-            | "hot_floor"
-            | "sulfur_cube_hot"
-            | "in_wall"
-            | "cramming"
-            | "drown"
-            | "starve"
-            | "cactus"
-            | "fall"
-            | "ender_pearl"
-            | "fly_into_wall"
-            | "out_of_world"
-            | "generic"
-            | "magic"
-            | "wither"
-            | "dragon_breath"
-            | "dry_out"
-            | "sweet_berry_bush"
-            | "freeze"
-            | "stalagmite"
-            | "outside_border"
-            | "generic_kill"
-            | "campfire"
-            | "spear"
-    )
-}
-/// `#minecraft:is_explosion` by the damage type's id.
-fn is_explosion_type(ty: &str) -> bool {
-    matches!(
-        ty.trim_start_matches("minecraft:"),
-        "fireworks" | "explosion" | "player_explosion" | "bad_respawn_point"
-    )
-}
 /// `Vec3.normalize`: zero under a length of `1.0E-5F`.
 fn vanilla_normalize(v: glam::DVec3) -> glam::DVec3 {
     let len = v.length();
@@ -578,6 +534,12 @@ fn vanilla_normalize(v: glam::DVec3) -> glam::DVec3 {
     } else {
         v / len
     }
+}
+
+/// `DragonStrafePlayerPhase`'s firing angle: `Math.acos` of the float dot, one
+/// `dmul` by `Mth.RAD_TO_DEG`, narrowed to float, then `+ 0.5F`.
+fn strafe_angle(dot: f32) -> f32 {
+    (jmath::acos(f64::from(dot)) * f64::from(trig::RAD_TO_DEG)) as f32 + 0.5
 }
 /// `#minecraft:is_fire`, which the dragon's parts and the crystals refuse
 /// (`isInvulnerableToBase`: both types are fire immune).
@@ -605,6 +567,69 @@ const ADJACENCY: [u32; 24] = [
     3166214, 2138120, 6373424, 4358208, 12910976, 9044480, 9706496, 15216640, 13688832, 11763712,
     8257536,
 ];
+/// A* over the dragon's 24 fixed nodes, in Minecraft's open-set order.
+fn search_dragon_path(
+    nodes: &[[i32; 3]; 24],
+    from: usize,
+    to: usize,
+    min: usize,
+    last: Option<[i32; 3]>,
+) -> Option<Path> {
+    use sunrise_client::mobs::path::heap::{Key, OpenSet};
+    let dist = |a: [i32; 3], b: [i32; 3]| {
+        (((a[0] - b[0]).pow(2) + (a[1] - b[1]).pow(2) + (a[2] - b[2]).pow(2)) as f32).sqrt()
+    };
+    let mut g = [f32::MAX; 24];
+    let mut came = [usize::MAX; 24];
+    let mut closed = [false; 24];
+    let mut keys = [Key::default(); 24];
+    let mut open = OpenSet::with_capacity(keys.len());
+    open.insert(&mut keys, from as u32, dist(nodes[from], nodes[to]));
+    g[from] = 0.0;
+    let mut closest = from;
+    while let Some(cur) = open.pop(&mut keys) {
+        let cur = cur as usize;
+        if cur == to {
+            closest = to;
+            break;
+        }
+        if dist(nodes[cur], nodes[to]) < dist(nodes[closest], nodes[to]) {
+            closest = cur;
+        }
+        closed[cur] = true;
+        for i in min..24 {
+            if ADJACENCY[cur] & (1 << i) != 0 && !closed[i] {
+                let tentative = g[cur] + dist(nodes[cur], nodes[i]);
+                if tentative < g[i] {
+                    g[i] = tentative;
+                    came[i] = cur;
+                    let f = tentative + dist(nodes[i], nodes[to]);
+                    if keys[i].is_open() {
+                        open.change_cost(&mut keys, i as u32, f);
+                    } else {
+                        open.insert(&mut keys, i as u32, f);
+                    }
+                }
+            }
+        }
+    }
+    if closest == from && from != to {
+        return None;
+    }
+    let mut list = vec![nodes[closest]];
+    let mut n = closest;
+    while came[n] != usize::MAX {
+        n = came[n];
+        list.insert(0, nodes[n]);
+    }
+    if let Some(l) = last {
+        list.push(l);
+    }
+    Some(Path {
+        nodes: list,
+        next: 0,
+    })
+}
 impl Dragon {
     /// `Entity.teleportSetPosition` with the command's relative motion flags.
     pub(super) fn teleport_motion(&mut self, relative: [bool; 3]) {
@@ -1513,7 +1538,14 @@ impl Game<'_> {
                 Vec3::new(x + 1.0, y + 2.0, z + 1.0),
             ));
             self.combat.explosion_direct = Some(c.id);
-            let _ = self.server_explode(at, 6.0, interaction, false);
+            let _ = self.server_explode_from(
+                at,
+                6.0,
+                interaction,
+                false,
+                super::explosion::ExplosionSource::default()
+                    .with_damage_direct(c.id, sunrise_client::health::DirectEntity::Other),
+            );
             self.combat.explosion_direct = None;
             self.combat.explosion_in_water = false;
             self.fight.blast_by = None;
@@ -1559,12 +1591,19 @@ impl Game<'_> {
             d.strafe_after_crystal(target.as_ref());
         }
     }
+    /// The boxes of the living dragon's parts a projectile can hit, in `getSubEntities` order.
+    pub(super) fn dragon_part_boxes(&self) -> Option<[Aabb; 8]> {
+        self.dragon
+            .as_ref()
+            .filter(|d| d.alive())
+            .map(|d| std::array::from_fn(|i| d.part_box(i)))
+    }
     /// Targets for projectiles: dragon parts and crystals.
     pub(super) fn special_targets(&self) -> Vec<(u32, Aabb)> {
         let mut out = Vec::new();
-        if let Some(d) = self.dragon.as_ref().filter(|d| d.alive()) {
-            for i in 0..8 {
-                out.push((SPECIAL + i as u32, d.part_box(i)));
+        if let Some(boxes) = self.dragon_part_boxes() {
+            for (i, part) in boxes.into_iter().enumerate() {
+                out.push((SPECIAL + i as u32, part));
             }
         }
         for (i, c) in self.crystals.iter().enumerate() {
@@ -1700,12 +1739,15 @@ impl Game<'_> {
             direct: direct_entity,
             position: from.map(|p| [p.x, p.y, p.z]),
         };
+        // The world's tags, so a datapack type is classed as vanilla's are.
+        let explosion = self.damage_in_tag(ty, "minecraft:is_explosion");
+        let no_knockback = self.damage_in_tag(ty, "minecraft:no_knockback");
         let level = super::entity::damage_level_of!(self, self.combat.attack(), no_push, None);
         let reaches_base = self.dragon.as_ref().is_some_and(|d| {
             d.reaches_base_check(
                 BODY,
                 amount,
-                player.is_some() || is_explosion_type(ty),
+                player.is_some() || explosion,
                 shrugs(direct.as_ref()),
             )
         });
@@ -1741,9 +1783,9 @@ impl Game<'_> {
         let Some(d) = self.dragon.as_mut().filter(|d| d.id == id) else {
             return false;
         };
-        let counts = player.is_some() || is_explosion_type(ty);
+        let counts = player.is_some() || explosion;
         // With no source position the push has no direction (knockback(0.4, 0, 0)).
-        let knock = (!is_no_knockback_type(ty)).then(|| from.unwrap_or(d.position));
+        let knock = (!no_knockback).then(|| from.unwrap_or(d.position));
         let entity_id = match by {
             Some(Target::Projectile(id) | Target::Trident(id)) => Some(id as i32),
             _ => None,
@@ -1784,10 +1826,7 @@ impl Game<'_> {
             .filter(|t| matches!(t, Target::Player | Target::Guest(_)))
             .and_then(|t| self.for_player(t, |g| g.creative))
             .unwrap_or(false);
-        let bypass = matches!(
-            ty.trim_start_matches("minecraft:"),
-            "out_of_world" | "generic_kill"
-        ) || creative;
+        let bypass = self.damage_in_tag(ty, "minecraft:bypasses_invulnerability") || creative;
         let vanilla = (self.crystals[index].invulnerable && !bypass) || is_fire(kind);
         let entity_id = |target| match target {
             Some(Target::Player) => self.own_entity_id(),
@@ -1810,7 +1849,7 @@ impl Game<'_> {
         }
         // destroy_crystal keeps a crystal invulnerable to everything else.
         self.crystals[index].invulnerable = false;
-        let damage = if is_explosion_type(ty) {
+        let damage = if self.damage_in_tag(ty, "minecraft:is_explosion") {
             CrystalDamage::Explosion
         } else {
             CrystalDamage::Direct
@@ -2128,67 +2167,12 @@ impl Game<'_> {
     /// `findPath` (A* over the adjacency masks), optionally ending at `last`.
     fn dragon_path(&mut self, from: usize, to: usize, last: Option<[i32; 3]>) -> Option<Path> {
         let nodes = self.dragon_nodes();
-        let dist = |a: [i32; 3], b: [i32; 3]| {
-            (((a[0] - b[0]).pow(2) + (a[1] - b[1]).pow(2) + (a[2] - b[2]).pow(2)) as f32).sqrt()
-        };
         let min = if self.fight.alive_crystals == 0 {
             12
         } else {
             0
         };
-        let mut g = [f32::MAX; 24];
-        let mut came = [usize::MAX; 24];
-        let mut closed = [false; 24];
-        let mut open = vec![from];
-        g[from] = 0.0;
-        let mut closest = from;
-        while !open.is_empty() {
-            let (k, &cur) = open
-                .iter()
-                .enumerate()
-                .min_by(|a, b| {
-                    (g[*a.1] + dist(nodes[*a.1], nodes[to]))
-                        .total_cmp(&(g[*b.1] + dist(nodes[*b.1], nodes[to])))
-                })
-                .expect("open set");
-            open.swap_remove(k);
-            if cur == to {
-                closest = to;
-                break;
-            }
-            if dist(nodes[cur], nodes[to]) < dist(nodes[closest], nodes[to]) {
-                closest = cur;
-            }
-            closed[cur] = true;
-            for i in min..24 {
-                if ADJACENCY[cur] & (1 << i) != 0 && !closed[i] {
-                    let tentative = g[cur] + dist(nodes[cur], nodes[i]);
-                    if tentative < g[i] {
-                        g[i] = tentative;
-                        came[i] = cur;
-                        if !open.contains(&i) {
-                            open.push(i);
-                        }
-                    }
-                }
-            }
-        }
-        if closest == from && from != to {
-            return None;
-        }
-        let mut list = vec![nodes[closest]];
-        let mut n = closest;
-        while came[n] != usize::MAX {
-            n = came[n];
-            list.insert(0, nodes[n]);
-        }
-        if let Some(l) = last {
-            list.push(l);
-        }
-        Some(Path {
-            nodes: list,
-            next: 0,
-        })
+        search_dragon_path(&nodes, from, to, min, last)
     }
     fn next_target(&mut self, path: &mut Option<PathBox>) -> Option<Vec3> {
         let p = path.as_mut()?;
@@ -2396,10 +2380,13 @@ impl Game<'_> {
                     *charge += 1;
                     let d = self.dragon.as_ref().expect("dragon");
                     let r = f64::from(d.yaw * trig::DEG_TO_RAD);
-                    let dir = glam::DVec2::new(f64::from(trig::sin(r)), f64::from(-trig::cos(r)))
-                        .normalize();
-                    let aim = glam::DVec2::new(pp.x - pos.x, pp.z - pos.z).normalize_or_zero();
-                    let angle = dir.dot(aim).clamp(-1.0, 1.0).acos().to_degrees() + 0.5;
+                    let dir = vanilla_normalize(glam::DVec3::new(
+                        f64::from(trig::sin(r)),
+                        0.0,
+                        f64::from(-trig::cos(r)),
+                    ));
+                    let aim = vanilla_normalize(glam::DVec3::new(pp.x - pos.x, 0.0, pp.z - pos.z));
+                    let angle = strafe_angle(dir.dot(aim) as f32);
                     if *charge >= 5 && (0.0..10.0).contains(&angle) {
                         // From the head, one block back along the view vector.
                         let head = d.parts[0].0;
@@ -2991,7 +2978,7 @@ impl Game<'_> {
         }
         // EnderDragon.aiStep queries living entities, not only players.
         if let Some(d) = self.dragon.as_ref() {
-            let frame = sunrise_client::mobs::dragon_contacts::Frame {
+            let frame = sunrise_gameplay::dragon_contacts::Frame {
                 dragon_id: d.id,
                 origin: d.position,
                 center: (bc, bz),
@@ -3024,7 +3011,7 @@ impl Game<'_> {
                         self.combat.attack(),
                     );
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                    if sunrise_client::mobs::dragon_contacts::contact_part(
+                    if sunrise_gameplay::dragon_contacts::contact_part(
                         crate::game::entity::damage_level_of!(
                             self,
                             &sunrise_client::health::NO_ATTACK,
@@ -3538,16 +3525,24 @@ impl Breath {
         self.age < self.potion.as_ref().map_or(20, |p| p.settings.wait_time)
     }
 }
+#[cfg(test)]
+impl Dragon {
+    pub(super) fn set_render_test_crystal(&mut self, crystal: Option<usize>) {
+        self.nearest_crystal = crystal;
+    }
+}
+
 impl Game<'_> {
-    /// `EnderDragonRenderer` and `EnderDragonModel.setupAnim`.
+    /// `EnderDragonRenderer.submit` and `EnderDragonModel.setupAnim`, from the real dragon's slot.
     pub(super) fn dragon_geometry(
         &self,
+        d: &Dragon,
         camera: glam::DVec3,
         alpha: f64,
         out: &mut Vec<Vertex>,
         additive: &mut Vec<Vertex>,
     ) {
-        let (Some(d), Some(model)) = (self.dragon.as_ref(), self.dragon_model.as_ref()) else {
+        let Some(model) = self.dragon_model.as_ref() else {
             return;
         };
         let a = alpha as f32;
@@ -3692,6 +3687,8 @@ impl Game<'_> {
             (0xFFFF_FFFF, u32::from(d.hurt_time > 0))
         };
         let first = out.len();
+        self.mark_entity(first, "minecraft:ender_dragon");
+        self.mark_motion(first, 0);
         sunrise_client::mobs::render::draw(model, base, &poses, skin, color, light, overlay, out);
         if let Some(mask) = mask {
             dissolve_mask(&mut out[first..], skin, mask);
@@ -3709,8 +3706,10 @@ impl Game<'_> {
             let full = sunrise_client::mobs::render::FULL_BRIGHT;
             sunrise_client::mobs::render::draw(model, base, &poses, glow, color, full, 0, out);
         }
+        #[cfg(test)]
+        super::native_render_pair_tests::witness_body(d.id, first, out.len());
         // RenderTypes.eyes: the glowing eyes, added on top.
-        let mut eye_quads = Vec::new();
+        let first_eye = additive.len();
         sunrise_client::mobs::render::draw(
             model,
             base,
@@ -3719,17 +3718,16 @@ impl Game<'_> {
             0xFFFF_FFFF,
             240 | 240 << 8,
             0,
-            &mut eye_quads,
+            additive,
         );
         // `RenderTypes.eyes` has an `OitPipelineSet`: improved transparency
         // moves the tagged quads into its stages (the HDR tier is the eyes'
         // shine, `mobs::render::EYES_TIER`).
-        for v in &mut eye_quads {
+        for v in &mut additive[first_eye..] {
             v.layer = 2
                 | sunrise_client::gfx::OIT_ENTITY
                 | u32::from(sunrise_client::mesher::BRIGHT) << 16;
         }
-        additive.extend(eye_quads);
         if death > 0.0 {
             let rays = additive.len();
             self.dragon_rays(rays_base, death / 200.0, additive);
@@ -3767,6 +3765,8 @@ impl Game<'_> {
         else {
             return;
         };
+        // Like the other layer-6 beams, this is a separate pack material from its body.
+        self.mark_stage(out.len(), "NONE");
         let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
         let wrap_light = q(s.v0) | q(s.v1 - s.v0) << 16;
         let (dx, dy, dz) = (delta.x as f32, delta.y as f32, delta.z as f32);
@@ -4154,6 +4154,7 @@ impl Game<'_> {
             horizontal_collision: false,
             needs_sync: false,
             sync_position: false,
+            sync_velocity: false,
             stepped: true,
             idle: false,
             bare: false,
@@ -4161,6 +4162,7 @@ impl Game<'_> {
             spectator: false,
             watching: false,
             hidden: None,
+            general: false,
         })
     }
 }
@@ -4675,7 +4677,11 @@ impl Game<'_> {
                     false,
                     super::explosion::ExplosionSource::default()
                         .with_silence(self.entity_silent(c.id))
-                        .with_entity(c.id, "minecraft:end_crystal"),
+                        .with_entity(
+                            c.id,
+                            "minecraft:end_crystal",
+                            sunrise_client::health::DirectEntity::Other,
+                        ),
                 );
             }
         }
@@ -4776,6 +4782,16 @@ impl Game<'_> {
     /// so it can be spawned in any dimension. Sunrise keeps one dragon per level, as `/summon`
     /// and loading do: with one already there, nothing spawns and the egg stays.
     pub(super) fn spawn_dragon_spawned(&mut self, at: [f64; 3], site: SpawnSite) -> Option<u32> {
+        self.spawn_dragon_facing(at, site, None)
+    }
+    /// [`spawn_dragon_spawned`](Self::spawn_dragon_spawned) snapped to `fixed_yaw` when
+    /// given (`snapTo(pos, yaw, 0)`), which takes no draw from the level.
+    pub(super) fn spawn_dragon_facing(
+        &mut self,
+        at: [f64; 3],
+        site: SpawnSite,
+        fixed_yaw: Option<f32>,
+    ) -> Option<u32> {
         if self.dragon.is_some() {
             return None;
         }
@@ -4783,8 +4799,11 @@ impl Game<'_> {
         // SummonCommand loads absent Rotation as zero before finalization. Only
         // EntityType.create's egg placement draws a random snapTo yaw.
         // Diverges from upstream: shared mod finalization also admits command dragons.
-        let yaw = match site {
-            SpawnSite::Finalizing(sunrise_client::mobs::spawn_rules::Reason::Command) => 0.0,
+        let yaw = match (fixed_yaw, site) {
+            (Some(yaw), _) => yaw,
+            (None, SpawnSite::Finalizing(sunrise_client::mobs::spawn_rules::Reason::Command)) => {
+                0.0
+            }
             _ => sunrise_client::camera::wrap_degrees(self.world.random.next_float() * 360.0),
         };
         let finalized = match site {
@@ -5111,13 +5130,48 @@ impl Game<'_> {
 
 #[path = "dragon/crystal.rs"]
 mod crystal;
-#[path = "dragon/death_render.rs"]
-mod death_render;
-use death_render::{dissolve_color, dissolve_mask};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dragon_search_preserves_equal_cost_heap_order() {
+        let xz = [
+            [60, -1],
+            [51, 29],
+            [29, 51],
+            [0, 60],
+            [-30, 51],
+            [-52, 30],
+            [-60, 0],
+            [-52, -31],
+            [-31, -52],
+            [-1, -60],
+            [29, -52],
+            [51, -30],
+            [40, -1],
+            [28, 28],
+            [0, 40],
+            [-29, 28],
+            [-40, 0],
+            [-29, -29],
+            [-1, -40],
+            [28, -29],
+            [20, -1],
+            [0, 20],
+            [-20, 0],
+            [-1, -20],
+        ];
+        let heights = [
+            83, 88, 75, 82, 86, 82, 87, 88, 83, 75, 78, 74, 80, 77, 79, 73, 74, 82, 74, 73, 85, 75,
+            75, 77,
+        ];
+        let nodes = std::array::from_fn(|i| [xz[i][0], heights[i], xz[i][1]]);
+        let path = search_dragon_path(&nodes, 18, 6, 0, None).unwrap();
+        // With crystals alive, the ruled array heap visits node 16 before 7 at a tie.
+        assert_eq!(path.nodes, [nodes[18], nodes[17], nodes[16], nodes[6]]);
+    }
 
     #[test]
     #[ignore = "daily"]
@@ -6373,6 +6427,34 @@ mod tests {
         let hurt = d.hurt(level, 0, 5.0, HIT, false);
         assert_eq!(hurt, Hurt::Landed { full: true });
         assert_eq!(d.hurt_time, 10);
+    }
+
+    #[test]
+    fn the_strafe_firing_angle_matches_vanillas_floats() {
+        // `(float)(Math.acos(dot) * (180.0F / (float)Math.PI)) + 0.5F` on a JDK: dots at
+        // and around cos(10°) cross the [0, 10) gate on single ulps.
+        for (dot, angle) in [
+            (0x3f80_0000, 0x3f00_0000), // 1.0 -> 0.5
+            (0x3f7f_be77, 0x4044_00b1), // 0.999 -> 3.0625422
+            (0x3f7c_1c5f, 0x4127_ffca), // over the gate -> 10.4999485
+            (0x3f7c_1c5d, 0x4127_fff3), // under it -> 10.499988
+            (0x3f7c_1c5c, 0x4128_0007), // -> 10.500007
+            (0x3f7c_1bda, 0x4128_0a80), // -> 10.502563
+            (0x3f7c_28f6, 0x4126_fb56), // -> 10.436361
+            (0x3f7a_e148, 0x413f_a742), // 0.98 -> 11.978334
+            (0x3f00_0000, 0x4271_ffff), // 0.5 -> 60.499996
+            (0x0000_0000, 0x42b4_ffff), // 0.0 -> 90.49999
+            (0xbf80_0000, 0x4334_7fff), // -1.0 -> 180.49998
+        ] {
+            assert_eq!(
+                strafe_angle(f32::from_bits(dot)),
+                f32::from_bits(angle),
+                "dot {dot:#010x}"
+            );
+        }
+        // Past 1.0 or NaN, `Math.acos` is NaN and the gate refuses, as vanilla's does.
+        assert!(strafe_angle(f32::from_bits(0x3f80_0001)).is_nan());
+        assert!(strafe_angle(f32::NAN).is_nan());
     }
 
     #[test]

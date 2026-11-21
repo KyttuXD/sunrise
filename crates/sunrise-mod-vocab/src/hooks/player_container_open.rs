@@ -15,7 +15,9 @@ pub trait Hooks {
     /// Replacing a menu follows its close; even inside one tick, open precedes
     /// `player_container_close`. `menu` is the current menu handle, valid during this call,
     /// as returned by `PlayerRef::container_menu`. It is `None` for crafting tables,
-    /// merchants, workstations, lecterns, mount inventories and menus with hidden slots.
+    /// merchants, workstations, lecterns, mount inventories and block-backed menus with
+    /// slots hidden at open; a native window a mod opened from code keeps its handle even
+    /// with slots hidden at open.
     /// The player's state is swapped in. Server-side.
     #[hook(
         side = "server",

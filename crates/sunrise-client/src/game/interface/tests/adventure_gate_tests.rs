@@ -165,7 +165,7 @@ fn an_adventure_placement_is_predicted_when_can_place_on_names_the_clicked_block
     let preview = game
         .remote_can_place(&hit, &allowed)
         .expect("an allowed placement is predicted");
-    assert_eq!([preview.0.x, preview.0.y, preview.0.z], [2, 5, 2]);
+    assert_eq!([preview.pos.x, preview.pos.y, preview.pos.z], [2, 5, 2]);
     assert_eq!(
         game.world.block(pos[0], pos[1] + 1, pos[2]),
         game.res.facts().air,

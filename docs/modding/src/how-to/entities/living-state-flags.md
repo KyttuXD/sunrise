@@ -36,8 +36,21 @@ the player's sprint key: a player's own client sets its flag again from its inpu
 
 `EntityRef::is_on_fire(host)` reads vanilla `Entity.isOnFire` on either side: an entity that is not
 fire immune and has positive fire ticks or, on a client, synced shared flag 0. It covers players,
-mobs, armor stands and dropped items, including item-stack fire immunity. On a client it reads
-that client's copy, including the local player's predicted timer, not a server query.
+mobs, armor stands, dropped items and tracked remote players. On a client it reads that
+client's copy, including the local player's predicted timer, not a server query.
+
+`EntityRef::fire_immune(host)` reads type immunity or a live grant on that side, not
+separate species-specific damage rules. On the server, use `set_fire_immunity(host, immune)` for a player, mob or armor
+stand. Granting it stops ignition and fire damage and silently clears any existing burn.
+Clearing the grant cannot remove built-in immunity. The grant belongs to the live body:
+it is not saved, a replacement body (including a respawn) starts without it, and a level
+transfer keeps it only if it carries the same body. The last write wins.
+
+For equipment-driven immunity, recompute the grant from the wearer's gear on the server and
+use `set_client_fire_immunity(host, immune)` on the client copy from its synced equipment.
+There is no grant packet: fire itself still uses vanilla's synced flag. The client grant only
+affects local prediction and drawing, without replacing remote entities' synced fire state.
+It ends when that entity copy is discarded.
 
 `EntityRef::is_under_water(host)` reads `Entity.isUnderWater` for players and mobs on either side:
 the previous eye-in-water sample AND current water contact. The local client player follows the
@@ -71,6 +84,12 @@ client-side write and a stale handle are refused (`false`). The write also refus
 falling block and an ender pearl by name: each keeps its cooldown in a store of its own (the player and guest portal
 states, the falling block's saved field, an End gateway traveller) that this write does not own, so a write can only
 reach them once that kind has its own owner decision.
+
+On the server, `EntityRef::tick_count(host)` reads the signed 32-bit `Entity.tickCount` for a player, mob, item entity, experience
+orb or minecart. A local player and the guest whose turn is running read their active `PlayerMotion`; a guest outside
+its turn reads the motion kept in the guest record, or its carried count while a teleport is between bodies. A newly
+admitted player with no body has count 0. The value wraps like Java's `int`, and a stale handle or another entity
+kind returns `None`.
 
 `MobRef::can_use_portal` reads the existing server portal decision for a mob in the current level, including mounts and player riders. It takes `&dyn Host`: `Some(false)` means the mob is ineligible, while `None` means a client, stale or unavailable handle, parked mob, or the separately modelled dragon. It does not load a level.
 
@@ -141,8 +160,8 @@ runs, so a mod's own write in that hook is what stays.
 
 ## Riding topology and resident handles
 
-`EntityRef` names only an entity resident in the current level. A rejected Mob
-passenger can remain a full object in a riding tree without becoming resident;
+On the server, `EntityRef` names only an entity resident in the current level.
+A rejected Mob passenger can remain a full object in a riding tree without becoming resident;
 its saved UUID does not make another object's handle refer to it.
 
 `is_passenger` and `is_vehicle` describe the actual relationships, including
@@ -163,6 +182,26 @@ obtain its handle. Cyclic relationships have no root and return `None`.
 its handle can be returned. An off-level first passenger means `None`, not a later
 resident rider. All these reads refuse stale input handles; none loads a retained
 object into the level or exposes a handle for it.
+
+On a client, `vehicle`, `is_passenger`, `passengers`, `root_vehicle` and
+`is_vehicle` read the riding relationships sent in the server's passenger
+packets. They work for every tracked entity and the local player. A stale or
+untracked input returns `None`. Passenger lists for unknown vehicles and entities
+that cannot carry passengers (markers and ominous item spawners) are ignored.
+Unknown passengers and links that would form a cycle do not board.
+`passengers` returns client handles in the order they boarded from the list.
+The other riding reads and all riding writes are server-only.
+
+A declared general entity can ride a supported vehicle, and players, mobs and
+other general entities can ride a general vehicle. The vehicle type's optional
+`passenger_attachment` is a local offset in blocks: it rotates with the vehicle's
+yaw and defaults to the top center of the declared box. A rider sits at that point
+minus its own vehicle attachment. A general rider has no offset of its own.
+The client uses the same placement from the server's passenger lists.
+
+Saved passengers of either family go under the root's ordinary NBT `Passengers`
+list and leave with the root's chunk. A general type declared `NoSave` can ride
+but isn't written to disk and cannot carry a passenger, even when forced.
 
 During boat or cart destruction, mob dismount notifications run, but remaining
 riding relationships are unlinked even when a listener cancels. Each mob keeps its

@@ -362,6 +362,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         fluid: FluidState,
         creative: bool,
     ) -> bool {
+        if let Some(placed) = self.level.place_liquid(self.ticks, pos, state, fluid) {
+            return placed;
+        }
         let Some(placed) = self.plan_place_liquid(pos, state, fluid, creative) else {
             return false;
         };
@@ -429,6 +432,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.emit(super::LevelEvent::Sound {
             pos,
             sound: sound.into(),
+            source: None,
             volume: 1.0,
             pitch: 1.0,
         });
@@ -440,6 +444,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.emit(super::LevelEvent::Sound {
                 pos,
                 sound: "minecraft:block.dried_ghast.place_in_water".into(),
+                source: None,
                 volume: 1.0,
                 pitch: 1.0,
             });
@@ -508,18 +513,35 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         b.is_block(state, b.named.powder_snow)
             .then(|| removed(true))
     }
+    /// `FlowingFluid.canHoldAnyFluid`, including blocks with a container decision part.
     fn can_hold_any_fluid(&self, state: BlockStateId) -> bool {
-        self.is_liquid_container(state) || self.b.in_set(state, &self.b.tags.washed_away_by_fluids)
+        self.is_liquid_container(state)
+            || self.b.in_set(state, &self.b.tags.washed_away_by_fluids)
+            || self.level.has_liquid_container_part(state)
     }
-    fn can_hold_specific_fluid(&self, state: BlockStateId, fluid: FluidKind) -> bool {
-        if self.is_liquid_container(state) {
-            self.can_place_liquid(state, fluid, false)
-        } else {
-            true
-        }
+    /// Some(true) fills a container; Some(false) refuses this flow. None means
+    /// an ordinary block whose eligibility is decided by the washed-away tag.
+    fn spread_container(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        fluid: FluidKind,
+    ) -> Option<bool> {
+        (fluid != FluidKind::Empty)
+            .then(|| {
+                self.level
+                    .can_place_liquid(pos, state, fluid, super::LiquidUser::default())
+            })
+            .flatten()
+            .or_else(|| {
+                self.is_liquid_container(state)
+                    .then(|| self.can_place_liquid(state, fluid, false))
+            })
     }
-    fn can_hold_fluid(&self, state: BlockStateId, fluid: FluidKind) -> bool {
-        self.can_hold_any_fluid(state) && self.can_hold_specific_fluid(state, fluid)
+    /// `FlowingFluid.canHoldFluid`: this fluid's container decision or the washed-away tag.
+    fn can_hold_fluid(&self, pos: BlockPos, state: BlockStateId, fluid: FluidKind) -> bool {
+        self.spread_container(pos, state, fluid)
+            .unwrap_or_else(|| self.b.in_set(state, &self.b.tags.washed_away_by_fluids))
     }
 
     // ---- FlowingFluid ----
@@ -585,7 +607,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if self.b.fluid(bottom).kind().same_family(kind) {
             true
         } else {
-            self.can_hold_fluid(bottom, flowing_of(kind))
+            self.can_hold_fluid(below(top_pos), bottom, flowing_of(kind))
         }
     }
     fn can_maybe_pass_through(
@@ -611,7 +633,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         test_fluid: FluidState,
     ) -> bool {
         self.can_maybe_pass_through(kind, source_pos, source, direction, test, test_fluid)
-            && self.can_hold_specific_fluid(test, flowing_of(kind))
+            && self.can_hold_fluid(rel(source_pos, direction), test, flowing_of(kind))
     }
     fn context_state(&self, context: &mut SpreadContext, pos: BlockPos) -> BlockStateId {
         let Some(i) = context.index(pos) else {
@@ -684,9 +706,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         kind: FluidKind,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Vec<(Direction, FluidState)> {
+    ) -> Vec<(Direction, FluidState, BlockStateId, bool)> {
         let mut lowest = 1000;
-        let mut result: Vec<(Direction, FluidState)> = Vec::new();
+        let mut result = Vec::new();
         let mut context: Option<SpreadContext> = None;
         for direction in HORIZONTAL {
             let test_pos = rel(pos, direction);
@@ -696,9 +718,16 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 continue;
             }
             let new_fluid = self.new_liquid(kind, test_pos, test_state);
-            if !self.can_hold_specific_fluid(test_state, new_fluid.kind()) {
-                continue;
-            }
+            let container = match self.spread_container(test_pos, test_state, new_fluid.kind()) {
+                Some(true) => true,
+                None if self
+                    .b
+                    .in_set(test_state, &self.b.tags.washed_away_by_fluids) =>
+                {
+                    false
+                }
+                _ => continue,
+            };
             let context = context.get_or_insert_with(|| SpreadContext::new(pos));
             let distance = if self.context_is_hole(kind, context, test_pos) {
                 0
@@ -710,12 +739,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             if distance <= lowest {
                 if self.can_be_replaced_with(test_fluid, test_pos, new_fluid.kind(), direction) {
-                    result.push((direction, new_fluid));
+                    result.push((direction, new_fluid, test_state, container));
                 }
                 lowest = distance;
             }
         }
-        result.sort_by_key(|(direction, _)| *direction as u8);
+        result.sort_by_key(|(direction, ..)| *direction as u8);
         result
     }
     fn source_neighbour_count(&self, kind: FluidKind, pos: BlockPos) -> i32 {
@@ -732,6 +761,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         state: BlockStateId,
         direction: Direction,
         target: FluidState,
+        container: bool,
     ) {
         let b = self.b;
         let from = rel(pos, direction.opposite());
@@ -750,7 +780,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.level_event(1501, pos, 0);
             return;
         }
-        if self.is_liquid_container(state) {
+        if container {
             self.place_liquid(pos, state, target, false);
         } else {
             if !b.is_air(state) {
@@ -765,6 +795,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block_and_update(pos, legacy);
         }
     }
+    /// `FlowingFluid.spreadToSides`: select the nearest paths and apply the arriving fluid.
     fn spread_to_sides(
         &mut self,
         kind: FluidKind,
@@ -777,10 +808,41 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             neighbour = 7;
         }
         if neighbour > 0 {
-            for (direction, new_fluid) in self.spread_targets(kind, pos, state) {
+            for (direction, new_fluid, tested, container) in self.spread_targets(kind, pos, state) {
                 let neighbour_pos = rel(pos, direction);
+                // `spreadToSides` hands each direction's live block to `spreadTo`,
+                // which asks `instanceof LiquidBlockContainer` — this `container`
+                // — of that block and nothing else. One case keeps the skip
+                // vanilla cannot express: a target a container's fill or a part
+                // rewrote mid-spread to a block that is no container and cannot
+                // be washed away (`lateral_flow_does_not_destroy_a_target_
+                // changed_by_an_earlier_container`). The rewrite is the part's
+                // own state; destroying it for the fluid would corrupt it, and
+                // a part's replacement cannot be told from a vanilla-style
+                // rewrite here.
                 let neighbour_state = self.state(neighbour_pos);
-                self.spread_to(kind, neighbour_pos, neighbour_state, direction, new_fluid);
+                let container = if neighbour_state == tested {
+                    container
+                } else {
+                    match self.spread_container(neighbour_pos, neighbour_state, new_fluid.kind()) {
+                        Some(_) => true,
+                        None if self
+                            .b
+                            .in_set(neighbour_state, &self.b.tags.washed_away_by_fluids) =>
+                        {
+                            false
+                        }
+                        _ => continue,
+                    }
+                };
+                self.spread_to(
+                    kind,
+                    neighbour_pos,
+                    neighbour_state,
+                    direction,
+                    new_fluid,
+                    container,
+                );
             }
         }
     }
@@ -796,13 +858,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         {
             let new_below = self.new_liquid(kind, below_pos, below_state);
             if self.can_be_replaced_with(below_fluid, below_pos, new_below.kind(), Direction::Down)
-                && self.can_hold_specific_fluid(below_state, new_below.kind())
             {
-                self.spread_to(kind, below_pos, below_state, Direction::Down, new_below);
-                if self.source_neighbour_count(kind, pos) >= 3 {
-                    self.spread_to_sides(kind, pos, fluid, state);
+                let container = self.spread_container(below_pos, below_state, new_below.kind());
+                if container.unwrap_or_else(|| {
+                    self.b
+                        .in_set(below_state, &self.b.tags.washed_away_by_fluids)
+                }) {
+                    self.spread_to(
+                        kind,
+                        below_pos,
+                        below_state,
+                        Direction::Down,
+                        new_below,
+                        container == Some(true),
+                    );
+                    if self.source_neighbour_count(kind, pos) >= 3 {
+                        self.spread_to_sides(kind, pos, fluid, state);
+                    }
+                    return;
                 }
-                return;
             }
         }
         if fluid.is_source() || !self.is_water_hole(kind, pos, state, below_state) {

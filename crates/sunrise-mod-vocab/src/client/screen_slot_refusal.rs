@@ -6,7 +6,7 @@
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ScreenSlotRefusal {
-    /// No mod screen is open, or the open one is another block's.
+    /// No mod screen is open, or the open one is another menu type's or another mod's.
     NoScreen,
     /// The slot is past the slots the screen declared when it opened.
     NoSuchSlot,
@@ -22,7 +22,7 @@ pub enum ScreenSlotRefusal {
 impl std::fmt::Display for ScreenSlotRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::NoScreen => "no mod screen of that block is open",
+            Self::NoScreen => "no screen owned by the calling mod is open for that menu type",
             Self::NoSuchSlot => "the screen declared no such slot",
             Self::HiddenAtOpen => "the slot was hidden when the screen opened",
             Self::BadPosition => "the position is not finite",

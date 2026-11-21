@@ -19,7 +19,10 @@ height (`Window.getGuiScaledWidth/Height`).
 
 `LevelRef::brightness(host, layer, pos)` (`getBrightness`, the stored light 0 to 15) reads on a client too: the
 light of the level the client shows, as the server sent it for a chunk the client holds. It is `None` for a
-chunk the client does not hold and before login; `can_see_sky` stays a server read.
+chunk the client does not hold and before login. `LevelRef::block_face_sturdy(host, pos, face, support)` uses
+that level's local shapes for a loaded block inside build height. `LevelRef::can_see_sky(host, pos)` reads
+its published sky light, even outside build height or in an unloaded column. See
+[Level hosts](../../concepts/hooks-and-the-host.md#level-hosts) for the boundary rules.
 
 `ClientHost::playing()` is true while the player is in the world with nothing over it: no screen, title, sign
 editor or book, so keys and zoom apply. `ClientHost::mapping(name)` reads a vanilla key mapping (`key.forward`,
@@ -35,7 +38,7 @@ use, an interact, a release, a drop and a continued block break (not before a bl
 selection made earlier in the same tick goes out before the action. One packet goes per change. A slot
 above 8 is `OutOfRange { slot }`, a client with no world or player is `NoWorld`, and a spectator is
 `Refused` (its number keys open the spectator menu); each leaves the selection unchanged. Read the slot
-back with `player_selected_slot` on the local player. Native and wasm mods use the same call.
+back with `player_selected_slot` on the local player.
 
 `ClientHost::clipboard_text()` reads the system clipboard (`KeyboardHandler.getClipboard`, empty text when it
 holds none) and `ClientHost::set_clipboard_text(text)` writes it (`setClipboard`; empty text copies nothing). Both
@@ -146,7 +149,6 @@ into another level replaces the client level: the old handle stays stale for goo
 `host.level` again once the server reopens the level. A respawn in the same level drops the viewed
 levels too, but keeps the client level, so the old handle reads again after the reopen. Writes,
 server-only reads, the other level reads and the entity reads (`entities_in`) refuse a viewed level.
-Native and wasm mods use the same handle methods.
 
 ## Crosshair reads
 
@@ -161,8 +163,12 @@ casts a new ray. Without listeners the decision is the vanilla block/entity pick
 It can be read with a screen open. `entity` is an `EntityRef` carrying the current
 client level's epoch and network entity ID, including dragon parts. It becomes stale
 when the client level is replaced or the client disconnects; a same-level respawn
-keeps its epoch. Unlike `view_hit` and `raycast`, this does not find blocks
-in distant terrain or return a block behind a targeted entity.
+keeps its epoch. Unlike `view_hit` and `raycast`, this does not return a block
+behind a targeted entity.
+
+`ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view, up
+to 1024 blocks, and hit blocks in loaded chunks only: far terrain is never hit. Both
+return `None` on a miss.
 
 A client `EntityRef` supports `bounding_box(host)`, `eye_height(host)` and
 `eye_position(host)`. For the local player these use the current predicted body and pose;
@@ -196,21 +202,12 @@ These read the local player as the client sees it. They take no mod-controlled n
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world
   is open.
-- `ClientHost::hover_name(&stack)` is `ItemStack.getHoverName()` as plain text: the custom name, else
-  a written book's non-blank title, else the item's name in the client's language, without rarity
-  colour or italics. An invalid stack reads an empty string.
-- `ClientHost::creative_search_items()` is the creative search tab's stacks, in the order the screen
-  lists them, once per item and components. Mod additions from `build_creative_mode_tab_contents`
-  join when the tabs are built, and the operator tab's items only with the last build's permissions.
-  It is empty before resources load. It reads the same on native and wasm.
-- `ClientHost::creative_tabs()` is the creative inventory's item tabs in `CreativeModeTabs.tabs()` order
-  (not the search, saved toolbars or survival inventory tabs), each a `CreativeModeTabInfo` with its
-  registry id and `display_items` (`CreativeModeTab.getDisplayItems`, components kept), and the build's
-  `has_permissions`. Mod stacks from `build_creative_mode_tab_contents` follow a tab's own, so this is
-  the read for "which tab shows this stack": `tabs_showing(&stack)` matches by item and components. The
-  operator tab is listed only when the last build had permissions. The contents come from the game's
-  tab export, built with vanilla's default feature flags: a world's feature set does not change them,
-  so there is no feature field. Empty before resources load; the same on native and wasm.
+- `ClientHost::creative_search_items()` returns the built creative search tab's display order,
+  for ranking stacks in inventory sorters. It requests the catalog with the local player's permission
+  and Operator Items Tab option. A cache miss can fire the creative build hook, so this read needs a
+  mutable Host. It returns an empty list during setup and reload, and excludes client-only
+  presentation additions.
+  For membership reads on either side, see [creative tab contents](../content-mods.md).
 - `ClientHost::item_uses_block_light(&stack, context)` is `ItemStackRenderState.usesBlockLight` of the
   stack's model resolved for an `ItemDisplayContext` (no owner or level): true for a model lit like a
   block from the side (`gui_light: side`), false for a flat item lit from the front. It is what
@@ -225,11 +222,15 @@ These read the local player as the client sees it. They take no mod-controlled n
 `client_pick` runs at both vanilla pick call sites: every client tick at
 partial tick 1.0 after the game mode tick and before key handling, even while
 paused; and every frame at its game-time partial tick before render-state
-extraction. Both write the same stored result. NeoForge 26.3 has no counterpart. The event supplies read-only `original`, `block_candidate` and
-`entity_candidate` values and a mutable `result`, initialized to `original`.
-Choose the block candidate to target a block through an entity, choose a target
-from the typed ray APIs, or clear the result for a miss. Later listeners see the
-previous listener's result. A reentrant `crosshair_target()` read sees `original`.
+extraction. Both write the same stored result. NeoForge 26.3 has no counterpart.
+The event supplies the vanilla `original`, the independent `block_candidate` and
+`entity_candidate`, and the pick's `origin: [f64; 3]` in world-space XYZ. This is
+the camera entity's eye for that pick: current for a tick, interpolated for a frame.
+Use it with a candidate's hit point to measure the ray distance without casting
+another ray. All listeners receive the same inputs. Only `result`, initialized to
+`original`, carries edits to later listeners. Choose the block candidate to target
+through an entity, choose a target from the typed ray APIs, or clear the result for
+a miss. A reentrant `crosshair_target()` read sees `original`.
 
 The game accepts an unchanged original without revalidating its geometry. A
 replacement is validated at writeback: finite point, current level, live entity or
@@ -262,4 +263,4 @@ and client occlusion policy. Additional targets are checked
 against live handles, attackability, reach, held-item range and ordinary block occlusion. Clearing an entity hit
 does not mine the block behind it; an empty list on a block or miss keeps the ordinary
 path. Each accepted hit uses normal attack packets and prediction. Server validation
-and cooldowns apply. Native and wasm mods use the same typed API.
+and cooldowns apply.

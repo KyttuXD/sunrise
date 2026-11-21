@@ -202,7 +202,7 @@ impl Behaviours {
     pub fn mapped_unwaxed(&self, state: BlockStateId) -> Option<BlockStateId> {
         self.mapped(state, BlockMaps::unwaxed)
     }
-    fn mapped(
+    pub(super) fn mapped(
         &self,
         state: BlockStateId,
         to: impl for<'m> Fn(&'m BlockMaps, &str) -> Option<&'m str>,

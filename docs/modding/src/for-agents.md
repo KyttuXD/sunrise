@@ -1,7 +1,7 @@
 # Using an AI agent
 
 This page is written for a coding agent, and for a person who points one at it: "Read
-https://sunrise-org.github.io/sunrise/for-agents.html and make me a Sunrise native mod". It holds the exact
+https://playsunrise.net/docs/modding/for-agents and make me a Sunrise native mod". It holds the exact
 commands and the rules that decide whether the code compiles. The same material, with the explanations, is in
 [Install the mod tool](start/install-tool.md) and [Your first native mod](start/first-mod.md).
 
@@ -18,7 +18,9 @@ commands and the rules that decide whether the code compiles. The same material,
 
 Take the page [Install the mod tool](start/install-tool.md) and run the block for the user's computer. It reads the
 current Nightly's build, downloads that SDK release's tool, checks Sunrise's signature and the tool's hash, and puts `cargo-sunrise-mod` on the
-`PATH`. On NixOS the prebuilt binary needs `steam-run` or `nix-ld`; the fallback is
+`PATH`. Then run `cargo sunrise-mod --version`: if it prints the usage instead of a commit, the Nightly's tool is
+older than this page and cannot build or run a native mod on its own, so run the block again with its `RELEASE` line
+changed to `mod-tool`, the newest tool from main. That page says when to take which. On NixOS the prebuilt binary needs `steam-run` or `nix-ld`; the fallback is
 `cargo install --locked --git https://github.com/sunrise-org/sunrise cargo-sunrise-mod`.
 
 ## 2. Make and check a native mod
@@ -26,19 +28,20 @@ current Nightly's build, downloads that SDK release's tool, checks Sunrise's sig
 ```sh
 cargo sunrise-mod new greeter --template native
 cd greeter
-rustup target add wasm32-unknown-unknown
 cargo sunrise-mod check
 ```
 
-`new` writes a complete project and fetches its SDK into `.sunrise/sdk/`. `check` compiles it for this computer and for wasm32, which is why the target is added first. It must end with a
+`new` writes a complete project and fetches its SDK into `.sunrise/sdk/`. `check` compiles it for the project's own target (this computer for a native mod). It must end with a
 line like `greeter uses 34 items of the API (…). Made for 2d81263.` Run `check` after every edit, and fix what it
 reports before going on. Use another mod id by changing the folder name: `new` turns it into the id.
 
 To compile it against the prebuilt game, run `cargo sunrise-mod build`: it fetches the pinned SDK's compiled slices
 into a per-user cache and installs the Rust the SDK names with rustup, so it needs the network the first time. To
 play it, run `cargo sunrise-mod run --resources <folder> -- <game args>`; the user has to make those prepared
-resources from their own Minecraft (`sunrise-prepare --prepare --output <folder>`), so ask for the folder and never
-download Mojang's files. Run `cargo test` for the logic the hooks use. A build server uses the plan contract in
+resources from their own Minecraft ([Prepared resources](start/first-mod.md#prepared-resources)), so ask for the
+folder and never download Mojang's files. For [`[[jar]]` originals](how-to/content-mods.md#java-jars-as-external-assets),
+add the developer's local jar with `cargo sunrise-mod use-jar <path>` before running. Run `cargo test` for the logic
+the hooks use. A build server uses the plan contract in
 [Your first native mod](start/first-mod.md#without-the-tools-commands).
 
 ## Rules that matter
@@ -52,12 +55,11 @@ download Mojang's files. Run `cargo test` for the logic the hooks use. A build s
   it from nothing and never write a commit into it by hand. To change what it declares (name, description,
   capabilities, dependencies) edit that one field in the generated file. To move to a newer game build run
   `cargo sunrise-mod update`.
-- Ids are `[a-z0-9_]`, at most 64 characters. A mod is `[native]` or `[wasm]`, never both. Unknown manifest fields
+- Ids are `[a-z0-9_]`, at most 64 characters. A code mod declares `[native]`. Unknown manifest fields
   are refused.
 - Hook names follow NeoForge 26.3. An event is `&mut`. A write to the world needs a `ServerHost`; a client hook
   gets a `ClientHost`, so the wrong side does not compile.
-- A mod that adds blocks, items, mob effects or entity types needs `capabilities = ["registries"]`, which the
-  template already has.
+- `api`, `capabilities` and the horizon-mixins commit are not in the manifest: `build` writes them. Do not add them.
 - Extra crates.io dependencies are allowed and are pinned by the mod's own `Cargo.lock`; a git or path dependency
   outside the mod is refused. The `sunrise-mod-api` path in `Cargo.toml` points at `.sunrise/sdk/` and stays as
   written.
@@ -70,7 +72,7 @@ download Mojang's files. Run `cargo test` for the logic the hooks use. A build s
 - `cargo sunrise-mod hooks <words>` searches the pinned build's hooks offline, by id, doc and counterpart name; every
   word must match.
 - [The mod API reference](reference/api.md) is the rustdoc of `mod_api`: start at `Hooks`, `Host`, `ServerHost` and
-  `ClientHost`. Open it at https://sunrise-org.github.io/sunrise/api/mod_api/.
+  `ClientHost`. Build it from a Sunrise checkout with `cargo doc -p sunrise-mod-api --no-deps --open`.
 - [Writing hooks](start/writing-hooks.md) gives the crate's shape, [Hooks and the Host](concepts/hooks-and-the-host.md)
   the model, [Parts](concepts/parts.md) per-object behaviour and [Attachments](concepts/attachments.md) per-object
   data.

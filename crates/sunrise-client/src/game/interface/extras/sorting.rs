@@ -5,6 +5,7 @@
 use crate::game::{Game, Screen};
 use sunrise_client::{
     containers::BlockEntity,
+    creative::Creative,
     hud::{HudBatch, rgba},
     inv_sort,
     items::ItemStack,
@@ -137,9 +138,10 @@ impl Game<'_> {
             return;
         }
         let views: Vec<Option<ItemStack>> = slots.iter().map(|&s| self.slot_view(s)).collect();
+        let order = self.stock_sort_order();
         let clicks = {
             let rank = |s: &ItemStack| {
-                let order = self.creative_screen.order_of(s).unwrap_or(usize::MAX);
+                let order = Creative::order_of(&order, s).unwrap_or(usize::MAX);
                 (order, hover_name(&self.pack.names, s))
             };
             let max = |s: &ItemStack| self.max_stack(s);

@@ -47,6 +47,32 @@ impl Game<'_> {
         boxes
     }
 
+    /// Fills `out` with the entities that can be solid to a player as `Entity.canBeCollidedWith`
+    /// allows (a boat, a living shulker, a happy ghast), as candidates the hub asks its rule of
+    /// for each reported move. Built once per tick into the hub's own buffer, and left empty when
+    /// no player is connected (`guests`): one test per mob and boat, no allocation once the buffer has grown.
+    pub(in crate::game) fn fill_move_solids(&self, out: &mut Vec<Candidate>, guests: bool) {
+        out.clear();
+        if !guests {
+            return;
+        }
+        let rule = Solids::new(
+            Rule::Player {
+                feet_y: 0.0,
+                riding: None,
+                side: Side::Server,
+            },
+            None,
+        );
+        out.extend(
+            self.mobs
+                .iter()
+                .filter(|m| rule.takes(m.solid_kind()))
+                .map(|m| m.solid_candidate()),
+        );
+        out.extend(self.boats.iter().map(boat));
+    }
+
     /// [`Self::entity_collisions`] for an armor stand, which mobs can ride (`/ride`): each mob's
     /// box comes with the vehicle at the bottom of what it rides, so the stand leaves its own
     /// riders out (`isPassengerOfSameVehicle`, through the grid's `near_except`).

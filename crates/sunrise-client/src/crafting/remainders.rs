@@ -38,7 +38,7 @@ impl Recipes {
             };
             match kind {
                 Some(Recipe::Special(Special::BannerDuplicate { .. }))
-                    if !crate::banner::layers(s).is_empty() =>
+                    if !s.banner_layers().is_empty() =>
                 {
                     out[at] = Some(copy);
                 }

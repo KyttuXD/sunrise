@@ -307,9 +307,10 @@ impl Game<'_> {
         let off_hand_item = self.offhand.is_some();
         let (target, block, can_pick) = self.pad_guide_target(spectator);
         let held = self.held().cloned();
-        let swallowed = block
-            .as_ref()
-            .is_some_and(|hit| self.pad_guide_click_swallowed(hit, held.as_ref()));
+        let swallowed = !self.remote_secondary_use_skips_block()
+            && block
+                .as_ref()
+                .is_some_and(|hit| self.pad_guide_click_swallowed(hit, held.as_ref()));
         let mut item_use = None;
         if !spectator && !swallowed {
             for hand in Hand::BOTH {
@@ -400,21 +401,21 @@ impl Game<'_> {
         let opens = self.block_opens_menu(&hit);
         let takes = if spectator {
             opens.then_some(Verb::Open)
+        } else if self.remote_secondary_use_skips_block() {
+            None
         } else {
             let held = self.held().cloned();
-            let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
-            let secondary = self.keys.held(Action::Sneak) && hands_full;
             let ender_chest = &*self
                 .res
                 .facts()
                 .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
                 .name
                 == "minecraft:ender_chest";
-            if !secondary && opens {
+            if opens {
                 Some(Verb::Open)
             } else if self.pad_guide_click_swallowed(&hit, held.as_ref()) {
                 None
-            } else if !secondary && ender_chest && !self.pad_guide_block_covered(&hit) {
+            } else if ender_chest && !self.pad_guide_block_covered(&hit) {
                 // EnderChestBlock has no menu provider but opens one: nothing solid on top.
                 Some(Verb::Open)
             } else if self.block_takes_click(&hit, held.as_ref()) {
@@ -450,10 +451,6 @@ impl Game<'_> {
         hit: &super::super::Hit,
         held: Option<&ItemStack>,
     ) -> bool {
-        let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
-        if self.keys.held(Action::Sneak) && hands_full {
-            return false;
-        }
         let book = held.is_some_and(|s| {
             matches!(
                 &*s.item,

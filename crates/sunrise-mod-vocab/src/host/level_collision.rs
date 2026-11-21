@@ -43,10 +43,10 @@ pub trait LevelCollisionBackend {
         blocks: ClipBlock,
         fluids: ClipFluid,
     ) -> Option<ClipHit>;
-    /// Side: server.
-    /// Gameplay's face support in the current or a parked server level, including
-    /// live block entities for dynamic shapes. None for stale or closed levels,
-    /// unloaded blocks, unsupported states or a shape query error.
+    /// Side: both.
+    /// `BlockState.isFaceSturdy` in an open server level or the current client level,
+    /// including shapes published by local block entities. None for stale or unavailable
+    /// levels, unloaded or out-of-height blocks, or a shape query error. Never loads chunks.
     #[access(WorldOnly)]
     fn level_block_face_sturdy(
         &self,

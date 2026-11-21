@@ -13,12 +13,74 @@
 //! also move on their rider's client when saddled and steered with the right stick.
 //! A minecart
 //! moves on the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, ray_box};
+use super::{Game, Keys, ray_box, remote::Remote};
 use crate::Result;
+use std::collections::HashMap;
 use sunrise_client::mobs::{Mob, equine, happy_ghast};
 use sunrise_client::{keybinds, text::Text};
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_protocol::packets::play::{self, Serverbound as S};
+use sunrise_world::stepped_interpolation::PosRot;
+
+/// One edge of the riding graph sent by `SetPassengers`.
+pub(super) struct PassengerSeat {
+    pub vehicle: u32,
+    pub index: usize,
+}
+
+fn passenger_chain(
+    vehicles: &HashMap<u32, PassengerSeat>,
+    id: u32,
+) -> impl Iterator<Item = u32> + '_ {
+    std::iter::successors(Some(id), |id| vehicles.get(id).map(|seat| seat.vehicle))
+        .take(vehicles.len() + 2)
+}
+
+/// Walks to the root without allocating. In a cycle, returns the last reached
+/// ID for the collision code's bounded stack walk; there is no actual root.
+pub(super) fn passenger_root(
+    vehicles: &HashMap<u32, PassengerSeat>,
+    id: u32,
+) -> std::result::Result<u32, u32> {
+    let root = passenger_chain(vehicles, id).last().unwrap_or(id);
+    if vehicles.contains_key(&root) {
+        Err(root)
+    } else {
+        Ok(root)
+    }
+}
+
+impl Remote {
+    pub(super) fn riding_entity_exists(&self, id: i32, local_exists: bool) -> bool {
+        if id == self.entity_id {
+            local_exists
+        } else {
+            self.entities.contains_key(&id)
+        }
+    }
+
+    fn forget_passengers(&mut self, vehicle: u32) {
+        self.passenger_vehicles
+            .retain(|_, seat| seat.vehicle != vehicle);
+    }
+
+    pub(super) fn passenger_vehicle(&self, passenger: u32) -> Option<u32> {
+        self.passenger_vehicles
+            .get(&passenger)
+            .map(|seat| seat.vehicle)
+    }
+
+    /// Passenger IDs and their packet indices, not sorted.
+    pub(super) fn passenger_seats(&self, vehicle: u32) -> impl Iterator<Item = (u32, usize)> + '_ {
+        self.passenger_vehicles
+            .iter()
+            .filter_map(move |(&id, seat)| (seat.vehicle == vehicle).then_some((id, seat.index)))
+    }
+
+    pub(super) fn has_passengers(&self, vehicle: u32) -> bool {
+        self.passenger_seats(vehicle).next().is_some()
+    }
+}
 
 /// An object under the crosshair: its entity id, how far along the view it
 /// was hit, and where (`EntityHitResult.getLocation` minus the entity's
@@ -78,8 +140,8 @@ impl Game<'_> {
                 .is_some_and(|(_, d, _)| self.before_block(d))
     }
 
-    /// The nearest boat, minecart, item frame, armor stand, painting, End crystal or dragon part
-    /// the view hits within reach; also fence knots when using.
+    /// The nearest pickable non-mob object the view hits within reach; also fence knots when
+    /// using.
     pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
         let mut pick = crate::game::pick_accumulator::PickAccumulator::new(self.entity_reach);
         self.remote_object_hit_with_pick(attacking, &mut pick)
@@ -160,6 +222,19 @@ impl Game<'_> {
                 hit = Some((id, d, [p.x, p.y, p.z]));
             }
         }
+        if let Some(remote) = &self.remote {
+            let catalog = crate::game::general::general_type_catalog();
+            for (&id, row) in &remote.general.rows {
+                if row.shown
+                    && catalog.pickable(row.type_slot)
+                    && let Ok(entity) = u32::try_from(id)
+                    && let Some(distance) = ray_box(eye, dir, reach, row.bounds())
+                    && pick.consider(self, entity, distance)
+                {
+                    hit = Some((id, distance, row.position));
+                }
+            }
+        }
         if (!attacking || self.client_pick.ray.is_some())
             && let Some((id, d, p)) = self.remote_knot_hit_with_pick(pick)
         {
@@ -218,18 +293,108 @@ impl Game<'_> {
     /// `ClientPacketListener.handleSetEntityPassengersPacket`: who rides
     /// `vehicle` now. The local player gets in or out; mobs and other
     /// players sit where the server keeps them.
-    pub(super) fn remote_set_passengers(&mut self, vehicle: i32, passengers: &[i32]) {
+    pub(super) fn remote_set_passengers(&mut self, vehicle: i32, mut passengers: Vec<i32>) {
+        let Some(remote) = self.remote.as_mut() else {
+            return;
+        };
+        // The local entity is known from Login, even before its motion body
+        // arrives on PlayerPosition. Other entities must already be tracked.
+        let local_exists = remote.logged_in || self.player.is_some();
+        if !remote.riding_entity_exists(vehicle, local_exists) {
+            log::warn!("Sunrise: ignoring passenger list for unknown vehicle {vehicle}");
+            return;
+        }
+        // Forced client startRiding still respects Entity.couldAcceptPassenger.
+        if remote
+            .tracked(vehicle)
+            .is_some_and(|(kind, _)| !super::seats::could_accept_passenger(kind))
+        {
+            return;
+        }
+        let vehicle_id = vehicle as u32;
+        remote.forget_passengers(vehicle_id);
+        let mut index = 0;
+        passengers.retain(|&passenger| {
+            if !remote.riding_entity_exists(passenger, local_exists) {
+                return false;
+            }
+            let rider = passenger as u32;
+            if remote.passenger_vehicle(rider) == Some(vehicle_id)
+                || passenger_chain(&remote.passenger_vehicles, vehicle_id)
+                    .any(|ancestor| ancestor == rider)
+            {
+                return false;
+            }
+            remote.passenger_vehicles.insert(
+                rider,
+                PassengerSeat {
+                    vehicle: vehicle_id,
+                    index,
+                },
+            );
+            index += 1;
+            true
+        });
+        self.apply_remote_passengers(vehicle, &passengers);
+    }
+
+    /// Removing a vehicle ejects its passengers even without a final packet.
+    pub(super) fn remote_clear_passengers(&mut self, vehicle: i32) {
+        if let Some(remote) = self.remote.as_mut() {
+            remote.forget_passengers(vehicle as u32);
+            self.apply_remote_passengers(vehicle, &[]);
+        }
+    }
+
+    /// A death respawn replaces the local entity even if its level and ID stay.
+    pub(super) fn reset_remote_player_riding(&mut self) {
+        // The old body is gone, not dismounting. Clear local control before
+        // updating the vehicle's remaining list so it won't play a dismount.
+        if let Some(vehicle) = self.riding.take() {
+            if let Some(mob) = self.mob_index.get_mut(&mut self.mobs, vehicle) {
+                mob.rider = None;
+            }
+            if let Some(i) = self.boats.iter().position(|b| b.id == vehicle) {
+                self.boats.update(i, |b| b.lerp = None);
+            }
+        }
+        if let Some(remote) = self.remote.as_mut() {
+            let player = remote.entity_id;
+            remote.first_passenger = false;
+            remote.passenger_index = 0;
+            remote.ghast_dismount = None;
+            let parent = remote.passenger_vehicles.remove(&(player as u32));
+            self.remote_clear_passengers(player);
+            if let Some(parent) = parent
+                && let Some(remote) = self.remote.as_mut()
+            {
+                let mut siblings: Vec<_> = remote.passenger_seats(parent.vehicle).collect();
+                siblings.sort_unstable_by_key(|&(_, index)| index);
+                let ids: Vec<_> = siblings
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (id, _))| {
+                        remote.passenger_vehicles.insert(
+                            id,
+                            PassengerSeat {
+                                vehicle: parent.vehicle,
+                                index,
+                            },
+                        );
+                        id as i32
+                    })
+                    .collect();
+                self.apply_remote_passengers(parent.vehicle as i32, &ids);
+            }
+        }
+    }
+
+    /// Apply the admitted list to the presentation and simulation copies too.
+    fn apply_remote_passengers(&mut self, vehicle: i32, passengers: &[i32]) {
         let Some(me) = self.remote.as_ref().map(|r| r.entity_id) else {
             return;
         };
         let vehicle_id = vehicle as u32;
-        if let Some(r) = self.remote.as_mut() {
-            r.passenger_vehicles
-                .retain(|_, parent| *parent != vehicle_id);
-            for &passenger in passengers {
-                r.passenger_vehicles.insert(passenger as u32, vehicle_id);
-            }
-        }
         self.remote_seat_passengers(vehicle_id, passengers);
         let player_controls = passengers.first().is_some_and(|&id| {
             self.remote
@@ -431,16 +596,20 @@ impl Game<'_> {
             // server is sent; this tick's keys are latched after it ticked.
             let mut b = self.boats[i].clone();
             if self.controls_boat(id) {
+                // A boat taken over while it eased toward the server's position keeps
+                // easing (the handler stays the entity's), and reports where it goes.
+                if let Some((to, rotation, steps)) =
+                    self.remote.as_mut().and_then(|r| r.take_object_lerp(id))
+                {
+                    let rotation = rotation.unwrap_or((b.yaw, b.pitch));
+                    b.go_on_easing(Vec3::new(to[0], to[1], to[2]), rotation, steps);
+                }
                 b = self.tick_boat(b, true);
                 b.input = [keys.left, keys.right, keys.forward, keys.backward];
             }
-            // positionRider: the seat turns with the boat; clampRotation,
-            // which moves `yRotO` (the held lead's old look) with the view.
+            // positionRider turns and clamps the rider's yaw without changing yRotO.
             self.yaw += b.delta_rotation;
-            let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
-            let clamped = delta.clamp(-105.0, 105.0) - delta;
-            self.yaw += clamped;
-            self.rope_rot_old.0 += clamped;
+            self.yaw = sunrise_client::camera::clamp_boat_rotation(self.yaw, b.yaw).0;
             self.store_boat_back(i, b);
             // In front of a mob that shares the boat.
             Some(self.player_boat_seat(i))
@@ -500,7 +669,7 @@ impl Game<'_> {
     /// server every tick with its paddles (the rider's own position does not).
     pub(super) fn remote_vehicle_packets(&self) -> Vec<S> {
         if let Some(m) = self.driven_mount() {
-            return vec![mount_move(m)];
+            return vec![mount_move(m, self.driven_mount_heading(m))];
         }
         let Some(b) = self
             .riding
@@ -517,7 +686,7 @@ impl Game<'_> {
                 position: [at.x, at.y, at.z],
                 yaw,
                 pitch,
-                on_ground: b.on_ground,
+                on_ground: b.ground.on_ground,
             }),
             S::PaddleBoat(play::PaddleBoat {
                 left: b.paddling[0],
@@ -527,13 +696,15 @@ impl Game<'_> {
     }
 
     /// The vehicle this client moves, when it is `id`, as `PositionMoveRotation.of` sees it:
-    /// its client position and rotation (`getClientPositionAndRotation`: for a boat a teleport
-    /// is easing, where it is going) and its known movement, which is its controller's
+    /// its client position and rotation (`getClientPositionAndRotation`: while an
+    /// interpolation runs, where it is going) and its known movement, which is its controller's
     /// (`getKnownMovement`): the local player's, nothing while it rides (`Entity.rideTick`).
     pub(super) fn driven_vehicle(&self, id: u32) -> Option<(Vec3, f32, f32, Vec3)> {
         let known = self.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity);
         if let Some(m) = self.driven_mount().filter(|m| m.id == id) {
-            return Some((m.position, m.yaw, m.head_pitch, known));
+            let at = self.driven_mount_heading(m);
+            let [x, y, z] = at.position;
+            return Some((Vec3::new(x, y, z), at.yaw, at.pitch, known));
         }
         let b = self.driven_boat().filter(|&i| self.boats[i].id == id)?;
         let (at, yaw, pitch) = self.boats[b].client_position();
@@ -551,17 +722,18 @@ impl Game<'_> {
     /// teleport is easing, where it is going.
     pub(super) fn driven_client_position(&self) -> Option<Vec3> {
         if let Some(m) = self.driven_mount() {
-            return Some(m.position);
+            let [x, y, z] = self.driven_mount_heading(m).position;
+            return Some(Vec3::new(x, y, z));
         }
         self.driven_boat()
             .map(|i| self.boats[i].client_position().0)
     }
 
     /// `handleTeleportEntity` (`setValuesFromPositionPacket`) for the vehicle this
-    /// client moves, with the packet's relative parts already counted: a boat eases
-    /// there (`moveOrInterpolateTo`) unless it is more than 64 blocks away, when it is
-    /// put there and reported to the server at once; a mount is put there. Its
-    /// deltaMovement and onGround are the packet's.
+    /// client moves, with the packet's relative parts already counted: it eases there
+    /// (`moveOrInterpolateTo`) unless it is more than 64 blocks away, when it is put
+    /// there and reported to the server at once. Its deltaMovement and onGround are the
+    /// packet's.
     pub(super) fn teleport_driven_vehicle(
         &mut self,
         to: [f64; 3],
@@ -571,10 +743,27 @@ impl Game<'_> {
     ) {
         let at = Vec3::new(to[0], to[1], to[2]);
         if let Some(id) = self.driven_mount().map(|m| m.id) {
-            self.remote_move_vehicle_and_file(to, rotation);
+            // tooBigToInterpolate measures from where the mount is going while it eases.
+            let far = self.driven_mount().is_some_and(|m| {
+                let [x, y, z] = self.driven_mount_heading(m).position;
+                Vec3::new(x, y, z).distance_squared(at) > 4096.0
+            });
+            if far {
+                self.remote_move_vehicle_and_file(to, rotation);
+            } else if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+                let at = PosRot {
+                    position: to,
+                    yaw: rotation.0,
+                    pitch: rotation.1,
+                };
+                self.interpolate_driven_mount_to(i, at);
+            }
             if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id) {
                 m.velocity = velocity;
                 m.on_ground = on_ground;
+            }
+            if far && let Some(report) = self.remote_vehicle_packets().into_iter().next() {
+                self.send(report);
             }
             return;
         }
@@ -596,7 +785,7 @@ impl Game<'_> {
                 b.interpolate_to(at, rotation.0, rotation.1);
             }
             b.velocity = velocity;
-            b.on_ground = on_ground;
+            b.ground.on_ground = on_ground;
         });
         if far {
             self.entity_section_moved_id(id);
@@ -613,6 +802,9 @@ impl Game<'_> {
         let at = Vec3::new(position[0], position[1], position[2]);
         // absSnapRotationTo.
         let (yaw, pitch) = (yaw % 360.0, pitch.clamp(-90.0, 90.0) % 360.0);
+        if let Some(id) = self.driven_mount().map(|m| m.id) {
+            self.cancel_driven_mount_interpolation(id);
+        }
         if let Some(id) = self.driven_mount().map(|m| m.id)
             && let Some(m) = self.mob_index.get_mut(&mut self.mobs, id)
         {
@@ -689,7 +881,7 @@ impl Game<'_> {
     /// Whether this client moves `m`, the mount the player rides: as its
     /// first passenger (`AbstractHorse.getControllingPassenger`), on its
     /// saddle (`isLocalInstanceAuthoritative`).
-    fn drives(&self, m: &Mob) -> bool {
+    pub(super) fn drives(&self, m: &Mob) -> bool {
         self.riding == Some(m.id)
             && client_moves(
                 m,
@@ -722,6 +914,7 @@ impl Game<'_> {
     /// `onPlayerJump`, for the mount's next tick. Moving on this tick's keys
     /// put every ridden move a tick ahead of the server's view of the input.
     fn drive_mount(&mut self, i: usize, keys: Keys, jump: f32) {
+        let old_pose = self.interpolate_driven_mount(i);
         let steer = self.steers_mount(&self.mobs[i]);
         let (yaw, pitch) = (self.yaw, self.pitch);
         // The first ridden tick reads what the player's last walking tick applied.
@@ -761,6 +954,13 @@ impl Game<'_> {
         // Only the server's packets take the mount away.
         mob.removed = false;
         lent.give_back(&mut self.world);
+        // Entity.commonTick's setOldPosAndRot came before the interpolation step: the
+        // frame eases from the last tick's pose, not from the stepped one.
+        if let Some((position, yaw, pitch)) = old_pose {
+            mob.previous = position;
+            mob.previous_yaw = yaw;
+            mob.previous_head_pitch = pitch;
+        }
         self.mobs.insert(i, mob);
         // LocalPlayer.aiStep, after the vehicle's tick.
         if jump > 0.0
@@ -831,12 +1031,12 @@ fn riding_jump(player: i32, scale: f32) -> S {
 }
 
 /// `ServerboundMoveVehiclePacket.fromEntity`: where the mount this client
-/// moves is, and how it is turned.
-fn mount_move(m: &Mob) -> S {
+/// moves is, and how it is turned (`at`: getClientPositionAndRotation).
+fn mount_move(m: &Mob, at: PosRot) -> S {
     S::MoveVehicle(play::MoveVehicleRequest {
-        position: [m.position.x, m.position.y, m.position.z],
-        yaw: m.yaw,
-        pitch: m.head_pitch,
+        position: at.position,
+        yaw: at.yaw,
+        pitch: at.pitch,
         on_ground: m.on_ground,
     })
 }
@@ -877,8 +1077,9 @@ mod tests {
     use sunrise_client::mobs::MobTypes;
 
     /// handleTeleportEntity and handleMoveVehicle for the vehicle this client moves (a saddled pig steered with a
-    /// carrot on a stick): a relative teleport counts from where the pig is on this client, and a server move
-    /// puts it there and is answered at once with a ServerboundMoveVehiclePacket from that spot.
+    /// carrot on a stick): a relative teleport counts from where the pig is on this client and eases it there,
+    /// reported as the spot it is going to; a server move puts it there and is answered at once with a
+    /// ServerboundMoveVehiclePacket from that spot.
     #[test]
     #[ignore = "daily"]
     fn the_driven_vehicle_takes_the_servers_teleports_and_moves() {
@@ -912,7 +1113,13 @@ mod tests {
                 on_ground: false,
             }))
             .unwrap();
-            assert_eq!(game.mobs[0].position, Vec3::new(3.5, 64.0, 6.5));
+            // The pig eases there (its SteppedInterpolationHandler) and reports the spot
+            // it is going to.
+            assert_eq!(game.mobs[0].position, Vec3::new(3.5, 64.0, 2.5));
+            match game.remote_vehicle_packets().first() {
+                Some(play::Serverbound::MoveVehicle(p)) => assert_eq!(p.position, [3.5, 64.0, 6.5]),
+                other => panic!("{other:?}"),
+            }
             while peer.recv().is_ok() {}
             game.apply_packet(C::MoveVehicle(play::MoveVehicle {
                 position: [1.5, 64.0, 1.5],
@@ -1192,7 +1399,12 @@ mod tests {
             return;
         };
         (m.yaw, m.head_pitch, m.on_ground) = (90.0, 10.0, true);
-        match mount_move(&m) {
+        let at = PosRot {
+            position: [m.position.x, m.position.y, m.position.z],
+            yaw: m.yaw,
+            pitch: m.head_pitch,
+        };
+        match mount_move(&m, at) {
             S::MoveVehicle(p) => {
                 assert_eq!(p.position, [1.5, 64.0, -2.5]);
                 assert_eq!((p.yaw, p.pitch, p.on_ground), (90.0, 10.0, true));

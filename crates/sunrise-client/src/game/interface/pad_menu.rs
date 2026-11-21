@@ -491,7 +491,7 @@ impl Game<'_> {
                     let (x, y) = Creative::tab_position(t);
                     targets.push(Target {
                         rect: [ox + x, oy + y, 26.0, 32.0],
-                        kind: Kind::Tab(i == self.creative_screen.selected),
+                        kind: Kind::Tab(i == self.creative_screen.selected_index()),
                     });
                 }
             }
@@ -1430,7 +1430,7 @@ impl Game<'_> {
         if count == 0 {
             return;
         }
-        let selected = self.creative_screen.selected;
+        let selected = self.creative_screen.selected_index();
         let tab = if next {
             (selected + 1) % count
         } else {
@@ -2379,7 +2379,7 @@ impl Game<'_> {
     /// Whether the screen under the keyboard can still be typed in.
     fn pad_has_typing_screen(&self) -> bool {
         self.text_input_focused()
-            || self.title.is_some()
+            || self.title_input_active()
             || matches!(self.screen, Screen::Options | Screen::WorldOptions)
     }
 
@@ -2545,7 +2545,7 @@ impl Game<'_> {
             if let Err(e) = result {
                 log::warn!("Sunrise: on-screen keyboard: {e}");
             }
-        } else if self.title.is_some() {
+        } else if self.title_input_active() {
             match key {
                 Some(KeyCode::Enter) => {
                     if let Some(t) = self.title.as_mut() {

@@ -128,7 +128,7 @@ pub(in crate::game) struct CommandExtras {
     /// Entities whose waypoint transmit range changed since they last ticked.
     pub waypoint_dirty: Vec<Target>,
     /// Attribute maps of living entities whose attributes Sunrise does not
-    /// model (an armor stand's, a mob's beyond its modelled three).
+    /// model (an armor stand's, a mob's beyond its own store's, `finalize::Attr`).
     pub attributes: HashMap<Target, sunrise_world::attributes::entity::EntityAttributes>,
     /// The `CommandResultCallback` results of the outermost source, when a
     /// harness records them.
@@ -327,6 +327,20 @@ impl Game<'_> {
                         .ok()
                 })
                 .unwrap_or(0.0);
+        }
+        // A mob's is in its own store, an Invisibility effect's stored
+        // modifier among the others (`Mob::set_effect_modifiers`).
+        if let Target::Mob(id) = t {
+            return self
+                .mobs
+                .iter()
+                .find(|m| m.id == id && !m.removed)
+                .map_or(0.0, |m| {
+                    sunrise_client::mobs::finalize::value(
+                        m,
+                        sunrise_client::mobs::finalize::Attr::WaypointTransmitRange,
+                    )
+                });
         }
         let catalog = self.motion.attributes.clone();
         let Some(key) = catalog.id("minecraft:waypoint_transmit_range") else {

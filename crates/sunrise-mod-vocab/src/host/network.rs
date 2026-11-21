@@ -55,7 +55,8 @@ pub trait NetworkClientHost {
     /// Side: client. Starts an ordered hold of uncancelled outgoing play packets.
     /// A second hold is refused with Limit while one is active. The limits are 256 packets
     /// and 1,048,576 encoded bytes. Overflow ends and flushes the hold oldest first;
-    /// its next release or drop returns Limit. Network-thread replies bypass holds.
+    /// its next release or drop returns Limit. Network-thread replies (keep-alives, chunk batch
+    /// acknowledgements, cookies) bypass holds.
     #[access(WorldOnly)]
     fn hold_packets(&mut self) -> Result<HoldId, HoldError>;
     /// Side: client. Sends the queue oldest first and ends the hold. On failure,

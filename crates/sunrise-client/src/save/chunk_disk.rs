@@ -58,7 +58,7 @@ impl DiskRuntime {
 }
 
 pub(super) struct DiskRecord {
-    original: Record,
+    pub(super) original: Record,
     job: ChunkDiskJob,
     runtime: Arc<DiskRuntime>,
     encoded: OnceLock<std::result::Result<Option<Arc<NamedTag>>, String>>,
@@ -70,13 +70,27 @@ impl DiskRecord {
                 let entries = self.runtime.run(&self.job).map_err(|e| e.to_string())?;
                 let mut tag = self
                     .original
-                    .tag()
+                    .tag_for_write()
                     .ok_or("captured chunk has no disk record")?;
                 replace_entries(Arc::make_mut(&mut tag), entries).map_err(|e| e.to_string())?;
                 Ok(Some(tag))
             })
             .clone()
             .map_err(std::io::Error::other)
+    }
+
+    pub(super) fn without_block_entity_edits(&self) -> Option<Arc<NamedTag>> {
+        let mut tag = self.original.without_block_entity_edits()?;
+        // The original encoding has already run the chunk-data callback.
+        // Replay only its result, not the callback or its other writes.
+        if let Some(Ok(Some(encoded))) = self.encoded.get() {
+            let entries = match encoded.tag.get(ATTACHMENTS_KEY) {
+                Some(Tag::Compound(entries)) => entries.clone(),
+                _ => Compound::new(),
+            };
+            replace_entries(Arc::make_mut(&mut tag), entries).ok()?;
+        }
+        Some(tag)
     }
 
     // Readers may wait for the owning writer, but never execute save callbacks.
@@ -96,17 +110,17 @@ fn admit_disk_save() -> Result<()> {
 }
 
 pub(super) fn encode_record(record: &Record) -> std::io::Result<Option<Arc<NamedTag>>> {
-    match record {
-        Record::Disk(record) => record.encode(),
-        _ => Ok(record.tag()),
+    match record.disk_job() {
+        Some(record) => record.encode(),
+        None => Ok(record.tag_for_write()),
     }
 }
 
-pub(super) fn prepare_batch(batch: &WriteBatchRecords) -> std::io::Result<()> {
+pub(super) fn prepare_batch(batch: &[QueuedWrite]) -> std::io::Result<()> {
     // Coalescing may skip a disk write, never the callback of a captured record.
     let mut refusal = None;
-    for (_, record, _) in batch {
-        if let Record::Disk(record) = record
+    for job in batch {
+        if let Some(record) = job.record.disk_job()
             && let Err(error) = record.encode()
         {
             refusal.get_or_insert(error);
@@ -114,8 +128,6 @@ pub(super) fn prepare_batch(batch: &WriteBatchRecords) -> std::io::Result<()> {
     }
     refusal.map_or(Ok(()), Err)
 }
-
-type WriteBatchRecords = [((i32, i32), Record, u64)];
 
 fn replace_entries(tag: &mut NamedTag, entries: Compound) -> std::io::Result<()> {
     let Tag::Compound(root) = &mut tag.tag else {
@@ -294,12 +306,12 @@ impl SaveDir {
 }
 
 /// Remember the chunks of a failed write so the game can mark them dirty again.
-pub(super) fn note_failed(batch: &WriteBatchRecords) {
-    for (key, record, _) in batch {
-        if let Record::Disk(record) = record
+pub(super) fn note_failed(batch: &[QueuedWrite]) {
+    for job in batch {
+        if let Some(record) = job.record.disk_job()
             && let Ok(mut failed) = record.runtime.failed_saves.lock()
         {
-            failed.push(*key);
+            failed.push(job.key);
         }
     }
 }

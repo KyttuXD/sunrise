@@ -8,10 +8,24 @@
 //! maps are kept as found (structure search is not run); conditions that
 //! need an entity, tool or damage source fail when the context has none, as
 //! they do for containers.
+mod component_validation;
 mod fill;
 pub mod global_modifiers;
 pub mod number;
 pub mod query;
+use component_validation::retain_valid;
+pub use component_validation::{
+    validate_entity_predicate, validate_item_modifier, validate_item_predicate,
+    validate_loot_condition, validate_loot_table, validate_slot_source,
+};
+mod component_validation_nbt;
+pub use component_validation_nbt::{
+    validate_item_modifier_tag, validate_loot_condition_tag, validate_loot_table_tag,
+};
+mod number_validation;
+pub use number_validation::{
+    number as validate_number_provider, number_tag as validate_number_provider_tag,
+};
 #[path = "loot_query.rs"]
 mod query_context;
 mod root;
@@ -28,11 +42,22 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, Weak},
 };
-use sunrise_core::random::{LegacyRandom, RandomSource};
+use sunrise_core::{
+    identifier::Identifier,
+    random::{LegacyRandom, RandomSource},
+};
 use {
     crate::{lazy_json::LazyJson, native_load_context::LoadContext},
     sunrise_core::nbt::{Compound, Tag},
 };
+
+/// One pack's copy of the recipe priorities, before JSON or conditions are decoded.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct RecipePriorityLayer {
+    pub pack: String,
+    pub path: &'static str,
+    pub contents: Result<Vec<u8>, String>,
+}
 
 /// Raw files a world's data packs add over the game's own data, by
 /// `<kind>/<ns>:<path>` (a `recipe/minecraft:stick` key names the file
@@ -45,12 +70,15 @@ pub struct PackOverlay<'a> {
     /// Immutable enabled package IDs for this owning server data load.
     pub conditions: &'a crate::conditions::LoadConditions,
     pub files: &'a [(String, Vec<Vec<u8>>)],
+    /// Recipe-priority layers, lowest pack first. Kept separately from path winners.
+    pub priority_layers: &'a [RecipePriorityLayer],
 }
 impl PackOverlay<'static> {
     /// No packs: the tables are the resource root's alone.
     pub const NONE: Self = Self {
         files: &[],
         conditions: &crate::conditions::LoadConditions::vanilla(),
+        priority_layers: &[],
     };
 }
 impl Default for PackOverlay<'_> {
@@ -64,7 +92,7 @@ impl<'a> PackOverlay<'a> {
     pub const fn new(files: &'a [(String, Vec<Vec<u8>>)]) -> Self {
         Self {
             files,
-            conditions: PackOverlay::NONE.conditions,
+            ..PackOverlay::NONE
         }
     }
     /// The overlay's files under `<kind>/`, with the prefix stripped.
@@ -264,8 +292,12 @@ pub struct LootData {
     items: HashMap<String, ItemFacts>,
     /// Enchantments in registry (identifier) order.
     enchantments: Vec<Enchantment>,
-    /// Tag files' layers by (registry, tag id).
-    tags: HashMap<(String, String), crate::tag_layers::TagLayers>,
+    /// Part answers resolved for this world registry snapshot, shared in meaning with
+    /// the items engine's selection table, never with another world's answers.
+    primary_answers: crate::enchantment_answers::AnswerTable,
+    support_answers: crate::enchantment_answers::AnswerTable,
+    /// Bound tags by registry and tag ID.
+    tags: loot_tags::BoundTags,
     /// Smelting recipes in recipe id order: (ingredient, result, result count).
     smelting: Vec<(Value, String, i32)>,
 }
@@ -605,6 +637,10 @@ pub fn shared_tables(root: &Path, overlay: &PackOverlay) -> io::Result<Arc<LootT
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         root.hash(&mut hasher);
+        if let Ok(metadata) = root.join("registries.json").metadata() {
+            metadata.len().hash(&mut hasher);
+            metadata.modified().ok().hash(&mut hasher);
+        }
         overlay.conditions.hash(&mut hasher);
         let data = root.join("data");
         let mut namespaces: Vec<_> = fs::read_dir(&data)
@@ -632,7 +668,8 @@ pub fn shared_tables(root: &Path, overlay: &PackOverlay) -> io::Result<Arc<LootT
     if let Some(tables) = held(&mut LOADED.lock().unwrap_or_else(|e| e.into_inner())) {
         return Ok(tables);
     }
-    let tables = types::load_files(root, overlay, "loot_table")?;
+    let mut tables = load_resources::load_ordered_kind(root, overlay, "loot_table")?;
+    tables.retain(|id, table| retain_valid("loot table", id, validate_loot_table(table)));
     let tables: LootTables = tables.into_iter().collect();
     let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
     // Another thread may have loaded the same tables meanwhile: keep one.
@@ -687,10 +724,44 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
     ) -> io::Result<Self> {
-        let mut loaded = Self::load_table_candidate(root, overlay, defaults, types)?;
+        Self::load_generation(root, overlay, defaults, types, None)
+    }
+
+    /// Load server loot with the damage catalog already bound for this generation.
+    pub fn load_with_damage(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        damage: &crate::damage_source::Catalog,
+    ) -> io::Result<Self> {
+        Self::load_generation(
+            root,
+            overlay,
+            defaults,
+            types::Types::capture(),
+            Some(damage),
+        )
+    }
+
+    fn load_generation(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        types: types::Types,
+        damage: Option<&crate::damage_source::Catalog>,
+    ) -> io::Result<Self> {
+        let mut loaded = Self::load_table_candidate(root, overlay, defaults, types, damage)?;
         let mut recipes = HashMap::new();
         load_kind(&root.join("data"), "recipe", &mut recipes)?;
         overlay_map(overlay, "recipe", &mut recipes);
+        recipes.retain(|id, value| {
+            value["type"] != "minecraft:smelting"
+                || retain_valid(
+                    "recipe",
+                    id,
+                    crate::item_defaults::validate_stack(&value["result"]),
+                )
+        });
         let mut ids: Vec<&String> = recipes.keys().collect();
         ids.sort();
         loaded.smelting = ids
@@ -725,7 +796,7 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
     ) -> io::Result<Self> {
         let mut loaded =
-            Self::load_table_candidate(root, overlay, defaults, types::Types::capture())?;
+            Self::load_table_candidate(root, overlay, defaults, types::Types::capture(), None)?;
         loaded.prepare_types()?;
         Ok(loaded)
     }
@@ -735,11 +806,16 @@ impl LootData {
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
+        damage: Option<&crate::damage_source::Catalog>,
     ) -> io::Result<Self> {
         let all = root.join("data");
         let tables = shared_tables(root, overlay)?;
-        let modifiers = types::load_files(root, overlay, "item_modifier")?;
-        let predicates = load_predicates(root, overlay)?;
+        let mut modifiers = load_resources::load_ordered_kind(root, overlay, "item_modifier")?;
+        modifiers
+            .retain(|id, value| retain_valid("item modifier", id, validate_item_modifier(value)));
+        let mut predicates = load_predicates(root, overlay)?;
+        predicates
+            .retain(|id, value| retain_valid("predicate", id, validate_loot_condition(value)));
         let items = defaults
             .entries()
             .iter()
@@ -787,7 +863,34 @@ impl LootData {
                 }
             })
             .collect();
-        let mut tags = HashMap::new();
+        let binding = holder_sets::Binding::load(root, overlay, &items, &enchantments)?;
+        let builtin = crate::tag_layers::builtin_ids(root)?;
+        let standalone_damage;
+        let damage = match damage {
+            Some(damage) => damage,
+            None => {
+                // Standalone loot fixtures may omit the prepared export, but
+                // their pack damage types still enter through the same loader.
+                standalone_damage = if root.join("damage-catalog.json").try_exists()? {
+                    crate::damage_source::Catalog::load(root, overlay)?
+                } else {
+                    crate::damage_source::Catalog::default().with_packs(root, overlay)?
+                };
+                &standalone_damage
+            }
+        };
+        let mut tags = HashMap::from([(
+            "damage_type".to_owned(),
+            damage
+                .tags()
+                .map(|tag| {
+                    (
+                        tag.to_owned(),
+                        damage.tag_members(tag).map(str::to_owned).collect(),
+                    )
+                })
+                .collect(),
+        )]);
         for registry in [
             "item",
             "block",
@@ -795,32 +898,34 @@ impl LootData {
             "enchantment",
             "instrument",
             "entity_type",
-            "damage_type",
             "predicate",
             "item_modifier",
             // What `location_check`'s `biomes` names.
             "worldgen/biome",
         ] {
-            let mut raw = HashMap::new();
-            load_kind(&all, &format!("tags/{registry}"), &mut raw)?;
-            for (name, value) in raw {
-                let layers = crate::tag_layers::TagLayers::from_file(&value);
-                tags.insert((registry.to_owned(), name), layers);
+            let raw = crate::tag_layers::layers(root, registry, overlay)?;
+            if matches!(registry, "predicate" | "item_modifier") {
+                loot_tags::check_cycles(registry, &raw)?;
             }
-            // The packs' entries join the game's own, in pack order; a
-            // `replace` file drops what the lower sources put in and `remove`
-            // takes entries out (`TagLoader.load` walks the stack the same way).
-            for (id, files) in overlay.tag_kind(registry) {
-                for bytes in files {
-                    let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                        continue;
-                    };
-                    let slot = tags.entry((registry.to_owned(), id.clone())).or_default();
-                    slot.push(&v);
-                }
-            }
+            let contains = |id: &str| match registry {
+                "item" => items.contains_key(id),
+                "block" => builtin.get(registry).is_some_and(|ids| ids.contains(id)),
+                "fluid" => builtin.get(registry).map_or_else(
+                    || crate::fluid::FluidKind::from_name(id).is_some(),
+                    |ids| ids.contains(id),
+                ),
+                "predicate" => predicates.contains_key(id),
+                "item_modifier" => modifiers.contains_key(id),
+                _ => binding.ids(registry).map_or_else(
+                    || builtin.get(registry).is_none_or(|ids| ids.contains(id)),
+                    |ids| ids.iter().any(|entry| entry == id),
+                ),
+            };
+            tags.insert(
+                registry.to_owned(),
+                crate::tag_layers::TagLayers::bind(registry, &raw, contains),
+            );
         }
-        let binding = holder_sets::Binding::load(root, overlay, &items, &enchantments)?;
         let mut loaded = Self {
             holder_sets: Default::default(),
             copies_entity_nbt: false,
@@ -833,10 +938,28 @@ impl LootData {
             predicates: Arc::new(predicates),
             items,
             enchantments,
+            primary_answers: Default::default(),
+            support_answers: Default::default(),
             tags,
             smelting: Vec::new(),
         };
         binding.snapshot(&mut loaded)?;
+        // Both enchantment engines bind the same item holder identities before
+        // a part can leave an unchanged default out of the shared answer table.
+        for enchantment in &mut loaded.enchantments {
+            for set in std::iter::once(&mut enchantment.supported).chain(&mut enchantment.primary) {
+                let bind = |holder: &mut Value| {
+                    if let Value::String(id) = holder {
+                        *id = crate::enchantment_answers::canonical_item_holder(id);
+                    }
+                };
+                if let Value::Array(members) = set {
+                    members.iter_mut().for_each(bind);
+                } else {
+                    bind(set);
+                }
+            }
+        }
         loaded.holder_sets = binding;
         Ok(loaded)
     }
@@ -844,6 +967,15 @@ impl LootData {
     pub fn copies_entity_nbt(&self) -> bool {
         self.copies_entity_nbt
     }
+    /// The primary-item answers resolved for this enchantment registry snapshot.
+    pub fn primary_answers(&self) -> &crate::enchantment_answers::AnswerTable {
+        &self.primary_answers
+    }
+    /// The support answers resolved for this enchantment registry snapshot.
+    pub fn support_answers(&self) -> &crate::enchantment_answers::AnswerTable {
+        &self.support_answers
+    }
+
     /// Attach prepared instances to this private, not-yet-published snapshot.
     pub fn set_global_modifiers(&mut self, modifiers: Arc<global_modifiers::GlobalLootModifiers>) {
         self.global_modifiers = modifiers;
@@ -854,6 +986,10 @@ impl LootData {
 
     pub fn predicates(&self) -> &Arc<HashMap<String, Value>> {
         &self.predicates
+    }
+
+    pub fn item_modifiers(&self) -> &HashMap<String, Value> {
+        &self.modifiers
     }
 
     /// The table snapshot used by this loot data.
@@ -940,7 +1076,7 @@ impl LootData {
     /// Tag members in tag order (nested tags expanded in place, duplicates
     /// dropped).
     fn tag(&self, registry: &str, name: &str) -> Vec<String> {
-        loot_tags::members(&self.tags, registry, name)
+        self.members(registry, name).unwrap_or_default()
     }
     /// A published HolderSet: "#tag", "id" or resolved IDs. Objects bind at load.
     fn holder_set(&self, registry: &str, v: &Value) -> Vec<String> {
@@ -958,7 +1094,20 @@ impl LootData {
         }
     }
     fn item_in(&self, item: &str, set: &Value) -> bool {
-        self.holder_set("item", set).iter().any(|i| i == item)
+        let matches = |holder: &str| match holder.strip_prefix('#') {
+            Some(tag) => self.tag("item", tag).iter().any(|id| id == item),
+            None => holder == item,
+        };
+        match set {
+            Value::String(holder) => matches(holder),
+            Value::Array(holders) => holders.iter().filter_map(Value::as_str).any(matches),
+            _ => false,
+        }
+    }
+    fn supports(&self, item: &str, enchantment: &Enchantment) -> bool {
+        self.support_answers
+            .answer(item, &enchantment.name)
+            .unwrap_or_else(|| self.item_in(item, &enchantment.supported))
     }
     fn facts(&self, item: &str) -> ItemFacts {
         self.items.get(item).copied().unwrap_or(ItemFacts {
@@ -1469,9 +1618,7 @@ impl<R: RandomSource> Context<'_, R> {
                 };
                 let options: Vec<usize> = options
                     .into_iter()
-                    .filter(|&i| {
-                        !check || data.item_in(&stack.item, &data.enchantments[i].supported)
-                    })
+                    .filter(|&i| !check || data.supports(&stack.item, &data.enchantments[i]))
                     .collect();
                 if !options.is_empty() {
                     let pick = self
@@ -1880,8 +2027,18 @@ impl<R: RandomSource> Context<'_, R> {
             // SetComponentsFunction: the patch's components, applied when the
             // stack becomes an item (trim on worn armour, see `mobs::finalize`).
             "minecraft:set_components" => {
-                for (id, value) in f["components"].as_object().into_iter().flatten() {
-                    let tag = if value.is_null() {
+                for (key, value) in f["components"].as_object().into_iter().flatten() {
+                    // DataComponentPatch parses the identifier after peeling off `!`.
+                    let (prefix, name) = key
+                        .strip_prefix('!')
+                        .map_or(("", key.as_str()), |name| ("!", name));
+                    let Ok(id) = Identifier::parse(name) else {
+                        continue;
+                    };
+                    let id = format!("{prefix}{id}");
+                    let tag = if prefix == "!" {
+                        Some(Tag::Compound(Default::default()))
+                    } else if value.is_null() {
                         None
                     } else {
                         // CustomData uses TagParser's lenient codec: an SNBT
@@ -1896,7 +2053,7 @@ impl<R: RandomSource> Context<'_, R> {
                         };
                         Some(tag)
                     };
-                    stack.components.push((id.clone(), tag));
+                    stack.components.push((id, tag));
                 }
             }
             // A validated registered function transforms only this stack.
@@ -1933,9 +2090,14 @@ impl<R: RandomSource> Context<'_, R> {
         let mut available: Vec<(usize, i32)> = Vec::new();
         for &i in source {
             let e = &data.enchantments[i];
-            let primary = data.item_in(item, &e.supported)
-                && e.primary.as_ref().is_none_or(|p| data.item_in(item, p));
-            if !primary && !book {
+            let primary = data
+                .primary_answers
+                .answer(item, &e.name)
+                .unwrap_or_else(|| {
+                    book || (data.supports(item, e)
+                        && e.primary.as_ref().is_none_or(|p| data.item_in(item, p)))
+                });
+            if !primary {
                 continue;
             }
             for level in (1..=e.max_level).rev() {
@@ -2174,11 +2336,12 @@ mod namespace_tests {
         let enabled = crate::conditions::LoadConditions::new(["package_id"]);
         let off = PackOverlay {
             files: &files,
-            ..PackOverlay::NONE
+            ..PackOverlay::default()
         };
         let on = PackOverlay {
             files: &files,
             conditions: &enabled,
+            ..PackOverlay::default()
         };
         let absent = shared_tables(&root, &off).unwrap();
         assert!(!absent.contains_key("demo:base"));
@@ -2189,18 +2352,80 @@ mod namespace_tests {
         assert!(present.contains_key("demo:replaced"));
         assert!(!present.contains_key("demo:unknown"));
         assert!(Arc::ptr_eq(&absent, &shared_tables(&root, &off).unwrap()));
-        fs::write(root.join("items.json"), "{}").unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:stone":{}}"#).unwrap();
         let defaults = crate::item_defaults::read(&root).unwrap();
         let loot = LootData::load(&root, &off, &defaults).unwrap();
+        assert_eq!(loot.tags["item"]["demo:food"], ["minecraft:stone"]);
+        assert!(loot.tags["item"].contains_key("demo:absent"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn damage_predicate_reads_only_bound_tags_of_the_frozen_registry() {
+        let root = std::env::temp_dir().join(format!("sunrise-loot-damage-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{"minecraft:stick":{},"minecraft:paper":{}}"#,
+        )
+        .unwrap();
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let initial = vec![(
+            "damage_type/test:hit".into(),
+            vec![br#"{"message_id":"hit","scaling":"never","exhaustion":0}"#.to_vec()],
+        )];
+        let damage = crate::damage_source::Catalog::default()
+            .with_packs(&root, &PackOverlay::new(&initial))
+            .unwrap();
+        let pool = |tag, item| {
+            serde_json::json!({
+                "rolls": 1,
+                "condition": {"type":"minecraft:damage_source_properties", "predicate":{
+                    "tags":[{"id":tag,"expected":true}]
+                }},
+                "entries": [{"type":"minecraft:item","name":item}]
+            })
+        };
+        let files = vec![
+            (
+                "tags/test:damage_type/good".into(),
+                vec![br#"{"values":["test:hit"]}"#.to_vec()],
+            ),
+            (
+                "tags/test:damage_type/broken".into(),
+                vec![br#"{"values":["test:hit","test:absent"]}"#.to_vec()],
+            ),
+            (
+                "loot_table/test:drop".into(),
+                vec![
+                    serde_json::to_vec(&serde_json::json!({"pools":[
+                        pool("#test:good", "minecraft:stick"),
+                        pool("#test:broken", "minecraft:paper"),
+                    ]}))
+                    .unwrap(),
+                ],
+            ),
+        ];
+        // The original pack no longer supplies the definition, but reload
+        // retains the damage registry and binds only these new tag files.
+        let overlay = PackOverlay::new(&files);
+        let damage = damage.reload_tags(&root, &overlay).unwrap();
+        let loot = LootData::load_with_damage(&root, &overlay, &defaults, &damage).unwrap();
+        let params = EntityLootParams {
+            damage: Some(LootDamage {
+                kind: "test:hit".into(),
+                ..LootDamage::default()
+            }),
+            ..EntityLootParams::default()
+        };
+        let mut random = sunrise_core::random::LegacyRandom::new(1);
+        let drops = loot.roll_entity("test:drop", &mut random, &params);
         assert_eq!(
-            loot.tags[&("item".into(), "demo:food".into())],
-            crate::tag_layers::TagLayers::from_file(
-                &serde_json::json!({"values": ["minecraft:stone"]})
-            )
-        );
-        assert!(
-            loot.tags
-                .contains_key(&("item".into(), "demo:absent".into()))
+            drops
+                .iter()
+                .map(|stack| stack.item.as_str())
+                .collect::<Vec<_>>(),
+            ["minecraft:stick"]
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2426,6 +2651,63 @@ mod namespace_tests {
                 ("test:value".into(), Some(Tag::List(vec![Tag::Byte(7)]))),
             ]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_aliases_and_removals_follow_json_member_order() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-ordered-loot-patch-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:bread":{}}"#).unwrap();
+        fs::write(
+            root.join("registries.json"),
+            r#"{"minecraft:data_component_type":{"entries":{"minecraft:villager_food":{}}}}"#,
+        )
+        .unwrap();
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let load = |patch| {
+            let files = [("loot_table/test:meal".to_owned(), vec![format!(r#"{{"pools":[{{"rolls":1,"entries":[{{"type":"minecraft:item","name":"minecraft:bread","modifier":{{"type":"minecraft:set_components","components":{{{patch}}}}}}}]}}]}}"#).into_bytes()])];
+            LootData::load(&root, &PackOverlay::new(&files), &defaults)
+        };
+        let roll = |patch| {
+            let data = load(patch).unwrap();
+            data.roll("test:meal", &mut LegacyRandom::new(1), 0.0, None, None)[0]
+                .components
+                .clone()
+        };
+        let food = (
+            "minecraft:villager_food".into(),
+            Some(Tag::compound([("nutrition", Tag::Byte(7))])),
+        );
+        let removal = (
+            "!minecraft:villager_food".into(),
+            Some(Tag::Compound(Default::default())),
+        );
+        assert_eq!(
+            roll(r#""minecraft:villager_food":{"nutrition":7},"!villager_food":{}"#),
+            [removal]
+        );
+        assert_eq!(
+            roll(r#""!villager_food":{},"minecraft:villager_food":{"nutrition":7}"#),
+            [food]
+        );
+        for (patch, expected) in [
+            (
+                r#""!villager_food":0"#,
+                "removal of minecraft:villager_food requires an object",
+            ),
+            (
+                r#""other:unknown":{}"#,
+                "unknown component ID other:unknown",
+            ),
+        ] {
+            let error = load(patch)
+                .err()
+                .expect("the malformed patch must refuse loading")
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2813,7 +3095,6 @@ mod namespace_tests {
     #[test]
     fn tag_kind_yields_tag_loader_ids_for_content_id_keys() {
         let overlay = PackOverlay {
-            conditions: &crate::conditions::LoadConditions::vanilla(),
             files: &[
                 (
                     "tags/minecraft:item/food".to_owned(),
@@ -2824,6 +3105,7 @@ mod namespace_tests {
                     vec![br#"{"values": ["minecraft:infinity"]}"#.to_vec()],
                 ),
             ],
+            ..PackOverlay::default()
         };
         let item: Vec<_> = overlay.tag_kind("item").map(|(id, _)| id).collect();
         assert_eq!(item, ["minecraft:food"]);
@@ -2840,14 +3122,13 @@ mod namespace_tests {
         let root = std::env::temp_dir().join(format!("sunrise-loot-tag-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("data/minecraft/tags/item")).unwrap();
-        fs::write(root.join("items.json"), "{}").unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:apple":{},"minecraft:bread":{},"minecraft:cookie":{},"minecraft:kelp":{}}"#).unwrap();
         fs::write(
             root.join("data/minecraft/tags/item/food.json"),
             r#"{"values": ["minecraft:bread", "minecraft:cookie"]}"#,
         )
         .unwrap();
         let overlay = PackOverlay {
-            conditions: &crate::conditions::LoadConditions::vanilla(),
             files: &[(
                 "tags/minecraft:item/food".to_owned(),
                 vec![
@@ -2855,6 +3136,7 @@ mod namespace_tests {
                     br#"{"replace": true, "values": ["minecraft:apple"]}"#.to_vec(),
                 ],
             )],
+            ..PackOverlay::default()
         };
         let defaults = crate::item_defaults::read(&root).unwrap();
         let data = LootData::load(&root, &overlay, &defaults).unwrap();
@@ -2954,6 +3236,96 @@ mod namespace_tests {
 #[cfg(test)]
 mod native_kinds_tests {
     use super::*;
+
+    fn enchantable_probe(name: &str, item: &str, modifier: Value) -> LootData {
+        let mut data = table(
+            name,
+            &serde_json::json!({"pools":[{"rolls":1,"entries":[{
+                "type":"minecraft:item", "name":item, "modifier":[modifier]
+            }]}]})
+            .to_string(),
+        );
+        data.items.insert(
+            item.into(),
+            ItemFacts {
+                max_stack: 64,
+                enchantable: Some(1),
+                ..Default::default()
+            },
+        );
+        data.enchantments.push(Enchantment {
+            name: "test:sharp".into(),
+            supported: serde_json::json!(["test:probe"]),
+            primary: None,
+            exclusive: Value::Null,
+            max_level: 1,
+            weight: 1,
+            min_cost: (0, 0),
+            max_cost: (100, 0),
+            slots: vec![],
+            effects: Value::Null,
+        });
+        data
+    }
+
+    #[test]
+    fn world_loot_selection_reads_and_retires_its_primary_snapshot() {
+        let mut data = enchantable_probe(
+            "primary_snapshot",
+            "test:probe",
+            serde_json::json!({"type":"minecraft:enchant_with_levels","levels":30}),
+        );
+        data.enchantments[0].supported = Value::Null;
+        let roll = |data: &LootData| {
+            data.roll("minecraft:test", &mut LegacyRandom::new(1), 0.0, None, None)[0]
+                .enchantments
+                .clone()
+        };
+        assert!(roll(&data).is_empty());
+        data.primary_answers().install(HashMap::from([(
+            "test:probe".into(),
+            HashMap::from([("test:sharp".into(), true)]),
+        )]));
+        assert_eq!(roll(&data), [("test:sharp".into(), 1)]);
+        // Retiring the world's answer restores the vanilla outcome.
+        data.primary_answers().clear();
+        assert!(roll(&data).is_empty());
+    }
+
+    #[test]
+    fn world_random_enchantment_respects_support_only_when_compatibility_is_requested() {
+        for (item, supported) in [("test:probe", true), ("minecraft:enchanted_book", false)] {
+            for compatible in [true, false] {
+                let data = enchantable_probe(
+                    "support_snapshot",
+                    item,
+                    serde_json::json!({
+                        "type":"minecraft:enchant_randomly", "only_compatible":compatible
+                    }),
+                );
+                let roll = || {
+                    data.roll("minecraft:test", &mut LegacyRandom::new(1), 0.0, None, None)[0]
+                        .enchantments
+                        .clone()
+                };
+                let answers = data.support_answers();
+                for answer in [None, Some(false), Some(true), None] {
+                    match answer {
+                        Some(value) => answers.install(HashMap::from([(
+                            item.into(),
+                            HashMap::from([("test:sharp".into(), value)]),
+                        )])),
+                        None => answers.clear(),
+                    }
+                    if !compatible || answer.unwrap_or(supported) {
+                        assert_eq!(roll(), [("test:sharp".into(), 1)]);
+                    } else {
+                        assert!(roll().is_empty(), "{item}, {answer:?}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn weight_totals_pool_and_enchantments() {

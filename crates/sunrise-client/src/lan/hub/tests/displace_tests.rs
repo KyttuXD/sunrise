@@ -68,13 +68,12 @@ fn warned(events: &[HostEvent]) -> bool {
 
 /// A displacement goes out as one relative teleport (position, motion and look), the player's
 /// own reports while it is awaited lose their position and keep their rotation with nothing
-/// held against it, and the confirmation leaves the server at its own target, from where the
-/// client's walk is accepted as an ordinary move. What this does not assert: that the end
-/// position is the client's walk plus the displacement. The hub commits the teleport's target
-/// on a confirmation, not the position the packet reports (sunrise#2055).
+/// held against it, and the confirmation is an ordinary report of where the client is (the
+/// client's walk plus the displacement), accepted from the target the server snapped to; the
+/// walk on from there is accepted as an ordinary move.
 #[test]
 #[ignore = "daily"]
-fn a_displacement_is_a_relative_teleport_that_drops_position_keeps_rotation_and_lands_on_the_target()
+fn a_displacement_is_a_relative_teleport_that_drops_position_keeps_rotation_and_lands_where_the_client_walked()
  {
     use play::relative::{DELTA_X, DELTA_Y, DELTA_Z, ROTATE_DELTA, X, X_ROT, Y, Y_ROT, Z};
     let Some(fixture) = crate::test_fixtures::vanilla() else {
@@ -128,8 +127,12 @@ fn a_displacement_is_a_relative_teleport_that_drops_position_keeps_rotation_and_
     let events = side.tick(&rig, vec![accept(packet.teleport, landed, 30.0)]);
     assert!(!warned(&events));
     assert!(side.guest().awaiting_teleport.is_none(), "confirmed");
-    assert_eq!(side.guest().position, target, "the server's own target");
-    // The client's landing, which kept the walk, is accepted as the ordinary move it is.
+    assert_eq!(
+        side.guest().position,
+        landed,
+        "the confirmation's own position, the walk kept"
+    );
+    // The walk on from the landing is accepted as the ordinary move it is.
     let next = plus(landed, [0.0, 0.0, 0.2]);
     walk(&mut side, &rig, next, 30.0);
     assert_eq!(side.guest().position, next);
@@ -227,7 +230,6 @@ fn an_unconfirmed_displacement_is_resent_absolute_with_no_velocity() {
     assert_eq!(packet.relatives, 0, "no relative flag");
     assert_eq!(packet.position, target, "the awaited position, absolute");
     assert_eq!(packet.delta, [0.0; 3]);
-    assert!(!side.guest().awaiting_keeps_motion);
     // The old id is stale now.
     side.tick(&rig, vec![accept(old, target, 0.0)]);
     assert_eq!(

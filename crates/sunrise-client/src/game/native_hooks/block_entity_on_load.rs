@@ -1,6 +1,15 @@
 use super::*;
 
 impl Game<'_> {
+    pub(in crate::game) fn authoritative_world_for_mods(
+        resources: &crate::game::Resources,
+        seed: i64,
+    ) -> sunrise_client::world::World {
+        let mut world = Self::world_for_mods(resources.facts().air, seed);
+        world.authoritative_group_lifetime(resources.rest().behaviours.clone());
+        world
+    }
+
     /// Configure notice collection before this level can receive any block entities.
     pub(in crate::game) fn world_for_mods(
         air: BlockStateId,
@@ -11,6 +20,11 @@ impl Game<'_> {
             .block_entities
             .set_on_load_enabled(mod_api::__private::has_part_hook(
                 mod_api::HookId::BlockEntityOnLoad,
+            ));
+        world
+            .block_entities
+            .set_data_load_enabled(mod_api::__private::has_part_hook(
+                mod_api::HookId::BlockEntityLoadAdditional,
             ));
         world
     }
@@ -24,7 +38,9 @@ impl Game<'_> {
         {
             return;
         }
-        if self.world.block_entities.has_pending_on_load() {
+        if self.world.block_entities.has_pending_on_load()
+            || self.world.block_entities.has_pending_data_load()
+        {
             let generation = self.world.block_entities.generation(&pos);
             self.fire_pending_block_entity_loads();
             if self.world.block_entities.generation(&pos) != generation {
@@ -36,6 +52,7 @@ impl Game<'_> {
 
     /// Drain attachment notices before either logical side runs block entity tickers.
     pub(in crate::game) fn fire_pending_block_entity_loads(&mut self) {
+        self.fire_pending_block_entity_data_loads();
         if !self.world.block_entities.has_pending_on_load() {
             return;
         }

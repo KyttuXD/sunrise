@@ -55,10 +55,12 @@ pub fn register(m: &mut Mob) {
 }
 /// AbstractCubeMob.setSize(size, true): the max health (size^2), movement
 /// speed (0.2 + 0.1 * size, in floats) and attack damage (size) bases, a
-/// magma cube's armor (size * 3), then the health back to the max.
-pub fn set_size(m: &mut Mob, size: i32) {
+/// magma cube's armor, then the health back to the max. The size is clamped
+/// to [`SIZES`] for all but the armor: `MagmaCube.setSize` sets it to the
+/// requested size * 3, unclamped.
+pub fn set_size(m: &mut Mob, requested: i32) {
     use super::finalize::{Attr, set_base};
-    let size = size.clamp(*SIZES.start(), *SIZES.end());
+    let size = requested.clamp(*SIZES.start(), *SIZES.end());
     m.extra.size = size;
     set_base(m, Attr::MaxHealth, f64::from(size * size));
     set_base(
@@ -68,7 +70,7 @@ pub fn set_size(m: &mut Mob, size: i32) {
     );
     set_base(m, Attr::AttackDamage, f64::from(size));
     if m.species() == super::Species::MagmaCube {
-        set_base(m, Attr::Armor, f64::from(size * 3));
+        set_base(m, Attr::Armor, f64::from(requested.wrapping_mul(3)));
     }
     m.health = super::finalize::max_health(m);
 }
@@ -776,6 +778,55 @@ mod keep_jumping_tests {
         });
         if ran {
             assert_eq!(result, Some(true));
+        }
+    }
+}
+
+#[cfg(test)]
+mod set_size_tests {
+    use super::Species;
+    use crate::{
+        entity_nbt::mob_from_nbt,
+        mobs::finalize::{Attr, base_value},
+    };
+    use std::sync::Arc;
+    use sunrise_core::nbt::Tag;
+
+    /// #2675: `AbstractCubeMob.readAdditionalSaveData` passes `Size + 1`;
+    /// the size, max health, speed and attack damage use it clamped to
+    /// 1..=127, while `MagmaCube.setSize` sets the armor from it unclamped.
+    #[test]
+    fn magma_cube_load_uses_unclamped_size_for_armor() {
+        let id = "minecraft:magma_cube";
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = id.into();
+        ty.species = Species::MagmaCube;
+        let types = [(id.into(), kind)].into();
+        // (saved Size, clamped size, armor base, max health base, speed base)
+        for (saved, clamped, armor, health, speed) in [
+            (-1, 1, 0.0, 1.0, 0.3_f32),
+            (-5, 1, -12.0, 1.0, 0.3),
+            (199, 127, 600.0, 16_129.0, 12.9),
+            // The first overflows Size + 1; the second only overflows the armor product.
+            (i32::MAX, 1, -2_147_483_648.0, 1.0, 0.3),
+            (715_827_882, 127, -2_147_483_647.0, 16_129.0, 12.9),
+        ] {
+            let tag = Tag::compound([("id", Tag::String(id.into())), ("Size", Tag::Int(saved))]);
+            let m = mob_from_nbt(&tag, &types, 1, None).unwrap();
+            assert_eq!(m.extra.size, clamped, "Size {saved}");
+            assert_eq!(base_value(&m, Attr::Armor), armor, "Size {saved}");
+            assert_eq!(base_value(&m, Attr::MaxHealth), health, "Size {saved}");
+            assert_eq!(
+                base_value(&m, Attr::MovementSpeed),
+                f64::from(speed),
+                "Size {saved}"
+            );
+            assert_eq!(
+                base_value(&m, Attr::AttackDamage),
+                f64::from(clamped),
+                "Size {saved}"
+            );
         }
     }
 }

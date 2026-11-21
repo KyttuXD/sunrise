@@ -117,6 +117,8 @@ impl Game<'_> {
             sunrise_client::spans::time("tick_general", || self.tick_general())?;
             // Orbs, primed TNT and falling blocks still to tick, in join order.
             self.run_ordered_ticks(sunrise_client::join_seq::JoinSeq::MAX, false)?;
+            // Unsimulated entities no mod named are told once for the family.
+            self.native_others_tick_family(self.ordered.told, self.ordered.born);
             sunrise_client::spans::time("tick_experience", || self.tick_experience());
             // Merged, despawned or picked up.
             span("mods_leaves_flush", || self.native_leaves_flush());
@@ -134,8 +136,10 @@ impl Game<'_> {
         // tick's. A piston's moved block reaches the clients once their own
         // copy of it finished moving, so a slow tick rate shows it slide
         // (#8430).
-        if let (Some(sent), Some(log)) = (sent, self.world.block_log.as_mut()) {
-            self.world.block_log_held = log.split_off(sent.min(log.len()));
+        if let Some(sent_blocks) = sent
+            && let Some(log) = self.world.block_log.as_mut()
+        {
+            self.world.block_log_held = log.split_off(sent_blocks.min(log.len()));
         }
         sunrise_client::spans::time("tick_lan", || self.tick_lan(false));
         let held = std::mem::take(&mut self.world.block_log_held);

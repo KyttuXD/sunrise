@@ -108,7 +108,11 @@ fn client_menu_click_refuses_a_host_without_its_backend() {
 #[test]
 fn level_family_accepts_empty_doubles() {
     struct Empty;
-    impl LevelHost for Empty {}
+    impl LevelHost for Empty {
+        fn block_entity_data(&self, _: mod_api::BlockEntityRef) -> Option<mod_api::Compound> {
+            None
+        }
+    }
     impl LevelRandomHost for Empty {}
     impl LevelTicksHost for Empty {}
     impl LevelWriteHost for Empty {}
@@ -148,7 +152,6 @@ impl Hooks for Quiet {}
 fn server_services_forward_commands_messages_and_player_identity() {
     let mut server = FakeHost::new();
     server.commands.known("list");
-    server.messages.blocked("blocked");
     server.join(7, 42);
     server.players.acting = Some(7);
     let host: &mut dyn ServerHost = &mut server;
@@ -162,7 +165,6 @@ fn server_services_forward_commands_messages_and_player_identity() {
     host.messages()
         .broadcast(Text::literal("everyone"))
         .unwrap();
-    assert_eq!(host.messages().text_allowed("blocked"), Some(false));
     let player = host.players().acting_player().unwrap();
     assert_eq!(host.players().server_players(), [player]);
     assert_eq!((player.uuid(), player.entity().id()), (7, 42));
@@ -186,6 +188,9 @@ fn render_hand_chains_pose_and_draw_until_cancelled() {
         fn push(&mut self) {
             self.0 += 1;
         }
+    }
+    impl crate::HandDrawContext for Draw {
+        fn render_arm(&mut self, _: crate::MainHand) {}
     }
     #[mod_api::__subscriptions]
     impl Hooks for HandMod {

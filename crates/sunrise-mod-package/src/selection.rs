@@ -1,9 +1,6 @@
 //! The package candidates the game loads, before content validation and conflicts.
 mod context;
-pub use context::{
-    Argument, LaunchArguments, MissingValue, ModSelectionContext, cache_home_in, data_dir_with,
-    private_home_in,
-};
+pub use context::{Argument, LaunchArguments, MissingValue, ModSelectionContext, data_dir_with};
 
 use crate::{
     Package, find,
@@ -49,44 +46,6 @@ pub fn content_packages_read<'a>(
             !package.is_native() && (enabled.contains(&package.manifest.id) || dev.contains(&path));
         selected.then_some(SelectedPackage { path, package })
     })
-}
-
-/// Retains invalid package diagnostics and manifest identities for loader refusals.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn package_errors(paths: impl IntoIterator<Item = PathBuf>) -> Vec<(String, String)> {
-    paths
-        .into_iter()
-        .filter_map(|path| {
-            let error = Package::read(&path).err()?;
-            use std::io::Read;
-            let limit = crate::manifest::MAX_MANIFEST + 1;
-            let text = if path.is_dir() {
-                let mut text = String::new();
-                std::fs::File::open(path.join(crate::manifest::MANIFEST))
-                    .ok()?
-                    .take(limit)
-                    .read_to_string(&mut text)
-                    .ok()?;
-                text
-            } else {
-                let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).ok()?).ok()?;
-                let mut text = String::new();
-                zip.by_name(crate::manifest::MANIFEST)
-                    .ok()?
-                    .take(limit)
-                    .read_to_string(&mut text)
-                    .ok()?;
-                text
-            };
-            if text.len() as u64 > crate::manifest::MAX_MANIFEST {
-                return None;
-            }
-            // Invalid manifests still need an identity for the player-visible refusal.
-            let manifest: toml::Table = toml::from_str(&text).ok()?;
-            let id = manifest.get("id")?.as_str()?;
-            crate::manifest::valid_mod_id(id).then(|| (id.to_owned(), error))
-        })
-        .collect()
 }
 
 #[cfg(test)]

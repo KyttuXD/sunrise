@@ -11,6 +11,7 @@ use std::{
     fs,
     path::Path,
 };
+use sunrise_mod_package::manifest::UNRESOLVED_BUILD;
 
 /// What `check` and the report say of a jar made for 1.20 or older that is not carried.
 pub const OLD_LAYOUT: &str =
@@ -145,6 +146,10 @@ pub struct Report {
     pub worldgen_types: crate::worldgen::Upgrade,
     /// The loader's convention biome tags the structures name, carried.
     pub convention_biome_tags: usize,
+    /// The jar's version when it couldn't be read as semver: the manifest holds `0.0.0+unresolved.…`,
+    /// which no dependency accepts, so it is set by hand before anything depends on the mod.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_unreadable: Option<String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -157,6 +162,44 @@ pub struct Pack<'a> {
     pub loaded: &'a dyn Fn(&str) -> bool,
     /// Every mod of the pack by id, ported or not: their namespaces are theirs.
     pub mods: &'a dyn Fn(&str) -> bool,
+    /// The pack's Minecraft version; empty when the jar is carried on its own.
+    pub minecraft: &'a str,
+}
+
+/// A jar's version as the semver the manifest holds: a leading `<minecraft>-` dropped, an
+/// omitted minor and patch padded. One that is still not semver becomes `0.0.0+unresolved.<it>`
+/// with the characters outside `[0-9A-Za-z-.]` replaced by `-`, and the flag is false: dependency
+/// resolution refuses such a placeholder against every requirement (`manifest::is_unresolved`).
+fn manifest_version(jar: &str, minecraft: &str) -> (String, bool) {
+    let trimmed = jar
+        .strip_prefix(minecraft)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .filter(|_| !minecraft.is_empty())
+        .unwrap_or(jar);
+    if let Ok(version) = sunrise_mod_package::manifest::parse_version(trimmed) {
+        return (version.to_string(), true);
+    }
+    let build: Vec<String> = jar
+        .split('.')
+        .map(|part| {
+            let part = part.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "-");
+            if part.is_empty() {
+                "-".to_owned()
+            } else {
+                part
+            }
+        })
+        .collect();
+    let fallback = format!("0.0.0+{UNRESOLVED_BUILD}.{}", build.join("."));
+    let readable = sunrise_mod_package::manifest::parse_version(&fallback).is_ok();
+    (
+        if readable {
+            fallback
+        } else {
+            format!("0.0.0+{UNRESOLVED_BUILD}")
+        },
+        false,
+    )
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -894,7 +937,9 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
         Ok(v) => v,
         // Minecraft reads data files with Gson's lenient reader, which skips
         // comments: YUNG's pools have them. The carry is plain JSON.
-        Err(e) => match serde_json::from_slice::<Value>(&without_comments(bytes)) {
+        Err(e) => match serde_json::from_slice::<Value>(
+            &sunrise_mod_package::content::without_comments(bytes),
+        ) {
             Ok(v) => {
                 *bytes = serde_json::to_vec_pretty(&v).expect("a parsed value serializes");
                 v
@@ -913,53 +958,6 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
         *bytes = serde_json::to_vec_pretty(&value).expect("a parsed value serializes");
     }
     None
-}
-
-/// JSON text without the comments Gson's lenient reader skips: `//` and
-/// `#` to the end of the line, and `/* ... */`, outside strings.
-fn without_comments(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    let mut string = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if string {
-            out.push(b);
-            if b == b'\\' {
-                out.extend(bytes.get(i + 1));
-                i += 1;
-            } else if b == b'"' {
-                string = false;
-            }
-            i += 1;
-            continue;
-        }
-        match (b, bytes.get(i + 1)) {
-            (b'"', _) => {
-                string = true;
-                out.push(b);
-                i += 1;
-            }
-            (b'/', Some(b'/')) | (b'#', _) => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            (b'/', Some(b'*')) => {
-                i += 2;
-                while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-                out.push(b' ');
-            }
-            _ => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    out
 }
 
 /// Item models another item's overrides reach: looks, not items; models that only reach each other stay items.
@@ -1514,17 +1512,22 @@ pub fn carry(
     unregistered_recipes(&inside, &outside, id, &owned, &mut report)?;
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
     let name = if info.name.is_empty() { id } else { &info.name };
+    let (version, readable) = manifest_version(&info.version, pack.minecraft);
+    if !readable {
+        report.version_unreadable = Some(info.version.clone());
+    }
     let mut manifest = format!(
-        "# Carried over from {jar} by sunrise-port-pack, for local use only.\n# Licence: {license}\nid = {}\nname = {}\nversion = {}\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
+        "# Carried over from {jar} by sunrise-port-pack, for local use only.\n# Licence: {license}\n# Jar version: {jar_version}\nid = {}\nname = {}\nversion = {}\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
         q(id),
         q(name),
-        q(&info.version),
+        q(&version),
         // In a `#` comment: a line break from the jar would end it and write keys of its own.
         jar = jar
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .replace(|c: char| c.is_control(), " "),
+        jar_version = info.version.replace(|c: char| c.is_control(), " "),
         license = if info.license.is_empty() {
             "not stated".to_owned()
         } else {
@@ -1792,6 +1795,7 @@ mod tests {
         let verdict = out.join("harness/result.json");
         let info = crate::jar::JarInfo {
             mod_id: "example".into(),
+            version: "1.0.0".into(),
             ..Default::default()
         };
         let run = |source: &Path| {
@@ -1803,6 +1807,7 @@ mod tests {
                 &|_| true,
                 &Pack {
                     loaded: &|_| true,
+                    minecraft: "",
                     mods: &|_| false,
                 },
                 &BTreeMap::new(),
@@ -1988,9 +1993,80 @@ mod tests {
         };
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|_| false,
         };
         carry(jar, &info, out, None, &|_| true, &pack, &BTreeMap::new())
+    }
+
+    #[test]
+    fn a_jar_version_is_converted_to_semver() {
+        for (jar, minecraft, want) in [
+            ("26.3-3.6.30+refabricated", "26.3", "3.6.30+refabricated"),
+            ("1.2", "26.3", "1.2.0"),
+            ("2-rc1", "", "2.0.0-rc1"),
+            ("26.3-3.6.30", "", "26.3.0-3.6.30"),
+            ("v1 beta!", "26.3", "0.0.0+unresolved.v1-beta-"),
+        ] {
+            let (version, readable) = manifest_version(jar, minecraft);
+            assert_eq!(version, want, "{jar}");
+            assert_eq!(readable, !want.starts_with("0.0.0+unresolved"), "{jar}");
+        }
+    }
+
+    #[test]
+    fn a_version_that_cannot_be_read_is_kept_in_the_comment_and_reported_for_hand_editing() {
+        use crate::{
+            inventory::Record,
+            report::{self, Status},
+        };
+        let dir = temp_dir("version");
+        let jar = dir.join("example.jar");
+        write_jar(
+            &jar,
+            &[(
+                "assets/example/blockstates/stone.json",
+                br#"{"variants":{"":{"model":"example:block/stone"}}}"#,
+            )],
+        );
+        let work = dir.join("work");
+        let out = work.join("mods/example");
+        let info = crate::jar::JarInfo {
+            mod_id: "example".into(),
+            version: "build 7\nid = \"evil\"".into(),
+            ..Default::default()
+        };
+        let pack = Pack {
+            loaded: &|_| true,
+            minecraft: "26.3",
+            mods: &|_| false,
+        };
+        let report = carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            report.version_unreadable.as_deref(),
+            Some(info.version.as_str())
+        );
+        let manifest = fs::read_to_string(out.join("carry/sunrise-mod.toml")).unwrap();
+        let parsed = sunrise_mod_package::Manifest::parse(&manifest).unwrap();
+        assert_eq!(parsed.id, "example");
+        assert_eq!(
+            parsed.version.to_string(),
+            "0.0.0+unresolved.build-7-id----evil-"
+        );
+        assert!(manifest.contains("# Jar version: build 7 id = \"evil\"\n"));
+        let records = [Record {
+            key: "example".into(),
+            class: "content".into(),
+            tier: "data".into(),
+            ..Default::default()
+        }];
+        let row = report::build(&records, &work).pop().unwrap();
+        assert_eq!(row.status, Status::Partial);
+        assert!(
+            row.reason.contains("set the version by hand"),
+            "{}",
+            row.reason
+        );
     }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
@@ -2564,6 +2640,7 @@ mod tests {
             &|_| true,
             &Pack {
                 loaded: &|_| true,
+                minecraft: "",
                 mods: &|_| false,
             },
             &BTreeMap::new(),
@@ -2751,6 +2828,7 @@ mod tests {
         let out = dir.join("work/mods/towers");
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|m| m == "cristel",
         };
         let report = carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
@@ -2828,6 +2906,7 @@ mod tests {
         let info = crate::jar::read(&jar).unwrap();
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|_| false,
         };
         let facts: Facts = serde_json::from_value(json!({"blocks": {}, "items": {
@@ -2908,6 +2987,7 @@ mod tests {
         let info = crate::jar::read(&jar).unwrap();
         let pack = Pack {
             loaded: &|m| m == "gem",
+            minecraft: "",
             mods: &|_| false,
         };
         let facts: Facts = serde_json::from_value(json!({"blocks": {}, "items": {},
@@ -2988,6 +3068,7 @@ mod tests {
         .unwrap();
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|_| false,
         };
         let out = dir.join("out");
@@ -3043,6 +3124,7 @@ mod tests {
         let out = dir.join("work/mods/evil");
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|_| false,
         };
         let report = carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
@@ -3083,6 +3165,7 @@ mod tests {
         let out = dir.join("work/mods/pulley");
         let pack = Pack {
             loaded: &|_| true,
+            minecraft: "",
             mods: &|_| false,
         };
         carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();

@@ -295,12 +295,12 @@ impl GoalCx<'_, '_> {
 
     pub(super) fn r_living_last_attacker(&self, living: LivingRef) -> Option<mod_api::EntityRef> {
         let mob = self.live_living_mob(living)?;
-        let who = mob
-            .ai
-            .last_hurt_by
-            .filter(|_| mob.age as i32 - mob.ai.last_hurt_by_time <= 100)?;
-        let id = match who {
-            crate::mobs::Who::Mob(id) => id,
+        let id = match mob.recent_hurt_by()? {
+            crate::mobs::Who::Mob(id) => {
+                return self
+                    .lookup_entity(id)
+                    .or_else(|| self.w.goal_host?.mob_attacker_elsewhere(id));
+            }
             crate::mobs::Who::Player => self.w.goal_host?.mob_player_credit(mob)??,
         };
         self.lookup_entity(id)

@@ -57,6 +57,9 @@ fn zombie_type() -> Arc<MobType> {
             ("minecraft:max_health", 20.0),
             ("minecraft:movement_speed", 0.23),
             ("minecraft:attack_damage", 3.0),
+            ("minecraft:safe_fall_distance", 3.0),
+            ("minecraft:max_absorption", 0.0),
+            ("minecraft:waypoint_transmit_range", 0.0),
         ],
     )
 }
@@ -89,7 +92,10 @@ fn tick(m: &mut Mob, times: usize) {
     }
 }
 fn types() -> HashMap<String, Arc<MobType>> {
-    HashMap::from([("minecraft:pig".to_owned(), pig_type())])
+    HashMap::from([
+        ("minecraft:pig".to_owned(), pig_type()),
+        ("minecraft:zombie".to_owned(), zombie_type()),
+    ])
 }
 
 /// The issue's first row: a NoAI pig loaded with an infinite Speed II reads
@@ -526,4 +532,365 @@ fn a_health_boosted_partner_below_its_maximum_is_no_mate() {
     assert!(!chosen(below), "a partner below its boosted maximum");
     b.health = 34.0;
     assert!(chosen(b.seen(None, &items)), "the same partner at 34");
+}
+
+// ---- #1988: Jump Boost, Absorption and Invisibility ------------------------
+//
+// `MobEffects`: Jump Boost adds `minecraft:effect.jump_boost`, 1.0 per level,
+// `add_value`, to `safe_fall_distance`; Absorption `minecraft:effect.absorption`,
+// 4.0 per level, `add_value`, to `max_absorption`; Invisibility
+// `minecraft:effect.waypoint_transmit_range_hide`, -1.0 per level,
+// `add_multiplied_total`, to `waypoint_transmit_range`. Every living entity
+// has the three attributes (`LivingEntity.createLivingAttributes`); a
+// zombie's defaults are 3, 0 and 0.
+
+const JUMP: &str = "minecraft:effect.jump_boost";
+const ABSORPTION: &str = "minecraft:effect.absorption";
+const HIDE: &str = "minecraft:effect.waypoint_transmit_range_hide";
+
+/// The health a fall of `distance` blocks leaves a copy of a 20-health
+/// zombie with (`causeFallDamage`:
+/// `floor((distance + 1.0E-6 - safe_fall_distance) * 1 * 1)`); a copy, so no
+/// earlier fall's hurt cooldown is on it.
+fn health_after_fall(m: &Mob, distance: f64) -> f32 {
+    let mut m = m.clone();
+    m.health = 20.0;
+    m.cause_fall_damage_from(
+        crate::test_resources::server_loop_context(),
+        &mut crate::health::TestLevel::new(0).level(),
+        distance,
+        1.0,
+        &mut Vec::new(),
+    );
+    m.health
+}
+
+/// A NoAI zombie loaded with Jump Boost II, Absorption II and Invisibility
+/// and a saved `waypoint_transmit_range` of 100 has none of the three
+/// modifiers (`readAdditionalSaveData` adds none): safe fall distance 3, so
+/// a 5.5-block fall hurts it for 2; max absorption 0; range 100.
+#[test]
+fn a_loaded_jump_boost_absorption_or_invisibility_adds_no_modifier() {
+    let tag = sunrise_core::nbt::parse_snbt(
+        r#"{id:"minecraft:zombie",Pos:[0.5d,64d,0.5d],NoAI:1b,attributes:[{id:"minecraft:waypoint_transmit_range",base:100d}],active_effects:[{id:"minecraft:jump_boost",amplifier:1b,duration:-1},{id:"minecraft:absorption",amplifier:1b,duration:-1},{id:"minecraft:invisibility",amplifier:0b,duration:-1}]}"#,
+    )
+    .unwrap()
+    .0;
+    let m = mob_from_nbt(&tag, &types(), 1, None).unwrap();
+    assert!(m.has_effect("minecraft:jump_boost"));
+    assert!(m.has_effect("minecraft:absorption"));
+    assert!(m.has_effect("minecraft:invisibility"));
+    assert!(stored(&m, Attr::SafeFallDistance, JUMP).is_empty());
+    assert!(stored(&m, Attr::MaxAbsorption, ABSORPTION).is_empty());
+    assert!(stored(&m, Attr::WaypointTransmitRange, HIDE).is_empty());
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 3.0);
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 0.0);
+    assert_eq!(finalize::value(&m, Attr::WaypointTransmitRange), 100.0);
+    assert_eq!(health_after_fall(&m, 5.5), 18.0);
+}
+
+/// `/effect give <zombie> jump_boost infinite 1` stores 2.0 (`modifier value
+/// get minecraft:effect.jump_boost`), so the safe fall distance reads 5 and
+/// the same 5.5-block fall does no harm; the effect's end takes it off.
+#[test]
+fn a_given_jump_boost_raises_the_safe_fall_distance() {
+    let mut m = zombie();
+    assert_eq!(health_after_fall(&m, 5.5), 18.0);
+    m.add_effect("minecraft:jump_boost", -1, 1);
+    assert_eq!(
+        stored(&m, Attr::SafeFallDistance, JUMP),
+        [(2.0, Op::AddValue)]
+    );
+    assert_eq!(
+        finalize::modifier_amount(&m, Attr::SafeFallDistance, JUMP),
+        Some(2.0)
+    );
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 5.0);
+    assert_eq!(finalize::base_value(&m, Attr::SafeFallDistance), 3.0);
+    assert_eq!(health_after_fall(&m, 5.5), 20.0);
+    assert_eq!(health_after_fall(&m, 7.5), 18.0);
+    // `onEffectUpdated(true)`: Jump Boost III replaces the amount.
+    m.add_effect("minecraft:jump_boost", -1, 2);
+    assert_eq!(
+        stored(&m, Attr::SafeFallDistance, JUMP),
+        [(3.0, Op::AddValue)]
+    );
+    assert!(m.retain_effects(|_| false));
+    assert!(stored(&m, Attr::SafeFallDistance, JUMP).is_empty());
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 3.0);
+    assert_eq!(health_after_fall(&m, 5.5), 18.0);
+}
+
+/// Absorption II stores 8.0 on `max_absorption` before `onEffectStarted`
+/// raises the amount to 8 within that maximum; Absorption III replaces it
+/// with 12.0 and raises the amount to 12; the effect's end takes the modifier
+/// off and the amount is clamped to the maximum left, 0.
+#[test]
+fn a_given_absorption_raises_the_cap_and_its_end_lowers_it() {
+    let mut m = zombie();
+    m.add_effect("minecraft:absorption", -1, 1);
+    assert_eq!(
+        stored(&m, Attr::MaxAbsorption, ABSORPTION),
+        [(8.0, Op::AddValue)]
+    );
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 8.0);
+    assert_eq!(m.absorption, 8.0);
+    m.add_effect("minecraft:absorption", -1, 2);
+    assert_eq!(
+        stored(&m, Attr::MaxAbsorption, ABSORPTION),
+        [(12.0, Op::AddValue)]
+    );
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 12.0);
+    assert_eq!(m.absorption, 12.0);
+    assert!(m.retain_effects(|_| false));
+    assert!(stored(&m, Attr::MaxAbsorption, ABSORPTION).is_empty());
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 0.0);
+    assert_eq!(m.absorption, 0.0);
+}
+
+/// Invisibility's modifier has its own id, not `minecraft:effect.invisibility`:
+/// on a zombie whose range was set to 100 it stores -1.0, which takes the
+/// range to 100 x (1 - 1) = 0; its end gives the 100 back.
+#[test]
+fn invisibility_hides_the_waypoint_range_under_its_own_id() {
+    let mut m = zombie();
+    finalize::set_base(&mut m, Attr::WaypointTransmitRange, 100.0);
+    m.add_effect("minecraft:invisibility", -1, 0);
+    assert_eq!(
+        stored(&m, Attr::WaypointTransmitRange, HIDE),
+        [(-1.0, Op::AddMultipliedTotal)]
+    );
+    assert!(
+        stored(
+            &m,
+            Attr::WaypointTransmitRange,
+            "minecraft:effect.invisibility"
+        )
+        .is_empty()
+    );
+    assert_eq!(finalize::value(&m, Attr::WaypointTransmitRange), 0.0);
+    assert!(m.retain_effects(|_| false));
+    assert!(stored(&m, Attr::WaypointTransmitRange, HIDE).is_empty());
+    assert_eq!(finalize::value(&m, Attr::WaypointTransmitRange), 100.0);
+}
+
+/// The three given modifiers are saved in their attributes' entries and a
+/// load reads them back, so the reloaded zombie still has them.
+#[test]
+fn the_three_given_modifiers_round_trip_through_the_save() {
+    let mut m = zombie();
+    finalize::set_base(&mut m, Attr::WaypointTransmitRange, 100.0);
+    m.add_effect("minecraft:jump_boost", -1, 1);
+    m.add_effect("minecraft:absorption", -1, 1);
+    m.add_effect("minecraft:invisibility", -1, 0);
+    let saved = mob_to_nbt(&m, [1, 0, 0, 2], None, None, |_| None, &Default::default());
+    let Some(Tag::List(list)) = saved.get("attributes") else {
+        panic!("no attributes: {saved:?}");
+    };
+    let entry = |name: &str| {
+        list.iter()
+            .find(|a| a.get("id") == Some(&Tag::String(name.into())))
+            .unwrap_or_else(|| panic!("no {name} entry: {list:?}"))
+    };
+    let modifier = |id: &str, amount: f64, op: &str| {
+        Tag::List(vec![Tag::compound([
+            ("id", Tag::String(id.into())),
+            ("amount", Tag::Double(amount.to_bits())),
+            ("operation", Tag::String(op.into())),
+        ])])
+    };
+    assert_eq!(
+        entry("minecraft:safe_fall_distance").get("modifiers"),
+        Some(&modifier(JUMP, 2.0, "add_value"))
+    );
+    assert_eq!(
+        entry("minecraft:max_absorption").get("modifiers"),
+        Some(&modifier(ABSORPTION, 8.0, "add_value"))
+    );
+    let range = entry("minecraft:waypoint_transmit_range");
+    assert_eq!(range.get("base"), Some(&Tag::Double(100f64.to_bits())));
+    assert_eq!(
+        range.get("modifiers"),
+        Some(&modifier(HIDE, -1.0, "add_multiplied_total"))
+    );
+    let back = mob_from_nbt(&saved, &types(), 1, None).unwrap();
+    assert_eq!(finalize::value(&back, Attr::SafeFallDistance), 5.0);
+    assert_eq!(crate::mobs::armor::max_absorption(&back), 8.0);
+    assert_eq!(
+        finalize::base_value(&back, Attr::WaypointTransmitRange),
+        100.0
+    );
+    assert_eq!(finalize::value(&back, Attr::WaypointTransmitRange), 0.0);
+}
+
+/// The issue named Haste, Mining Fatigue, Luck and Unluck too, but their
+/// attributes (`attack_speed`, `luck`) are a player's only: on a mob
+/// `addAttributeModifiers` finds no instance and adds nothing.
+#[test]
+fn haste_mining_fatigue_luck_and_unluck_store_nothing_on_a_mob() {
+    let mut m = zombie();
+    for effect in [
+        "minecraft:haste",
+        "minecraft:mining_fatigue",
+        "minecraft:luck",
+        "minecraft:unluck",
+    ] {
+        m.add_effect(effect, -1, 0);
+    }
+    assert_eq!(m.extra.effects.len(), 4);
+    assert!(
+        m.extra
+            .attributes
+            .as_ref()
+            .is_none_or(|s| s.modifiers.is_empty()),
+        "{:?}",
+        m.extra.attributes
+    );
+}
+
+/// A type built without an attribute row (a fixture, a remote client's
+/// stand-in) reads its own `safe_fall_distance` field as the base: 6 for a
+/// type whose field says 6.
+#[test]
+fn a_type_without_the_row_takes_its_own_safe_fall_distance() {
+    let mut t = (*kind()).clone();
+    t.attributes = Arc::default();
+    t.safe_fall_distance = 6.0;
+    let mut m = Mob::new(8, Arc::new(t), Vec3::ZERO, 0.0);
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 6.0);
+    // No instance in the type's row: `addAttributeModifiers` adds nothing.
+    m.add_effect("minecraft:jump_boost", -1, 0);
+    assert!(stored(&m, Attr::SafeFallDistance, JUMP).is_empty());
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 6.0);
+}
+
+/// `removeAttributeModifiers` calls `AttributeInstance.removeModifier`,
+/// which marks the instance dirty only when it held the id. A zombie that
+/// loaded Absorption II with 8 absorption has no modifier, so `/effect clear`
+/// runs no `onAttributeUpdated(MAX_ABSORPTION)` and the 8 stay; a given one
+/// had the modifier, and its removal clamps the 10 it holds to the maximum
+/// left, 0; removing another effect first clamps nothing.
+#[test]
+fn clearing_a_loaded_absorption_keeps_the_amount_and_a_given_one_clamps_it() {
+    let tag = sunrise_core::nbt::parse_snbt(
+        r#"{id:"minecraft:zombie",Pos:[0.5d,64d,0.5d],NoAI:1b,AbsorptionAmount:8f,active_effects:[{id:"minecraft:absorption",amplifier:1b,duration:-1}]}"#,
+    )
+    .unwrap()
+    .0;
+    let mut loaded = mob_from_nbt(&tag, &types(), 1, None).unwrap();
+    assert_eq!(loaded.absorption, 8.0);
+    assert!(loaded.retain_effects(|_| false));
+    assert_eq!(loaded.absorption, 8.0);
+    let mut given = zombie();
+    given.add_effect("minecraft:absorption", -1, 1);
+    given.add_effect("minecraft:speed", -1, 0);
+    assert_eq!(given.absorption, 8.0);
+    // Removing another effect leaves `max_absorption` clean: an amount above
+    // the maximum (as a load sets it) stays.
+    given.absorption = 10.0;
+    assert!(given.retain_effects(|e| e.id != "minecraft:speed"));
+    assert_eq!(given.absorption, 10.0);
+    assert!(given.retain_effects(|_| false));
+    assert_eq!(given.absorption, 0.0);
+}
+
+/// A zombie's live attribute map (what a `LivingRef` reads and the LAN sync
+/// sends), built from its records over a catalog with the three attributes.
+fn live_value(m: &Mob, name: &str) -> f64 {
+    use sunrise_world::attribute_map::ValueKind;
+    let bits = |v: f64| format!("{:016x}", v.to_bits());
+    let row = |id: &str, default: f64, min: f64, max: f64| serde_json::json!({"id": id, "default": bits(default), "min": bits(min), "max": bits(max), "syncable": true});
+    let catalog = Arc::new(
+        sunrise_world::attributes::entity::Catalog::from_json(&serde_json::json!({
+            "data_version": sunrise_world::DATA_VERSION,
+            "attributes": [
+                row("minecraft:safe_fall_distance", 3.0, -1024.0, 1024.0),
+                row("minecraft:max_absorption", 0.0, 0.0, 2048.0),
+            ],
+            "entities": {"minecraft:zombie": {
+                "minecraft:safe_fall_distance": bits(3.0),
+                "minecraft:max_absorption": bits(0.0),
+            }}
+        }))
+        .unwrap(),
+    );
+    m.extra
+        .live
+        .read(
+            &catalog,
+            "minecraft:zombie",
+            name,
+            ValueKind::Computed,
+            || {
+                crate::entity_nbt::attribute_entries(m)
+                    .into_iter()
+                    .map(|(_, entry)| entry)
+                    .collect()
+            },
+        )
+        .unwrap()
+}
+
+/// A mod's transient `minecraft:effect.jump_boost` (5.0) on a zombie, then
+/// Jump Boost II given: `addAttributeModifiers` removes the id wherever it is
+/// and adds the permanent 2.0, so gameplay and the rebuilt live map both read
+/// 3 + 2 = 5, not the old 5.0 replayed over it (10). Clearing the effect
+/// leaves 3 in both.
+#[test]
+fn a_given_effect_replaces_a_mods_transient_modifier_with_its_id_everywhere() {
+    let mut m = zombie();
+    finalize::add_transient_modifier(&mut m, Attr::SafeFallDistance, JUMP, 5.0, Op::AddValue);
+    assert_eq!(live_value(&m, "minecraft:safe_fall_distance"), 8.0);
+    m.add_effect("minecraft:jump_boost", -1, 1);
+    assert!(!finalize::has_transient_modifier(
+        &m,
+        Attr::SafeFallDistance,
+        JUMP
+    ));
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 5.0);
+    assert_eq!(live_value(&m, "minecraft:safe_fall_distance"), 5.0);
+    // A transient Absorption id the given effect replaced stays gone through
+    // the clear; another mod modifier stays.
+    finalize::add_transient_modifier(&mut m, Attr::MaxAbsorption, ABSORPTION, 4.0, Op::AddValue);
+    assert_eq!(live_value(&m, "minecraft:max_absorption"), 4.0);
+    m.add_effect("minecraft:absorption", -1, 0);
+    assert_eq!(live_value(&m, "minecraft:max_absorption"), 4.0);
+    finalize::add_transient_modifier(
+        &mut m,
+        Attr::SafeFallDistance,
+        "test:other",
+        1.0,
+        Op::AddValue,
+    );
+    assert!(m.retain_effects(|_| false));
+    assert_eq!(finalize::value(&m, Attr::SafeFallDistance), 4.0);
+    assert_eq!(live_value(&m, "minecraft:safe_fall_distance"), 4.0);
+    assert_eq!(live_value(&m, "minecraft:max_absorption"), 0.0);
+}
+
+/// Clearing an Absorption effect that loaded without a modifier, while a
+/// mod's transient `minecraft:effect.absorption` (8.0) is on `max_absorption`:
+/// `removeModifier` finds that one, so the instance is dirty and the 8
+/// absorption are clamped to the maximum left, 0; the live maximum reads 8
+/// before and 0 after.
+#[test]
+fn clearing_absorption_takes_a_mods_transient_off_and_clamps() {
+    let tag = sunrise_core::nbt::parse_snbt(
+        r#"{id:"minecraft:zombie",Pos:[0.5d,64d,0.5d],NoAI:1b,AbsorptionAmount:8f,active_effects:[{id:"minecraft:absorption",amplifier:1b,duration:-1}]}"#,
+    )
+    .unwrap()
+    .0;
+    let mut m = mob_from_nbt(&tag, &types(), 1, None).unwrap();
+    finalize::add_transient_modifier(&mut m, Attr::MaxAbsorption, ABSORPTION, 8.0, Op::AddValue);
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 8.0);
+    assert_eq!(live_value(&m, "minecraft:max_absorption"), 8.0);
+    assert!(m.retain_effects(|_| false));
+    assert!(!finalize::has_transient_modifier(
+        &m,
+        Attr::MaxAbsorption,
+        ABSORPTION
+    ));
+    assert_eq!(crate::mobs::armor::max_absorption(&m), 0.0);
+    assert_eq!(live_value(&m, "minecraft:max_absorption"), 0.0);
+    assert_eq!(m.absorption, 0.0);
 }

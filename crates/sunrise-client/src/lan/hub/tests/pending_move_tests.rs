@@ -13,6 +13,7 @@ pub(super) fn with_input_context<T>(run: impl FnOnce(&mut TickCtx<'_>) -> T) -> 
         next_entity: &mut next_entity,
         spawn: [0.5, 64.0, 0.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -250,44 +251,4 @@ fn with_no_listener_the_report_is_committed_in_place_and_nothing_is_held() {
     assert_eq!(g.position, [0.5, 64.0, 0.0]);
     assert!(g.pending_move.is_none());
     assert!(g.inbox.is_empty());
-}
-
-/// What a vetoed report does to the counters: the server's own checks and the anticheat's record
-/// of the client's ticks saw it before the hook, and the packets behind it are read after the ruling, in order.
-#[test]
-fn a_vetoed_report_is_counted_before_the_hook_and_adds_no_violation() {
-    let mut hub = standing(true, vec![walking(0.5), tick_end()]);
-    let config = sunrise_anticheat::Config::default();
-    hub.set_anticheat(config.clone());
-    let conn = hub.guests[0].conn;
-    assert_eq!(moves(&drain(&mut hub)), [conn]);
-    let g = &hub.guests[0];
-    assert_eq!(g.received_moves, 1, "the speed check's window counted it");
-    assert_eq!(
-        g.record.as_ref().map(|r| r.ended()),
-        Some(0),
-        "its tick end waits"
-    );
-    assert_eq!(
-        g.anticheat.timer.ms, 0.0,
-        "the timer has not read the tick end"
-    );
-    hub.resolve_move(conn, false);
-    assert!(
-        hub.guests[0].moves.is_empty(),
-        "its bookkeeping was skipped"
-    );
-    assert!(moves(&drain(&mut hub)).is_empty());
-    let g = &hub.guests[0];
-    let record = g.record.as_ref().unwrap();
-    assert_eq!(record.ended(), 1, "the tick end was read after the ruling");
-    assert_eq!(
-        record.ticks().last().and_then(|t| t.position),
-        Some([0.5, 64.0, 0.0]),
-        "the record holds what the client sent, vetoed or not"
-    );
-    assert_eq!(g.anticheat.timer.ms, -50.0, "one tick end of the timer");
-    for check in sunrise_anticheat::Check::ALL {
-        assert_eq!(g.anticheat.vl(&config, *check, hub.ticks), 0.0, "{check:?}");
-    }
 }

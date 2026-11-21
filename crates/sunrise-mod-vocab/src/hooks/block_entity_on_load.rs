@@ -5,7 +5,9 @@ pub trait Hooks {
     /// data already applied, before its first tick (`IBlockEntityExtension.onLoad`).
     /// Fires once for each instance on both logical sides, including placement.
     /// A chunk loaded again creates new instances and calls this hook again.
+    /// On a server, `block_entity_load_additional` reports the saved-data application first.
     /// Read saved data through the attached handle and the supplied `HostSide`.
+    /// `block_entity_save_additional` is the separate server-side serialization hook.
     #[notes = "`block_entity_on_load` is the per-instance attachment notice, after saved data is applied and before ticking. It also runs for fresh placement and for client chunk instances. The factory remains a separate creation step. Its counterpart is `IBlockEntityExtension.onLoad`."]
     #[hook(
         side = "both",

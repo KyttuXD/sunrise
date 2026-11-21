@@ -104,7 +104,7 @@ fn track_name(id: &str) -> &str {
 }
 pub(crate) enum Kind {
     /// Slider position 0..1.
-    Slider(f32),
+    Slider(f64),
     Cycle,
 }
 /// `PlayerModelPart` keys, in vanilla's bit order (`modelPart_*` in options.txt).
@@ -368,27 +368,27 @@ impl Opt {
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
-        let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
+        let unit = |v: f64, lo: f64, hi: f64| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
             Opt::ModSetting(i, j) => {
-                Kind::Slider(mod_setting(s, i, j).map_or(0.0, |m| m.value.fraction()))
+                Kind::Slider(mod_setting(s, i, j).map_or(0.0, |m| f64::from(m.value.fraction())))
             }
-            Opt::ChatDelay => values::kind(s.file.double("chatDelay")),
+            Opt::ChatDelay => values::kind(s.chat_delay),
             Opt::FovEffects | Opt::DarknessPulsing => {
-                Kind::Slider(s.file.double(self.file_key().unwrap()).sqrt() as f32)
+                Kind::Slider(s.file.double(self.file_key().unwrap()).sqrt())
             }
             Opt::DistortionEffects
             | Opt::DamageTilt
             | Opt::GlintSpeed
             | Opt::GlintStrength
-            | Opt::PanoramaSpeed => Kind::Slider(s.file.double(self.file_key().unwrap()) as f32),
-            Opt::Fov => unit(s.fov, 30.0, 110.0),
+            | Opt::PanoramaSpeed => Kind::Slider(s.file.double(self.file_key().unwrap())),
+            Opt::Fov => unit(f64::from(s.fov), 30.0, 110.0),
             Opt::RenderDistance => unit(
-                s.render_distance as f32,
+                s.render_distance as f64,
                 2.0,
-                crate::options_file::MAX_RENDER_DISTANCE as f32,
+                crate::options_file::MAX_RENDER_DISTANCE as f64,
             ),
-            Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
+            Opt::SimulationDistance => unit(s.simulation_distance as f64, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => wheel::kind(s.mouse_wheel_sensitivity),
             Opt::Volume(i) => Kind::Slider(if i == 0 {
@@ -397,24 +397,24 @@ impl Opt {
                 s.volumes[i]
             }),
             Opt::Gamma => Kind::Slider(s.gamma),
-            Opt::MaxFps => unit(s.max_fps as f32, 10.0, 260.0),
-            Opt::CloudRange => unit(s.cloud_range as f32, 2.0, 128.0),
+            Opt::MaxFps => unit(s.max_fps as f64, 10.0, 260.0),
+            Opt::CloudRange => unit(s.cloud_range as f64, 2.0, 128.0),
             Opt::EntityDistance => unit(s.entity_distance, 0.5, 5.0),
-            Opt::BiomeBlend => unit(s.biome_blend as f32, 0.0, 7.0),
-            Opt::Preset => unit(preset_index(&s.graphics_preset) as f32, 0.0, 3.0),
-            Opt::Mipmaps => unit(s.mipmap_levels as f32, 0.0, 4.0),
-            Opt::MaxAnisotropy => unit(s.file.int("maxAnisotropyBit") as f32, 1.0, 3.0),
+            Opt::BiomeBlend => unit(s.biome_blend as f64, 0.0, 7.0),
+            Opt::Preset => unit(preset_index(&s.graphics_preset) as f64, 0.0, 3.0),
+            Opt::Mipmaps => unit(s.mipmap_levels as f64, 0.0, 4.0),
+            Opt::MaxAnisotropy => unit(s.file.int("maxAnisotropyBit") as f64, 1.0, 3.0),
             Opt::ExclusiveMode => {
-                let last = s.video_modes.len() as f32 - 1.0;
+                let last = s.video_modes.len() as f64 - 1.0;
                 if last < 0.0 {
                     Kind::Slider(0.0)
                 } else {
-                    unit(s.video_mode_index() as f32, -1.0, last)
+                    unit(s.video_mode_index() as f64, -1.0, last)
                 }
             }
-            Opt::WeatherRadius => unit(s.weather_radius as f32, 3.0, 10.0),
+            Opt::WeatherRadius => unit(s.weather_radius as f64, 3.0, 10.0),
             Opt::ChunkFade => unit(s.chunk_fade, 0.0, 2.0),
-            Opt::MenuBlur => unit(s.menu_blur as f32, 0.0, 10.0),
+            Opt::MenuBlur => unit(s.menu_blur as f64, 0.0, 10.0),
             Opt::NotificationDisplayTime => unit(s.notification_display_time, 0.5, 10.0),
             Opt::ChatOpacity => Kind::Slider(s.chat_opacity),
             Opt::TextBackgroundOpacity => Kind::Slider(s.text_background_opacity),
@@ -423,15 +423,15 @@ impl Opt {
             Opt::ChatHeightFocused => Kind::Slider(s.chat_height_focused),
             Opt::ChatHeightUnfocused => Kind::Slider(s.chat_height_unfocused),
             Opt::ChatLineSpacing => Kind::Slider(s.chat_line_spacing),
-            Opt::PadLookSensitivity => Kind::Slider(s.controller.look_sensitivity),
-            Opt::PadPointerSpeed => unit(s.controller.pointer_speed, 0.25, 3.0),
-            Opt::PadScrollSpeed => unit(s.controller.scroll_speed, 1.0, 36.0),
-            Opt::PadRepeatDelay => unit(s.controller.repeat_delay, 0.1, 1.0),
-            Opt::PadRepeatInterval => unit(s.controller.repeat_interval, 0.03, 0.3),
-            Opt::PadMoveDeadzone => unit(s.controller.move_deadzone, 0.0, 0.5),
-            Opt::PadLookDeadzone => unit(s.controller.look_deadzone, 0.0, 0.5),
-            Opt::PadTriggerThreshold => unit(s.controller.trigger_threshold, 0.1, 0.9),
-            Opt::SprintWindow => unit(s.sprint_window as f32, 0.0, 10.0),
+            Opt::PadLookSensitivity => Kind::Slider(f64::from(s.controller.look_sensitivity)),
+            Opt::PadPointerSpeed => unit(f64::from(s.controller.pointer_speed), 0.25, 3.0),
+            Opt::PadScrollSpeed => unit(f64::from(s.controller.scroll_speed), 1.0, 36.0),
+            Opt::PadRepeatDelay => unit(f64::from(s.controller.repeat_delay), 0.1, 1.0),
+            Opt::PadRepeatInterval => unit(f64::from(s.controller.repeat_interval), 0.03, 0.3),
+            Opt::PadMoveDeadzone => unit(f64::from(s.controller.move_deadzone), 0.0, 0.5),
+            Opt::PadLookDeadzone => unit(f64::from(s.controller.look_deadzone), 0.0, 0.5),
+            Opt::PadTriggerThreshold => unit(f64::from(s.controller.trigger_threshold), 0.1, 0.9),
+            Opt::SprintWindow => unit(s.sprint_window as f64, 0.0, 10.0),
             Opt::Page(page, row) => pages::slider_kind(page, row),
             _ => Kind::Cycle,
         }
@@ -478,7 +478,7 @@ impl Opt {
         format!("{key}.tooltip")
     }
     /// A slider's position (0..1), or `None` for a cycle button.
-    pub fn slider_position(self, s: &Settings) -> Option<f32> {
+    pub fn slider_position(self, s: &Settings) -> Option<f64> {
         match self.kind(s) {
             Kind::Slider(v) => Some(v),
             Kind::Cycle => None,
@@ -525,23 +525,7 @@ impl Opt {
             },
             _ => self.slider_steps(),
         };
-        let next_pos = if let Some(steps) = steps {
-            let steps = steps as f32;
-            let current = (pos * steps).round();
-            let next = if forward {
-                current + 1.0
-            } else {
-                current - 1.0
-            };
-            (next / steps).clamp(0.0, 1.0)
-        } else {
-            let delta = 1.0 / (width - 8.0).max(1.0);
-            if forward {
-                (pos + delta).min(1.0)
-            } else {
-                (pos - delta).max(0.0)
-            }
-        };
+        let next_pos = crate::settings_shell::slider_step(pos, steps, width, forward);
         self.set_slider(s, next_pos);
     }
     /// The widget message (OptionInstance.toString / CycleButton full name).
@@ -558,14 +542,14 @@ impl Opt {
             | Opt::DamageTilt
             | Opt::GlintSpeed
             | Opt::GlintStrength => {
-                let value = s.file.double(self.file_key().unwrap()) as f32;
+                let value = s.file.double(self.file_key().unwrap());
                 if value == 0.0 {
                     generic(c, tr("options.off"))
                 } else {
                     percent(c, value)
                 }
             }
-            Opt::PanoramaSpeed => percent(c, s.file.double("panoramaScrollSpeed") as f32),
+            Opt::PanoramaSpeed => percent(c, s.file.double("panoramaScrollSpeed")),
             Opt::SprintWindow => {
                 let value = if s.sprint_window == 0 {
                     tr("options.off")
@@ -594,7 +578,9 @@ impl Opt {
             }
             Opt::WheelSensitivity => generic(
                 c,
-                Text::literal(format!("{:.2}", s.mouse_wheel_sensitivity)),
+                Text::literal(sunrise_core::java_number::format_fixed2(
+                    s.mouse_wheel_sensitivity,
+                )),
             ),
             Opt::Volume(i) => {
                 let v = if i == 0 {
@@ -617,7 +603,7 @@ impl Opt {
                 };
                 generic(c, value)
             }
-            Opt::Gamma => match (f64::from(s.gamma) * 100.0) as i32 {
+            Opt::Gamma => match (s.gamma * 100.0) as i32 {
                 0 => generic(c, tr("options.gamma.min")),
                 50 => generic(c, tr("options.gamma.default")),
                 100 => generic(c, tr("options.gamma.max")),
@@ -674,7 +660,7 @@ impl Opt {
                 } else {
                     Text::tr(
                         "options.chunkFade.seconds",
-                        &[&format!("{:.2}", s.chunk_fade)],
+                        &[&sunrise_core::java_number::format_fixed2(s.chunk_fade)],
                     )
                 }
             }
@@ -694,22 +680,22 @@ impl Opt {
                     percent(c, s.chat_scale)
                 }
             }
-            Opt::ChatWidth => chat_px(c, (s.chat_width * 280.0 + 40.0).floor()),
-            Opt::ChatHeightFocused => chat_px(c, (s.chat_height_focused * 160.0 + 20.0).floor()),
-            Opt::ChatHeightUnfocused => {
-                chat_px(c, (s.chat_height_unfocused * 160.0 + 20.0).floor())
-            }
+            Opt::ChatWidth => chat_px(c, s.chat_options().width_px()),
+            Opt::ChatHeightFocused => chat_px(c, s.chat_options().height_px(true)),
+            Opt::ChatHeightUnfocused => chat_px(c, s.chat_options().height_px(false)),
             Opt::ChatLineSpacing => percent(c, s.chat_line_spacing),
             Opt::NotificationDisplayTime => generic(
                 c,
                 Text::tr(
                     "options.multiplier",
-                    &[&format!("{:.1}", s.notification_display_time)],
+                    &[&sunrise_core::java_number::double_to_string(
+                        s.notification_display_time,
+                    )],
                 ),
             ),
-            Opt::PadLookSensitivity => percent(c, 2.0 * s.controller.look_sensitivity),
-            Opt::PadPointerSpeed => percent(c, s.controller.pointer_speed),
-            Opt::PadScrollSpeed => percent(c, s.controller.scroll_speed / 12.0),
+            Opt::PadLookSensitivity => percent(c, f64::from(2.0 * s.controller.look_sensitivity)),
+            Opt::PadPointerSpeed => percent(c, f64::from(s.controller.pointer_speed)),
+            Opt::PadScrollSpeed => percent(c, f64::from(s.controller.scroll_speed / 12.0)),
             Opt::PadRepeatDelay | Opt::PadRepeatInterval => generic(
                 c,
                 Text::tr(
@@ -929,7 +915,7 @@ impl Opt {
         }
     }
     /// Set a slider from its 0..1 position (OptionInstance value sets).
-    pub fn set_slider(self, s: &mut Settings, v: f32) {
+    pub fn set_slider(self, s: &mut Settings, v: f64) {
         if let Opt::ModSetting(i, j) = self {
             let setting = s
                 .mods
@@ -938,7 +924,7 @@ impl Opt {
                 .and_then(|m| m.native.as_mut())
                 .and_then(|page| page.settings.get_mut(usize::from(j)));
             if let Some(setting) = setting {
-                setting.value.slide(v);
+                setting.value.slide(v as f32);
             }
             return;
         }
@@ -946,25 +932,24 @@ impl Opt {
             return;
         }
         let v = v.clamp(0.0, 1.0);
-        let step = |lo: f32, hi: f32| (lo + v * (hi - lo)).round();
+        let step = |lo: f64, hi: f64| (lo + v * (hi - lo)).round();
         match self {
-            Opt::ChatDelay => values::set(s, v),
+            Opt::ChatDelay => s.chat_delay = values::from_slider(v),
             Opt::FovEffects | Opt::DarknessPulsing => s.file.set(
                 self.file_key().unwrap(),
-                crate::options_file::V::Double(f64::from(v).powi(2)),
+                crate::options_file::V::Double(v.powi(2)),
             ),
             Opt::DistortionEffects
             | Opt::DamageTilt
             | Opt::PanoramaSpeed
             | Opt::GlintSpeed
-            | Opt::GlintStrength => s.file.set(
-                self.file_key().unwrap(),
-                crate::options_file::V::Double(f64::from(v)),
-            ),
-            Opt::Fov => s.fov = step(30.0, 110.0),
+            | Opt::GlintStrength => s
+                .file
+                .set(self.file_key().unwrap(), crate::options_file::V::Double(v)),
+            Opt::Fov => s.fov = step(30.0, 110.0) as f32,
             Opt::RenderDistance => {
                 s.render_distance =
-                    step(2.0, crate::options_file::MAX_RENDER_DISTANCE as f32) as i32
+                    step(2.0, crate::options_file::MAX_RENDER_DISTANCE as f64) as i32
             }
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
             Opt::Sensitivity => s.sensitivity = v,
@@ -987,7 +972,7 @@ impl Opt {
                 let Some(last) = s.video_modes.len().checked_sub(1) else {
                     return;
                 };
-                let index = step(-1.0, last as f32) as i32;
+                let index = step(-1.0, last as f64) as i32;
                 s.file.fullscreen_resolution = usize::try_from(index)
                     .ok()
                     .map(|i| s.video_modes[i].write());
@@ -1003,16 +988,22 @@ impl Opt {
             Opt::ChatHeightFocused => s.chat_height_focused = v,
             Opt::ChatHeightUnfocused => s.chat_height_unfocused = v,
             Opt::ChatLineSpacing => s.chat_line_spacing = v,
-            Opt::PadLookSensitivity => s.controller.look_sensitivity = v,
-            Opt::PadPointerSpeed => s.controller.pointer_speed = step(25.0, 300.0) / 100.0,
-            Opt::PadScrollSpeed => s.controller.scroll_speed = step(1.0, 36.0),
-            Opt::PadRepeatDelay => s.controller.repeat_delay = step(100.0, 1000.0) / 1000.0,
-            Opt::PadRepeatInterval => s.controller.repeat_interval = step(30.0, 300.0) / 1000.0,
-            Opt::PadMoveDeadzone => s.controller.move_deadzone = step(0.0, 50.0) / 100.0,
-            Opt::PadLookDeadzone => s.controller.look_deadzone = step(0.0, 50.0) / 100.0,
-            Opt::PadTriggerThreshold => s.controller.trigger_threshold = step(10.0, 90.0) / 100.0,
+            Opt::PadLookSensitivity => s.controller.look_sensitivity = v as f32,
+            Opt::PadPointerSpeed => s.controller.pointer_speed = (step(25.0, 300.0) / 100.0) as f32,
+            Opt::PadScrollSpeed => s.controller.scroll_speed = step(1.0, 36.0) as f32,
+            Opt::PadRepeatDelay => {
+                s.controller.repeat_delay = (step(100.0, 1000.0) / 1000.0) as f32
+            }
+            Opt::PadRepeatInterval => {
+                s.controller.repeat_interval = (step(30.0, 300.0) / 1000.0) as f32
+            }
+            Opt::PadMoveDeadzone => s.controller.move_deadzone = (step(0.0, 50.0) / 100.0) as f32,
+            Opt::PadLookDeadzone => s.controller.look_deadzone = (step(0.0, 50.0) / 100.0) as f32,
+            Opt::PadTriggerThreshold => {
+                s.controller.trigger_threshold = (step(10.0, 90.0) / 100.0) as f32
+            }
             Opt::SprintWindow => s.sprint_window = step(0.0, 10.0) as i32,
-            Opt::Page(page, row) => pages::slide(page, row, v),
+            Opt::Page(page, row) => pages::slide(page, row, v as f32),
             _ => {}
         }
         if self.affects_preset() {
@@ -1271,7 +1262,7 @@ fn preset_index(p: &str) -> usize {
 }
 /// A slider moved to `v` (OptionInstance.set): the graphics preset applies
 /// its options when its value changes (`Options.applyGraphicsPreset`).
-pub fn set_slider(opt: Opt, s: &mut Settings, v: f32) {
+pub fn set_slider(opt: Opt, s: &mut Settings, v: f64) {
     let preset = preset_index(&s.graphics_preset);
     opt.set_slider(s, v);
     if opt == Opt::Preset && preset_index(&s.graphics_preset) != preset {
@@ -1281,7 +1272,7 @@ pub fn set_slider(opt: Opt, s: &mut Settings, v: f32) {
 /// A slider pressed or dragged to `v`: apply it live, and tell the game when
 /// a category volume changed (`Options.createSoundSliderOptionInstance`'s
 /// callback, which `OptionInstance.set` runs only for a new value).
-fn drag_slider(opt: Opt, s: &mut Settings, v: f32, events: &mut Vec<Event>) {
+fn drag_slider(opt: Opt, s: &mut Settings, v: f64, events: &mut Vec<Event>) {
     let volume = |s: &Settings| match opt {
         Opt::Volume(0) => Some(s.master_volume),
         Opt::Volume(i) => Some(s.volumes[i]),
@@ -1296,7 +1287,7 @@ fn drag_slider(opt: Opt, s: &mut Settings, v: f32, events: &mut Vec<Event>) {
     if let (Opt::Volume(source), Some(after)) = (opt, volume(s))
         && before != Some(after)
     {
-        events.push(Event::Volume(source, after));
+        events.push(Event::Volume(source, after as f32));
     }
 }
 /// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set.
@@ -1777,6 +1768,8 @@ pub struct OptionsUi {
     /// The registered key waiting: (mod, mapping) in `mods.installed`.
     selected_mod_key: Option<(usize, usize)>,
     selected_page_key: Option<(usize, usize)>,
+    /// The open registered page's rows its layout was made from (`refresh_added_rows`).
+    added_seen: Vec<sunrise_hooks::pages::Row>,
     pending_mod_key: Option<winit::keyboard::KeyCode>,
     /// Bindings: the action waiting for a pad button.
     pub selected_pad_action: Option<&'static str>,
@@ -1903,6 +1896,7 @@ impl Default for OptionsUi {
             selected_key: None,
             selected_mod_key: None,
             selected_page_key: None,
+            added_seen: Vec::new(),
             pending_mod_key: None,
             selected_pad_action: None,
             pad_glyphs: crate::pad_glyph::Glyphs::default(),
@@ -1976,7 +1970,7 @@ fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
             h: 20.0,
             kind: WKind::Slider {
                 label: opt.label(s),
-                value: v,
+                value: v as f32,
                 opt,
             },
             list: false,
@@ -2368,7 +2362,7 @@ impl OptionsUi {
         if let (Opt::Volume(source), Some(after)) = (opt, volume(s))
             && before_vol != Some(after)
         {
-            events.push(Event::Volume(source, after));
+            events.push(Event::Volume(source, after as f32));
         }
         events
     }
@@ -3311,7 +3305,7 @@ impl OptionsUi {
                     .find(|wd| matches!(&wd.kind, WKind::Slider { opt: o, .. } if *o == opt))
             {
                 let v = ui::slider_value(wd.x, wd.w, x);
-                self.slider_value = Some((opt, v, Instant::now()));
+                self.slider_value = Some((opt, v as f32, Instant::now()));
                 drag_slider(opt, s, v, &mut events);
             }
             return events;
@@ -3464,7 +3458,7 @@ impl OptionsUi {
                     self.can_change_value = true;
                     self.dragging = Some(*opt);
                     let v = ui::slider_value(wd.x, wd.w, x);
-                    self.slider_value = Some((*opt, v, Instant::now()));
+                    self.slider_value = Some((*opt, v as f32, Instant::now()));
                     drag_slider(*opt, s, v, &mut events);
                 }
                 WKind::LanguageRow { code, .. } => {
@@ -4798,9 +4792,9 @@ mod tests {
                 let loaded = Settings::parse(&s.serialize());
                 assert_eq!(opt.slider_position(&loaded), Some(position));
                 let expected = if matches!(opt, Opt::FovEffects | Opt::DarknessPulsing) {
-                    f64::from(position).powi(2)
+                    position.powi(2)
                 } else {
-                    f64::from(position)
+                    position
                 };
                 assert_eq!(loaded.file.double(opt.file_key().unwrap()), expected);
             }
@@ -6262,6 +6256,55 @@ mod tests {
     }
 
     #[test]
+    fn numeric_captions_use_vanilla_double_text_and_truncation() {
+        let mut s = Settings {
+            mouse_wheel_sensitivity: 1.125,
+            chunk_fade: 0.125,
+            notification_display_time: 1.125,
+            chat_delay: 1.25,
+            ..Settings::parse("gamma:0.7\n")
+        };
+        let language = lang::Language::of(
+            "en_us",
+            [
+                ("options.generic_value", "%s: %s"),
+                ("options.mouseWheelSensitivity", "Wheel"),
+                ("options.notifications.display_time", "Notification"),
+                ("options.multiplier", "%sx"),
+                ("options.chunkFade.seconds", "%s s"),
+                ("options.chat.delay", "%s s"),
+                ("options.gamma", "Brightness"),
+            ]
+            .map(|(k, v)| (k.into(), v.into())),
+        );
+        lang::scoped(language, || {
+            // Temurin 25: %.2f(1.125), %.2f(0.125), Double.toString(1.125),
+            // %.1f(1.25), and the Java int cast of 0.7 * 100.0.
+            assert_eq!(Opt::WheelSensitivity.label(&s).plain(), "Wheel: 1.13");
+            assert_eq!(Opt::ChunkFade.label(&s).plain(), "0.13 s");
+            assert_eq!(
+                Opt::NotificationDisplayTime.label(&s).plain(),
+                "Notification: 1.125x"
+            );
+            assert_eq!(Opt::ChatDelay.label(&s).plain(), "1.3 s");
+            assert_eq!(Opt::Gamma.label(&s).plain(), "Brightness: 70");
+            Opt::Gamma.set_slider(&mut s, 0.0);
+            // A click seven pixels along a ten-pixel run, via the classic slider path.
+            let mut events = Vec::new();
+            drag_slider(
+                Opt::Gamma,
+                &mut s,
+                ui::slider_value(0.0, 18.0, 11.0),
+                &mut events,
+            );
+            assert_eq!(Opt::Gamma.label(&s).plain(), "Brightness: 70");
+            // A real wheel slider position selecting step 17. Temurin 25: 10^0.17 → 1.48.
+            set_slider(Opt::WheelSensitivity, &mut s, 217.5 / 301.0);
+            assert_eq!(Opt::WheelSensitivity.label(&s).plain(), "Wheel: 1.48");
+        });
+    }
+
+    #[test]
     fn option_tooltip_keys_follow_value_dependent_descriptions() {
         let mut s = Settings::default();
         assert_eq!(
@@ -6774,7 +6817,7 @@ mod tests {
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
                 ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
-                vec![Event::SliderDrag, Event::Volume(0, s.master_volume)]
+                vec![Event::SliderDrag, Event::Volume(0, s.master_volume as f32)]
             );
         }
         assert_eq!(ui.release(), vec![Event::ButtonClick, Event::Changed]);
@@ -6804,7 +6847,7 @@ mod tests {
         assert!((volume - 0.5).abs() < 1e-3, "{volume}");
         assert_eq!(
             events,
-            vec![Event::SliderDrag, Event::Volume(hostile, volume)]
+            vec![Event::SliderDrag, Event::Volume(hostile, volume as f32)]
         );
         // OptionInstance.set: an unchanged value runs no callback.
         assert_eq!(
@@ -6837,7 +6880,7 @@ mod tests {
         ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false);
         let raw = ui::slider_value(slider.x, slider.w, x);
         // Held: the handle stays under the pointer whatever the stepped value.
-        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw);
+        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw as f32);
         assert_eq!(ui.slider_shown(Opt::Volume(1), 0.25), 0.25);
         ui.click(
             &mut s,
@@ -6850,7 +6893,7 @@ mod tests {
             false,
         );
         let raw = ui::slider_value(slider.x, slider.w, x + 10.0);
-        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw);
+        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw as f32);
         ui.release();
         assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), 0.25);
         // Render distance applies late (applyValueImmediately = false) and
@@ -7043,9 +7086,7 @@ mod tests {
             h: 20,
         };
         for name in ["button", "button_disabled", "button_highlighted"] {
-            atlas
-                .sprites
-                .insert(format!("gui/sprites/widget/{name}"), button);
+            atlas.sprites.insert(format!("widget/{name}"), button);
         }
         for above in [true, false] {
             let mut s = Settings::default();
@@ -7973,13 +8014,13 @@ mod tests {
         for opt in stepped_opts {
             let steps = opt.slider_steps().expect("slider steps");
             for i in 0..steps {
-                let pos = i as f32 / steps as f32;
+                let pos = f64::from(i) / f64::from(steps);
                 let mut s1 = Settings::default();
                 let mut s2 = Settings::default();
                 opt.set_slider(&mut s1, pos);
 
                 opt.step_slider(&mut s1, true, 200.0);
-                let next_pos = (i + 1) as f32 / steps as f32;
+                let next_pos = f64::from(i + 1) / f64::from(steps);
                 opt.set_slider(&mut s2, next_pos);
                 assert_eq!(
                     opt.slider_position(&s1),
@@ -7988,13 +8029,13 @@ mod tests {
                 );
             }
             for i in 1..=steps {
-                let pos = i as f32 / steps as f32;
+                let pos = f64::from(i) / f64::from(steps);
                 let mut s1 = Settings::default();
                 let mut s2 = Settings::default();
                 opt.set_slider(&mut s1, pos);
 
                 opt.step_slider(&mut s1, false, 200.0);
-                let prev_pos = (i - 1) as f32 / steps as f32;
+                let prev_pos = f64::from(i - 1) / f64::from(steps);
                 opt.set_slider(&mut s2, prev_pos);
                 assert_eq!(
                     opt.slider_position(&s1),
@@ -8291,7 +8332,7 @@ mod tests {
     }
 }
 
-fn preset_from_slider(v: f32) -> usize {
+fn preset_from_slider(v: f64) -> usize {
     let v = if v >= 1.0 { 0.99999 } else { v };
     ((v * 4.0).floor() as usize).min(3)
 }

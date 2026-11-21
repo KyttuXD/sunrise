@@ -1,4 +1,4 @@
-//! Client text resolution and styled measurements, outside drawing.
+//! Client visual-order text and styled measurements, outside drawing.
 #![allow(unused_variables)]
 use crate::*;
 
@@ -6,20 +6,9 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait ClientTextClientHost {
     /// Side: client.
-    /// `Component.getString()`: resolve a component to its plain characters,
-    /// including current-language translations, arguments, key names and siblings.
-    /// Styles do not contribute characters; literal legacy formatting codes remain
-    /// in the string, as in vanilla. Available outside drawing, including client
-    /// setup, on native and wasm. Invalid components return their boundary error.
-    /// Action keybind IDs such as `key.jump` resolve through the client's current
-    /// key binding to their assigned physical key, matching vanilla KeybindContents.
-    #[access(ClientSetup)]
-    fn text_string(&self, text: &Text) -> Result<String, TextFormError>;
-
-    /// Side: client.
     /// `Component.getVisualOrderText()`: current-language, styled characters in
     /// visual order, including bidi shaping and mirroring. Available outside
-    /// drawing on native and wasm, including client setup. Invalid components
+    /// drawing, including client setup. Invalid components
     /// return the same boundary errors as `text_string`. Sink indices are local
     /// UTF-16 offsets, not offsets into the input component tree.
     /// Action keybinds resolve to their assigned keys as in `text_string`.
@@ -43,7 +32,7 @@ pub trait ClientTextClientHost {
     /// GUI pixels. Lines retain styles, resolve the current language and use
     /// the same active font as tooltip layout. Newlines force breaks; a width
     /// below one follows vanilla's one-pixel minimum, without rejecting input.
-    /// Available outside drawing on native and wasm alike.
+    /// Available outside drawing.
     #[access(ClientSetup)]
     fn text_split(&self, text: &Text, width: i32) -> Result<Vec<Text>, TextFormError>;
 }

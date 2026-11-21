@@ -1526,16 +1526,13 @@ input's state and every call. Not compared: the mouse wheel over the
 suggestion list and clipboard keys.
 
 `sunrise_client::creative` is the creative inventory. Its tabs come from
-`creative-inventory.json`, which `VanillaCreativeTabsExporter` writes from
-vanilla's own `CreativeModeTabs.tryRebuildTabContents` over the vanilla data
-pack's registries: every stack with its components, and for each stack of the
-search tab the creative tooltip lines and item tags that the client's search
-trees index. The tabs are built with permissions, and the export marks the
-stacks only that build lists (`permissions_only`): the operator tab and its
-stacks at the end of the search tab, shown while the player
-`canUseGameMasterBlocks` with the Operator Items Tab option on
-(`CreativeModeInventoryScreen.hasPermissions`, checked on opening and every
-tick as `tryRefreshInvalidatedTabs` does). The search ports `refreshSearchResults` and `SessionSearchTrees`
+`creative-inventory.json`, which `VanillaCreativeTabsExporter` writes as tab
+recipes plus search presentation, not a prebuilt membership table. The live
+world's registries and feature flags supply the holder-dependent items and their
+search descriptions. The operator tab's build depends on the player being able
+to use game master blocks with the Operator Items Tab option on
+(`CreativeModeInventoryScreen.hasPermissions`, checked when opening and ticking
+as `tryRefreshInvalidatedTabs` does). The search ports `refreshSearchResults` and `SessionSearchTrees`
 (substring matches over tooltip lines; after a colon the item id's namespace,
 then its path or a line; tags after `#`), and the scrollbar follows
 `mouseClicked`/`mouseDragged`/`mouseScrolled`. `tools/test_creative_parity.py`

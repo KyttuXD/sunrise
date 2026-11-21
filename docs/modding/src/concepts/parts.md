@@ -40,9 +40,9 @@ impl Hooks for MyMod {
 | `BlockPart` | A block type, your own or vanilla's |
 | `BlockEntityPart` | A block entity type, with block behavior through `BlockPart` |
 | `ItemPart` | An item type, your own or vanilla's |
-| `MenuPart` | A mod menu type |
+| `MenuPart` | A menu type: a mod's, or one of vanilla's that a mod block opens |
 | `FluidPart` | A mod world fluid type |
-| `EntityPart` | An entity type, your own or vanilla's; registered through `Registrar::entity_part`; on wasm, `general_entity_tick` and `can_rider_interact` cross |
+| `EntityPart` | An entity type, your own or vanilla's; registered through `Registrar::entity_part` |
 
 - Annotate each part trait implementation with `#[mod_api::sunrise_part]`. For scoped hooks, the
   attribute subscribes the part only to the methods you implement.

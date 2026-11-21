@@ -678,9 +678,11 @@ impl Game<'_> {
                 _ => {}
             }
             // Entity.thunderHit: burning (8 seconds) and 5 lightning damage.
-            m.fire_ticks += 1;
-            if m.fire_ticks == 0 {
-                m.ignite_for_ticks(160);
+            if !m.mod_fire_immune {
+                m.fire_ticks += 1;
+                if m.fire_ticks == 0 {
+                    m.ignite_for_ticks(160);
+                }
             }
 
             m.damage(
@@ -788,7 +790,9 @@ impl Game<'_> {
                 && meets([p.x, p.y, p.z], 0.3, 1.8)
                 && g.lightning_may_strike(g.own_entity_id() as u32, bolt)
             {
-                if let Some(p) = g.player.as_mut() {
+                if let Some(p) = g.player.as_mut()
+                    && !p.mod_fire_immune
+                {
                     p.fire_ticks += 1;
                     if p.fire_ticks == 0
                         && let Err(error) = p.ignite_for_ticks(160)

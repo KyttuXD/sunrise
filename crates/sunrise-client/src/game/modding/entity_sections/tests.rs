@@ -7,6 +7,40 @@ use mod_api::{EntityEnteringSectionEvent, Hooks, HostSide};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[test]
+fn section_read_backend_refuses_reads_outside_its_snapshot() {
+    let host = LiveSectionHost(None);
+    let entity = EntityRef::new(mod_api::WorldEpoch::new(1), 1);
+    assert_eq!(
+        entity.piston_push_reaction(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        entity.is_hanging(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    );
+    let player = mod_api::__private::game::player_ref(entity, 1);
+    assert_eq!(
+        player.collision_flags(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    );
+    let menu = mod_api::__private::game::menu_ref(player, 1, 1);
+
+    assert_eq!(entity.bounding_box(&host), None);
+    assert_eq!(
+        player.supporting_block(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        player.on_block(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    );
+    assert!(matches!(
+        menu.merchant_offers(&host),
+        Err(mod_api::LevelReadError::Unavailable)
+    ));
+}
+
 /// What each told crossing carried: client side, entity id, old, new, chunk changed.
 type Calls = Arc<Mutex<Vec<(bool, u32, [i32; 3], [i32; 3], bool)>>>;
 
@@ -112,12 +146,12 @@ fn a_section_is_the_floored_block_shifted_by_four() {
     assert_eq!(section_of([0.0, 15.999, 15.0]), [0, 0, 0]);
     assert_eq!(section_of([16.0, 64.0, 31.5]), [1, 4, 1]);
     assert_eq!(section_of([-0.001, -16.0, -16.001]), [-1, -1, -2]);
-    // Java's cast saturates and NaN is 0; `Mth.floor` then wraps `MIN - 1` to `MAX`.
+    // `Mth.floor` is `(int) Math.floor(v)`: Java's cast saturates and NaN is 0.
     assert_eq!(section_coord(f64::NAN), 0);
     assert_eq!(section_coord(1e300), i32::MAX >> 4);
     assert_eq!(section_coord(f64::from(i32::MIN)), -134_217_728);
-    assert_eq!(section_coord(f64::from(i32::MIN) - 0.5), 134_217_727);
-    assert_eq!(section_coord(f64::NEG_INFINITY), 134_217_727);
+    assert_eq!(section_coord(f64::from(i32::MIN) - 0.5), -134_217_728);
+    assert_eq!(section_coord(f64::NEG_INFINITY), -134_217_728);
 }
 
 #[test]
@@ -653,11 +687,9 @@ fn a_server_mobs_own_move_is_not_reconstructed_after_its_post() {
             let kind = game.mobs.iter().find(|m| m.id == id).unwrap().kind.clone();
             // The mobs' round: Pre, the tick (its own move over z = 16), then the Post.
             let mut round = game.native_tick_round();
-            assert!(game.native_tick_pre_batch(
-                &mut round,
-                id,
-                crate::game::native_ticks::TickKind::Mob(kind)
-            ));
+            round.add(id, crate::game::native_ticks::TickKind::Mob(kind));
+            game.native_tick_pre_batch(&mut round);
+            assert_eq!(round.let_through(0), Some(id));
             let i = game.mobs.iter().position(|m| m.id == id).unwrap();
             game.mobs
                 .update(i, |m| m.position = Vec3::new(1.0, 70.0, 17.0));

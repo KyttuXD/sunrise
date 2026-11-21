@@ -49,6 +49,26 @@ fn startup_recipe_uses_registered_condition() {
         &std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap()),
         &root,
     );
+    // Both bootstrap readers see a provisional registry. A world's packs can
+    // supply these entries later, so neither may refuse the shared bootstrap.
+    for (kind, definition) in [
+        (
+            "damage_type",
+            r#"{"message_id":"condition_startup","scaling":"never","exhaustion":0}"#,
+        ),
+        (
+            "instrument",
+            r#"{"sound_event":"minecraft:item.goat_horn.sound.0","use_duration":7,"range":256}"#,
+        ),
+    ] {
+        let folder = root.join("data/testmod").join(kind);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut file: mod_api::serde_json::Value =
+            mod_api::serde_json::from_str(definition).unwrap();
+        file["neoforge:conditions"] =
+            mod_api::serde_json::json!([{"type":"absent:may_be_overridden"}]);
+        std::fs::write(folder.join("condition_startup.json"), file.to_string()).unwrap();
+    }
     let recipe = root.join("data/minecraft/recipe/condition_startup.json");
     std::fs::write(&recipe, r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:flint"],"result":{"id":"minecraft:stick"},"neoforge:conditions":[{"type":"testmod:flag","value":true}]}"#).unwrap();
     let count = Arc::new(AtomicUsize::new(0));

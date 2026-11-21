@@ -1,8 +1,10 @@
 //! `native-build`: native mods compiled against an unpacked SDK (docs/modding/src/reference/sdk/08-native-build.md).
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
-use sunrise_native_build::{check as checks, contract, host};
+use sunrise_mod_package::{internals::ListedInternal, manifest::Native, sdk::Mixins};
+use sunrise_native_build::{check as checks, contract, discover, host, rust::Unpacked};
 
 /// The plan's build folder, the host's root.
 static WORK: OnceLock<PathBuf> = OnceLock::new();
@@ -33,7 +35,6 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
-/// Fetches through the proxy its environment names (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), as the launcher passes its own.
 /// The tool as the native build's host: `work` its folder, English, its own network, used files noted for the reply.
 pub(crate) fn install_host(work: &Path) {
     let _ = WORK.set(work.to_owned());
@@ -45,11 +46,12 @@ pub(crate) fn install_host(work: &Path) {
     });
 }
 
+/// Fetches through the proxy named in the environment (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`).
 fn get(url: &str) -> Result<host::Body, String> {
-    match sunrise_port_pack::net::agent(url).get(url).call() {
+    match sunrise_proxy::get(url, &[], None) {
         Ok(response) => Ok(Some(Box::new(response.into_reader()))),
-        Err(ureq::Error::Status(404, _)) => Ok(None),
-        Err(error) => Err(format!("{url}: {error}")),
+        Err(error) if error.status() == Some(404) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -123,6 +125,63 @@ pub fn discover(args: &[String]) -> ExitCode {
     answer(discovered(&plan))
 }
 
+/// Find the internals a project names, using the Rust and mixins identity in its signed SDK.
+pub(crate) fn project_internals(
+    dir: &Path,
+    native: &Native,
+) -> Result<Vec<ListedInternal>, String> {
+    discover_project(dir, native, |rust, dir, mixins| {
+        discover::internals(rust, dir, Some(mixins))
+    })
+}
+
+/// Build an independent catalog of the pinned source with this project's modules applied.
+pub(crate) fn project_catalog(dir: &Path, native: &Native) -> Result<PathBuf, String> {
+    discover_project(dir, native, |rust, dir, mixins| {
+        let snapshots = dir.join("target/sunrise-mod/catalog-snapshots");
+        fs::create_dir_all(&snapshots).map_err(|e| format!("{}: {e}", snapshots.display()))?;
+        let destination = snapshots.join(format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos()
+        ));
+        discover::catalog(rust, dir, Some(mixins), &destination)
+    })
+}
+
+fn discover_project<T>(
+    dir: &Path,
+    native: &Native,
+    run: impl FnOnce(&Unpacked, &Path, &Mixins) -> Result<T, discover::Error>,
+) -> Result<T, String> {
+    let dir = dunce::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let cache = crate::dev::cache_dir()?;
+    let work = cache.join("discovery");
+    fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+    // Source staging replaces kept files; a second CLI must not change them mid-discovery.
+    let lock = work.join("discovery.lock");
+    let _lease = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .and_then(|file| file.lock().map(|()| file))
+        .map_err(|e| format!("{}: {e}", lock.display()))?;
+    let sdk = crate::dev::native_sdk(&cache, &native.sunrise)?;
+    install_host(&work);
+    sunrise_native_build::clear_log()?;
+    run(&sdk.rust, &dir, &sdk.index.mixins).map_err(|e| {
+        format!(
+            "{e}\nDiscovery log: {}",
+            sunrise_native_build::log_path().display()
+        )
+    })
+}
+
 fn discovered(plan: &contract::DiscoverPlan) -> Result<serde_json::Value, (&'static str, String)> {
     let kind = |error: sunrise_native_build::discover::Error| match error {
         sunrise_native_build::discover::Error::SourceUnavailable { .. } => {
@@ -132,11 +191,11 @@ fn discovered(plan: &contract::DiscoverPlan) -> Result<serde_json::Value, (&'sta
     };
     match &plan.catalog {
         Some(output) => {
-            sunrise_native_build::discover::catalog(&plan.toolchain, &plan.mods, output)
+            sunrise_native_build::discover::catalog(&plan.toolchain, &plan.mods, None, output)
                 .map(|path| serde_json::json!({"catalog": path}))
                 .map_err(kind)
         }
-        None => sunrise_native_build::discover::internals(&plan.toolchain, &plan.mods)
+        None => sunrise_native_build::discover::internals(&plan.toolchain, &plan.mods, None)
             .map(|internals| serde_json::json!({"internals": internals}))
             .map_err(kind),
     }

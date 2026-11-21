@@ -463,6 +463,7 @@ pub(super) fn load_files(
     root: &std::path::Path,
     overlay: &super::PackOverlay<'_>,
     kind: &str,
+    decode: impl Fn(&[u8]) -> serde_json::Result<Value>,
 ) -> io::Result<HashMap<String, Value>> {
     let mut files = HashMap::new();
     for namespace in crate::json_folder::namespaces(&root.join("data")) {
@@ -486,8 +487,7 @@ pub(super) fn load_files(
     for (id, bytes) in files {
         let path = format!("{kind} {id} $");
         let bytes = bytes.map_err(|reason| invalid(&path, "<unreadable>", reason))?;
-        let mut value: Value = serde_json::from_slice(&bytes)
-            .map_err(|reason| invalid(&path, "<undecodable>", reason))?;
+        let mut value = decode(&bytes).map_err(|reason| invalid(&path, "<undecodable>", reason))?;
         let admitted = if kind == "loot_table" {
             overlay.conditions.admit_loot_table(&mut value, &id)
         } else {

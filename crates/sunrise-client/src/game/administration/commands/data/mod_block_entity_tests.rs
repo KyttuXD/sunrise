@@ -152,7 +152,7 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
 
     let before = run(
         &mut game,
-        r#"data merge block 2 64 2 {fuel:41,Opaque:{added:9s},Items:[{Slot:1b,id:"minecraft:diamond",count:3,components:{"minecraft:custom_data":{stamp:8b}}}]}"#,
+        r#"data merge block 2 64 2 {fuel:41,Opaque:{added:9s},Items:[{Slot:1b,id:"minecraft:diamond",count:3,components:{"minecraft:custom_data":{stamp:8b}}},{Slot:3b,raw:"keep"}]}"#,
     );
     changed(&game, before);
     let loaded = entity(&game);
@@ -186,6 +186,9 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
         Some(&Tag::compound([("added", Tag::Short(9))]))
     );
     assert_eq!(entity(&game).items[1].as_ref().unwrap().count, 3);
+    let projected = game.data_of(&DataRef::Block(POS)).unwrap();
+    let expected = parse_snbt(r#"[{Slot:1b,id:"minecraft:diamond",count:3,components:{"minecraft:custom_data":{stamp:8b}}},{Slot:3b,raw:"keep"}]"#).unwrap().0;
+    assert_eq!(projected.get("Items"), Some(&expected));
     let before = run(&mut game, "data remove block 2 64 2 Items");
     changed(&game, before);
     assert!(
@@ -230,4 +233,18 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
     assert_ne!(entity(&game).revision(), before);
     assert!(entity(&game).data.is_empty());
     assert_eq!(game.data_of(&DataRef::Block(POS)).unwrap(), saved);
+
+    game.native_lifecycle
+        .begin_open(mod_api::Authority::IntegratedServer);
+    game.options.dedicated = Some(Vec::new());
+    let level = game.level("minecraft:overworld").unwrap();
+    let handle = game.block_entity(level, POS).unwrap();
+    assert_eq!(
+        handle.merge_data(&mut game, [("count".into(), Tag::Int(3))].into()),
+        Ok(true)
+    );
+    assert_eq!(
+        handle.data(&game).unwrap().get(&"count".into()),
+        Some(&mod_api::Tag::Int(3))
+    );
 }

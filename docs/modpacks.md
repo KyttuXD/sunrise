@@ -191,7 +191,7 @@ A content mod (`.smod`) carries `assets/` and `data/` and no code:
 
 ```
 ruby.smod
-├── sunrise-mod.toml          id = "ruby", api = "0.2", side = "both", capabilities = ["registries"]
+├── sunrise-mod.toml          id = "ruby", side = "both" (the build adds api and capabilities)
 ├── data/ruby/sunrise/block/ruby_block.json
 ├── data/ruby/sunrise/item/ruby.json
 ├── data/ruby/recipe/ruby_block.json            (26.3 data-pack formats)
@@ -335,6 +335,16 @@ cargo run -p sunrise-port-pack -- status ~/.sunrise/ports/pack         # what th
 cargo run -p sunrise-port-pack -- profile ~/.sunrise/ports/pack        # the staged resource packs into the profile's home
 ```
 
+### Versions of carried mods
+
+A manifest's `version` must be semver, and a Java jar's version often isn't. The carry drops a leading
+`<Minecraft version>-` when it equals the pack's own (`26.3-3.6.30+refabricated` becomes
+`3.6.30+refabricated`) and pads an omitted minor or patch. A version that is still not semver is written
+as `0.0.0+unresolved.<the jar's version, with characters outside [0-9A-Za-z-.] replaced by '-'>`. The jar's original
+string stays in the manifest's header comment. Dependency resolution never lets a
+`0.0.0+unresolved.…` version satisfy a requirement, `*` and `=0.0.0` included: the port report says that the mod's version couldn't be read, and it
+must be set by hand in the carried `sunrise-mod.toml` before anything can depend on the mod.
+
 ### Data packs in mod jars
 
 Some mods are a data pack in a jar: no classes, a `pack.mcmeta` and a `data/` folder (the skyblock
@@ -400,7 +410,7 @@ events a mod listens to and the capabilities it uses. A listener is an `@Subscri
 parameter, or a method reference or lambda that takes one event
 (`NeoForge.EVENT_BUS.addListener(this::onTick)`). It looks each name up in the hook catalog's
 `neoforge` names, generated at build time from the Rust hook declarations (see the
-[hook notes](https://sunrise-org.github.io/sunrise/reference/hook-notes.html)). An optional JSON
+[hook notes](https://playsunrise.net/docs/modding/reference/hook-notes)). An optional JSON
 file with `hooks` entries containing `name` and `neoforge` can replace those labels for a report.
 Over a folder of jars it ranks the names by how many mods use them. Each name gets one of eight answers:
 
@@ -417,7 +427,7 @@ Over a folder of jars it ranks the names by how many mods use them. Each name ge
 - none.
 
 The load-phase events follow the modding book's
-[load phases](https://sunrise-org.github.io/sunrise/concepts/load-phases.html).
+[load phases](https://playsunrise.net/docs/modding/concepts/load-phases).
 `FMLCommonSetupEvent`'s work goes in `Hooks::register`, then the first server reload.
 `FMLLoadCompleteEvent`'s goes after the initial config and before `server_about_to_start`.
 `FMLDedicatedServerSetupEvent`'s goes in `server_about_to_start`, when its `dedicated` flag is set.

@@ -13,7 +13,9 @@ impl Game<'_> {
         // One read says whether any item part listens; with none, no stack is looked at.
         let update_hook =
             merging && mod_api::__private::has_part_hook(mod_api::HookId::OnEntityItemUpdate);
-        if round.listening() || update_hook {
+        // Items a mod named (`entity_tick_each`) hear their Pre, and then their part, alone in
+        // their own turn (`tick_dropped_items`).
+        if (round.listening() || update_hook) && !round.alone_kind(native_ticks::ITEM) {
             let ticking = self.entity_ticking_area();
             let mut i = 0;
             while let Some(item) = self.dropped.get(i) {
@@ -23,15 +25,25 @@ impl Game<'_> {
                     item.position.z.floor() as i32,
                 );
                 if !(merging && self.joined_during_entity_pass(id)) && ticking(x, z) {
-                    let kind = native_ticks::TickKind::Fixed("minecraft:item");
-                    if self.native_tick_pre_batch(&mut round, id, kind)
-                        && update_hook
-                        && self.item_update_halts(i)
-                    {
+                    if round.listening() {
+                        round.add(id, native_ticks::TickKind::Fixed(native_ticks::ITEM));
+                    } else if update_hook && self.item_update_halts(i) {
                         round.halt(id);
                     }
                 }
                 i += 1;
+            }
+            self.native_tick_pre_batch(&mut round);
+            // Each item the Pre let through, in order, hears its part.
+            let (mut n, mut from) = (0, 0);
+            while update_hook && let Some(id) = round.let_through(n) {
+                if let Some(i) = native_ticks::place(&self.dropped, from, |item| item.id == id) {
+                    if self.item_update_halts(i) {
+                        round.halt(id);
+                    }
+                    from = i + 1;
+                }
+                n += 1;
             }
         }
         round
@@ -128,35 +140,45 @@ mod on_entity_item_update_tests {
         }
     }
 
-    struct Mod(Vec<Update>);
+    struct Mod(Vec<Update>, bool);
 
     thread_local! { static ORDER: std::cell::RefCell<Vec<(u32, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+    /// Each entity a tick hook was told, in order, with the hook's phase.
+    fn told(entities: &[u32], phase: &'static str) {
+        ORDER.with(|order| {
+            let mut order = order.borrow_mut();
+            order.extend(entities.iter().map(|&entity| (entity, phase)));
+        });
+    }
 
     #[mod_api::__subscriptions]
     impl Hooks for Mod {
         fn entity_tick_listened(
             &self,
-            _: &mut dyn ServerHost,
+            _: mod_api::HostSide<'_>,
             event: &mut mod_api::EntityTickListenedEvent,
         ) {
             event.listened = true;
         }
         fn entity_tick_pre(
             &self,
-            _: &mut dyn ServerHost,
+            _: mod_api::HostSide<'_>,
             event: &mut mod_api::EntityTickPreEvent<'_>,
-        ) -> Flow {
-            ORDER.with(|order| order.borrow_mut().push((event.entity, "pre")));
-            Flow::Continue
+        ) {
+            told(event.entities, "pre");
         }
         fn entity_tick_post(
             &self,
-            _: &mut dyn ServerHost,
+            _: mod_api::HostSide<'_>,
             event: &mut mod_api::EntityTickPostEvent<'_>,
         ) {
-            ORDER.with(|order| order.borrow_mut().push((event.entity, "post")));
+            told(event.entities, "post");
         }
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            if self.1 {
+                r.entity_tick_each("minecraft:item");
+            }
             for part in &self.0 {
                 let key = r.item_key(part.item);
                 r.item_part(key, part.clone());
@@ -211,11 +233,20 @@ mod on_entity_item_update_tests {
     fn a_canceling_part_holds_its_own_item_and_nothing_else() {
         crate::game::in_own_process(
             "game::native_hooks::on_entity_item_update::on_entity_item_update_tests::a_canceling_part_holds_its_own_item_and_nothing_else",
-            a_canceling_part_holds_its_own_item_and_nothing_else_isolated,
+            || a_canceling_part_holds_its_own_item_and_nothing_else_isolated(false),
         );
     }
 
-    fn a_canceling_part_holds_its_own_item_and_nothing_else_isolated() {
+    #[test]
+    #[ignore = "daily"]
+    fn a_named_item_still_hears_post_when_its_part_halts_physics() {
+        crate::game::in_own_process(
+            "game::native_hooks::on_entity_item_update::on_entity_item_update_tests::a_named_item_still_hears_post_when_its_part_halts_physics",
+            || a_canceling_part_holds_its_own_item_and_nothing_else_isolated(true),
+        );
+    }
+
+    fn a_canceling_part_holds_its_own_item_and_nothing_else_isolated(named: bool) {
         use crate::game::native_entity_refs::tests::with_game;
         let iron = Update {
             item: "minecraft:iron_ingot",
@@ -233,24 +264,27 @@ mod on_entity_item_update_tests {
         };
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
             "item_update",
-            Box::new(Mod(vec![
-                iron.clone(),
-                gold.clone(),
-                Update {
-                    item: "minecraft:emerald",
-                    cancels: false,
-                    remove: true,
-                    mixed: false,
-                    heard: Default::default(),
-                },
-                Update {
-                    item: "minecraft:copper_ingot",
-                    cancels: true,
-                    remove: false,
-                    mixed: true,
-                    heard: Default::default(),
-                },
-            ])),
+            Box::new(Mod(
+                vec![
+                    iron.clone(),
+                    gold.clone(),
+                    Update {
+                        item: "minecraft:emerald",
+                        cancels: false,
+                        remove: true,
+                        mixed: false,
+                        heard: Default::default(),
+                    },
+                    Update {
+                        item: "minecraft:copper_ingot",
+                        cancels: true,
+                        remove: false,
+                        mixed: true,
+                        heard: Default::default(),
+                    },
+                ],
+                named,
+            )),
         )]
         .into();
         mod_platform::testing::with_mods(mods.clone(), || {

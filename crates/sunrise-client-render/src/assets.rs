@@ -81,6 +81,7 @@ pub struct RenderAssets {
     /// The block sprites' RGBA, layer by layer: as built until a renderer has
     /// them, then kept compressed ([`SpritePixels`]).
     pub pixels: SpritePixels,
+    /// How many array layers the block sprites take, whatever maps name them.
     pub texture_layers: u32,
     pub model_catalog: crate::models::StateModels,
     /// Shared parsed resources; item-only validation errors surface at item preparation.
@@ -89,6 +90,8 @@ pub struct RenderAssets {
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
     pub sprite_layers: std::collections::BTreeMap<String, u32>,
+    /// The layers of the texture files read on their own (emissive overlays), by raw name.
+    pub file_layers: std::collections::BTreeMap<String, u32>,
     /// OptiFine's emissive block overlays: base sprite and overlay sprite names.
     pub emissive: Vec<(String, String)>,
     pub translucent_layers: Vec<bool>,
@@ -360,14 +363,13 @@ impl RenderAssets {
         parsed: Option<crate::model_library::ParsedModels>,
     ) -> Result<Self> {
         let registry = assets.registry;
-        let mut sprites = crate::sprites::Sprites::with_disk_cache(root);
+        let mut sprites = if draws {
+            crate::sprites::Sprites::with_disk_cache(root)
+        } else {
+            crate::sprites::Sprites::for_server(root.source().clone())
+        };
         for name in MATERIALS {
             sprites.insert(&format!("minecraft:block/{name}"))?;
-        }
-        if draws {
-            for id in root.runtime_block_sprites() {
-                sprites.insert(id)?;
-            }
         }
         // A server draws no block and no item: its block models (about 24 MB
         // baked) and item model library (7 MB) stay empty.
@@ -382,13 +384,18 @@ impl RenderAssets {
         // Connected-texture rules find their faces by sprite layer: what they match by name keeps a
         // layer of its own, decided before the models insert their textures.
         let ctm_rules = if draws {
-            sunrise_optifine::ctm::load(root.source())
+            crate::connected::read_rules(root.source())
         } else {
             Vec::new()
         };
         sprites.keep_apart(crate::connected::ConnectedTextures::matched_sprites(
             &ctm_rules,
         ));
+        if draws {
+            // After the rules' names are kept apart, so a sprite a source made keeps its own layer
+            // where a rule matches it.
+            sprites.insert_mod_sprites()?;
+        }
         let mut models = if draws {
             let _step = crate::spans::startup::step("core.models_bake");
             crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?
@@ -408,7 +415,7 @@ impl RenderAssets {
             "lava_still",
             "lava_flow",
         ] {
-            sprites.insert(&format!("minecraft:block/{name}"))?;
+            sprites.insert_in_blocks(&format!("minecraft:block/{name}"))?;
         }
         for model in crate::fluid_models::resolved() {
             for name in [
@@ -419,8 +426,11 @@ impl RenderAssets {
             .into_iter()
             .flatten()
             {
-                sprites.insert(name)?;
+                sprites.insert_in_blocks(name)?;
             }
+        }
+        if crate::fluid_models::any_flat_look() {
+            sprites.insert_flat(crate::fluid_models::FLAT_SPRITE)?;
         }
         for stage in 0..10 {
             sprites.insert(&format!("minecraft:block/destroy_stage_{stage}"))?;
@@ -438,11 +448,17 @@ impl RenderAssets {
             Default::default()
         };
         let mut emissive = Vec::new();
-        let connected = if draws {
+        let mut connected = if draws {
             crate::native_emissive::load(root.source(), &mut sprites);
             // A side's sprite, for rules that connect by tile: the first quad facing it.
             let catalog = &models.catalog;
             let mut found = Vec::new();
+            // Which states are panes, read only when a rule can draw on a pane by its sprite.
+            let panes = if ctm_rules.iter().any(|rule| rule.match_blocks.is_empty()) {
+                Some(crate::blocks::BlockFacts::load(root.prepared(), registry)?)
+            } else {
+                None
+            };
             crate::connected::ConnectedTextures::load(
                 root.source(),
                 ctm_rules,
@@ -463,10 +479,24 @@ impl RenderAssets {
                         .find(|f| f.quad.facing == side)
                         .map(|f| f.layer)
                 },
+                |state| {
+                    panes
+                        .as_ref()
+                        .and_then(|facts| facts.states.get(state.0 as usize))
+                        .is_some_and(|facts| facts.is_pane())
+                },
             )
         } else {
             Default::default()
         };
+        // Rules that join by height read one number per block state: the highest point of its
+        // collision shape. Nothing is read when no rule does.
+        if connected.joins_by_height() {
+            connected.set_heights(crate::connected::collision_heights(
+                root.prepared(),
+                registry,
+            )?);
+        }
         // After the connected tiles: a tile identical to a block shares its layer, and the
         // overlays skip shared layers.
         if draws {
@@ -492,6 +522,7 @@ impl RenderAssets {
             model_gallery: models.states,
             animations: sprites.animations,
             sprite_layers: sprites.layers,
+            file_layers: sprites.files,
             emissive,
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,

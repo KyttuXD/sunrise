@@ -72,6 +72,7 @@ impl Scene {
             .map(|(i, (tracker, out))| Viewer {
                 entity_id: i as i32 + 1,
                 sunrise: true,
+                general_entity: true,
                 sources: None,
                 spectator: false,
                 permission: 0,
@@ -81,7 +82,6 @@ impl Scene {
                 chunks: &self.chunks,
                 tracker,
                 out,
-                gone: None,
             })
             .collect();
         let riding = Riding::default();

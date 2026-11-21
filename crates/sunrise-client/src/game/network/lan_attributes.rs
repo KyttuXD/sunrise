@@ -6,7 +6,6 @@ use super::Game;
 use std::sync::Arc;
 use sunrise_client::items::ItemStack;
 use sunrise_client::{
-    effects,
     items::Items,
     lan::attributes::{add_modifier, instance, operation_named, syncable},
     mobs::{
@@ -134,11 +133,11 @@ impl Game<'_> {
     /// A mob's synced instances: the live attribute map's (#941) — what
     /// finalizeSpawn set, `/attribute` changed, the save loaded and every
     /// worn or held stack granted, its base and each modifier exactly once,
-    /// as the map holds them, a stored effect modifier among them — plus
-    /// movement speed (its first `aiStep` reads it, `LivingEntity.removeFrost`,
-    /// and no stack granted one), the baby speed modifier and the modifiers of
-    /// the effects on attributes the mob's store does not hold, which no map
-    /// holds.
+    /// as the map holds them, the stored effect modifiers among them
+    /// (`Mob::set_effect_modifiers`: a mob has no instance of the attributes
+    /// of the other effects, Haste's and Luck's) — plus movement speed (its
+    /// first `aiStep` reads it, `LivingEntity.removeFrost`, and no stack
+    /// granted one) and the baby speed modifier, which no map holds.
     pub(super) fn mob_attributes(
         &self,
         m: &Mob,
@@ -239,42 +238,6 @@ impl Game<'_> {
                     id: "minecraft:sprinting".into(),
                     amount: f64::from(0.3f32),
                     operation: 2,
-                },
-            );
-        }
-        let base = |name: &str| {
-            Attr::ALL
-                .into_iter()
-                .find(|a| name.strip_prefix("minecraft:") == Some(a.name()))
-                .map(|a| finalize::base_value(m, a))
-        };
-        // LivingEntity.onEffectAdded: MobEffect.addAttributeModifiers. An
-        // effect on an attribute the mob's store holds (speed, slowness,
-        // strength, weakness, health boost) stored its modifier there when it
-        // was added (`Mob::set_effect_modifiers`), and the live map above sent
-        // it: only the effects on the other attributes are added here.
-        for effect in &m.extra.effects {
-            let (effect, amplifier) = (effect.id, effect.amplifier);
-            let Some((attribute, id, amount, op)) =
-                effects::effect_modifier(effect.trim_start_matches("minecraft:"))
-            else {
-                continue;
-            };
-            if base(attribute).is_some() {
-                continue;
-            }
-            let Some(a) = self.synced_attribute(kind, attribute) else {
-                continue;
-            };
-            let start = self.attribute_default(kind, attribute);
-            add_modifier(
-                out,
-                a,
-                start,
-                AttributeModifier {
-                    id: id.to_owned(),
-                    amount: amount * f64::from(amplifier + 1),
-                    operation: operation_named(op),
                 },
             );
         }

@@ -91,8 +91,8 @@ fn client_placement_predicts_signal_fire_from_a_block_part() {
                         .remote_can_place(&hit, &ItemStack::new("minecraft:campfire", 1))
                         .expect("campfire prediction");
                     let pos = sunrise_core::position::BlockPos::new(x, 65, 0);
-                    assert_eq!(preview.0, pos);
-                    let predicted = preview.1.iter().find(|(at, _)| *at == pos).unwrap().1;
+                    assert_eq!(preview.pos, pos);
+                    let predicted = preview.changes.iter().find(|(at, _)| *at == pos).unwrap().1;
                     let state = game.pack.assets.registry.state(predicted).unwrap();
                     assert_eq!(
                         state.properties.get("signal_fire").map(String::as_str),
@@ -130,9 +130,9 @@ fn client_placement_predicts_signal_fire_from_a_block_part() {
                     let preview = game
                         .remote_can_place(&hit, &ItemStack::new(block, 1))
                         .expect("placement under campfire");
-                    assert_eq!(preview.0, sunrise_core::position::BlockPos::new(x, 64, 0));
+                    assert_eq!(preview.pos, sunrise_core::position::BlockPos::new(x, 64, 0));
                     let predicted = preview
-                        .1
+                        .changes
                         .iter()
                         .find(|(at, _)| *at == pos)
                         .map_or(campfire, |(_, state)| *state);

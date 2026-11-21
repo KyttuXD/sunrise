@@ -38,6 +38,8 @@ pub mod state_flags {
     pub const SKYLIGHT_DOWN: u32 = 1 << 15;
     pub const REQUIRES_TOOL: u32 = 1 << 16;
     pub const SHAPE_OCCLUSION: u32 = 1 << 17;
+    // `VanillaBlockBehaviourExporter`: the predicate could not run on an empty level.
+    pub const CONDUCTOR_ERROR: u32 = 1 << 20;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -865,7 +867,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
             .ok_or_else(|| fail("invalid behaviour state row"))?;
         let int = |i: usize| row.get(i).and_then(Value::as_i64).unwrap_or(0);
         let gb = |key: &str| game.flag(key);
-        let mut flags = int(1) as u32 & 0x7f;
+        let mut flags = int(1) as u32 & (0x7f | state_flags::CONDUCTOR_ERROR);
         for (key, bit) in [
             ("replaceable", state_flags::REPLACEABLE),
             ("random_ticks", state_flags::RANDOM_TICKS),

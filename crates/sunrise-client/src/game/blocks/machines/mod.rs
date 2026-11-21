@@ -7,6 +7,8 @@ use super::{Game, composter::is_composter, spill, storage::is_shulker_box};
 use mod_api::__private::game::*;
 use sunrise_core::nbt::Tag;
 
+#[cfg(test)]
+mod can_place_item_tests;
 pub(in crate::game) mod cauldron_contents;
 #[cfg(test)]
 mod contents_changed_tests;
@@ -31,17 +33,17 @@ use sunrise_client::{
     save,
     world::World,
 };
-use sunrise_core::{
-    geometry::{Aabb, Direction, Vec3},
-    position::BlockPos,
-    random::RandomSource,
-};
+use sunrise_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use sunrise_world::{
     level::{Behaviours, LevelAccess},
     registry::BlockStateId,
 };
 
-type Pos = (i32, i32, i32);
+pub(super) use sunrise_gameplay::hoppers::{
+    HopperState, ItemColumns, StampedItemColumns, cat_sitting_above, dir_from_name, offset, room,
+    shelf_signal,
+};
+pub(in crate::game) use sunrise_gameplay::hoppers::{Pos, hopper_cooldown_in};
 
 /// What item automation reaches among the entities at its target (`ENTITY_AUTOMATION`).
 enum AutomationEntity {
@@ -57,55 +59,9 @@ enum ContainerTarget<'a> {
     Part(Capability<dyn ResourceHandler<ItemResource>>),
 }
 
-/// `HopperBlockEntity` transient state (`TransferCooldown`, `tickedGameTime`).
-#[derive(Clone, Copy, Debug)]
-pub(super) struct HopperState {
-    pub(super) cooldown: i32,
-    ticked: i64,
-}
-impl Default for HopperState {
-    fn default() -> Self {
-        Self {
-            cooldown: -1,
-            ticked: 0,
-        }
-    }
-}
-
-impl HopperState {
-    /// A transferred holder keeps its cooldown and starts with a fresh ticker timestamp.
-    pub(super) fn with_cooldown(cooldown: i32) -> Self {
-        Self {
-            cooldown,
-            ticked: 0,
-        }
-    }
-
-    /// `HopperBlockEntity.loadAdditional`: only the cooldown is saved; the
-    /// last tick time starts at zero for the new block entity.
-    pub(super) fn load(tag: &sunrise_core::nbt::Tag) -> Self {
-        let canonical = sunrise_client::block_entity_nbt::canonical(tag);
-        let cooldown = match canonical.as_ref().and_then(|t| t.get("TransferCooldown")) {
-            Some(sunrise_core::nbt::Tag::Int(value)) => *value,
-            _ => -1,
-        };
-        Self::with_cooldown(cooldown)
-    }
-}
-
 impl Game<'_> {
     pub(super) fn hopper_cooldown(&self, pos: Pos) -> i32 {
-        self.hoppers.get(&pos).map_or_else(
-            || {
-                self.world
-                    .chunks
-                    .get(&(pos.0 >> 4, pos.2 >> 4))
-                    .and_then(|c| c.saved.as_deref())
-                    .and_then(|s| s.block_entity_sources.iter().find(|(p, _)| *p == pos))
-                    .map_or(-1, |(_, tag)| HopperState::load(tag).cooldown)
-            },
-            |s| s.cooldown,
-        )
+        hopper_cooldown_in(&self.hoppers, &self.world, pos)
     }
 }
 
@@ -231,31 +187,6 @@ impl Iterator for Slots<'_> {
 }
 impl ExactSizeIterator for Slots<'_> {}
 
-pub(super) fn dir_from_name(name: &str) -> Option<Direction> {
-    Some(match name {
-        "down" => Direction::Down,
-        "up" => Direction::Up,
-        "north" => Direction::North,
-        "south" => Direction::South,
-        "west" => Direction::West,
-        "east" => Direction::East,
-        _ => return None,
-    })
-}
-fn step(d: Direction) -> [i32; 3] {
-    match d {
-        Direction::Down => [0, -1, 0],
-        Direction::Up => [0, 1, 0],
-        Direction::North => [0, 0, -1],
-        Direction::South => [0, 0, 1],
-        Direction::West => [-1, 0, 0],
-        Direction::East => [1, 0, 0],
-    }
-}
-fn offset(p: Pos, d: Direction) -> Pos {
-    let s = step(d);
-    (p.0 + s[0], p.1 + s[1], p.2 + s[2])
-}
 /// State-level container queries shared by the game and comparator signals.
 pub(super) struct Containers<'a> {
     world: &'a World,
@@ -267,6 +198,141 @@ pub(super) struct Containers<'a> {
     /// The level's mobs, for the cat half of `ChestBlock.isChestBlockedAt`.
     mobs: &'a [Mob],
 }
+/// The API snapshots for one offered stack. The offered count may shrink, and an
+/// accepted write (or its notification) may change what the next slot sees.
+#[derive(Default)]
+struct PlacementAttempt {
+    stack: Option<Option<mod_api::ItemStack>>,
+    entity: Option<PlacementEntity>,
+}
+
+enum PlacementQuery<'a> {
+    Offer(&'a mut PlacementAttempt),
+    Planning,
+}
+
+struct PlacementEntity {
+    pos: Pos,
+    revision: sunrise_client::chunk::block_entity::ModRevision,
+    snapshot: PlacementSnapshot,
+}
+
+enum PlacementSnapshot {
+    Unsubscribed,
+    Unrepresentable,
+    Ready(mod_api::ModBlockEntity),
+}
+
+#[derive(Clone, Copy)]
+enum Insertion {
+    Automation(Option<Pos>),
+    /// The pull transaction keeps just the receiving hopper's slot.
+    Pull,
+    /// A capability write may need to keep the whole entity.
+    Capability,
+}
+
+#[derive(PartialEq, Eq)]
+enum MoveIn {
+    /// The offer was refused or had no room; a pull can try the next slot.
+    Skipped,
+    /// A fitting slot failed to take the stack; a pull must abort.
+    Blocked,
+    Moved,
+}
+
+impl PlacementAttempt {
+    fn ask(
+        &mut self,
+        world: &World,
+        pos: Pos,
+        entity: &sunrise_client::containers::ModBlockEntity,
+        slot: usize,
+        stack: &ItemStack,
+    ) -> Option<bool> {
+        use super::api_values::TryIntoApi;
+
+        if stack.count == 0 || !mod_api::__private::has_part_hook(mod_api::HookId::CanPlaceItem) {
+            return None;
+        }
+        let revision = entity.revision();
+        if self
+            .entity
+            .as_ref()
+            .is_none_or(|seen| seen.pos != pos || seen.revision != revision)
+        {
+            let snapshot = if mod_api::__private::block_entity_type_listens(
+                mod_api::HookId::CanPlaceItem,
+                entity.id(),
+            ) {
+                match entity.try_into_api() {
+                    Ok(snapshot) => PlacementSnapshot::Ready(snapshot),
+                    Err(error) => {
+                        log::debug!(
+                            "Sunrise: can_place_item could not read {} at {pos:?}: {error:?}",
+                            entity.id()
+                        );
+                        PlacementSnapshot::Unrepresentable
+                    }
+                }
+            } else {
+                PlacementSnapshot::Unsubscribed
+            };
+            self.entity = Some(PlacementEntity {
+                pos,
+                revision,
+                snapshot,
+            });
+        }
+        let snapshot = match &self.entity.as_ref()?.snapshot {
+            PlacementSnapshot::Unsubscribed => return None,
+            PlacementSnapshot::Unrepresentable => return Some(false),
+            PlacementSnapshot::Ready(snapshot) => snapshot,
+        };
+        let Some(offered) = self.stack.get_or_insert_with(|| {
+            stack
+                .try_into_api()
+                .inspect_err(|error| {
+                    log::debug!(
+                        "Sunrise: can_place_item could not read the offered {}: {error:?}",
+                        stack.item
+                    );
+                })
+                .ok()
+        }) else {
+            return Some(false);
+        };
+        if offered.count() != stack.count && offered.set_count(stack.count).is_err() {
+            return Some(false);
+        }
+        let (x, y, z) = pos;
+        let state = world.block(x, y, z);
+        let state = match state.try_into_api() {
+            Ok(state) => state,
+            Err(error) => {
+                log::debug!(
+                    "Sunrise: can_place_item could not read block state at {pos:?}: {error:?}"
+                );
+                return Some(false);
+            }
+        };
+        let mut allowed = None;
+        Game::native_can_place_item(
+            snapshot,
+            mod_api::BlockPos::new(x, y, z),
+            state,
+            slot,
+            offered,
+            &mut allowed,
+        );
+        allowed
+    }
+
+    fn wrote_entity(&mut self) {
+        self.entity = None;
+    }
+}
+
 impl Containers<'_> {
     fn prop(&self, state: BlockStateId, key: &str) -> Option<&str> {
         self.registry
@@ -521,24 +587,49 @@ impl Containers<'_> {
     /// `Container.canPlaceItem` (+ `canPlaceItemThroughFace` for furnaces): `accepts`, and what
     /// the slot holds now. The slots of one item (a jukebox's, a chiseled bookshelf's, a brewing
     /// stand's bottles) take one only when empty, a furnace's fuel slot no bucket onto a
-    /// bucket, and a crafter fills its smallest stack first.
-    fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
+    /// bucket, and a crafter fills its smallest stack first. Planning has no offered amount,
+    /// so it must not veto a slot that a subscribed part could admit.
+    fn can_place(
+        &self,
+        view: &View,
+        slot: usize,
+        stack: &ItemStack,
+        query: PlacementQuery<'_>,
+    ) -> bool {
         if !self.accepts(view, slot, stack) {
             return false;
         }
+        if let Some(container) = &view.container {
+            let Some((pos, index)) = view.locate(slot) else {
+                return false;
+            };
+            let Some(BlockEntity::Mod(entity)) = self.world.block_entities.get(&pos) else {
+                return false;
+            };
+            let answer = match query {
+                PlacementQuery::Offer(attempt) => {
+                    attempt.ask(self.world, pos, entity, index, stack)
+                }
+                PlacementQuery::Planning => mod_api::__private::block_entity_type_listens(
+                    mod_api::HookId::CanPlaceItem,
+                    entity.id(),
+                )
+                .then_some(true),
+            };
+            return answer.unwrap_or_else(|| {
+                sunrise_client::containers::mod_container_insert_allowed(
+                    container
+                        .insert_rules
+                        .get(slot)
+                        .copied()
+                        .unwrap_or_default(),
+                    self.get(view, slot),
+                    stack,
+                )
+            });
+        }
         let held = self.get(view, slot);
         let is_bucket = |s: &ItemStack| &*s.item == "minecraft:bucket";
-        if let Some(container) = &view.container {
-            return sunrise_client::containers::mod_container_insert_allowed(
-                container
-                    .insert_rules
-                    .get(slot)
-                    .copied()
-                    .unwrap_or_default(),
-                held,
-                stack,
-            );
-        }
         match view.kind {
             Kind::Jukebox | Kind::Bookshelf => held.is_none(),
             Kind::Brewing => slot >= 3 || held.is_none(),
@@ -561,19 +652,26 @@ impl Containers<'_> {
         if !self.accepts(view, slot, stack) {
             return 0;
         }
-        let capacity = view.slot_limit().min(self.max_stack(stack));
+        self.slot_stack_limit(view, slot, Some(stack))
+    }
+    fn slot_stack_limit(&self, view: &View, slot: usize, stack: Option<&ItemStack>) -> u32 {
+        let capacity = stack.map_or(view.slot_limit(), |s| {
+            view.slot_limit().min(self.max_stack(s))
+        });
         view.locate(slot)
             .and_then(|(pos, _)| self.world.container_stack_limit(pos))
             .map_or(capacity, |limit| capacity.min(limit))
     }
-    /// How many of `stack` slot `slot` takes now: none where `can_place` refuses it, else
-    /// `capacity` less what it holds.
-    fn fits(&self, view: &View, slot: usize, stack: &ItemStack) -> u32 {
-        if !self.can_place(view, slot, stack) {
+    /// For planning, physical room subject to rules a part cannot override.
+    fn planning_room(&self, view: &View, slot: usize, stack: &ItemStack) -> u32 {
+        if !self.can_place(view, slot, stack, PlacementQuery::Planning) {
             return 0;
         }
+        self.insertion_room(view, slot, stack)
+    }
+    fn insertion_room(&self, view: &View, slot: usize, stack: &ItemStack) -> u32 {
         room(
-            self.capacity(view, slot, stack),
+            self.slot_stack_limit(view, slot, Some(stack)),
             self.get(view, slot),
             stack,
         )
@@ -618,7 +716,16 @@ impl Containers<'_> {
             || slot != 1
             || matches!(&*stack.item, "minecraft:water_bucket" | "minecraft:bucket")
     }
-    /// `HopperBlockEntity.isFullContainer`.
+    fn comparator_view(&self, pos: Pos) -> Option<View> {
+        self.view(pos, true)
+            .filter(|v| !matches!(v.kind, Kind::Composter(_)))
+            .or_else(|| self.saved_pot_view(pos))
+    }
+    /// Comparator signal of stored slots, without materializing deferred loot.
+    pub(in crate::game) fn stored_container_signal(&self, pos: Pos) -> i32 {
+        self.comparator_view(pos)
+            .map_or(0, |view| self.signal(&view))
+    }
     /// `AbstractContainerMenu.getRedstoneSignalFromContainer`.
     fn signal(&self, view: &View) -> i32 {
         if view.kind == Kind::Crafter {
@@ -642,98 +749,6 @@ impl Containers<'_> {
     }
 }
 
-/// How many of `stack` go into a slot holding `current`, up to `limit`: into an empty slot, or
-/// onto the same item and components (`HopperBlockEntity.canMergeItems`).
-fn room(limit: u32, current: Option<&ItemStack>, stack: &ItemStack) -> u32 {
-    match current {
-        None => stack.count.min(limit),
-        Some(current) if current.same_item_same_components(stack) => {
-            stack.count.min(limit.saturating_sub(current.count))
-        }
-        Some(_) => 0,
-    }
-}
-
-/// The block columns any item entity's box reaches, so that a hopper with
-/// no item over it skips the scan of every item. Kept for one block-entity
-/// pass, in which items do not move: removing one leaves a superset, still
-/// right, and adding one (always pushed at the end, under a new id) or
-/// removing the last rebuilds the columns.
-#[derive(Default)]
-pub(super) struct ItemColumns {
-    /// The item count and last item id when last asked, if built.
-    seen: Option<(usize, Option<u32>)>,
-    cells: sunrise_client::fast_hash::FxHashSet<(i32, i32)>,
-}
-impl ItemColumns {
-    /// Whether an item's box may reach into column (x, z).
-    fn may_reach(
-        &mut self,
-        items: &[sunrise_client::entities::ItemEntity],
-        x: i32,
-        z: i32,
-    ) -> bool {
-        if items.is_empty() {
-            return false;
-        }
-        let (len, last) = (items.len(), items.last().map(|i| i.id));
-        let stale = self
-            .seen
-            .is_none_or(|(seen_len, seen_last)| len > seen_len || last != seen_last);
-        self.seen = Some((len, last));
-        if stale {
-            self.cells.clear();
-            for item in items {
-                let b = item.bounds();
-                let (lo, hi) = (b.min_position(), b.max_position());
-                for cx in lo.x.floor() as i32..=hi.x.floor() as i32 {
-                    for cz in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                        self.cells.insert((cx, cz));
-                    }
-                }
-            }
-        }
-        self.cells.contains(&(x, z))
-    }
-    /// Whether an item's box may reach into any column of x0..=x1, z0..=z1.
-    pub(super) fn may_reach_area(
-        &mut self,
-        items: &[sunrise_client::entities::ItemEntity],
-        (x0, x1): (i32, i32),
-        (z0, z1): (i32, i32),
-    ) -> bool {
-        (x0..=x1).any(|x| (z0..=z1).any(|z| self.may_reach(items, x, z)))
-    }
-}
-
-/// [`ItemColumns`] for a pass in which items can move (a command, an
-/// explosion's push), kept with the item list's
-/// [`ListStamp`](sunrise_client::join_seq::ListStamp): after any write the
-/// first question scans as before (`true`), and the second with nothing
-/// written in between builds the columns. A pass that writes the items
-/// between questions costs no more than the scans did.
-#[derive(Default)]
-pub(super) struct StampedItemColumns {
-    stamp: Option<sunrise_client::join_seq::ListStamp>,
-    columns: ItemColumns,
-}
-impl StampedItemColumns {
-    /// [`ItemColumns::may_reach_area`] for the items as they are now.
-    pub(super) fn may_reach_area(
-        &mut self,
-        items: &sunrise_client::join_seq::JoinList<sunrise_client::entities::ItemEntity>,
-        xs: (i32, i32),
-        zs: (i32, i32),
-    ) -> bool {
-        if self.stamp != Some(items.stamp()) {
-            self.stamp = Some(items.stamp());
-            self.columns = ItemColumns::default();
-            return true;
-        }
-        self.columns.may_reach_area(items, xs, zs)
-    }
-}
-
 fn bone_meal_stack() -> &'static ItemStack {
     static STACK: std::sync::LazyLock<ItemStack> = std::sync::LazyLock::new(|| ItemStack {
         item: "minecraft:bone_meal".into(),
@@ -744,34 +759,11 @@ fn bone_meal_stack() -> &'static ItemStack {
     &STACK
 }
 
-/// `ChestBlock.isCatSittingOnChest`: a sitting cat whose box meets the block
-/// above `key` (the box of the block above, not the chest's own).
-pub(super) fn cat_sitting_above(mobs: &[Mob], key: Pos) -> bool {
-    let area = Aabb::new(
-        Vec3::new(f64::from(key.0), f64::from(key.1 + 1), f64::from(key.2)),
-        Vec3::new(
-            f64::from(key.0 + 1),
-            f64::from(key.1 + 2),
-            f64::from(key.2 + 1),
-        ),
-    );
-    mobs.iter().any(|m| {
-        m.species() == sunrise_client::mobs::Species::Cat
-            && m.alive()
-            && sunrise_client::mobs::tame::cat_sitting(m)
-            && m.bounds().intersects(area)
-    })
-}
-
 /// Comparator input from a container block entity (0 when there is none):
 /// `ChestBlock.getContainer(.., false)`, whose blocked check sees the level's
 /// cats (`isCatSittingOnChest`).
 pub(super) fn container_signal(level: &mut super::GameLevel<'_>, pos: BlockPos) -> i32 {
-    let c = level.containers();
-    let view = c
-        .view((pos.x, pos.y, pos.z), true)
-        .filter(|v| !matches!(v.kind, Kind::Composter(_)))
-        .or_else(|| c.saved_pot_view((pos.x, pos.y, pos.z)));
+    let view = level.containers().comparator_view((pos.x, pos.y, pos.z));
     if let Some(view) = &view {
         for &(key, _) in &view.parts {
             level.unpack_loot(super::container_loot::LootTarget::Block(key), None);
@@ -779,47 +771,6 @@ pub(super) fn container_signal(level: &mut super::GameLevel<'_>, pos: BlockPos) 
     }
     let c = level.containers();
     view.map_or(0, |v| c.signal(&v))
-}
-
-/// `ChiseledBookShelfBlock.getAnalogOutputSignal` and
-/// `ShelfBlock.getAnalogOutputSignal`, from the block entity Sunrise keeps as
-/// it was loaded; `None` for any other block. `direction` points from the
-/// block to the comparator.
-pub(super) fn shelf_signal(
-    world: &World,
-    registry: &'static sunrise_world::registry::BlockRegistry,
-    state: BlockStateId,
-    pos: BlockPos,
-    direction: Direction,
-) -> Option<i32> {
-    let info = registry.state(state)?;
-    let chiseled = info.name == "minecraft:chiseled_bookshelf";
-    if !chiseled && !info.name.ends_with("_shelf") {
-        return None;
-    }
-    if chiseled {
-        // The last slot touched, plus one (`lastInteractedSlot` starts at -1).
-        return Some(match world.block_entities.get(&(pos.x, pos.y, pos.z)) {
-            Some(BlockEntity::ChiseledBookshelf(b)) => b.last_slot + 1,
-            _ => 0,
-        });
-    }
-    // Only read from the back: a bit for each of the three slots in use.
-    let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
-    if facing.map(Direction::opposite) != Some(direction) {
-        return Some(0);
-    }
-    let Some(BlockEntity::Shelf(shelf)) = world.block_entities.get(&(pos.x, pos.y, pos.z)) else {
-        return Some(0);
-    };
-    Some(
-        shelf
-            .items
-            .iter()
-            .enumerate()
-            .map(|(slot, item)| i32::from(item.is_some()) << slot)
-            .sum(),
-    )
 }
 
 impl super::GameLevel<'_> {
@@ -846,12 +797,26 @@ impl Game<'_> {
             mobs: &self.mobs,
         }
     }
+    pub(super) fn stored_container_signal(&self, pos: Pos) -> i32 {
+        // Match a GameLevel view; the level's block entities own the slots.
+        Containers {
+            brewing: None,
+            ..self.containers()
+        }
+        .stored_container_signal(pos)
+    }
     pub(super) fn block_can_place(&self, pos: [i32; 3], slot: usize, stack: &ItemStack) -> bool {
         let containers = self.containers();
         let Some(view) = containers.view((pos[0], pos[1], pos[2]), false) else {
             return false;
         };
-        view.kind == Kind::Shulker || containers.can_place(&view, slot, stack)
+        view.kind == Kind::Shulker
+            || containers.can_place(
+                &view,
+                slot,
+                stack,
+                PlacementQuery::Offer(&mut PlacementAttempt::default()),
+            )
     }
     fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> {
         let (pos, i) = view.locate(slot)?;
@@ -862,7 +827,7 @@ impl Game<'_> {
         {
             m.items.resize(view.len(), None);
         }
-        entity.slots_mut().get_mut(i)
+        entity.slot_mut(i)
     }
     /// `BlockEntity.setChanged` for every block entity of a container.
     fn view_changed(&mut self, view: &View) {
@@ -907,10 +872,8 @@ impl Game<'_> {
             self.mark_block_entity_updated(pos);
         }
         // A double chest's other half changes with it.
-        let halves: Vec<Pos> = std::iter::once(pos)
-            .chain(self.chest_other_half(pos))
-            .collect();
-        for pos in halves {
+        let other = self.chest_other_half(pos);
+        for pos in std::iter::once(pos).chain(other) {
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
             self.with_level(|b, level, ticks| {
                 b.container_changed(level, ticks, BlockPos::new(pos.0, pos.1, pos.2))
@@ -920,13 +883,14 @@ impl Game<'_> {
     /// `HopperBlockEntity.tryMoveInItem`.
     fn try_move_in_item(
         &mut self,
-        from_hopper: Option<Pos>,
+        insertion: Insertion,
         view: &View,
         stack: ItemStack,
         slot: usize,
-    ) -> Option<ItemStack> {
-        let (rest, moved) = self.move_in_item(from_hopper, view, stack, slot);
-        if moved {
+        attempt: &mut PlacementAttempt,
+    ) -> (Option<ItemStack>, MoveIn) {
+        let (rest, result) = self.move_in_item(insertion, view, stack, slot, attempt);
+        if result == MoveIn::Moved {
             self.view_changed(view);
             // JukeboxBlockEntity.setTheItem through a hopper's or a dropper's
             // transfer: the disc it lands on starts playing.
@@ -935,21 +899,40 @@ impl Game<'_> {
                 self.jukebox_inserted([x, y, z]);
             }
         }
-        rest
+        (rest, result)
     }
-    /// `tryMoveInItem` before its `setChanged`: the remainder, and whether
-    /// anything moved.
+    /// `tryMoveInItem` before `setChanged`: ask about the full offer, then keep and
+    /// write the admitted slot. A skipped slot is never journaled.
     fn move_in_item(
         &mut self,
-        from_hopper: Option<Pos>,
+        insertion: Insertion,
         view: &View,
         mut stack: ItemStack,
         slot: usize,
-    ) -> (Option<ItemStack>, bool) {
+        attempt: &mut PlacementAttempt,
+    ) -> (Option<ItemStack>, MoveIn) {
         let c = self.containers();
-        if !c.can_place(view, slot, &stack) {
-            return (Some(stack), false);
+        if !c.can_place(view, slot, &stack, PlacementQuery::Offer(attempt)) {
+            return (Some(stack), MoveIn::Skipped);
         }
+        let (from_hopper, count) = match insertion {
+            Insertion::Automation(from_hopper) => (from_hopper, stack.count),
+            Insertion::Pull | Insertion::Capability => {
+                let count = c.insertion_room(view, slot, &stack).min(stack.count);
+                if count == 0 {
+                    return (Some(stack), MoveIn::Skipped);
+                }
+                if matches!(insertion, Insertion::Pull) {
+                    let Some((pos, index)) = view.locate(slot) else {
+                        return (Some(stack), MoveIn::Blocked);
+                    };
+                    self.journal_block_entity_slot(pos, index);
+                } else {
+                    self.journal_view_slot(view, slot);
+                }
+                (None, count)
+            }
+        };
         self.unpack_inventory_slot(view, slot);
         let was_empty = self.inventory_is_empty(view);
         let c = self.containers();
@@ -960,7 +943,7 @@ impl Game<'_> {
         let restricted = override_limit.is_some_and(|limit| limit < vanilla_max);
         let max = override_limit.map_or(vanilla_max, |limit| vanilla_max.min(limit));
         if restricted && max == 0 {
-            return (Some(stack), false);
+            return (Some(stack), MoveIn::Blocked);
         }
 
         let mut success = false;
@@ -970,7 +953,7 @@ impl Game<'_> {
             let Some(tag) = spill::saved_entity(&self.world, [pos.0, pos.1, pos.2])
                 .or_else(|| self.pot_data([pos.0, pos.1, pos.2]))
             else {
-                return (Some(stack), false);
+                return (Some(stack), MoveIn::Blocked);
             };
             let item = tag.get("item").and_then(save::item_from_nbt);
             Some((tag, item))
@@ -981,10 +964,12 @@ impl Game<'_> {
             item
         } else {
             let Some(target) = self.slot_mut_at(view, slot) else {
-                return (Some(stack), false);
+                return (Some(stack), MoveIn::Blocked);
             };
             target
         };
+        let beyond_slot = stack.count - count;
+        stack.count = count;
         // An empty stack a mod left in its slot: the slot is free (`isEmpty`).
         if target.as_ref().is_some_and(|s| s.count == 0) {
             *target = None;
@@ -1045,7 +1030,14 @@ impl Game<'_> {
                 state.cooldown = 8 - skip;
             }
         }
-        ((stack.count > 0).then_some(stack), success)
+        let result = if success {
+            attempt.wrote_entity();
+            MoveIn::Moved
+        } else {
+            MoveIn::Blocked
+        };
+        stack.count += beyond_slot;
+        ((stack.count > 0).then_some(stack), result)
     }
     /// `HopperBlockEntity.addItem(from, container, stack, direction)`; the remainder.
     fn add_item(
@@ -1059,10 +1051,19 @@ impl Game<'_> {
             let (x, y, z) = view.parts[0].0;
             return self.composter_container_insert([x, y, z], stack, face == Some(Direction::Up));
         }
+        let mut attempt = PlacementAttempt::default();
         let mut rest = Some(stack);
         for slot in view.slots_to_add_iter(face) {
             let Some(stack) = rest.take() else { break };
-            rest = self.try_move_in_item(from_hopper, view, stack, slot);
+            rest = self
+                .try_move_in_item(
+                    Insertion::Automation(from_hopper),
+                    view,
+                    stack,
+                    slot,
+                    &mut attempt,
+                )
+                .0;
         }
         rest
     }
@@ -1071,8 +1072,9 @@ impl Game<'_> {
         if view.kind == Kind::Pot {
             return self.pot_take_one(view.parts[0].0);
         }
+        self.containers().get(view, slot)?;
         let target = self.slot_mut_at(view, slot)?;
-        let current = target.as_mut().filter(|s| s.count > 0)?;
+        let current = target.as_mut()?;
         let one = ItemStack {
             count: 1,
             ..current.clone()
@@ -1335,7 +1337,6 @@ impl Game<'_> {
     pub(super) fn put_into_part(
         &mut self,
         part: &Capability<dyn ResourceHandler<ItemResource>>,
-        at: [i32; 3],
         stack: &ItemStack,
         take: impl FnOnce(&mut Self, u32) -> Option<()>,
     ) -> u32 {
@@ -1346,11 +1347,13 @@ impl Game<'_> {
         let resource = ItemResource::of(&snapshot);
         mod_api::run_transaction(self, |game, tx| {
             let host: &mut dyn mod_api::ServerHost = game;
-            let went = part.insert_any(host, tx, &resource, stack.count);
-            match part.checked(went, stack.count, &at) {
-                Some(0) | None => Err(()),
-                Some(went) => take(game, went).map(|()| went).ok_or(()),
+            let went = part
+                .insert(host, tx, &resource, stack.count)
+                .map_err(|_| ())?;
+            if went == 0 {
+                return Err(());
             }
+            take(game, went).map(|()| went).ok_or(())
         })
         .unwrap_or(0)
     }
@@ -1369,11 +1372,7 @@ impl Game<'_> {
         part: &Capability<dyn ResourceHandler<ItemResource>>,
         at: [i32; 3],
     ) -> bool {
-        if (0..part.size(self)).all(|slot| {
-            part.resource(self, slot).is_some_and(|resource| {
-                part.amount(self, slot) >= part.capacity(self, slot, &resource)
-            })
-        }) {
+        if mod_api::resource_util::is_full(self, part) {
             return false;
         }
         let from = self.container_world_pos(hopper);
@@ -1397,14 +1396,12 @@ impl Game<'_> {
                 let Some(mut one) = game.take_one(hopper, slot) else {
                     continue;
                 };
-                let went = part.insert_any(game, tx, &resource, 1);
-                let accepted = part.checked(went, 1, &at);
-                if accepted == Some(1) {
+                let went = part.insert(game, tx, &resource, 1).map_err(|_| ())?;
+                if went == 1 {
                     return Ok(());
                 }
                 one.count = snapshot.count();
                 *game.slot_mut_at(hopper, slot).ok_or(())? = Some(one);
-                accepted.ok_or(())?;
             }
             Err(())
         })
@@ -1435,17 +1432,21 @@ impl Game<'_> {
             }
             let moved = mod_api::run_transaction(self, |game, tx| {
                 let host: &mut dyn mod_api::ServerHost = game;
-                let came = part.extract(host, tx, slot, &resource, 1);
+                let came = part.extract_at(host, tx, slot, &resource, 1);
                 if part.checked(came, 1, &at) != Some(1) {
                     return Err(());
                 }
-                let target = (0..hopper.len())
-                    .find(|&slot| game.containers().fits(hopper, slot, &one) > 0)
-                    .ok_or(())?;
-                let (pos, slot) = hopper.locate(target).ok_or(())?;
-                game.journal_block_entity_slot(pos, slot);
-                game.try_move_in_item(None, hopper, one, target)
-                    .map_or(Ok(()), |_| Err(()))
+                let mut attempt = PlacementAttempt::default();
+                let mut rest = one;
+                for target in 0..hopper.len() {
+                    match game.try_move_in_item(Insertion::Pull, hopper, rest, target, &mut attempt)
+                    {
+                        (Some(remainder), MoveIn::Skipped) => rest = remainder,
+                        (None, MoveIn::Moved) => return Ok(()),
+                        _ => return Err(()),
+                    }
+                }
+                Err(())
             });
             if moved.is_ok() {
                 return true;
@@ -2058,8 +2059,7 @@ impl Game<'_> {
                     ControlFlow::Continue(inserted)
                 }
                 ContainerTarget::Part(part) => {
-                    let at = [target.0, target.1, target.2];
-                    game.dropper_into_part(&part, &stack, at, &view, slot);
+                    game.dropper_into_part(&part, &stack, &view, slot);
                     ControlFlow::Break(())
                 }
             });
@@ -2203,7 +2203,7 @@ mod brewing_fuel_transfer_tests {
                 .unwrap();
                 let resource = mod_api::ItemResource::of(&stack);
                 host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 0, &resource, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 0, &resource, 1), 1);
                     Ok::<_, ()>(())
                 })
                 .unwrap();
@@ -2330,7 +2330,15 @@ mod brewing_fuel_transfer_tests {
                 let hopper = containers.view(hopper_pos, false).unwrap();
                 let stand = containers.view(stand_pos, false).unwrap();
                 let fuel = containers.get(&hopper, 0).unwrap();
-                assert_eq!(containers.can_place(&stand, 4, fuel), accepted);
+                assert_eq!(
+                    containers.can_place(
+                        &stand,
+                        4,
+                        fuel,
+                        super::PlacementQuery::Offer(&mut super::PlacementAttempt::default()),
+                    ),
+                    accepted
+                );
                 assert_eq!(
                     game.eject_into(hopper_pos, &hopper, &stand, Direction::West),
                     accepted
@@ -2373,9 +2381,8 @@ mod item_column_tests {
             position: at,
             previous: at,
             velocity: Vec3::ZERO,
-            on_ground: true,
+            ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
             vertical_collision: false,
-            horizontal_collision: false,
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -2670,7 +2677,7 @@ mod capacity_tests {
             };
             let offered = ItemStack::new(offered, 1);
             assert_eq!(c.capacity(&view, 0, &offered), 1, "{block}");
-            assert_eq!(c.fits(&view, 0, &offered), 0, "{block}");
+            assert_eq!(c.planning_room(&view, 0, &offered), 0, "{block}");
             assert_eq!(
                 c.capacity(&view, 0, &ItemStack::new("minecraft:stick", 1)),
                 0,
@@ -2954,7 +2961,7 @@ mod hopper_cart_transfer_tests {
                 &game.options.resources.join("data"),
                 &PackOverlay {
                     files: &files,
-                    ..PackOverlay::NONE
+                    ..PackOverlay::default()
                 },
             ));
             game.adv.loaded = true;

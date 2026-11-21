@@ -6,7 +6,10 @@
 use super::Game;
 use super::transactions::{After, DeferredEffect};
 use mod_api::__private::game::*;
-use mod_api::{CraftedByError, EquipmentSlot, ItemPlace, LivingRef, MenuSlotBacking, Transaction};
+use mod_api::{
+    CraftedByError, EquipmentSlot, ItemPlace, ItemPlaceEditError, LivingRef, MenuSlotBacking,
+    Transaction,
+};
 use sunrise_client::{first_person::Hand, items::ItemStack, menu::Menu};
 
 impl Game<'_> {
@@ -79,7 +82,7 @@ impl Game<'_> {
             _ => None,
         }
     }
-    /// All player place mutations use the command/host slot writer (and its journal).
+    /// Player place insert and extract use the command/host slot writer (and its journal).
     fn write_player_place(&mut self, place: &ItemPlace, stack: Option<ItemStack>) {
         use super::commands::items::Slot;
         let slot = match place {
@@ -164,6 +167,50 @@ impl Game<'_> {
         }
         self.unscoped_game_stack(place)
     }
+    /// Component-only write, without going through an equipment setter or stopping item use.
+    pub(super) fn game_edit_stack(
+        &mut self,
+        place: &ItemPlace,
+        stack: ItemStack,
+        changed: &[String],
+        tx: &Transaction,
+    ) -> Result<(), ItemPlaceEditError> {
+        if !self.places_simulated() || !self.transaction_holds(tx) {
+            return Err(ItemPlaceEditError::Unavailable);
+        }
+        if let ItemPlace::Equipment { entity, slot } = *place {
+            let mut held = self
+                .equipment_stack(entity, slot)
+                .flatten()
+                .ok_or(ItemPlaceEditError::NotHeld)?;
+            held.copy_changed_components_from(stack, changed);
+            self.journal_equipment(entity);
+            if let Some(mob) = self.mobs.iter_mut().find(|m| m.id == entity && !m.removed) {
+                mob.set_equipment_stack(slot as usize, Some(held));
+                self.after_commit(After::EquipmentSync(entity));
+            } else if let Some(stand) = self.armor_stands.iter_mut().find(|a| a.id == entity) {
+                stand.equipment.set(slot as usize, Some(held));
+            }
+        } else {
+            let player = self
+                .place_player(place)
+                .ok_or(ItemPlaceEditError::NotHeld)?;
+            let mut written = false;
+            self.native_as_player(player, |game| {
+                game.journal_player(player);
+                if let Some(held) = game.player_place(place).and_then(Option::as_mut) {
+                    held.copy_changed_components_from(stack, changed);
+                    written = true;
+                }
+            });
+            if !written {
+                return Err(ItemPlaceEditError::NotHeld);
+            }
+        }
+        self.notice_menu_place_write(place);
+        Ok(())
+    }
+
     /// Runs the vanilla `ItemStack.onCraftedBy` effects for a stack a mod-delivered menu result
     /// owns. The stack mutation is journaled through the caller's transaction and the statistic
     /// is deferred until its root commit.
@@ -281,7 +328,13 @@ impl Game<'_> {
         if let ItemPlace::Scratch(id) | ItemPlace::ScratchSlots(id) = place {
             return self.scratch_insert(*id, &stack);
         }
-        let max = self.containers().max_stack(&stack);
+        let item_max = self.containers().max_stack(&stack);
+        let max = match place {
+            ItemPlace::MenuSlot { menu, slot } => self
+                .menu_owned_slot_limit(*menu, *slot)
+                .map_or(item_max, |limit| limit.min(item_max)),
+            _ => item_max,
+        };
         // Puts what of `rest` fits into `slot`.
         let fill = |slot: &mut Option<ItemStack>, rest: &mut ItemStack| {
             let held = slot.as_ref().map_or(0, |held| held.count);
@@ -388,7 +441,13 @@ impl Game<'_> {
                 .then(|| g.add_stack_to_inventory(rest))
                 .flatten()
             {
-                g.drop_after_commit(player, rest);
+                // What is left drops at the player, unless they are in another level than
+                // this one: then it stays the caller's.
+                if g.acting_in_level_in_place() {
+                    g.drop_after_commit(player, rest);
+                } else {
+                    went -= rest.count;
+                }
             }
         });
         went
@@ -508,10 +567,6 @@ impl Game<'_> {
         });
         took
     }
-    /// Writes mob `entity`'s equipment `slot` (#932): the same write
-    /// `native_living_set_equipment` makes — stack, attribute map, equip sound and game event
-    /// — with the effects waiting for the root commit of the open transaction, so an abort of
-    /// it is quiet. The equipment goes back then too (`journal_equipment`).
     /// The equipment `slot` of living entity `entity` (#932): a mob's
     /// (`equipment_stacks`, the worn stacks overlaid) or an armor stand's
     /// own, `None` where the slot is empty. None where neither kind is
@@ -563,7 +618,8 @@ pub(super) mod tests {
     use mod_api::HostTransaction;
     use mod_api::ServerHost;
     use mod_api::{
-        CraftedByError, ENTITY_AUTOMATION, ENTITY_ITEMS, ItemPlace, ItemResource, MenuRef,
+        CraftedByError, ENTITY_AUTOMATION, ENTITY_ITEMS, ItemPlace, ItemPlaceEditError,
+        ItemResource, MenuRef,
     };
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
     use sunrise_client::{
@@ -655,7 +711,7 @@ pub(super) mod tests {
                         .unwrap();
                 }))
             });
-            assert_eq!(result, Ok(true));
+            assert_eq!(result, Ok(Ok(())));
             assert_eq!(game.dropped.len(), dropped_before);
             assert_eq!(
                 inventory(game),
@@ -669,7 +725,7 @@ pub(super) mod tests {
                 game.transaction(|host, tx| {
                     Ok::<_, ()>(slot.edit(host, tx, |stack| stack.set_count(15).unwrap()))
                 }),
-                Ok(false)
+                Ok(Err(ItemPlaceEditError::CountChanged))
             );
             assert_eq!(inventory(game), expected);
             let stone = ItemStack::new("minecraft:stone", 16)
@@ -679,7 +735,7 @@ pub(super) mod tests {
                 game.transaction(|host, tx| {
                     Ok::<_, ()>(slot.edit(host, tx, |stack| *stack = stone))
                 }),
-                Ok(false)
+                Ok(Err(ItemPlaceEditError::ItemChanged))
             );
             assert_eq!(inventory(game), expected);
             assert_eq!(game.inventory, host_before);
@@ -692,7 +748,7 @@ pub(super) mod tests {
                 game.transaction(|host, tx| {
                     Ok::<_, ()>(empty.edit(host, tx, |_| panic!("empty place ran editor")))
                 }),
-                Ok(false)
+                Ok(Err(ItemPlaceEditError::NotHeld))
             );
             assert_eq!(inventory(game), expected);
             assert_eq!(game.dropped.len(), dropped_before);
@@ -725,9 +781,12 @@ pub(super) mod tests {
             let original_stack = before[3].as_ref().unwrap().try_into_api().unwrap();
             assert_eq!(
                 game.transaction(|host, tx| {
-                    assert!(slot.edit(host, tx, |stack| {
-                        stack.copy_component_from(&source, "minecraft:custom_name");
-                    }));
+                    assert!(
+                        slot.edit(host, tx, |stack| {
+                            stack.copy_component_from(&source, "minecraft:custom_name");
+                        })
+                        .is_ok()
+                    );
                     assert_eq!(slot.stack(host), Some(expected_stack.clone()));
                     Err::<(), ()>(())
                 }),
@@ -739,9 +798,12 @@ pub(super) mod tests {
             assert_eq!(
                 game.transaction(|host, _| {
                     let child = host.transaction(|host, tx| {
-                        assert!(slot.edit(host, tx, |stack| {
-                            stack.copy_component_from(&source, "minecraft:custom_name");
-                        }));
+                        assert!(
+                            slot.edit(host, tx, |stack| {
+                                stack.copy_component_from(&source, "minecraft:custom_name");
+                            })
+                            .is_ok()
+                        );
                         Err::<(), ()>(())
                     });
                     assert_eq!(child, Err(()));
@@ -757,7 +819,7 @@ pub(super) mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_bucket_fills_and_empties_whole_through_its_place_and_splits_off_its_stack() {
-        use mod_api::{BlockUpdateFlags, FLUIDS, ITEM_FLUIDS, move_resources};
+        use mod_api::{BlockUpdateFlags, FLUIDS, ITEM_FLUIDS, resource_util::move_resources};
         use sunrise_client::chunk::Chunk;
         with_game(|game| {
             open_to_lan(game);
@@ -798,7 +860,9 @@ pub(super) mod tests {
                     true => (&block, &bucket),
                     false => (&bucket, &block),
                 };
-                host.transaction(|host, tx| move_resources(host, from, to, |_| true, 1000, tx))
+                host.transaction(|host, tx| {
+                    move_resources(host, from, to, |_| true, 1000, Some(tx))
+                })
             };
             let inventory =
                 |game: &super::Game<'_>| game.lan.as_ref().unwrap().hub.guests[0].inventory.clone();
@@ -902,8 +966,8 @@ pub(super) mod tests {
                     .try_into_api()
                     .unwrap(),
             );
-            let wrote =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 39, &pumpkin, 64)));
+            let wrote = host
+                .transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 39, &pumpkin, 64)));
             assert_eq!(wrote, Ok(1));
         });
     }
@@ -932,7 +996,7 @@ pub(super) mod tests {
             );
             super::super::dispense_fixture::start_recording();
             let result = game.transaction(|host, tx| {
-                assert_eq!(items.insert(host, tx, 4, &chest, 1), 1);
+                assert_eq!(items.insert_at(host, tx, 4, &chest, 1), 1);
                 Err::<(), ()>(())
             });
             assert_eq!(result, Err(()));
@@ -946,7 +1010,7 @@ pub(super) mod tests {
             super::super::dispense_fixture::start_recording();
             let result = game.transaction(|host, _| {
                 host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 4, &chest, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 4, &chest, 1), 1);
                     Ok::<(), ()>(())
                 })?;
                 Err::<(), ()>(())
@@ -960,12 +1024,12 @@ pub(super) mod tests {
             let result = game.transaction(|host, _| {
                 // An inner abort must not contribute effects to the root.
                 let aborted = host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 4, &chest, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 4, &chest, 1), 1);
                     Err::<(), ()>(())
                 });
                 assert_eq!(aborted, Err(()));
                 host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 4, &chest, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 4, &chest, 1), 1);
                     Ok::<(), ()>(())
                 })?;
                 assert!(super::super::dispense_fixture::stop_recording().is_empty());
@@ -996,6 +1060,608 @@ pub(super) mod tests {
             0.0,
         ));
         30
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn worn_component_edit_is_quiet_and_reaches_tracking() {
+        use mod_api::EquipmentSlot;
+        use sunrise_client::lan::Out;
+        use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
+
+        with_game(|game| {
+            open_to_lan(game);
+            let (tx, rx) = mpsc::channel();
+            let mut viewer = guest(1);
+            viewer.sender = PlayerSender::new(tx, Arc::default());
+            viewer.position = [0.5, 64.0, 1.5];
+            viewer.dimension = "minecraft:overworld".into();
+            viewer.loaded = true;
+            viewer.load_timeout = 0;
+            viewer.sent_chunks.insert((0, 0));
+            game.lan.as_mut().unwrap().hub.guests.push(viewer);
+
+            // With no tickets every chunk is entity-ticking; the zombie must lie outside that
+            // range for the tracker to describe it idle (`ChunkMap.tick`).
+            game.tickets
+                .update(Some(sunrise_client::ticket_levels::Sources {
+                    players: vec![(40, 40)],
+                    view_distance: 2,
+                    simulation_distance: 2,
+                    ..Default::default()
+                }));
+            let id = zombie(game);
+            let living = game.living(game.entity(id).unwrap()).unwrap();
+            let slot = EquipmentSlot::Chest;
+            let armor = ItemStack::new("minecraft:diamond_chestplate", 1);
+            assert!(game.living_set_equipment(living, slot, Some(armor)));
+            game.mobs[0].first_tick = false;
+            // Track once to pair, again to cache a full idle state, then confirm it can go bare.
+            for _ in 0..3 {
+                game.level_pass.packets_drained = true;
+                game.mobs[0].needs_sync = false;
+                game.tick_lan(false);
+            }
+            let host = game.lan.as_ref().unwrap();
+            assert!(host.hub.guests[0].tracker.is_tracking(id as i32));
+            assert!(
+                host.states
+                    .as_slice()
+                    .iter()
+                    .any(|state| state.id == id as i32 && state.bare)
+            );
+            rx.try_iter().for_each(drop);
+
+            game.audio.capture = Some(Vec::new());
+            let place = ItemPlace::Equipment { entity: id, slot };
+            super::super::dispense_fixture::start_recording();
+            game.transaction(|host, tx| place.edit(host, tx, |stack| stack.set_damage(7)))
+                .unwrap();
+            assert!(game.audio.capture.as_ref().unwrap().is_empty());
+            assert!(super::super::dispense_fixture::stop_recording().is_empty());
+
+            game.level_pass.packets_drained = true;
+            game.tick_lan(false);
+            let hub = &game.lan.as_ref().unwrap().hub;
+            let received = rx
+                .try_iter()
+                .flat_map(|message| match message {
+                    Out::Packet(body) => vec![body],
+                    Out::Packets(bodies) => bodies,
+                    Out::Disconnect(reason) => panic!("tracking viewer disconnected: {reason:?}"),
+                })
+                .find_map(|body| {
+                    let mut reader = Reader::new(&body);
+                    let packet = reader.varint().ok()?;
+                    let Clientbound::SetEquipment(equipment) =
+                        Clientbound::decode(packet, reader.rest()).ok()?
+                    else {
+                        return None;
+                    };
+                    if equipment.id != id as i32 {
+                        return None;
+                    }
+                    let (_, stack) = equipment
+                        .slots
+                        .into_iter()
+                        .find(|(at, _)| *at == slot as u8)?;
+                    Some(hub.stack_from_network(&stack?))
+                })
+                .expect("the existing viewer receives the idle mob's equipment edit");
+            assert_eq!(received.item.as_ref(), "minecraft:diamond_chestplate");
+            assert_eq!(received.count, 1);
+            assert_eq!(received.damage, 7);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn virtual_wrappers_and_cursors_refuse_a_whole_stack_edit() {
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            let stick = ItemStack::new("minecraft:stick", 32);
+            let cursor_stack = ItemStack::new("minecraft:paper", 1);
+            game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                guest.game_mode = 1;
+                guest.inventory[0] = Some(stick.clone());
+                guest.carried = Some(cursor_stack.clone());
+            });
+            let player = game.player(12).unwrap();
+            let menu = game.player_container_menu(player).unwrap();
+            let hand = ItemPlace::PlayerHand {
+                player: player.uuid(),
+                hand: mod_api::Hand::Main,
+            };
+            for place in [
+                ItemPlace::Strict(Box::new(ItemPlace::InfiniteMaterials {
+                    player: player.uuid(),
+                    inner: Box::new(hand.clone()),
+                })),
+                ItemPlace::OneByOne(Box::new(hand)),
+                menu.cursor(),
+            ] {
+                assert_eq!(
+                    game.transaction(|host, tx| {
+                        place.edit(host, tx, |_| panic!("a refused place ran its editor"))
+                    }),
+                    Err(ItemPlaceEditError::UnsupportedPlace)
+                );
+            }
+            let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!(guest.inventory[0].as_ref(), Some(&stick));
+            assert_eq!(guest.carried.as_ref(), Some(&cursor_stack));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn component_edit_preserves_live_nested_data_and_applies_a_removal() {
+        use mod_api::Tag;
+
+        with_game(|game| {
+            open_to_lan(game);
+            let mut player = guest(1);
+            let mut map = ItemStack::new("minecraft:filled_map", 1);
+            map.data_mut().map_id = Some(27);
+            map.data_mut().map_post_processing = Some(1);
+            let mut bundle = ItemStack::new("minecraft:bundle", 1);
+            let data = bundle.data_mut();
+            data.bundle_contents.push(map);
+            data.bundle_selected = sunrise_items::item_data::BundleSelected(0);
+            data.custom_name = Some(Tag::String("keep my contents".into()));
+            player.inventory[3] = Some(bundle);
+            let place = ItemPlace::PlayerSlot {
+                player: 123,
+                slot: 3,
+            };
+            game.lan.as_mut().unwrap().hub.guests.push(player);
+
+            game.transaction(|host, tx| {
+                place.edit(host, tx, |stack| {
+                    stack
+                        .apply_components(
+                            &[(
+                                "!minecraft:custom_name".into(),
+                                Tag::compound(Vec::<(&str, Tag)>::new()),
+                            )]
+                            .into(),
+                        )
+                        .unwrap();
+                })
+            })
+            .unwrap();
+            let bundle = game.lan.as_ref().unwrap().hub.guests[0].inventory[3]
+                .as_ref()
+                .unwrap()
+                .data()
+                .unwrap();
+            assert!(bundle.custom_name.is_none());
+            assert!(bundle.other("!minecraft:custom_name").is_some());
+            assert_eq!(bundle.bundle_selected.0, 0);
+            let map = bundle.bundle_contents[0].data().unwrap();
+            assert_eq!(map.map_id, Some(27));
+            assert_eq!(map.map_post_processing, Some(1));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn editing_a_raid_banners_name_preserves_its_other_components() {
+        use mod_api::Tag;
+        use sunrise_items::item_data::encode_extra_components;
+
+        with_game(|game| {
+            open_to_lan(game);
+            let banner = sunrise_client::mobs::raider::ominous_banner();
+            let original = encode_extra_components(&banner).unwrap();
+            let mut player = guest(1);
+            player.inventory[3] = Some(banner);
+            game.lan.as_mut().unwrap().hub.guests.push(player);
+            let place = ItemPlace::PlayerSlot {
+                player: 123,
+                slot: 3,
+            };
+            let edit = |game: &mut super::Game<'_>, id: &str, value: Tag| {
+                game.transaction(|host, tx| {
+                    place.edit(host, tx, |stack| {
+                        stack
+                            .apply_components(&[(id.into(), value)].into())
+                            .unwrap();
+                    })
+                })
+                .unwrap();
+            };
+            let banner = |game: &super::Game<'_>| {
+                game.lan.as_ref().unwrap().hub.guests[0].inventory[3]
+                    .clone()
+                    .unwrap()
+            };
+            edit(
+                game,
+                "minecraft:custom_name",
+                Tag::String("Named Raid Banner".into()),
+            );
+            let compact = banner(game);
+            assert!(compact.data().unwrap().ominous_banner);
+            let mut named = sunrise_client::mobs::raider::ominous_banner();
+            named.data_mut().set_other(
+                "minecraft:custom_name",
+                Some(Tag::String("Named Raid Banner".into())),
+            );
+            assert!(compact.same_item_same_components(&named));
+
+            let name = Tag::String("Renamed Raid Banner".into());
+            edit(game, "minecraft:item_name", name.clone());
+            let edited = encode_extra_components(&banner(game)).unwrap();
+            assert_eq!(edited.get("minecraft:item_name"), Some(&name));
+            for id in [
+                "minecraft:banner_patterns",
+                "minecraft:rarity",
+                "minecraft:tooltip_display",
+            ] {
+                assert_eq!(
+                    edited.get(id).unwrap(),
+                    original.get(id).unwrap(),
+                    "{id} was not edited"
+                );
+            }
+
+            let rare = Tag::String("rare".into());
+            edit(game, "minecraft:rarity", rare.clone());
+            edit(
+                game,
+                "minecraft:item_name",
+                original.get("minecraft:item_name").unwrap().clone(),
+            );
+            let saved = sunrise_items::item_nbt::item_to_nbt(&banner(game), game.items());
+            let loaded = sunrise_items::item_nbt::item_from_nbt(&saved).unwrap();
+            for stack in [banner(game), loaded] {
+                let components = encode_extra_components(&stack).unwrap();
+                assert_eq!(components.get("minecraft:rarity"), Some(&rare));
+                for id in [
+                    "minecraft:item_name",
+                    "minecraft:banner_patterns",
+                    "minecraft:tooltip_display",
+                ] {
+                    assert_eq!(components.get(id), original.get(id), "{id} must survive");
+                }
+            }
+            // Writing the last differing value restores the stock representation,
+            // so a resource reconstructed from the same components compares equal.
+            let fresh = sunrise_client::mobs::raider::ominous_banner();
+            let prototype = fresh.try_into_api().unwrap();
+            game.transaction(|host, tx| {
+                place.edit(host, tx, |stack| {
+                    for id in ["minecraft:rarity", "minecraft:custom_name"] {
+                        stack.copy_component_from(&prototype, id);
+                    }
+                })
+            })
+            .unwrap();
+            assert!(banner(game).same_item_same_components(&fresh));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn nested_equipment_rollback_restores_the_live_modifiers_not_the_quiet_stack() {
+        use mod_api::{EquipmentSlot, Tag};
+
+        with_game(|game| {
+            let id = zombie(game);
+            let living = game.living(game.entity(id).unwrap()).unwrap();
+            let slot = EquipmentSlot::Chest;
+            let place = ItemPlace::Equipment { entity: id, slot };
+            assert!(game.living_set_equipment(
+                living,
+                slot,
+                Some(ItemStack::new("minecraft:diamond_chestplate", 1))
+            ));
+            let armor = |host: &dyn mod_api::ServerHost| {
+                living.attribute_value(host, "minecraft:armor").unwrap()
+            };
+            let before = armor(game);
+            assert!(before >= 8.0);
+            for (commit_child, gravity) in [(false, 0.1), (true, 0.2)] {
+                let rolled_back = game.transaction(|host, tx| {
+                    place
+                        .edit(host, tx, |stack| {
+                            stack
+                                .apply_components(
+                                    &[(
+                                        "!minecraft:attribute_modifiers".into(),
+                                        Tag::compound(Vec::<(&str, Tag)>::new()),
+                                    )]
+                                    .into(),
+                                )
+                                .unwrap();
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        armor(host),
+                        before,
+                        "quiet edit must not recollect the worn stack"
+                    );
+                    let taken = place.resource(host).unwrap();
+                    let child = host.transaction(|host, tx| {
+                        assert_eq!(place.extract(host, tx, &taken, 1), 1);
+                        assert!(armor(host) < before);
+                        assert!(living.set_attribute_base(host, "minecraft:gravity", gravity));
+                        // This disjoint write invalidates the live map. Rollback must use
+                        // the updated seed and restore armor without asking the item again.
+                        assert!(living.set_attribute_base(host, "minecraft:max_health", 30.0));
+                        commit_child.then_some(()).ok_or(())
+                    });
+                    assert_eq!(child.is_ok(), commit_child);
+                    assert_eq!(
+                        living.attribute_base(host, "minecraft:gravity"),
+                        Some(gravity)
+                    );
+                    if !commit_child {
+                        assert_eq!(
+                            armor(host),
+                            before,
+                            "child abort restores the still-active modifiers"
+                        );
+                        assert_eq!(place.resource(host), Some(taken));
+                    }
+                    Err::<(), ()>(())
+                });
+                assert_eq!(rolled_back, Err(()));
+                assert_eq!(
+                    living.attribute_base(game, "minecraft:gravity"),
+                    Some(gravity)
+                );
+                assert_eq!(
+                    living.attribute_base(game, "minecraft:max_health"),
+                    Some(30.0)
+                );
+                assert_eq!(
+                    armor(game),
+                    before,
+                    "parent abort restores the original modifiers"
+                );
+                assert_eq!(
+                    game.mobs[0]
+                        .equipment_stacks()
+                        .get(slot as usize)
+                        .unwrap()
+                        .item
+                        .as_ref(),
+                    "minecraft:diamond_chestplate"
+                );
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn equipment_rollback_undoes_a_rebuild_after_a_quiet_edit() {
+        use mod_api::{EquipmentSlot, Tag};
+
+        with_game(|game| {
+            let entity = zombie(game);
+            let living = game.living(game.entity(entity).unwrap()).unwrap();
+            let slot = EquipmentSlot::Chest;
+            let place = ItemPlace::Equipment { entity, slot };
+            assert!(game.living_set_equipment(
+                living,
+                slot,
+                Some(ItemStack::new("minecraft:diamond_chestplate", 1))
+            ));
+            let before = place.resource(game).unwrap();
+            let armor =
+                |host: &dyn ServerHost| living.attribute_value(host, "minecraft:armor").unwrap();
+            let worn_armor = armor(game);
+            assert!(worn_armor >= 8.0);
+            let result = game.transaction(|host, tx| {
+                place
+                    .edit(host, tx, |stack| {
+                        stack
+                            .apply_components(
+                                &[(
+                                    "!minecraft:attribute_modifiers".into(),
+                                    Tag::Compound(Default::default()),
+                                )]
+                                .into(),
+                            )
+                            .unwrap();
+                    })
+                    .unwrap();
+                assert_eq!(
+                    armor(host),
+                    worn_armor,
+                    "the quiet edit does not refresh armor"
+                );
+                assert!(living.set_attribute_base(host, "minecraft:max_health", 32.0));
+                assert!(
+                    armor(host) < worn_armor,
+                    "the rebuild sees the tentative edit"
+                );
+                Err::<(), ()>(())
+            });
+            assert_eq!(result, Err(()));
+            assert_eq!(place.resource(game), Some(before));
+            assert_eq!(
+                armor(game),
+                worn_armor,
+                "rollback restores the pre-rebuild live modifiers"
+            );
+            assert_eq!(
+                living.attribute_base(game, "minecraft:max_health"),
+                Some(32.0)
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn equipment_rollback_keeps_a_later_permanent_modifier_with_the_same_id() {
+        use mod_api::{
+            AttributeModifier, AttributeOperation, EquipmentSlot, Identifier, ModifierLifetime, Tag,
+        };
+
+        with_game(|game| {
+            let entity = zombie(game);
+            let living = game.living(game.entity(entity).unwrap()).unwrap();
+            let slot = EquipmentSlot::Chest;
+            let place = ItemPlace::Equipment { entity, slot };
+            let attribute = "minecraft:gravity";
+            let modifier = "test:bonus";
+            let gravity = |host: &dyn ServerHost| living.attribute_value(host, attribute).unwrap();
+            assert!(living.set_attribute_base(game, attribute, 0.125));
+            let mut armor = ItemStack::new("minecraft:diamond_chestplate", 1);
+            armor.data_mut().set_other(
+                "minecraft:attribute_modifiers",
+                Some(Tag::List(vec![Tag::compound([
+                    ("type", Tag::String(attribute.into())),
+                    ("id", Tag::String(modifier.into())),
+                    ("amount", Tag::Double(0.25f64.to_bits())),
+                    ("operation", Tag::String("add_value".into())),
+                    ("slot", Tag::String("chest".into())),
+                ])])),
+            );
+            assert!(game.living_set_equipment(living, slot, Some(armor)));
+            assert_eq!(gravity(game), 0.375);
+            let resource = place.resource(game).unwrap();
+            game.transaction(|host, _| {
+                let child = host.transaction(|host, tx| {
+                    assert_eq!(place.extract(host, tx, &resource, 1), 1);
+                    assert_eq!(gravity(host), 0.125);
+                    assert!(living.add_attribute_modifier(
+                        host,
+                        attribute,
+                        AttributeModifier::new(
+                            Identifier::parse(modifier).unwrap(),
+                            0.5,
+                            AttributeOperation::AddValue
+                        ),
+                        ModifierLifetime::Permanent,
+                    ));
+                    Err::<(), ()>(())
+                });
+                assert_eq!(child, Err(()));
+                assert_eq!(place.resource(host), Some(resource));
+                assert_eq!(gravity(host), 0.625);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+            assert_eq!(gravity(game), 0.625);
+            let entry = saved_mob_attribute(game, entity, attribute);
+            assert_eq!(
+                entry.get("modifiers"),
+                Some(&Tag::List(vec![Tag::compound([
+                    ("id", Tag::String(modifier.into())),
+                    ("amount", Tag::Double(0.5f64.to_bits())),
+                    ("operation", Tag::String("add_value".into())),
+                ])]))
+            );
+        });
+    }
+
+    fn saved_mob_attribute(game: &super::Game<'_>, entity: u32, attribute: &str) -> mod_api::Tag {
+        use mod_api::Tag;
+        let mob = game.mobs.iter().find(|mob| mob.id == entity).unwrap();
+        let saved = sunrise_client::entity_nbt::mob_to_nbt(
+            mob,
+            [0, 0, 0, 1],
+            None,
+            None,
+            |_| None,
+            game.items(),
+        );
+        let Some(Tag::List(attributes)) = saved.get("attributes") else {
+            panic!("the mob must save its live attributes");
+        };
+        let id = Tag::String(attribute.into());
+        attributes
+            .iter()
+            .find(|entry| entry.get("id") == Some(&id))
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_same_id_gear_refresh_only_keeps_its_overwrite_on_commit() {
+        use mod_api::{
+            AttributeModifier, AttributeOperation, EquipmentSlot, Identifier, ModifierLifetime, Tag,
+        };
+
+        for commit in [false, true] {
+            with_game(|game| {
+                let entity = zombie(game);
+                let living = game.living(game.entity(entity).unwrap()).unwrap();
+                let slot = EquipmentSlot::Chest;
+                let place = ItemPlace::Equipment { entity, slot };
+                let attribute = "minecraft:max_health";
+                let modifier = "test:bonus";
+                assert!(living.set_attribute_base(game, attribute, 20.0));
+                assert!(game.living_set_equipment(
+                    living,
+                    slot,
+                    Some(ItemStack::new("minecraft:diamond_chestplate", 1))
+                ));
+                let before = place.resource(game).unwrap();
+                let mut after = None;
+                let result = game.transaction(|host, tx| {
+                    place
+                        .edit(host, tx, |stack| {
+                            let rows = Tag::List(vec![Tag::compound([
+                                ("type", Tag::String(attribute.into())),
+                                ("id", Tag::String(modifier.into())),
+                                ("amount", Tag::Double(3.0f64.to_bits())),
+                                ("operation", Tag::String("add_value".into())),
+                                ("slot", Tag::String("chest".into())),
+                            ])]);
+                            stack
+                                .apply_components(
+                                    &[("minecraft:attribute_modifiers".into(), rows)].into(),
+                                )
+                                .unwrap();
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        living.attribute_value(host, attribute),
+                        Some(20.0),
+                        "the edit is quiet"
+                    );
+                    after = place.resource(host);
+                    assert_ne!(after.as_ref(), Some(&before));
+                    assert!(living.add_attribute_modifier(
+                        host,
+                        attribute,
+                        AttributeModifier::new(
+                            Identifier::parse(modifier).unwrap(),
+                            5.0,
+                            AttributeOperation::AddValue
+                        ),
+                        ModifierLifetime::Permanent,
+                    ));
+                    assert_eq!(
+                        living.attribute_value(host, attribute),
+                        Some(23.0),
+                        "refresh applies the now-worn item"
+                    );
+                    commit.then_some(()).ok_or(())
+                });
+                assert_eq!(result.is_ok(), commit);
+                assert_eq!(
+                    place.resource(game),
+                    if commit { after } else { Some(before) }
+                );
+                assert_eq!(
+                    living.attribute_value(game, attribute),
+                    Some(if commit { 23.0 } else { 25.0 })
+                );
+                let entry = saved_mob_attribute(game, entity, attribute);
+                let permanent = Tag::List(vec![Tag::compound([
+                    ("id", Tag::String(modifier.into())),
+                    ("amount", Tag::Double(5.0f64.to_bits())),
+                    ("operation", Tag::String("add_value".into())),
+                ])]);
+                assert_eq!(entry.get("modifiers"), (!commit).then_some(&permanent));
+            });
+        }
     }
 
     /// A living entity's [`ENTITY_ITEMS`] is its equipment (#932): seven slots by
@@ -1031,16 +1697,16 @@ pub(super) mod tests {
             );
             // The armour slots take what names them for a zombie, one of it; the
             // chestplate is not for the feet, and a sword is not armour at all.
-            assert_eq!(items.capacity(host, 4, &chestplate), 1);
-            assert_eq!(items.capacity(host, 2, &chestplate), 0);
-            assert_eq!(items.capacity(host, 2, &boots), 1);
-            assert_eq!(items.capacity(host, 4, &sword), 0);
+            assert_eq!(items.capacity(host, 4, Some(&chestplate)), 1);
+            assert_eq!(items.capacity(host, 2, Some(&chestplate)), 0);
+            assert_eq!(items.capacity(host, 2, Some(&boots)), 1);
+            assert_eq!(items.capacity(host, 4, Some(&sword)), 0);
             // A hand takes a stack of anything.
-            assert_eq!(items.capacity(host, 0, &sword), 1);
+            assert_eq!(items.capacity(host, 0, Some(&sword)), 1);
 
             // An aborted transaction puts the equipment back.
             let _ = host.transaction(|host, tx| {
-                assert_eq!(items.insert(host, tx, 4, &chestplate, 1), 1);
+                assert_eq!(items.insert_at(host, tx, 4, &chestplate, 1), 1);
                 assert_eq!(
                     items.amount(host, 4),
                     1,
@@ -1051,13 +1717,14 @@ pub(super) mod tests {
             assert_eq!(items.amount(host, 4), 0, "the abort put it back");
 
             // A committed one wears it and hands it back out.
-            let _ = host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 0, &sword, 1)));
             let _ =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 4, &chestplate, 1)));
+                host.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 0, &sword, 1)));
+            let _ = host
+                .transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 4, &chestplate, 1)));
             assert_eq!(items.amount(host, 0), 1);
             assert_eq!(items.amount(host, 4), 1);
             let _ = host
-                .transaction(|host, tx| Ok::<_, ()>(items.extract(host, tx, 4, &chestplate, 1)));
+                .transaction(|host, tx| Ok::<_, ()>(items.extract_at(host, tx, 4, &chestplate, 1)));
             assert_eq!(items.amount(host, 4), 0);
             assert_eq!(items.amount(host, 0), 1);
 
@@ -1066,7 +1733,7 @@ pub(super) mod tests {
             let host: &mut dyn ServerHost = game;
             assert_eq!(items.amount(host, 4), 0);
             assert_eq!(
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 0, &sword, 1))),
+                host.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 0, &sword, 1))),
                 Ok(0)
             );
         });
@@ -1099,7 +1766,7 @@ pub(super) mod tests {
                 .capability(host, &ENTITY_ITEMS, ())
                 .unwrap();
             let _ = host.transaction(|host, tx| {
-                Ok::<_, ()>(handler.insert(
+                Ok::<_, ()>(handler.insert_at(
                     host,
                     tx,
                     4,
@@ -1152,7 +1819,7 @@ pub(super) mod tests {
             let sticks =
                 ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
             assert_eq!(
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert_any(host, tx, &sticks, 4))),
+                host.transaction(|host, tx| items.insert(host, tx, &sticks, 4)),
                 Ok(4)
             );
             assert_eq!(
@@ -1188,7 +1855,7 @@ pub(super) mod tests {
                 ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
             let host: &mut dyn ServerHost = game;
             let wrote =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 0, &sticks, 1)));
+                host.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 0, &sticks, 1)));
             assert_eq!(wrote, Ok(0));
         });
     }
@@ -1215,7 +1882,7 @@ pub(super) mod tests {
             let helmet = ItemResource::of(&helmet.try_into_api().unwrap());
             assert_eq!(items.amount(host, 39), 1);
             let take = |host: &mut dyn ServerHost| {
-                host.transaction(|host, tx| Ok::<_, ()>(items.extract(host, tx, 39, &helmet, 1)))
+                host.transaction(|host, tx| Ok::<_, ()>(items.extract_at(host, tx, 39, &helmet, 1)))
             };
             assert_eq!(take(host), Ok(0));
             // A creative player takes it off (`ArmorSlot.mayPickup`'s `isCreative`).
@@ -1267,7 +1934,7 @@ pub(super) mod tests {
                 ),
             )
             .unwrap();
-            assert_eq!(items.capacity(host, 39, &helmet), 1);
+            assert_eq!(items.capacity(host, 39, Some(&helmet)), 1);
         });
     }
 
@@ -1292,7 +1959,7 @@ pub(super) mod tests {
             let sticks =
                 ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
             let wrote =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 0, &sticks, 1)));
+                host.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 0, &sticks, 1)));
             assert_eq!(wrote, Ok(0));
         });
     }
@@ -1711,11 +2378,10 @@ pub(super) mod tests {
                 game.level_set_block(level, [0, 64, 0], chest.unwrap(), flags),
                 Ok(true)
             );
-            let mut player = guest(1);
-            player.carried = Some(ItemStack::new("minecraft:emerald", 9));
-            game.lan.as_mut().unwrap().hub.guests.push(player);
+            let host = game.lan.as_mut().unwrap();
+            host.hub.guests.push(guest(1));
             let title = sunrise_core::nbt::Tag::String("chest".into());
-            game.lan.as_mut().unwrap().hub.open_container(
+            host.hub.open_container(
                 1,
                 "minecraft:generic_9x3",
                 title,
@@ -1724,6 +2390,10 @@ pub(super) mod tests {
                 vec![None; 27],
                 None,
             );
+            // Opening a window leaves the inventory's cursor parked; seed the chest menu's.
+            host.hub.guests.update(0, |guest| {
+                guest.carried = Some(ItemStack::new("minecraft:emerald", 9));
+            });
             let menu = menu_of(game);
             // Slot 0 is the chest's first, 27 the inventory's 9 and 54 the hotbar's first.
             let (chest, inventory, hotbar) = (
@@ -2090,7 +2760,7 @@ pub(super) mod tests {
             let sticks =
                 ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
             let aborted = host.transaction(|host, tx| {
-                assert_eq!(items.insert_any(host, tx, &sticks, 70), 70);
+                assert_eq!(items.insert(host, tx, &sticks, 70), Ok(70));
                 Err::<(), ()>(())
             });
             assert!(aborted.is_err());
@@ -2099,8 +2769,7 @@ pub(super) mod tests {
             // `Inventory.add`: onto the selected stack (4 more), then the same item in order
             // (54 more), then the first empty slot (the other 12); not onto the stone.
             let host: &mut dyn ServerHost = game;
-            let went =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert_any(host, tx, &sticks, 70)));
+            let went = host.transaction(|host, tx| items.insert(host, tx, &sticks, 70));
             assert_eq!(went, Ok(70));
             let after = &inventories(game)[0];
             assert_eq!(after[4], Some(ItemStack::new("minecraft:stick", 64)));
@@ -2110,7 +2779,7 @@ pub(super) mod tests {
             // Index 39 is the head: a stick doesn't go there.
             let host: &mut dyn ServerHost = game;
             let head =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 39, &sticks, 1)));
+                host.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 39, &sticks, 1)));
             assert_eq!(head, Ok(0));
         });
     }
@@ -2134,8 +2803,8 @@ pub(super) mod tests {
                     let still = from.resource(host, *index).as_ref() == Some(&offered)
                         && from.amount(host, *index) == stack.count;
                     if !still
-                        || from.extract(host, tx, *index, &offered, stack.count) != stack.count
-                        || to.insert_any(host, tx, &offered, stack.count) != stack.count
+                        || from.extract_at(host, tx, *index, &offered, stack.count) != stack.count
+                        || to.insert(host, tx, &offered, stack.count) != Ok(stack.count)
                     {
                         return Err(());
                     }
@@ -2290,14 +2959,13 @@ pub(super) mod tests {
             let sticks =
                 ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
             let aborted = host.transaction(|host, tx| {
-                assert_eq!(items.insert_any(host, tx, &sticks, 70), 70);
+                assert_eq!(items.insert(host, tx, &sticks, 70), Ok(70));
                 Err::<(), ()>(())
             });
             assert!(aborted.is_err());
             assert!(game.carts[0].items.iter().all(Option::is_none));
             let host: &mut dyn ServerHost = game;
-            let went =
-                host.transaction(|host, tx| Ok::<_, ()>(items.insert_any(host, tx, &sticks, 70)));
+            let went = host.transaction(|host, tx| items.insert(host, tx, &sticks, 70));
             assert_eq!(went, Ok(70));
             assert_eq!(
                 game.carts[0].items[0],
@@ -2385,10 +3053,10 @@ pub(super) mod tests {
         fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
             self.held.lock().unwrap().as_ref().map_or(0, |(_, n)| *n)
         }
-        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
+        fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&ItemResource>) -> u32 {
             64
         }
-        fn insert(
+        fn insert_at(
             &self,
             _: &mut dyn ServerHost,
             _: &mod_api::Transaction,
@@ -2414,7 +3082,7 @@ pub(super) mod tests {
                 }
             }
         }
-        fn extract(
+        fn extract_at(
             &self,
             _: &mut dyn ServerHost,
             _: &mod_api::Transaction,
@@ -2535,10 +3203,10 @@ pub(super) mod tests {
             fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
                 0
             }
-            fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
+            fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: Option<&ItemResource>) -> u32 {
                 64
             }
-            fn insert(
+            fn insert_at(
                 &self,
                 _: &mut dyn ServerHost,
                 _: &mod_api::Transaction,
@@ -2548,7 +3216,7 @@ pub(super) mod tests {
             ) -> u32 {
                 amount
             }
-            fn extract(
+            fn extract_at(
                 &self,
                 _: &mut dyn ServerHost,
                 _: &mod_api::Transaction,
@@ -2849,24 +3517,24 @@ pub(super) mod tests {
                     .capability(host, &ENTITY_ITEMS, ())
                     .unwrap();
                 assert_eq!(items.size(host), 7);
-                assert_eq!(items.capacity(host, 4, &chestplate), 1);
-                assert_eq!(items.capacity(host, 5, &helmet), 1);
+                assert_eq!(items.capacity(host, 4, Some(&chestplate)), 1);
+                assert_eq!(items.capacity(host, 5, Some(&helmet)), 1);
                 assert_eq!(
                     items.capacity(
                         host,
                         4,
-                        &ItemResource::of(
+                        Some(&ItemResource::of(
                             &ItemStack::new("minecraft:iron_sword", 1)
                                 .try_into_api()
                                 .unwrap()
-                        )
+                        ))
                     ),
                     0
                 );
 
                 // An aborted insert leaves the stand as it was.
                 let _ = host.transaction(|host, tx| {
-                    assert_eq!(items.insert(host, tx, 4, &chestplate, 1), 1);
+                    assert_eq!(items.insert_at(host, tx, 4, &chestplate, 1), 1);
                     assert_eq!(items.amount(host, 4), 1);
                     Err::<(), ()>(())
                 });
@@ -2886,8 +3554,9 @@ pub(super) mod tests {
                     .unwrap()
                     .capability(host, &ENTITY_ITEMS, ())
                     .unwrap();
-                let _ = host
-                    .transaction(|host, tx| Ok::<_, ()>(items.insert(host, tx, 4, &chestplate, 1)));
+                let _ = host.transaction(|host, tx| {
+                    Ok::<_, ()>(items.insert_at(host, tx, 4, &chestplate, 1))
+                });
             }
             let through_setter = game.living(game.entity(41).unwrap()).unwrap();
             assert!(game.living_set_equipment(
@@ -2910,7 +3579,7 @@ pub(super) mod tests {
                     .capability(host, &ENTITY_ITEMS, ())
                     .unwrap();
                 let came = host.transaction(|host, tx| {
-                    Ok::<_, ()>(items.extract(host, tx, 4, &chestplate, 1))
+                    Ok::<_, ()>(items.extract_at(host, tx, 4, &chestplate, 1))
                 });
                 assert_eq!(came, Ok(1));
                 assert_eq!(items.amount(host, 4), 0);
@@ -2944,7 +3613,7 @@ pub(super) mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_scratch_stack_lives_in_its_transaction_and_keeps_its_item() {
-        use mod_api::{FLUIDS, ITEM_FLUIDS, move_resources};
+        use mod_api::{FLUIDS, ITEM_FLUIDS, resource_util::move_resources};
         with_game(|game| {
             let level = with_cauldron(game);
             let cauldron = game.world.block(2, 64, 0);
@@ -2969,7 +3638,7 @@ pub(super) mod tests {
                 // Filling it would make it a water bucket, another item: refused.
                 let block = level.capability(host, &FLUIDS, [2, 64, 0], None).unwrap();
                 let held = place.capability(host, &ITEM_FLUIDS).unwrap();
-                let filled = move_resources(host, &block, &held, |_| true, 1000, tx);
+                let filled = move_resources(host, &block, &held, |_| true, 1000, Some(tx));
                 assert_eq!(filled, Ok(0));
                 Ok::<_, ()>(host.scratch_take(tx, &place))
             });
@@ -3073,7 +3742,7 @@ pub(super) mod tests {
     #[test]
     #[ignore = "daily"]
     fn one_by_one_shows_one_bucket_of_sixteen_and_fills_one() {
-        use mod_api::{FLUIDS, ITEM_FLUIDS, move_resources};
+        use mod_api::{FLUIDS, ITEM_FLUIDS, resource_util::move_resources};
         with_game(|game| {
             let level = with_cauldron(game);
             let mut player = guest(1);
@@ -3087,8 +3756,9 @@ pub(super) mod tests {
             assert_eq!(one.amount(host), 1);
             let block = level.capability(host, &FLUIDS, [2, 64, 0], None).unwrap();
             let bucket = one.capability(host, &ITEM_FLUIDS).unwrap();
-            let moved = host
-                .transaction(|host, tx| move_resources(host, &block, &bucket, |_| true, 1000, tx));
+            let moved = host.transaction(|host, tx| {
+                move_resources(host, &block, &bucket, |_| true, 1000, Some(tx))
+            });
             assert_eq!(moved, Ok(1000));
             let held = game.lan.as_ref().unwrap().hub.guests[0].inventory.clone();
             assert_eq!(held[0], Some(ItemStack::new("minecraft:bucket", 15)));

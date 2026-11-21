@@ -2,13 +2,16 @@
 // catalog-order: 0028
 
 pub trait Hooks {
-    /// Draw block `block`'s screen at `origin` (its top left, GUI pixels),
-    /// over a plain panel with its slots' frames and under the items and
-    /// labels, from the menu's data slots `data` (the block entity's `data`
-    /// on the server): data slots are 16-bit on the wire as in vanilla (a
-    /// bigger value wraps), and `data` is empty until the server's first
-    /// values arrive, so read it with `get`. Draw with `event.draw.sprite`,
+    /// Draw the screen of mod menu type `menu` at `origin` (its top left, GUI
+    /// pixels), over a plain panel with its slots' frames and under the items
+    /// and labels, from the open window's data slots `data`. A block-backed
+    /// menu still carries the block entity's values as vanilla signed shorts;
+    /// a blockless menu carries the full signed `i32` from its opener and
+    /// `MenuRef::set_data_slot`. Data is empty until the server's first values
+    /// arrive, so read it with `get`. Draw with `event.draw.sprite`,
     /// `event.draw.fill` and `event.draw.text`.
+    /// `block` is the mod block whose menu it is, as in `screen` (including
+    /// menus and blocks in a content package served by this mod via `served_by`).
     /// `pos` is the open menu's block position, as reported by the server
     /// (or the clicked block for a server without menu-extra support).
     /// It is `None` for a menu opened without a block position. Read the
@@ -20,15 +23,16 @@ pub trait Hooks {
     /// `origin` is the panel's top-left in the same coordinates. The pointer may
     /// be outside the panel; use these frame values rather than caching a size.
     #[hook(
-        version = 3,
+        version = 5,
         side = "client",
         contract = "listen",
-        scope = "block_entity",
-        key = "block",
+        scope = "menu",
+        key = "menu",
         neoforge = "none (see screen)"
     )]
     fn screen_draw(
-        block: &str,
+        menu: &str,
+        block: Option<&str>,
         pos: Option<[i32; 3]>,
         data: &[i32],
         draw: &mut dyn DrawContext,

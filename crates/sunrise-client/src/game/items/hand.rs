@@ -338,10 +338,17 @@ impl Game<'_> {
     }
     /// `handleKeybinds`' number keys: keys 1 to 9 in that order, one click of each
     /// (`keyHotbarSlots[i].consumeClick`), so the highest key clicked this tick wins and a
-    /// key's further clicks wait for the next ticks.
+    /// key's further clicks wait for the next ticks. A creative player holding the load or
+    /// save toolbar key loads or saves that toolbar instead (load first when both are held).
     pub(super) fn select_queued_hotbar(&mut self) {
-        for (slot, clicks) in self.hotbar_presses.iter_mut().enumerate() {
-            if clicks.take_tick() > 0 {
+        for slot in 0..self.hotbar_presses.len() {
+            if self.hotbar_presses[slot].take_tick() == 0 {
+                continue;
+            }
+            let load = self.creative && self.mapped_key_down("key.loadToolbarActivator");
+            if load || (self.creative && self.mapped_key_down("key.saveToolbarActivator")) {
+                self.hotbar_load_or_save(slot, load);
+            } else {
                 self.selected = slot;
             }
         }

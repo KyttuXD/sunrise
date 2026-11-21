@@ -30,8 +30,10 @@ impl Game<'_> {
         if fields.items.len() < slots {
             fields.items.resize(slots, None);
         }
-        let normalized_items = (slots == 0 && !entity.items.is_empty())
-            .then(|| sunrise_client::save::encode_items(&entity.items, self.res.items()));
+        let normalized_items = (slots == 0 && !entity.items.is_empty()).then(|| {
+            sunrise_client::save::block_entity_encode::mod_items(entity, self.res.items())
+                .unwrap_or_else(|| sunrise_core::nbt::Tag::List(Vec::new()))
+        });
         if let Some(items) = &normalized_items {
             fields.nbt.insert("Items".into(), items.clone());
         }
@@ -79,9 +81,11 @@ impl Game<'_> {
             revision,
             self.items(),
             "block_entity_tick",
-            if self.block_entity_tick_key.as_ref().is_none_or(|key| {
-                !key.unbalanced && key.failure_generation == self.wasm_dispatch_failures.get()
-            }) {
+            if self
+                .block_entity_tick_key
+                .as_ref()
+                .is_none_or(|key| !key.unbalanced)
+            {
                 Ok(())
             } else {
                 Err(BlockEntitySnapshotError::InvalidRevision)

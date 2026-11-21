@@ -71,7 +71,7 @@ impl Game<'_> {
             .collect();
         let sounds = result
             .sound
-            .map(|sound| (at, Arc::from(sound), 1.0, 1.0))
+            .map(|sound| (at, Arc::from(sound), mod_api::SoundSource::Blocks, 1.0, 1.0))
             .into_iter()
             .collect();
         (result.outcome, (changes, sounds))

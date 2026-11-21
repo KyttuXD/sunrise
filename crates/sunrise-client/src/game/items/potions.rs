@@ -2,8 +2,6 @@
 //! `Consumable`), throwing splash/lingering potions (`ThrownSplashPotion`),
 //! filling glass bottles (`BottleItem`), the per-tick effect application,
 //! effect attribute modifiers and the HUD effect icons (`Hud.extractEffects`).
-#[path = "potions/cloud_particle.rs"]
-mod cloud_particle;
 use super::{
     Game, Screen,
     dragon::{Breath, FightPlayer, FightWho},
@@ -276,7 +274,8 @@ pub(super) fn potion_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>)
     tag
 }
 
-pub(in crate::game) use cloud_particle::particle_options;
+use sunrise_gameplay::particle_options::custom_particle_options;
+pub(in crate::game) use sunrise_gameplay::particle_options::particle_options;
 /// An entity a cloud has affected (`AreaEffectCloud.victims`).
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Victim {
@@ -315,7 +314,7 @@ impl PotionCloud {
     pub(super) fn particle(&self) -> ParticleOptions {
         self.custom_particle
             .as_ref()
-            .and_then(cloud_particle::custom_particle_options)
+            .and_then(custom_particle_options)
             .unwrap_or_else(|| {
                 let c = |shift: u32| (self.color >> shift & 255) as f32 / 255.0;
                 ParticleOptions::colored(ParticleType::EntityEffect, [c(16), c(8), c(0), 1.0])
@@ -982,35 +981,33 @@ impl Game<'_> {
         // trigger, with the stack as drunk (before it shrinks).
         self.award_stat("used", &stack.item, 1);
         self.trigger_item("minecraft:consume_item", stack);
-        self.post_entity_event("minecraft:drink", sunrise_client::mobs::Who::Player);
         if ominous {
-            self.drink_ominous_bottle(slot, stack);
-            return true;
-        }
-        // PotionContents.onConsume: the potion's and the custom effects, at the
-        // stack's POTION_DURATION_SCALE.
-        let (lasting, now) = PlayerEffects::contents_effects(
-            &brewing::contents_effects(stack),
-            stack.potion_duration_scale(),
-        );
-        for e in lasting {
-            self.add_player_effect(e);
-        }
-        for a in now {
-            self.apply_effect_action(a);
-        }
-        if !self.creative {
-            if let Some(s) = self.stack_in_mut(slot).as_mut() {
-                s.count -= 1;
-                if s.count == 0 {
-                    *self.stack_in_mut(slot) = None;
-                }
+            self.drink_ominous_bottle(stack);
+        } else {
+            // PotionContents.onConsume: the potion's and the custom effects,
+            // at the stack's POTION_DURATION_SCALE.
+            let (lasting, now) = PlayerEffects::contents_effects(
+                &brewing::contents_effects(stack),
+                stack.potion_duration_scale(),
+            );
+            for e in lasting {
+                self.add_player_effect(e);
             }
-            let bottle = ItemStack::new("minecraft:glass_bottle", 1);
-            if self.stack_in(slot).is_none() {
-                *self.stack_in_mut(slot) = Some(bottle);
-            } else if let Some(rest) = self.add_stack_to_inventory(bottle) {
-                self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+            for a in now {
+                self.apply_effect_action(a);
+            }
+        }
+        self.apply_drink_effects(stack);
+        self.post_entity_event("minecraft:drink", sunrise_client::mobs::Who::Player);
+        if !self.creative && self.stack_in(slot) == Some(stack) {
+            self.consume_player_slot(slot, 1);
+            if !ominous {
+                let bottle = ItemStack::new("minecraft:glass_bottle", 1);
+                if self.stack_in(slot).is_none() {
+                    *self.stack_in_mut(slot) = Some(bottle);
+                } else if let Some(rest) = self.add_stack_to_inventory(bottle) {
+                    self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+                }
             }
         }
         true
@@ -1155,7 +1152,7 @@ impl Game<'_> {
             }
             EffectAction::Hurt(source, amount) => {
                 let mut canceled = false;
-                if let Some(id) = self.motion.health.damage.id(source)
+                if let Some(id) = self.health_resources.damage.id(source)
                     && let Ok(o) = p.hurt_blocking(
                         crate::game::entity::damage_level_of!(
                             self,
@@ -1163,7 +1160,7 @@ impl Game<'_> {
                             no_push,
                             None
                         ),
-                        &self.motion.health,
+                        &self.health_resources,
                         rules,
                         id,
                         amount,
@@ -1186,7 +1183,7 @@ impl Game<'_> {
                             no_push,
                             None
                         ),
-                        &self.motion.health,
+                        &self.health_resources,
                         rules,
                         id,
                         1.0,
@@ -1323,7 +1320,7 @@ impl Game<'_> {
                             .iter()
                             .filter_map(|effect| effect.registry_index),
                     );
-                    let registry = &self.motion.health.damage;
+                    let registry = &self.health_resources.damage;
                     actions.extend(changes.into_iter().filter_map(|change| {
                         match change {
                             EffectTickChange::Heal(amount) => Some(EffectAction::Heal(amount)),
@@ -2556,7 +2553,9 @@ impl Game<'_> {
                     let harm = (intensity * f64::from(6 << amp) + 0.5) as i32 as f32;
                     let source = Damage::indirect_magic(owner.who(), [at.x, at.y, at.z]);
                     let id = m.id;
-                    let attack = self.potion_attack(owner.who(), owner.guest);
+                    let mut attack = self.potion_attack(owner.who(), owner.guest);
+                    attack.projectile = self.combat.attack().projectile;
+                    attack.projectile_kind = self.combat.attack().projectile_kind;
                     let plan = self.prepare_knockback_credit(id as i32, owner.who(), &attack);
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
                     self.mobs[i].damage_by(
@@ -2777,7 +2776,7 @@ impl sunrise_client::mobs::ModEffectTicks for Game<'_> {
                 EffectTickChange::Heal(amount) => mob.heal(&self.loop_context, amount),
                 // An unregistered damage type hurts nothing.
                 EffectTickChange::Hurt(source, amount) => {
-                    let registry = &self.motion.health.damage;
+                    let registry = &self.health_resources.damage;
                     if registry.id(&source).is_some() {
                         let kind = Self::damage_kind(registry, &source);
                         mob.damage(level, amount, Damage::of(kind));
@@ -2813,6 +2812,68 @@ mod tests {
     use super::super::sculk::darkness_blend_added;
     use super::*;
     use sunrise_client::{motion::PlayerMotion, screen_effects::nausea_blend_added};
+
+    fn flt(v: f32) -> Tag {
+        Tag::Float(v.to_bits())
+    }
+
+    /// `AreaEffectCloud.updateParticle` with a `custom_particle`: the codec's
+    /// type and payload win over the potion colour; none falls back to the
+    /// entity effect in that colour.
+    #[test]
+    fn cloud_custom_particle_overrides_potion_colour() {
+        let cloud = |custom: Option<Tag>| {
+            let mut tag = Tag::compound([
+                ("Pos", Tag::List(vec![Tag::Double(0f64.to_bits()); 3])),
+                ("Radius", flt(3.0)),
+                ("Duration", Tag::Int(200)),
+            ]);
+            if let (Tag::Compound(map), Some(custom)) = (&mut tag, custom) {
+                map.insert("custom_particle".into(), custom);
+            }
+            potion_cloud_from_nbt(&tag).unwrap().1.potion.unwrap()
+        };
+        let none = cloud(None).particle();
+        assert_eq!(none.ty, ParticleType::EntityEffect);
+        let flame = cloud(Some(Tag::compound([("type", Tag::String("flame".into()))])));
+        assert_eq!(flame.particle().ty, ParticleType::Flame);
+        let dust = cloud(Some(Tag::compound([
+            ("type", Tag::String("minecraft:dust".into())),
+            ("color", Tag::List(vec![flt(1.0), flt(0.0), flt(0.0)])),
+            ("scale", flt(2.0)),
+        ])))
+        .particle();
+        assert_eq!(dust.ty, ParticleType::Dust);
+        assert_eq!(dust.color[..3], [1.0, 0.0, 0.0]);
+        assert_eq!(dust.scale, 2.0);
+        let effect = cloud(Some(Tag::compound([
+            ("type", Tag::String("entity_effect".into())),
+            ("color", Tag::Int(0x00FF_8000u32 as i32)),
+        ])))
+        .particle();
+        assert_eq!(effect.ty, ParticleType::EntityEffect);
+        assert_eq!(effect.color[..3], [1.0, 128.0 / 255.0, 0.0]);
+    }
+
+    /// `AreaEffectCloud.addAdditionalSaveData` writes `custom_particle` back.
+    #[test]
+    fn cloud_custom_particle_survives_a_save() {
+        let particle = Tag::compound([("type", Tag::String("flame".into()))]);
+        let tag = Tag::compound([
+            ("Pos", Tag::List(vec![Tag::Double(0f64.to_bits()); 3])),
+            ("Radius", flt(3.0)),
+            ("Duration", Tag::Int(200)),
+            ("custom_particle", particle.clone()),
+        ]);
+        let (at, cloud) = potion_cloud_from_nbt(&tag).unwrap();
+        let _ = at;
+        let saved = potion_cloud_to_nbt(&cloud, [1, 2, 3, 4], None);
+        let Tag::Compound(map) = saved else {
+            panic!("not a compound");
+        };
+        assert_eq!(map.get(&"custom_particle".into()), Some(&particle));
+    }
+
     #[test]
     #[ignore = "daily"]
     fn lifecycle_cloud_commands_and_parked_owners() {

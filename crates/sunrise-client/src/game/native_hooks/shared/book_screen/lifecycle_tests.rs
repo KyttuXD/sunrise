@@ -93,7 +93,9 @@ fn entering_inventory_requests_catalogue_for_preinstalled_bound_screen() {
                 layout_revision: 4,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: "bound:block".into(),
+                menu: "bound:menu".into(),
+                block: Some("bound:block".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::RecipeBookLayout::registered_screen("bound:menu").unwrap(),
@@ -123,7 +125,63 @@ fn entering_inventory_requests_catalogue_for_preinstalled_bound_screen() {
         });
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn a_registered_recipe_book_screen_opens_for_a_blockless_menu() {
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("bound", Box::new(BoundBookMod))].into();
+    sunrise_client::containers::with_mod_menu_types(
+        [(
+            "bound:menu".into(),
+            "bound".into(),
+            3,
+            0,
+            vec![1],
+            vec![0],
+            None,
+            None,
+            true,
+            None,
+        )],
+        || {
+            mod_platform::testing::with_mods(mods, || {
+                crate::game::native_entity_refs::tests::with_client_game(|game| {
+                    mod_api::__private::resolve_menus(["bound:menu"]).unwrap();
+                    game.open_native_screen(
+                        (i32::MIN, 0, 0),
+                        None,
+                        7,
+                        "bound:menu",
+                        Some(sunrise_protocol::menu_extra::Message {
+                            window: 7,
+                            pos: None,
+                            data: Vec::new(),
+                        }),
+                    );
+                    let opened = game
+                        .mod_screen
+                        .as_ref()
+                        .expect("blockless book screen opens");
+                    assert_eq!(opened.window, 7);
+                    assert_eq!(opened.menu, "bound:menu");
+                    assert_eq!(opened.block, None);
+                    assert_eq!(
+                        opened
+                            .screen
+                            .recipe_book
+                            .as_ref()
+                            .map(mod_api::RecipeBookTypeKey::as_str),
+                        Some("bound:book")
+                    );
+                    assert_eq!(game.native_hidden_slots("bound:menu", None, 3), vec![2]);
+                });
+            });
+        },
+    );
+}
+
 const STONE: &str = "minecraft:stone";
+const MENU: &str = "minecraft:generic_9x1";
 fn geometry(game: &Game<'_>) -> ((f32, f32), Vec<(usize, [f32; 4])>) {
     let batch = sunrise_client::hud::HudBatch::new([1280, 720], game.settings.gui_scale_inputs());
     let layout = game.built_container(&batch).expect("cached container");
@@ -160,7 +218,9 @@ fn authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen() {
                 layout_revision: 0,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: "minecraft:stone".into(),
+                menu: "geometry:menu".into(),
+                block: Some("minecraft:stone".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -339,7 +399,9 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
                 layout_revision: 0,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: "minecraft:stone".into(),
+                menu: "minecraft:generic_9x1".into(),
+                block: Some("minecraft:stone".into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -372,7 +434,7 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
 
             // A render hook moves it after this frame's build: drawing and
             // hit-testing both still use the old place this frame.
-            assert!(game.set_screen_slot(STONE, 0, Some([48.0, 60.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 0, Some([48.0, 60.0])).is_ok());
             assert_eq!(game.slot_position(300), (8.0, 18.0));
             assert_eq!(game.slot_at(&batch, 600.0, 340.0), None);
             assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
@@ -400,27 +462,27 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
 
             // Repeating the position, or the declared one, rebuilds nothing.
             let builds = crate::game::container_layout::LAYOUT_CONSTRUCTIONS.with(|c| c.get());
-            assert!(game.set_screen_slot(STONE, 0, Some([48.0, 60.0])).is_ok());
-            assert!(game.set_screen_slot(STONE, 1, Some([26.0, 18.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 0, Some([48.0, 60.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 1, Some([26.0, 18.0])).is_ok());
             game.build_screen();
             assert_eq!(
                 crate::game::container_layout::LAYOUT_CONSTRUCTIONS.with(|c| c.get()),
                 builds
             );
-            assert!(!game.set_screen_slot(STONE, 2, Some([1.0, 1.0])).is_ok());
-            assert!(!game.set_screen_slot(STONE, 9, Some([1.0, 1.0])).is_ok());
+            assert!(!game.set_screen_slot(MENU, 2, Some([1.0, 1.0])).is_ok());
+            assert!(!game.set_screen_slot(MENU, 9, Some([1.0, 1.0])).is_ok());
             assert_eq!(geometry(game), after);
 
             // Overlaps resolve by menu index: the container slot over the hotbar's
             // first slot (8, 142) and over the main inventory's first (8, 84).
-            assert!(game.set_screen_slot(STONE, 0, Some([8.0, 142.0])).is_ok());
-            assert!(game.set_screen_slot(STONE, 1, Some([8.0, 84.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 0, Some([8.0, 142.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 1, Some([8.0, 84.0])).is_ok());
             game.build_screen();
             assert_eq!(game.slot_at(&batch, 561.0, 420.0), Some(300));
             assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(301));
 
             // A slot beyond the image takes the click instead of making it an outside click.
-            assert!(game.set_screen_slot(STONE, 0, Some([200.0, 20.0])).is_ok());
+            assert!(game.set_screen_slot(MENU, 0, Some([200.0, 20.0])).is_ok());
             game.build_screen();
             game.cursor = (555.0 + 200.0, 277.0 + 22.0);
             assert_eq!(game.target_at(&batch), (Some(300), false));
@@ -451,7 +513,9 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
                 layout_revision: 0,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: STONE.into(),
+                menu: MENU.into(),
+                block: Some(STONE.into()),
+                mod_type: None,
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
@@ -479,46 +543,47 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
             assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
 
             // Hidden by a render hook: still there this frame, gone from the next build.
-            assert_eq!(game.set_screen_slot(STONE, 0, None), Ok(()));
-            assert_eq!(ScreensClientHost::screen_slot(game, STONE, 0), None);
+            assert_eq!(game.set_screen_slot(MENU, 0, None), Ok(()));
+            assert_eq!(ScreensClientHost::screen_slot(game, MENU, 0), None);
             assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
             game.build_screen();
             assert_eq!(game.slot_at(&batch, 560.0, 295.0), None);
             assert!(!geometry(game).1.iter().any(|(id, _)| *id == 300));
             assert_eq!(game.native_screen_slots(), Some(vec![301]));
-            assert_eq!(game.native_screen_slot_count(), Some(1));
+            // The 36 player slots and the remaining visible container slot.
+            assert_eq!(game.slot_count(), 37);
             assert_eq!(game.native_screen_slot(0), None);
 
             // Shown again where the mod puts it.
-            assert_eq!(game.set_screen_slot(STONE, 0, Some([48.0, 60.0])), Ok(()));
-            assert_eq!(game.screen_slot(STONE, 0), Some([48.0, 60.0]));
+            assert_eq!(game.set_screen_slot(MENU, 0, Some([48.0, 60.0])), Ok(()));
+            assert_eq!(game.screen_slot(MENU, 0), Some([48.0, 60.0]));
             game.build_screen();
             assert_eq!(game.slot_at(&batch, 600.0, 340.0), Some(300));
             assert_eq!(game.native_screen_slots(), Some(vec![300, 301]));
-            assert_eq!(game.screen_slot(STONE, 1), Some([26.0, 18.0]));
+            assert_eq!(game.screen_slot(MENU, 1), Some([26.0, 18.0]));
 
             // Refusals, each by name, and nothing changes.
             let before = geometry(game);
             assert_eq!(
-                game.set_screen_slot(STONE, 2, Some([1.0, 1.0])),
+                game.set_screen_slot(MENU, 2, Some([1.0, 1.0])),
                 Err(HiddenAtOpen)
             );
-            assert_eq!(game.set_screen_slot(STONE, 3, None), Err(NoSuchSlot));
+            assert_eq!(game.set_screen_slot(MENU, 3, None), Err(NoSuchSlot));
             assert_eq!(
-                game.set_screen_slot(STONE, 0, Some([f32::NAN, 0.0])),
+                game.set_screen_slot(MENU, 0, Some([f32::NAN, 0.0])),
                 Err(BadPosition)
             );
-            assert_eq!(game.set_screen_slot("other:block", 0, None), Err(NoScreen));
-            assert_eq!(game.screen_slot("other:block", 0), None);
+            assert_eq!(game.set_screen_slot("other:menu", 0, None), Err(NoScreen));
+            assert_eq!(game.screen_slot("other:menu", 0), None);
             // Hiding a slot hidden at open is already so.
-            assert_eq!(game.set_screen_slot(STONE, 2, None), Ok(()));
+            assert_eq!(game.set_screen_slot(MENU, 2, None), Ok(()));
             game.build_screen();
             assert_eq!(geometry(game), before);
 
             // With the screen closed there is no screen to change.
             game.screen = Screen::Playing;
-            assert_eq!(game.set_screen_slot(STONE, 0, None), Err(NoScreen));
-            assert_eq!(game.screen_slot(STONE, 0), None);
+            assert_eq!(game.set_screen_slot(MENU, 0, None), Err(NoScreen));
+            assert_eq!(game.screen_slot(MENU, 0), None);
         });
     });
 }
@@ -551,7 +616,9 @@ fn a_bound_books_catalogue_survives_slot_moves_and_hides() {
                     layout_revision: nonce,
                     key: (i32::MIN, 0, 0),
                     window: 1,
-                    block: "bound:block".into(),
+                    menu: "bound:menu".into(),
+                    block: Some("bound:block".into()),
+                    mod_type: None,
                     data: Vec::new(),
                     extra: None,
                     screen: mod_api::RecipeBookLayout::registered_screen("bound:menu").unwrap(),
@@ -596,12 +663,21 @@ fn a_bound_books_catalogue_survives_slot_moves_and_hides() {
             };
             assert!(kept(game));
 
-            // A move and a hide, built, and the retry check that clears a stale window.
-            assert_eq!(
-                game.set_screen_slot("bound:block", 0, Some([30.0, 40.0])),
-                Ok(())
-            );
-            assert_eq!(game.set_screen_slot("bound:block", 1, None), Ok(()));
+            // The book declaration, not a screen part, gives the mod its slot controls.
+            {
+                let _call =
+                    mod_api::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                        id: "bound",
+                        hook: "render_gui_post",
+                        part: None,
+                    });
+                assert_eq!(game.screen_slot("bound:menu", 0), Some([8.0, 18.0]));
+                assert_eq!(
+                    game.set_screen_slot("bound:menu", 0, Some([30.0, 40.0])),
+                    Ok(())
+                );
+                assert_eq!(game.set_screen_slot("bound:menu", 1, None), Ok(()));
+            }
             game.build_screen();
             game.check_mod_book_placement_timeout();
             game.ensure_mod_book_catalog();

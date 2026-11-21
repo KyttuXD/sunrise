@@ -788,12 +788,6 @@
       "canonical_path": "crate::world::custom_spawners::SpawnerKind"
     },
     {
-      "name": "StackError",
-      "path": "crate::item::item_stack::StackError",
-      "hash": "e7f3dc8561be3e31",
-      "canonical_path": "crate::item::item_stack::StackError"
-    },
-    {
       "name": "StatType",
       "path": "crate::item::types::StatType",
       "hash": "24743f4b7e1c51fd",
@@ -902,7 +896,8 @@
     "crate::content::payloads::ConnectionPhase",
     "crate::content::payloads::PayloadDirection",
     "crate::content::payloads::PayloadPhase",
-    "crate::content::payloads::PeerPolicy"
+    "crate::content::payloads::PeerPolicy",
+    "crate::item::item_stack::StackError"
   ],
   "manual_contract_changes": {
     "AttachmentError": {

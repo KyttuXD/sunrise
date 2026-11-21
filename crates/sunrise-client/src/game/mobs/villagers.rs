@@ -360,7 +360,10 @@ impl Game<'_> {
                     continue;
                 }
                 let item = &e.stack.item;
-                let wants = villager::food_points(world_items!(self), item) > 0
+                let wants = e
+                    .stack
+                    .villager_food(world_items!(self).get(item))
+                    .is_some()
                     || picks_up.as_ref().is_some_and(|t| t.contains(&**item))
                     || requested.iter().any(|key| key == &**item);
                 let fits =
@@ -434,7 +437,10 @@ impl Game<'_> {
                     continue;
                 }
                 let item = e.stack.item.clone();
-                let wants = villager::food_points(world_items!(self), &item) > 0
+                let wants = e
+                    .stack
+                    .villager_food(world_items!(self).get(&item))
+                    .is_some()
                     || picks_up.as_ref().is_some_and(|t| t.contains(&*item))
                     || requested.iter().any(|key| key == &*item);
                 if !wants {

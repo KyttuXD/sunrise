@@ -57,7 +57,7 @@ impl Game<'_> {
         self.set_event_ai_target(mob, Some(target), player);
     }
 
-    fn item_in_tag(&self, tag: &str, item: &str) -> bool {
+    pub(in crate::game) fn item_in_tag(&self, tag: &str, item: &str) -> bool {
         self.res
             .items()
             .item_tags

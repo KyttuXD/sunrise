@@ -15,20 +15,25 @@
 //!   usual range), so `log` and `log10` are [`exact`]'s, which glibc's miss
 //!   by far more. `exp` is the stub's own algorithm
 //!   ([`hotspot_exp`]), whose results are not always correctly rounded.
-//!   The others use the platform libm, which rounds like the stubs for nearly
-//!   every argument; Windows' libm (Microsoft's) rounds `sin` and `cos`
-//!   differently for about 3% of arguments, so there they are correctly
-//!   rounded instead ([`exact`]), as Intel's stubs are for all but about 0.1%.
+//!   `sin`, `cos` and `tan` are the stubs' own algorithms (`intel_trig`),
+//!   whose results are not always correctly rounded either. `pow` uses the
+//!   platform libm, which rounds like the stub for nearly every argument.
 //! - On AArch64 only `sin` and `cos` are intrinsics, which compute fdlibm's
 //!   `sin` and `cos` with fused multiply-adds ([`aarch64`]). Everything else
 //!   is `StrictMath`, which the Java SE API defines as fdlibm 5.3's results
 //!   ([`fdlibm`]).
+//! - Other targets (wasm32, 32-bit x86) follow x86-64 except for `sin`, `cos`
+//!   and `tan`, which there are the platform libm's; Windows' libm
+//!   (Microsoft's) rounds `sin` and `cos` differently for about 3% of
+//!   arguments, so there they are correctly rounded instead ([`exact`]).
 //!
 //! So these functions return what vanilla returns on the same machine, on
 //! Linux and on an Apple silicon Mac alike.
 
 pub mod fdlibm;
 pub mod hotspot_exp;
+#[cfg(target_arch = "x86_64")]
+pub mod intel_trig;
 
 /// `Math.sin` and `Math.cos` as HotSpot computes them on AArch64: fdlibm's
 /// algorithm with fused multiply-adds, on every platform.
@@ -54,7 +59,8 @@ pub fn round_f32(a: f32) -> i32 {
 pub enum Platform {
     /// HotSpot on AArch64: fdlibm with fused multiply-adds for `sin`/`cos`.
     Aarch64,
-    /// Windows: correctly rounded `sin`, `cos`, `log` and `log10`.
+    /// Windows: Microsoft's libm where jmath calls the platform's (`pow`,
+    /// `cbrt`), and off x86-64 correctly rounded `sin` and `cos`.
     Windows,
     /// The platform libm.
     Libm,
@@ -73,7 +79,11 @@ pub const PLATFORM: Platform = if cfg!(target_arch = "aarch64") {
 pub fn sin(x: f64) -> f64 {
     match PLATFORM {
         Platform::Aarch64 => aarch64::sin(x),
+        #[cfg(target_arch = "x86_64")]
+        Platform::Windows | Platform::Libm => intel_trig::sin(x),
+        #[cfg(not(target_arch = "x86_64"))]
         Platform::Windows => exact::sin(x),
+        #[cfg(not(target_arch = "x86_64"))]
         Platform::Libm => x.sin(),
     }
 }
@@ -82,7 +92,11 @@ pub fn sin(x: f64) -> f64 {
 pub fn cos(x: f64) -> f64 {
     match PLATFORM {
         Platform::Aarch64 => aarch64::cos(x),
+        #[cfg(target_arch = "x86_64")]
+        Platform::Windows | Platform::Libm => intel_trig::cos(x),
+        #[cfg(not(target_arch = "x86_64"))]
         Platform::Windows => exact::cos(x),
+        #[cfg(not(target_arch = "x86_64"))]
         Platform::Libm => x.cos(),
     }
 }
@@ -91,6 +105,9 @@ pub fn cos(x: f64) -> f64 {
 pub fn tan(x: f64) -> f64 {
     match PLATFORM {
         Platform::Aarch64 => libm::tan(x),
+        #[cfg(target_arch = "x86_64")]
+        Platform::Windows | Platform::Libm => intel_trig::tan(x),
+        #[cfg(not(target_arch = "x86_64"))]
         Platform::Windows | Platform::Libm => x.tan(),
     }
 }
@@ -174,8 +191,8 @@ pub fn round(x: f64) -> i64 {
 }
 
 /// `sin`, `cos`, `log` and `log10` correctly rounded, as Java's x86-64
-/// intrinsics nearly always are (`sin` and `cos` serve Windows, whose libm
-/// rounds them otherwise). Double-double arithmetic (two `f64`s
+/// intrinsics nearly always are (`sin` and `cos` serve Windows off x86-64,
+/// whose libm rounds them otherwise). Double-double arithmetic (two `f64`s
 /// per value): `x` reduced by a four-part pi/2 (`log`: split into a power of
 /// two and a mantissa near 1), a short series checked against an error bound,
 /// and where the bound leaves the rounding open, the full series with its

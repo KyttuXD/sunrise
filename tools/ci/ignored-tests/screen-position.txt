@@ -1,1 +1,0 @@
-sunrise-client game::native_hooks::screen_position_tests::screen_draw_receives_open_blocks_position lib daily resources

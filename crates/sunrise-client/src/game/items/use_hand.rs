@@ -250,7 +250,9 @@ impl Game<'_> {
                     } else {
                         empty_template_ran = true;
                         let player = self.use_context();
+                        let actor = self.interacting_loot_entity();
                         self.with_block_use_level(|b, level, ticks| {
+                            level.interacting = Some(actor.clone());
                             b.use_without_item(level, ticks, state, block_hit, player)
                         })
                     };
@@ -624,7 +626,7 @@ impl Game<'_> {
             item: stack.item.to_string(),
             can_use_game_master_blocks: self.can_use_game_master_blocks(),
         };
-        let Some((resolved, state)) = self.place_item_block(&ctx, true) else {
+        let Some(placed) = self.place_item_block(&ctx, true, &stack)? else {
             self.process_level_events()?;
             // BlockItem.useOn: a consumable that could not be placed is used,
             // which ItemStack.useOn counts as a use of the item.
@@ -636,40 +638,8 @@ impl Game<'_> {
             }
             return Ok(true);
         };
-        let pos = resolved.pos;
+        let pos = placed.context.pos;
         let target = [pos.x, pos.y, pos.z];
-        let game_master = self.can_use_game_master_blocks();
-        let state = self.lectern_placed(target, state, &stack, game_master)?;
-        let state = self.apply_item_block_state(target, state, &stack)?;
-        let key = (target[0], target[1], target[2]);
-        if !self.world.block_entities.stateful_entity(state.0)
-            && let Some(entity) = self.new_block_entity_for_state(state)
-        {
-            self.world.block_entities.insert(key, entity);
-        }
-        if self.world.block_entities.get(&key).is_some() {
-            self.apply_placed_item(target, &stack, game_master);
-            // Block.setPlacedBy.
-            match self.world.block_entities.get(&key) {
-                Some(BlockEntity::CommandBlock(_)) => {
-                    let data = stack.data().is_some_and(|d| {
-                        d.other(sunrise_client::block_entity_item::BLOCK_ENTITY_DATA)
-                            .is_some()
-                    });
-                    self.command_block_placed(key, !data);
-                }
-                Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
-                Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
-                Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
-                Some(BlockEntity::Jukebox(_)) => self.jukebox_placed(target, &stack),
-                Some(BlockEntity::Sign(sign)) if !sign.waxed && sign.front.has_editable_text() => {
-                    self.open_text_edit(key, true)
-                }
-                _ => {}
-            }
-        }
-        let placer = self.native_acting_player();
-        self.block_item_placed(&stack, placer, &resolved);
         // BlockItem.place's SUCCESS: the client swings with its own prediction.
         self.swing_arm_predicted();
         // BlockItem.place's sound is among the level events;
@@ -685,10 +655,7 @@ impl Game<'_> {
             }
         }
         self.process_level_events()?;
-        // BlockItem.place: the used statistic and the placed_block trigger.
         self.award_stat("used", &stack.item, 1);
-        self.trigger_block("minecraft:placed_block", target, &stack);
-        self.check_wither_spawn(target)?;
         self.check_golem_spawn(target)?;
         self.consume_placed(&stack);
         // ItemStack.useOn applies the pre-use stack's component side effects
@@ -704,6 +671,7 @@ impl Game<'_> {
         consumed: &sunrise_client::items::ItemStack,
         effect: &sunrise_client::items::ConsumeEffect,
         mob: Option<mod_api::LivingRef>,
+        user: mod_api::EntityRef,
     ) -> Option<bool> {
         use sunrise_client::items::ConsumeEffect;
         Some(match effect {
@@ -802,9 +770,9 @@ impl Game<'_> {
                 self.native_queue_sound(level, sound, at, source, 1.0, 1.0, None)?;
                 true
             }
-            ConsumeEffect::Native { kind, data } => {
-                consume_effect_dispatch::dispatch(kind, || self.native_consume_effect(kind, data))
-            }
+            ConsumeEffect::Native { kind, data } => consume_effect_dispatch::dispatch(kind, || {
+                self.native_consume_effect(kind, data, consumed, user)
+            }),
         })
     }
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3, as
@@ -921,13 +889,7 @@ impl Game<'_> {
             && !infinity
             && let Some(i) = arrow_slot
         {
-            let cell = self.stack_in_mut(i);
-            if let Some(s) = cell.as_mut() {
-                s.count -= 1;
-                if s.count == 0 {
-                    *cell = None;
-                }
-            }
+            self.consume_player_slot(i, 1);
         }
     }
     /// `EnchantmentHelper.processProjectileCount` and `processProjectileSpread`

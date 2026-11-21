@@ -1,4 +1,4 @@
-/// Per-type behaviour switches derived from vanilla classes and tags.
+/// Per-type behaviour switches.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Flags {
     /// WaterAnimal / fish: not affected by fluid physics (swims with its own control).
@@ -15,7 +15,9 @@ pub struct Flags {
     /// LivingEntity.omnidirectionalAirMover (bees and parrots).
     pub omnidirectional: bool,
     pub fire_immune: bool,
-    /// EntityTypeTags.BURN_IN_DAYLIGHT
+    /// Cleared by default, like `EntityType.Builder` before `notInPeaceful`.
+    pub not_in_peaceful: bool,
+    /// Membership of the `minecraft:burn_in_daylight` entity type tag, resolved at load.
     pub burns_in_day: bool,
     pub undead: bool,
     pub breathes_water: bool,
@@ -24,4 +26,8 @@ pub struct Flags {
     /// Hurt by water (endermen, blazes, striders out of lava, snow golems).
     pub water_sensitive: bool,
     pub animal: bool,
+    /// Told `entity_tick_pre` and `entity_tick_post` alone, right before and after its own
+    /// tick: a mod named the type (`Registrar::entity_tick_each`). Set when the game loads its
+    /// mob types; false for a type no mod names.
+    pub tick_alone: bool,
 }

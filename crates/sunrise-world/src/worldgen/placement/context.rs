@@ -197,6 +197,23 @@ pub trait PlacementContext {
         Err(PlacementQueryError::Unavailable)
     }
 
+    /// A live `LiquidBlockContainer.placeLiquid` override can also make a
+    /// non-waterloggable template block a liquid container.
+    fn has_template_liquid_override(&self, _state: crate::registry::BlockStateId) -> bool {
+        false
+    }
+
+    /// Restore fluid directly, without asking the container's acceptance
+    /// predicate. `None` is an unhandled restore; use the vanilla template.
+    fn place_template_liquid(
+        &mut self,
+        _position: [i32; 3],
+        _state: crate::registry::BlockStateId,
+        _fluid: crate::fluid::FluidState,
+    ) -> Option<bool> {
+        None
+    }
+
     /// Request destruction with no responsible entity. The world adapter owns
     /// replacement, drops, block entities and updates; false is a rejected request.
     fn destroy_block_without_entity(

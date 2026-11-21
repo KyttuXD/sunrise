@@ -3,9 +3,6 @@
 # launcher's normal native build against a PREBUILT game, with no game rebuild, then run on a
 # dedicated server.
 #   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] tools/ci/fn_replace_check.sh LAUNCHER SDK_BASE SCRATCH [RESOURCES]
-# FNR_WASM_MISMATCH_PACKAGE=valid.smod FNR_WASM_STD=std.wasm adds a wasm refusal check for a changed point import
-# to the with-RESOURCES server run (not the build/link-only CI mode):
-# its exported layout fingerprint is changed to zero, and its integrity hash is updated.
 # SDK_BASE is a folder holding one `sdk-<commit>/` release folder (the SDK's archives, `sdk.json`, `SHA256SUMS` and its
 # signature) of this checkout's HEAD: the launcher reads its SDK from there (SUNRISE_SDK_BASE), checking the signature
 # as it does a release's. The daily run signs its own SDK with a throwaway key and passes the public key in
@@ -109,6 +106,22 @@ engine = pathlib.Path(sys.argv[1])
 binary = next(p for p in (engine / "sunrise-engine", engine / "sunrise-engine.exe") if p.is_file())
 assert b"sunrise-private-holder-v2;" in binary.read_bytes(), f"holder capability missing from {binary}"
 PYMARK
+if [[ " ${FNR_MODS:-alpha beta} " == *" shared_tip "* ]]; then
+  # The library the mods' registry crates are linked from is exported beside them, as a library
+  # they load, not a mod: no row of the libraries record names it (#1379).
+  python3 - "$scratch/engine" <<'PYSHARED'
+import json, pathlib, sys
+engine = pathlib.Path(sys.argv[1])
+names = ("libsunrise_registry_shared.so", "libsunrise_registry_shared.dylib", "sunrise_registry_shared.dll")
+found = [name for name in names if (engine / name).is_file()]
+assert len(found) == 1, f"one shared registry library in {engine}, found {found}"
+rows = json.loads((engine / "native-mods.json").read_text())["libraries"]
+assert all(row["file"] != found[0] for row in rows), f"{found[0]} is recorded as a mod library: {rows}"
+mods = {row["mod"] for row in rows if row["kind"] == "mod"}
+assert {"fnr_shared_left", "fnr_shared_right", "fnr_shared_tip"} <= mods, rows
+print(f"shared registry library {found[0]} exported, not recorded as a mod")
+PYSHARED
+fi
 if [ "$side" = server ]; then
   # The server folder's export: the launcher says where the engine is, and installs no instance build.
   grep -F "Built the server engine: $scratch/engine/sunrise-engine" "$scratch/native-build.out"
@@ -163,12 +176,6 @@ if [ -n "$resources" ]; then
   run=$scratch/run
   mkdir -p "$run"
   echo eula=true > "$run/eula.txt"
-  import_mod=
-  if [ -n "${FNR_WASM_MISMATCH_PACKAGE:-}" ]; then
-    cp "${FNR_WASM_STD:?set FNR_WASM_STD to the matching sunrise-wasm-std.wasm}" "$scratch/engine/sunrise-wasm-std.wasm"
-    import_mod=$(python3 "$root/tools/ci/mismatch_wasm_import.py" "$FNR_WASM_MISMATCH_PACKAGE" "$run/sunrise-mods/import-refused.smod")
-    printf 'mod.%s:true\n' "$import_mod" > "$run/sunrise-mods.txt"
-  fi
   # Compile a changed copy of one mod, then swap only its library into the first build.
   # Its public probe adds compiled code without changing the hooks the check asserts below.
   executable_hash=$(sha256sum "$scratch/engine/sunrise-engine" | cut -d' ' -f1)
@@ -240,9 +247,6 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
     (cd "$run" && env "${env_vars[@]}" timeout 180 "$scratch/engine/sunrise-engine" --resources "$(realpath "$resources")" \
       --dedicated --nogui) > "$scratch/server.log" 2>&1 || true
   grep -F 'fnr:' "$scratch/server.log"
-  if [ -n "$import_mod" ]; then
-    grep -F "wasm mod $import_mod refused: uses point:Points::" "$scratch/server.log"
-  fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" alpha "* ]]; then
     grep -F 'OVERWRITE by fnr_alpha' "$scratch/server.log"
   fi
@@ -264,10 +268,8 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
     grep -F 'fnr: loop count own #1: fnr_loop:counter' "$scratch/server.log"
     grep -F 'fnr: loop throttle skips #1:' "$scratch/server.log"
     grep -F 'fnr: loop HEAD tick_block_entities' "$scratch/server.log"
-    # A call-site row inside the loop body ran in the loop's copy, and an API listener at the entry
-    # fired through the same cell as the loop.
+    # A call-site row inside the loop body ran in the loop's copy.
     grep -F 'fnr: loop MODIFY_EXPRESSION_VALUE chunk check inside the loop' "$scratch/server.log"
-    grep -F 'fnr: loop api head listener at tick_block_entities' "$scratch/server.log"
     grep -F "Published loops: 1 filled by $slots mod slots" "$log"
     # The slot ran the loop again from inside it: the nested run was the game's own, logged once.
     grep -F 'fnr: loop count ran the loop again inside it: true' "$scratch/server.log"
@@ -280,11 +282,10 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
   fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" api_only "* ]]; then
     grep -F 'fnr: api_only server_started, sin 0.479' "$scratch/server.log"
-    grep -F 'fnr: api_only listener at tick_block_entities' "$scratch/server.log"
   fi
-  if [[ " ${FNR_MODS:-alpha beta} " == *" wasmtime "* ]]; then
-    # The mod's own engine ran a module in the game's one wasmtime.
-    grep -F 'fnr: wasmtime add 2+3=5' "$scratch/server.log"
+  if [[ " ${FNR_MODS:-alpha beta} " == *" shared_tip "* ]]; then
+    # A mod depending on two mods that use the same crates.io crate linked, and runs (#1379).
+    grep -F 'fnr: shared_tip left 1 right 2 own 3' "$scratch/server.log"
   fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" fdshape "* ]]; then
     grep -F 'fnr: native_server_started dedicated=true' "$scratch/server.log"

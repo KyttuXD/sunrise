@@ -3,29 +3,23 @@
 //! Each hook does nothing while its extra is off and no mod uses it.
 #[path = "extras/mouse_tweaks.rs"]
 pub(in crate::game) mod mouse_tweaks;
-#[path = "extras/reconnect.rs"]
-mod reconnect;
 #[path = "extras/sorting.rs"]
 mod sorting;
 
 use super::{Game, Screen};
 use std::time::Duration;
 use sunrise_client::{
-    extras::{Cps, FpsCounter, fov_target},
-    extras_hud::Corners,
+    extras::{Corner, Cps, FpsCounter, fov_target},
+    extras_hud::{self, Corners},
     hud::HudBatch,
-    reconnect::Tracker,
 };
 use winit::event::MouseButton;
 
 #[derive(Default)]
 pub(super) struct ExtrasState {
     fps: FpsCounter,
-    /// Left and right mouse buttons: held, and their clicks.
-    mouse: [bool; 2],
+    /// Attack and use click rates.
     cps: [Cps; 2],
-    /// Auto-reconnect's attempts at the current server.
-    reconnect: Tracker,
     /// Captured before pre listeners; shared by the draw and post listeners.
     pub(super) frame_partial_ticks: Option<(f32, f32)>,
 }
@@ -41,21 +35,14 @@ impl Game<'_> {
             MouseButton::Right => 1,
             _ => return,
         };
-        self.extras.mouse[i] = pressed;
         // For mods (`input.clicks-per-second`, `native_clicks`).
         if pressed {
             let now = self.extras_now();
             self.extras.cps[i].click(now);
         }
     }
-    /// Once per frame: the frame's time, and keys let go behind screens.
+    /// Once per frame: update frame timing and the extra HUD state.
     pub(super) fn extras_frame(&mut self, elapsed: Duration) {
-        // Under agent control the window may lack focus without pausing.
-        let focused = self.focused || self.control.is_some();
-        let playing = self.screen == Screen::Playing && self.title.is_none() && focused;
-        if !playing {
-            self.extras.mouse = [false; 2];
-        }
         // For mods (`render.frame-stats`, `native_frame_rate`).
         let now = self.extras_now();
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
@@ -78,10 +65,6 @@ impl Game<'_> {
         let now = self.extras_now();
         let [l, r] = &mut self.extras.cps;
         (l.per_second(now) as u32, r.per_second(now) as u32)
-    }
-    /// Whether the attack and use buttons are held.
-    pub(super) fn mouse_held(&self) -> [bool; 2] {
-        self.extras.mouse
     }
     /// A mod's zoom in effect (`native_zoom`): (factor, smooth, turning
     /// scale); none is 1.
@@ -114,6 +97,12 @@ impl Game<'_> {
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
         self.draw_pvp_hud(batch, &mut corners);
         self.native_render_gui_post(batch, &mut corners);
+        // The layers crates registered (`sunrise_hooks::hud`): none, no canvas.
+        let layers = sunrise_hooks::hud::engine::all();
+        if !layers.is_empty() {
+            let shown = Corner::ALL.map(|corner| !(self.debug && corner == Corner::TopLeft));
+            extras_hud::draw_layers(layers, batch, &self.gui.atlas, &mut corners, shown);
+        }
     }
     /// The height the status effect icons take at the top right
     /// (`Hud.extractEffects`: beneficial at y 1, harmful at y 26).

@@ -55,15 +55,6 @@ impl Game<'_> {
             );
             return;
         }
-        // The chat filter's mute commands (game/interface/chat_filter.rs), on servers that filter.
-        if crate::game::chat_filter::MUTE_COMMANDS.contains(&words[0]) && host.hub.chat_filter_on()
-        {
-            if let Some(mut host) = self.lan.take() {
-                self.guest_mute_command(&mut host, conn, &words);
-                self.lan = Some(host);
-            }
-            return;
-        }
         // A native mod's command, for every player its level allows,
         // whether the world allows commands or not (game/modding/native_server.rs).
         let allowed = self.options.dedicated.is_some() || self.allow_commands();

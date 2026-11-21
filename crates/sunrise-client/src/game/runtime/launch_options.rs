@@ -176,7 +176,7 @@ impl Options {
     }
     pub(super) fn from_launch(launch: LaunchArguments) -> Result<Option<Self>> {
         let installation_side = launch.installation_side();
-        let LaunchArguments { context, rest } = launch;
+        let LaunchArguments { context, rest, .. } = launch;
         let sibling = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?

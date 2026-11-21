@@ -477,7 +477,7 @@ impl Game<'_> {
                 }
                 Item::Slider { id, x, y, w, .. } if ui::hovered(cursor, *x, *y, *w, 20.0) => {
                     let (id, x, w) = (*id, *x, *w);
-                    let value = ui::slider_value(x, w, cursor.0);
+                    let value = ui::slider_value(x, w, cursor.0) as f32;
                     if let Some(mut screen) = self.block_editor.take() {
                         screen.dragging = Some((id, x, w));
                         screen.editor.slide(id, value);
@@ -508,7 +508,7 @@ impl Game<'_> {
         if let Some(screen) = self.block_editor.as_mut()
             && let Some((id, sx, sw)) = screen.dragging
         {
-            screen.editor.slide(id, ui::slider_value(sx, sw, x));
+            screen.editor.slide(id, ui::slider_value(sx, sw, x) as f32);
         }
     }
 

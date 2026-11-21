@@ -79,9 +79,9 @@ fn the_block_maps_drive_fire_weathering_waxing_and_scraping_until_a_reload_remov
         let sim = b.sim(&mut w.level, &mut w.ticks);
         assert_eq!(sim.ignite_odds(end_stone, below, Direction::Up), 0);
         assert_eq!(sim.burn_odds(end_stone, below, Direction::Up), 0);
-        assert_eq!(sim.copper_next(exposed), Some(weathered));
-        assert_eq!(sim.copper_next(copper), Some(exposed_copper));
-        assert_eq!(sim.copper_stepped(oxidized, false), Some(weathered));
+        assert_eq!(b.weathering_next(exposed), Some(weathered));
+        assert_eq!(b.weathering_next(copper), Some(exposed_copper));
+        assert_eq!(b.weathering_previous(oxidized), Some(weathered));
         assert_eq!(b.mapped_waxed(stairs), None);
         assert_eq!(b.mapped_waxed(copper), None);
         assert_eq!(b.mapped_unwaxed(mossy), None);
@@ -112,10 +112,10 @@ fn the_block_maps_drive_fire_weathering_waxing_and_scraping_until_a_reload_remov
         assert_eq!(sim.ignite_odds(end_stone, below, Direction::Up), 5);
         assert_eq!(sim.burn_odds(end_stone, below, Direction::Up), 300);
         // The map's next stage, properties kept; an unmapped block keeps vanilla's.
-        assert_eq!(sim.copper_next(exposed), Some(oxidized));
-        assert_eq!(sim.copper_next(copper), Some(exposed_copper));
+        assert_eq!(b.weathering_next(exposed), Some(oxidized));
+        assert_eq!(b.weathering_next(copper), Some(exposed_copper));
         // One scrape back goes through the derived inverse.
-        assert_eq!(sim.copper_stepped(oxidized, false), Some(exposed));
+        assert_eq!(b.weathering_previous(oxidized), Some(exposed));
     }
     assert_eq!(fire(&mut w), (5, true));
     // The fire hook comes before the map.

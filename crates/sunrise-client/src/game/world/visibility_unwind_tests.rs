@@ -33,7 +33,6 @@ pub(super) fn with_save_game(root: &std::path::Path, test: impl FnOnce(&mut Game
             player_idle_timeout: 0,
             stop: false,
             autosave: true,
-            whitelist_bypass: Vec::new(),
         })));
         game.build_registries();
         game.ui.dispatcher = chat::SessionDispatcher(Arc::new(

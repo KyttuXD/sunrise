@@ -370,7 +370,7 @@ impl Item {
             _ => None,
         }
     }
-    fn slider(self, s: &Settings) -> Option<f32> {
+    fn slider(self, s: &Settings) -> Option<f64> {
         match self {
             Item::Option(o) => o.slider_position(s),
             _ => None,
@@ -530,7 +530,7 @@ impl Screen for ControllerScreen {
             Item::Bind(_) | Item::Info(_) => Vec::new(),
         }
     }
-    fn slide(&mut self, s: &mut Settings, item: Item, position: f32) {
+    fn slide(&mut self, s: &mut Settings, item: Item, position: f64) {
         if let Item::Option(o) = item {
             o.set_slider(s, position);
         }

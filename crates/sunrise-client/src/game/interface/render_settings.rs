@@ -165,7 +165,7 @@ impl Game<'_> {
         if reload {
             self.all_sections_changed();
         }
-        self.audio.master = self.settings.master_volume;
+        self.audio.master = self.settings.master_volume as f32;
         if self.settings.sound_device != self.audio.device() {
             let _ = self.audio.set_device(&self.settings.sound_device);
         }

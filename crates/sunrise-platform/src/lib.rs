@@ -5,7 +5,7 @@
 //!
 //! Today this re-exports engine modules whole. Each one gets its own stable types as the split
 //! goes on (docs/layers.md#plan, M6). The parts that pull in large engine crates sit behind
-//! features (`world`, `protocol`, `prepare`, `server-files`), so a crate builds only what it uses.
+//! features (`world`, `server-files`, `mod-build`), so a crate builds only what it uses.
 
 /// The machine the game runs on (`sunrise-system`): OS, CPU, memory, drive, power, GPU maker and
 /// memory.
@@ -34,17 +34,6 @@ pub mod world {
     pub use sunrise_world::{compression, region};
 }
 
-/// What a server list and a profile head need of the network protocol.
-#[cfg(feature = "protocol")]
-pub mod protocol {
-    pub use sunrise_protocol::crypto::offline_uuid;
-    pub use sunrise_protocol::server_redirect;
-}
-
-/// The preparer: the game's files from the player's own Minecraft install.
-#[cfg(feature = "prepare")]
-pub use sunrise_prepare as prepare;
-
 /// A server's own files: `server.properties`, the op, white and ban lists, the user cache.
 #[cfg(feature = "server-files")]
 pub use sunrise_server_files as server_files;
@@ -57,17 +46,9 @@ pub use sunrise_java_properties as java_properties;
 /// [`hooks::register`] it before the game starts (docs/layers.md, "How a Sunrise crate plugs
 /// in"). The engine's dispatch side is not part of the API.
 pub mod hooks {
-    /// The players the game shows (`sunrise_hooks::players`): the views [`Hooks::frame`] and
-    /// [`Hooks::tick`] get, the pose a crate lays over a player's body, what goes by their names,
-    /// the crate's sprites, the camera, and what a crate draws on them.
-    pub use sunrise_hooks::players::{
-        BODY_PARTS, Badge, BodyPose, Bone, CameraOverride, CameraView, Frame, Gear, Kind, Light,
-        Look, Mark, Mesh, Motion, NameDecoration, PartPoses, Particle, Pass, PlayerDraw,
-        PlayerModel, PlayerModels, Quad, SpriteStore, Sprites, View,
-    };
     pub use sunrise_hooks::{
         Activity, Client, ClientIdentity, Dimension, GameMode, GetTheGame, Hooks, Play, Started,
-        TooLate, perf, register, seat, tunnel,
+        TooLate, connection, perf, register, seat, tunnel,
     };
 }
 
@@ -80,6 +61,12 @@ pub mod settings {
 /// Settings pages a crate adds to the options screens (docs/layers.md, "Platform registries").
 pub mod pages {
     pub use sunrise_hooks::pages::{Act, Label, Page, Place, Row, connect, register};
+}
+
+/// The volume of the audio mods make themselves (`sunrise_hooks::sound`): a crate's setting can turn
+/// it down or off.
+pub mod sound {
+    pub use sunrise_hooks::sound::set_mod_stream_gain;
 }
 
 /// The lang files with a crate's text, loaded with the game's own (docs/layers.md, "Platform
@@ -125,25 +112,24 @@ pub mod containers {
     }
 }
 
+/// The buttons a crate adds to the title screen (docs/layers.md, "Platform registries").
+pub mod title {
+    pub use sunrise_hooks::title::{Button, Opens, Refused, Title, register};
+}
+
 /// Drawing on the HUD (docs/layers.md, "Platform registries").
 pub mod hud {
-    pub use sunrise_hooks::hud::{Canvas, Corner, Layer, register};
+    pub use sunrise_hooks::hud::{Canvas, Corner, Layer, Stage, register};
 }
 
-/// The multiplayer server list as vanilla stores it (`servers.dat`): read, write, add, remove,
-/// and the lock held while it is read and written back.
-#[cfg(feature = "protocol")]
-pub mod servers {
-    pub use sunrise_protocol::servers::{
-        ServerEntry, load, lock, parse_address, prepend, remove_where, save,
-    };
+/// What the engine draws differently, per player; not [`hooks::Look`] (players::Look).
+pub mod look {
+    pub use sunrise_hooks::look::{Chat, Look, update};
 }
 
-/// Build-time mod source generation and point signature inspection.
+/// Build-time mod source generation.
 #[cfg(feature = "mod-build")]
 pub mod mod_build {
-    /// Parsing and validation of injection point signatures.
-    pub use point_shape;
     /// The shared mod API and source generator.
     pub use sunrise_mod_api_gen as api_gen;
 }

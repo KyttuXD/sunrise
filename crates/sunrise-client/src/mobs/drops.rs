@@ -429,7 +429,7 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
     if let Some(name) = m.custom_name_tag() {
         e.components.insert("minecraft:custom_name".into(), name);
     }
-    e.on_fire = m.fire_ticks > 0 && !m.kind.flags.fire_immune;
+    e.on_fire = m.is_on_fire();
     e.baby = m.is_baby();
     e.vehicle = vehicle.map(Box::new);
     if matches!(s, S::Slime | S::MagmaCube | S::SulfurCube) {

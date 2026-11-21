@@ -22,7 +22,7 @@ impl Game<'_> {
                     .map_err(ReloadStageError::DataSource)?,
             );
         }
-        self.prepare_server_reload(stack, resources)
+        self.prepare_server_reload(stack)
     }
     pub(super) fn prepare_pack_condition_reload(
         &mut self,
@@ -106,7 +106,7 @@ fn candidate_registry_files(
         .chain(stack.enabled_packs())
         .collect();
     // Admission is evaluated below, against the load-scoped conditions; no fallback.
-    let files = sunrise_client::datapack::registry_files(&packs, &keys, false, |_, _, _| true)
+    let files = sunrise_client::datapack::registry_files(&packs, &keys, |_, _| true)
         .map_err(|error| format!("{error:?}"))?
         .into_iter()
         .flat_map(|(file, versions)| {
@@ -176,9 +176,11 @@ fn candidate_registries<'a>(
         let Some(slash) = key.find(':').and_then(|colon| key[..colon].rfind('/')) else {
             continue;
         };
-        // The winning file, if its own conditions hold: an entry they turn off is not there.
-        // One whose conditions read registries or tags, which this view is still building,
-        // counts, as it may load.
+        let Some(registry) = by_folder.get(&key[..slash]) else {
+            continue;
+        };
+        // The winning registry file, if its own conditions hold: an entry
+        // they turn off is not there. Non-registry files belong to their loaders.
         // The path the loaders test it under (`data/<namespace>/<folder>/<path>.json`).
         let file_path = key[slash + 1..]
             .split_once(':')
@@ -192,19 +194,19 @@ fn candidate_registries<'a>(
             payload.is_none_or(|payload| {
                 payload.contains("\"neoforge:registered\"")
                     || payload.contains("\"neoforge:tag_empty\"")
-                    || admission.allows_file(&file, &file_path)
+                    // An admission probe is not the entry's loader. A codec
+                    // error omits it here; the owning loader will report it.
+                    || admission.allows_file_isolated(&file, &file_path).unwrap_or(false)
             })
         });
         if !admitted {
             continue;
         }
-        if let Some(registry) = by_folder.get(&key[..slash]) {
-            let id = key[slash + 1..].to_owned();
-            registries
-                .get_mut(registry)
-                .expect("named above")
-                .insert(id);
-        }
+        let id = key[slash + 1..].to_owned();
+        registries
+            .get_mut(registry)
+            .expect("named above")
+            .insert(id);
     }
     registries
 }
@@ -233,35 +235,39 @@ pub(super) fn conditions_for_mods(
         })
         .clone()?;
     let conditions = sunrise_world::conditions::LoadConditions::new(inventory.server_ids());
-    if table.is_empty() {
-        return Ok(conditions);
-    }
-    let mut enabled: std::collections::BTreeSet<_> =
-        table.values().map(|(owner, _)| owner.clone()).collect();
-    enabled.retain(|owner| sources.code_owner_enabled(owner));
-    let owned = table
-        .iter()
-        .filter(|(name, (owner, _))| name.namespace() == owner)
-        .map(|(name, (owner, _))| (name.namespace().to_owned(), owner.clone()))
-        .collect();
-    Ok(conditions.with_lookup(owned, move |name, args| {
-        let id = mod_api::Identifier::parse(name).ok()?;
-        let (owner, handler) = table.get(&id)?;
-        if !enabled.contains(owner) {
-            return Some(Ok(false));
-        }
-        let mut arguments = args.as_object().cloned().unwrap_or_default();
-        arguments.remove("type");
-        Some(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                handler.test(&mod_api::serde_json::Value::Object(arguments))
-            }))
-            .map_err(|_| format!("condition {name} (mod {owner}): handler panicked"))
-            .and_then(|answer| {
-                answer.map_err(|error| format!("condition {name} (mod {owner}): {}", error.message))
-            }),
-        )
-    }))
+    Ok(
+        conditions.with_lookup(table.iter().map(|(id, (owner, handler))| {
+            let name = id.to_string();
+            let enabled = sources.code_owner_enabled(owner);
+            let owner = owner.clone();
+            let handler = handler.clone();
+            (name.clone(), move |args: &serde_json::Value| {
+                if !enabled {
+                    return Ok(false);
+                }
+                let mut arguments = args.as_object().cloned().expect("decoded condition object");
+                arguments.remove("type");
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    mod_api::__private::contain_refusal(
+                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
+                        || handler.test(&mod_api::serde_json::Value::Object(arguments)),
+                    )
+                }))
+                .map_err(|_| format!("condition {name} (mod {owner}): handler panicked"))
+                .and_then(|contained| {
+                    contained.map_err(|refusal| {
+                        refusal.report();
+                        format!("condition {name} (mod {owner}): handler refused: {refusal}")
+                    })
+                })
+                .and_then(|answer| {
+                    answer.map_err(|error| {
+                        format!("condition {name} (mod {owner}): {}", error.message)
+                    })
+                })
+            })
+        })),
+    )
 }
 
 #[cfg(test)]

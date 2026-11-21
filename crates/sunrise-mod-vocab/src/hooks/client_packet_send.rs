@@ -4,7 +4,8 @@ pub trait Hooks {
     /// A play packet the window's game is about to send to the server (`Connection.send`):
     /// every packet of the play phase it sends, in the order it sends them, the selected slot
     /// that goes out before an attack or a use included. Not heard: what the network thread
-    /// sends itself (keep-alives, configuration pongs, cookies, the configuration phase), the answers the
+    /// sends itself (keep-alives, chunk batch acknowledgements, configuration pongs, cookies, the
+    /// configuration phase), the answers the
     /// connection sends in whichever phase it is in (a resource pack's status, a dialog's custom
     /// click action), and far terrain requests. Cancel drops the packet: the game goes on as if
     /// it had been sent, so the server never hears of it. Client-side, on any server, single
@@ -17,6 +18,7 @@ pub trait Hooks {
         contract = "cancel",
         out = "canceled",
         cancellable = false,
+        version = 2,
         neoforge = "none (NeoForge has no raw play-packet send event)"
     )]
     fn client_packet_send();

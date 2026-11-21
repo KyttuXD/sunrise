@@ -1,4 +1,4 @@
-//! Load-phase condition handlers shared by native and wasm mods.
+//! Load-phase condition handlers.
 use crate::Identifier;
 use std::{collections::BTreeMap, sync::Arc};
 type Entries = BTreeMap<Identifier, (String, Arc<dyn LoadCondition>)>;
@@ -38,15 +38,13 @@ impl From<(Identifier, String)> for ConditionError {
 /// A handler that reads the condition's JSON from a borrowed raw value.
 /// Arguments are the JSON object without `type`; validate their shape and
 /// return `ConditionError` for invalid mod input, never panic while decoding it.
-/// Called once per entry per candidate reload, before publication. Return false
-/// to omit the entry, or an error to keep the previous usable generation.
-/// An unknown ID in a mod's own namespace refuses the reload if that mod
-/// registered a handler in that namespace. Registering a foreign ID doesn't
-/// make its namespace owned. Other unknown IDs omit the file at any depth
-/// inside `not`, `and` or `or`, with one ERROR log entry per file per candidate.
-/// Recipes refuse unknown IDs regardless of namespace.
-/// A returned error or native panic refuses the candidate reload, naming the
-/// file, condition and owner. Handlers must not mutate published data.
+/// Called before publication, after all IDs in the list (including children of
+/// `not`, `and` and `or`) have been resolved. Namespace and mod presence do not
+/// change the handling of an unknown ID. Return false to omit this entry or
+/// value without an error. An unknown ID, a returned error, or a native panic
+/// refuses registry-backed data before it is installed. A simple JSON listener
+/// or data map instead logs the error and skips the entire offending file.
+/// Handlers must not mutate published data.
 pub trait LoadCondition: Send + Sync + 'static {
     /// Read and validate the raw JSON arguments for one entry.
     fn test(&self, args: &serde_json::Value) -> Result<bool, ConditionError>;
@@ -63,7 +61,7 @@ pub trait LoadConditions {
     ) -> Result<(), ConditionError>;
 }
 impl dyn LoadConditions + '_ {
-    /// Store a concrete handler through the shared native and wasm route.
+    /// Store a concrete load condition handler.
     pub fn register(
         &mut self,
         name: Identifier,

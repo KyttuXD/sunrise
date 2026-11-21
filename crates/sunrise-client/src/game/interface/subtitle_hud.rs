@@ -42,7 +42,7 @@ impl Game<'_> {
             position: v.position,
             forward: v.forwards.map(f64::from),
             up: v.up.map(f64::from),
-            multiplier: f64::from(self.settings.notification_display_time),
+            multiplier: self.settings.notification_display_time,
             background: self.settings.text_background(0.8),
             width: batch.width as i32,
             height: batch.height as i32,

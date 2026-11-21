@@ -7,9 +7,100 @@ use sunrise_core::{
 use sunrise_world::region::RegionFile;
 
 use super::{
-    Record,
-    compression_pool::{CompressionPool, compress_records, compress_records_with_pool},
+    Chunk, ChunkExtras, Compression, Encoding, LevelShape, QueuedWrite, Record,
+    compression_pool::{
+        CompressionPool, compress_record, compress_records, compress_records_with_pool,
+    },
+    write_chunk_record,
 };
+
+#[test]
+fn full_record_overflow_discards_edits_without_losing_current_chunk_data() {
+    use crate::containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields};
+    use sunrise_core::nbt::{Compound, write_named};
+
+    let (registry, biomes) = super::loot_tests::fixture();
+    let mut chunk = Chunk::empty(0, 0);
+    let pos = (1, 64, 1);
+    chunk.block_entities.push((
+        pos,
+        BlockEntity::Mod(Box::new(ModBlockEntity::new(
+            "test:machine".into(),
+            ModBlockEntityFields {
+                nbt: Compound::from([("".into(), Tag::Int(82)), ("stored".into(), Tag::Int(7))]),
+                ..Default::default()
+            },
+        ))),
+    ));
+    let edited = Compound::from([
+        ("".into(), Tag::Int(82)),
+        ("edit".into(), Tag::ByteArray(vec![9; 64 * 1024])),
+    ]);
+    let limits = Limits {
+        max_bytes: 96 * 1024,
+        ..Limits::saved()
+    };
+    // The edit fits by itself. Combined with the rest of the captured record it does not.
+    assert!(
+        write_named(
+            &NamedTag {
+                name: "".into(),
+                tag: Tag::Compound(edited.clone())
+            },
+            limits
+        )
+        .is_ok()
+    );
+    let unrelated = Tag::ByteArray(vec![11; 64 * 1024]);
+    chunk.saved = Some(Arc::new(ChunkExtras {
+        last_update: 37,
+        root: Compound::from([("test:unrelated".into(), unrelated.clone())]),
+        block_entity_save_edits: Some(Arc::new([(pos, edited)].into())),
+        ..Default::default()
+    }));
+    let encoding = Arc::new(Encoding {
+        registry: Box::leak(Box::new(registry)),
+        biomes: Arc::new(biomes),
+        items: Default::default(),
+        tables: None,
+        shape: LevelShape::OVERWORLD,
+    });
+    let record = Record::Chunk(Arc::new(chunk), encoding, None);
+    let dir = tempfile::tempdir().unwrap();
+    let mut region = RegionFile::open_writable(dir.path().join("r.0.0.mca"), true).unwrap();
+    let pos = ChunkPos::new(0, 0);
+    for (limits, compressed_overflow, admitted) in [
+        (Limits::saved(), false, true),
+        (limits, false, false),
+        (Limits::saved(), true, false),
+    ] {
+        let job = QueuedWrite::new((0, 0), record.clone(), 0);
+        let pending = job.record.clone();
+        let mut compressed = compress_record(&job.record, Compression::Zlib, 0, limits)
+            .unwrap()
+            .unwrap();
+        if compressed_overflow {
+            // Simulate an oversized compressor result without the cost of
+            // zlib encoding a large incompressible input.
+            compressed.record.compressed = vec![0; 64 * 1024 * 1024 + 1];
+        }
+        write_chunk_record(&mut region, pos, &job.record, compressed).unwrap();
+        drop(job);
+        let saved = region.read(pos).unwrap().unwrap().nbt(limits).unwrap();
+        assert_eq!(pending.tag().unwrap().as_ref(), &saved);
+        assert_eq!(saved.tag.get("LastUpdate"), Some(&Tag::Long(37)));
+        assert_eq!(saved.tag.get("test:unrelated"), Some(&unrelated));
+        let Some(Tag::List(entities)) = saved.tag.get("block_entities") else {
+            panic!("block entities missing from the record");
+        };
+        assert_eq!(entities[0].get(""), Some(&Tag::Int(82)));
+        assert_eq!(entities[0].get("edit").is_some(), admitted);
+        assert_eq!(
+            entities[0].get("stored"),
+            if admitted { None } else { Some(&Tag::Int(7)) }
+        );
+    }
+}
 
 fn sample_tag(i: i32) -> NamedTag {
     let payload: Vec<i64> = (0..((i * 131) % 1500).abs())
@@ -34,7 +125,7 @@ fn empty_and_single_chunk_compression() {
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
     let compressed = compress_records(&refs, 555);
     assert_eq!(compressed.len(), 1);
-    let record = compressed[0].as_ref().unwrap().as_ref().unwrap();
+    let record = &compressed[0].as_ref().unwrap().as_ref().unwrap().record;
     assert_eq!(record.timestamp, 555);
     let loaded = record.nbt(Limits::saved()).unwrap();
     assert_eq!(loaded, *tag);
@@ -64,8 +155,8 @@ fn parallel_compression_matches_single_threaded_fidelity() {
         .zip(single_compressed)
         .enumerate()
     {
-        let rec_pool = got_pool.unwrap();
-        let rec_single = got_single.unwrap();
+        let rec_pool = got_pool.unwrap().map(|r| r.record);
+        let rec_single = got_single.unwrap().map(|r| r.record);
         match (rec_pool, rec_single) {
             (None, None) => assert_eq!(i % 5, 2),
             (Some(p), Some(s)) => {
@@ -97,9 +188,9 @@ fn custom_worker_pool_sizes_all_produce_identical_output() {
     let res_4 = compress_records_with_pool(&refs, 12345, &pool_4);
 
     for idx in 0..records.len() {
-        let r1 = res_1[idx].as_ref().unwrap().as_ref().unwrap();
-        let r2 = res_2[idx].as_ref().unwrap().as_ref().unwrap();
-        let r4 = res_4[idx].as_ref().unwrap().as_ref().unwrap();
+        let r1 = &res_1[idx].as_ref().unwrap().as_ref().unwrap().record;
+        let r2 = &res_2[idx].as_ref().unwrap().as_ref().unwrap().record;
+        let r4 = &res_4[idx].as_ref().unwrap().as_ref().unwrap().record;
         assert_eq!(r1.compressed, r2.compressed);
         assert_eq!(r1.compressed, r4.compressed);
         assert_eq!(r1.timestamp, r2.timestamp);
@@ -126,7 +217,7 @@ fn compressed_chunks_written_to_region_file_reload_with_full_integrity() {
     assert_eq!(compressed.len(), count as usize);
 
     for (idx, ((x, z), _)) in records.iter().enumerate() {
-        let record = compressed[idx].as_ref().unwrap().as_ref().unwrap();
+        let record = &compressed[idx].as_ref().unwrap().as_ref().unwrap().record;
         region.write(ChunkPos::new(*x, *z), record).unwrap();
     }
     region.sync().unwrap();

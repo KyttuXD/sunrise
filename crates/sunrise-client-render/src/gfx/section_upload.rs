@@ -484,6 +484,27 @@ impl Renderer {
             })
             .flat_map(|(_, blocks)| blocks)
     }
+    /// `LevelRenderer.isSectionCompiledAndVisible`: the entity's section must have finished
+    /// its mesh (including empty sections) and reached the same fade threshold as block entities.
+    pub fn entity_section_visible(
+        &self,
+        [x, y, z]: [i32; 3],
+        fade_seconds: f32,
+        now: Instant,
+    ) -> bool {
+        let Some(sy) = self.layout.section_index(y) else {
+            return false;
+        };
+        let column = (x >> 4, z >> 4);
+        self.detail_columns
+            .get(&column)
+            .is_some_and(|mask| mask.contains(sy))
+            && chunk_visibility(
+                self.section_elapsed_ms((column.0, sy as i32, column.1), now),
+                fade_millis(fade_seconds),
+            ) >= CHUNK_VISIBILITY_THRESHOLD
+    }
+
     /// Whether a section may still be fading in over `fade_ms` (vanilla's chunk fade): one was
     /// uploaded more recently than that. Otherwise every section is whole.
     pub(super) fn sections_fading_in(&self, fade_ms: u64, now: std::time::Instant) -> bool {
@@ -577,6 +598,26 @@ impl Renderer {
         );
         self.shadow_visible.iter().any(|v| v.key == key)
     }
+    /// `LevelRenderer.isSectionCompiledAndVisible` for the section holding block `pos`: it
+    /// has had a mesh since its column came (an empty one too), and it is 30% through its
+    /// fade-in of `fade_ms` since its first upload. A mesh still waiting to upload is not
+    /// compiled yet.
+    pub fn section_compiled_and_visible(&self, pos: [i32; 3], fade_ms: u64) -> bool {
+        let Some(sy) = self.layout.section_index(pos[1]) else {
+            return false;
+        };
+        let key = (pos[0] >> 4, sy as i32, pos[2] >> 4);
+        let compiled = self
+            .detail_columns
+            .get(&(key.0, key.2))
+            .is_some_and(|mask| mask.contains(sy));
+        compiled_and_visible(
+            compiled,
+            self.section_uploaded.get(&key),
+            fade_ms,
+            std::time::Instant::now(),
+        )
+    }
     /// Milliseconds since `key` was uploaded; a section not in `section_uploaded` is old.
     fn section_elapsed_ms(&self, key: SectionKey, now: std::time::Instant) -> u64 {
         self.section_uploaded.get(&key).map_or(u64::MAX, |t| {
@@ -658,9 +699,9 @@ impl Renderer {
         let split = translucent_split(
             self.translucent_batching,
             self.flat.is_some() && self.flat_on,
-            pack.is_some_and(pack_post::PackPost::has_terrain),
+            pack.is_some_and(|p| p.has_terrain()),
             // One of Sunrise's own packs with `[shadow]` draws from the same lists (`shadow_view`).
-            pack.is_some_and(pack_post::PackPost::has_shadow) || self.native_shadow(),
+            pack.is_some_and(|p| p.has_shadow()) || self.native_shadow(),
         );
         if split == self.translucent_arena.is_some() {
             return;

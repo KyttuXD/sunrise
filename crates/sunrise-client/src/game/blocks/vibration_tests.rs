@@ -202,7 +202,9 @@ fn a_landing_posts_the_block_game_event_its_rule_posts() {
     let land = |game: &mut Game<'_>, state| {
         let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 5.0, 3.5)).unwrap();
         {
+            let side = game_side!(game);
             let mut world = MotionWorld {
+                side: &side,
                 entities: &[],
                 player: &mut player,
                 scene: &mut game.world,
@@ -417,7 +419,7 @@ fn a_cauldron_use_posts_its_fluid_event_after_the_sound() {
     let mut banner = ItemStack::new("minecraft:white_banner", 1);
     banner
         .data_mut()
-        .banner_patterns
+        .banner_layers_mut()
         .push(sunrise_items::banner_layer::BannerLayer::new(
             "minecraft:stripe_top",
             "minecraft:red",

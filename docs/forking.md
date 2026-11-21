@@ -7,9 +7,12 @@ are removed, not compiled behind a switch.
 
 Cosmetics, emotes, the Wardrobe and the Shop, partner ads, sponsor links and the
 official server are not part of this fork: Sunrise has no paid features, shop or
-ads. No Cargo feature restores them. CI's public-tree check
+ads. No Cargo feature restores them, and the engine has no hook to draw them: the
+player-model hooks cosmetics used (name decorations, the player-list mark, meshes
+and poses on player models, the camera pull) were removed with them. CI's public-tree check
 (`tools/check_public_tree.py`, run by `verify-static`) fails a branch that
-brings back `crates/sunrise-cosmetics`, `crates/sunrise-official-servers`, the
+brings back `crates/sunrise-cosmetics`, the game's `cosmetics` module,
+`crates/sunrise-official-servers`, the
 launcher's `partner`, `shop`, `wardrobe` and `wardrobe_page` sources, or
 the launcher's `sculk-*` assets (in sunrise-launcher, which has its own check). It looks at the current tree, not at history, so the
 commits from before the removal stay allowed. The Mods and
@@ -36,9 +39,11 @@ a telemetry placeholder or an official-build promotion in the options screen.
 | The "Start Sunrise from the launcher" screen of a game without its prepared files, with its Download button (`get_the_game` hook) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Sunrise Settings (Extras, PvP & HUD, Studio, AI Agent) and Mods (with the registry browser) | `options_ui.rs` (`Page::Sunrise` and below), `extras_ui.rs`, `extras.rs`, `pvp.rs`, `game/extras.rs` and `game/extras/`, `extras_hud.rs` | the Options screen shows vanilla's greyed Telemetry Data instead (`options_ui::SUNRISE_EXTRAS`, set in `entry.rs`) |
 | The Mods screen's Sunrise row (name, version, authors, licence, links) (`sunrise_platform::mod_rows`) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable lists Minecraft and the mods only |
+| Auto-reconnect ([extras.md](extras.md)) | crate `sunrise-reconnect` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Discord Rich Presence and its switch | crate `sunrise-discord` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Play with Friends | hosting: `game/friends.rs`, `game/friends/screen.rs`; joining: crate `sunrise-friends` (`game`) | hosting: the `friends` feature (`game/friends_off.rs` stands in); joining: only the official executable registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 | The anonymous "I'm playing" ping | crate `sunrise-heartbeat` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
+| The performance overlay (frames per second, frame times and their graph) and its Performance Overlay row on the Extras page | crate `sunrise-perf-overlay` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 
 Credits & Attribution then says where the official build is (`sunrise.plain.official`).
 

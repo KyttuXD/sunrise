@@ -10,6 +10,8 @@ the exhaustion. The player needn't reach or look at the block. It is true when t
 removed. With `into_inventory`, the drops `block_drops` leaves go to the player's inventory, and
 what doesn't fit drops from them.
 
+For a player in another level than the hook's it breaks nothing and returns false: a break lands in the world, and the hook's level is the one in place.
+
 ## A vein miner
 
 A vein miner keeps the drops of its own breaks with `block_drops`: it takes the item list and the

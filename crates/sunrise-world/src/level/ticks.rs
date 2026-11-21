@@ -26,8 +26,15 @@ pub struct Ticks {
     /// `ComparatorBlockEntity.output` per comparator position (block-entity
     /// state owned by the level; persist it with the chunk if desired).
     pub comparator_outputs: std::collections::HashMap<BlockPos, i32>,
-    /// `RedstoneTorchBlock.RECENT_TOGGLES` (position, game time).
-    pub torch_toggles: Vec<(BlockPos, i64)>,
+    /// `RedstoneTorchBlock.RECENT_TOGGLES` (position, game time), oldest
+    /// first: a torch's own ticks drop the entries older than 60.
+    pub torch_toggles: std::collections::VecDeque<(BlockPos, i64)>,
+    /// Memoized wire connection states for one `Signals` view; see
+    /// [`super::redstone::WireConnections`].
+    pub(crate) wire_connections: super::redstone::WireConnections,
+    /// Cached wire inputs for the cascade in flight; see
+    /// [`super::redstone::WireGraph`].
+    pub(crate) wire_graph: super::redstone::WireGraph,
     /// Moving-piston block entities in ticker order (render and collide
     /// moving blocks from these; see `piston_shape`).
     pub moving_pistons: Vec<(BlockPos, super::pistons::MovingPiston)>,
@@ -80,7 +87,9 @@ impl Ticks {
             random_tick_value: random_tick_seed,
             updater: NeighborUpdater::default(),
             comparator_outputs: Default::default(),
-            torch_toggles: Vec::new(),
+            torch_toggles: std::collections::VecDeque::new(),
+            wire_connections: Default::default(),
+            wire_graph: Default::default(),
             moving_pistons: Vec::new(),
             moving_piston_ids: FxHashMap::default(),
             piston_pushes: Vec::new(),

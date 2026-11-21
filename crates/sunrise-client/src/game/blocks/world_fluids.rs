@@ -11,7 +11,9 @@ use mod_api::{
 use sunrise_core::position::BlockPos;
 use sunrise_world::{
     fluid::FluidKind,
-    level::{FluidWrite, fluid_empty_sound, fluid_pickup_sound},
+    level::{
+        BucketContent, FluidChange, FluidWrite, LiquidUser, fluid_empty_sound, fluid_pickup_sound,
+    },
 };
 
 /// `FluidType.BUCKET_VOLUME`: what one source block holds.
@@ -41,6 +43,45 @@ pub(in crate::game) struct WrittenFluid {
 }
 
 impl Game<'_> {
+    /// A normal player's bucket uses the same plan as a dispenser, but lends a
+    /// transactional host to a subscribing container instead of the direct one.
+    pub(in crate::game) fn empty_player_bucket(
+        &mut self,
+        pos: BlockPos,
+        beside: Option<BlockPos>,
+        content: BucketContent,
+        sound: &str,
+        sneaking: bool,
+    ) -> Option<BlockPos> {
+        let user = self.bucket_liquid_user();
+        let Some(kind) = content
+            .fluid()
+            .filter(|_| mod_api::__private::has_scoped_hook(mod_api::HookId::PlaceLiquid))
+        else {
+            return self.with_level(|b, level, ticks| {
+                b.bucket_empty_as(level, ticks, pos, beside, content, sound, sneaking, user)
+            });
+        };
+        let mut write = self.with_level(|b, level, ticks| {
+            b.plan_bucket_pour(level, ticks, pos, beside, kind, sneaking, user)
+        })?;
+        if matches!(write.change, FluidChange::Fill(_))
+            && let Some(level) = self.level(self.dim.id())
+            && self.journalled_place_liquid(level, &write).is_some()
+        {
+            // BucketItem still empties on a container's false answer.
+            write.change = FluidChange::Fill(None);
+        }
+        self.with_level(|b, level, ticks| {
+            b.apply_bucket_pour(
+                level,
+                ticks,
+                write,
+                sound,
+                content == BucketContent::MobWater,
+            )
+        })
+    }
     /// `BucketPickup.pickupBlock` for a mod's fluid container at `pos` in the level in place,
     /// kept by transaction `tx`: the source taken, a bucket of it. None, with nothing done,
     /// where the block gives no fluid, off the level in place, or for a transaction that is not
@@ -86,14 +127,29 @@ impl Game<'_> {
         else {
             return false;
         };
-        let creative = self.creative(player);
+        let user = player
+            .and_then(|player| {
+                Some(LiquidUser {
+                    entity_id: Some(player.entity().id()),
+                    creative: self.player_is_creative(player)?,
+                })
+            })
+            .unwrap_or_default();
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        let write = self.with_level(|b, level, ticks| {
-            b.plan_fluid_place(level, ticks, at, kind, creative, validate)
-        });
-        let Some(write) = write else {
+        let Some(mut write) = self.with_level(|b, level, ticks| {
+            b.plan_bucket_pour(level, ticks, at, None, kind, false, user)
+        }) else {
             return false;
         };
+        if let FluidChange::Fill(template) = write.change {
+            let answer = self.journalled_place_liquid(level, &write);
+            if validate && !answer.unwrap_or(template.is_some()) {
+                return false;
+            }
+            if answer.is_some() {
+                write.change = FluidChange::Fill(None);
+            }
+        }
         self.journal_fluid_write(level, write, false, player);
         true
     }

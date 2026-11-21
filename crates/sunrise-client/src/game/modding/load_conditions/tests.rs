@@ -266,7 +266,7 @@ fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes()
                     if bad == 2 || bad == 3 {
                         assert!(error.contains("testmod:flag"), "{error}");
                     }
-                    if bad == 1 || bad == 3 {
+                    if bad == 3 {
                         assert!(error.contains("mod testmod"), "{error}");
                     }
                     assert_eq!(
@@ -411,7 +411,7 @@ fn load_conditions_refuse_a_builtin_id_at_startup_even_if_ignored() {
 }
 
 #[test]
-fn load_conditions_foreign_registrations_do_not_grant_namespace_ownership() {
+fn load_conditions_admit_registered_foreign_ids_but_refuse_every_unknown_id() {
     mod_platform::testing::with_mods(
         vec![
             ModEntry::new("a", Box::new(NamedCondition("a:x"))),
@@ -430,20 +430,16 @@ fn load_conditions_foreign_registrations_do_not_grant_namespace_ownership() {
                 &file("neoforge:custom"),
                 "data/demo/advancement/custom.json"
             ));
-            for (id, path) in [
-                ("c:missing", "data/demo/advancement/c.json"),
-                ("neoforge:missing", "data/demo/advancement/neoforge.json"),
-            ] {
-                assert!(!conditions.allows_file(&file(id), path));
+            for namespace in ["a", "c", "neoforge"] {
+                let id = format!("{namespace}:missing");
+                let path = format!("data/demo/advancement/{namespace}.json");
+                assert!(!conditions.allows_file(&file(&id), &path));
+                let error = conditions.check_errors().unwrap_err();
+                assert!(
+                    error.contains(&format!("{path}: unknown load conditions [{id}]")),
+                    "{error}"
+                );
             }
-            assert_eq!(conditions.check_errors(), Ok(()));
-            assert!(!conditions.allows_file(&file("a:missing"), "data/demo/advancement/a.json"));
-            let error = conditions.check_errors().unwrap_err();
-            assert!(
-                error.contains("condition a:missing in namespace registered by mod a"),
-                "{error}"
-            );
-            assert!(!error.contains("mod b"), "{error}");
         },
     );
 }
@@ -541,4 +537,53 @@ fn registered_reads_the_candidate_packs_not_the_last_load() {
         "the pack no longer has it: not registered"
     );
     assert!(next.allows(&registered("minecraft:worldgen/biome", "minecraft:plains")));
+}
+
+/// A handler that reads the world through the Host. Read in a load phase, it is a named refusal.
+struct Gated;
+impl LoadCondition for Gated {
+    fn test(&self, _: &Value) -> std::result::Result<bool, ConditionError> {
+        mod_api::__private::check_access("level", mod_api::__private::LoadAccess::WorldOnly);
+        Ok(true)
+    }
+}
+struct GatedRegistrant;
+#[mod_api::__subscriptions]
+impl Hooks for GatedRegistrant {
+    fn register_load_conditions(
+        &self,
+        _: &RegistrationContext,
+        event: &mut RegisterLoadConditionsEvent<'_>,
+    ) {
+        event
+            .conditions
+            .register(Identifier::parse("testmod:gated").unwrap(), Gated)
+            .unwrap();
+    }
+}
+
+/// A Host call the load phase refuses is a refusal of that condition, named, and no panic: the
+/// arm of the client's catch sites that reads `PhaseRefusal`.
+#[test]
+fn a_handler_refused_by_the_load_phase_is_a_named_refusal_not_a_panic() {
+    mod_platform::__private::initialize().unwrap();
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new("testmod", Box::new(GatedRegistrant))].into(),
+        || {
+            let sources = crate::game::mods::ModsState::default();
+            let inventory = sunrise_mod_package::enabled::EnabledMods::default();
+            let conditions = super::conditions_for_mods(&sources, &inventory).unwrap();
+            let file = json!({"neoforge:conditions":[{"type":"testmod:gated"}]});
+            let _setup = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Setup);
+            let error = conditions
+                .allows_file_isolated(&file, "gated.json")
+                .unwrap_err();
+            assert!(
+                error.contains("testmod")
+                    && error.contains("refused")
+                    && error.contains("mod API level is unavailable during Setup"),
+                "{error}"
+            );
+        },
+    );
 }

@@ -22,7 +22,7 @@ fn in_bounds(at: [f64; 3]) -> bool {
 
 /// Whether level event `id` can play with `data`: the events that carry a
 /// block state (2001, 2014, 3008) need `data` to be one of the `states`.
-fn level_event_data_ok(id: i32, data: i32, states: usize) -> bool {
+pub(super) fn level_event_data_ok(id: i32, data: i32, states: usize) -> bool {
     !matches!(id, 2001 | 2014 | 3008) || usize::try_from(data).is_ok_and(|d| d < states)
 }
 

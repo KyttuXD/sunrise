@@ -10,6 +10,18 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 use sunrise_core::position::ChunkPos;
+
+/// A record exceeded the region format's compressed size admission limit.
+#[derive(Debug)]
+pub struct CompressedChunkLimit;
+
+impl std::fmt::Display for CompressedChunkLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("compressed chunk limit exceeded")
+    }
+}
+
+impl std::error::Error for CompressedChunkLimit {}
 use {
     crate::compression::{Compression, invalid},
     sunrise_core::{
@@ -40,12 +52,27 @@ impl ChunkRecord {
         timestamp: u32,
         limits: Limits,
     ) -> io::Result<Self> {
-        let bytes = nbt::write_named(root, limits).map_err(|e| invalid(e.to_string()))?;
+        // `RegionFileStorage.write` is `NbtIo.write`, which has no nesting limit: a tree deeper
+        // than the read limit is written, and its read fails (see `nbt`).
+        let write = Limits {
+            max_depth: nbt::DISK_WRITE_NESTING_GUARD.max(limits.max_depth),
+            ..limits
+        };
+        let bytes = nbt::write_named(root, write).map_err(|e| invalid(e.to_string()))?;
         Ok(Self {
             compression,
             compressed: compression.encode(&bytes)?,
             timestamp,
         })
+    }
+    fn check_compressed_size(&self) -> io::Result<()> {
+        if self.compressed.len() > MAX_COMPRESSED {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                CompressedChunkLimit,
+            ));
+        }
+        Ok(())
     }
     /// `RegionFileStorage.read`: the root read straight off the decompressing
     /// stream, so bytes after it, and a damaged stream past it, are never read.
@@ -308,9 +335,7 @@ impl RegionFile {
     /// they are. A chunk's last sector is padded with zeros.
     pub fn write(&mut self, chunk: ChunkPos, record: &ChunkRecord) -> io::Result<()> {
         let i = slot(self.position, chunk)?;
-        if record.compressed.len() > MAX_COMPRESSED {
-            return Err(invalid("compressed chunk limit exceeded"));
-        }
+        record.check_compressed_size()?;
         let required = (record.compressed.len() + 5).div_ceil(SECTOR);
         let external = required >= 256;
         let sectors = if external { 1 } else { required };
@@ -353,6 +378,15 @@ impl RegionFile {
             return Err(e);
         }
         let old = self.offsets[i];
+        if !external
+            && old != 0
+            && crate::crash_fixture::selected()
+                == Some(crate::crash_fixture::CrashFixture::SaveRegion(chunk))
+            && directory.ends_with("region")
+        {
+            // Kill with the new payload written, but the header still pointing to the old one.
+            crate::crash_fixture::await_save_kill("region");
+        }
         self.offsets[i] = (start as u32) << 8 | sectors as u32;
         self.timestamps[i] = record.timestamp;
         self.write_header()?;
@@ -585,9 +619,7 @@ impl RegionWriter {
         if self.offsets[i] != 0 {
             return Err(invalid("chunk already written"));
         }
-        if record.compressed.len() > MAX_COMPRESSED {
-            return Err(invalid("compressed chunk limit exceeded"));
-        }
+        record.check_compressed_size()?;
         let required = (record.compressed.len() + 5).div_ceil(SECTOR);
         let external = required >= 256;
         let sectors = if external { 1 } else { required as u32 };
@@ -621,6 +653,12 @@ impl RegionWriter {
         self.timestamps[i] = record.timestamp;
         self.next_sector += sectors;
         Ok(())
+    }
+
+    /// The `c.X.Z.mcc` files of the oversized chunks written so far, next to
+    /// the destination.
+    pub(crate) fn externals(&self) -> &[PathBuf] {
+        &self.externals
     }
 
     pub fn finish(mut self) -> io::Result<()> {
@@ -780,5 +818,23 @@ mod tests {
         assert_eq!(saved.compressed, record.compressed);
         assert_eq!(saved.timestamp, record.timestamp);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `NbtIo.write` has no nesting limit, so a chunk tree deeper than the read limit is
+    /// written whole; the read then fails with the depth error and the bytes stay on disk.
+    #[test]
+    fn a_tree_deeper_than_the_read_limit_is_written_and_fails_to_read() {
+        use sunrise_core::nbt::Tag;
+        let mut tag = Tag::compound([("leaf", Tag::Byte(1))]);
+        for _ in 0..600 {
+            tag = Tag::compound([("next", tag)]);
+        }
+        let root = NamedTag {
+            name: Default::default(),
+            tag,
+        };
+        let record = ChunkRecord::from_nbt(&root, Compression::None, 1, Limits::saved()).unwrap();
+        let error = record.nbt(Limits::saved()).unwrap_err();
+        assert!(error.to_string().contains("depth"), "{error}");
     }
 }

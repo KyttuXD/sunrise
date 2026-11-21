@@ -499,11 +499,12 @@ macro_rules! world {
     }};
 }
 #[test]
+#[ignore = "daily"]
 fn block_observation_follows_successful_commits_only() {
     use std::cell::RefCell;
     #[derive(Debug, PartialEq)]
     enum Observation {
-        Block(BlockPos, BlockStateId, BlockStateId),
+        Block(BlockPos, BlockStateId, BlockStateId, i32),
         Neighbor,
     }
     struct Observer {
@@ -528,11 +529,17 @@ fn block_observation_follows_successful_commits_only() {
         fn game_time(&self) -> i64 {
             self.inner.game_time()
         }
-        fn observe_block_changed(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+        fn observe_block_changed(
+            &self,
+            pos: BlockPos,
+            old: BlockStateId,
+            new: BlockStateId,
+            flags: i32,
+        ) {
             assert_eq!(self.block_state(pos), new);
             self.seen
                 .borrow_mut()
-                .push(Observation::Block(pos, old, new));
+                .push(Observation::Block(pos, old, new, flags));
         }
         fn observe_neighbor_changed(
             &self,
@@ -545,7 +552,7 @@ fn block_observation_follows_successful_commits_only() {
             self.seen.borrow_mut().push(Observation::Neighbor);
         }
     }
-    let Some(f) = fixture() else { return };
+    let f = fixture().expect("prepared resources for the block observation test");
     let b = &f.behaviours;
     let mut level = Observer {
         inner: TestLevel::new(b),
@@ -557,7 +564,7 @@ fn block_observation_follows_successful_commits_only() {
     let stone = f.registry.default_state("minecraft:stone").unwrap();
     assert!(b.set_block(&mut level, &mut ticks, pos, stone, flags::UPDATE_ALL));
     let seen = level.seen.borrow();
-    assert_eq!(seen[0], Observation::Block(pos, b.air(), stone));
+    assert_eq!(seen[0], Observation::Block(pos, b.air(), stone, 3));
     assert!(seen[1..].contains(&Observation::Neighbor));
     drop(seen);
     level.seen.borrow_mut().clear();
@@ -573,10 +580,16 @@ fn block_observation_follows_successful_commits_only() {
         flags::UPDATE_ALL
     ));
     assert!(level.seen.borrow().is_empty());
-    assert!(b.set_block(&mut level, &mut ticks, pos, b.air(), flags::UPDATE_ALL));
+    assert!(b.set_block(
+        &mut level,
+        &mut ticks,
+        pos,
+        b.air(),
+        flags::UPDATE_CLIENTS | flags::UPDATE_KNOWN_SHAPE,
+    ));
     assert_eq!(
-        level.seen.borrow()[0],
-        Observation::Block(pos, stone, b.air())
+        *level.seen.borrow(),
+        [Observation::Block(pos, stone, b.air(), 18)]
     );
 }
 
@@ -1625,6 +1638,90 @@ fn wire_connects_only_to_the_block_that_answers_should_redstone_wire_connect_to(
     assert_eq!(connection(&mut w), before);
 }
 
+/// `affectNeighborsAfterRemoval` calls `updatePowerStrength` with the wire's
+/// REMOVED state: the power that state still carries decides whether the
+/// position's six neighbours are updated again (the write itself already
+/// updated them once). Reading the level's power — air by then — skipped that
+/// fan-out inside a neighbour-update run's wire cache (#3230).
+#[test]
+fn a_dropped_wire_notifies_its_neighbours_from_its_removed_state() {
+    use std::cell::RefCell;
+    struct Observer {
+        inner: TestLevel,
+        seen: RefCell<Vec<BlockPos>>,
+    }
+    impl crate::level::BlockEntityNeighbors for Observer {}
+    impl LevelAccess for Observer {
+        fn block_state(&self, pos: BlockPos) -> BlockStateId {
+            self.inner.block_state(pos)
+        }
+        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
+            self.inner.set_raw(pos, state)
+        }
+        fn is_loaded(&self, pos: BlockPos) -> bool {
+            self.inner.is_loaded(pos)
+        }
+        fn random(&mut self) -> &mut LegacyRandom {
+            self.inner.random()
+        }
+        fn game_time(&self) -> i64 {
+            self.inner.game_time()
+        }
+        fn observe_neighbor_changed(
+            &self,
+            _: &mut Ticks,
+            pos: BlockPos,
+            _: BlockStateId,
+            _: BlockId,
+            _: bool,
+        ) {
+            self.seen.borrow_mut().push(pos);
+        }
+    }
+    let Some(f) = fixture() else {
+        return;
+    };
+    let b = &f.behaviours;
+    let mut level = Observer {
+        inner: TestLevel::new(b),
+        seen: RefCell::new(Vec::new()),
+    };
+    let mut ticks = Ticks::new(0);
+    let pos = BlockPos::new(0, 1, 0);
+    let support = BlockPos::new(0, 0, 0);
+    let stone = f.registry.default_state("minecraft:stone").unwrap();
+    let wire = b.table.set_int(
+        f.registry.default_state("minecraft:redstone_wire").unwrap(),
+        b.props.power,
+        7,
+    );
+    level.set_raw(support, stone);
+    level.set_raw(pos, wire);
+    // Removing the support drops the wire mid-run, so the removal cascade is
+    // processed with the run's wire cache open.
+    b.set_block(&mut level, &mut ticks, support, b.air(), flags::UPDATE_ALL);
+    assert_eq!(
+        level.block_state(pos),
+        b.air(),
+        "the unsupported wire drops"
+    );
+    let heard = |at: BlockPos| level.seen.borrow().iter().filter(|&&pos| pos == at).count();
+    for (dx, dy, dz) in [
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+        (-1, 0, 0),
+        (1, 0, 0),
+    ] {
+        assert_eq!(
+            heard(BlockPos::new(pos.x + dx, pos.y + dy, pos.z + dz)),
+            2,
+            "heard at ({dx}, {dy}, {dz}) of the wire"
+        );
+    }
+}
+
 #[test]
 fn connections_follow_connects_to_both_ways() {
     // Each kind with its block and the side values for connected and not.
@@ -1823,7 +1920,10 @@ fn fence_gate_sites_play_distinct_sounds() {
             .events
             .iter()
             .filter_map(|event| match event {
-                LevelEvent::Sound { sound, .. } => Some(sound.to_string()),
+                LevelEvent::Sound { sound, source, .. } => {
+                    assert_eq!(*source, Some(LevelSoundSource::Blocks), "{sound}");
+                    Some(sound.to_string())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -4106,6 +4206,7 @@ fn update_shape_hook_can_answer_for_the_block() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_level_chooses_the_state_a_block_is_placed_in() {
     use crate::fluid::{FluidKind, FluidState};
     use std::cell::RefCell;
@@ -4130,6 +4231,9 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
         /// What it answers for that block.
         answer: Option<Option<BlockStateId>>,
         asked: RefCell<Vec<Asked>>,
+        unloaded: Option<BlockPos>,
+        max_y: i32,
+        rewrite_on_update: Option<(BlockPos, BlockStateId)>,
     }
     impl crate::level::BlockEntityNeighbors for Placer {}
     impl LevelAccess for Placer {
@@ -4139,8 +4243,21 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
         fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
             self.inner.set_raw(pos, state)
         }
+        fn send_block_updated(&mut self, pos: BlockPos) {
+            // Model a side effect after the chunk accepts the write, but
+            // before Level.setBlock returns to BlockItem.
+            if let Some((at, state)) = self.rewrite_on_update
+                && at == pos
+            {
+                self.rewrite_on_update = None;
+                self.inner.set_raw(pos, state);
+            }
+        }
         fn is_loaded(&self, pos: BlockPos) -> bool {
-            self.inner.is_loaded(pos)
+            self.unloaded != Some(pos)
+        }
+        fn max_y(&self) -> i32 {
+            self.max_y
         }
         fn random(&mut self) -> &mut LegacyRandom {
             self.inner.random()
@@ -4201,7 +4318,7 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
             first.fluid,
         )
     }
-    let Some(f) = fixture() else { return };
+    let f = fixture().expect("prepared resources");
     let b = &f.behaviours;
     let stone = f.registry.default_state("minecraft:stone").unwrap();
     let furnace = f.registry.default_state("minecraft:furnace").unwrap();
@@ -4218,6 +4335,9 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
         block: furnace_block,
         answer: Some(Some(facing("east"))),
         asked: RefCell::new(Vec::new()),
+        unloaded: None,
+        max_y: 320,
+        rewrite_on_update: None,
     };
     let mut ticks = Ticks::new(0);
     ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
@@ -4323,18 +4443,152 @@ fn the_level_chooses_the_state_a_block_is_placed_in() {
     assert_eq!(pos, front);
     assert_eq!(item, "minecraft:furnace");
     assert!(replace_clicked, "the front block is air: it is replaced");
-    // A made-up id is not trusted, nor is another block's state: the block
-    // places as vanilla's would.
+    // A made-up id is not trusted: the fallback remains vanilla's state.
     level.answer = Some(Some(BlockStateId(u32::MAX)));
     assert_eq!(
         b.state_for_placement(&mut level, &mut ticks, furnace_block, &ctx),
         Some(furnace)
     );
-    level.answer = Some(Some(b.default_of(stairs)));
-    assert_eq!(
-        b.state_for_placement(&mut level, &mut ticks, furnace_block, &ctx),
-        Some(furnace)
+    // The resolved candidate can belong to another block. Place that block,
+    // including its companion and sound, even though the item is a furnace.
+    let door = f.registry.default_state("minecraft:oak_door").unwrap();
+    let mut upper = f.registry.state(door).unwrap().clone();
+    upper.properties.insert("half".into(), "upper".into());
+    let upper = f.registry.resolve(&upper).unwrap();
+    level.answer = Some(Some(door));
+    level.inner.events.clear();
+    ctx.clicked_pos = ground;
+    let placed = b
+        .place_block_with_context(&mut level, &mut ticks, &ctx)
+        .unwrap();
+    let pos = BlockPos::new(0, 1, 0);
+    assert_eq!(placed.context.pos, pos);
+    assert!(placed.matches_candidate);
+    assert_eq!(level.block_state(pos), door);
+    let top = BlockPos::new(0, 2, 0);
+    assert_eq!(level.block_state(top), upper);
+    assert!(level.inner.events.iter().any(|event| matches!(
+        event,
+        LevelEvent::Sound { pos: at, sound, .. }
+            if *at == pos && &**sound == "minecraft:block.wood.place"
+    )));
+
+    // A held door asks for space above. A furnace selecting a door does not
+    // call the door's getStateForPlacement, so its placed-by writes there anyway.
+    level.set_raw(pos, b.air());
+    level.set_raw(top, stone);
+    let mut held_door = ctx.clone();
+    held_door.item = "minecraft:oak_door".into();
+    assert!(
+        b.placement_preview(&mut level, &mut ticks, &held_door)
+            .is_none()
     );
+    level.asked.borrow_mut().clear();
+    assert!(
+        b.place_block_with_context(&mut level, &mut ticks, &ctx)
+            .is_some()
+    );
+    assert_eq!(level.asked.borrow().len(), 1);
+    assert_eq!(level.block_state(top), upper);
+
+    // An unloaded or out-of-height companion's write can fail; BlockItem still
+    // placed the lower half, and must report success so its caller consumes it.
+    for (at, max_y) in [(Some(top), 320), (None, 2)] {
+        level.set_raw(pos, b.air());
+        level.set_raw(top, b.air());
+        level.unloaded = at;
+        level.max_y = max_y;
+        assert!(
+            b.place_block_with_context(&mut level, &mut ticks, &ctx)
+                .is_some()
+        );
+        assert_eq!(level.block_state(pos), door);
+        assert_eq!(level.block_state(top), b.air());
+    }
+    level.max_y = 320;
+    level.set_raw(pos, b.air());
+
+    level.answer = Some(Some(
+        f.registry.default_state("minecraft:command_block").unwrap(),
+    ));
+    assert!(
+        b.place_block_with_context(&mut level, &mut ticks, &ctx)
+            .is_none()
+    );
+    ctx.can_use_game_master_blocks = true;
+    assert!(b.placement_preview(&mut level, &mut ticks, &ctx).is_some());
+
+    // A command block item cannot get around its operator gate by selecting stone.
+    let mut other_item = ctx.clone();
+    other_item.item = "minecraft:command_block".into();
+    other_item.can_use_game_master_blocks = false;
+    level.block = b.block(f.registry.default_state(&other_item.item).unwrap());
+    level.answer = Some(Some(stone));
+    level.asked.borrow_mut().clear();
+    assert!(
+        b.placement_preview(&mut level, &mut ticks, &other_item)
+            .is_none()
+    );
+    assert!(level.asked.borrow().is_empty());
+    other_item.can_use_game_master_blocks = true;
+    assert_eq!(
+        b.placement_preview(&mut level, &mut ticks, &other_item)
+            .unwrap()
+            .state,
+        stone
+    );
+
+    // A cactus won't survive on stone, but the scaffolding item does not require
+    // the selected candidate to survive; a furnace item does.
+    let cactus = f.registry.default_state("minecraft:cactus").unwrap();
+    other_item.item = "minecraft:scaffolding".into();
+    level.block = b.block(f.registry.default_state(&other_item.item).unwrap());
+    level.answer = Some(Some(cactus));
+    assert_eq!(
+        b.placement_preview(&mut level, &mut ticks, &other_item)
+            .unwrap()
+            .state,
+        cactus
+    );
+    level.block = furnace_block;
+    assert!(b.placement_preview(&mut level, &mut ticks, &ctx).is_none());
+
+    // Replacing the primary during its write is still a successful item use,
+    // but the door's tag and companion are not applied to that other block.
+    level.set_raw(top, b.air());
+    level.answer = Some(Some(door));
+    level.rewrite_on_update = Some((pos, stone));
+    let placed = b
+        .place_block_with_state(&mut level, &mut ticks, &ctx, |state| {
+            assert_eq!(
+                state, door,
+                "item data must not act on the substituted post-write block"
+            );
+            (state, state)
+        })
+        .unwrap();
+    assert!(!placed.matches_candidate);
+    assert_eq!(placed.state, stone);
+    assert_eq!(level.block_state(top), b.air());
+
+    // A same-block rewrite still calls setPlacedBy, using the state that actually
+    // landed, not the facing that the placement Part supplied before the write.
+    let bed = f.registry.default_state("minecraft:red_bed").unwrap();
+    let mut foot = f.registry.state(bed).unwrap().clone();
+    foot.properties.insert("facing".into(), "east".into());
+    let east_foot = f.registry.id(&foot).unwrap();
+    foot.properties.insert("part".into(), "head".into());
+    let east_head = f.registry.id(&foot).unwrap();
+    level.set_raw(pos, b.air());
+    level.answer = Some(Some(bed));
+    level.rewrite_on_update = Some((pos, east_foot));
+    let placed = b
+        .place_block_with_context(&mut level, &mut ticks, &ctx)
+        .unwrap();
+    assert!(placed.matches_candidate);
+    assert_eq!(level.block_state(pos), east_foot);
+    assert_eq!(level.block_state(BlockPos::new(1, 1, 0)), east_head);
+    assert_eq!(level.block_state(BlockPos::new(0, 1, -1)), b.air());
 }
 
 #[test]

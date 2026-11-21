@@ -30,7 +30,7 @@ mod sunrise_client { pub mod mouse { pub use crate::mouse::*; } }
 #[derive(Clone, Copy, PartialEq)] enum Screen { Playing, Other }
 struct Point { x: f64, y: f64 }
 enum MouseScrollDelta { LineDelta(f32, f32), PixelDelta(Point) }
-struct Settings { discrete_scroll: bool, mouse_wheel_sensitivity: f32 }
+struct Settings { discrete_scroll: bool, mouse_wheel_sensitivity: f64 }
 struct Player { flying_speed: f32 }
 struct SpectatorGui { active: bool }
 impl SpectatorGui { fn is_menu_active(&self) -> bool { self.active } }

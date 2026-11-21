@@ -21,16 +21,7 @@ use sunrise_world::registry::BlockStateId;
 impl Game<'_> {
     fn native_block_entity_target(&self, entity: BlockEntityRef) -> Option<(&World, &BlockEntity)> {
         let world = self.native_level_read_world(entity.fields().level)?;
-        let fields = entity.fields();
-        if world.block_entities.generation(&(
-            fields.position[0],
-            fields.position[1],
-            fields.position[2],
-        )) != Some(fields.generation)
-        {
-            return None;
-        }
-        Some((world, loaded_block_entity(world, fields.position)?))
+        Some((world, resident_block_entity(world, entity)?))
     }
 
     /// Find a block entity in a loaded chunk of an open level, or on a client in
@@ -118,6 +109,9 @@ impl Game<'_> {
         }) else {
             return Ok(false);
         };
+        if self.menu_click_in_progress(conn) {
+            return Ok(false);
+        }
         let [x, y, z] = entity.fields().position;
         match self.open_block_menu(conn, (x, y, z)) {
             super::lan_actions::MenuOpen::Stale => Err(BlockEntityError::Stale),
@@ -148,10 +142,8 @@ impl Game<'_> {
     /// The data saved without identity or position metadata
     /// (`BlockEntity.saveWithoutMetadata`).
     pub(super) fn block_entity_data(&self, entity: BlockEntityRef) -> Option<Compound> {
-        let (world, block_entity) = self.native_block_entity_target(entity)?;
-        let [x, y, z] = entity.fields().position;
-        let block = &self.pack.assets.registry.state(world.block(x, y, z))?.name;
-        save_without_metadata(world, (x, y, z), block_entity, block, self.res.items())
+        let world = self.native_level_read_world(entity.fields().level)?;
+        world_block_entity_data(world, self.pack.assets.registry, self.res.items(), entity)
     }
 
     /// The vanilla lock's item predicate, if present on a loaded block entity.
@@ -260,8 +252,8 @@ impl Game<'_> {
         Ok(true)
     }
 
-    /// Sizes a mod block entity's menu data explicitly, using the same write
-    /// target, journal and Changed notice as scalar data-slot writes.
+    /// Sizes a mod block entity's transient menu data using the same silent
+    /// write and journal as scalar data-slot writes.
     pub(super) fn block_entity_set_data_slots(
         &mut self,
         entity: BlockEntityRef,
@@ -369,23 +361,25 @@ impl Game<'_> {
             }
         }
         let index = slot as usize;
-        if block_entity.items.get(index).and_then(Option::as_ref) == stack.as_ref() {
+        if block_entity.items.get(index).and_then(Option::as_ref) == stack.as_ref()
+            && !block_entity.has_opaque_item_slot(index)
+        {
             return Ok(false);
         }
         // A slot of a list already its full length: the journal keeps that slot, not the
         // entity's whole saved data. A list still to grow is kept whole, length and all.
         if index < block_entity.items.len() {
             self.journal_block_entity_slot(key, index);
-            self.edit_mod_block_entity(key, |block_entity| block_entity.items[index] = stack);
-            return Ok(true);
+            self.edit_mod_block_entity(key, |block_entity| {
+                *block_entity.item_slot_mut(index).unwrap() = stack;
+            });
+        } else {
+            self.write_mod_block_entity(key, |block_entity| {
+                block_entity.items.resize(slots, None);
+                *block_entity.item_slot_mut(index).unwrap() = stack;
+            });
         }
-        self.write_mod_block_entity(key, |block_entity| {
-            let items = &mut block_entity.items;
-            if items.len() < slots {
-                items.resize(slots, None);
-            }
-            items[index] = stack;
-        });
+        self.journal_chunk_save((key.0 >> 4, key.2 >> 4));
         Ok(true)
     }
 
@@ -691,7 +685,7 @@ fn loaded_payload(old: &Tag, payload: &Tag, replace: bool) -> Tag {
 
 /// A mod's data payload as the block entity takes it: without the fields the engine owns, which
 /// are its identity and position, and its published shapes (`set_shapes` alone writes those).
-fn mod_payload(mut data: Compound) -> Compound {
+pub(in crate::game) fn mod_payload(mut data: Compound) -> Compound {
     for field in ["id", "x", "y", "z", sunrise_client::containers::SHAPES_KEY] {
         data.remove(&field.into());
     }
@@ -745,14 +739,25 @@ fn save_with_metadata(
     block: &str,
     items: &crate::items::Items,
 ) -> Option<Compound> {
-    let mut tag = save::block_entity_data(pos, entity, block, world.block_lock(pos), items);
-    Game::write_pending_loot(world, pos, &mut tag);
-    let Tag::Compound(mut data) = tag else {
+    let pending = world
+        .chunks
+        .get(&(pos.0 >> 4, pos.2 >> 4))
+        .and_then(|chunk| chunk.saved.as_ref())
+        .and_then(|saved| saved.pending_loot.get(&pos));
+    let Tag::Compound(data) = save::block_entity_encode::data(
+        pos,
+        entity,
+        block,
+        save::block_entity_encode::DataFields {
+            lock: world.block_lock(pos),
+            custom_name: world.block_names.get(&pos),
+            pending,
+            ..Default::default()
+        },
+        items,
+    ) else {
         return None;
     };
-    if let Some(name) = world.block_names.get(&pos) {
-        data.insert("CustomName".into(), name.clone());
-    }
     Some(data)
 }
 
@@ -861,6 +866,28 @@ pub(super) fn world_block_entity(
     ))
 }
 
+/// Read a resident entity's saved data after the caller has resolved its level to `world`.
+pub(super) fn world_block_entity_data(
+    world: &World,
+    registry: &sunrise_world::registry::BlockRegistry,
+    items: &crate::items::Items,
+    entity: BlockEntityRef,
+) -> Option<Compound> {
+    let block_entity = resident_block_entity(world, entity)?;
+    let [x, y, z] = entity.fields().position;
+    let block = &registry.state(world.block(x, y, z))?.name;
+    save_without_metadata(world, (x, y, z), block_entity, block, items)
+}
+
+fn resident_block_entity(world: &World, entity: BlockEntityRef) -> Option<&BlockEntity> {
+    let fields = entity.fields();
+    let [x, y, z] = fields.position;
+    if world.block_entities.generation(&(x, y, z)) != Some(fields.generation) {
+        return None;
+    }
+    loaded_block_entity(world, fields.position)
+}
+
 fn loaded_block_entity(world: &World, [x, y, z]: [i32; 3]) -> Option<&BlockEntity> {
     if !world.loaded(x, z) || !world.shape.contains_y(y) {
         return None;
@@ -877,7 +904,7 @@ mod tests {
     use mod_api::HostTransaction;
     use mod_api::ServerHost;
     use std::sync::Arc;
-    use sunrise_client::{chunk::Chunk, lan::menu::Slots};
+    use sunrise_client::{chunk::Chunk, containers::ModBlockEntityFields, lan::menu::Slots};
     use sunrise_world::registry::BlockStateId;
 
     #[test]
@@ -983,7 +1010,14 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn retained_handles_reject_replacements_and_rollback_restores_identity() {
-        use super::super::native_entity_refs::tests::with_game;
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
+        if run_fresh_cases(
+            "game::native_block_entity_refs::tests::retained_handles_reject_replacements_and_rollback_restores_identity",
+            "SUNRISE_RETAINED_HANDLES_CHILD",
+            &["holder"],
+        ) {
+            return;
+        }
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             game.world
@@ -994,12 +1028,14 @@ mod tests {
             let holder = || {
                 BlockEntity::Mod(Box::new(ModBlockEntity::new(
                     "test:holder".into(),
-                    Default::default(),
+                    ModBlockEntityFields {
+                        nbt: compound("{count:3}"),
+                        ..Default::default()
+                    },
                 )))
             };
             game.world.block_entities.insert(pos, holder());
             let original = game.block_entity(level, [1, 64, 1]).unwrap();
-            assert_eq!(original.merge_data(game, compound("{count:3}")), Ok(true));
             game.with_level(|_, host, ticks| {
                 let wrapped = super::super::mod_api_host::LevelTicks::new(&*host, ticks);
                 assert_eq!(
@@ -1298,7 +1334,8 @@ mod tests {
             let mut guest = game.lan.as_mut().unwrap().hub.guests.remove(0);
             guest.kind = sunrise_client::lan::guest::GuestKind::Fake;
             game.lan.as_mut().unwrap().hub.guests.insert(0, guest);
-            assert_eq!(game.open_block_menu(12, (0, 64, 0)), MenuOpen::Cancelled);
+            // Fake players have no client menu. This is a refusal, not a hook cancellation.
+            assert_eq!(game.open_block_menu(12, (0, 64, 0)), MenuOpen::Refused);
             assert!(!player.open_menu(game, chest).unwrap());
             let mut guest = game.lan.as_mut().unwrap().hub.guests.remove(0);
             guest.kind = sunrise_client::lan::guest::GuestKind::Network;

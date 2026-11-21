@@ -14,12 +14,19 @@ impl Game<'_> {
     /// accepted target was removed by its hurt implementation.
     pub(super) fn special_attack_slowdown(&mut self, knockback: f32) {
         if knockback > 0.0 {
-            if let Some(player) = self.player.as_mut() {
-                player.velocity.x *= sunrise_client::attack_strength::ATTACKER_SLOWDOWN;
-                player.velocity.z *= sunrise_client::attack_strength::ATTACKER_SLOWDOWN;
-            }
-            self.stop_sprint_after_extra_knockback();
+            self.attacker_slowdown();
         }
+    }
+    /// What `causeExtraKnockback` does to the attacker once its knockback is
+    /// above 0: the horizontal motion times 0.6 (the vertical kept), and the
+    /// sprint stopped. The server's hit and a server's client's simulated one
+    /// decide the knockback each their own way.
+    pub(super) fn attacker_slowdown(&mut self) {
+        if let Some(player) = self.player.as_mut() {
+            player.velocity.x *= sunrise_client::attack_strength::ATTACKER_SLOWDOWN;
+            player.velocity.z *= sunrise_client::attack_strength::ATTACKER_SLOWDOWN;
+        }
+        self.stop_sprint_after_extra_knockback();
     }
 
     pub(super) fn attack_dragon(&mut self) -> bool {

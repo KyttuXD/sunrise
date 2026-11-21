@@ -156,6 +156,104 @@ fn unknown_serializer_refuses_before_unclaimed_ingredient_is_dropped() {
     });
 }
 
+const STICKS: &str =
+    r#","ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick","count":3}}"#;
+
+/// A resource root whose `data/minecraft/recipe` holds `files`.
+fn recipe_root(files: &[(&str, String)]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("data/minecraft/recipe");
+    std::fs::create_dir_all(&folder).unwrap();
+    for (name, text) in files {
+        std::fs::write(folder.join(format!("{name}.json")), text).unwrap();
+    }
+    root
+}
+
+fn load_error(root: &tempfile::TempDir) -> String {
+    Recipes::load(
+        root.path(),
+        &Items::for_tests(Default::default()),
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )
+    .err()
+    .expect("the load is refused")
+    .to_string()
+}
+
+#[test]
+fn a_type_without_a_namespace_is_minecrafts() {
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        // `:path` too: the default is `minecraft`, never the file's namespace.
+        let root = recipe_root(&[
+            ("bare", format!(r#"{{"type":"crafting_shapeless"{STICKS}"#)),
+            (
+                "colon",
+                format!(r#"{{"type":":crafting_shapeless"{STICKS}"#),
+            ),
+        ]);
+        let recipes = Recipes::load(
+            root.path(),
+            &Items::for_tests(Default::default()),
+            &PackOverlay::NONE,
+            &crate::test_resources::server_load(),
+        )
+        .unwrap();
+        assert_eq!(recipes.crafting.len(), 2);
+        assert_eq!(recipes.by_type["minecraft:crafting"].len(), 2);
+        let grid = [Some(ItemStack::new("minecraft:stone", 1)), None, None, None];
+        let (_, output) = recipes
+            .find(crate::test_resources::server_loop_context(), &grid, 2)
+            .unwrap();
+        assert_eq!(output, ItemStack::new("minecraft:stick", 3));
+    });
+}
+
+#[test]
+fn an_unknown_bare_type_is_unregistered_not_malformed() {
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        let root = recipe_root(&[("future", r#"{"type":"future_serializer"}"#.into())]);
+        let error = load_error(&root);
+        assert!(
+            error.contains("data/minecraft/recipe/future.json"),
+            "{error}"
+        );
+        assert!(error.contains("unregistered recipe serializer"), "{error}");
+        assert!(error.contains("minecraft:future_serializer"), "{error}");
+        assert!(!error.contains("malformed"), "{error}");
+    });
+}
+
+#[test]
+fn a_malformed_type_is_refused_by_name_with_every_other_bad_recipe() {
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        let root = recipe_root(&[
+            ("upper", r#"{"type":"Crafting_shapeless"}"#.into()),
+            ("missing", r#"{"ingredients":[]}"#.into()),
+            ("number", r#"{"type":3}"#.into()),
+            ("array", "[]".into()),
+            ("unknown", r#"{"type":"absent:serializer"}"#.into()),
+        ]);
+        let error = load_error(&root);
+        assert!(error.starts_with("5 recipes failed to load:"), "{error}");
+        for (file, category) in [
+            ("upper", "malformed recipe serializer id"),
+            ("missing", "missing or non-string type"),
+            ("number", "missing or non-string type"),
+            ("array", "not a JSON object"),
+            ("unknown", "unregistered recipe serializer"),
+        ] {
+            let line = error
+                .lines()
+                .find(|line| line.contains(&format!("data/minecraft/recipe/{file}.json")))
+                .unwrap_or_else(|| panic!("{file} is not named: {error}"));
+            assert!(line.contains(category), "{line}");
+        }
+        assert!(error.contains("Crafting_shapeless"), "{error}");
+    });
+}
+
 #[test]
 fn a_failed_load_names_every_bad_recipe() {
     mod_platform::testing::with_mods(Vec::new().into(), || {

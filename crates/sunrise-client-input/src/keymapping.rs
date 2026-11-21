@@ -66,7 +66,7 @@ impl KeyState {
         }
     }
     /// The mapping toggles: its option is on, or a pad toggled it down.
-    fn needs_toggle(&self, option: bool) -> bool {
+    pub fn needs_toggle(&self, option: bool) -> bool {
         option || self.pad_toggled
     }
     /// `setDown`; `needs_toggle` is the mapping's option value.

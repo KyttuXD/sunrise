@@ -18,9 +18,11 @@ pub trait LevelLightBackend {
     /// client, the light of the level it shows, as the server sent it for a chunk it holds.
     #[access(WorldOnly)]
     fn level_brightness(&self, level: LevelRef, layer: LightLayer, pos: [i32; 3]) -> Option<i32>;
-    /// Side: server.
-    /// `BlockAndTintGetter.canSeeSky`: the sky light at `pos` is full (15), so nothing above
-    /// blocks it. None as for `brightness`.
+    /// Side: both.
+    /// `BlockAndLightGetter.canSeeSky`: whether the level's published sky light at `pos` is 15.
+    /// Works in an open server level or the current client level; stale or unavailable levels
+    /// return None. Never loads chunks. See `LevelHost::can_see_sky` for the light storage rules
+    /// at its boundaries.
     #[access(WorldOnly)]
     fn level_can_see_sky(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
 }

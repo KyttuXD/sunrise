@@ -1,9 +1,9 @@
 //! `text_from_json`: a text component read as `/tellraw` takes it.
 use super::Game;
-use super::native_text_grammar::build;
 use mod_api::text::TextFormError;
 use sunrise_client::command::Registries;
 use sunrise_client::text::Text;
+use sunrise_client::text_grammar::build;
 
 impl Game<'_> {
     /// A component read as `/tellraw` takes it; None when it isn't one (an object with no
@@ -108,7 +108,7 @@ mod tests {
     }
 
     /// Objects and lists that are not one component are refused whole, however deep.
-    const NOT_COMPONENTS: [&str; 43] = [
+    const NOT_COMPONENTS: [&str; 46] = [
         "{}",
         r#"{"color":"red"}"#,
         r#"{"unrelated":"x","extra":[]}"#,
@@ -148,6 +148,9 @@ mod tests {
         r#"{"text":"a","click_event":"run_command"}"#,
         r#"{"text":"a","hover_event":{"action":"show_text"}}"#,
         r#"{"text":"a","hover_event":{"action":"show_text","value":{}}}"#,
+        r#"{"text":"a","hover_event":{"action":"show_item","id":"minecraft:bad item"}}"#,
+        r#"{"text":"a","hover_event":{"action":"show_item","id":"air"}}"#,
+        r#"{"text":"a","hover_event":{"action":"show_item","id":"minecraft:stone","components":{"!minecraft:lore":[]}}}"#,
         // The partial result is never used: a good entry before a bad one.
         r#"["a",{"text":"b","extra":["ok",{"bad":1}]}]"#,
         r#"{"text":"a","bold":true,"extra":["ok",{"text":"b","italic":"no"}]}"#,
@@ -276,6 +279,14 @@ mod tests {
             content(r#"{"translate":"k","fallback":5}"#),
             TextContent::Translatable { key, fallback: None, .. } if key == "k"
         ));
+        assert!(matches!(
+            content(r#"{"sprite":"test:icon","player":{"name":"Steve"}}"#),
+            TextContent::Object(mod_api::text::TextObject::Atlas { sprite, .. }) if sprite == "test:icon"
+        ));
+        assert!(matches!(
+            content(r#"{"atlas":7,"sprite":"test:icon","player":{"name":"Steve"}}"#),
+            TextContent::Object(mod_api::text::TextObject::Player { .. })
+        ));
         // `{"text":1}` fails the text kind, so the next kind that decodes is used.
         assert_eq!(
             content(r#"{"text":1,"keybind":"key.use"}"#),
@@ -368,6 +379,10 @@ mod tests {
         with_game(|game| {
             let host: &dyn mod_api::Host = game;
             let read = |json: &str| host.text_from_json(json).unwrap().map(|t| t.content);
+            assert_eq!(
+                read(r#"{"text":"Click","click_event":{"action":"run_command","value":"/help"}}"#),
+                None
+            );
             assert_eq!(
                 read(r#"{"text":"Hi"}"#),
                 Some(TextContent::Literal("Hi".into()))

@@ -10,7 +10,7 @@ impl Game<'_> {
     /// The options `MouseHandler.turnPlayer` reads.
     pub(super) fn look_options(&self) -> LookOptions {
         LookOptions {
-            sensitivity: f64::from(self.settings.sensitivity),
+            sensitivity: self.settings.sensitivity,
             smooth_camera: self.smooth_camera,
             scoping: self.scoping(),
             invert_x: self.settings.invert_x,
@@ -147,9 +147,11 @@ impl Game<'_> {
         }
         // MouseHandler.grabMouse never captures an inactive window, and vanilla
         // grabs only on `setScreen(null)`: the pack prompt and server dialogs
-        // are screens over the world that keep the pointer.
+        // are screens over the world that keep the pointer, as does a screen a
+        // mod's `screen_opening` answer kept or opened in place of none.
         if capture
-            && ((!self.focused && !self.unclaimed_window && !self.scripted_run())
+            && ((self.screen_state.answered.get() && self.screen != Screen::Playing)
+                || (!self.focused && !self.unclaimed_window && !self.scripted_run())
                 || self.server_packs.prompt.is_some()
                 || self.dialog_open()
                 || self.command_prompt.is_some())

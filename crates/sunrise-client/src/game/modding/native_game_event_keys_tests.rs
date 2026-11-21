@@ -46,11 +46,11 @@ fn game_event_key_registry_data_reload_and_unavailable_sides() {
                 game.world_tables = game
                     .stage_world_tables(&packs, frequency == 12, &resources)
                     .unwrap()
-                    .0;
+                    .tables;
                 assert_eq!(game.game_event_key("minecraft:step"), Some(step));
                 assert_eq!(
                     step.data(game, &Frequencies),
-                    Ok(Some(Tag::Compound(std::collections::BTreeMap::from([(
+                    Ok(Some(Tag::Compound(sunrise_core::nbt::Compound::from([(
                         "frequency".into(),
                         Tag::Int(frequency)
                     )]))))

@@ -3,7 +3,7 @@
 //! overriding class.
 use super::{
     Behaviours, LevelAccess, LevelEvent, Sim, Ticks,
-    classes::Class,
+    classes::{Class, Interface},
     data::ItemKind,
     query::{axis_of, clockwise, counter_clockwise, is_horizontal},
     states::BlockId,
@@ -47,13 +47,22 @@ pub enum PlaceOutcome {
     Failed,
 }
 
+/// The actual result of a successful block-item write.
+#[derive(Debug)]
+pub struct AppliedPlacement {
+    pub context: PlacementContext,
+    pub state: BlockStateId,
+    /// Whether the block after the write belongs to the selected placement state.
+    pub matches_candidate: bool,
+}
+
 /// An admitted block-item placement. Keep it across `entity_place` so the
 /// veto and the write agree on the target, state and rewritten context.
 #[derive(Debug)]
 pub struct ResolvedPlacement {
     context: PlacementContext,
-    kind: ItemKind,
-    state: BlockStateId,
+    primary: BlockStateId,
+    preview: PlacementPreview,
 }
 
 impl ResolvedPlacement {
@@ -73,6 +82,8 @@ pub struct PlacementPreview {
     pub state: BlockStateId,
     /// The companion half, when the block places one.
     pub companion: Option<(BlockPos, BlockStateId)>,
+    /// A change to the cell above made by the held `DoubleHighBlockItem` before the primary write.
+    pub pre_clear: Option<(BlockPos, BlockStateId)>,
 }
 
 /// `BlockPlaceContext` after resolving the replaced position: what
@@ -325,13 +336,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.level
             .before_state_for_placement(&*self.ticks, None, default, ctx, fluid, &mut answer);
         match answer {
-            // A mod's answer, for a state of the block being placed, as
-            // vanilla's `getStateForPlacement` returns its own `defaultBlockState`
-            // set out. Another block's answer, or an id past the state table
-            // (which would panic the server), leaves vanilla's state as it is.
-            Some(Some(new))
-                if (new.0 as usize) < self.b.table.state_count() && self.b.block(new) == block =>
-            {
+            // The candidate need not belong to the item-bound block. An ID outside
+            // the state table falls back to vanilla before it can be looked up.
+            Some(Some(new)) if (new.0 as usize) < self.b.table.state_count() => {
                 return Some(new);
             }
             // Vanilla's `null` return: the block goes nowhere.
@@ -391,12 +398,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let horizontal = ctx.horizontal_direction();
         Some(match class {
             Class::AbstractBed => {
-                let relative = rel(pos, horizontal);
-                if self.can_be_replaced(self.state(relative), ctx) {
-                    Some(table.set_dir(default, p.facing, horizontal))
-                } else {
-                    None
-                }
+                let at = rel(pos, horizontal);
+                (self.can_be_replaced(self.state(at), ctx) && self.level.within_world_border(at))
+                    .then(|| table.set_dir(default, p.facing, horizontal))
             }
             Class::AbstractFurnace
             | Class::Beehive
@@ -911,14 +915,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         .unwrap_or(state),
                 )
             }
+
             Class::TallSeagrass => {
                 let state = sup!()?;
                 let fluid = self.fluid_at(above(pos));
-                if b.is_water_fluid(fluid.kind()) && fluid.is_full() {
-                    Some(state)
-                } else {
-                    None
-                }
+                (b.is_water_fluid(fluid.kind()) && fluid.is_full()).then_some(state)
             }
             Class::DriedGhast => {
                 let state = sup!()?;
@@ -1629,7 +1630,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `BlockItem.place` (and its subclasses' overrides).
     /// `BlockPlaceContext` resolution, `updatePlacementContext` and the item's
     /// `getPlacementState` (survival and obstruction checks included).
-    fn placement(&mut self, input: &PlaceContext) -> Option<ResolvedPlacement> {
+    fn placement(
+        &mut self,
+        input: &PlaceContext,
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+        rewrite: impl FnOnce(&L, &PlacementContext) -> Option<Option<PlacementContext>>,
+    ) -> Option<ResolvedPlacement> {
         let b = self.b;
         let binding = b.item_binding(&input.item).cloned()?;
         let mut ctx = PlacementContext {
@@ -1648,31 +1654,44 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if !ctx.replace_clicked {
             ctx.pos = rel(input.clicked_pos, input.face);
         }
-        if !ctx.replace_clicked && !self.can_be_replaced(self.state(ctx.pos), &ctx) {
-            return None;
-        }
-        match self.level.placement_context(&input.item, &ctx) {
+        let rewritten = match rewrite(self.level, &ctx) {
             Some(Some(replacement)) => {
                 ctx = replacement;
-                if !self.is_in_valid_bounds(ctx.pos) {
-                    log::warn!(
-                        "placement_context: refused {}: destination {:?} is out of bounds",
-                        input.item,
-                        ctx.pos
-                    );
-                    return None;
-                }
+                true
             }
             Some(None) => return None,
-            None if binding.kind == ItemKind::Scaffolding => {
-                ctx = self.scaffolding_update_context(&ctx, binding.block)?;
+            None => {
+                // The default keeps BlockPlaceContext.canPlace before the item's rewrite.
+                if !ctx.replace_clicked && !self.can_be_replaced(self.state(ctx.pos), &ctx) {
+                    return None;
+                }
+                if binding.kind == ItemKind::Scaffolding {
+                    ctx = self.scaffolding_update_context(&ctx, binding.block)?;
+                }
+                false
             }
-            None => {}
-        }
-        if binding.game_master && !input.can_use_game_master_blocks {
+        };
+        if !self.is_in_valid_bounds(ctx.pos) {
+            if rewritten {
+                log::warn!(
+                    "placement_context: refused {}: destination {:?} is out of bounds",
+                    input.item,
+                    ctx.pos
+                );
+            }
             return None;
         }
-        let state = match binding.kind {
+        if (binding.game_master && !input.can_use_game_master_blocks)
+            || !self.level.is_loaded(ctx.pos)
+            || (rewritten && !self.can_be_replaced(self.state(ctx.pos), &ctx))
+        {
+            return None;
+        }
+        let standing_and_wall = matches!(
+            binding.kind,
+            ItemKind::StandingAndWall | ItemKind::HangingSign
+        );
+        let primary = match binding.kind {
             ItemKind::StandingAndWall | ItemKind::HangingSign => {
                 let wall = binding
                     .wall_block
@@ -1698,67 +1717,101 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         }
                     }
                 }
-                chosen.filter(|state| self.level.is_unobstructed(ctx.pos, *state))
+                chosen
             }
-            _ => self
-                .state_for_placement(binding.block, &ctx)
-                .filter(|state| {
-                    let must_survive = self
-                        .level
-                        .must_survive(&input.item)
-                        .unwrap_or(binding.kind != ItemKind::Scaffolding);
-                    (!must_survive || self.can_survive(*state, ctx.pos))
-                        && self.level.is_unobstructed(ctx.pos, *state)
-                }),
-        };
-        state.map(|state| ResolvedPlacement {
-            context: ctx,
-            kind: binding.kind,
-            state,
-        })
-    }
-
-    /// Apply the admitted state without resolving another context or asking placement Parts.
-    fn apply_placement(
-        &mut self,
-        decision: ResolvedPlacement,
-    ) -> Option<(PlacementContext, BlockStateId)> {
-        let b = self.b;
-        let ResolvedPlacement {
-            context: ctx,
-            kind,
-            state,
-        } = decision;
-        if !self.is_in_valid_bounds(ctx.pos) {
+            _ => self.state_for_placement(binding.block, &ctx),
+        }?;
+        if !input.can_use_game_master_blocks && b.data(primary).implements(Interface::GameMaster) {
             return None;
         }
-        if kind == ItemKind::DoubleHigh {
-            let above_pos = above(ctx.pos);
-            let replacement = if self.is_water_at(above_pos) {
+        let must_survive = standing_and_wall
+            || self
+                .level
+                .must_survive(&input.item)
+                .unwrap_or(binding.kind != ItemKind::Scaffolding);
+        let pos = ctx.pos;
+        let (primary, state) = stack_state(primary);
+        if (!standing_and_wall && must_survive && !self.can_survive(primary, pos))
+            || !self.level.is_unobstructed(pos, primary)
+        {
+            return None;
+        }
+        let companion = self.placed_companion(pos, state);
+        let pre_clear = if binding.kind == ItemKind::DoubleHigh {
+            let at = above(pos);
+            let replacement = if self.is_water_at(at) {
                 b.default_of(b.named.water)
             } else {
                 b.air()
             };
-            self.set_block(above_pos, replacement, 27);
+            (self.state(at) != replacement).then_some((at, replacement))
+        } else {
+            None
+        };
+        Some(ResolvedPlacement {
+            context: ctx,
+            primary,
+            preview: PlacementPreview {
+                pos,
+                state,
+                companion,
+                pre_clear,
+            },
+        })
+    }
+
+    /// The primary write and BlockItem.updateBlockStateFromTag. Callers put
+    /// item block-entity data between this step and Block.setPlacedBy.
+    fn apply_placement(
+        &mut self,
+        decision: ResolvedPlacement,
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+    ) -> Option<AppliedPlacement> {
+        let ResolvedPlacement {
+            context,
+            primary,
+            preview,
+        } = decision;
+        let pos = preview.pos;
+        if let Some((at, replacement)) = preview.pre_clear {
+            self.set_block(at, replacement, 27);
         }
-        if !self.set_block(ctx.pos, state, 11) {
+        if !self.set_block(pos, primary, 11) {
             return None;
         }
-        let placed = self.state(ctx.pos);
-        if b.block(placed) == b.block(state) {
-            self.set_placed_by(ctx.pos, placed);
+        let mut state = self.state(pos);
+        let matches_candidate = self.b.block(state) == self.b.block(primary);
+        if matches_candidate {
+            let adjusted = if state == primary {
+                preview.state
+            } else {
+                stack_state(state).1
+            };
+            if adjusted != state {
+                self.set_block(pos, adjusted, super::flags::UPDATE_CLIENTS);
+                state = adjusted;
+            }
         }
-        let placed = self.state(ctx.pos);
-        let own = b.data(placed).sounds.clone();
-        let sounds = self.level.place_sound_type(ctx.pos, placed, own);
+        Some(AppliedPlacement {
+            context,
+            state,
+            matches_candidate,
+        })
+    }
+
+    fn report_placement(&mut self, placed: &AppliedPlacement) {
+        let pos = placed.context.pos;
+        let state = placed.state;
+        let own = self.b.data(state).sounds.clone();
+        let sounds = self.level.place_sound_type(pos, state, own);
         self.emit(LevelEvent::Sound {
-            pos: ctx.pos,
+            pos,
             sound: sounds.place.clone(),
+            source: None,
             volume: (sounds.volume + 1.0) / 2.0,
             pitch: sounds.pitch * 0.8,
         });
-        self.game_event_state(ctx.pos, "minecraft:block_place", placed);
-        Some((ctx, placed))
+        self.game_event_state(pos, "minecraft:block_place", state);
     }
     /// `ScaffoldingBlockItem.updatePlacementContext`.
     fn scaffolding_update_context(
@@ -1822,10 +1875,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 }
 
 impl Behaviours {
-    /// The `Block.setPlacedBy` step of a placement, for a block already written at `pos` (a bed's
-    /// head, a door's upper half), when the block standing there is `state`'s block, except a
-    /// dried ghast's, which only plays its place sound. Nothing is written otherwise; the
-    /// write itself is the caller's (`Level.setBlock`).
+    /// The simulation's `Block.setPlacedBy` effects for the state standing at `pos`.
+    /// The caller has already written the block itself (`Level.setBlock`).
     pub fn set_placed_by_state<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
@@ -1833,11 +1884,7 @@ impl Behaviours {
         pos: BlockPos,
         state: BlockStateId,
     ) {
-        let mut sim = self.sim(level, ticks);
-        let placed = sim.state(pos);
-        if self.block(placed) == self.block(state) && !self.data(placed).is(Class::DriedGhast) {
-            sim.set_placed_by(pos, placed);
-        }
+        self.sim(level, ticks).set_placed_by(pos, state);
     }
     /// `BlockItem.place` for the item in `ctx`: resolves the replaced
     /// position, computes `getStateForPlacement`, checks survival and entity
@@ -1849,13 +1896,11 @@ impl Behaviours {
         ticks: &mut Ticks,
         ctx: &PlaceContext,
     ) -> PlaceOutcome {
-        self.place_block_with_context(level, ticks, ctx).map_or(
-            PlaceOutcome::Failed,
-            |(ctx, state)| PlaceOutcome::Placed {
-                pos: ctx.pos,
-                state,
-            },
-        )
+        self.place_block_with_context(level, ticks, ctx)
+            .map_or(PlaceOutcome::Failed, |placement| PlaceOutcome::Placed {
+                pos: placement.context.pos,
+                state: placement.state,
+            })
     }
     /// Place immediately, returning the context used for the successful write.
     pub fn place_block_with_context<L: LevelAccess + ?Sized>(
@@ -1863,49 +1908,86 @@ impl Behaviours {
         level: &mut L,
         ticks: &mut Ticks,
         ctx: &PlaceContext,
-    ) -> Option<(PlacementContext, BlockStateId)> {
+    ) -> Option<AppliedPlacement> {
+        self.place_block_with_state(level, ticks, ctx, |state| (state, state))
+    }
+    /// Run the same placement steps against a preview level, including item state properties.
+    pub fn place_block_with_state<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        ctx: &PlaceContext,
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+    ) -> Option<AppliedPlacement> {
+        let (decision, _) = self.decide_placement(level, ticks, ctx, &stack_state, |_, _| None)?;
+        self.place_resolved_block(level, ticks, decision, stack_state)
+    }
+    /// Finish a resolved placement in a level that does not apply game-owned item data.
+    pub fn place_resolved_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        decision: ResolvedPlacement,
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+    ) -> Option<AppliedPlacement> {
         let mut sim = self.sim(level, ticks);
-        let decision = sim.placement(ctx)?;
-        sim.apply_placement(decision)
+        let mut placed = sim.apply_placement(decision, stack_state)?;
+        if placed.matches_candidate {
+            sim.set_placed_by(placed.context.pos, placed.state);
+        }
+        sim.report_placement(&placed);
+        placed.state = sim.state(placed.context.pos);
+        Some(placed)
     }
     /// Freeze a decision and the writes it proposes before a caller asks for a veto.
+    /// `rewrite` can supply an item Part's replacement or refusal before state selection.
+    /// `None` keeps vanilla's original admission and `updatePlacementContext`.
     pub fn decide_placement<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         ctx: &PlaceContext,
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+        rewrite: impl FnOnce(&L, &PlacementContext) -> Option<Option<PlacementContext>>,
     ) -> Option<(ResolvedPlacement, PlacementPreview)> {
-        let mut sim = self.sim(level, ticks);
-        let decision = sim.placement(ctx)?;
-        let pos = decision.context.pos;
-        if !sim.is_in_valid_bounds(pos) {
-            return None;
-        }
-        let state = decision.state;
-        let companion = sim.placed_companion(pos, state);
-        Some((
-            decision,
-            PlacementPreview {
-                pos,
-                state,
-                companion,
-            },
-        ))
+        let decision = self
+            .sim(level, ticks)
+            .placement(ctx, stack_state, rewrite)?;
+        let preview = decision.preview;
+        Some((decision, preview))
     }
-    /// Apply a frozen decision after the caller has verified its level snapshot.
-    /// A listener could add an obstructing entity even with no block changes.
+    /// Write the primary state and item block-state properties. The caller
+    /// can apply item block-entity data before running `placement_set_placed_by`.
     pub fn apply_placement<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         decision: ResolvedPlacement,
-    ) -> Option<(PlacementContext, BlockStateId)> {
-        if !level.is_loaded(decision.context.pos)
-            || !level.is_unobstructed(decision.context.pos, decision.state)
-        {
-            return None;
+        stack_state: impl Fn(BlockStateId) -> (BlockStateId, BlockStateId),
+    ) -> Option<AppliedPlacement> {
+        self.sim(level, ticks)
+            .apply_placement(decision, stack_state)
+    }
+    /// Run `Block.setPlacedBy` on the state after the primary write and item tag.
+    pub fn placement_set_placed_by<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        placed: &AppliedPlacement,
+    ) {
+        if placed.matches_candidate {
+            self.sim(level, ticks)
+                .set_placed_by(placed.context.pos, placed.state);
         }
-        self.sim(level, ticks).apply_placement(decision)
+    }
+    /// The sound and game event happen even when the successful write left another block.
+    pub fn report_placement<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        placed: &AppliedPlacement,
+    ) {
+        self.sim(level, ticks).report_placement(placed);
     }
     /// `DirectionalPlaceContext.canPlace`: whether the block at the clicked
     /// position can be replaced by the item (a dispenser places only there).
@@ -1938,7 +2020,7 @@ impl Behaviours {
         ticks: &mut Ticks,
         ctx: &PlaceContext,
     ) -> Option<PlacementPreview> {
-        self.decide_placement(level, ticks, ctx)
+        self.decide_placement(level, ticks, ctx, |state| (state, state), |_, _| None)
             .map(|(_, preview)| preview)
     }
     /// `getStateForPlacement` of `block` for `ctx` without placing anything
@@ -1994,8 +2076,13 @@ mod placed_against_tests {
                     item: String::new(),
                     replace_clicked: false,
                 },
-                kind: ItemKind::Block,
-                state: BlockStateId(0),
+                primary: BlockStateId(0),
+                preview: PlacementPreview {
+                    pos: clicked.offset(x, y, z),
+                    state: BlockStateId(0),
+                    companion: None,
+                    pre_clear: None,
+                },
             };
             // A solid clicked block puts the new block beside it.
             assert_eq!(decision.placed_against_pos(), clicked);

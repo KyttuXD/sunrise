@@ -89,6 +89,20 @@ class NotesGuard(Repository):
         self.assertEqual(code, 1)
         self.assertIn(f"{guards.NOTES}: 2 lines, 1 on the base", out)
 
+    def test_a_base_that_cant_be_read_stops_the_guard(self):
+        # A partial clone whose download of the base's file failed: the file is in the base's tree, its text is not.
+        self.git("switch", "-qc", "branch")
+        (self.root / guards.NOTES).write_text("pub trait Notes {}\n// More prose.\n")
+        self.commit("grow")
+        blob = subprocess.run(["git", "rev-parse", f"main:{guards.NOTES}"], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+        (self.root / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        with self.assertRaises(SystemExit) as stopped:
+            self.run_guards()
+        self.assertIn(f"{guards.NOTES} is at", str(stopped.exception))
+        # A file the base doesn't have is no baseline at all: nothing to compare, nothing to stop.
+        self.assertIsNone(guards.at(self.root, "main", "crates/none.rs"))
+
 
 if __name__ == "__main__":
     unittest.main()

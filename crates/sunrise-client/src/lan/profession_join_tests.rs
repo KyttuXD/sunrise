@@ -25,7 +25,8 @@ fn profession_mod_missing_refused_before_pairing() {
     assert!(mod_list::set_local(vec![Entry {
         id: "test".into(),
         version: "1.0".into(),
-        side: Side::Both
+        side: Side::Both,
+        runtime: None,
     }]));
     let config = crate::lan::NetConfig {
         announce: false,

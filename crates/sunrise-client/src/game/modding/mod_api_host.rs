@@ -441,6 +441,7 @@ macro_rules! base_level_reads {
 
 impl mod_api::LevelHost for FireOddsLevel<'_> {
     base_level_reads! {
+        fn block_states() -> mod_api::BlockStates<'_>;
         fn container_size(at: mod_api::BlockSide) -> Option<usize>;
         fn container_stack(at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack>;
         fn block_state_id(name: &str) -> Option<mod_api::BlockState>;
@@ -555,6 +556,9 @@ impl mod_api::LevelHost for FireOddsLevel<'_> {
 }
 
 impl mod_api::LevelHost for super::GameLevel<'_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::BlockStates::of(&self.tables)
+    }
     fn block_face_sturdy(
         &self,
         pos: [i32; 3],
@@ -562,7 +566,7 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
         support: mod_api::SupportType,
     ) -> Option<bool> {
         if !self.native_authoritative {
-            return None;
+            self.api_level?;
         }
         super::native_world_read::block_face_sturdy(
             self.world,
@@ -575,9 +579,9 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
     }
     fn can_see_sky(&self, pos: [i32; 3]) -> Option<bool> {
         if !self.native_authoritative {
-            return None;
+            self.api_level?;
         }
-        super::native_world_read::can_see_sky(self.world, pos)
+        Some(super::native_world_read::can_see_sky(self.world, pos))
     }
     fn block_entity(&self, pos: [i32; 3]) -> Option<mod_api::BlockEntityRef> {
         super::native_block_entity_refs::world_block_entity(self.world, self.api_level?, pos)
@@ -814,6 +818,10 @@ impl mod_api::LevelRandomHost for super::GameLevel<'_> {
 }
 
 impl mod_api::LevelHost for super::native_hooks::HitLevel<'_> {
+    fn block_entity_data(&self, _: mod_api::BlockEntityRef) -> Option<mod_api::Compound> {
+        None
+    }
+
     fn block_state_id(&self, name: &str) -> Option<mod_api::BlockState> {
         super::native_block_states::parse(self.0.block_registries()?, self.0.registry(), name)?
             .try_into_api()
@@ -968,6 +976,7 @@ impl mod_api::HitHost for super::native_hooks::HitLevel<'_> {
 pub(in crate::game) struct LevelTicks<'b, L, T = &'b mut Ticks> {
     level: L,
     ticks: T,
+    unpack_container_loot: bool,
     /// The blocks a preview standing in for the level changed, which the reads see over it.
     preview: Option<&'b sunrise_world::level::PreviewBlocks>,
     /// The level's and the ticks' borrow, which the delegating reads below are bounded by.
@@ -979,10 +988,18 @@ impl<'b, L, T> LevelTicks<'b, L, T> {
         Self {
             level,
             ticks,
+            unpack_container_loot: true,
             preview: None,
             borrow: std::marker::PhantomData,
         }
     }
+
+    /// `place_liquid` reads stored slots whether it uses a direct or journalled host.
+    pub(in crate::game) fn without_container_loot(mut self) -> Self {
+        self.unpack_container_loot = false;
+        self
+    }
+
     /// This level as the preview that changed `preview` sees it (`None`: as it is).
     pub(in crate::game) fn previewing(
         mut self,
@@ -1004,6 +1021,9 @@ impl<
     T: std::ops::Deref<Target = Ticks>,
 > mod_api::LevelHost for LevelTicks<'b, L, T>
 {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::LevelHost::block_states(&*self.level)
+    }
     fn block_face_sturdy(
         &self,
         pos: [i32; 3],
@@ -1156,7 +1176,12 @@ impl<'a: 'b, 'b, T: std::ops::Deref<Target = Ticks>> mod_api::LevelRandomHost
     for LevelTicks<'b, &mut super::GameLevel<'a>, T>
 {
     fn container_signal(&mut self, pos: [i32; 3]) -> Option<i32> {
-        mod_api::LevelRandomHost::container_signal(&mut *self.level, pos)
+        if self.unpack_container_loot {
+            return mod_api::LevelRandomHost::container_signal(&mut *self.level, pos);
+        }
+        let [x, y, z] = pos;
+        (self.level.native_authoritative && self.level.world.is_loaded_at(x, y, z))
+            .then(|| self.level.containers().stored_container_signal((x, y, z)))
     }
     fn attachments(&mut self) -> &mut dyn mod_api::AttachmentStore {
         mod_api::LevelRandomHost::attachments(&mut *self.level)
@@ -1200,7 +1225,12 @@ impl<
         &self,
         read: impl FnOnce(&sunrise_world::level::Signals<'_, Self>) -> R,
     ) -> Option<R> {
-        let signals = self.level.behaviours.signals(self, &self.ticks);
+        let behaviours = self.level.behaviours;
+        let signals = if self.level.native_authoritative && self.preview.is_some() {
+            behaviours.uncached_signals(self, &self.ticks)
+        } else {
+            behaviours.signals(self, &self.ticks)
+        };
         let value = read(&signals);
         (!(self.level.client_side && signals.read_unknown_output())).then_some(value)
     }

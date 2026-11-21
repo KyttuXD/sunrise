@@ -702,6 +702,15 @@ pub struct VideoMode {
     pub refresh_rate: f32,
 }
 
+/// `VideoMode.refreshRateLabel`, shared by the fullscreen option and F3 FPS line.
+pub fn refresh_rate_label(rate: f32) -> String {
+    if rate == rate.round_ties_even() {
+        (rate as i32).to_string()
+    } else {
+        sunrise_core::java_number::format_fixed2(f64::from(rate))
+    }
+}
+
 impl VideoMode {
     /// `VideoMode.read`: the JSON object `write` makes; any other string is None.
     pub fn read(text: &str) -> Option<Self> {
@@ -728,11 +737,7 @@ impl VideoMode {
 
     /// `VideoMode.write`: the Codec's JSON through Gson (a float prints as `60.0`).
     pub fn write(&self) -> String {
-        let rate = if self.refresh_rate == self.refresh_rate.trunc() {
-            format!("{:.1}", self.refresh_rate)
-        } else {
-            self.refresh_rate.to_string()
-        };
+        let rate = sunrise_core::java_number::float_to_string(self.refresh_rate);
         format!(
             "{{\"width\":{},\"height\":{},\"red_bits\":{},\"green_bits\":{},\"blue_bits\":{},\"refresh_rate\":{rate}}}",
             self.width, self.height, self.red_bits, self.green_bits, self.blue_bits
@@ -741,11 +746,7 @@ impl VideoMode {
 
     /// `VideoMode.refreshRateLabel`: a whole rate without decimals, any other with two.
     pub fn refresh_rate_label(&self) -> String {
-        if self.refresh_rate == self.refresh_rate.round_ties_even() {
-            (self.refresh_rate as i32).to_string()
-        } else {
-            format!("{:.2}", self.refresh_rate)
-        }
+        refresh_rate_label(self.refresh_rate)
     }
 
     /// The colour depth `options.fullscreen.entry` shows.
@@ -1160,6 +1161,8 @@ mod tests {
         assert_eq!(mode.refresh_rate_label(), "144");
         mode.refresh_rate = 59.94;
         assert_eq!(mode.refresh_rate_label(), "59.94");
+        mode.refresh_rate = 59.125;
+        assert_eq!(mode.refresh_rate_label(), "59.13"); // Temurin %.2f of 59.125f
         assert_eq!(mode.bits(), 24);
     }
     #[test]

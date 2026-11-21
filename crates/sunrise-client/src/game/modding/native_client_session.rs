@@ -375,7 +375,7 @@ pub(super) mod tests {
             assert_eq!(game.client_session().client_frame_stats(), None);
             game.remote = None;
             // A reconnect target must not be mistaken for the current session.
-            game.extras_connecting("stale.example:25565", "OldPlayer", false);
+            game.connection_starts("stale.example:25565", "OldPlayer", false);
             assert_eq!(game.client_session().client_server(), None);
         });
     }

@@ -114,6 +114,26 @@ pub trait RecipesClientHost {
     #[access(WorldOnly)]
     fn panel_style(&mut self, mod_id: &str, style: PanelStyle);
     /// Side: client.
+    /// Sets the text in mod `mod_id`'s item panel search box (`panel_items`),
+    /// called by the panel's owner itself: `mod_id` must be the mod whose hook
+    /// or part is making the call and whose panel is showing; any other call
+    /// changes nothing, so one mod can't rewrite another's search (another mod
+    /// asks the owner, through the owner's published integration). The text,
+    /// cut to the box's 50 characters counted in UTF-16 code units as vanilla's
+    /// box counts them, goes into the box the next time the owner's panel draws
+    /// its box, never during this call: the box's value is replaced, the cursor
+    /// goes to its end, the panel goes back to its first page, and the owner
+    /// hears `panel_event` `Search(text)`, the event the player's typing sends.
+    /// No keystrokes are simulated. A later call before that replaces an
+    /// earlier one; the player editing the box first, or another mod taking
+    /// the panel, drops it; text the box already holds changes nothing, its
+    /// cursor and selection included. Set while no container screen is open,
+    /// it waits for the panel to appear. A viewer `jei` clearing its own box
+    /// calls `host.panel_search("jei", "")` from one of its hooks. JEI's
+    /// `IIngredientFilter.setFilterText`.
+    #[access(WorldOnly)]
+    fn panel_search(&mut self, mod_id: &str, text: &str);
+    /// Side: client.
     /// Shows `page` in mod `mod_id`'s item panel instead of its items, drawn by
     /// the game with its own slots (`RecipePage`, `RecipeView`): a title and a
     /// back button, tabs, and the recipes paged to the panel's height. `None`,
@@ -157,9 +177,9 @@ pub trait RecipesClientHost {
     /// whether or not the player's recipe book holds it. For a viewer's "+",
     /// to mark the inputs it lacks. The first call for a recipe asks and
     /// returns None; the answer comes a moment later and is kept for that
-    /// recipe while the menu, the inventory and the grid stay as they were;
-    /// while it is still wanted it is asked again every two seconds, at most
-    /// fifteen times for one state of the menu. None outside a screen that
+    /// recipe while the menu, the inventory and the grid stay as they were.
+    /// On a remote server, while the answer is wanted, the client asks again
+    /// once the cached answer is one second old. None outside a screen that
     /// takes `transfer_recipe_id` and on a server that doesn't answer it.
     #[access(WorldOnly)]
     fn transfer_recipe_check(&mut self, recipe: &str) -> Option<RecipeTransferCheck>;

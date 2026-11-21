@@ -71,6 +71,14 @@ fn loader(names: &[String]) -> &'static str {
     }
 }
 
+/// What the user is told of a jar version that isn't semver (see [`carry::manifest_version`]).
+pub(crate) fn version_note(version: &str) -> String {
+    format!(
+        "version {version:?} couldn't be read as semver: the manifest says 0.0.0+unresolved.…, which no \
+         dependency accepts, so set the version by hand before anything depends on this mod"
+    )
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -135,6 +143,7 @@ pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
     let alone = |m: &str| m == info.mod_id || m == "minecraft";
     let pack = carry::Pack {
         loaded: &alone,
+        minecraft: "",
         mods: &alone,
     };
     let report = match carry::carry(
@@ -180,6 +189,9 @@ pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
             .push("blocks take the closest vanilla block's shape, hardness and sounds".into());
     }
     let mut skipped = Vec::new();
+    if let Some(version) = &report.version_unreadable {
+        skipped.push(version_note(version));
+    }
     if !report.blocks_unknown.is_empty() {
         skipped.push(plural(
             report.blocks_unknown.len(),

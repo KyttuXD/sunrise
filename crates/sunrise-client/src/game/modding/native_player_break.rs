@@ -60,7 +60,11 @@ impl Game<'_> {
         };
         let mut broke = false;
         self.native_as_player_handle(player, |game| {
-            broke = game.break_as_acting_player(pos, into_inventory);
+            // The break is in the player's level: for a player in another level than the one
+            // in place, nothing is broken.
+            if game.acting_in_level_in_place() {
+                broke = game.break_as_acting_player(pos, into_inventory);
+            }
         });
         broke
     }

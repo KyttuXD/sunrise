@@ -1,7 +1,7 @@
 //! Internals discovery: which game internals a native mod names, found by checking it against the pinned game's source with the deprecation lint forced (`native-discover`).
 use crate::host::trf;
 use crate::rust::Toolchain;
-use crate::{Bundle, api, dependencies, internals};
+use crate::{MixinsIdentity, api, dependencies, internals, mixins_patch};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -12,6 +12,7 @@ use std::{
 };
 use sunrise_mod_package::build_data;
 use sunrise_mod_package::internals::{self as catalog, ListedInternal};
+use sunrise_mod_package::sdk::Mixins;
 
 #[derive(Debug)]
 pub enum Error {
@@ -38,18 +39,31 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The internals the mod in `folder` names, each as the pinned game's catalog lists it.
-pub fn internals(rust: &dyn Toolchain, folder: &Path) -> Result<Vec<ListedInternal>, Error> {
-    let game = catalog_for_mod(rust, folder, &crate::root().join("internals-sync"))?;
+/// `sdk` is only needed when the executing tool came from outside that SDK.
+pub fn internals(
+    rust: &dyn Toolchain,
+    folder: &Path,
+    sdk: Option<&Mixins>,
+) -> Result<Vec<ListedInternal>, Error> {
+    let game = catalog_for_mod(rust, folder, sdk)?;
     discover_catalog(rust, folder, &game)
 }
 
-/// The pinned game's build data (`internals.json`, `points.json`) with only this mod's modules applied, copied into `output`, which must not exist yet.
-pub fn catalog(rust: &dyn Toolchain, folder: &Path, output: &Path) -> Result<PathBuf, Error> {
-    let game = catalog_for_mod(rust, folder, &crate::root().join("internals-sync"))?;
+/// The pinned game's `internals.json` with only this mod's modules applied, copied into `output`, which must not exist yet.
+/// `sdk` is only needed when the executing tool came from outside that SDK.
+pub fn catalog(
+    rust: &dyn Toolchain,
+    folder: &Path,
+    sdk: Option<&Mixins>,
+    output: &Path,
+) -> Result<PathBuf, Error> {
+    let game = catalog_for_mod(rust, folder, sdk)?;
     fs::create_dir(output).map_err(|e| format!("{}: {e}", output.display()))?;
-    for name in [build_data::INTERNALS, build_data::POINTS] {
-        fs::copy(game.join(name), output.join(name)).map_err(|e| e.to_string())?;
-    }
+    fs::copy(
+        game.join(build_data::INTERNALS),
+        output.join(build_data::INTERNALS),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(output.to_path_buf())
 }
 
@@ -57,14 +71,15 @@ pub fn catalog(rust: &dyn Toolchain, folder: &Path, output: &Path) -> Result<Pat
 fn catalog_for_mod(
     rust: &dyn Toolchain,
     folder: &Path,
-    cache_root: &Path,
+    sdk: Option<&Mixins>,
 ) -> Result<PathBuf, Error> {
     catalog_for_mod_with(
         folder,
-        cache_root,
+        &crate::root().join("internals-sync"),
+        sdk,
         crate::source,
-        |bundle, prepared, input, fresh| {
-            let tool = crate::tool(rust, &bundle.native().mixins, &|| {})?;
+        |identity, prepared, input, fresh| {
+            let tool = mixins_patch::tool(rust, identity)?;
             crate::run(
                 crate::apply(rust, &tool, prepared, input, fresh),
                 "horizon-mixins",
@@ -86,9 +101,10 @@ fn discover_catalog(
         )
     })?;
     let projects = [api::Project::read(&bundle).map_err(|e| e.to_string())?];
-    let declared = [dependencies::from_manifest(
-        &bundle.manifest.dependencies,
+    let declared = [dependencies::build_dependencies(
+        &bundle.manifest,
         sunrise_mod_package::manifest::Side::Both,
+        |id| bundle.manifest.id == id,
     )];
     let inputs = [dependencies::Mod {
         id: &bundle.manifest.id,
@@ -104,7 +120,7 @@ fn discover_catalog(
         .to_path_buf();
     crate::host::mark_used(&cache)?;
     let stage = cache.join("stage");
-    prepare_stage(game, &stage)?;
+    prepare_stage(game, &stage, bundle.needs_mixins())?;
     let mut listed = internals::Catalog::read(&stage)?;
     listed.discovery = true;
     api::stage(&stage, &projects, &declared, &resolution, &listed)?;
@@ -155,12 +171,16 @@ fn discover_catalog(
 fn catalog_for_mod_with(
     folder: &Path,
     cache_root: &Path,
+    sdk: Option<&Mixins>,
     source: impl FnOnce(&str) -> Result<PathBuf, String>,
-    apply: impl FnOnce(&Bundle, &Path, &Path, &Path) -> Result<(), String>,
+    apply: impl FnOnce(&MixinsIdentity, &Path, &Path, &Path) -> Result<(), String>,
 ) -> Result<PathBuf, Error> {
-    let bundle = crate::bundle_in(folder)?.ok_or_else(|| "not a native mod project".to_owned())?;
+    let bundle = crate::bundle_in(folder)?
+        .filter(|bundle| bundle.manifest.native.is_some())
+        .ok_or_else(|| "not a native mod project".to_owned())?;
     let native = bundle.native();
-    let cache = if bundle.needs_mixins() {
+    let needs_mixins = bundle.needs_mixins();
+    let cache = if needs_mixins {
         cache_root
             .join(&native.sunrise)
             .join("modules")
@@ -168,14 +188,11 @@ fn catalog_for_mod_with(
     } else {
         cache_root.join(&native.sunrise)
     };
-    let game = cache.join(if bundle.needs_mixins() {
-        "module-game"
-    } else {
-        "game"
-    });
-    if !bundle.needs_mixins() && game.join(".discovery-ready").is_file() {
+    let game = cache.join(if needs_mixins { "module-game" } else { "game" });
+    if !needs_mixins && game.join(".discovery-ready").is_file() {
         return Ok(game);
     }
+    let identity = MixinsIdentity::resolve([&bundle], sdk)?;
     let source = source(&native.sunrise).map_err(|reason| Error::SourceUnavailable {
         revision: native.sunrise.clone(),
         reason,
@@ -184,19 +201,18 @@ fn catalog_for_mod_with(
     if fresh.exists() {
         fs::remove_dir_all(&fresh).map_err(|e| e.to_string())?;
     }
-    if bundle.needs_mixins() {
+    if needs_mixins {
         let input = cache.join("mixins.incoming");
         crate::stage_mixins(std::slice::from_ref(&bundle), &input)?;
         let prepared = cache.join("mixins.source");
         crate::prepare_mixins_source(&source, &prepared)?;
-        apply(&bundle, &prepared, &input, &fresh)
+        apply(&identity, &prepared, &input, &fresh)
             .map_err(|error| format!("{}: {error}", bundle.manifest.id))?;
     } else {
         crate::sync(&source, &fresh)?;
     }
     sunrise_platform::mod_build::api_gen::staging::stage(
         &fresh,
-        &fresh.join("points.json"),
         &fresh.join(internals::INTERNALS),
         sunrise_platform::mod_build::api_gen::staging::Mode::Discovery,
         &sunrise_platform::mod_build::api_gen::staging::Build {
@@ -215,7 +231,9 @@ fn catalog_for_mod_with(
 // sunrise-world watches it, so restoring the pristine lock would rebuild the entire game
 // every time. Reset only the workspace membership and the generated mod source copies.
 // The first copy is published by a rename, so an interrupted copy is never taken as warm.
-fn prepare_stage(game: &Path, stage: &Path) -> Result<(), String> {
+// `regenerated`: the mod's own mixins rewrote the game tree, so its changed sources and catalogs
+// are taken too.
+fn prepare_stage(game: &Path, stage: &Path, regenerated: bool) -> Result<(), String> {
     if !stage.is_dir() {
         let fresh = stage.with_extension("new");
         if fresh.exists() {
@@ -223,10 +241,16 @@ fn prepare_stage(game: &Path, stage: &Path) -> Result<(), String> {
         }
         crate::sync(game, &fresh)?;
         fs::rename(&fresh, stage).map_err(|e| e.to_string())?;
+    } else if regenerated {
+        for (name, path) in crate::files(game)? {
+            if name != "Cargo.lock" {
+                crate::copy_changed(&path, &stage.join(name))?;
+            }
+        }
     } else {
         fs::copy(game.join("Cargo.toml"), stage.join("Cargo.toml")).map_err(|e| e.to_string())?;
     }
-    for relative in ["native-api", "native-internals", "crates/native-game"] {
+    for relative in ["native-api", "native-internals"] {
         let path = stage.join(relative);
         if path.exists() {
             fs::remove_dir_all(path).map_err(|e| e.to_string())?;
@@ -345,6 +369,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a_regenerated_game_tree_reaches_the_warm_stage_and_the_resolved_lock_stays() {
+        let root = crate::tests::dir("discovery-regenerated");
+        let game = root.join("game");
+        let stage = root.join("stage");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("Cargo.toml"), "[workspace]\nmembers=[]\n").unwrap();
+        fs::write(game.join("Cargo.lock"), "original").unwrap();
+        fs::write(game.join("module.rs"), "first").unwrap();
+        fs::write(game.join(internals::INTERNALS), "first catalog").unwrap();
+        prepare_stage(&game, &stage, true).unwrap();
+        fs::write(stage.join("Cargo.lock"), "resolved").unwrap();
+        fs::write(game.join("module.rs"), "second").unwrap();
+        fs::write(game.join(internals::INTERNALS), "second catalog").unwrap();
+        prepare_stage(&game, &stage, true).unwrap();
+        assert_eq!(fs::read(stage.join("module.rs")).unwrap(), b"second");
+        assert_eq!(
+            fs::read(stage.join(internals::INTERNALS)).unwrap(),
+            b"second catalog"
+        );
+        assert_eq!(fs::read(stage.join("Cargo.lock")).unwrap(), b"resolved");
+    }
+
+    #[test]
     fn discovery_cache_keeps_the_resolved_lock_and_game_sources_but_replaces_mods() {
         let root = crate::tests::dir("discovery-cache");
         let game = root.join("game");
@@ -353,7 +400,7 @@ mod tests {
         fs::write(game.join("Cargo.toml"), "[workspace]\nmembers=[]\n").unwrap();
         fs::write(game.join("Cargo.lock"), "original").unwrap();
         fs::write(game.join("game.rs"), "struct Game;").unwrap();
-        prepare_stage(&game, &stage).unwrap();
+        prepare_stage(&game, &stage, false).unwrap();
         let modified = fs::metadata(stage.join("game.rs"))
             .unwrap()
             .modified()
@@ -362,7 +409,7 @@ mod tests {
         fs::write(stage.join("Cargo.toml"), "with a generated mod").unwrap();
         fs::create_dir_all(stage.join("native-api/old/src")).unwrap();
         fs::write(stage.join("native-api/old/src/lib.rs"), "old mod").unwrap();
-        prepare_stage(&game, &stage).unwrap();
+        prepare_stage(&game, &stage, false).unwrap();
         assert_eq!(
             fs::read(stage.join("Cargo.lock")).unwrap(),
             b"resolved with mod dependencies"
@@ -395,7 +442,7 @@ mod tests {
         let partial = root.join("stage.new");
         fs::create_dir_all(&partial).unwrap();
         fs::write(partial.join("Cargo.toml"), "[workspace]\nmembers=[]\n").unwrap();
-        prepare_stage(&game, &stage).unwrap();
+        prepare_stage(&game, &stage, false).unwrap();
         assert_eq!(fs::read(stage.join("internals.json")).unwrap(), b"[]");
         assert!(stage.join("crates/lib.rs").is_file());
         assert!(!partial.exists());

@@ -1,5 +1,11 @@
 # Saving chunk attachments
 
+This hook saves chunk attachments. To serialize a mod block entity's live state into its own
+payload, use [`block_entity_save_additional`](../concepts/parts/block-entity-types.md#saved-data)
+on the server thread, before the disk worker sees the capture. If block-entity serializer edits
+cannot be written, the worker retries with stored block-entity payloads and keeps the result of
+`chunk_data_save`.
+
 `chunk_data_save` receives `&dyn ChunkDiskHost` and a `ChunkDataSaveEvent`.
 The event's `data` is a typed, job-local attachment store. Use its `get`, `set`
 and `remove` methods with an `AttachmentType<T>`; `T` must implement `Wire` and

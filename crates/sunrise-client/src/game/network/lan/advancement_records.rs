@@ -8,6 +8,7 @@ impl Game<'_> {
         guest: &sunrise_client::lan::guest::Guest,
     ) {
         if !guest.placed
+            || self.crash_save.excludes(guest.conn)
             || guest.released
             || !guest.participates_in_player_simulation()
             || self.adv.tree.list.is_empty()
@@ -21,11 +22,8 @@ impl Game<'_> {
         let json = guest
             .advancements
             .to_json(&self.adv.tree, sunrise_world::DATA_VERSION);
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
         if let Ok(text) = serde_json::to_string_pretty(&json) {
-            let _ = std::fs::write(path, text);
+            let _ = sunrise_client::save::write_durable(&path, text.as_bytes());
         }
     }
     /// `PlayerAdvancements.save` and `ServerStatsCounter.save` of a network player.
@@ -35,6 +33,7 @@ impl Game<'_> {
         guest: &sunrise_client::lan::guest::Guest,
     ) {
         if !guest.placed
+            || self.crash_save.excludes(guest.conn)
             || guest.released
             || !guest.participates_in_player_simulation()
             || self.adv.tree.list.is_empty()

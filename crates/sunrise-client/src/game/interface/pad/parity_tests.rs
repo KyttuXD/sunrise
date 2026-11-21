@@ -175,6 +175,48 @@ fn readers_of_the_movement_keys_see_the_stick() {
             !game.mapping("key.jump").unwrap().unwrap().down,
             "the stick holds only the movement keys"
         );
+        // Forward is inside the eight-direction sector, left outside it. A direct
+        // write on forward must not reclassify what remains of the stick.
+        with_player(game);
+        game.pad.state.left = [-0.34, 0.93];
+        let before = game.sample_movement_keys(game.pad_move());
+        assert!(game.mapping_state("key.forward").unwrap().0);
+        assert!(!game.mapping_state("key.left").unwrap().0);
+        assert!(before.forward);
+        let [left, forward] = before.direction();
+        assert!(left > 0.3 && forward > 0.8);
+        game.set_mapping_down("key.forward", false).unwrap();
+        let after = game.sample_movement_keys(game.pad_move());
+        assert!(!game.mapping_state("key.forward").unwrap().0);
+        assert!(!game.mapping_state("key.left").unwrap().0);
+        assert!(!after.forward);
+        assert_eq!(after.left, before.left);
+        assert_eq!(after.direction(), [left, 0.0]);
+
+        game.pad.state.left = [-0.85, 0.0];
+        let [left, _] = game.pad_move().unwrap();
+        game.set_mapping_down("key.forward", true).unwrap();
+        let after = game.sample_movement_keys(game.pad_move());
+        assert!(game.mapping_state("key.forward").unwrap().0);
+        assert!(after.forward);
+        assert_eq!(after.direction(), [left, 1.0]);
+
+        // A tilt below the digital threshold is new analog input and still
+        // takes over. A changed left component does not take over forward.
+        game.pad.state.left = [0.0, 0.0];
+        let before = game.pad_move();
+        game.set_mapping_down("key.forward", false).unwrap();
+        game.pad.state.left = [-0.4, 0.0];
+        game.resume_stick_mappings(before);
+        assert_eq!(game.keys.override_for(&KeyCode::KeyW), Some(false));
+        game.pad.state.left = [0.0, 0.0];
+        let before = game.pad_move();
+        game.pad.state.left = [0.0, game.settings.controller.move_deadzone + 0.01];
+        game.resume_stick_mappings(before);
+        let after = game.sample_movement_keys(game.pad_move());
+        assert!(!after.forward);
+        assert!(after.direction()[1] > 0.0);
+
         // A screen takes the stick away.
         game.screen = Screen::Paused;
         assert!(!game.mapping("key.forward").unwrap().unwrap().down);
@@ -271,6 +313,31 @@ fn the_mouse_letting_go_leaves_what_the_pad_holds_and_back() {
         game.mouse_mapping(MouseButton::Right, false, Source::Keyboard)
             .unwrap();
         assert!(!game.right);
+
+        // Rebinding a physical mouse button to an ordinary key goes through
+        // the keyboard source path, not the default attack/use path above.
+        with_player(game);
+        let binding = "key.mouse.left";
+        game.settings.keys.set("key.forward", binding);
+        for mouse_releases_first in [true, false] {
+            game.mapped_mouse_event(MouseButton::Left, binding, true)
+                .unwrap();
+            game.pad_action("key.forward", true).unwrap();
+            game.set_mapping_down("key.forward", false).unwrap();
+            assert!(!game.keys.held(Action::Forward));
+            for mouse_releases in [mouse_releases_first, !mouse_releases_first] {
+                if mouse_releases {
+                    game.mapped_mouse_event(MouseButton::Left, binding, false)
+                        .unwrap();
+                } else {
+                    game.pad_action("key.forward", false).unwrap();
+                }
+                assert_eq!(
+                    game.keys.held(Action::Forward),
+                    mouse_releases == mouse_releases_first
+                );
+            }
+        }
     });
 }
 

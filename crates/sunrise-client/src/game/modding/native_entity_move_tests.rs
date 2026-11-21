@@ -243,7 +243,7 @@ fn without_listeners_the_move_stands() {
 /// still hears the same entity on the same session.
 #[test]
 fn a_poisoned_move_listener_keeps_its_other_hooks() {
-    use mod_api::{EntityTickPreEvent, ServerHost};
+    use mod_api::{EntityTickPreEvent, HostSide, ServerHost};
     struct Both {
         moves: Arc<Mutex<Heard>>,
         ticks: Arc<Mutex<usize>>,
@@ -254,9 +254,8 @@ fn a_poisoned_move_listener_keeps_its_other_hooks() {
             self.moves.lock().unwrap().clear();
             panic!("the move listener unwinds")
         }
-        fn entity_tick_pre(&self, _: &mut dyn ServerHost, _: &mut EntityTickPreEvent<'_>) -> Flow {
+        fn entity_tick_pre(&self, _: HostSide<'_>, _: &mut EntityTickPreEvent<'_>) {
             *self.ticks.lock().unwrap() += 1;
-            Flow::Continue
         }
     }
     let ticks = Arc::new(Mutex::new(0usize));
@@ -287,13 +286,12 @@ fn a_poisoned_move_listener_keeps_its_other_hooks() {
         impl ServerHost for World {}
         mod_api::impl_server_host_areas!(World);
         let mut world = World;
-        let mut canceled = false;
         mod_api::dispatch_entity_tick_pre(
-            &mut world,
+            HostSide::Server(&mut world),
             "minecraft:overworld",
-            7,
-            "minecraft:zombie",
-            &mut canceled,
+            &[7],
+            &["minecraft:zombie"],
+            &mut Vec::new(),
         );
         assert_eq!(*ticks.lock().unwrap(), 1, "the other hook still runs");
     });
@@ -304,7 +302,7 @@ fn a_poisoned_move_listener_keeps_its_other_hooks() {
 /// move still reaches the mod's listener.
 #[test]
 fn a_panic_elsewhere_does_not_poison_the_move_listener() {
-    use mod_api::{EntityTickPreEvent, ServerHost};
+    use mod_api::{EntityTickPreEvent, HostSide, ServerHost};
     struct Ticking {
         moves: Arc<Mutex<Heard>>,
     }
@@ -317,7 +315,7 @@ fn a_panic_elsewhere_does_not_poison_the_move_listener() {
                 .push((event.entity, event.cause, *event.delta));
             Flow::Continue
         }
-        fn entity_tick_pre(&self, _: &mut dyn ServerHost, _: &mut EntityTickPreEvent<'_>) -> Flow {
+        fn entity_tick_pre(&self, _: HostSide<'_>, _: &mut EntityTickPreEvent<'_>) {
             panic!("a panic outside entity_move")
         }
     }
@@ -340,13 +338,12 @@ fn a_panic_elsewhere_does_not_poison_the_move_listener() {
             impl ServerHost for World {}
             mod_api::impl_server_host_areas!(World);
             let mut world = World;
-            let mut canceled = false;
             mod_api::dispatch_entity_tick_pre(
-                &mut world,
+                HostSide::Server(&mut world),
                 "minecraft:overworld",
-                7,
-                "minecraft:zombie",
-                &mut canceled,
+                &[7],
+                &["minecraft:zombie"],
+                &mut Vec::new(),
             );
         }));
         assert!(caught.is_err(), "the other hook unwound");

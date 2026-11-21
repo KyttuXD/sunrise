@@ -1,7 +1,8 @@
 //! The settings store (docs/layers.md, "Platform registries"): a crate above the engine keeps its
 //! own settings as `key:value` lines in the game folder, next to `options.txt`, which stays
-//! exactly vanilla's. Its lines go in `sunrise-extras.txt` (a setting that moved out of the
-//! engine's extras keeps its key there, so players keep their choice) or in a file of its own.
+//! exactly vanilla's. Its lines go in `sunrise-extras.txt` or `sunrise-graphics.txt` (a setting
+//! that moved out of the engine's extras or video settings keeps its key there, so players keep
+//! their choice) or in a file of its own.
 //!
 //! The engine routes the lines when it loads and saves the player's settings, never per frame.
 //! With no store registered it reads and writes nothing more than before.
@@ -15,8 +16,8 @@ use crate::registry::Registry;
 /// One crate's settings. The values live in the crate (statics); the engine only hands it its
 /// lines and asks for them back.
 pub trait Store: Sync {
-    /// Its file in the game folder: `sunrise-extras.txt`, or its own `sunrise-<name>.txt` that the
-    /// engine doesn't write.
+    /// Its file in the game folder: `sunrise-extras.txt` or `sunrise-graphics.txt`, or its own
+    /// `sunrise-<name>.txt` that the engine doesn't write.
     fn file(&self) -> &'static str;
     /// Whether a line's key is this store's.
     fn owns(&self, key: &str) -> bool;

@@ -8,15 +8,22 @@ pub trait Hooks {
     /// change, reorder or remove lines. `player` and `player_entity_id` are
     /// the local player's, `display` the stack's `minecraft:tooltip_display`,
     /// `advanced` (F3+H) and `creative` (a creative tab's own slot) its
-    /// `TooltipFlag`. Asked each frame the tooltip shows, never for one the
-    /// stack hides or a crossbow's loaded projectile. Client-side.
+    /// `TooltipFlag`. Asked when item tooltip lines are built, for the game's display
+    /// or `ItemResource::tooltip`. Never asked for a hidden tooltip, a crossbow's loaded
+    /// projectile or a query made during item tooltip line construction. Queries outside
+    /// line construction can dispatch this event, but never gather images or draw. Client-side.
     /// This global event is distinct from [`ItemPart::tooltip`], which runs at
     /// the earlier `Item.appendHoverText` position, before component lines.
     /// Parts' lines therefore come first; this event sees the finished list
     /// including them, for any item, even one with no attached parts.
     /// A component deeper than 512 nodes refuses capture or the whole writeback;
     /// no event field is applied if any Text field fails conversion.
-    #[hook(side = "client", contract = "listen", neoforge = "ItemTooltipEvent")]
+    #[hook(
+        side = "client",
+        contract = "listen",
+        neoforge = "ItemTooltipEvent",
+        version = 2
+    )]
     fn item_tooltip(
         player: u128,
         player_entity_id: i32,

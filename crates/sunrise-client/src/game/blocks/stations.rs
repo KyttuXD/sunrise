@@ -39,10 +39,10 @@ fn tooltip_position(
 use super::api_values::{TryIntoApi, TryIntoEngine};
 use super::{Game, Screen};
 use mod_api::{TooltipElement, TooltipImage};
+use std::cell::Cell;
 use sunrise_client::{
     block_entity_item, brewing,
     containers::BlockEntity,
-    enchant::Enchantments,
     hud::{HudBatch, rgba},
     items::ItemStack,
     random_source,
@@ -50,6 +50,18 @@ use sunrise_client::{
     text::Text,
 };
 use sunrise_core::random::{LegacyRandom, RandomSource};
+
+thread_local! {
+    static IN_TOOLTIP_BUILD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct TooltipBuildGuard;
+
+impl Drop for TooltipBuildGuard {
+    fn drop(&mut self) {
+        IN_TOOLTIP_BUILD.set(false);
+    }
+}
 
 /// The book above the enchanting table's offers: `EnchantmentScreen`'s
 /// `time`, `flip`, `oFlip`, `flipT`, `flipA`, `open`, `oOpen` and `last`.
@@ -359,6 +371,14 @@ impl Station {
     pub(super) fn stonecutter_changed(&mut self) {
         self.start = 0;
         self.scroll = 0.0;
+    }
+    /// Clear state tied to the previous `UpdateRecipes` table.
+    pub(in crate::game) fn reset_stonecutter_generation(&mut self) {
+        self.stone = Default::default();
+        self.selected = None;
+        self.result = None;
+        self.scrolling = false;
+        self.stonecutter_changed();
     }
     /// `StonecutterScreen.isScrollBarActive`.
     fn stonecutter_scrolls(&self) -> bool {
@@ -952,6 +972,7 @@ impl Game<'_> {
     /// (`ExperienceOrb.award`), then level event 1042, the grindstone's sound
     /// for everyone around.
     pub(super) fn grindstone_taken(&mut self, pos: [i32; 3], amount: i32) {
+        self.journal_level_random();
         let xp = stations::grindstone_xp_roll(amount, &mut self.world.random);
         self.grindstone_award(pos, xp);
     }
@@ -961,7 +982,7 @@ impl Game<'_> {
         if xp > 0 {
             self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), xp);
         }
-        self.level_event_at(1042, pos, 0);
+        self.after_commit(super::transactions::After::GrindstoneEvent(pos));
     }
     fn play_at(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
         let at = [
@@ -1415,7 +1436,7 @@ impl Game<'_> {
         size: (f32, f32),
         dst: (f32, f32),
     ) {
-        if let Some(mut r) = atlas.sprites.get(name).copied() {
+        if let Some(mut r) = atlas.gui_rect(name).copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u0 += src.0 * du;
             r.v0 += src.1 * dv;
@@ -1547,13 +1568,7 @@ impl Game<'_> {
         nested: bool,
         creative: bool,
     ) -> Vec<(sunrise_client::text::Text, u32)> {
-        self.build_stack_tooltip_lines(
-            stack,
-            nested,
-            creative,
-            self.options_advanced_tooltips(),
-            true,
-        )
+        self.tooltip_lines(stack, nested, creative, self.options_advanced_tooltips())
     }
 
     #[allow(clippy::needless_question_mark)] // TODO(#2273)
@@ -1565,7 +1580,7 @@ impl Game<'_> {
     ) -> Option<Vec<mod_api::TooltipElement>> {
         self.items().get(&stack.item)?;
         Some(
-            self.build_stack_tooltip_lines(stack, false, creative, advanced, false)
+            self.tooltip_lines(stack, false, creative, advanced)
                 .into_iter()
                 .map(|(text, color)| {
                     text.try_into_api()
@@ -1576,6 +1591,22 @@ impl Game<'_> {
         )
     }
 
+    fn tooltip_lines(
+        &self,
+        stack: &ItemStack,
+        nested: bool,
+        creative: bool,
+        advanced: bool,
+    ) -> Vec<(sunrise_client::text::Text, u32)> {
+        // A listener, part or appender may ask for another tooltip on the same client thread.
+        let guard = if IN_TOOLTIP_BUILD.replace(true) {
+            None
+        } else {
+            Some(TooltipBuildGuard)
+        };
+        self.build_stack_tooltip_lines(stack, nested, creative, advanced, guard.is_some())
+    }
+
     fn build_stack_tooltip_lines(
         &self,
         stack: &ItemStack,
@@ -1584,7 +1615,10 @@ impl Game<'_> {
         advanced: bool,
         mod_callbacks: bool,
     ) -> Vec<(sunrise_client::text::Text, u32)> {
-        let e: &Enchantments = self.active_enchantment_definitions();
+        use sunrise_client::item_tooltip::{
+            self, EnchantmentComponent, PaintingTooltip, TooltipHolders,
+        };
+        let holders = TooltipHolders::Definitions(self.active_enchantment_definitions());
         let color = self.rarity_color(stack);
         let advanced = !nested && advanced;
         let display = sunrise_client::item_tooltip::tooltip_display(stack);
@@ -1611,27 +1645,24 @@ impl Game<'_> {
         if let Some(text) = sunrise_client::item_tooltip::disc_fragment_line(stack, &translate) {
             push(&mut lines, text, gray);
         }
-        // HangingEntityItem.appendHoverText: a painting's variant, its title,
-        // author and size, or in a creative tab "Random variant".
-        if &*stack.item == "minecraft:painting" && display.shows("minecraft:painting/variant") {
-            use sunrise_client::text::Text;
-            if let Some(v) = self.painting_variants.of_stack(stack) {
-                for part in [&v.title, &v.author].into_iter().flatten() {
-                    let text = sunrise_client::component::to_text(part, &mut |_| Text::empty());
-                    lines.push((text, u32::MAX));
-                }
-                let size = [v.width, v.height].map(|n| Text::literal(n.to_string()));
-                lines.push((Text::translate("painting.dimensions", &size), u32::MAX));
-            } else if creative
-                && stack
-                    .data()
-                    .and_then(|d| d.other("minecraft:painting/variant"))
-                    .is_none()
-            {
-                let random = Text::translate("painting.random", &[]);
-                lines.push((random.with_color(sunrise_client::text::GRAY), u32::MAX));
-            }
-        }
+        lines.extend(
+            item_tooltip::painting_lines(
+                stack,
+                &display,
+                creative,
+                |id| {
+                    let v = self.painting_variants.get(id)?;
+                    Some(PaintingTooltip {
+                        title: v.title.as_ref(),
+                        author: v.author.as_ref(),
+                        size: [v.width, v.height],
+                    })
+                },
+                &sunrise_client::text::Text::translate,
+            )
+            .into_iter()
+            .map(|text| (text, u32::MAX)),
+        );
         let context = mod_api::TooltipAppendContext {
             player: self.own_uuid(),
             player_entity_id: self.own_entity_id(),
@@ -1665,9 +1696,14 @@ impl Game<'_> {
         }
         details.start("minecraft:instrument", lines.len());
         // InstrumentComponent.addToTooltip.
-        if let Some(text) =
-            sunrise_client::item_tooltip::instrument_line(stack, &display, &translate)
-        {
+        if let Some(text) = item_tooltip::instrument_line(
+            stack,
+            &display,
+            Some(|id: &str| {
+                let key = format!("instrument.{}", id.replacen(':', ".", 1));
+                Some(translate(&key).unwrap_or(key))
+            }),
+        ) {
             push(&mut lines, text, gray);
         }
         details.start("minecraft:map_id", lines.len());
@@ -1828,31 +1864,15 @@ impl Game<'_> {
             push(&mut lines, format!(" {p}"), rgba(170, 170, 170, 255));
             push(&mut lines, format!(" {m}"), rgba(170, 170, 170, 255));
         }
-        details.start("minecraft:stored_enchantments", lines.len());
-        if display.shows("minecraft:stored_enchantments") {
-            for (text, curse) in e.tooltip(stack.stored_enchantments()) {
+        for component in [EnchantmentComponent::Stored, EnchantmentComponent::Applied] {
+            details.start(component.id(), lines.len());
+            for (text, curse) in
+                item_tooltip::enchantment_lines(stack, &display, component, holders, &translate)
+            {
                 push(
                     &mut lines,
                     text,
-                    if curse {
-                        rgba(255, 85, 85, 255)
-                    } else {
-                        rgba(170, 170, 170, 255)
-                    },
-                );
-            }
-        }
-        details.start("minecraft:enchantments", lines.len());
-        if display.shows("minecraft:enchantments") {
-            for (text, curse) in e.tooltip(stack.enchantments()) {
-                push(
-                    &mut lines,
-                    text,
-                    if curse {
-                        rgba(255, 85, 85, 255)
-                    } else {
-                        rgba(170, 170, 170, 255)
-                    },
+                    if curse { rgba(255, 85, 85, 255) } else { gray },
                 );
             }
         }
@@ -1873,9 +1893,15 @@ impl Game<'_> {
             }
         }
         details.start("minecraft:attribute_modifiers", lines.len());
-        let shown = display.shows("minecraft:attribute_modifiers");
-        let (modifier_lines, added) =
-            self.stack_attribute_tooltip(stack, shown, nested, advanced, creative, mod_callbacks);
+        let attributes_shown = display.shows("minecraft:attribute_modifiers");
+        let (modifier_lines, added) = self.stack_attribute_tooltip(
+            stack,
+            attributes_shown,
+            nested,
+            advanced,
+            creative,
+            mod_callbacks && display.name_visible(creative),
+        );
         for (text, c) in modifier_lines {
             push(&mut lines, text, c);
         }
@@ -1908,15 +1934,17 @@ impl Game<'_> {
             push(&mut lines, text, gray);
         }
         details.start("minecraft:entity_data", lines.len());
-        // TypedEntityData.addToTooltip: a spawn egg of a monster in Peaceful.
+        // TypedEntityData.addToTooltip: a type disallowed in Peaceful.
+        let entity_data = block_entity_item::item_entity_data(stack, self.items());
         if let Some(text) = sunrise_client::item_tooltip::spawn_egg_peaceful_line(
-            stack,
+            entity_data.as_ref().map(|data| data.kind.as_str()),
             self.ui.difficulty == 0,
             &display,
             &|id| {
-                self.res.mob_types().get(id).is_none_or(|t| {
-                    sunrise_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
-                })
+                self.res
+                    .mob_types()
+                    .get(id)
+                    .is_none_or(|t| t.allowed_in_peaceful())
             },
             &translate,
         ) {
@@ -2012,7 +2040,8 @@ impl Game<'_> {
             && self.ui.registries.permission >= 2
             && (item_info.is_some_and(|i| i.block.is_some())
                 && block_entity_item::op_warning(stack)
-                || block_entity_item::spawn_egg_op_warning(stack))
+                || stack.item.ends_with("_spawn_egg")
+                    && entity_data.is_some_and(|data| data.op_only()))
         {
             for (i, (key, fallback)) in [
                 ("item.op_warning.line1", "Warning:"),
@@ -2097,14 +2126,15 @@ impl Game<'_> {
                 _ => serde_json::Value::Null,
             };
         };
-        let recipes = &self.stations().recipes.stonecutting;
+        let recipes = &self.station_recipes().stonecutting;
         serde_json::json!({
             "costs": s.offers.costs,
             "clues": s.offers.clues.iter().map(|c| c.as_ref().map(|(e, l)| format!("{e} {l}"))).collect::<Vec<_>>(),
             "bookcases": s.bookcases,
             "anvil_cost": s.anvil.cost,
             "result": s.result.as_ref().map(|r| format!("{} x{}", r.item, r.count)),
-            "recipes": s.stone.recipes.iter().map(|&i| recipes[i].id.clone()).collect::<Vec<_>>(),
+            "recipes": s.stone.recipes.iter().map(|&i| &recipes[i].id).collect::<Vec<_>>(),
+            "recipe_results": s.stone.recipes.iter().map(|&i| recipes[i].result.item.as_ref()).collect::<Vec<_>>(),
             "selected": s.selected,
         })
     }
@@ -2280,7 +2310,7 @@ impl Game<'_> {
     ) {
         for (i, (at, stack)) in layout.slots.iter().enumerate() {
             let selected = layout.selected == Some(i);
-            let sprite = |name: &str| format!("gui/sprites/container/bundle/{name}");
+            let sprite = |name: &str| format!("container/bundle/{name}");
             // Each draw takes the atlas on its own: the item's needs `&mut self`.
             sunrise_client::ui::nine_slice(
                 batch,
@@ -2338,9 +2368,9 @@ impl Game<'_> {
         }
         let [bx, by] = layout.bar;
         let fill_sprite = if layout.full {
-            "gui/sprites/container/bundle/bundle_progressbar_full"
+            "container/bundle/bundle_progressbar_full"
         } else {
-            "gui/sprites/container/bundle/bundle_progressbar_fill"
+            "container/bundle/bundle_progressbar_fill"
         };
         sunrise_client::ui::nine_slice(
             batch,
@@ -2355,7 +2385,7 @@ impl Game<'_> {
         sunrise_client::ui::nine_slice(
             batch,
             atlas,
-            "gui/sprites/container/bundle/bundle_progressbar_border",
+            "container/bundle/bundle_progressbar_border",
             bx,
             by,
             96.0,
@@ -2529,6 +2559,32 @@ impl Game<'_> {
 mod tests {
     #[test]
     #[ignore = "daily"]
+    fn spawn_egg_tooltip_warns_for_the_mod_type_in_peaceful() {
+        use crate::game::{commands::peaceful_tests, execution_role::ExecutionRole};
+        use sunrise_client::hud::rgba;
+
+        peaceful_tests::with_types(ExecutionRole::Client, |game| {
+            let egg = peaceful_tests::trader_egg();
+            let message = game
+                .pack
+                .names
+                .display_get("item.spawn_egg.peaceful")
+                .unwrap_or_else(|| "item.spawn_egg.peaceful".into());
+            let warns = |game: &super::Game<'_>| {
+                game.stack_tooltip_lines(&egg, false, false)
+                    .iter()
+                    .any(|(text, color)| {
+                        text.plain() == message && *color == rgba(255, 85, 85, 255)
+                    })
+            };
+            assert!(warns(game));
+            game.set_difficulty_forced(2);
+            assert!(!warns(game));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn anvil_subscriber_probe_and_answer_cache() {
         use mod_api::{self, AnvilUpdateEvent, Flow, HookId, Hooks, HostSide, ModEntry};
         use std::sync::{
@@ -2581,28 +2637,137 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn resource_tooltip_uses_inventory_lines_and_explicit_flags() {
-        use mod_api::{ItemResource, TooltipElement};
+        use mod_api::{
+            AddAttributeTooltipsEvent, ClientHost, Hooks, ItemResource, ItemTooltipEvent, ModEntry,
+            Mods, TooltipElement,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use sunrise_core::nbt::Tag;
 
-        crate::game::native_entity_refs::tests::with_client_game(|game| {
-            let stack = super::ItemStack::new("minecraft:iron_sword", 1);
-            let resource = ItemResource::of(&crate::game::api_values::test_snapshot(&stack));
-            let inventory: Vec<_> = game
-                .stack_tooltip_lines(&stack, false, false)
-                .into_iter()
-                .map(|(text, color)| TooltipElement::Text(text.try_into_api().unwrap(), color))
-                .collect();
-            let advanced = game.options_advanced_tooltips();
-            assert!(resource.tooltip(game, advanced, false).unwrap() == inventory);
-            for advanced in [false, true] {
-                let lines = resource.tooltip(game, advanced, false).unwrap();
-                assert_eq!(
-                    lines.iter().any(|line| matches!(
-                        line,
-                        TooltipElement::Text(text, _) if *text == mod_api::Text::literal("minecraft:iron_sword")
-                    )),
-                    advanced
-                );
+        const BASE_NAME: &str = "base item line";
+        const REENTERED: &str = "reentered tooltip listener";
+        struct Listener(AtomicBool);
+        #[mod_api::__subscriptions]
+        impl Hooks for Listener {
+            fn add_attribute_tooltips(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut AddAttributeTooltipsEvent<'_>,
+            ) {
+                event
+                    .lines
+                    .push((mod_api::Text::literal("attribute listener"), u32::MAX));
             }
+
+            fn item_tooltip(&self, host: &dyn ClientHost, event: &mut ItemTooltipEvent<'_>) {
+                if self.0.swap(true, Ordering::Relaxed) {
+                    event
+                        .lines
+                        .push((mod_api::Text::literal(REENTERED), u32::MAX));
+                    return;
+                }
+                // Asking for the same stack must return base lines, not enter another listener.
+                let nested = ItemResource::of(event.stack)
+                    .tooltip(host, event.advanced, event.creative)
+                    .unwrap();
+                self.0.store(false, Ordering::Relaxed);
+                assert!(matches!(
+                    nested.first(),
+                    Some(TooltipElement::Text(text, _)) if *text == mod_api::Text::literal(BASE_NAME)
+                ));
+                assert!(!nested.contains(&TooltipElement::Text(
+                    mod_api::Text::literal(REENTERED),
+                    u32::MAX,
+                )));
+                event
+                    .lines
+                    .push((mod_api::Text::literal("listener"), u32::MAX));
+            }
+        }
+        let mods: Mods = vec![ModEntry::new(
+            "listener",
+            Box::new(Listener(AtomicBool::new(false))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                let name = Tag::compound([("text", Tag::String(BASE_NAME.into()))]);
+                let mut stack = super::ItemStack::new("minecraft:iron_sword", 1);
+                stack
+                    .data_mut()
+                    .set_other("minecraft:item_name", Some(name.clone()));
+                let resource = ItemResource::of(&crate::game::api_values::test_snapshot(&stack));
+                let inventory: Vec<_> = game
+                    .stack_tooltip_lines(&stack, false, false)
+                    .into_iter()
+                    .map(|(text, color)| TooltipElement::Text(text.try_into_api().unwrap(), color))
+                    .collect();
+                let advanced = game.options_advanced_tooltips();
+                assert!(resource.tooltip(game, advanced, false).unwrap() == inventory);
+                let attribute_line =
+                    TooltipElement::Text(mod_api::Text::literal("attribute listener"), u32::MAX);
+                assert!(inventory.contains(&attribute_line));
+                let mut hidden = stack.clone();
+                hidden.data_mut().set_other(
+                    "minecraft:tooltip_display",
+                    Some(Tag::compound([("hide_tooltip", Tag::Byte(1))])),
+                );
+                let hidden = ItemResource::of(&crate::game::api_values::test_snapshot(&hidden));
+                assert!(
+                    !hidden
+                        .tooltip(game, false, false)
+                        .unwrap()
+                        .contains(&attribute_line)
+                );
+                let mut attributes_hidden = stack.clone();
+                attributes_hidden.data_mut().set_other(
+                    "minecraft:tooltip_display",
+                    Some(Tag::compound([(
+                        "hidden_components",
+                        Tag::List(vec![Tag::String("minecraft:attribute_modifiers".into())]),
+                    )])),
+                );
+                let attributes_hidden =
+                    ItemResource::of(&crate::game::api_values::test_snapshot(&attributes_hidden));
+                let lines = attributes_hidden.tooltip(game, false, false).unwrap();
+                assert!(lines.contains(&attribute_line));
+                assert!(lines.contains(&TooltipElement::Text(
+                    mod_api::Text::literal("listener"),
+                    u32::MAX,
+                )));
+
+                let mut crossbow = super::ItemStack::new("minecraft:crossbow", 1);
+                crossbow
+                    .data_mut()
+                    .set_other("minecraft:item_name", Some(name));
+                crossbow
+                    .data_mut()
+                    .charged
+                    .push(super::ItemStack::new("minecraft:arrow", 1));
+                let lines = game.stack_tooltip_lines(&crossbow, false, false);
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter(|(text, _)| text.plain().trim() == "listener")
+                        .count(),
+                    1,
+                    "only the crossbow gets the final tooltip event",
+                );
+
+                for advanced in [false, true] {
+                    let lines = resource.tooltip(game, advanced, false).unwrap();
+                    assert!(lines.last().is_some_and(|line| {
+                        *line == TooltipElement::Text(mod_api::Text::literal("listener"), u32::MAX)
+                    }));
+                    assert_eq!(
+                        lines.iter().any(|line| matches!(
+                            line,
+                            TooltipElement::Text(text, _) if *text == mod_api::Text::literal("minecraft:iron_sword")
+                        )),
+                        advanced
+                    );
+                }
+            });
         });
     }
 
@@ -2649,8 +2814,7 @@ mod tests {
 
                 let stack = super::ItemStack::new("minecraft:stick", 1);
                 let assert_context = |game: &mut super::Game<'_>, advanced, rate| {
-                    let lines =
-                        game.build_stack_tooltip_lines(&stack, false, false, advanced, true);
+                    let lines = game.tooltip_lines(&stack, false, false, advanced);
                     assert!(lines.iter().any(|(text, _)| text.plain() == "context"));
                     let context = heard.lock().unwrap().pop().expect("item tooltip Part ran");
                     assert_eq!(context.advanced, advanced);

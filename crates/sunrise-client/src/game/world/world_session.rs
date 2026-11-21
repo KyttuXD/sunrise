@@ -184,7 +184,7 @@ impl Game<'_> {
     #[cfg(test)]
     pub(super) fn load_world(&mut self, request: world_loading::WorldRequest) -> Result<()> {
         let prepared = self.prepare_world_and_rules(request)?;
-        self.finish_open_world(prepared)
+        self.finish_open_world(prepared).map(|_| ())
     }
 
     /// Leaving the game with a world open (window closed, Quit, `quit`):
@@ -225,6 +225,7 @@ impl Game<'_> {
         // A repro recording is finished and bundled before the process may go away.
         self.repro_on_exit();
         self.finish_perf();
+        self.connection_left(sunrise_hooks::connection::Left::Quit);
         if self.title.is_some() || self.saved_for_exit {
             return Ok(());
         }

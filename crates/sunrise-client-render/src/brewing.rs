@@ -660,6 +660,22 @@ mod tests {
     }
 
     #[test]
+    fn a_brewing_recipe_without_a_namespace_in_its_type_is_loaded() {
+        let root = content_brewing_root("bare", "");
+        std::fs::write(
+            root.join("data/example/recipe/brewing/test.json"),
+            br#"{"type":"brewing","input":{"item":"minecraft:potion"},"reagent":{"item":"minecraft:nether_wart"},"output":{"id":"minecraft:diamond"}}"#,
+        )
+        .unwrap();
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(recipes.recipes.len(), 1);
+        assert_eq!(recipes.recipes[0].id, "example:brewing/test");
+        assert!(recipes.reagents.contains("minecraft:nether_wart"));
+    }
+
+    #[test]
     fn content_brewing_recipe_condition_is_applied() {
         let root = content_brewing_root(
             "condition",

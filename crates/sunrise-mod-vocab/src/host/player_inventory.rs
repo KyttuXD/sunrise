@@ -56,8 +56,9 @@ pub trait PlayerInventoryBackendMut {
     /// the item places first, which is what separates it from giving or dropping into the
     /// inventory. `thrown_by_player` names the player as the item's thrower, as the drop key
     /// does. `Ok(None)` when the stack is in the world; otherwise `Ok(Some(stack))` comes back, untouched, for
-    /// the caller to put back: an empty stack, a stale or dead player, or a toss a mod canceled
-    /// (`item_toss`), so a refused drop never loses items. Invalid API stack conversion returns
+    /// the caller to put back: an empty stack, a stale or dead player, a player in another level
+    /// than the hook's, or a toss a mod canceled (`item_toss`), so a refused drop never loses
+    /// items. Invalid API stack conversion returns
     /// `StackWriteError`, as other checked stack writes do.
     #[access(WorldOnly)]
     fn player_drop_stack(
@@ -105,6 +106,10 @@ pub trait PlayerInventoryBackendMut {
     /// the player's eyes with no pickup delay and only they may pick it up; a stack that went
     /// in whole plays the pickup sound. Refuses, with nothing given, with `Stale`, `Client`,
     /// `Dead` or `Stack`, as `player_set_inventory_slot` does.
+    /// For a player in another level than the hook's, what fits goes into their inventory at
+    /// once and nothing lands in the world: what does not fit comes back as `Ok(Some(rest))`
+    /// and no sound plays, so drop it from a hook in the player's own level if you want it
+    /// dropped. Otherwise `Ok(None)`.
     /// An open transaction journals this write; an abort restores the previous value.
     /// Overflow drops and pickup sounds wait for the outermost commit.
     #[access(WorldOnly)]
@@ -112,5 +117,5 @@ pub trait PlayerInventoryBackendMut {
         &mut self,
         player: PlayerRef,
         stack: ItemStack,
-    ) -> Result<(), PlayerDataRefusal>;
+    ) -> Result<Option<ItemStack>, PlayerDataRefusal>;
 }

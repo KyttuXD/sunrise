@@ -664,7 +664,7 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             // The synced `Mob.isAggressive`, which a client's mobs have too.
             Aggressive => flag(m.ai.aggressive),
             Alive => flag(m.alive()),
-            Burning => flag(m.fire_ticks > 0),
+            Burning => flag(m.fire_ticks > 0 && !m.mod_fire_immune),
             Child => flag(s.baby),
             Glowing => flag(m.glowing),
             Hurt => flag(m.hurt_time > 0),

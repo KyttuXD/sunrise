@@ -8,9 +8,9 @@ no edit to SUMMARY.md, and check every page's links.
 - A page directly in one of FOLDERS that SUMMARY.md doesn't list joins the end of its part, by title.
 - Every relative link, reference destination and `{{#include}}` must reach a file (or a generated
   chapter) and, for a page, an existing heading anchor; root-relative links are refused.
-- An absolute URL naming the game's repository or the book's `/sunrise` site names `sunrise-org`;
-  Horizon's own projects (the machine sample, the mixins tool, the registry and its
-  `horizon-rust.github.io/horizon-mods` page) keep their links.
+- An absolute URL naming the game's repository or the mod registry names `sunrise-org`, and one naming the
+  book names `playsunrise.net/docs/modding`, where it is published; the old Pages addresses are refused.
+  Horizon's own projects (the machine sample, the mixins tool) keep their links.
 - A page the book doesn't render, or one titled as a design, a plan or a work list, fails the build.
 """
 import argparse
@@ -28,13 +28,14 @@ SRC = ROOT / "docs/modding/src"
 LINK = re.compile(r"(\!?\[[^\n]*?\]\()([^\s)]+)(\))")
 REFERENCE = re.compile(r"^( {0,3}\[[^\]\n]+\]:[ \t]*<?)([^\s>]+)(>?)", re.MULTILINE)
 INCLUDE = re.compile(r"(\{\{#(?:rustdoc_)?include )([^ }]+)(\s*\}\})")
-# The game repository and the book's Pages site are this repository's. The site's pages are the ones under
-# `/sunrise`: a page beside them (`horizon-rust.github.io/horizon-mods`) belongs to an upstream project and
-# keeps its link, as does a sub-project under another owner (`horizon-machine-sample`, `horizon-mixins`,
-# `horizon-mods`).
+# The game repository and the mod registry are sunrise-org's, and the book is published at
+# playsunrise.net/docs/modding, not on a Pages site (`sunrise-org.github.io/sunrise-mods` is the registry's
+# index, and keeps its link). A sub-project under another owner (`horizon-machine-sample`, `horizon-mixins`)
+# keeps its link too.
 STALE_URL = re.compile(
-    r"https?://(?:github\.com/(?:arismoko|horizon-rust)/horizon(?![\w.-])"
-    r"|(?:arismoko|horizon-rust)\.github\.io/sunrise(?![\w.-]))"
+    r"https?://(?:github\.com/(?:arismoko|horizon-rust)/horizon(?:-mods)?(?![\w.-])"
+    r"|(?:arismoko|horizon-rust)\.github\.io/horizon-mods(?![\w.-])"
+    r"|(?:arismoko|horizon-rust|sunrise-org)\.github\.io/sunrise(?![\w.-]))"
 )
 # Each page directly in one of these folders is a chapter of the part: the pages SUMMARY.md lists keep
 # their place, the rest follow in title order.
@@ -82,7 +83,7 @@ def prose(text):
 
 def check_url(link, where):
     """Refuse an absolute link that sends readers to the game's old repository or the old book site."""
-    assert not STALE_URL.match(link), f"{where}: stale Horizon URL {link} (use sunrise-org/sunrise or its site)"
+    assert not STALE_URL.match(link), f"{where}: stale URL {link} (use sunrise-org's repository, or playsunrise.net/docs/modding for the book)"
 
 
 def validate(text, path, src, contents):

@@ -738,12 +738,13 @@ mod tests {
                     assert_eq!(m.custom_name.as_deref(), Some("Bacon"));
                     assert_eq!(game.tags_of(Target::Mob(spawned)), ["test:tagged"]);
                 });
+                // Item keys resolve with the game inside this scope, so the stack is read here.
+                let (kind, base, head) = seen.lock().unwrap().take().expect("the hook ran");
+                assert_eq!(kind, Ok(id("minecraft:pig")));
+                assert_eq!(base, Ok(20.0));
+                assert_eq!(head, Ok(Some(pumpkin())));
             },
         );
-        let (kind, base, head) = seen.lock().unwrap().take().expect("the hook ran");
-        assert_eq!(kind, Ok(id("minecraft:pig")));
-        assert_eq!(base, Ok(20.0));
-        assert_eq!(head, Ok(Some(pumpkin())));
     }
 
     /// A handle kept past its hook reads `Expired`, and the next call's

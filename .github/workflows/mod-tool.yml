@@ -6,9 +6,10 @@ name: mod tool
 # SHA256SUMS.sig, signed with the release key for the tag `mod-tool` (the message is "horizon release mod-tool\n" and
 # the sums, as an SDK's is for its tag). tool.json is in the sums, so the commit a tool says it is built from is signed.
 #
-# Runs on a push to main and by dispatch, never on a pull request, and builds only when the tool changed: the folders
+# Runs when dyna-checks finishes a main push and by dispatch, never on a pull request (a run that starts at the push
+# would look for the gate before it had finished), and builds only when the tool changed: the folders
 # are the workspace crates cargo-sunrise-mod depends on, from `cargo metadata` (tools/ci/mod_tool.py), plus the files
-# that build and sign it. Like release.yml's snapshot, it needs dyna-checks' gate green on the commit.
+# that build and sign it. Like release.yml's Dev build, it needs dyna-checks' gate green on the commit.
 # - `decide` (no secrets, a read-only token) refuses a commit that is not on main in a step of this file, before any
 #   code of that commit runs; then refuses one not containing what `mod-tool` holds, finds whether the tool changed
 #   since, and needs the gate green on the commit (a cancelled gate is run again by hand, or the next push covers it).
@@ -16,14 +17,16 @@ name: mod tool
 # - `assemble` (no secrets) writes tool.json beside the three archives.
 # - `sign` is the only job with the release key, only for a publishing run on main (the `release` environment): it
 #   checks out nothing but tools/ci/sign_release.sh. Any other run signs with a throwaway key.
-# - `verify` (a read-only token) checks the signature as users' install blocks do (sunrise-release-sign verify) and the
+# - `verify` (a read-only token) checks the signature as users' install blocks do (tools/ci/nightly.py verify-sums) and the
 #   asset set; a dry run ends here.
 # - `publish` exists only for a publishing run on main and is the only job with a write token: it checks that the
 #   published tool is not newer, then replaces the assets. It compiles nothing.
 # A push run publishes only when the repository variable MOD_TOOL_AUTOPUBLISH is `true`; without it a push run is a dry
 # run (throwaway key, nothing published). A dispatch publishes with `-f dry_run=false` on main.
 on:
-  push:
+  workflow_run:
+    workflows: [dyna-checks]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -45,7 +48,7 @@ concurrency:
   # One at a time: a newer push waits behind the one running (and replaces an older waiting one: its commit holds the
   # older one's changes). A dry run has a group of its own, as release.yml's: a dispatched one, a run off main, and a
   # push while MOD_TOOL_AUTOPUBLISH is off, so none of them holds up or cancels a publishing dispatch.
-  group: mod-tool${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'push' && vars.MOD_TOOL_AUTOPUBLISH != 'true') || github.ref != 'refs/heads/main') && '-dry-run' || '' }}
+  group: mod-tool${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'workflow_run' && vars.MOD_TOOL_AUTOPUBLISH != 'true') || github.ref != 'refs/heads/main') && '-dry-run' || '' }}
   cancel-in-progress: false
 defaults:
   run:
@@ -54,6 +57,13 @@ env:
   TAG: mod-tool
 jobs:
   decide:
+    # Of dyna-checks' runs, only this repository's main pushes that ran to the end: a pull request from a branch
+    # named main is a `pull_request` run, and a push run a newer push cancelled is covered by that push's own.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion != 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -68,12 +78,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.commit }}
+          ref: ${{ inputs.commit || github.event.workflow_run.head_sha }}
       # Before anything of the checkout runs: the commit, as a full id, is on main. Every later job builds this id.
       - name: The commit is on main
         id: commit
         env:
-          COMMIT: ${{ inputs.commit || github.sha }}
+          COMMIT: ${{ inputs.commit || github.event.workflow_run.head_sha || github.sha }}
         run: |
           sha=$(git rev-parse --verify "$COMMIT^{commit}")
           git fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -97,7 +107,7 @@ jobs:
           publish=false
           if [ "$GITHUB_REF" = refs/heads/main ]; then
             if [ "$EVENT" = workflow_dispatch ] && [ "$DRY" = false ]; then publish=true; fi
-            if [ "$EVENT" = push ] && [ "$AUTO" = true ]; then publish=true; fi
+            if [ "$EVENT" = workflow_run ] && [ "$AUTO" = true ]; then publish=true; fi
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - id: decide
@@ -264,10 +274,10 @@ jobs:
       COMMIT: ${{ needs.decide.outputs.commit }}
       PUBLISH: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' }}
     steps:
+      # The workflow's own checker, never the built commit's.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ needs.decide.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: mod-tool-release
@@ -284,8 +294,9 @@ jobs:
       - name: The signature, checked as an install block checks it
         run: |
           key=(); [[ "$PUBLISH" != true ]] && key=(--key "$(cat key/ephemeral.pub)")
-          cargo run --locked --quiet -p sunrise-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$TAG" \
-            --publishing "${key[@]}" dist
+          # The workflow checkout's Python and the runner's OpenSSL against main's release keys: nothing is compiled, and
+          # no binary of the release runs.
+          python3 tools/ci/nightly.py verify-sums --tag "$TAG" --publishing "${key[@]}" dist
       - name: Exactly the assets an install block takes
         run: |
           expected=$(printf '%s\n' tool-x86_64-unknown-linux-gnu.tar.xz tool-x86_64-pc-windows-gnu.tar.xz \
@@ -303,8 +314,8 @@ jobs:
 
   publish:
     needs: [decide, verify]
-    # The only job with a write token, and only for a publishing run on main. It runs no code but
-    # tools/ci/mod_tool.py of a commit `decide` found on main, and compiles nothing.
+    # The only job with a write token, and only for a publishing run on main. It runs no code but the workflow's own
+    # tools/ci/mod_tool.py (never the built commit's), and compiles nothing.
     if: needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -315,11 +326,11 @@ jobs:
       GH_REPO: ${{ github.repository }}
       COMMIT: ${{ needs.decide.outputs.commit }}
     steps:
+      # The workflow's own checkout, with main's history: `decide` found the built commit on main.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.decide.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: mod-tool-release

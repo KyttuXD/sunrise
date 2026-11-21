@@ -21,9 +21,7 @@ impl Codec<UpdateRecipes> for UpdateRecipes {
         for _ in 0..count {
             let key = r.string(32767)?;
             let count = r.count(r.remaining())?;
-            let items = (0..count)
-                .map(|_| r.varint().map(crate::adapter::ids::item))
-                .collect::<Result<_>>()?;
+            let items = (0..count).map(|_| r.varint()).collect::<Result<_>>()?;
             properties.push((key, items));
         }
         let count = r.count(r.remaining())?;

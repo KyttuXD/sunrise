@@ -7,6 +7,22 @@ use mod_api::{
 struct RegistryMod;
 #[mod_api::__subscriptions]
 impl Hooks for RegistryMod {
+    fn data_pack_files(
+        &self,
+        _: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::DataPackFilesEvent<'_>,
+    ) {
+        event.files.extend([
+            (
+                "predicate/registry_test:native".into(),
+                br#"{"type":"minecraft:random_chance","chance":1}"#.to_vec(),
+            ),
+            (
+                "item_modifier/registry_test:native".into(),
+                br#"{"type":"minecraft:set_count","count":3}"#.to_vec(),
+            ),
+        ]);
+    }
     fn data_map_types(
         &self,
         _: &mut dyn mod_api::ServerHost,
@@ -33,6 +49,64 @@ fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
+#[test]
+#[ignore = "daily"]
+fn recipe_priority_layer_is_named_and_applied_through_reload() {
+    use sunrise_mod_package::content::RECIPE_PRIORITIES_PATH;
+    let _publication = sunrise_client::datapack_net::isolate_server_publication();
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let pack = root.join("datapacks/priority_fixture");
+    write(
+        &pack.join("pack.mcmeta"),
+        r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
+    );
+    write(
+        &root.join("datapacks.json"),
+        r#"{"enabled":["vanilla","file/priority_fixture"],"disabled":[]}"#,
+    );
+    for id in ["a", "b"] {
+        write(
+            &pack.join(format!("data/priority_fixture/recipe/{id}.json")),
+            r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick"}}"#,
+        );
+    }
+    let path = pack.join(RECIPE_PRIORITIES_PATH);
+    write(&path, r#"{"entries":{"priority_fixture:b":5}}"#);
+    with_game(|game| {
+        let order = |game: &Game<'_>| {
+            game.recipes().by_type["minecraft:crafting"]
+                .iter()
+                .filter(|row| row.id.starts_with("priority_fixture:"))
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
+        game.load_world(request(root)).unwrap();
+        assert_eq!(order(game), ["priority_fixture:b", "priority_fixture:a"]);
+        write(
+            &path,
+            r#"{"replace":true,"entries":{"priority_fixture:a":10}}"#,
+        );
+        assert!(game.run_command("reload"));
+        assert_eq!(order(game), ["priority_fixture:a", "priority_fixture:b"]);
+        let layers = game.pack_files().priority_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].pack, "file/priority_fixture");
+        assert_eq!(layers[0].path, "data/neoforge/recipe_priorities.json");
+        write(&path, "{");
+        let error = game
+            .reload_datapacks(true, &game.level.enabled_features.clone())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("file/priority_fixture: data/neoforge/recipe_priorities.json"),
+            "{error}"
+        );
+        assert_eq!(order(game), ["priority_fixture:a", "priority_fixture:b"]);
+    });
+}
+
 fn power(game: &crate::game::Game<'_>) -> DatapackValue {
     let set = game.mods.datapack_registries.as_ref().unwrap();
     set.get(
@@ -76,7 +150,25 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
         vec![ModEntry::new("registry_test", Box::new(RegistryMod))].into(),
         || {
             with_game(|game| {
+                let builtin = root.join("builtin");
+                for kind in ["predicate", "item_modifier"] {
+                    write(
+                        &builtin.join(format!("data/registry_test/{kind}/native.json")),
+                        r#"{"neoforge:conditions":[{"type":"absent:overridden"}]}"#,
+                    );
+                }
+                let source = sunrise_assets::resource_source::ResourceSource::directory(builtin);
+                game.pack.data_source = source.clone();
+                game.pack.data_changes = source;
                 game.load_world(request(root)).unwrap();
+                assert_eq!(
+                    game.fns.store.predicates["registry_test:native"]["chance"],
+                    1
+                );
+                assert_eq!(
+                    game.fns.store.item_modifiers["registry_test:native"]["count"],
+                    3
+                );
                 assert_eq!(power(game), DatapackValue::Int(7));
                 assert_eq!(
                     game.mods
@@ -98,6 +190,56 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
                     game.mods.datapack_registries.as_ref().unwrap().generation(),
                     1
                 );
+                let old = game.mods.datapack_registries.as_ref().unwrap().clone();
+                write(
+                    &winning,
+                    r#"{"power":8,"neoforge:conditions":[{"type":"neoforge:or","values":[{"type":"neoforge:always"},{"type":"absent:spell_enabled"}]}]}"#,
+                );
+                let bad_entries = ["predicate", "advancement", "recipe"].map(|kind| {
+                    let path = format!("data/registry_test/{kind}/bad.json");
+                    let file = root.join("datapacks/override").join(&path);
+                    let id = format!("absent:{kind}");
+                    write(
+                        &file,
+                        &serde_json::json!({"neoforge:conditions":[{"type":id}]}).to_string(),
+                    );
+                    (path, id, file)
+                });
+                let referencing_loot =
+                    root.join("datapacks/override/data/registry_test/loot_table/reference.json");
+                write(
+                    &referencing_loot,
+                    r#"{"pools":[{"rolls":1,"condition":"registry_test:bad","entries":[{"type":"minecraft:item","name":"minecraft:stick"}]}]}"#,
+                );
+                let features = game.level.enabled_features.clone();
+                let error = game
+                    .reload_datapacks(true, &features)
+                    .err()
+                    .expect("unknown ID refuses the winning registry entry")
+                    .to_string();
+                assert!(
+                    error.contains("data/registry_test/registry_test/spell/fire.json"),
+                    "{error}"
+                );
+                assert!(error.contains("absent:spell_enabled"), "{error}");
+                assert!(
+                    error.contains("unknown reference") && error.contains("registry_test:bad"),
+                    "{error}"
+                );
+                std::fs::remove_file(referencing_loot).unwrap();
+                for (path, id, file) in bad_entries {
+                    assert!(error.contains(&path) && error.contains(&id), "{error}");
+                    std::fs::remove_file(file).unwrap();
+                }
+                assert!(std::sync::Arc::ptr_eq(
+                    game.mods.datapack_registries.as_ref().unwrap(),
+                    &old
+                ));
+                assert!(std::sync::Arc::ptr_eq(
+                    &sunrise_client::datapack_net::served().unwrap(),
+                    &old
+                ));
+                assert_eq!(power(game), DatapackValue::Int(7));
                 write(&winning, "{bad");
                 assert!(!game.run_command("reload"));
                 assert_eq!(power(game), DatapackValue::Int(7));
@@ -181,6 +323,79 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
             });
         },
     );
+}
+
+#[test]
+#[ignore = "daily"]
+fn world_open_and_wire_use_the_pack_biome_instead_of_the_bundled_file() {
+    use crate::game::native_entity_refs::tests::{fixture_root, with_game_at};
+    use sunrise_client::lan::data::BIOME_REGISTRY;
+
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    let scratch = tempfile::tempdir().unwrap();
+    let resources = scratch.path().join("resources");
+    copy_tree(&fixture_root(), &resources);
+    let bundle_path = resources.join("worldgen/biomes.json");
+    let mut bundle: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&bundle_path).unwrap()).unwrap();
+    let mut winner: serde_json::Value =
+        serde_json::from_str(bundle["minecraft:plains"].as_str().unwrap()).unwrap();
+    let id = "registry_test:replacement";
+    let mut bundled = winner.clone();
+    bundled["neoforge:conditions"] = serde_json::json!([{"type":"absent:bundled_biome"}]);
+    bundle[id] = serde_json::json!(bundled.to_string());
+    write(&bundle_path, &bundle.to_string());
+
+    let world = scratch.path().join("world");
+    let pack = world.join("datapacks/override");
+    write(
+        &pack.join("pack.mcmeta"),
+        r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
+    );
+    write(
+        &world.join("datapacks.json"),
+        r#"{"enabled":["vanilla","file/override"],"disabled":[]}"#,
+    );
+    winner["temperature"] = serde_json::json!(0.125);
+    write(
+        &pack.join("data/registry_test/worldgen/biome/replacement.json"),
+        &winner.to_string(),
+    );
+    // A packed damage type makes world open decode the wire registries eagerly.
+    write(
+        &pack.join("data/registry_test/damage_type/fixture.json"),
+        r#"{"message_id":"fixture","scaling":"never","exhaustion":0}"#,
+    );
+    let _publication = sunrise_client::datapack_net::isolate_server_publication();
+    with_game_at(resources, |game| {
+        game.load_world(request(&world)).unwrap();
+        let sync = crate::game::lan::sync::cached_reload_sync().unwrap();
+        let biome = sync
+            .registry_packets(true, &game.level_shapes)
+            .into_iter()
+            .find(|registry| registry.registry == BIOME_REGISTRY)
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .unwrap();
+        assert_eq!(
+            biome.data,
+            Some(sunrise_client::lan::data::json_to_nbt(&winner))
+        );
+    });
 }
 
 #[test]

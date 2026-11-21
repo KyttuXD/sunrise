@@ -66,39 +66,12 @@ fn installation_refusals(patched: &[(&str, &[&str], bool)]) -> Vec<String> {
     }).collect()
 }
 
-/// Code-runtime services supplied by the platform at startup.
-pub struct CodeRuntime {
-    pub initialize: fn(&[mod_api::PackageInfo]),
-    pub refusal: fn(&str) -> Option<String>,
-    pub startup_refused: fn(&str) -> bool,
-}
-static CODE_RUNTIME: std::sync::OnceLock<CodeRuntime> = std::sync::OnceLock::new();
-pub(crate) fn initialize_code(inventory: &[mod_api::PackageInfo]) {
-    let runtime = CODE_RUNTIME
-        .get()
-        .expect("code initialization requires entry::start");
-    (runtime.initialize)(inventory);
-}
-pub(crate) fn code_startup_refused(id: &str) -> bool {
-    CODE_RUNTIME
-        .get()
-        .is_some_and(|runtime| (runtime.startup_refused)(id))
-}
-pub(crate) fn code_refusal(id: &str) -> Option<String> {
-    CODE_RUNTIME.get().and_then(|runtime| (runtime.refusal)(id))
-}
-
 /// Start the engine with dependency-ordered code supplied by the host.
-pub fn start<G>(
+pub fn start(
     native: sunrise_mod_package::runtime::Runtime,
-    load: impl FnOnce(
-        &sunrise_mod_package::runtime::Runtime,
-        &LaunchArguments,
-    ) -> (Vec<&'static str>, G),
-    code: CodeRuntime,
+    load: impl FnOnce(&sunrise_mod_package::runtime::Runtime, &LaunchArguments),
     startup: Startup,
 ) {
-    let _ = CODE_RUNTIME.set(code);
     let Startup {
         launch,
         options,
@@ -106,7 +79,6 @@ pub fn start<G>(
     } = startup;
     runtime_environment::capture(&launch);
     sunrise_threads::configure_allocator();
-    sunrise_chat_filter::install();
     sunrise_look::give();
     // OptiFine's and Polytone's pack formats (platform, docs/layers.md), before any pack loads.
     sunrise_client::pack_formats::install();
@@ -124,7 +96,10 @@ pub fn start<G>(
     // The text crates ship (`sunrise_hooks::lang`), loaded with the game's own languages.
     sunrise_client::lang::install_crate_files(sunrise_hooks::lang::engine::all());
     sunrise_client::spans::startup::init(std::time::Instant::now());
-    logging::set_game_home(launch.context.home.clone());
+    logging::set_game_home(
+        launch.context.home.clone(),
+        launch.cache_home().to_path_buf(),
+    );
     // The dedicated server logs in its own folder, as vanilla's does; the game in its home.
     let (home, side, thread) = if launch
         .rest
@@ -151,7 +126,7 @@ pub fn start<G>(
     // Mods' startup bars and lines (`RegistrationContext::progress`), before they register.
     game::startup_progress::install(side == "server");
     // Mod loading emits refusals; both client and dedicated logs must exist first.
-    let (_ids, _loaded_code) = load(&native, &launch);
+    load(&native, &launch);
     crash::install(home.clone(), side);
     let _ = sunrise_world::loot::types::install(crate::game::loot_types::capture);
     if sunrise_world::native_load_hooks::install(
@@ -208,7 +183,11 @@ pub fn start<G>(
         // A bad command line is the caller's mistake, not a crash: no report.
         let missing_mods = game::dedicated::is_missing_mods_refusal(error.as_ref());
         let usage = error.is::<game::UsageError>() || missing_mods;
-        if !missing_mods {
+        if let Some(refusals) = error.downcast_ref::<game::mods::DeclarationFailures>() {
+            for line in refusals.lines() {
+                log::error!("Sunrise: {line}");
+            }
+        } else if !missing_mods {
             log::error!("Sunrise: {error}");
         }
         logging::flush();
@@ -248,22 +227,7 @@ pub(crate) fn install_client_hooks() {
             let context = reader.context();
             mod_api::dispatch_living_heal(&context, entity, amount, cancel);
         },
-        living_breathe: |context, entity, kind, can_breathe, consume, refill| {
-            if !mod_api::__private::listened(mod_api::HookId::LivingBreathe) {
-                return;
-            }
-            let reader = sunrise_client_render::api_context::LoopReader(context);
-            let context = reader.context();
-            mod_api::dispatch_living_breathe(&context, entity, kind, can_breathe, consume, refill);
-        },
-        farmland_trample: |context, entity, pos, state, distance, cancel| {
-            if !mod_api::__private::listened(mod_api::HookId::FarmlandTrample) {
-                return;
-            }
-            let reader = sunrise_client_render::api_context::LoopReader(context);
-            let context = reader.context();
-            mod_api::dispatch_farmland_trample(&context, entity, pos, state, distance, cancel);
-        },
+        living_breathe_heard: || mod_api::__private::listened(mod_api::HookId::LivingBreathe),
         has_mods: || !mod_api::__private::mods().is_empty(),
         player_name_format: |context, username, displayname| {
             use game::api_values::{TryIntoApi, TryIntoEngine};
@@ -365,9 +329,7 @@ pub(crate) fn install_client_hooks() {
         },
         makes_open_trapdoor_above_climbable:
             crate::game::native_trapdoor_ladder::makes_open_trapdoor_above_climbable,
-        friction: |context, entity, kind, pos, state, friction| {
-            crate::game::native_surface::friction(context, entity, kind, pos, state, friction);
-        },
+        friction: crate::game::native_surface::friction,
         collision_shape: |context, pos, state, query, shape| {
             crate::game::native_collision_shape::collision_shape(context, pos, state, query, shape);
         },

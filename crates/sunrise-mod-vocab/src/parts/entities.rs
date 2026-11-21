@@ -70,22 +70,6 @@ impl HookParts {
     }
 }
 
-/// The refusal a wasm mod's entity part earns by overriding a native-only
-/// method: hooks such as [`general_entity_tick`] and [`can_rider_interact`] cross,
-/// but native-only overrides would be silently never called. The subscription macro
-/// records the overrides as [`EntityPart::entity_native_only`] capability
-/// metadata; the generated wasm attach wrapper consults it where the real part
-/// lives, and delivers this refusal through the registration refusal channel.
-// hidden: the generated wasm boundary's refusal, not a mod authoring surface.
-#[doc(hidden)]
-pub fn entity_part_native_only_refusal(part: &dyn EntityPart) -> Option<String> {
-    let native_only = part.entity_native_only();
-    let first = *native_only.first()?;
-    Some(format!(
-        "EntityPart::{first}: a wasm entity part cannot override native-only methods"
-    ))
-}
-
 /// Whether any mod registered a provider of entity capability `key`, for any entity type: one
 /// table lookup, no allocation, so the game's own lookups skip all their work where none did.
 pub fn has_entity_providers<T: ?Sized + 'static, C: 'static>(
@@ -152,8 +136,7 @@ impl dyn Registrar + '_ {
     /// [`EntityPart::register_goals`] runs at every `Mob` construction of that
     /// type, spawning or loading, and its goals join the mob's selectors
     /// beside vanilla's. Its `general_entity_tick` runs for one general row
-    /// of the type (#792). Wasm parts can implement `general_entity_tick`
-    /// and `can_rider_interact`.
+    /// of the type (#792).
     pub fn entity_part<P: EntityPart>(&mut self, entity: &str, part: P) {
         self.attach_entity_part(entity, type_name::<P>(), Arc::new(part));
     }
@@ -165,7 +148,6 @@ impl dyn Registrar + '_ {
     /// loads: only mob types (vanilla and mod) and mod general entity types keep Part state,
     /// and `minecraft:player`, any other vanilla family and an unknown id refuse the load,
     /// naming the type. `entity_part` itself checks no type.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn entity_part_with_state<P: crate::EntityPartState>(
         &mut self,
         entity: &str,
@@ -218,18 +200,13 @@ pub trait EntitiesRegistrar {
     /// Attach `part`, of kind `kind`, to the entity type `entity`
     /// (`minecraft:zombie`, `mymod:golem`): its `register_goals` runs at every
     /// `Mob` construction of that type, and its `general_entity_tick` for one
-    /// general row's authoritative tick (#792). A wasm mod's part crosses
-    /// here as a handler the host calls back; the part's goal, behavior,
-    /// spawn-size and shear methods stay off wasm, as their docs say.
+    /// general row's authoritative tick (#792).
     fn attach_entity_part(&mut self, entity: &str, kind: &'static str, part: Arc<dyn EntityPart>);
 
     /// Record the state declaration of entity Part `part` on entity type `entity`, or refuse
     /// it (as the mod's registration refusal too): see `PartStateDeclaration::check`, a key
     /// outside this mod's namespaces, or one it declared with another Rust type name. Mods reach
     /// it through `entity_part_with_state`.
-    ///
-    /// Not on wasm: entity parts and their state declarations are registered only by native mods.
-    #[cfg(not(target_arch = "wasm32"))]
     fn declare_entity_part_state(
         &mut self,
         entity: &str,
@@ -246,6 +223,71 @@ pub trait EntitiesRegistrar {
         before_game: bool,
         provider: EntityProviderOf,
     );
+
+    /// Tell `entity_tick_pre` and `entity_tick_post` for each entity of type `entity`
+    /// (`minecraft:zombie`, `mymod:golem`) alone, right before and right after its own tick
+    /// (NeoForge's `EntityTickEvent` timing), instead of once with its family. Every mod that
+    /// hooks them hears those entities alone. Name only the types that need their own moment:
+    /// each entity of a named type costs a call of its own every tick. A type that is not a
+    /// namespaced lowercase id refuses the mod's registration.
+    fn entity_tick_each(&mut self, entity: &str);
+
+    /// [`Self::entity_tick_each`] for every entity type the tick hooks observe,
+    /// as a port of a NeoForge mod that listens to `EntityTickEvent` needs.
+    fn entity_tick_each_entity(&mut self);
+}
+
+/// The entity types whose ticks are told one entity at a time, from every mod's
+/// [`EntitiesRegistrar::entity_tick_each`], resolved when the mods are installed.
+// hidden: the game reads it once at load to mark its entity types.
+// no wire: resolved on the host from the registrar's `entity_tick_each` calls, which cross on
+// their own; the set itself is never sent to a mod.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EntityTickEach {
+    all: bool,
+    /// Sorted, without repeats.
+    kinds: Vec<String>,
+}
+
+impl EntityTickEach {
+    /// The set the declarations name, in any order: `None` names every type.
+    pub fn of(declarations: &[Option<String>]) -> Self {
+        let all = declarations.iter().any(Option::is_none);
+        let mut kinds: Vec<String> = if all {
+            Vec::new()
+        } else {
+            declarations.iter().flatten().cloned().collect()
+        };
+        kinds.sort_unstable();
+        kinds.dedup();
+        Self { all, kinds }
+    }
+    /// Whether a mod named any type.
+    pub fn any(&self) -> bool {
+        self.all || !self.kinds.is_empty()
+    }
+    /// Whether a mod named every type.
+    pub fn all(&self) -> bool {
+        self.all
+    }
+    /// Whether entities of type `kind` are told one at a time.
+    pub fn names(&self, kind: &str) -> bool {
+        self.all
+            || self
+                .kinds
+                .binary_search_by(|k| k.as_str().cmp(kind))
+                .is_ok()
+    }
+}
+
+/// The installed mods' [`EntityTickEach`], or `None` before the mods are installed, when no type
+/// is named.
+// hidden: the game reads it once at load.
+#[doc(hidden)]
+pub fn entity_tick_each() -> Option<&'static EntityTickEach> {
+    installed().map(|parts| &parts.entity_tick_each)
 }
 
 /// CapabilityProviders operations for entities.

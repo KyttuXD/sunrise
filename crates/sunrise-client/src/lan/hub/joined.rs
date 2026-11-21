@@ -36,7 +36,7 @@ impl Hub {
             .collect();
         let mut viewers = self.guests.tracking_viewers(
             |g| g.placed && g.dimension == *dimension,
-            outs.iter_mut().map(|out| (out, None)),
+            outs.iter_mut(),
             false,
         );
         let level = self.entities.entry(dimension.clone()).or_default();

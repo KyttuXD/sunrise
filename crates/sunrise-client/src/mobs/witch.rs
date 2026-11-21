@@ -278,8 +278,8 @@ fn drink(m: &mut Mob, context: &LoopContext, cx_events: &mut Vec<MobEvent>, targ
         m.extra.using_item -= 1;
         if m.extra.using_item < 0 {
             m.extra.using_item = 0;
-            if let Some(potion) = m.extra.take_slot_id(sunrise_items::equipment::MAINHAND) {
-                match potion.as_ref() {
+            if let Some(stack) = m.extra.main_hand_stack().cloned() {
+                match stack.potion().unwrap_or(&stack.item) {
                     "minecraft:water_breathing" => {
                         m.add_effect("minecraft:water_breathing", 3600, 0)
                     }
@@ -290,6 +290,7 @@ fn drink(m: &mut Mob, context: &LoopContext, cx_events: &mut Vec<MobEvent>, targ
                     "minecraft:swiftness" => m.add_effect("minecraft:speed", 3600, 0),
                     _ => {}
                 }
+                cx_events.push(MobEvent::DrinkFinished { mob: m.id, stack });
             }
             m.extra.flag = false;
         }
@@ -317,7 +318,9 @@ fn drink(m: &mut Mob, context: &LoopContext, cx_events: &mut Vec<MobEvent>, targ
         None
     };
     if let Some(p) = potion {
-        m.extra.set_main_hand(Some(p.into()));
+        m.extra.set_main_hand_stack(Some(
+            crate::items::ItemStack::new("minecraft:potion", 1).with_potion(p),
+        ));
         // PotionItem use duration 32 ticks.
         m.extra.using_item = 32;
         m.extra.flag = true;

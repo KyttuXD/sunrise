@@ -11,6 +11,7 @@ fn math_profile_wire_tags_are_pinned() {
         (MathProfile::CorrectlyRounded, [1, 0, 0, 0]),
         (MathProfile::Aarch64Fma, [2, 0, 0, 0]),
         (MathProfile::StrictMath, [3, 0, 0, 0]),
+        (MathProfile::HotSpotX86_64, [4, 0, 0, 0]),
     ] {
         let mut writer = Writer::new();
         writer.put(&profile);
@@ -19,7 +20,7 @@ fn math_profile_wire_tags_are_pinned() {
     }
     assert!(Reader::new(&[0, 0, 0]).take::<MathProfile>().is_err());
     assert!(matches!(
-        Reader::new(&[4, 0, 0, 0]).take::<MathProfile>(),
-        Err(WireError::Tag(4))
+        Reader::new(&[5, 0, 0, 0]).take::<MathProfile>(),
+        Err(WireError::Tag(5))
     ));
 }

@@ -79,6 +79,7 @@ pub fn restore(modifiers: &mut ModifiersState, physical: &mut HashSet<KeyCode>, 
 
 /// Recover missing modifier releases without releasing a rebound key or a pad.
 /// ToggleKeyMapping itself preserves keyboard and controller toggles on release.
+/// Reports which mappings received a recovered release, even if a pad still holds them.
 pub fn reconcile(
     modifiers: ModifiersState,
     physical: &mut HashSet<KeyCode>,
@@ -86,7 +87,8 @@ pub fn reconcile(
     toggles: &mut ToggleKeys,
     options: [bool; 2],
     pad_held: [bool; 2],
-) {
+) -> [bool; 2] {
+    let mut released = [false; 2];
     for (bit, pair) in MODIFIERS {
         if modifiers.contains(bit) {
             continue;
@@ -96,12 +98,16 @@ pub fn reconcile(
                 continue;
             }
             for (slot, name) in [(SNEAK, "key.sneak"), (SPRINT, "key.sprint")] {
-                if key_code(bindings.get(name)) == Some(key) && !pad_held[slot] {
-                    toggles.key(slot, KeyAction::Release, false, options[slot]);
+                if key_code(bindings.get(name)) == Some(key) {
+                    released[slot] = true;
+                    if !pad_held[slot] {
+                        toggles.key(slot, KeyAction::Release, false, options[slot]);
+                    }
                 }
             }
         }
     }
+    released
 }
 
 #[cfg(test)]

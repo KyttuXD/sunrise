@@ -2,7 +2,9 @@
 // catalog-order: 0030
 
 pub trait Hooks {
-    /// The tooltip at `at` (GUI pixels from the mod screen's top-left).
+    /// The tooltip at `at` (GUI pixels from the top left) of the screen of
+    /// mod menu type `menu` (`block` as in `screen`, including menus and blocks
+    /// in a content package served by this mod via `served_by`).
     /// `slot` is the hovered menu index, including player inventory slots,
     /// or `None` outside a mapped slot. On a filled slot, `lines` starts as
     /// the item's tooltip after item tooltip hooks; your final lines replace
@@ -16,16 +18,17 @@ pub trait Hooks {
     /// `origin` is the panel's top-left in the same coordinates. The pointer may
     /// be outside the panel; use these frame values rather than caching a size.
     #[hook(
+        version = 4,
         side = "client",
-        version = 3,
         contract = "collect",
         out = "lines",
-        scope = "block_entity",
-        key = "block",
+        scope = "menu",
+        key = "menu",
         neoforge = "none (see screen)"
     )]
     fn screen_tooltip(
-        block: &str,
+        menu: &str,
+        block: Option<&str>,
         data: &[i32],
         at: [f32; 2],
         slot: Option<u32>,

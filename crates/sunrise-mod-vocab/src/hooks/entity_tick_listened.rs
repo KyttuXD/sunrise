@@ -5,9 +5,11 @@ pub trait Hooks {
     /// Whether a mod listens to `entity_tick_pre` and `entity_tick_post`: a mod
     /// that hooks them hooks this one too and sets `listened` (HEAD, `*listened = true`).
     /// Without it the game tells no entity's tick, and keeps no list of them. Asked once for
-    /// each family (mobs, items, minecarts, boats) each tick. Server-side.
+    /// each family each tick, on the server and on a client (`host` says which side). Contract
+    /// version 2: version 1 was asked on the server only.
     #[hook(
-        side = "server",
+        side = "both",
+        version = 2,
         contract = "collect",
         out = "listened",
         cancellable = false,

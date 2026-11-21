@@ -1,6 +1,7 @@
 use super::*;
-use crate::tests::{dir, write_bundle};
+use crate::tests::{A, dir, project_manifest, write_bundle};
 use std::cell::Cell;
+use sunrise_platform::mod_build::api_gen::crossing::CROSSING_FOREIGN_FILE;
 
 const STRUCT: &str = "sunrise_client::game::ported_level::PortedGame";
 const METHOD: &str = "sunrise_client::game::ported_level::PortedGame::tick";
@@ -20,7 +21,7 @@ impl Fixture {
         fs::write(folder.join("Cargo.toml"), "[package]\nname='example'\nversion='0.1.0'\n[dependencies]\nmod_api={package='sunrise-mod-api',path='.sunrise/sdk/api/crates/sunrise-mod-api'}\n").unwrap();
         if modules {
             let manifest = folder.join(sunrise_mod_package::manifest::MANIFEST);
-            let text = fs::read_to_string(&manifest).unwrap();
+            let text = project_manifest("example", "0.1.0", A, crate::MIXINS_REV);
             fs::write(manifest, format!("{text}\n[[native.module]]\nid='ported'\nfile='game.rs'\nname='ported_level'\nsource='src/ported.rs'\n")).unwrap();
             fs::write(folder.join("src/ported.rs"), PAYLOAD).unwrap();
         }
@@ -35,15 +36,7 @@ impl Fixture {
             ("crates/sunrise-client/src/entry.rs", ""),
             ("crates/sunrise-client/src/game.rs", ""),
             ("crates/sunrise-mod-api-gen/internals.txt", ""),
-            (
-                "crates/sunrise-engine-slots/Cargo.toml",
-                "[package]\nname='sunrise-engine-slots'\n",
-            ),
-            ("crates/sunrise-engine-slots/src/lib.rs", ""),
-            (
-                "crates/sunrise-mod-points/Cargo.toml",
-                "[package]\nname='sunrise-mod-points'\n",
-            ),
+            (CROSSING_FOREIGN_FILE, "[]"),
         ] {
             let path = source.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -60,10 +53,11 @@ impl Fixture {
         catalog_for_mod_with(
             &self.folder,
             &self.root.join("cache"),
+            None,
             |_| Ok(self.source.clone()),
-            |bundle, prepared, input, output| {
+            |identity, prepared, input, output| {
                 calls.set(calls.get() + 1);
-                assert_eq!(bundle.manifest.id, "example");
+                assert_eq!(identity.revision(), crate::MIXINS_REV);
                 // This is the external tool seam only. Production code prepares the real tool
                 // input and pristine source, and runs the actual discovery staging afterwards.
                 assert_eq!(
@@ -123,6 +117,7 @@ fn module_free_discovery_reuses_unchanged_catalog_without_running_mixins() {
     let again = catalog_for_mod_with(
         &fixture.folder,
         &fixture.root.join("cache"),
+        None,
         |_| panic!("warm discovery must not obtain source"),
         |_, _, _, _| panic!("module-free discovery must not run mixins"),
     )
@@ -153,6 +148,7 @@ fn module_edit_regenerates_hash_and_apply_failure_names_the_mod() {
     let error = catalog_for_mod_with(
         &fixture.folder,
         &fixture.root.join("cache"),
+        None,
         |_| Ok(fixture.source.clone()),
         |_, _, _, _| Err("E_TARGET_NOT_FOUND: cannot apply ported".into()),
     )
@@ -161,6 +157,32 @@ fn module_edit_regenerates_hash_and_apply_failure_names_the_mod() {
         error.to_string(),
         "example: E_TARGET_NOT_FOUND: cannot apply ported"
     );
+}
+
+#[test]
+fn discovery_refuses_a_different_explicit_pin_without_reading_game_source() {
+    let fixture = Fixture::new("discovery-wrong-pin", true);
+    let path = fixture.folder.join(crate::NATIVE_MANIFEST);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace(crate::MIXINS_REV, crate::tests::B)).unwrap();
+    let error = catalog_for_mod_with(
+        &fixture.folder,
+        &fixture.root.join("cache"),
+        None,
+        |_| panic!("an incompatible mixins pin must refuse before obtaining source"),
+        |_, _, _, _| panic!("an incompatible mixins pin must not run mixins"),
+    )
+    .unwrap_err()
+    .to_string();
+    for fragment in [
+        "E_MIXINS_IDENTITY:",
+        "example",
+        crate::tests::B,
+        crate::MIXINS_REV,
+        "[native] mixins",
+    ] {
+        assert!(error.contains(fragment), "{error}");
+    }
 }
 
 #[test]

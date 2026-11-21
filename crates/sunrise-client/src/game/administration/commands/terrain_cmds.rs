@@ -624,6 +624,8 @@ impl Game<'_> {
                     let (tag, _) = sunrise_core::nbt::parse_snbt(&table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = sunrise_client::scoreboard::tag_to_json(&tag);
+                    sunrise_world::loot::validate_loot_table(&json)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     // LootCommand's omitted fishing tool is EMPTY, not mainhand.
                     let held = if id == "loot.fish"
                         && (ctx.get("tool").is_some() || ctx.has("mainhand") || ctx.has("offhand"))
@@ -742,16 +744,9 @@ impl Game<'_> {
                 let tool = self.tool_stack(ctx)?;
                 let mut pending = crate::game::spill::Pending::default();
                 let key = (p[0], p[1], p[2]);
-                if let Some(entity) = self.world.block_entities.get(&key) {
-                    pending.record(
-                        p,
-                        entity,
-                        &name,
-                        self.world.block_names.get(&key).cloned(),
-                        self.world.block_lock(key),
-                        self.res.items(),
-                    );
-                } else if let Some(saved) = self.block_entity_nbt(p) {
+                if !self.world.block_entities.contains_key(&key)
+                    && let Some(saved) = self.block_entity_nbt(p)
+                {
                     pending.record_saved(p, &saved);
                 }
                 // LootCommand: the source's entity is `this`, if it has one.
@@ -1613,7 +1608,7 @@ mod loot_mine_location_tests {
             game.world_tables = game
                 .stage_world_tables(&stack, false, &game.options.resources.clone())
                 .unwrap()
-                .0;
+                .tables;
             assert!(game.world_tables.is_some());
             game.ensure_datapacks();
             assert!(game.run_command("scoreboard objectives add h079 dummy"));

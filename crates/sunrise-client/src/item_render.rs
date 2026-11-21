@@ -32,7 +32,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use sunrise_assets::{
-    animation::AnimationMetadata,
     item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model, bake_sprite_layer},
     item_model::{
         ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, LayerContent,
@@ -40,7 +39,6 @@ use sunrise_assets::{
         StackView,
     },
     model::Direction,
-    palette::PalettedPermutations,
     resolve::{MISSING_MODEL, ModelLibrary},
 };
 use sunrise_core::nbt::Tag;
@@ -223,8 +221,14 @@ pub struct ItemRenderState {
     /// In HDR output, the block light of an item that glows: its block's, as a placed one has
     /// it, so a torch doesn't go dark in the shade while it shines. 0 for the rest.
     pub hdr_light: u8,
+    /// A third-person held-item submission's opaque ARGB multiplier, never cached with the model.
+    held_tint: Option<u32>,
 }
 impl ItemRenderState {
+    /// Apply a held-item Part's RGB answer to this draw only, preserving model alpha.
+    pub fn set_held_tint(&mut self, rgb: u32) {
+        self.held_tint = Some(rgb | 0xFF00_0000);
+    }
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
@@ -233,13 +237,17 @@ impl ItemRenderState {
         self.layers.first().is_some_and(|l| l.uses_block_light)
     }
     /// `getModelBoundingBox`: the transformed extents of every layer, as
-    /// (min, max); a zero box at the origin when there are none.
+    /// (min, max); a zero box at the origin when there are none. Each extent is
+    /// `Vector3f.mulPosition`'s (JOML's `Math.fma` unfused, summed from the right).
     pub fn bounding_box(&self) -> (Vec3, Vec3) {
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         for layer in &self.layers {
+            let [c0, c1, c2, c3] = layer.matrix.to_cols_array_2d();
             for p in layer.extents.iter() {
-                let q = layer.matrix.transform_point3(*p);
+                let q = Vec3::from_array(std::array::from_fn(|row| {
+                    c0[row] * p.x + (c1[row] * p.y + (c2[row] * p.z + c3[row]))
+                }));
                 lo = lo.min(q);
                 hi = hi.max(q);
             }
@@ -280,6 +288,13 @@ impl ItemRenderState {
         pose: Mat4,
         sink: &mut dyn ItemSink,
     ) {
+        let mut tinted;
+        let sink: &mut dyn ItemSink = if let Some(tint) = self.held_tint {
+            tinted = TintedItemSink { sink, tint };
+            &mut tinted
+        } else {
+            sink
+        };
         for layer in &self.layers {
             let m = pose * layer.matrix;
             match &layer.geometry {
@@ -368,7 +383,10 @@ impl ItemRenderState {
                 } else {
                     -1
                 };
-                let colors = AXES.map(|d| shaded(argb(color), normals.face(d), lights));
+                let color = self.held_tint.map_or(argb(color), |tint| {
+                    crate::hud_layout::multiply(argb(color), tint)
+                });
+                let colors = AXES.map(|d| shaded(color, normals.face(d), lights));
                 let frame = &mut *skin.frame;
                 frame.jobs.push(SkinJob {
                     first: run.first,
@@ -388,6 +406,18 @@ impl ItemRenderState {
             skin.grow_bounds(m, bounds);
         }
         true
+    }
+}
+
+/// Multiplies every submitted quad's RGB, including special models, before the world sink lights it.
+struct TintedItemSink<'a> {
+    sink: &'a mut dyn ItemSink,
+    tint: u32,
+}
+impl ItemSink for TintedItemSink<'_> {
+    fn quad(&mut self, mut quad: ItemQuad) {
+        quad.color = crate::hud_layout::multiply(quad.color, self.tint);
+        self.sink.quad(quad);
     }
 }
 
@@ -548,11 +578,11 @@ fn submit_quads(
 // Sprites for baking
 // ---------------------------------------------------------------------------
 
-/// The alpha masks of item and block sprites, read from the texture files
-/// (every unique animation frame) and the items atlas's palette sprites.
+/// The alpha masks of item and block sprites as the items and blocks atlases finish them (every
+/// unique animation frame): the same sprites the block models and the HUD atlas draw.
 struct FileSprites {
     root: ResourceSource,
-    permutations: Vec<PalettedPermutations>,
+    materials: crate::atlas_sources::Materials,
     cache: Mutex<HashMap<String, Option<SpriteMask>>>,
     /// Sprites with a pixel that is neither fully transparent nor opaque
     /// (`Transparency.hasTranslucent`), filled in as sprites load.
@@ -580,6 +610,14 @@ fn argb_pixels(rgba: &[u8]) -> Vec<u32> {
         .collect()
 }
 impl FileSprites {
+    fn new(root: ResourceSource) -> Self {
+        Self {
+            materials: crate::atlas_sources::Materials::new(&root),
+            root,
+            cache: Mutex::default(),
+            translucent: Mutex::default(),
+        }
+    }
     fn translucent(&self, sprite: &str) -> bool {
         let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
         known(self).unwrap_or_else(|| {
@@ -587,39 +625,19 @@ impl FileSprites {
             known(self).unwrap_or(false)
         })
     }
-    fn png(&self, sprite: &str, directory: &str) -> String {
-        crate::atlas_sources::texture_resource(sprite, directory)
-    }
-    fn image(&self, sprite: &str, directory: &str) -> Option<(usize, usize, Vec<u32>)> {
-        let (w, h, rgba) =
-            crate::hud::decode_bytes(&self.root.read(&self.png(sprite, directory)).ok()?).ok()?;
-        Some((w as usize, h as usize, argb_pixels(&rgba)))
-    }
     fn load(&self, sprite: &str) -> Option<SpriteMask> {
-        let png = self.png(sprite, "textures");
-        let (iw, ih, argb) = match self.image(sprite, "textures") {
-            Some(image) => image,
-            None => {
-                let p = self.permutations.iter().find_map(|s| s.find(sprite))?;
-                let (w, h, mut pixels) = self.image(p.base, "textures")?;
-                let (_, _, key) = self.image(p.palette_key, "textures/palettes")?;
-                let (_, _, target) = self.image(p.palette, "textures/palettes")?;
-                sunrise_assets::palette::apply_palette(&mut pixels, &key, &target)?;
-                (w, h, pixels)
-            }
-        };
+        // A candidate whose frames don't fit already gave way to the next atlas.
+        let crate::atlas_sources::Material {
+            image: (iw, ih, rgba),
+            animation,
+            ..
+        } = self.materials.finish(&self.root, sprite)?;
+        let (iw, ih, argb) = (iw as usize, ih as usize, argb_pixels(&rgba));
         let translucent = argb.iter().any(|p| matches!(p >> 24, 1..=254));
         if let Ok(mut cache) = self.translucent.lock() {
             cache.insert(sprite.to_owned(), translucent);
         }
         let alpha: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
-        let animation = self
-            .root
-            .read_to_string(&format!("{png}.mcmeta"))
-            .ok()
-            .and_then(|m| serde_json::from_str::<Value>(&m).ok())
-            .and_then(|m| m.get("animation").map(Value::to_string))
-            .and_then(|a| AnimationMetadata::from_json(&a).ok());
         let (w, h) = match &animation {
             Some(a) => {
                 let [w, h] = a.frame_size(iw as i32, ih as i32);
@@ -804,12 +822,6 @@ impl ItemRenderer {
         } else {
             (library?, None)
         };
-        let permutations = PalettedPermutations::from_atlas(
-            &root
-                .source()
-                .read_to_string("assets/minecraft/atlases/items.json")
-                .unwrap_or_default(),
-        );
         let mut parts = if drawn {
             entity_models.map_or_else(
                 || special::load_parts(root.prepared()),
@@ -853,12 +865,7 @@ impl ItemRenderer {
             item_ids,
             models,
             library,
-            sprites: FileSprites {
-                root: root.source().clone(),
-                permutations,
-                cache: Mutex::default(),
-                translucent: Mutex::default(),
-            },
+            sprites: FileSprites::new(root.source().clone()),
             baked: Mutex::default(),
             extents: Mutex::default(),
             gui_drawn: Mutex::default(),
@@ -1232,6 +1239,7 @@ impl ItemRenderer {
             cit_glint: None,
             hdr_tier: 0,
             hdr_light: 0,
+            held_tint: None,
         }
     }
     /// `GrassColor.get` over the loaded colormap.
@@ -1552,35 +1560,44 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
         return Vec::new();
     }
     let (lo, hi) = state.bounding_box();
-    cluster_poses_with_depth(pose, amount, seed, hi.z - lo.z)
+    // `AABB.getZsize`, in doubles, then narrowed.
+    let depth = (f64::from(hi.z) - f64::from(lo.z)) as f32;
+    cluster_poses_with_depth(pose, amount, seed, depth)
 }
 
 /// [`cluster_poses`] with the depth of the resolved model's bounding box
-/// already computed for this draw (also used to place the stack's bob).
+/// already computed for this draw (also used to place the stack's bob). Each
+/// copy's `PoseStack.translate` is JOML's.
 pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
+    use crate::camera::joml;
     use sunrise_core::random::{LegacyRandom, RandomSource};
     let mut out = Vec::new();
     if amount == 0 {
         return out;
     }
+    let pose = joml::Mat4::affine(pose);
+    let translated = |p: joml::Mat4, x: f32, y: f32, z: f32| {
+        let mut p = p;
+        p.translate(x, y, z);
+        p
+    };
     let mut random = LegacyRandom::new(seed);
     let mut next = || random.next_float() * 2.0 - 1.0;
     if depth > 0.0625 {
-        out.push(pose);
+        out.push(pose.to_glam());
         for _ in 1..amount {
             let (x, y, z) = (next() * 0.15, next() * 0.15, next() * 0.15);
-            out.push(pose * Mat4::from_translation(Vec3::new(x, y, z)));
+            out.push(translated(pose, x, y, z).to_glam());
         }
     } else {
         let offset = depth * 1.5;
-        let mut p = pose
-            * Mat4::from_translation(Vec3::new(0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0)));
-        out.push(p);
-        p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+        let mut p = translated(pose, 0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0));
+        out.push(p.to_glam());
+        p.translate(0.0, 0.0, offset);
         for _ in 1..amount {
             let (x, y) = (next() * 0.15 * 0.5, next() * 0.15 * 0.5);
-            out.push(p * Mat4::from_translation(Vec3::new(x, y, 0.0)));
-            p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+            out.push(translated(p, x, y, 0.0).to_glam());
+            p.translate(0.0, 0.0, offset);
         }
     }
     out
@@ -1595,6 +1612,112 @@ mod tests {
     /// Item definitions are read again on every load: a node of a registered type keeps its
     /// `models` as the packs now give them, and a definition with a type no mod registered isn't
     /// loaded, so its item draws the missing model.
+    /// A renamed file whose animation frames can't tile it is no candidate: the blocks atlas's
+    /// sprite of the id is the mask, and nothing divides by zero.
+    #[test]
+    fn a_renamed_file_with_unfitting_frames_leaves_the_blocks_sprite() {
+        let root = std::env::temp_dir().join(format!("sunrise-mask-frames-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let textures = root.join("assets/demo/textures/item");
+        let atlases = root.join("assets/minecraft/atlases");
+        fs::create_dir_all(&textures).unwrap();
+        fs::create_dir_all(&atlases).unwrap();
+        let write = |name: &str, width: u32, height: u32, pixels: &[u8]| {
+            let mut encoder = png::Encoder::new(
+                fs::File::create(textures.join(name)).unwrap(),
+                width,
+                height,
+            );
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(pixels)
+                .unwrap();
+        };
+        // A 1 x 1 file declaring frames 2 wide, and a 2 x 1 sheet: opaque, then transparent.
+        write("tiny.png", 1, 1, &[255; 4]);
+        fs::write(
+            textures.join("tiny.png.mcmeta"),
+            r#"{"animation":{"width":2}}"#,
+        )
+        .unwrap();
+        write("sheet.png", 2, 1, &[255, 0, 0, 255, 0, 255, 0, 0]);
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources":[{"type":"minecraft:single","resource":"demo:item/tiny","sprite":"demo:item/target"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            atlases.join("blocks.json"),
+            r#"{"sources":[{"type":"minecraft:unstitch","resource":"demo:item/sheet","divisor_x":2,
+                "regions":[{"sprite":"demo:item/target","x":1,"y":0,"width":1,"height":1}]}]}"#,
+        )
+        .unwrap();
+        let sprites = FileSprites::new(ResourceSource::directory(root.clone()));
+        let mask = sprites.mask("demo:item/target").unwrap();
+        assert_eq!((mask.width, mask.height), (1, 1));
+        assert_eq!(mask.frames, vec![vec![true]]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+    /// The items atlas's cut of an id is the mask, not the blocks atlas's; a sprite only an
+    /// atlas cut makes has one at all.
+    #[test]
+    fn a_mask_follows_the_items_atlas_then_the_blocks_atlas() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-mask-atlases-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let textures = root.join("assets/demo/textures/item");
+        let atlases = root.join("assets/minecraft/atlases");
+        fs::create_dir_all(&textures).unwrap();
+        fs::create_dir_all(&atlases).unwrap();
+        // 2 x 1 sheet: an opaque texel, then a fully transparent one.
+        let mut encoder =
+            png::Encoder::new(fs::File::create(textures.join("sheet.png")).unwrap(), 2, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 0])
+            .unwrap();
+        let cut = |sprite: &str, x: u8| {
+            format!(
+                r#"{{"type":"minecraft:unstitch","resource":"demo:item/sheet","divisor_x":2,
+                "regions":[{{"sprite":"demo:item/{sprite}","x":{x},"y":0,"width":1,"height":1}}]}}"#
+            )
+        };
+        fs::write(
+            atlases.join("items.json"),
+            format!(r#"{{"sources":[{}]}}"#, cut("both", 1)),
+        )
+        .unwrap();
+        fs::write(
+            atlases.join("blocks.json"),
+            format!(
+                r#"{{"sources":[{},{}]}}"#,
+                cut("both", 0),
+                cut("blocks_only", 0)
+            ),
+        )
+        .unwrap();
+        let sprites = FileSprites::new(ResourceSource::directory(root.clone()));
+        // `true` marks a fully transparent texel.
+        assert_eq!(
+            sprites.mask("demo:item/both").unwrap().frames,
+            vec![vec![true]]
+        );
+        assert_eq!(
+            sprites.mask("demo:item/blocks_only").unwrap().frames,
+            vec![vec![false]]
+        );
+        assert!(
+            sprites.mask("demo:item/sheet").is_none(),
+            "no atlas lists the sheet"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn a_registered_item_model_type_is_read_again_on_each_load() {
         use sunrise_assets::resource_source::Resource;
@@ -1736,7 +1859,9 @@ mod tests {
             ("assets/example/textures/item/mask.png", png.as_slice()),
             (
                 "assets/example/textures/item/mask.png.mcmeta",
-                br#"{"animation":{"width":1,"height":1,"frames":[0,1]}}"#.as_slice(),
+                br#"{"animation":{"width":1,"height":1,"frames":[0,1]}}
+// High Contrast pack signature"#
+                    .as_slice(),
             ),
             (
                 "assets/example/items/nested/mask.json",
@@ -1757,12 +1882,7 @@ mod tests {
         let source = ResourceSource::archive(&jar).unwrap();
         fs::remove_file(&jar).unwrap();
         assert!(load_definitions(&source).contains_key("example:nested/mask"));
-        let sprites = FileSprites {
-            root: source.clone(),
-            permutations: Vec::new(),
-            cache: Mutex::default(),
-            translucent: Mutex::default(),
-        };
+        let sprites = FileSprites::new(source.clone());
         let mask = sprites.mask("example:item/mask").unwrap();
         assert_eq!((mask.width, mask.height), (1, 1));
         assert_eq!(mask.frames, vec![vec![true], vec![false]]);
@@ -1859,6 +1979,7 @@ mod tests {
             cit_glint: None,
             hdr_tier: 0,
             hdr_light: 0,
+            held_tint: None,
         };
         let poses = [
             Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)),

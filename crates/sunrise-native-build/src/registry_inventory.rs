@@ -61,10 +61,20 @@ struct Kind {
     kind: Option<String>,
 }
 
+/// A package a mod links at run time, as cargo resolved it: one per name and version (a crate
+/// the SDK patches in replaces the registry's, so there is never a second source).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Used {
+    pub name: String,
+    pub version: String,
+}
+
 #[derive(Deserialize)]
 pub struct Package {
     id: String,
     pub name: String,
+    #[serde(default)]
+    pub manifest_path: std::path::PathBuf,
     pub version: String,
     pub source: Option<String>,
     pub links: Option<String>,
@@ -122,6 +132,115 @@ impl Metadata {
             );
         }
         Ok(reachable)
+    }
+
+    /// The packages each mod links at run time from outside its own folder: the targets of the
+    /// normal dependency edges (those active for the build's target and features, as cargo
+    /// resolved them) of its root and of the local crates it links, not walking into proc macros,
+    /// build scripts' dependencies, other workspace members, or crates staged elsewhere. `mods`
+    /// maps each mod to its staged folder under `stage`. A proc-macro target is left out: it runs
+    /// in the compiler, it is not linked.
+    pub fn runtime_uses(
+        &self,
+        stage: &std::path::Path,
+        mods: &std::collections::BTreeMap<String, std::path::PathBuf>,
+    ) -> Result<std::collections::BTreeMap<String, BTreeSet<Used>>, String> {
+        let canonical = |path: &std::path::Path| {
+            path.canonicalize()
+                .map_err(|e| format!("{}: {e}", path.display()))
+        };
+        let stage = canonical(stage)?;
+        let nodes: std::collections::BTreeMap<_, _> = self
+            .resolve
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), node))
+            .collect();
+        let mut packages = std::collections::BTreeMap::new();
+        let mut folders = std::collections::BTreeMap::new();
+        for package in &self.packages {
+            packages.insert(package.id.as_str(), package);
+            if package.source.is_none() {
+                let folder = package
+                    .manifest_path
+                    .parent()
+                    .ok_or("Cargo metadata: invalid manifest path")?;
+                folders.insert(package.id.as_str(), canonical(folder)?);
+            }
+        }
+        let members: BTreeSet<&str> = self.workspace_members.iter().map(String::as_str).collect();
+        let proc_macro = |package: &Package| {
+            package
+                .targets
+                .iter()
+                .any(|target| target.kind.iter().any(|kind| kind == "proc-macro"))
+        };
+        let mut uses = std::collections::BTreeMap::new();
+        for (id, folder) in mods {
+            let folder = canonical(folder)?;
+            let root = self
+                .workspace_members
+                .iter()
+                .find(|member| folders.get(member.as_str()) == Some(&folder))
+                .ok_or_else(|| format!("Cargo metadata: mod {id} is not a workspace member"))?;
+            let mut used = BTreeSet::new();
+            let mut pending = vec![root.as_str()];
+            let mut seen = BTreeSet::new();
+            while let Some(current) = pending.pop() {
+                if !seen.insert(current) {
+                    continue;
+                }
+                let node = nodes
+                    .get(current)
+                    .ok_or("Cargo metadata: missing resolved node")?;
+                for dep in &node.deps {
+                    if !dep.dep_kinds.iter().any(|kind| kind.kind.is_none()) {
+                        continue;
+                    }
+                    let package = packages
+                        .get(dep.pkg.as_str())
+                        .ok_or("Cargo metadata: missing package")?;
+                    if proc_macro(package) || members.contains(dep.pkg.as_str()) {
+                        continue;
+                    }
+                    match folders.get(dep.pkg.as_str()) {
+                        // One of this mod's own crates, linked into its library.
+                        Some(path) if path.starts_with(&folder) => pending.push(&dep.pkg),
+                        // Staged by the build for something else.
+                        Some(path) if path.starts_with(&stage) => {}
+                        // A registry crate, or one the SDK patches in.
+                        _ => {
+                            used.insert(Used {
+                                name: package.name.clone(),
+                                version: package.version.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            uses.insert(id.clone(), used);
+        }
+        Ok(uses)
+    }
+
+    /// The facade copies in the target graph, including ones reached only through other crates.
+    /// The older 0.3 facade forwards to its dependency on 0.4.
+    pub fn runtime_logs(&self) -> Result<BTreeSet<Used>, String> {
+        let runtime = self.reachable(true)?;
+        Ok(self
+            .packages
+            .iter()
+            .filter(|package| {
+                package.name == "log"
+                    && package.version.starts_with("0.4.")
+                    && package.source.as_deref() == Some(sunrise_addresses::CARGO_CRATES_IO_SOURCE)
+                    && runtime.contains(package.id.as_str())
+            })
+            .map(|package| Used {
+                name: package.name.clone(),
+                version: package.version.clone(),
+            })
+            .collect())
     }
 
     pub fn runtime_packages(&self) -> Result<BTreeSet<String>, String> {

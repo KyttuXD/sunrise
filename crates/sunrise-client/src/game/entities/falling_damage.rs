@@ -167,21 +167,16 @@ impl Game<'_> {
             {
                 self.world.block_entities.insert(key, entity);
             }
-            if let Some(entity) = self.world.block_entities.get(&key) {
-                let mut tag = sunrise_client::save::block_entity_encode::encode(
-                    key,
-                    entity,
-                    &name,
-                    self.res.items(),
-                );
+            if let Some(sunrise_core::nbt::Tag::Compound(carried)) = block
+                .saved
+                .as_ref()
+                .and_then(|saved| saved.1.get("TileEntityData"))
+                && let Some(entity) = self.world.block_entities.get(&key)
+            {
+                let mut tag = self.encode_live_block_entity(key, entity, &name, self.res.items());
                 // FallingBlockEntity.tick copies each supplied field over the
                 // new block entity's saved defaults before loadWithComponents.
-                if let Some(sunrise_core::nbt::Tag::Compound(carried)) = block
-                    .saved
-                    .as_ref()
-                    .and_then(|saved| saved.1.get("TileEntityData"))
-                    && let sunrise_core::nbt::Tag::Compound(fields) = &mut tag
-                {
+                if let sunrise_core::nbt::Tag::Compound(fields) = &mut tag {
                     fields.extend(carried.clone());
                     self.load_block_entity_nbt(pos, &sunrise_client::snbt::to_snbt(&tag));
                 }
@@ -232,7 +227,7 @@ impl Game<'_> {
         }) {
             return;
         }
-        let Some(id) = self.motion.health.damage.id(kind) else {
+        let Some(id) = self.health_resources.damage.id(kind) else {
             return;
         };
         let attack = sunrise_client::health::Attack {

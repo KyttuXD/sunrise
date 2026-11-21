@@ -58,11 +58,10 @@ pub(super) fn block_face_sturdy(
     })
 }
 
-/// Shared full-skylight query; never reads an unloaded chunk.
-pub(super) fn can_see_sky(world: &World, pos: [i32; 3]) -> Option<bool> {
-    world.is_loaded_at(pos[0], pos[1], pos[2]).then(|| {
-        super::native_level_refs::world_brightness(world, mod_api::LightLayer::Sky, pos) >= 15
-    })
+/// Read the published sky light without requiring a block or a resident column.
+pub(super) fn can_see_sky(world: &World, pos: [i32; 3]) -> bool {
+    world.shape.sky_light
+        && super::native_level_refs::world_brightness(world, mod_api::LightLayer::Sky, pos) >= 15
 }
 
 /// Why a server block cannot be read.
@@ -452,8 +451,28 @@ mod tests {
     use super::*;
     use mod_api::LevelHost;
     use std::sync::Arc;
-    use sunrise_client::chunk::Chunk;
+    use sunrise_client::chunk::{Chunk, Light};
     use sunrise_client::items::TagRegistry;
+
+    #[test]
+    fn sky_visibility_uses_the_published_sky_layer() {
+        let mut world = World::new(BlockStateId(0), 0);
+        let y = world.shape.min_y;
+        let above = world.shape.max_y() + 16;
+        let mut chunk = Chunk::empty(0, 0);
+        Arc::make_mut(&mut chunk.sections[0]).light = Light::Uniform(0xef);
+        world.chunks.insert((0, 0), Arc::new(chunk));
+        assert!(
+            !can_see_sky(&world, [0, y, 0]),
+            "block light is not sky light"
+        );
+        assert!(can_see_sky(&world, [0, above, 0]));
+        assert!(can_see_sky(&world, [32, y, 0]));
+        world.shape.sky_light = false;
+        assert!(!can_see_sky(&world, [0, above, 0]));
+        assert!(!can_see_sky(&world, [32, y, 0]));
+        assert!(!world.loaded(32, 0));
+    }
 
     #[test]
     fn a_fluid_shape_is_full_under_the_same_fluid_and_its_own_height_otherwise() {
@@ -674,11 +693,12 @@ mod tests {
                 let oak_tag = tags
                     .key(&mod_api::Identifier::parse("minecraft:oak_logs").unwrap())
                     .unwrap();
+                let mod_api::TagMembers::Members(keys) = tags.items(oak_tag) else {
+                    panic!("the oak logs tag is loaded");
+                };
                 assert_eq!(
-                    tags.items(oak_tag)
-                        .map(|keys| keys.into_iter().map(|key| key.id(host)).collect::<Vec<_>>())
-                        .as_deref(),
-                    Some(&oak[..])
+                    keys.into_iter().map(|key| key.id(host)).collect::<Vec<_>>(),
+                    oak
                 );
                 let item = host
                     .item_key(&mod_api::Identifier::parse("minecraft:oak_log").unwrap())
@@ -973,7 +993,7 @@ mod tests {
             let item = host
                 .item_key(&mod_api::Identifier::parse("minecraft:oak_log").unwrap())
                 .unwrap();
-            assert_eq!(tags.items(oak_tag), None);
+            assert_eq!(tags.items(oak_tag), mod_api::TagMembers::Unavailable);
             assert_eq!(tags.is_in_tag(item, oak_tag), None);
             game.session_lock = None;
             let _ = std::fs::remove_dir_all(dir);

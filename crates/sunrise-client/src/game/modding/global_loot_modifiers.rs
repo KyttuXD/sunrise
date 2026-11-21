@@ -85,7 +85,7 @@ impl Serializers {
                 instances.borrow_mut().insert(id.to_owned(), instance);
                 Ok(decoded)
             },
-            |error| log::warn!("{error}"),
+            |error| log::error!("{error}"),
         ));
         let mut instances = instances.into_inner();
         let entries = generation

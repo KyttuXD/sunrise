@@ -64,8 +64,8 @@ pub struct ItemStack {
     components: Option<Arc<Components>>,
 }
 
-/// A stack operation could not represent the requested count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A stack operation could not represent the requested count or component patch.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum StackError {
@@ -77,6 +77,11 @@ pub enum StackError {
     InvalidDamage,
     /// A patch and the damage field (or a patch value and removal) disagree.
     ConflictingDamage,
+    /// The supplied value for a component is not admitted by its codec.
+    InvalidComponent {
+        /// The component whose value was refused.
+        id: crate::ComponentId,
+    },
 }
 impl std::fmt::Display for StackError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -85,6 +90,9 @@ impl std::fmt::Display for StackError {
             Self::CountOverflow => f.write_str("item stack count overflow"),
             Self::InvalidDamage => f.write_str("invalid item damage"),
             Self::ConflictingDamage => f.write_str("conflicting item damage"),
+            Self::InvalidComponent { id } => {
+                write!(f, "invalid value for component {}", id.as_str())
+            }
         }
     }
 }
@@ -115,7 +123,7 @@ pub enum StackWriteError {
     InvalidMaximum,
     /// An engine result contained a zero-count stack instead of an empty slot.
     EmptyEngineStack,
-    /// An engine snapshot's component patch was malformed or conflicted with its damage.
+    /// A stack's component patch was malformed or conflicted with its damage.
     InvalidComponents {
         /// The record-level normalization refusal.
         reason: StackError,
@@ -505,6 +513,29 @@ mod tests {
         }
         fn encode(&self, value: i32) -> Tag {
             Tag::Int(value)
+        }
+    }
+
+    #[test]
+    fn stack_errors_keep_their_wire_tags_and_append_the_component_id() {
+        use crate::wire::{Reader, Writer};
+
+        for (error, bytes) in [
+            (StackError::Empty, &b"\x00\x00\x00\x00"[..]),
+            (StackError::CountOverflow, &b"\x01\x00\x00\x00"[..]),
+            (StackError::InvalidDamage, &b"\x02\x00\x00\x00"[..]),
+            (StackError::ConflictingDamage, &b"\x03\x00\x00\x00"[..]),
+            (
+                StackError::InvalidComponent {
+                    id: crate::ComponentId::new("minecraft:villager_food").unwrap(),
+                },
+                &b"\x04\x00\x00\x00\x17\x00\x00\x00minecraft:villager_food"[..],
+            ),
+        ] {
+            let mut out = Writer::new();
+            out.put(&error);
+            assert_eq!(out.bytes(), bytes);
+            assert_eq!(Reader::decode::<StackError>(bytes).unwrap(), error);
         }
     }
 

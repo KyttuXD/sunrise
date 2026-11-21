@@ -124,9 +124,12 @@ mod tests {
         assert_eq!(
             candidates
                 .iter()
-                .map(|p| (p.manifest.id.as_str(), p.manifest.version.as_str()))
+                .map(|p| (p.manifest.id.as_str(), p.manifest.version.to_string()))
                 .collect::<Vec<_>>(),
-            [("first", "1.2.3"), ("not_in_the_record", "1.2.3")]
+            [
+                ("first", "1.2.3".to_owned()),
+                ("not_in_the_record", "1.2.3".to_owned())
+            ]
         );
         assert_eq!(candidates[0].path, first);
         fs::write(home.0.join("native-mods.json"), "not JSON").unwrap();

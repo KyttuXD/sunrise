@@ -130,3 +130,75 @@ fn a_dash_after_a_given_effect_comes_after_it_in_the_packet() {
         );
     });
 }
+
+/// #1988: a zombie given Jump Boost II and Absorption II sends each stored
+/// modifier once, on its attribute's instance (base 3 and 0): 2.0 and 8.0,
+/// `add_value` (0). A zombie that loaded the same effects stored none, and
+/// no instance of either is sent for it. `waypoint_transmit_range` is not
+/// syncable, so Invisibility's modifier is never sent.
+#[test]
+#[ignore = "daily"]
+fn the_attribute_packet_carries_given_jump_boost_and_absorption_modifiers_once() {
+    with_game(|game| {
+        let zombie = game
+            .res
+            .mob_types()
+            .get("minecraft:zombie")
+            .unwrap()
+            .clone();
+        let mut given = Mob::new(12, zombie.clone(), Vec3::ZERO, 0.0);
+        let mut loaded = Mob::new(13, zombie, Vec3::ZERO, 0.0);
+        for (effect, amplifier) in [
+            ("minecraft:jump_boost", 1),
+            ("minecraft:absorption", 1),
+            ("minecraft:invisibility", 0),
+        ] {
+            given.add_effect(effect, -1, amplifier);
+            loaded.load_effect(StoredEffect::new(effect, -1, amplifier));
+        }
+        let id = |name: &str| game.motion.attributes.id(name).unwrap().registry_id();
+        let (safe_fall, max_absorption, range) = (
+            id("minecraft:safe_fall_distance"),
+            id("minecraft:max_absorption"),
+            id("minecraft:waypoint_transmit_range"),
+        );
+        let synced = |m: &Mob| -> Vec<AttributeSnapshot> {
+            let mut out = Vec::new();
+            game.mob_attributes(m, &mut SpeedByType::default(), &mut out);
+            out
+        };
+        let rows = synced(&given);
+        let row = |attribute: i32| {
+            let found: Vec<_> = rows.iter().filter(|s| s.attribute == attribute).collect();
+            assert_eq!(found.len(), 1, "{rows:?}");
+            found[0].clone()
+        };
+        let jump = row(safe_fall);
+        assert_eq!(jump.base, 3.0);
+        assert_eq!(
+            jump.modifiers,
+            [AttributeModifier {
+                id: "minecraft:effect.jump_boost".into(),
+                amount: 2.0,
+                operation: 0,
+            }]
+        );
+        let absorption = row(max_absorption);
+        assert_eq!(absorption.base, 0.0);
+        assert_eq!(
+            absorption.modifiers,
+            [AttributeModifier {
+                id: "minecraft:effect.absorption".into(),
+                amount: 8.0,
+                operation: 0,
+            }]
+        );
+        assert!(rows.iter().all(|s| s.attribute != range), "{rows:?}");
+        let rows = synced(&loaded);
+        assert!(
+            rows.iter()
+                .all(|s| ![safe_fall, max_absorption, range].contains(&s.attribute)),
+            "{rows:?}"
+        );
+    });
+}

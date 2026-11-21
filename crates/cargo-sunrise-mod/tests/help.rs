@@ -10,16 +10,41 @@ fn run(args: &[&str]) -> std::process::Output {
 
 #[test]
 #[ignore = "daily"]
-fn help_prints_the_usage_to_standard_output_and_succeeds() {
+fn help_lists_the_everyday_commands_and_each_command_says_its_usage() {
     for args in [&[][..], &["--help"], &["-h"], &["sunrise-mod", "--help"]] {
         let output = run(args);
         assert!(output.status.success(), "{args:?}");
         let text = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            text.starts_with("usage: cargo sunrise-mod new <path>"),
-            "{args:?}: {text}"
-        );
+        assert!(text.lines().count() < 20, "{args:?}: {text}");
+        for command in ["new", "build", "run", "check", "update", "hooks"] {
+            assert!(
+                text.lines().any(|l| l.trim_start().starts_with(command)),
+                "{args:?}: {command}"
+            );
+        }
+        assert!(text.contains("cargo sunrise-mod help all"), "{args:?}");
         assert!(output.stderr.is_empty(), "{args:?}");
+    }
+    let output = run(&["build", "--help"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.starts_with("usage: cargo sunrise-mod build [--update-lock]"),
+        "{text}"
+    );
+    for (subcommand, usage) in [("plan", "--releases"), ("scripts", "--out")] {
+        for flag in ["--help", "-h"] {
+            let output = run(&["release", subcommand, flag]);
+            assert!(output.status.success(), "{subcommand} {flag}");
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                text.starts_with(&format!(
+                    "usage: cargo sunrise-mod release {subcommand} {usage}"
+                )),
+                "{text}"
+            );
+            assert!(output.stderr.is_empty());
+        }
     }
 }
 
@@ -28,5 +53,10 @@ fn help_prints_the_usage_to_standard_output_and_succeeds() {
 fn an_unknown_command_is_an_error() {
     let output = run(&["frobnicate"]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: cargo sunrise-mod new"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a cargo sunrise-mod command"));
+    let output = run(&["release", "frobnicate", "--help"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown release command \"frobnicate\"")
+    );
 }

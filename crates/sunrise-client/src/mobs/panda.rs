@@ -710,7 +710,7 @@ impl Goal for PandaPanic {
 }
 /// `DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES` (`armadillo::environmental`), or burning.
 fn environmental(m: &Mob) -> bool {
-    m.fire_ticks > 0 && !m.kind.flags.fire_immune
+    m.is_on_fire()
         || m.last_damage.is_some_and(|(d, t)| {
             super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
         })

@@ -54,19 +54,20 @@ impl Game<'_> {
         index: usize,
     ) -> Option<bool> {
         let target = self.native_living_target(living)?;
-        let effect = self
-            .items()
-            .get(&stack.item)?
-            .consumable
-            .as_ref()?
+        let effect = stack
+            .consumable(self.items().get(&stack.item))?
             .effects
             .get(index)?
             .clone();
         match target {
             t @ (Target::Player | Target::Guest(_)) => self
-                .for_player(t, |g| g.apply_consume_effect(stack, &effect, None))
+                .for_player(t, |g| {
+                    g.apply_consume_effect(stack, &effect, None, living.entity())
+                })
                 .flatten(),
-            Target::Mob(_) => self.apply_consume_effect(stack, &effect, Some(living)),
+            Target::Mob(_) => {
+                self.apply_consume_effect(stack, &effect, Some(living), living.entity())
+            }
             _ => None,
         }
     }
@@ -130,10 +131,11 @@ impl Game<'_> {
                 if !self.can_be_affected_resolved(Some(id as i32), &kind, name, Some(effect.id)) {
                     return false;
                 }
-                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+                let Some(changed) = self.mutate_mob_effects(id, Some(name), |mob| {
+                    mob.add_effect_instance(name, instance)
+                }) else {
                     return false;
                 };
-                let changed = m.add_effect_instance(name, instance);
                 self.mod_effect_added_resolved(effect.id, Some(id as i32), amplifier, new);
                 changed
             }
@@ -293,10 +295,10 @@ impl Game<'_> {
                 if cancel {
                     return false;
                 }
-                self.mobs
-                    .iter_mut()
-                    .find(|m| m.id == id && !m.removed)
-                    .is_some_and(|m| m.retain_effects(|e| e.registry_index != Some(def.index)))
+                self.mutate_mob_effects(id, Some(def.id), |mob| {
+                    mob.retain_effects(|e| e.registry_index != Some(def.index))
+                })
+                .unwrap_or(false)
             }
             _ => false,
         }
@@ -338,14 +340,12 @@ impl Game<'_> {
                     .map(|(name, _)| *name)
                     .collect();
                 // The refused removals keep their effects; the rest go.
-                self.mobs
-                    .iter_mut()
-                    .find(|m| m.id == id && !m.removed)
-                    .is_some_and(|m| {
-                        m.retain_effects(|e| {
-                            e.registry_index.is_some_and(|index| keep.contains(&index))
-                        })
+                self.mutate_mob_effects(id, None, |mob| {
+                    mob.retain_effects(|e| {
+                        e.registry_index.is_some_and(|index| keep.contains(&index))
                     })
+                })
+                .unwrap_or(false)
             }
             _ => false,
         }

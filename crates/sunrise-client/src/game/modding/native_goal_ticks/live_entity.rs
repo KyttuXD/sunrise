@@ -119,9 +119,7 @@ impl GoalCx<'_, '_> {
     }
 
     pub(super) fn r_entity_fire_immune(&self, entity: EntityRef) -> Option<bool> {
-        Some(crate::mobs::spawn_rules::fire_immune(
-            self.entity_mob(entity)?.species(),
-        ))
+        Some(self.entity_mob(entity)?.fire_immune())
     }
 
     pub(super) fn r_entity_fire_ticks(&self, entity: EntityRef) -> Option<i32> {

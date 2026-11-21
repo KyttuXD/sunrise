@@ -177,14 +177,14 @@ fn selecting_a_pack_never_falls_back_from_malformed_winning_loot_data() {
     let files = vec![("predicate/test:value".into(), vec![valid.clone()])];
     let overlay = super::super::PackOverlay::new(&files);
     assert_eq!(
-        load_files(&root, &overlay, "predicate").unwrap()["test:value"],
+        super::super::load_predicates(&root, &overlay).unwrap()["test:value"],
         json!({"type":"minecraft:all_of","terms":[]})
     );
     let files = vec![(
         "predicate/test:value".into(),
         vec![valid, b"invalid winner".to_vec()],
     )];
-    let error = load_files(&root, &super::super::PackOverlay::new(&files), "predicate")
+    let error = super::super::load_predicates(&root, &super::super::PackOverlay::new(&files))
         .unwrap_err()
         .to_string();
     assert!(

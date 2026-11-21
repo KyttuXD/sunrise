@@ -19,6 +19,20 @@ pub(in crate::game) fn push_reaction(
     }
 }
 
+pub(in crate::game) fn api_push_reaction(
+    reaction: sunrise_world::level::PushReaction,
+) -> mod_api::PushReaction {
+    use mod_api::PushReaction as Api;
+    use sunrise_world::level::PushReaction as World;
+    match reaction {
+        World::PushPull => Api::PushPull,
+        World::Push => Api::Push,
+        World::Popped => Api::Popped,
+        World::Immoveable => Api::Immoveable,
+        World::IgnoreEntity => Api::IgnoreEntity,
+    }
+}
+
 impl TryIntoEngine<()> for mod_api::GateSound {
     type Engine = engine::GateSound;
     type Error = String;
@@ -78,6 +92,10 @@ impl TryIntoEngine<()> for mod_api::BlockProperties {
             }),
             max_horizontal_offset: self.max_horizontal_offset,
             max_vertical_offset: self.max_vertical_offset,
+            instrument: self.instrument,
+            ignited_by_lava: self.ignited_by_lava,
+            replaceable: self.replaceable,
+            skip_same_block_faces: self.skip_same_block_faces,
             vegetation: self.vegetation,
         })
     }
@@ -181,6 +199,15 @@ impl TryIntoEngine<()> for mod_api::Block {
                 .transpose()?,
             block_item: self.block_item.clone(),
             components: component_patch("block", &self.id, &self.components)?,
+            suspicious_stew_effects: self.suspicious_stew_effects.as_ref().map(|effects| {
+                effects
+                    .iter()
+                    .map(|(id, duration)| engine::StewEffect {
+                        id: id.clone(),
+                        duration: *duration,
+                    })
+                    .collect()
+            }),
             connects_to: self.connects_to.clone(),
             thickness: self.thickness,
             wood_type: self.wood_type.clone(),
@@ -326,9 +353,13 @@ mod tests {
             // The block item holds the id: an item of the same id is refused.
             assert_eq!(
                 content.declare(&[], &[item(id)]),
-                Err(format!(
-                    "item {id} is declared twice, or is also a block's item"
-                )),
+                Err(vec![(
+                    mod_api::__private::DeclarationKind::Item,
+                    mod_api::DeclarationError::Rejected {
+                        id: id.to_owned(),
+                        reason: "declared twice, or is also a block's item".into(),
+                    }
+                )]),
             );
         }
         let mut without = declared(Block::new("test:bare", "minecraft:stone").with_item(false));
@@ -392,7 +423,7 @@ mod tests {
         item.components = vec![
             (
                 "!minecraft:lore".into(),
-                Some(Tag::Compound(BTreeMap::new())),
+                Some(Tag::Compound(sunrise_core::nbt::Compound::new())),
             ),
             ("minecraft:lore".into(), None),
         ];
@@ -472,8 +503,9 @@ mod tests {
                 .declare(&[block.try_into_engine(&()).unwrap()], &[])
                 .unwrap_err();
             assert!(
-                error.contains("test:offset") && error.contains(key),
-                "{error}"
+                matches!(&error[..], [(mod_api::__private::DeclarationKind::Block, mod_api::DeclarationError::Rejected { id, reason })]
+                    if id == "test:offset" && reason.contains(key)),
+                "{error:?}"
             );
             assert!(content.blocks.is_empty());
         }
@@ -481,7 +513,7 @@ mod tests {
 
     #[test]
     fn declaration_conversion_preserves_admission_outcomes() {
-        // Independent old-path records: errors must match byte for byte, not just reject.
+        // Independent engine records: errors must match by kind, id and reason, not just reject.
         for (id, template, light, hardness, item) in [
             ("test:block", "minecraft:stone", 15, 2.5, true),
             ("other:block", "minecraft:stone", 0, 1.0, false),
@@ -529,7 +561,16 @@ mod tests {
                 let bad = api.try_into_engine(&()).unwrap();
                 let mut admission = sunrise_mod_package::Content::declared("test");
                 let error = admission.declare(&[valid, bad], &[]).unwrap_err();
-                assert_eq!(error, "block test:block: light is 0 to 15");
+                assert_eq!(
+                    error,
+                    [(
+                        mod_api::__private::DeclarationKind::Block,
+                        mod_api::DeclarationError::Rejected {
+                            id: "test:block".into(),
+                            reason: "light is 0 to 15".into(),
+                        }
+                    )]
+                );
                 assert!(admission.blocks.is_empty());
                 assert!(admission.items.is_empty());
             }
@@ -671,18 +712,25 @@ mod tests {
     }
 }
 
-pub(super) fn validate_decoded_effects(
+pub(super) fn validate_decoded_components(
     patch: Option<&mod_api::Tag>,
     stack: &sunrise_items::items::ItemStack,
 ) -> Result<(), mod_api::StackWriteError> {
-    // The component codec already decoded each supplied value. Check that admission
-    // succeeded rather than parsing untrusted component payloads a second time.
-    if let Some(patch) = patch
-        && ((patch.get("minecraft:consumable").is_some() && stack.consumable(None).is_none())
-            || (patch.get("minecraft:death_protection").is_some()
-                && stack.death_protection(None).is_none()))
+    // Use the admission results already produced by the component codec.
+    let Some(patch) = patch else { return Ok(()) };
+    if (patch.get("minecraft:consumable").is_some() && stack.consumable(None).is_none())
+        || (patch.get("minecraft:death_protection").is_some()
+            && stack.death_protection(None).is_none())
     {
         return Err(mod_api::StackWriteError::InvalidEffectPayload);
+    }
+    let id = "minecraft:villager_food";
+    if patch.get(id).is_some() && stack.villager_food(None).is_none() {
+        return Err(mod_api::StackWriteError::InvalidComponents {
+            reason: mod_api::StackError::InvalidComponent {
+                id: mod_api::ComponentId::new(id).expect("built-in component id"),
+            },
+        });
     }
     Ok(())
 }
@@ -692,6 +740,30 @@ mod effect_write_tests {
     use super::super::{TryIntoEngine, stack_limit_tests::catalog};
     use mod_api::{ItemStack, StackWriteError, Tag};
     use sunrise_core::nbt::JavaString;
+
+    #[test]
+    fn malformed_villager_food_refusal_names_the_component() {
+        let items = catalog();
+        let key = mod_api::__private::item_key("minecraft:stick").unwrap();
+        let mut draft = ItemStack::of(key);
+        let id = "minecraft:villager_food";
+        draft
+            .set_components(
+                [(
+                    JavaString::from(id),
+                    Tag::compound([("nutrition", Tag::Int(0))]),
+                )]
+                .into(),
+            )
+            .unwrap();
+        let Err(StackWriteError::InvalidComponents {
+            reason: mod_api::StackError::InvalidComponent { id: refused },
+        }) = draft.try_into_engine(&items)
+        else {
+            panic!("expected a named component refusal")
+        };
+        assert_eq!(refused.as_str(), id);
+    }
 
     #[test]
     fn malformed_effect_override_refuses_typed_stack_write() {

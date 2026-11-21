@@ -69,7 +69,7 @@ impl Game<'_> {
     }
     /// `Options.getFinalSoundSourceVolume(SoundSource.MUSIC)`.
     fn final_music_volume(&self) -> f32 {
-        self.settings.master_volume * self.settings.volumes[1]
+        (self.settings.master_volume * self.settings.volumes[1]) as f32
     }
     /// `ToastManager.setMusicToastDisplayState`: Pause and Pause and Toast make
     /// the toast (the second one shows it at once while music is audible),
@@ -94,7 +94,7 @@ impl Game<'_> {
         {
             toast.title = title;
             toast.description = description;
-            toast.show(f64::from(self.settings.notification_display_time));
+            toast.show(self.settings.notification_display_time);
         }
     }
 
@@ -220,7 +220,7 @@ impl Game<'_> {
     /// the level's music delay before the next one.
     pub(super) fn stop_sounds_for_new_level(&mut self) {
         self.ambience.clear(&mut self.audio);
-        self.audio.stop_all();
+        self.audio.leave_level();
         // Mod plays still queued for the next audio update go too.
         self.mod_sounds.clear();
     }

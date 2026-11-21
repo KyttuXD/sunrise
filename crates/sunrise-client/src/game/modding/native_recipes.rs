@@ -1,6 +1,5 @@
 //! Every item and recipe the game knows, made once for the mods that read
-//! them (native mods' `native_recipes`, capability `recipes` of WebAssembly
-//! mods, docs/modding/src/how-to/content-mods.md), and the recipe book's known displays; placing a
+//! them through `native_recipes`, and the recipe book's known displays; placing a
 //! recipe and creative gifts. The recipes are the window's own data — the
 //! content root's — with the server's recipes of the types its native mods
 //! had it send (`sunrise:recipe_content`) in their place, while the known
@@ -27,6 +26,44 @@ use sunrise_client::{
 /// The most recipes a server's recipe content may carry.
 const MAX_SYNCED_RECIPES: usize = 1_000_000;
 
+/// The parts of one recipe update so far. A part whose serializer could not
+/// be decoded refuses the whole update, once, when its last part comes: the
+/// parts after it must not publish what is left, and the previous generation
+/// stays.
+#[derive(Default)]
+struct IncomingRecipes {
+    recipes: Vec<(String, serde_json::Value)>,
+    refused: Option<String>,
+}
+/// A completed update: the recipes and the types they replace, or why it is
+/// refused.
+type RecipeUpdate = Result<(Vec<(String, serde_json::Value)>, Vec<String>), String>;
+impl IncomingRecipes {
+    /// Take one part; the finished update on the last.
+    fn push(&mut self, part: sunrise_client::lan::recipes::ContentPart) -> Option<RecipeUpdate> {
+        if self.refused.is_none() {
+            self.refused = part.refused;
+        }
+        if self.refused.is_none() {
+            self.recipes.extend(part.recipes);
+            // The server is trusted to end its parts; one that never does is
+            // dropped, not kept growing.
+            if self.recipes.len() > MAX_SYNCED_RECIPES {
+                self.recipes = Vec::new();
+                self.refused = Some(format!(
+                    "more than {MAX_SYNCED_RECIPES} recipes; the rest is dropped"
+                ));
+            }
+        }
+        let types = part.last?;
+        let recipes = std::mem::take(&mut self.recipes);
+        Some(match self.refused.take() {
+            Some(why) => Err(why),
+            None => Ok((recipes, types)),
+        })
+    }
+}
+
 #[derive(Default)]
 pub(super) struct RecipeTables {
     tables: Option<Arc<Recipes>>,
@@ -46,7 +83,7 @@ pub(super) struct RecipeTables {
     /// included, so the book numbers them the same (`Game::display_index`).
     pub(super) synced_index: Option<sunrise_client::recipe_book::RecipeIndex>,
     /// The recipe content's parts so far, until its last.
-    incoming: Vec<(String, serde_json::Value)>,
+    incoming: IncomingRecipes,
     /// The types that came before the player did: the mods hear of them
     /// once the helpers can answer (`recipes_received_now`).
     received: Option<Vec<String>>,
@@ -568,7 +605,7 @@ impl Game<'_> {
     pub(super) fn forget_synced_recipes(&mut self) {
         self.recipe_tables.synced = None;
         self.recipe_tables.synced_index = None;
-        self.recipe_tables.incoming.clear();
+        self.recipe_tables.incoming = IncomingRecipes::default();
         self.recipe_tables.received = None;
         self.recipe_tables.tables = None;
         self.forget_book();
@@ -595,18 +632,14 @@ impl Game<'_> {
                 return;
             }
         };
-        self.recipe_tables.incoming.extend(part.recipes);
-        // The server is trusted to end its parts; one that never does is
-        // dropped, not kept growing.
-        if self.recipe_tables.incoming.len() > MAX_SYNCED_RECIPES {
-            log::warn!("Sunrise: the server sent more than {MAX_SYNCED_RECIPES} recipes; dropped");
-            self.recipe_tables.incoming = Vec::new();
-            return;
-        }
-        let Some(types) = part.last else {
-            return;
+        let (received, types) = match self.recipe_tables.incoming.push(part) {
+            None => return,
+            Some(Ok(update)) => update,
+            Some(Err(why)) => {
+                log::warn!("Sunrise: the server's recipes were not taken: {why}");
+                return;
+            }
         };
-        let received = std::mem::take(&mut self.recipe_tables.incoming);
         // No type any more: back on the window's own recipes.
         if types.is_empty() {
             self.recipe_tables.synced_index = None;
@@ -649,6 +682,43 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    /// A part with a malformed serializer refuses the whole update: the
+    /// valid last part after it publishes nothing, one refusal is reported
+    /// when the update completes, and the next update is taken whole.
+    #[test]
+    fn a_bad_part_refuses_the_whole_update_at_its_last_part() {
+        use sunrise_client::lan::recipes::ContentPart;
+        let part = |text: &str| ContentPart::decode(text.as_bytes()).unwrap();
+        let mut incoming = super::IncomingRecipes::default();
+        assert!(
+            incoming
+                .push(part(
+                    r#"{"recipes":[["a:one",{"type":"smelting"}]],"last":null}"#
+                ))
+                .is_none()
+        );
+        assert!(
+            incoming
+                .push(part(
+                    r#"{"recipes":[["a:bad",{"type":"x:y:z"}]],"last":null}"#
+                ))
+                .is_none()
+        );
+        let refused = incoming.push(part(
+            r#"{"recipes":[["a:two",{"type":"smelting"}]],"last":["minecraft:smelting"]}"#,
+        ));
+        assert!(refused.unwrap().unwrap_err().contains("a:bad"));
+        let (recipes, types) = incoming
+            .push(part(
+                r#"{"recipes":[["a:three",{"type":"smelting"}]],"last":["minecraft:smelting"]}"#,
+            ))
+            .unwrap()
+            .unwrap();
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0].0, "a:three");
+        assert_eq!(types, ["minecraft:smelting"]);
+    }
+
     use super::super::native_entity_refs::tests::{with_game, with_game_at};
     use mod_api::{ItemStack, RecipeInput, RecipeLookupError};
 
@@ -684,6 +754,31 @@ mod tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(names, ["iron_ingot", "stick", "braid:sticks_from_logs"]);
+    }
+
+    /// A window's own `smelting` file (a bare type) and a server's bare one
+    /// both read as `minecraft:smelting`: the server's replaces the window's,
+    /// and the book numbers the same displays as for qualified types.
+    #[test]
+    fn synced_sources_classify_bare_types_as_minecrafts() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("data/minecraft/recipe");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("iron_ingot.json"), r#"{"type":"smelting"}"#).unwrap();
+        let own = sunrise_items::recipe_sources::sources(
+            root.path(),
+            &sunrise_world::loot::PackOverlay::NONE,
+        )
+        .unwrap();
+        let part = sunrise_client::lan::recipes::ContentPart::decode(
+            br#"{"recipes":[["minecraft:gold_ingot",{"type":"smelting"}]],"last":["minecraft:smelting"]}"#,
+        )
+        .unwrap();
+        let types = part.last.unwrap();
+        let all = super::synced_sources(own, part.recipes, &types);
+        let names: Vec<_> = all.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["gold_ingot"]);
+        assert_eq!(all[0].1["type"], "minecraft:smelting");
     }
 
     /// With the server's crafting recipes synced, the book still holds the

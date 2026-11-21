@@ -721,6 +721,7 @@ mod tests {
                     spectator: false,
                     permission: 0,
                     sunrise: true,
+                    general_entity: true,
                     moved: true,
                     position: [0.0; 3],
                     view_distance: 10,
@@ -728,7 +729,6 @@ mod tests {
                     sources: None,
                     tracker: &mut tracker,
                     out: &mut packets,
-                    gone: None,
                 }],
                 |_| Some(100),
             );
@@ -885,6 +885,7 @@ mod tests {
                     spectator: false,
                     permission: 0,
                     sunrise: true,
+                    general_entity: true,
                     moved: true,
                     position: [0.0; 3],
                     view_distance: 10,
@@ -892,7 +893,6 @@ mod tests {
                     sources: None,
                     tracker: &mut tracker,
                     out: &mut packets,
-                    gone: None,
                 }],
                 |_| Some(100),
             );

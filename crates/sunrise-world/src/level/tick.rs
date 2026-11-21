@@ -73,6 +73,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         self.emit(LevelEvent::Sound {
                             pos,
                             sound: "minecraft:block.composter.ready".into(),
+                            source: None,
                             volume: 1.0,
                             pitch: 1.0,
                         });
@@ -605,6 +606,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.emit(LevelEvent::Sound {
             pos,
             sound: "minecraft:block.big_dripleaf.tilt_down".into(),
+            source: None,
             volume: 1.0,
             pitch,
         });
@@ -1695,74 +1697,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let chance = (older + 1) as f32 / (older + same + 1) as f32;
         let modifier = if own == 0 { 0.75 } else { 1.0 };
         if self.random().next_float() < chance * chance * modifier
-            && let Some(next) = self.copper_next(state)
+            && let Some(next) = b.weathering_next(state)
         {
             self.set_block_and_update(pos, next);
         }
-    }
-    /// `WeatheringCopper.getNext`: the world's `neoforge:oxidizables` value
-    /// (`DataMapHooks.getNextOxidizedStage`), else by registry naming.
-    pub(crate) fn copper_next(&self, state: BlockStateId) -> Option<BlockStateId> {
-        let b = self.b;
-        let name = &*b.table.info(b.block(state)).name;
-        if let Some(next) = b.read_block_maps(|maps| {
-            maps.next_oxidation(name)
-                .and_then(|n| b.table.block_by_name(n))
-        }) {
-            return Some(b.table.with_properties_of(next, state));
-        }
-        let path = name.strip_prefix("minecraft:")?;
-        let next = if path == "copper_block" {
-            "exposed_copper".to_owned()
-        } else if let Some(rest) = path.strip_prefix("exposed_") {
-            format!("weathered_{rest}")
-        } else if let Some(rest) = path.strip_prefix("weathered_") {
-            format!("oxidized_{rest}")
-        } else if path.starts_with("oxidized_") || path.starts_with("waxed_") {
-            return None;
-        } else {
-            format!("exposed_{path}")
-        };
-        let block = b.table.block_by_name(&format!("minecraft:{next}"))?;
-        Some(b.table.with_properties_of(block, state))
-    }
-    /// `WeatheringCopper.getPrevious` (and `getFirst` by repeating it) by
-    /// registry naming: the block one oxidation step back.
-    fn copper_previous_name(path: &str) -> Option<String> {
-        if let Some(rest) = path.strip_prefix("oxidized_") {
-            Some(format!("weathered_{rest}"))
-        } else if let Some(rest) = path.strip_prefix("weathered_") {
-            Some(format!("exposed_{rest}"))
-        } else {
-            path.strip_prefix("exposed_").map(|rest| {
-                if rest == "copper" {
-                    "copper_block".to_owned()
-                } else {
-                    rest.to_owned()
-                }
-            })
-        }
-    }
-    /// One oxidation step back, or all of them: the world's
-    /// `neoforge:oxidizables` inverse (`DataMapHooks.getPreviousOxidizedStage`)
-    /// first, else by registry naming.
-    fn copper_stepped(&self, state: BlockStateId, all_the_way: bool) -> Option<BlockStateId> {
-        let b = self.b;
-        let previous = |name: &str| -> Option<String> {
-            b.read_block_maps(|maps| maps.previous_oxidation(name).map(str::to_owned))
-                .or_else(|| {
-                    let path = Self::copper_previous_name(name.strip_prefix("minecraft:")?)?;
-                    Some(format!("minecraft:{path}"))
-                })
-        };
-        let start: &str = &b.table.info(b.block(state)).name;
-        let name = if all_the_way {
-            first_stage(start, previous)?
-        } else {
-            previous(start)?
-        };
-        let block = b.table.block_by_name(&name)?;
-        Some(b.table.with_properties_of(block, state))
     }
     /// `LightningBolt.clearCopperOnLightningStrike`: the struck copper goes
     /// back to unoxidized, then 3 to 5 random walks of up to 8 steps each
@@ -1778,7 +1716,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if !(weathering || waxed) {
             return;
         }
-        if weathering && let Some(first) = self.copper_stepped(state, true) {
+        if weathering && let Some(first) = b.first_weathering_stage(state) {
             self.set_block_and_update(struck, first);
         }
         for _ in 0..self.rand_int(3) + 3 {
@@ -1796,7 +1734,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if b.data(state)
                         .implements(super::classes::Interface::WeatheringCopper)
                     {
-                        if let Some(previous) = self.copper_stepped(state, false) {
+                        if let Some(previous) = b.weathering_previous(state) {
                             self.set_block_and_update(candidate, previous);
                         }
                         self.level_event(3002, candidate, -1);
@@ -1850,6 +1788,79 @@ pub struct Precipitation {
 }
 
 impl Behaviours {
+    /// `WeatheringCopper.getAge`, in vanilla weather-state order. No age for
+    /// a block that does not implement WeatheringCopper, including waxed variants.
+    pub fn weathering_age(&self, state: BlockStateId) -> Option<u8> {
+        let data = self.data(state);
+        data.implements(super::classes::Interface::WeatheringCopper)
+            .then_some(data.weather)
+    }
+
+    /// `WeatheringCopper.getNext`: the world's `neoforge:oxidizables` mapping
+    /// first; otherwise the next vanilla stage, with shared properties copied.
+    pub fn weathering_next(&self, state: BlockStateId) -> Option<BlockStateId> {
+        if let Some(next) = self.mapped(state, super::BlockMaps::next_oxidation) {
+            return Some(next);
+        }
+        self.weathering_age(state)?;
+        let path = self.table.name(state).strip_prefix("minecraft:")?;
+        let next = if path == "copper_block" {
+            "exposed_copper".to_owned()
+        } else if let Some(rest) = path.strip_prefix("exposed_") {
+            format!("weathered_{rest}")
+        } else if let Some(rest) = path.strip_prefix("weathered_") {
+            format!("oxidized_{rest}")
+        } else if path.starts_with("oxidized_") || path.starts_with("waxed_") {
+            return None;
+        } else {
+            format!("exposed_{path}")
+        };
+        let block = self.table.block_by_name(&format!("minecraft:{next}"))?;
+        Some(self.table.with_properties_of(block, state))
+    }
+
+    /// `WeatheringCopper.getPrevious`: the world's `neoforge:oxidizables`
+    /// inverse first; otherwise the previous vanilla stage, with shared properties copied.
+    pub fn weathering_previous(&self, state: BlockStateId) -> Option<BlockStateId> {
+        let name = self.weathering_previous_name(self.table.name(state))?;
+        let block = self.table.block_by_name(&name)?;
+        Some(self.table.with_properties_of(block, state))
+    }
+
+    fn weathering_previous_name(&self, name: &str) -> Option<String> {
+        if let Some(mapped) =
+            self.read_block_maps(|maps| maps.previous_oxidation(name).map(str::to_owned))
+        {
+            return Some(mapped);
+        }
+        let path = name.strip_prefix("minecraft:")?;
+        let data = self.block_data(self.table.block_by_name(name)?);
+        if !data.implements(super::classes::Interface::WeatheringCopper) {
+            return None;
+        }
+        let previous = if let Some(rest) = path.strip_prefix("oxidized_") {
+            format!("weathered_{rest}")
+        } else if let Some(rest) = path.strip_prefix("weathered_") {
+            format!("exposed_{rest}")
+        } else {
+            let rest = path.strip_prefix("exposed_")?;
+            if rest == "copper" {
+                "copper_block".to_owned()
+            } else {
+                rest.to_owned()
+            }
+        };
+        Some(format!("minecraft:{previous}"))
+    }
+
+    fn first_weathering_stage(&self, state: BlockStateId) -> Option<BlockStateId> {
+        let name = first_stage(self.table.name(state), |name| {
+            self.weathering_previous_name(name)
+        })?;
+        let block = self.table.block_by_name(&name)?;
+        Some(self.table.with_properties_of(block, state))
+    }
+
     /// Run due scheduled ticks for the level's current game time, in vanilla
     /// order: block ticks then fluid ticks (65536 each at most).
     pub fn tick_scheduled<L: LevelAccess + ?Sized>(&self, level: &mut L, ticks: &mut Ticks) {

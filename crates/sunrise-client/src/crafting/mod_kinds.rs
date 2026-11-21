@@ -16,10 +16,7 @@ impl std::fmt::Debug for ModRecipe {
             .finish_non_exhaustive()
     }
 }
-fn source_path(name: &str) -> String {
-    let (namespace, path) = name.split_once(':').unwrap_or(("minecraft", name));
-    format!("data/{namespace}/recipe/{path}.json")
-}
+use sunrise_items::recipe_sources::source_path;
 /// Resolve the file's serializer before parsing, after source conditions have run.
 pub fn recipe_type(file: &str, serializer: &str) -> Result<String, String> {
     if super::VANILLA_RECIPE_SERIALIZERS.contains(&serializer) {
