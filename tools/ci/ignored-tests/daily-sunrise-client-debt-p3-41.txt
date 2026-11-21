@@ -1,0 +1,1 @@
+sunrise-client game::entity_sizes::tests::guest_pose_queries_only_active_vanilla_candidates lib daily resources

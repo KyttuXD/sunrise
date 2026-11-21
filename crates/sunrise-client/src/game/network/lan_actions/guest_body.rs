@@ -335,12 +335,25 @@ impl Game<'_> {
             // LivingEntity.tick: a changed scale rebuilds the box. Player.tick
             // ends with updatePlayerPose — or, for a passenger, the rideTick
             // path that clears a swim (#4509 / #3308).
-            let _ = if riding {
-                w.passenger_pose_tick()
+            if mod_api::__private::listened(mod_api::HookId::EntitySize) {
+                if riding {
+                    let _ = w.passenger_base_tick();
+                } else {
+                    w.player.count_down_server_spin();
+                    let _ = w.player.refresh_attributes();
+                }
+                let _ = game.update_player_pose_with_sizes(id, &[], riding);
             } else {
-                w.server_player_pose_tick()
-            };
-            let mut events = std::mem::take(&mut w.player.events);
+                let _ = if riding {
+                    w.passenger_pose_tick()
+                } else {
+                    w.server_player_pose_tick()
+                };
+            }
+            let mut events = game
+                .player
+                .as_mut()
+                .map_or_else(Vec::new, |player| std::mem::take(&mut player.events));
             if let Some((at, alive)) = rose {
                 game.end_tracked_fall(at, alive);
             }

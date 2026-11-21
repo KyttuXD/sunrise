@@ -3,21 +3,49 @@
 use super::*;
 use sunrise_world::world_movement::CollisionCheckRequest;
 
+/// `Level.noCollision(player, bounds)` using read-only borrows of the player and world: blocks,
+/// less the player's collision exclusions, and the host's entity boxes.
+pub fn no_player_collision_read(
+    player: &PlayerMotion,
+    scene: &World,
+    collision_binding: &BlockCollisionRegistry<'_>,
+    entities: &[Aabb],
+    bounds: Aabb,
+) -> Result<bool> {
+    let at = [player.position.x, player.position.z];
+    let mut collisions = crate::collisions::EntityCollisions {
+        blocks: SceneCollisions {
+            world: scene,
+            binding: collision_binding,
+            subject: Some(player.powder_snow_subject()),
+        },
+        entities,
+        border: player.border.as_ref().map(|b| (b, at)),
+    };
+    let context = player_context(player, player.main_hand.as_deref());
+    Ok(collision_exclusions::no_world_collision(
+        &mut collisions,
+        &player.collision_exclusions,
+        CollisionCheckRequest {
+            entity: player_collision_identity(player),
+            context,
+            bounds,
+            candidate_budget: 1_000_000,
+        },
+    )?)
+}
+
 impl MotionWorld<'_, '_, '_> {
     /// `Level.noCollision(player, bounds)`: blocks, less the player's collision exclusions, and
     /// the host's entity boxes.
     pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
-        let context = self.context();
-        Ok(collision_exclusions::no_world_collision(
-            &mut self.movement_collisions(),
-            &self.player.collision_exclusions,
-            CollisionCheckRequest {
-                entity: player_collision_identity(self.player),
-                context,
-                bounds,
-                candidate_budget: 1_000_000,
-            },
-        )?)
+        no_player_collision_read(
+            self.player,
+            self.scene,
+            self.collision_binding,
+            self.entities,
+            bounds,
+        )
     }
 }
 
