@@ -7,7 +7,9 @@ Request existing entries inside `Hooks::register` with `r.block_key(id)`,
 - A bare registration ID uses `minecraft:`. Requests are canonicalized and deduplicated.
 - Requests resolve after every mod's content is known, so another mod can supply an entry.
 - An unknown request refuses the load with the requesting mod and canonical ID, even if
-  you never attach the key to a Part.
+  you never attach the key to a Part. For an optional package integration, check
+  `context.has_optional_dependency("package_id")` before requesting the key; the registry
+  namespace is not the package ID.
 - Keys are opaque `u32` slots, not engine numeric IDs.
 - Block, item, effect, fluid, block-entity-type and dimension keys return a borrowed canonical
   name (`Option<&str>`) from `key.id(host)`. Compare with `Some("minecraft:stone")`; `None`

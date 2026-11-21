@@ -1737,7 +1737,7 @@ impl<'a> Plan<'a> {
             for i in &m.content.items {
                 if let Some(block) = &i.block
                     && !defaults.contains_key(block)
-                    && !blocks.iter().any(|b| b.decl.id == *block)
+                    && !declared_ids.contains(block.as_str())
                 {
                     return Err(format!("{}: block {block:?} is not a block", i.id).into());
                 }

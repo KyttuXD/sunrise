@@ -148,7 +148,7 @@ impl EffectsRegistrar for PartRegistrar {
             ));
             return Err(MobEffectPartError::InvalidKey { effect: *effect });
         };
-        if Self::is_builtin("minecraft:mob_effect", &id) {
+        if self.has_builtin_entry("minecraft:mob_effect", &id) {
             return Err(MobEffectPartError::VanillaEffect { effect: *effect });
         }
         if self.attach_known(|parts| &mut parts.effects, kind, &id, part) {

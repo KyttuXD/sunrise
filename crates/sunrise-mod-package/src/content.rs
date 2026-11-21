@@ -118,26 +118,13 @@ pub(crate) fn check_namespace(name: &str, manifest: &Manifest) -> Result<(), Str
     Ok(())
 }
 
-/// A vanilla identifier, `minecraft:path`.
-/// `Identifier.isValidNamespace` and `isValidPath` on an id with both parts
-/// given: `[a-z0-9_.-]`, and `/` in the path too.
+/// An explicit `namespace:path`, validated by the same parser as registry keys.
 pub fn namespaced_id(id: &str) -> bool {
-    let ok = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b);
-    id.split_once(':').is_some_and(|(namespace, path)| {
-        !namespace.is_empty()
-            && !path.is_empty()
-            && namespace.bytes().all(ok)
-            && path.bytes().all(|b| ok(b) || b == b'/')
-    })
+    sunrise_core::identifier::Identifier::parse_namespaced(id).is_some()
 }
 
 fn vanilla_id(id: &str) -> bool {
-    id.strip_prefix("minecraft:").is_some_and(|path| {
-        !path.is_empty()
-            && path
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_./-".contains(&b))
-    })
+    id.starts_with("minecraft:") && namespaced_id(id)
 }
 
 /// What a declared block changes from its template; unset keeps the
@@ -4187,6 +4174,7 @@ capabilities = ["registries"]
         for (case, rest) in [
             ("bare-remainder", "bowl"),
             ("malformed-remainder", "jade:bad bowl"),
+            ("invalid-remainder-namespace", "..:bowl"),
             ("air-remainder", "minecraft:air"),
         ] {
             let item =

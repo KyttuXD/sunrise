@@ -458,26 +458,37 @@ pub mod tests {
                     .build();
             }
         }
-        for admitted in [false, true] {
-            let mut mods = vec![ModEntry::new("b", Box::new(Optional))];
-            let mut optional = std::collections::BTreeMap::new();
-            if admitted {
-                optional.insert("b".into(), ["owner-lib".into()].into_iter().collect());
-                mods.push(ModEntry::new("owner-lib", Box::new(Provider)));
+        let provider = PackageInfo::new(
+            "owner-lib".into(),
+            "1".into(),
+            PackageKind::Code,
+            Side::Both,
+            vec!["owner-lib".into(), "owner".into()],
+            vec![],
+        );
+        // Selection knows the package and its secondary namespace even if it is not admitted.
+        crate::load_state::with_test_package_inventory(vec![provider], || {
+            for admitted in [false, true] {
+                let mut mods = vec![ModEntry::new("b", Box::new(Optional))];
+                let mut optional = std::collections::BTreeMap::new();
+                if admitted {
+                    optional.insert("b".into(), ["owner-lib".into()].into_iter().collect());
+                    mods.push(ModEntry::new("owner-lib", Box::new(Provider)));
+                }
+                let data = mod_vocab::__private::RegistrationData::new(
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    RuntimeEnvironment::new(Dist::Client, "26.3".into(), "test".into(), false),
+                )
+                .with_optional_dependencies(optional);
+                crate::load_state::with_test_registration_data(data, || {
+                    let (attached, refused) = attached_to_owner_block(&mods);
+                    assert!(refused.is_empty(), "{refused:?}");
+                    assert_eq!(attached, if admitted { &["b"][..] } else { &[] });
+                });
             }
-            let data = mod_vocab::__private::RegistrationData::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
-                RuntimeEnvironment::new(Dist::Client, "26.3".into(), "test".into(), false),
-            )
-            .with_optional_dependencies(optional);
-            crate::load_state::with_test_registration_data(data, || {
-                let (attached, refused) = attached_to_owner_block(&mods);
-                assert!(refused.is_empty(), "{refused:?}");
-                assert_eq!(attached, if admitted { &["b"][..] } else { &[] });
-            });
-        }
+        });
     }
 
     #[test]
@@ -804,7 +815,7 @@ impl BlockEntitiesRegistrar for PartRegistrar {
         let Some(id) = id else {
             return Err(crate::BlockEntityPartError::InvalidKey { kind: *key });
         };
-        if Self::is_builtin("minecraft:block_entity_type", &id) {
+        if self.has_builtin_entry("minecraft:block_entity_type", &id) {
             return Err(crate::BlockEntityPartError::VanillaType { kind: *key });
         }
         if self.attach_known(|p| &mut p.block_entity_kinds, kind, &id, part) {

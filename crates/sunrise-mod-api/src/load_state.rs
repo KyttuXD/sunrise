@@ -108,8 +108,8 @@ pub(crate) fn registration_data() -> Option<RegistrationData> {
     REGISTRATION_DATA.get().cloned()
 }
 
-/// Records the registries and settings registration reads, once at startup, after the
-/// package inventory and before the first registration hook; a second call panics.
+/// Publishes the registration snapshot once, after component registration and content
+/// admission and before Parts register. A second call panics.
 pub fn install_registration_data(data: RegistrationData) {
     let _ = crate::__private::initialize();
     assert!(

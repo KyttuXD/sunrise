@@ -77,8 +77,9 @@ report for other registries), and the settings on disk when the snapshot was cap
 exclude what mods declare during registration. Invalid registry names, unknown registries, empty or
 path-like setting keys, unknown packages and unavailable snapshots return a `RegistrationReadError`.
 
-Package metadata describes what was selected, not what content admission accepted. Component types
-register first so content files can use them. In `Hooks::register` or a later registration hook,
+Package metadata describes what was selected, not what content admission accepted.
+`component_types` runs before `Hooks::register` so content files can use those types and admission
+can determine which optional dependencies loaded. In `Hooks::register` or a later registration hook,
 `context.has_optional_dependency("package_id")` opts in using the calling mod's admitted,
 side- and override-filtered optional dependency row. It does not guarantee that a registry key exists.
 Client setup

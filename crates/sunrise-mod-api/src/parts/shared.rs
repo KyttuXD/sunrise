@@ -176,14 +176,6 @@ impl PartRegistrar {
         ))
     }
 
-    /// Check the frozen built-in inventory, not the namespace of the key.
-    pub(crate) fn is_builtin(registry: &str, id: &str) -> bool {
-        use mod_vocab::__private::game::RegistrationContextNew;
-        crate::RegistrationContext::new()
-            .registry(registry)
-            .is_ok_and(|entries| entries.iter().any(|entry| entry == id))
-    }
-
     /// Attach `part`, of kind `kind`, to `id` in `table`; false if it is refused.
     pub(crate) fn attach<P: ?Sized>(
         &mut self,

@@ -7,6 +7,14 @@ impl PartRegistrar {
     pub(crate) fn owned_declaration_id(&self, name: &str) -> Result<String, String> {
         owned_declaration_id(self.mod_id, name)
     }
+
+    /// Whether the startup snapshot's built-in `registry` already contains `id`.
+    pub(crate) fn has_builtin_entry(&self, registry: &str, id: &str) -> bool {
+        use mod_vocab::__private::game::RegistrationContextNew;
+        crate::RegistrationContext::new()
+            .registry(registry)
+            .is_ok_and(|names| names.iter().any(|known| known == id))
+    }
 }
 
 #[cfg(test)]
