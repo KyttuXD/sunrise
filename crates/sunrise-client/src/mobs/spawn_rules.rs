@@ -662,7 +662,7 @@ impl SpawnLevel for super::MobWorld<'_> {
         self.data
             .biome_tags
             .get(tag.trim_start_matches('#'))
-            .is_some_and(|members| members.contains(biome))
+            .is_some_and(|members| members.contains(biome.as_ref()))
     }
     fn sky_light(&self, x: i32, y: i32, z: i32) -> i32 {
         // Kept as before: vanilla's End has sky light, but Sunrise reads 0 there.

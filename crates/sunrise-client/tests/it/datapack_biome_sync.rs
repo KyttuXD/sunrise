@@ -75,7 +75,7 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         names,
         ["minecraft:plains", "minecraft:river", "minecraft:tundra_x"]
     );
-    assert!(world.list.iter().all(|b| names.contains(&b.name.as_str())));
+    assert!(world.list.iter().all(|b| names.contains(&b.name.as_ref())));
 
     // A client that knows the vanilla pack still gets the pack biome's data.
     let sent = sync.registry_packets(true, &LevelShapes::VANILLA);

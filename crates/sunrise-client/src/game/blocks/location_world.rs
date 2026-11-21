@@ -72,7 +72,7 @@ impl World for LevelLocation<'_> {
         self.world
             .chunks
             .get(&(p[0] >> 4, p[2] >> 4))
-            .map(|c| self.biomes.get(c.biome(p[0], p[1], p[2])).name.clone())
+            .map(|c| self.biomes.get(c.biome(p[0], p[1], p[2])).name.to_string())
             .unwrap_or_default()
     }
     fn structures(&self, p: [i32; 3]) -> Vec<String> {

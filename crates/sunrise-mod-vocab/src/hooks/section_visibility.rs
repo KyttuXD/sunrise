@@ -76,7 +76,7 @@ it may read the `ClientHost`; it changes when the section meshes again, which a 
         neoforge = "none verified"
     )]
     fn section_visibility(
-        input: &SectionVisibilityInput,
+        input: &SectionVisibilityInput<'_>,
         answers: &mut dyn FnMut(Answered<SectionVisibility>),
     );
 }

@@ -818,7 +818,7 @@ impl Game<'_> {
         let biome_names: Vec<String> = world_biomes!(self)
             .list
             .iter()
-            .map(|b| b.name.clone())
+            .map(|b| b.name.to_string())
             .collect();
         let registry: Vec<String> = r
             .registries

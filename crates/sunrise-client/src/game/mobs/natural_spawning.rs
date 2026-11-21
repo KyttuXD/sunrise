@@ -550,7 +550,7 @@ impl sunrise_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
     fn biome(&self, pos: [i32; 3]) -> String {
         // A spawn site without its chunk (a loaded marker mob) is neutral.
         super::finalize_spawn::biome_or_plains(
-            self.l.biome(pos[0], pos[1], pos[2]).map(|b| b.name.clone()),
+            self.l.biome(pos[0], pos[1], pos[2]).map(|b| b.name.to_string()),
         )
     }
     fn biome_tag(&self, tag: &str, pos: [i32; 3]) -> bool {
@@ -1402,7 +1402,7 @@ impl<'a> Game<'a> {
             }
             let [x, y, z] = r.position;
             let (bx, by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
-            let biome = l.zoomed_biome(bx, by, bz).map_or("", |b| b.name.as_str());
+            let biome = l.zoomed_biome(bx, by, bz).map_or("", |b| b.name.as_ref());
             let at = Vec3::new(x, y, z);
             match terrain.spawn_generated(r.entity, at, r.yaw, biome, region, &mut group) {
                 Some(nbt) => {

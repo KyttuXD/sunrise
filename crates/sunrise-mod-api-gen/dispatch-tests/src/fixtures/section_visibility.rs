@@ -1,6 +1,6 @@
 mod stubs {
     #[derive(Debug, PartialEq)]
-    pub(super) struct SectionVisibilityInput(pub(super) [i32; 3]);
+    pub(super) struct SectionVisibilityInput<'a>(pub(super) &'a [i32; 3]);
     #[derive(Debug, PartialEq)]
     pub(super) enum SectionVisibility {
         Keep(u8),
@@ -20,7 +20,7 @@ fn each_section_visibility_answer_names_the_mod_that_gave_it() {
             _: &dyn ClientHost,
             event: &mut SectionVisibilityEvent<'_>,
         ) -> Option<SectionVisibility> {
-            assert_eq!(*event.input, SectionVisibilityInput([16, -64, 32]));
+            assert_eq!(*event.input, SectionVisibilityInput(&[16, -64, 32]));
             self.0.map(|answer| answer())
         }
     }
@@ -38,7 +38,7 @@ fn each_section_visibility_answer_names_the_mod_that_gave_it() {
         ]
         .into(),
     );
-    let input = SectionVisibilityInput([16, -64, 32]);
+    let input = SectionVisibilityInput(&[16, -64, 32]);
     let mut answers = Vec::new();
     dispatch_section_visibility(
         &TestHost,
@@ -84,8 +84,8 @@ fn a_section_visibility_listener_that_unwinds_loses_only_its_own_answer() {
             _: &dyn ClientHost,
             event: &mut SectionVisibilityEvent<'_>,
         ) -> Option<SectionVisibility> {
-            static OTHER: SectionVisibilityInput = SectionVisibilityInput([32, 16, 0]);
-            assert_eq!(*event.input, SectionVisibilityInput([0, 0, 0]));
+            static OTHER: SectionVisibilityInput<'static> = SectionVisibilityInput(&[32, 16, 0]);
+            assert_eq!(*event.input, SectionVisibilityInput(&[0, 0, 0]));
             *self.asked.lock().unwrap() += 1;
             let answer = self.answer.map(|answer| answer());
             if self.unwinds {
@@ -125,7 +125,7 @@ fn a_section_visibility_listener_that_unwinds_loses_only_its_own_answer() {
         ]
         .into(),
     );
-    let input = SectionVisibilityInput([0, 0, 0]);
+    let input = SectionVisibilityInput(&[0, 0, 0]);
     let healthy = [
         Answered {
             answer: SectionVisibility::Keep(61),

@@ -89,7 +89,7 @@ pub struct BiomeInfo {
     /// The `gameplay/increased_fire_burnout` attribute (jungles, swamps, peaks,
     /// mushroom fields).
     pub increased_fire_burnout: bool,
-    pub name: String,
+    pub name: Arc<str>,
     pub temperature: f32,
     /// `temperature_modifier: frozen` (the frozen oceans).
     pub frozen: bool,
@@ -303,7 +303,7 @@ impl BiomeInfo {
                     log::warn!("biome attributes: {e}");
                     Default::default()
                 }),
-            name,
+            name: name.into(),
         }
     }
 }
@@ -388,7 +388,7 @@ impl Biomes {
         let index = list
             .iter()
             .enumerate()
-            .map(|(i, b)| (b.name.clone(), i as u16))
+            .map(|(i, b)| (b.name.to_string(), i as u16))
             .collect();
         Ok(Self {
             builtin: Arc::new(list.clone()),
@@ -459,7 +459,7 @@ impl Biomes {
     /// The biome names in the network registry's order: `RegistryDataLoader`
     /// sorts a registry's files by `Identifier` (path, then namespace).
     pub fn registry_order(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.list.iter().map(|b| b.name.as_str()).collect();
+        let mut names: Vec<&str> = self.list.iter().map(|b| b.name.as_ref()).collect();
         names.sort_by(|a, b| identifier_order(a, b));
         names
     }
@@ -486,7 +486,7 @@ impl Biomes {
                 spawn_costs: HashMap::new(),
                 creature_probability: 0.0,
                 increased_fire_burnout: false,
-                name: "minecraft:plains".to_owned(),
+                name: "minecraft:plains".into(),
                 temperature: 0.8,
                 frozen: false,
                 downfall: 0.4,
@@ -569,7 +569,7 @@ impl Biomes {
     pub fn name(&self, id: u16) -> &str {
         self.list
             .get(usize::from(id))
-            .map_or("minecraft:plains", |b| b.name.as_str())
+            .map_or("minecraft:plains", |b| b.name.as_ref())
     }
     /// A biome's natural spawners by category, sorted by category name; None for a name this
     /// table lacks.
@@ -762,7 +762,7 @@ mod pack_tests {
             index: list
                 .iter()
                 .enumerate()
-                .map(|(i, b)| (b.name.clone(), i as u16))
+                .map(|(i, b)| (b.name.to_string(), i as u16))
                 .collect(),
             list,
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
@@ -864,7 +864,7 @@ impl Biomes {
             index: list
                 .iter()
                 .enumerate()
-                .map(|(i, b)| (b.name.clone(), i as u16))
+                .map(|(i, b)| (b.name.to_string(), i as u16))
                 .collect(),
             list,
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
@@ -911,7 +911,7 @@ mod color_tests {
             index: list
                 .iter()
                 .enumerate()
-                .map(|(i, b)| (b.name.clone(), i as u16))
+                .map(|(i, b)| (b.name.to_string(), i as u16))
                 .collect(),
             list,
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
@@ -1016,9 +1016,9 @@ mod blend_tests {
         };
         // Any id returns the shared default plains biome, no panic.
         let b = empty.get(0);
-        assert_eq!(b.name, "minecraft:plains");
+        assert_eq!(b.name.as_ref(), "minecraft:plains");
         let b = empty.get(65535);
-        assert_eq!(b.name, "minecraft:plains");
+        assert_eq!(b.name.as_ref(), "minecraft:plains");
         // Colours and temperature come from the default.
         assert_eq!(b.temperature, 0.8);
         assert_eq!(b.grass, 0x7f_c0_55);
@@ -1298,7 +1298,7 @@ mod placeholder_tests {
             "one id per name"
         );
         assert_eq!(biomes.name(gone), "minecraft:plains");
-        assert_eq!(biomes.get(gone).name, "minecraft:plains");
+        assert_eq!(biomes.get(gone).name.as_ref(), "minecraft:plains");
         assert_eq!(biomes.get(gone).water, 2);
         assert_eq!(biomes.saved_name(gone), "gone_mod:highland");
         assert_eq!(biomes.saved_name(other), "gone_mod:lowland");

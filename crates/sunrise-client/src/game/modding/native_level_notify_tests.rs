@@ -171,8 +171,8 @@ fn biome_writes_roll_back_and_only_the_root_commit_notifies_clients() {
         let old = 0_u16;
         assert_eq!(game.world.chunks[&(0, 0)].biome(0, 64, 0), 0);
         let target = 1_u16;
-        let name = world_biomes!(game).list[usize::from(target)].name.clone();
-        let old_name = world_biomes!(game).list[usize::from(old)].name.clone();
+        let name = world_biomes!(game).list[usize::from(target)].name.to_string();
+        let old_name = world_biomes!(game).list[usize::from(old)].name.to_string();
         let host: &mut dyn mod_api::ServerHost = game;
         let aborted: Result<(), ()> = host.transaction(|host, _| {
             assert!(level.set_biome(host, pos, &name));
@@ -270,7 +270,7 @@ fn biome_negative_min_y_and_unwind_restore_without_publication() {
             .unwrap();
         assert_eq!(game.world.bottom_y(), -64);
         assert_eq!(game.world.chunks[&(-1, -1)].biome(-1, -64, -1), 0);
-        let name = world_biomes!(game).list[1].name.clone();
+        let name = world_biomes!(game).list[1].name.to_string();
         let level = game.level(game.dim.id()).unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let host: &mut dyn mod_api::ServerHost = game;
