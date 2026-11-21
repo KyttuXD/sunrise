@@ -692,7 +692,7 @@ fn add_section_geometry(role: ExecutionRole) {
     if !role.is_client() {
         return;
     }
-    let mut registry = mod_api::SectionGeometryRegistry::default();
+    let mut registry = mod_api::__private::game::SectionGeometryRegistry::default();
     Game::native_add_section_geometry(&RegistrationContext::new(), &mut registry);
     sunrise_client::mesher::register_section_geometry(registry.into_renderers());
 }

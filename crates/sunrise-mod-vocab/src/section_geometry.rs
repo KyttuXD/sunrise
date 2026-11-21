@@ -1,49 +1,58 @@
-//! Extra geometry in chunk section meshes, as a client mod registers it in `add_section_geometry`
-//! (NeoForge's `AddSectionGeometryEvent` and its `AdditionalSectionGeometryRenderer`).
-//!
-//! A mod's renderer is held by the game and asked on the meshing workers each time a section
-//! meshes, like a block tint source: it gets no `Host` and keeps no mutable state, since two
-//! workers can mesh neighbouring sections at once. The quads it adds are part of the section's
-//! mesh, so they are rebuilt with it, never added twice, and gone when the section unloads.
+//! Native geometry appended to a chunk section's mesh by `add_section_geometry`.
 use super::BlockAndTintGetter;
 use std::sync::Arc;
 
-/// A mod's extra section geometry: NeoForge's `AdditionalSectionGeometryRenderer`.
+/// A mod's extra section geometry: NeoForge's `AdditionalSectionRenderer`.
 pub trait SectionGeometry: Send + Sync + 'static {
-    /// `render(context)`: adds the quads of the section whose lowest corner is block `origin` (a
-    /// multiple of 16 on each axis) through `context`. Asked on a meshing worker every time that
-    /// section meshes, also when it holds only air; a renderer with nothing for the section adds
-    /// nothing. What it adds is taken whole or refused whole, logged once: see
-    /// [`SectionGeometryContext::add`]. A renderer that panics is asked no more.
+    /// Adds quads through `context`, relative to the section's lowest block, `origin`.
+    /// Called on the meshing workers on each rebuild, including all-air sections. Callbacks
+    /// may run concurrently. A panic disables this callback for the session and reports the mod;
+    /// completed submissions stay in the current mesh.
     fn add(&self, origin: [i32; 3], context: &mut dyn SectionGeometryContext);
 }
 
-/// One section a [`SectionGeometry`] adds quads to. The section's quads, its own blocks' and
-/// every renderer's together, share one budget: 262144 quads and 32 MiB of mesh data. All
-/// sections meshing at once share another, 128 MiB of added quads not yet in their meshes. A
-/// quad is checked against them before it is kept.
+/// The section collector, corresponding to NeoForge's `SectionRenderingContext`.
 pub trait SectionGeometryContext {
     /// Reads the section's chunk and its eight neighbours.
     fn level(&self) -> &dyn BlockAndTintGetter;
-    /// Adds `quad`, drawn with the block atlas sprite `sprite` (`minecraft:block/stone`, a mod's
-    /// `mymod:block/glow`). False when this renderer's quads for the section are refused, and
-    /// then none of them are drawn and every later `add` is false too: a quad past a budget, a
-    /// corner or UV out of range or not a number, or a sprite the atlas lacks refuses them all.
-    fn add(&mut self, sprite: &str, quad: SectionQuad) -> bool;
-    /// How many more quads the section takes before its budget refuses one.
-    fn remaining(&self) -> u32;
+    /// Appends one quad textured with the named block atlas sprite (e.g. `minecraft:block/stone`).
+    /// An absent sprite uses the atlas's missing sprite. A refusal is reported and skips only
+    /// this quad: earlier submissions remain, and later calls are still accepted.
+    fn add(&mut self, sprite: &str, quad: SectionQuad) -> Result<(), SectionQuadError>;
 }
 
-/// One quad a [`SectionGeometry`] adds. Its corners go counter-clockwise seen from the side it
-/// faces; a solid quad is culled from behind, as a block's faces are, so a quad seen from both
-/// sides is two quads.
-#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+/// Why a section's collector refused one submitted quad.
+// no wire: a local section mesher's submission result, not serialized.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionQuadError {
+    /// At least one position coordinate is NaN or infinite.
+    NonFinitePosition,
+    /// At least one UV coordinate is NaN or infinite.
+    NonFiniteUv,
+}
+
+impl std::fmt::Display for SectionQuadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NonFinitePosition => "non-finite position",
+            Self::NonFiniteUv => "non-finite UV",
+        })
+    }
+}
+
+impl std::error::Error for SectionQuadError {}
+
+/// One quad a [`SectionGeometry`] adds. Its corners go counter-clockwise when seen from the
+/// side it faces; a solid quad is back-face culled, like a block's faces.
+// no wire: quads go directly from a native callback into the local section mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: mods build quads with struct literals
 pub struct SectionQuad {
-    /// The corners, in blocks from the section's lowest corner, each 0 to 16: a quad stays inside
-    /// its section.
+    /// Corners in blocks relative to the section's lowest corner. Finite positions may extend
+    /// beyond the section, but the quad is still rebuilt and unloaded with this section.
     pub positions: [[f32; 3]; 4],
-    /// Each corner's texture coordinate within the sprite, 0 to 1.
+    /// Finite coordinates relative to the sprite. Zero and one mark its opposite edges.
     pub uvs: [[f32; 2]; 4],
     /// ARGB the sprite's texels are multiplied by; `0xFFFFFFFF` leaves them as they are.
     pub color: u32,
@@ -60,23 +69,24 @@ pub trait SectionGeometryRenderers {
     fn register(&mut self, renderer: Arc<dyn SectionGeometry>);
 }
 
-/// The game's [`SectionGeometryRenderers`]: the renderers in registration order.
+/// Engine-owned registrations, in dispatch order.
 #[derive(Default)]
 // exhaustive: its field is private; the game builds it
 // no wire: process-local renderer storage; renderers run on the meshing workers, not serialized.
 pub struct SectionGeometryRegistry {
-    renderers: Vec<Arc<dyn SectionGeometry>>,
+    renderers: Vec<(&'static str, Arc<dyn SectionGeometry>)>,
 }
 
 impl SectionGeometryRenderers for SectionGeometryRegistry {
     fn register(&mut self, renderer: Arc<dyn SectionGeometry>) {
-        self.renderers.push(renderer);
+        let owner = crate::content::crash::current_native_mod().unwrap_or("unknown");
+        self.renderers.push((owner, renderer));
     }
 }
 
 impl SectionGeometryRegistry {
-    /// The renderers, in registration order.
-    pub fn into_renderers(self) -> Vec<Arc<dyn SectionGeometry>> {
+    /// The callbacks and their captured owners, in registration order.
+    pub fn into_renderers(self) -> Vec<(&'static str, Arc<dyn SectionGeometry>)> {
         self.renderers
     }
 }

@@ -1,0 +1,14 @@
+ids = [
+    "hook:add_section_geometry",
+    "trait:SectionGeometry",
+    "method:SectionGeometry::add",
+    "trait:SectionGeometryContext",
+    "method:SectionGeometryContext::add",
+    "method:SectionGeometryContext::remaining",
+    "type:SectionQuad",
+    "type:SectionQuadError",
+    "type:SectionGeometryRegistry",
+    "method:SectionGeometryRegistry::into_renderers",
+]
+why = """The original native route inherited whole-batch staging and shared budgets from guest meshing (9e58d42eb88). NeoForge's AddSectionGeometryEvent.SectionRenderingContext.getOrCreateChunkBuffer and SectionCompiler.compile append directly to the section's layer builders after terrain. The collector now keeps completed quads, rejects non-finite vertex positions and UVs individually, and uses the missing sprite for unknown names as in vanilla 26.3 TextureAtlas.getSprite. The collector adds no position or UV range policy over vanilla BufferBuilder.addVertex and setUv. Section geometry is local, not Wire data. A callback panic uses the shared session panic boundary, with an attributed log and toast; ordinary refusals never disable the callback. The hook is version 2."""
+migrate = """Keep registering with event.renderers.register(Arc::new(renderer)) in the same hook. Replace if context.add(sprite, quad) with if context.add(sprite, quad).is_ok(), or handle Err(SectionQuadError) directly. If you do not need to react to refusal, use let _ = context.add(sprite, quad); the collector reports it. Delete context.remaining() and submit each quad; do not discard or resubmit previous geometry on Err. Remove any Wire encoding or decoding of SectionQuad and construct it directly for context.add. Unknown sprite ids draw the missing sprite instead of failing. SectionGeometryRegistry and into_renderers were engine plumbing; mods implement SectionGeometry and use the hook's SectionGeometryRenderers, not a registry they own."""

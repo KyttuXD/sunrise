@@ -1,0 +1,3 @@
+sunrise-client-render mesher::mod_geometry_tests::a_decorative_quad_joins_its_section_once_per_compilation lib daily resources
+sunrise-client-render mesher::mod_geometry_tests::refusal_only_skips_its_quad_and_missing_sprites_draw lib daily resources
+sunrise-client-render mesher::mod_geometry_tests::panic_keeps_completed_quads_and_disables_only_its_callback lib daily resources

@@ -504,6 +504,10 @@ impl RenderAssets {
         if draws {
             emissive = crate::native_emissive::load_optifine(root.source(), &mut sprites);
         }
+        // `TextureAtlas.getSprite` uses this entry for names the block atlas does not contain.
+        if draws {
+            sprites.insert_in_blocks("minecraft:missingno")?;
+        }
         sprites.save_disk_cache();
         if draws {
             sprites.finish();

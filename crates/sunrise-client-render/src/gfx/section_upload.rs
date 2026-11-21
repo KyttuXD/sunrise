@@ -58,22 +58,17 @@ impl Renderer {
         }
     }
     pub(super) fn upload_mesh(&mut self, mesh: &SectionMesh) -> Option<SectionGpu> {
-        let solid = (mesh.solid.len() / 4) as u32;
-        let translucent = (mesh.translucent.len() / 4) as u32;
-        if solid + translucent == 0 {
+        let (Ok(solid), Ok(translucent)) = (
+            u32::try_from(mesh.solid.len() / 4),
+            u32::try_from(mesh.translucent.len() / 4),
+        ) else {
+            log::error!("Section upload exceeds the draw index address space");
+            return None;
+        };
+        let max = solid.max(translucent);
+        if max == 0 {
             return None;
         }
-        let max = solid.max(translucent);
-        if max > self.index_quads {
-            self.index_quads = max.next_power_of_two();
-            self.indices = Self::quad_indices(&self.device, self.index_quads);
-        }
-        let encoder = self.section_copies.get_or_insert_with(|| {
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Section uploads"),
-                })
-        });
         // The solid quads, and the translucent ones after them unless they have
         // an arena of their own. With video and system memory both full, the
         // section is not drawn. The solid ones in the compact layout where the
@@ -90,6 +85,37 @@ impl Renderer {
         } else {
             solid_slots + mesh.translucent.len() as u64
         };
+        // One section's ranges must fit their actual GPU pages and the indexed draw's u32
+        // count; `Arena::alloc` rounds reservations to pages, not to a mod-facing quota.
+        let translucent_vertices = mesh.translucent.len() as u64;
+        if main > self.arena.page_vertices()
+            || self
+                .translucent_arena
+                .as_ref()
+                .is_some_and(|arena| translucent_vertices > arena.page_vertices())
+            || translucency::index_words(translucent) > self.sorted_indices.page_vertices()
+        {
+            log::error!("Section upload exceeds the available terrain buffer address space");
+            return None;
+        }
+        if max > self.index_quads {
+            let index_limit = (self.device.limits().max_buffer_size
+                / (6 * size_of::<u32>() as u64))
+                .min(u64::from(u32::MAX / 6));
+            if u64::from(max) > index_limit {
+                log::error!("Section upload exceeds the available quad index buffer address space");
+                return None;
+            }
+            let quads = u64::from(max).next_power_of_two().min(index_limit) as u32;
+            self.indices = Self::quad_indices(&self.device, quads);
+            self.index_quads = quads;
+        }
+        let encoder = self.section_copies.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Section uploads"),
+                })
+        });
         let (page, start) = if main > 0 {
             self.arena.alloc(&self.device, encoder, main)?
         } else {
@@ -100,7 +126,6 @@ impl Renderer {
                 arena.release(page, start, main);
             }
         };
-        let translucent_vertices = mesh.translucent.len() as u64;
         let translucent_at = match &mut self.translucent_arena {
             Some(arena) if translucent > 0 => {
                 match arena.alloc(&self.device, encoder, translucent_vertices) {
