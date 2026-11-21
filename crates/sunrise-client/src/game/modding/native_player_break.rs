@@ -2,7 +2,7 @@
 //! break the blocks around the one its player broke as that player breaks them, taking their
 //! drops and experience in `block_drops`.
 use super::Game;
-use mod_api::PlayerRef;
+use mod_api::{BlockDropDestination, PlayerRef};
 use sunrise_client::first_person::Hand;
 
 impl Game<'_> {
@@ -14,7 +14,7 @@ impl Game<'_> {
         &mut self,
         player: PlayerRef,
         pos: [i32; 3],
-        into_inventory: bool,
+        destination: BlockDropDestination,
     ) -> bool {
         if !self.native_authoritative() {
             return false;
@@ -26,7 +26,7 @@ impl Game<'_> {
             }
             // Only this break owns these drops. Other breaks, including ones made by
             // callbacks, cannot inherit this destination, even if this call unwinds.
-            let mut drops = into_inventory.then(Vec::new);
+            let mut drops = (destination == BlockDropDestination::Inventory).then(Vec::new);
             let result = game.with_hand(Hand::Main, |game| {
                 game.player_break_block(pos, drops.as_mut())
             });
@@ -135,7 +135,7 @@ mod tests {
             // A break requested from an offhand interaction still uses the main hand.
             game.offhand = Some(ItemStack::new("minecraft:debug_stick", 1));
             game.hand = Hand::Off;
-            assert!(game.player_destroy_block(player, pos, false));
+            assert!(game.player_destroy_block(player, pos, BlockDropDestination::World));
             assert!(matches!(game.hand, Hand::Off));
             assert_eq!(block(game, pos), "minecraft:air");
             assert!(popped(game, "minecraft:cobblestone"));
@@ -158,7 +158,7 @@ mod tests {
             let player = with_player(game, pickaxe.clone());
             let iron = [8, 64, 4];
             place(game, iron, "minecraft:iron_block");
-            assert!(game.player_destroy_block(player, iron, false));
+            assert!(game.player_destroy_block(player, iron, BlockDropDestination::World));
             assert!(
                 popped(game, "minecraft:iron_block"),
                 "selected pickaxe harvests"
@@ -168,7 +168,7 @@ mod tests {
             game.offhand = Some(pickaxe.clone());
             game.hand = sunrise_client::first_person::Hand::Off;
             place(game, iron, "minecraft:iron_block");
-            assert!(game.player_destroy_block(player, iron, false));
+            assert!(game.player_destroy_block(player, iron, BlockDropDestination::World));
             assert!(
                 !popped(game, "minecraft:iron_block"),
                 "offhand cannot harvest"
@@ -200,7 +200,7 @@ mod tests {
             };
             door(game, "lower", lower);
             door(game, "upper", upper);
-            assert!(game.player_destroy_block(player, upper, false));
+            assert!(game.player_destroy_block(player, upper, BlockDropDestination::World));
             assert_eq!(block(game, upper), "minecraft:air");
             // Vanilla takes the lower half out in the same call, by the neighbour update.
             game.process_level_events().unwrap();
@@ -218,7 +218,7 @@ mod tests {
             door(game, "lower", lower);
             door(game, "upper", upper);
             assert_eq!(block(game, lower), "minecraft:iron_door");
-            assert!(game.player_destroy_block(player, upper, false));
+            assert!(game.player_destroy_block(player, upper, BlockDropDestination::World));
             assert_eq!(block(game, upper), "minecraft:air");
             assert_eq!(
                 block(game, lower),
@@ -244,13 +244,13 @@ mod tests {
             let player = with_player(game, silk);
             let (stone, ore) = ([6, 64, 4], [7, 64, 4]);
             place(game, stone, "minecraft:stone");
-            assert!(game.player_destroy_block(player, stone, true));
+            assert!(game.player_destroy_block(player, stone, BlockDropDestination::Inventory));
             assert_eq!(carried(game, "minecraft:stone"), 1);
             assert!(!popped(game, "minecraft:stone"));
 
             game.inventory[game.selected] = Some(ItemStack::new("minecraft:diamond_pickaxe", 1));
             place(game, ore, "minecraft:diamond_ore");
-            assert!(game.player_destroy_block(player, ore, true));
+            assert!(game.player_destroy_block(player, ore, BlockDropDestination::Inventory));
             assert_eq!(carried(game, "minecraft:diamond"), 1);
             assert!(!game.orbs.is_empty(), "the ore's experience");
         });
@@ -270,22 +270,22 @@ mod tests {
             let (stone, command, air) = ([6, 64, 4], [7, 64, 4], [8, 64, 4]);
             place(game, stone, "minecraft:stone");
             place(game, command, "minecraft:command_block");
-            assert!(!game.player_destroy_block(player, air, false));
-            assert!(!game.player_destroy_block(player, [16, 64, 4], false));
+            assert!(!game.player_destroy_block(player, air, BlockDropDestination::World));
+            assert!(!game.player_destroy_block(player, [16, 64, 4], BlockDropDestination::World));
             let epoch = game.native_lifecycle.epoch().unwrap();
             let stranger =
                 mod_api::__private::game::player_ref(mod_api::EntityRef::new(epoch, 21), 124);
-            assert!(!game.player_destroy_block(stranger, stone, false));
+            assert!(!game.player_destroy_block(stranger, stone, BlockDropDestination::World));
             game.set_mode(GameMode::Adventure);
-            assert!(!game.player_destroy_block(player, stone, false));
+            assert!(!game.player_destroy_block(player, stone, BlockDropDestination::World));
             game.set_mode(GameMode::Spectator);
-            assert!(!game.player_destroy_block(player, stone, false));
+            assert!(!game.player_destroy_block(player, stone, BlockDropDestination::World));
             assert_eq!(game.held().unwrap().damage, 0, "nothing wore the pickaxe");
             game.set_mode(GameMode::Creative);
-            assert!(!game.player_destroy_block(player, command, false));
+            assert!(!game.player_destroy_block(player, command, BlockDropDestination::World));
             assert_eq!(block(game, command), "minecraft:command_block");
             game.inventory[game.selected] = Some(ItemStack::new("minecraft:diamond_sword", 1));
-            assert!(!game.player_destroy_block(player, stone, false));
+            assert!(!game.player_destroy_block(player, stone, BlockDropDestination::World));
             assert_eq!(block(game, stone), "minecraft:stone");
             assert!(game.dropped.is_empty());
         });
@@ -305,7 +305,7 @@ mod tests {
             game.level.world_spawn = Some(pos);
             game.lan_acting_spawn_protection = Some(1);
             assert!(game.spawn_protects(1, game.dim.id(), pos));
-            assert!(game.player_destroy_block(player, pos, false));
+            assert!(game.player_destroy_block(player, pos, BlockDropDestination::World));
             assert_eq!(block(game, pos), "minecraft:air");
         });
     }
@@ -334,7 +334,7 @@ mod tests {
             }
             let player = host.players().acting_player().expect("the breaker acts");
             for &pos in &self.vein {
-                player.destroy_block(host, pos, false);
+                player.destroy_block(host, pos, BlockDropDestination::World);
             }
             self.busy.store(false, Ordering::Relaxed);
             let (stacks, experience) = std::mem::take(&mut *self.kept.lock().unwrap());
@@ -481,7 +481,12 @@ mod tests {
                 (self.vetoed, true)
             };
             let player = host.players().acting_player().expect("the breaker acts");
-            assert_eq!(player.destroy_block(host, next, collect), !collect);
+            let destination = if collect {
+                BlockDropDestination::Inventory
+            } else {
+                BlockDropDestination::World
+            };
+            assert_eq!(player.destroy_block(host, next, destination), !collect);
             mod_api::Flow::Continue
         }
     }
@@ -506,7 +511,11 @@ mod tests {
                     place(game, [x, 64, 4], "minecraft:stone");
                 }
                 place(game, vetoed, "minecraft:stone");
-                assert!(game.player_destroy_block(player, [first, 64, 4], true));
+                assert!(game.player_destroy_block(
+                    player,
+                    [first, 64, 4],
+                    BlockDropDestination::Inventory
+                ));
                 assert!((first..=last).all(|x| block(game, [x, 64, 4]) == "minecraft:air"));
                 assert_eq!(block(game, vetoed), "minecraft:stone");
                 assert_eq!(game.held().unwrap().damage, 10);
@@ -534,7 +543,7 @@ mod tests {
         ) -> mod_api::Flow {
             if !self.0.swap(true, Ordering::Relaxed) {
                 let player = host.players().acting_player().expect("the breaker acts");
-                assert!(player.destroy_block(host, event.pos, false));
+                assert!(player.destroy_block(host, event.pos, BlockDropDestination::World));
             }
             mod_api::Flow::Continue
         }
@@ -558,7 +567,7 @@ mod tests {
                 let pos = [6, 64, 4];
                 place(game, pos, "minecraft:tripwire");
                 // Disarming the original state in the outer break would write the wire back.
-                assert!(!game.player_destroy_block(player, pos, false));
+                assert!(!game.player_destroy_block(player, pos, BlockDropDestination::World));
                 assert_eq!(block(game, pos), "minecraft:air");
                 assert_eq!(game.held().unwrap().damage, 1);
             });

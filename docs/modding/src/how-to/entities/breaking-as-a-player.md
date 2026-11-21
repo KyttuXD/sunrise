@@ -40,7 +40,7 @@ impl Hooks for VeinMiner {
         let vein = find_vein(host, origin); // the origin first
         *self.vein.lock().unwrap() = vein.clone();
         for pos in vein {
-            player.destroy_block(host, pos, false);
+            player.destroy_block(host, pos, BlockDropDestination::World);
         }
         self.busy.store(false, Ordering::Relaxed);
         let (stacks, experience) = std::mem::take(&mut *self.kept.lock().unwrap());

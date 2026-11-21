@@ -5,7 +5,9 @@ use super::native_entity_refs::tests::{collect_all_entities, with_game};
 use sunrise_client::{command::args::GameMode, items::ItemStack, motion::PlayerMotion};
 use sunrise_core::{geometry::Vec3, position::BlockPos};
 
-use mod_api::{BreakBlockEvent, Flow, Hooks, PlayerDestroyedBlockEvent, ServerHost};
+use mod_api::{
+    BlockDropDestination, BreakBlockEvent, Flow, Hooks, PlayerDestroyedBlockEvent, ServerHost,
+};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -133,7 +135,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             );
             let stone = [6, 64, 4];
             place(game, stone, "minecraft:stone");
-            assert!(game.player_destroy_block(player, stone, false));
+            assert!(game.player_destroy_block(player, stone, BlockDropDestination::World));
             assert_eq!(block(game, stone), "minecraft:air");
             assert_eq!(take(), [(stone, "minecraft:stone".to_owned(), None)]);
             // Heard before `playerDestroy` counts the block mined; the count comes after.
@@ -153,7 +155,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
                 (chest[0], chest[1], chest[2]),
                 sunrise_client::containers::BlockEntity::Chest(contents),
             );
-            assert!(game.player_destroy_block(player, chest, false));
+            assert!(game.player_destroy_block(player, chest, BlockDropDestination::World));
             assert_eq!(block(game, chest), "minecraft:air");
             let heard_now = take();
             assert_eq!(heard_now.len(), 1);
@@ -187,7 +189,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             cancel_break.store(true, Ordering::Relaxed);
             let kept = [8, 64, 4];
             place(game, kept, "minecraft:stone");
-            assert!(!game.player_destroy_block(player, kept, false));
+            assert!(!game.player_destroy_block(player, kept, BlockDropDestination::World));
             assert_eq!(block(game, kept), "minecraft:stone");
             assert!(take().is_empty());
             cancel_break.store(false, Ordering::Relaxed);
@@ -609,7 +611,9 @@ fn block_drops_lends_the_saved_only_pot_payload() {
                 )]
                 .into(),
                 || match site {
-                    BreakSite::Player => assert!(game.player_destroy_block(player, pot, false)),
+                    BreakSite::Player => {
+                        assert!(game.player_destroy_block(player, pot, BlockDropDestination::World))
+                    }
                     BreakSite::Level => {
                         // The level destroy path shared with `/setblock ... destroy`.
                         game.destroy_block_dropping(pot).unwrap();
@@ -740,7 +744,7 @@ fn block_drops_lends_the_removed_chests_data_without_a_temporary_handle() {
                 mod_api::Tag::String("Loot Chest".into()),
             );
             game.dropped.clear();
-            assert!(game.player_destroy_block(player, chest, false));
+            assert!(game.player_destroy_block(player, chest, BlockDropDestination::World));
             assert_eq!(block(game, chest), "minecraft:air");
             // The listener read the name the removal clears from the level and put it on the
             // chest item the break dropped.
@@ -793,7 +797,7 @@ fn block_drops_lends_the_removed_chests_data_without_a_temporary_handle() {
             // A block with no block entity gives neither a handle nor lent data.
             let dirt = [8, 64, 4];
             place(game, dirt, "minecraft:dirt");
-            assert!(game.player_destroy_block(player, dirt, false));
+            assert!(game.player_destroy_block(player, dirt, BlockDropDestination::World));
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 1);
             assert!(!heard[0].has_block_entity && !heard[0].has_block_entity_data);
@@ -915,7 +919,7 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
             put_chest(game, chest);
             // The platform may contain the panic or let it unwind through the break: either way.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                game.player_destroy_block(player, chest, false)
+                game.player_destroy_block(player, chest, BlockDropDestination::World)
             }));
             let heard = seen.lock().unwrap();
             assert_eq!(heard.len(), 1, "the listener ran and read the chest");
@@ -980,7 +984,7 @@ fn block_drops_ignores_a_replacement_block_entity_placed_after_removal() {
                 (chest[0], chest[1], chest[2]),
                 mod_api::Tag::String("Original Chest".into()),
             );
-            assert!(game.player_destroy_block(player, chest, false));
+            assert!(game.player_destroy_block(player, chest, BlockDropDestination::World));
             assert_eq!(block(game, chest), "minecraft:chest");
             assert!(
                 game.world
@@ -1011,7 +1015,7 @@ fn block_drops_ignores_a_replacement_block_entity_placed_after_removal() {
             );
             let stone = [8, 64, 4];
             place(game, stone, "minecraft:stone");
-            assert!(game.player_destroy_block(player, stone, false));
+            assert!(game.player_destroy_block(player, stone, BlockDropDestination::World));
             assert_eq!(block(game, stone), "minecraft:chest");
             assert!(
                 game.world

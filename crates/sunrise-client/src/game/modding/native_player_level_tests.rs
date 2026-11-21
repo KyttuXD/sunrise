@@ -276,7 +276,7 @@ fn a_throw_or_break_for_a_player_in_another_level_changes_nothing() {
             player.drop_stack(host, diamond.clone(), true),
             Ok(Some(diamond))
         );
-        assert!(!player.destroy_block(host, pos, false));
+        assert!(!player.destroy_block(host, pos, mod_api::BlockDropDestination::World));
         assert_eq!(dropped(game), before);
         assert_eq!(game.world.block(pos[0], pos[1], pos[2]), stone);
         game.enter_level(Dim::Nether).unwrap();

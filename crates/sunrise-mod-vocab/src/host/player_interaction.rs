@@ -107,7 +107,7 @@ pub trait PlayerInteractionBackendMut {
         &mut self,
         player: PlayerRef,
         pos: [i32; 3],
-        into_inventory: bool,
+        destination: BlockDropDestination,
     ) -> bool;
     /// Side: server.
     /// Acknowledges the player's block actions up to `sequence`
