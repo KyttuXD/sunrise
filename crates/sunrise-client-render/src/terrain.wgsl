@@ -65,6 +65,7 @@ struct Globals {
 // pixels must reach to shine in HDR output: r where the bright parts shine, g
 // where all of it does (gfx/hdr_stats.rs, measured from the sprite itself).
 @group(0) @binding(12) var emission_thresholds: texture_2d<f32>;
+@group(0) @binding(13) var emissive_overlays: texture_2d<u32>;
 // How many sprite arrays hold layers (a pipeline constant): 1 for vanilla,
 // which then samples exactly as before.
 override SPRITE_ARRAYS: u32 = 1u;
@@ -680,17 +681,11 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.uv = uv;
     out.layer = layer;
     out.emissive_layer = 0xffffffffu;
-    // The pairs are sorted by base layer: stop at the first past this one.
     let sprite_layer = layer & 0x7fffu;
-    for (var i = 0u; i < min(globals.emissive_count.x, 128u); i++) {
-        let pair = globals.emissive_layers[i];
-        if pair.x == sprite_layer {
-            out.emissive_layer = pair.y;
-            break;
-        }
-        if pair.x > sprite_layer {
-            break;
-        }
+    let overlay_size = textureDimensions(emissive_overlays, 0);
+    let row = sprite_layer / overlay_size.x;
+    if row < overlay_size.y {
+        out.emissive_layer = textureLoad(emissive_overlays, vec2<u32>(sprite_layer % overlay_size.x, row), 0).x;
     }
     let block = max(f32(light.y), dynamic_block_light(pos));
     out.color = vec4(color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);

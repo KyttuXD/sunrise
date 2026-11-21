@@ -24,11 +24,11 @@ use client::{
     },
 };
 use glam::DVec3;
-use sunrise_client_render as client;
 use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+use sunrise_client_render as client;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,

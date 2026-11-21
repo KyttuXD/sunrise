@@ -571,6 +571,7 @@ pub struct Renderer {
     /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
     mipmaps: u32,
     terrain_layout: wgpu::BindGroupLayout,
+    emissive_overlays: wgpu::TextureView,
     /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`, for a shader pack's terrain.
     terrain_sprites: [f64; 2],
     sprite_sampler: wgpu::Sampler,
@@ -984,6 +985,7 @@ fn terrain_group(
     lightmap: &wgpu::TextureView,
     lightmap_sampler: &wgpu::Sampler,
     emission_thresholds: &wgpu::TextureView,
+    emissive_overlays: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     let view = |binding, view| wgpu::BindGroupEntry {
         binding,
@@ -1015,6 +1017,7 @@ fn terrain_group(
             view(10, &sprites[6]),
             view(11, &sprites[7]),
             view(12, emission_thresholds),
+            view(13, emissive_overlays),
         ],
     })
 }
@@ -1259,6 +1262,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
         self.fluid_group = terrain_group(
             &self.device,
@@ -1270,6 +1274,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
         self.terrain_model_group = terrain_group(
             &self.device,
@@ -1281,6 +1286,7 @@ impl Renderer {
             &self.lightmap_view,
             &self.lightmap_sampler,
             &self.emission_stats.view,
+            &self.emissive_overlays,
         );
     }
     /// Block sprite layers per array on this device: a sprite's array is its layer over it, its

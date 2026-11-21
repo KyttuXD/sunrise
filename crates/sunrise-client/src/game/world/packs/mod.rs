@@ -402,6 +402,7 @@ impl Game<'_> {
         // registering mod for crash attribution.
         let client_listeners = self.register_client_reload_listeners();
         let texture_atlases = super::client_reload::collect_texture_atlases();
+        let emissive = super::client_reload::collect_emissive_sprites();
         super::mods::register_fluid_models(self.options.execution_role);
         let stage = move |progress: &crate::game::Progress| {
             stage_pack(
@@ -411,6 +412,7 @@ impl Game<'_> {
                 &mod_sources,
                 client_listeners,
                 &texture_atlases,
+                &emissive,
                 &assets,
                 &res,
                 &context,
@@ -686,7 +688,8 @@ pub(super) fn stage_pack(
     server: &[Pack],
     mod_sources: &super::mods::ModsState,
     client_listeners: mod_api::ClientListenerRegistry,
-    texture_atlases: &[mod_api::TextureAtlasRegistration],
+    texture_atlases: &[mod_api::Answered<mod_api::TextureAtlasRegistration>],
+    emissive: &sunrise_client::native_emissive::Registrations,
     assets: &Arc<Assets>,
     res: &Resources,
     context: &WorkerContext,
@@ -731,7 +734,7 @@ pub(super) fn stage_pack(
             )
         });
         (
-            assets.reload(&resource_root),
+            assets.reload_with_models(&resource_root, None, emissive),
             atlas.join(),
             panorama.join(),
             small

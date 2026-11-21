@@ -246,6 +246,15 @@ impl Renderer {
                         multisampled: false,
                     },
                 ),
+                entry(
+                    13,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let layout = kept.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -880,6 +889,8 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let emissive_overlays =
+            super::prepared_textures::upload_emissive(&device, &queue, prepared.emissive);
         let emission_stats =
             hdr_stats::EmissionStats::new(&device, split, sprite_textures.len() as u32);
         let group = terrain_group(
@@ -892,6 +903,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let fluid_sampler = device.create_sampler(&fluid::SAMPLER);
         let fluid_group = terrain_group(
@@ -904,6 +916,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let terrain_model_sampler = device.create_sampler(&terrain_model::MOVING_BLOCK_SAMPLER);
         let terrain_model_group = terrain_group(
@@ -916,6 +929,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let crosshair_group = terrain_group(
             &device,
@@ -927,6 +941,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let mirror_group = terrain_group(
             &device,
@@ -938,6 +953,7 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
             &emission_stats.view,
+            &emissive_overlays,
         );
         let index_quads = 1 << 16;
         let indices = Self::quad_indices(&device, index_quads);
@@ -2341,6 +2357,7 @@ impl Renderer {
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
+            emissive_overlays,
             terrain_sprites: sprite_constants.map(|(_, v)| v),
             sprite_split: split,
             sprite_sampler,

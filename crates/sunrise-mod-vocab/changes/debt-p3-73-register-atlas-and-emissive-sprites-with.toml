@@ -1,0 +1,20 @@
+ids = [
+    "hook:register_texture_atlases",
+    "method:Hooks::register_texture_atlases",
+    "type:RegisterTextureAtlasesEvent",
+    "handle:RegisterTextureAtlasesEvent::register",
+    "type:TextureAtlasRegistration",
+    "type:TextureAtlasRegistration.atlas",
+    "type:TextureAtlasRegistration.definition",
+    "handle:TextureAtlasRegistration::sprite_name",
+    "hook:emissive",
+    "hook:emissive.layers",
+    "method:Hooks::emissive",
+    "type:EmissiveEvent",
+    "type:EmissiveEvent.layers",
+    "hook:register_emissive_sprites",
+    "type:RegisterEmissiveSpritesEvent",
+    "handle:RegisterEmissiveSpritesEvent::register",
+]
+why = "NeoForge RegisterTextureAtlasesEvent.register rejects a duplicate definition; vanilla AtlasManager registers the texture by slot and TextureManager.register replaces the old texture in that slot. SpriteLoader.stitch and TextureAtlas use the drawable texture dimensions, not registration counts. Bad assets do not prevent unrelated ones from loading. The Sunrise-only emissive hook now resolves identifiers during resource baking instead of scanning static names and rebuilding a bounded table every frame."
+migrate = "Keep calling event.register(TextureAtlasRegistration { atlas, definition }) with Identifier values, but use a definition id not already registered by a mod or the game: to reuse a built-in source list, give your own definition file a new id. A later definition for the same atlas slot replaces the previous slot's contents. Replace a hard-coded gui/atlases path with registration.sprite_name(&sprite). Replace Hooks::emissive(&ClientHost, &mut EmissiveEvent) and event.layers.push((base_str, overlay_str)) with Hooks::register_emissive_sprites(&RegistrationContext, &mut RegisterEmissiveSpritesEvent) and event.register((base_id, overlay_id)), using owned Identifier values. The base is a baked terrain sprite; the overlay id omits assets/<namespace>/textures/ and .png. Move any per-frame selection to startup/reload registration and submit the pairs again whenever the hook runs. Replace the manifest hook key emissive with register_emissive_sprites."

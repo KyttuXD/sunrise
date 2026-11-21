@@ -1067,7 +1067,9 @@ pub(super) fn emit<'a>(
         } else {
             "Default::default()"
         };
-        let report = if event_type == "RegisterConfigurationTasksEvent" {
+        let report = if event_type == "RegisterConfigurationTasksEvent"
+            || (hook.owned_answer_batch && registration_append.is_some())
+        {
             // A refusal from task_type also unwinds to this listener's checkpoint.
             "report_each"
         } else {
@@ -1262,6 +1264,13 @@ pub(super) fn emit<'a>(
                 format!(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(Some(answer))) => {o}(Answered {{ answer, mod_id }}), Ok(Ok(None)) => {{}}, Ok(Err(refusal)) => refusal.report(), Err(payload) => {{ if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {{ std::mem::forget(payload); }} super::runtime::poison(HookId::{hook_id}, mod_id); }} }} }} }}",
                     o = out.unwrap()
+                ),
+            ),
+            None if hook.owned_answer_batch && registration_append.is_some() => (
+                String::new(),
+                format!(
+                    "for {binding} in {each} {{ if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} if !super::runtime::contain_registration(HookId::{hook_id}, mod_id, \"{name}\", || {{ {} }}) {{ {clear_batch} }} }}",
+                    call(&mod_item, "break")
                 ),
             ),
             None if mod_cancel && hook.isolate => (

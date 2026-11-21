@@ -184,6 +184,25 @@ pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
         .store(false, std::sync::atomic::Ordering::Release);
 }
 
+/// Contain a startup/reload registrar separately from the phase-refusal unwind.
+pub(crate) fn contain_registration(
+    hook: generated::HookId,
+    id: &'static str,
+    operation: &'static str,
+    invoke: impl FnOnce(),
+) -> bool {
+    if let Err(message) = crate::callback_owner::contain_unwind(invoke) {
+        poison(hook, id);
+        log::error!(
+            "mod {id}: {operation} panicked; listener disabled for this session: {message}"
+        );
+        crate::callback_owner::record_callback_panic(id, "registration", operation, message);
+        false
+    } else {
+        true
+    }
+}
+
 /// Whether `id`'s listener of `hook` is poisoned for the session.
 pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
     // One atomic load on the usual path: the sets only fill on a panic.

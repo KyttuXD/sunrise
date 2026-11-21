@@ -6,6 +6,7 @@ pub struct PreparedTextures {
     pub(super) sprites: Vec<(Vec<u8>, u32)>,
     /// The sprite layers per array `sprites` is cut by.
     pub(super) split: u32,
+    pub(super) emissive: Vec<u32>,
     pub(super) forcefield: (Vec<u8>, u32),
     /// The LabPBR maps' mip chains (normals, specular), their levels, layers and size.
     pub(super) pbr: Option<(Vec<u8>, Vec<u8>, u32, u32, u32)>,
@@ -71,9 +72,16 @@ impl PreparedTextures {
                 })
                 .collect(),
             split,
+            emissive: Vec::new(),
             forcefield: mip_chain(forcefield.0, forcefield.1, &[], 0, 1),
             pbr: None,
         }
+    }
+
+    /// Overlay layers keyed by the base sprite layer of this same resource generation.
+    pub fn with_emissive(mut self, layers: &[u32]) -> Self {
+        self.emissive.extend_from_slice(layers);
+        self
     }
 
     /// With the resource packs' LabPBR `normals` and `specular` maps (`layers` layers of
@@ -113,6 +121,42 @@ impl PreparedTextures {
         self.split = split;
         self
     }
+}
+
+/// One texel per possible base layer in the table, laid out within the actual device's 2D limit.
+pub(super) fn upload_emissive(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mut layers: Vec<u32>,
+) -> wgpu::TextureView {
+    use wgpu::util::DeviceExt;
+    let width = layers
+        .len()
+        .max(1)
+        .min(device.limits().max_texture_dimension_2d as usize);
+    let height = layers.len().max(1).div_ceil(width);
+    layers.resize(width * height, u32::MAX);
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Terrain emissive sprite layers"),
+                size: wgpu::Extent3d {
+                    width: width as u32,
+                    height: height as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&layers),
+        )
+        .create_view(&Default::default())
 }
 
 pub(super) fn mip_chain(

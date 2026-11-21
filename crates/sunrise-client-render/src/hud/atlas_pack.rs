@@ -383,8 +383,35 @@ impl HudAtlas {
                 decode_bytes(include_bytes!("../jei_recipes/config_button.png"))?;
             images.push(("sunrise/recipes/settings".to_owned(), width, height, rgba));
         }
+        // Stitch the game's HUD first. A mod atlas that exceeds the shared sheet's capacity
+        // must not cause the game to drop its packs or downscale unrelated model textures.
+        let mut registered = std::collections::BTreeMap::<String, Vec<PackedImage>>::new();
+        images.retain_mut(|image| {
+            let Some(key) = image.0.strip_prefix(REGISTERED_KEY) else {
+                return true;
+            };
+            let (namespace, path) = key.split_once(':').unwrap_or(("minecraft", key));
+            let Some((length, rest)) = path
+                .strip_prefix("gui/atlases/")
+                .and_then(|p| p.split_once('/'))
+            else {
+                return true;
+            };
+            let Some((atlas, _)) = length
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| rest.split_at_checked(n))
+            else {
+                return true;
+            };
+            registered
+                .entry(format!("{namespace}:{atlas}"))
+                .or_default()
+                .push(std::mem::take(image));
+            false
+        });
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let (width, placements, glyph_region) =
+        let mut layout =
             Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)
                 .or_else(|error| -> Result<_> {
                     let models = reducible_model_sprites(root, &images, &bordered);
@@ -399,6 +426,20 @@ impl HudAtlas {
                     );
                     Ok(layout)
                 })?;
+        for (atlas, group) in registered {
+            let names: HashSet<_> = group.iter().map(|image| image.0.clone()).collect();
+            images.extend(group);
+            images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+            match Self::layout(&images, MAX_ATLAS_SIZE) {
+                Ok(stitched) => layout = stitched,
+                Err(error) => {
+                    images.retain(|image| !names.contains(&image.0));
+                    animated.retain(|name| !names.contains(name));
+                    log::warn!("texture atlas {atlas} did not fit the GUI sheet: {error}");
+                }
+            }
+        }
+        let (width, placements, glyph_region) = layout;
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
         let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);

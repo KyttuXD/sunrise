@@ -510,10 +510,6 @@ impl Game<'_> {
     }
     /// At most 32 pairs of already-loaded base and transparent overlay sprites.
     /// Per-pixel alpha in the overlay marks full-bright material, without
-    /// illuminating the surrounding block or changing gameplay light.
-    pub(in crate::game) fn native_emissive(&self, layers: &mut Vec<(&'static str, &'static str)>) {
-        self.fire_emissive(layers);
-    }
     /// The world's phases, read-only; `error_text` carries the engine's
     /// own open-failure text, empty otherwise. Server-side. A server loop or final
     /// save failure fires `WorldCloseFailed` with the error text.

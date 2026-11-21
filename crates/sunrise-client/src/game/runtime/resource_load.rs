@@ -164,6 +164,7 @@ pub(super) struct GameplayTables {
 /// environment need no block facts and load beside them. The outer error
 /// fails the load; the inner one is the packs' (the registry or the block
 /// models), which [`load_resources_for_mods`] rolls back from.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn load_core(
     resources: &sunrise_assets::resource_source::ResourceRoot,
     additional_data: &[Arc<sunrise_client::datapack::DataPack>],
@@ -172,6 +173,7 @@ pub(super) fn load_core(
     parallel: bool,
     progress: &Progress,
     launch_world: Option<&str>,
+    emissive: &sunrise_client::native_emissive::Registrations,
 ) -> std::result::Result<std::result::Result<CoreTables, String>, String> {
     let role = load_role.execution;
     let root = resources.prepared();
@@ -221,10 +223,8 @@ pub(super) fn load_core(
                 let render = startup::time("core.block_models_sprites", || {
                     if headless {
                         assets.reload_for_server(resources)
-                    } else if let Some(parsed) = parsed_models {
-                        assets.reload_with_models(resources, parsed)
                     } else {
-                        assets.reload(resources)
+                        assets.reload_with_models(resources, parsed_models, emissive)
                     }
                 })
                 .map_err(|e| e.to_string())?;
@@ -601,6 +601,11 @@ pub(super) fn load_resources_for_mods(
     } else {
         client_reload::collect_texture_atlases()
     };
+    let emissive = if headless {
+        Vec::new()
+    } else {
+        client_reload::collect_emissive_sprites()
+    };
     resolved = client_reload::stage_texture_atlases(resolved, &texture_atlases);
     let threads = settings.sunrise.worker_threads();
     // One pool of workers for every level's streaming, the client's and the
@@ -664,6 +669,7 @@ pub(super) fn load_resources_for_mods(
                         parallel,
                         progress,
                         early,
+                        &emissive,
                     )
                 })
             });

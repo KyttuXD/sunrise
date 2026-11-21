@@ -489,14 +489,10 @@ impl Hook {
         {
             return Err(CatalogError::AnsweredNeedsGlobalOutput(name));
         }
-        if api.owned_answer_batch
-            && (!answered_by_mod
-                || api.contract != Contract::Collect
-                || api.registration_append.is_some())
-        {
+        if api.owned_answer_batch && (!answered_by_mod || api.contract != Contract::Collect) {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error: "owned_answer_batch requires a private answered collect batch without registration_append".into(),
+                error: "owned_answer_batch requires a private answered collect batch".into(),
             });
         }
         if api.owner.is_some() && (api.contract != Contract::Listen || scope.is_some()) {

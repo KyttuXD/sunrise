@@ -94,8 +94,8 @@ pub struct RenderAssets {
     pub(crate) sprite_names: Vec<Option<String>>,
     /// The layers of the texture files read on their own (emissive overlays), by raw name.
     pub file_layers: std::collections::BTreeMap<String, u32>,
-    /// OptiFine's emissive block overlays: base sprite and overlay sprite names.
-    pub emissive: Vec<(String, String)>,
+    /// This generation's overlay layers, indexed by terrain sprite layer.
+    pub emissive: Vec<u32>,
     pub translucent_layers: Vec<bool>,
     /// Each layer's `MipmapGenerator` settings.
     pub sprite_mips: Vec<crate::mipmap::Settings>,
@@ -331,9 +331,10 @@ impl Assets {
     pub fn reload_with_models(
         &self,
         root: &crate::resource_source::ResourceRoot,
-        parsed: crate::model_library::ParsedModels,
+        parsed: Option<crate::model_library::ParsedModels>,
+        emissive: &crate::native_emissive::Registrations,
     ) -> Result<RenderAssets> {
-        RenderAssets::load_with_parsed(root, self, true, Some(parsed))
+        RenderAssets::load_with_parsed(root, self, true, parsed, emissive)
     }
     /// [`Assets::reload`] for a server, which draws nothing: the sprites'
     /// layers, without the block or item models or the textures' pixels.
@@ -354,7 +355,7 @@ impl RenderAssets {
         assets: &Assets,
         draws: bool,
     ) -> Result<Self> {
-        Self::load_with_parsed(root, assets, draws, None)
+        Self::load_with_parsed(root, assets, draws, None, &[])
     }
     /// `parsed`: the model library when a caller parsed it ahead of this
     /// (see [`Assets::reload_with_models`]); otherwise it is parsed here.
@@ -363,6 +364,7 @@ impl RenderAssets {
         assets: &Assets,
         draws: bool,
         parsed: Option<crate::model_library::ParsedModels>,
+        emissive: &crate::native_emissive::Registrations,
     ) -> Result<Self> {
         let registry = assets.registry;
         let mut sprites = if draws {
@@ -370,6 +372,7 @@ impl RenderAssets {
         } else {
             crate::sprites::Sprites::for_server(root.source().clone())
         };
+        sprites.keep_apart(emissive.iter().map(|entry| entry.answer.0.to_string()));
         for name in MATERIALS {
             sprites.insert(&format!("minecraft:block/{name}"))?;
         }
@@ -449,9 +452,7 @@ impl RenderAssets {
         } else {
             Default::default()
         };
-        let mut emissive = Vec::new();
         let mut connected = if draws {
-            crate::native_emissive::load(root.source(), &mut sprites);
             // A side's sprite, for rules that connect by tile: the first quad facing it.
             let catalog = &models.catalog;
             let mut found = Vec::new();
@@ -501,9 +502,11 @@ impl RenderAssets {
         }
         // After the connected tiles: a tile identical to a block shares its layer, and the
         // overlays skip shared layers.
-        if draws {
-            emissive = crate::native_emissive::load_optifine(root.source(), &mut sprites);
-        }
+        let emissive = if draws {
+            crate::native_emissive::bake(root.source(), &mut sprites, emissive)
+        } else {
+            Vec::new()
+        };
         sprites.save_disk_cache();
         if draws {
             sprites.finish();

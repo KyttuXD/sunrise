@@ -372,7 +372,7 @@ impl<'a> Draw<'a> {
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
         let mut entries = vec![];
-        for binding in 0..if terrain { 13 } else { 8 } {
+        for binding in 0..if terrain { 14 } else { 8 } {
             let sampler = if terrain {
                 binding == 2 || binding == 4
             } else {
@@ -386,6 +386,12 @@ impl<'a> Draw<'a> {
                 }
             } else if sampler {
                 wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+            } else if binding == 13 {
+                wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Uint,
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                }
             } else {
                 wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -447,6 +453,7 @@ impl<'a> Draw<'a> {
         let image = texture(1, &[200, 100, 50, alpha]).create_view(&Default::default());
         let threshold = texture(1, &[0, 0, 0, 0]).create_view(&Default::default());
         let sampler = device.create_sampler(&Default::default());
+        let emissive = super::super::prepared_textures::upload_emissive(device, queue, Vec::new());
         let resources: Vec<_> = entries
             .iter()
             .map(|entry| wgpu::BindGroupEntry {
@@ -458,10 +465,10 @@ impl<'a> Draw<'a> {
                         view_dimension: wgpu::TextureViewDimension::D2Array,
                         ..
                     } => wgpu::BindingResource::TextureView(&array),
-                    _ => wgpu::BindingResource::TextureView(if entry.binding == 12 {
-                        &threshold
-                    } else {
-                        &image
+                    _ => wgpu::BindingResource::TextureView(match entry.binding {
+                        12 => &threshold,
+                        13 => &emissive,
+                        _ => &image,
                     }),
                 },
             })
