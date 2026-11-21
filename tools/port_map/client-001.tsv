@@ -106,7 +106,7 @@ ClientLevel.fillReportDetails	skip:debug		crash report details only
 ClientLevel.playPlayerSound	skip:other		no caller in the 26.3 client sources
 ClientLevel.playSound	port	crates/sunrise-client-render/src/audio.rs::Audio::play_distance_delayed	a sound over 10 blocks from the camera starts sqrt(distance)/40 s later (Audio::play_after)
 ClientLevel.getRelativeTickSpeed	skip:other		no caller in the 26.3 client sources
-ClientLevel.destroyBlockProgress	port	crates/sunrise-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	sets or clears another player's crack on a block
+ClientLevel.destroyBlockProgress	port	crates/sunrise-client/src/game/blocks/block_breaking.rs::Game::destroy_block_progress	sets or clears the breaker's crack
 ClientLevel.addAlwaysVisibleParticle	port	crates/sunrise-client-render/src/particles.rs::ParticleEngine::add_with	always-show flag set
 ClientLevel.doAddParticle	port	crates/sunrise-client-render/src/particles.rs::ParticleEngine::add_with	drops particles beyond 32 blocks and at minimal particle level
 ClientLevel.getSkyFlashTime	inline	crates/sunrise-client/src/game.rs::Game::render	the flash check with the hideLightningFlashes option
