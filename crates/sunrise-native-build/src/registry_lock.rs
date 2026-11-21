@@ -1,5 +1,5 @@
 //! The trust boundary for a mod-owned registry lock. Never resolve missing pins online.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const CRATES_IO: &str = sunrise_addresses::CARGO_CRATES_IO_SOURCE;
 
@@ -178,8 +178,52 @@ impl RegistryLock {
         Ok(())
     }
 
-    pub fn game_package_names(&self) -> std::collections::BTreeSet<String> {
+    pub fn game_package_names(&self) -> BTreeSet<String> {
         self.local.keys().map(|id| id.name.clone()).collect()
+    }
+
+    /// The SDK bindings are Rust externs, not Cargo dependencies. Nothing in a mod's resolved
+    /// Cargo graph may bring in a game package, except SDK patches already excluded by the caller.
+    pub(crate) fn check_game_graph_names<'a>(
+        &'a self,
+        staged: impl IntoIterator<Item = (&'a str, &'a str)>,
+        game_names: &BTreeSet<String>,
+    ) -> Result<(), String> {
+        let mut by_name = BTreeMap::<&str, Vec<&Record>>::new();
+        for (id, record) in self.local.iter().chain(&self.packages) {
+            by_name.entry(id.name.as_str()).or_default().push(record);
+        }
+        for (mod_id, name) in staged {
+            let mut todo = vec![(name, name)];
+            let mut seen = BTreeSet::new();
+            while let Some((current, via)) = todo.pop() {
+                if !seen.insert(current) {
+                    continue;
+                }
+                for record in by_name.get(current).into_iter().flatten() {
+                    for dep in record
+                        .raw
+                        .get("dependencies")
+                        .and_then(toml::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(toml::Value::as_str)
+                    {
+                        let dep = dep.split_whitespace().next().unwrap_or(dep);
+                        let first = if current == name { dep } else { via };
+                        if game_names.contains(dep) {
+                            return Err(super::api::ProjectError::GameDependency {
+                                mod_id: mod_id.to_owned(),
+                                key: format!("{first} -> {dep}"),
+                            }
+                            .to_string());
+                        }
+                        todo.push((dep, first));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn seed(&self, text: &str) -> Result<String, String> {
@@ -206,6 +250,47 @@ mod tests {
             "version = 4\n[[package]]\nname = 'itoa'\nversion = '1.0.15'\nsource = '{source}'\nchecksum = '{checksum}'\n"
         )
     }
+    #[test]
+    fn sdk_names_no_longer_hide_game_dependencies_in_the_resolved_lock() {
+        let facade = crate::internals::package("camera");
+        let game = BTreeSet::from(["sunrise-mod-api".to_owned(), "sunrise-core".to_owned()]);
+        let base = format!(
+            "version=4\n[[package]]\nname='camera-lib'\nversion='0.1.0'\n\
+             dependencies=['{facade}']\n[[package]]\nname='{facade}'\nversion='0.0.0'\n"
+        );
+        let mods = [("camera", "camera-lib")];
+        RegistryLock::parse(&base)
+            .unwrap()
+            .check_game_graph_names(mods, &game)
+            .unwrap();
+        for (lock, route) in [
+            (
+                format!(
+                    "{}[[package]]\nname='sunrise-mod-api'\nversion='0.1.0'\n",
+                    base.replace(
+                        &format!("dependencies=['{facade}']"),
+                        "dependencies=['sunrise-mod-api']",
+                    ),
+                ),
+                "sunrise-mod-api -> sunrise-mod-api".to_owned(),
+            ),
+            (
+                format!(
+                    "{base}dependencies=['sunrise-core 0.1.0']\n\
+                     [[package]]\nname='sunrise-core'\nversion='0.1.0'\n"
+                ),
+                format!("{facade} -> sunrise-core"),
+            ),
+        ] {
+            let error = RegistryLock::parse(&lock)
+                .unwrap()
+                .check_game_graph_names(mods, &game)
+                .unwrap_err();
+            assert!(error.contains("E_GAME_DEPENDENCY: camera:"), "{error}");
+            assert!(error.contains(&route), "{error}");
+        }
+    }
+
     /// A crates.io record of `name` at `version` depending on `dependencies`, with a checksum of `sum`s.
     fn package(name: &str, version: &str, sum: char, dependencies: &[&str]) -> String {
         format!(

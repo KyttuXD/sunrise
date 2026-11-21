@@ -20,21 +20,19 @@ cargo sunrise-mod build --update-lock
 A build server writes the lock with the `native-lock` command of the
 [`native-build` contract](../../reference/sdk/08-native-build.md).
 
-Every build consumes this **registry dependency lock** during staging. Ordinary Cargo may not
-resolve the original pinned SDK declaration offline. Writing the lock creates an inert copy
-of the manifests, removes only SDK dependencies naming the exact pinned Sunrise repository and
-revision, and resolves registry metadata. It does not copy or execute mod sources, build scripts
-or proc macros. It does not modify the original manifests or Cargo configuration. Existing pins
-are not replaced without `--update-lock`; a refused input leaves the existing lock untouched.
-A starter that uses only the SDK does not need registry pins until it adds a
-registry dependency.
+Writing the **registry dependency lock** creates an inert copy of the manifests. It removes SDK
+entries at their exact pinned SDK paths and resolves registry metadata without copying or executing
+mod sources, build scripts, or proc macros. Existing pins are not replaced without `--update-lock`;
+a refused input leaves the existing lock untouched. A starter that uses only the SDK does not
+need a lock until it adds a registry dependency.
 
-A build never repins a dependency the lock already pins, and a player's build never writes a lock:
-it refuses a package the mod's lock doesn't pin.
-A build may resolve registry **index metadata** online using an inert manifest whose
-requirements are exact pins. Before fetching crate archives, every resulting identity and
-checksum must match a supplied lock. Cargo checks downloaded archives against those checksums.
-Only after this fetch does the build resolve the actual staged workspace **offline**.
+A registry build validates and rewrites the manifests in its actual Cargo staging folder. It
+collects requirements from the mod and its reachable local crates, including build, dev and
+target-specific dependencies, and checks them against the mod's own lock before resolving. Cargo
+resolves registry **index metadata** using that staged workspace's aliases, features and SDK-owned
+patches. Every resulting registry identity and checksum must match a supplied lock before the
+build fetches crate archives. Cargo checks the downloaded archives against those checksums and
+compiles the workspace **offline**. The build does not edit the mod's original manifests or lock.
 
 The game's own packages never change because of a mod. The game ships prebuilt, and a mod's registry
 packages are compiled for the mod and linked into the mod's library, so a package both use exists
@@ -70,12 +68,12 @@ A package the SDK builds from its own patched source (the `[patch]` table of the
 source, never the registry's. A native library with conflicting providers cannot be silently
 substituted.
 
-Git dependencies other than the SDK's own declaration, alternate registries,
-paths escaping the mod, linked dependency paths, `[patch]`, `[replace]`, and mod-owned Cargo source
-configuration are refused. Local crates inside the mod are traversed without copying their code
-into the registry resolver. Registry dependencies remain native code: their build scripts and
-proc macros execute during compilation, and the resulting mod runs with your rights. Trust their
-authors as well as the mod's author.
+Git dependencies, alternate registries, paths escaping the mod, linked dependency paths, mod-owned
+`[patch]`, `[replace]`, `[workspace]`, and Cargo source configuration are refused. Name other mods in
+[`sunrise-mod.toml`](../../concepts/dependencies.md), not with a path in `Cargo.toml`; the build
+adds their edges after it checks the authored paths. Registry dependencies remain native code:
+their build scripts and proc macros execute during compilation, and the resulting mod runs with
+your rights. Trust their authors as well as the mod's author.
 
 `cargo sunrise-mod build` compiles these dependencies without asking: you chose them, and their build
 scripts and proc macros run with your rights. A player's launcher asks first: it shows how many registry

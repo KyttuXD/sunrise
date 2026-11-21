@@ -110,6 +110,64 @@ pub fn sdk_source(key: &str, package: &str, value: &toml::Value) -> Result<(), S
     ))
 }
 
+/// Cargo still reads the underscore spellings before edition 2024.
+pub(crate) const DEPENDENCY_KINDS: [&str; 5] = [
+    "dependencies",
+    "dev-dependencies",
+    "build-dependencies",
+    "dev_dependencies",
+    "build_dependencies",
+];
+
+/// Validate an authored dependency's package and source before rewriting it for a build.
+pub(crate) fn validate_dependency<'a>(
+    mod_id: &str,
+    kind: &str,
+    key: &'a str,
+    value: &'a toml::Value,
+) -> Result<&'a str, ProjectError> {
+    let cargo_error = |reason| ProjectError::Cargo {
+        mod_id: mod_id.to_owned(),
+        reason,
+    };
+    if !(value.is_str() || value.is_table()) {
+        return Err(cargo_error(format!(
+            "{key} in [{kind}] must be a version string or a table"
+        )));
+    }
+    let package = match value.get("package") {
+        Some(package) => package
+            .as_str()
+            .ok_or_else(|| cargo_error(format!("{key} in [{kind}]: package must be a string")))?,
+        None => key,
+    };
+    if PACKAGES.iter().any(|(sdk, _)| *sdk == package) {
+        sdk_source(key, package, value).map_err(cargo_error)?;
+    } else if let Some(selector) = [
+        "git",
+        "registry",
+        "registry-index",
+        "branch",
+        "rev",
+        "tag",
+        "workspace",
+    ]
+    .into_iter()
+    .find(|selector| value.get(*selector).is_some())
+    {
+        return Err(cargo_error(format!(
+            "{key}: {selector} source is refused; use crates.io with Cargo.lock"
+        )));
+    }
+    if package == "sunrise-client" {
+        return Err(ProjectError::GameDependency {
+            mod_id: mod_id.to_owned(),
+            key: key.to_owned(),
+        });
+    }
+    Ok(package)
+}
+
 /// A dependency on one of [`PACKAGES`], under `[dependencies]` or a `[target.*]` table.
 struct ApiDependency {
     target: Option<String>,
@@ -251,13 +309,7 @@ impl<'a> Project<'a> {
         let mut api_deps = Vec::new();
         for (target, table) in configs {
             let table = table?;
-            for kind in [
-                "dependencies",
-                "dev-dependencies",
-                "build-dependencies",
-                "dev_dependencies",
-                "build_dependencies",
-            ] {
+            for kind in DEPENDENCY_KINDS {
                 let Some(dependencies) = table.get(kind) else {
                     continue;
                 };
@@ -265,53 +317,16 @@ impl<'a> Project<'a> {
                     .as_table()
                     .ok_or_else(|| cargo_error(format!("[{kind}] must be a table")))?;
                 for (key, value) in dependencies {
-                    if !(value.is_str() || value.is_table()) {
-                        return Err(cargo_error(format!(
-                            "{key} in [{kind}] must be a version string or a table"
-                        )));
-                    }
-                    let package = match value.get("package") {
-                        Some(package) => package.as_str().ok_or_else(|| {
-                            cargo_error(format!("{key} in [{kind}]: package must be a string"))
-                        })?,
-                        None => key,
-                    };
-                    if let Some(&(package, library)) =
-                        PACKAGES.iter().find(|(sdk, _)| *sdk == package)
+                    let package = validate_dependency(&bundle.manifest.id, kind, key, value)?;
+                    if kind == "dependencies"
+                        && let Some(&(package, library)) =
+                            PACKAGES.iter().find(|(sdk, _)| *sdk == package)
                     {
-                        sdk_source(key, package, value).map_err(cargo_error)?;
-                        if kind == "dependencies" {
-                            api_deps.push(ApiDependency {
-                                target: target.map(str::to_owned),
-                                key: key.clone(),
-                                package,
-                                library,
-                            });
-                        }
-                    } else {
-                        for selector in [
-                            "git",
-                            "registry",
-                            "registry-index",
-                            "branch",
-                            "rev",
-                            "tag",
-                            "workspace",
-                        ] {
-                            if value.get(selector).is_some() {
-                                return Err(ProjectError::Cargo {
-                                    mod_id: mod_id(),
-                                    reason: format!(
-                                        "{key}: {selector} source is refused; use crates.io with Cargo.lock"
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    if package == "sunrise-client" {
-                        return Err(ProjectError::GameDependency {
-                            mod_id: mod_id(),
+                        api_deps.push(ApiDependency {
+                            target: target.map(str::to_owned),
                             key: key.clone(),
+                            package,
+                            library,
                         });
                     }
                 }

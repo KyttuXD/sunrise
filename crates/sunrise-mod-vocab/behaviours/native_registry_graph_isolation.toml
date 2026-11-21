@@ -1,0 +1,6 @@
+version = 1
+doc = "The resolved Cargo graph of a native mod cannot link the game's packages, except sources supplied by the verified SDK patch table. The mod API and each mod's declared internals use pinned SDK binaries instead."
+tests = [
+    "crates/sunrise-native-build/src/registry_lock.rs::sdk_names_no_longer_hide_game_dependencies_in_the_resolved_lock",
+    "crates/sunrise-native-build/src/registry_plan.rs::a_mods_registry_package_builds_on_the_sdks_naga_and_never_on_the_registrys",
+]

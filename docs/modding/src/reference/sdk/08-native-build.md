@@ -61,6 +61,9 @@ What it downloads (the horizon-mixins tool, a mod's GitHub source) goes through 
 `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`, with the hosts `NO_PROXY` lists reached directly. A caller with a proxy setting of its own passes it in those variables.
 
 The tool never edits an instance, never selects a version and never installs anything outside `work`.
+For a registry build, it validates and rewrites the Cargo manifests it will build under `work`,
+checks their registry requirements against the mods' locks, and resolves with the SDK's own patch
+table. It does not make a second workspace for validation or modify the input mods.
 
 ## `native-check`
 

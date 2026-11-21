@@ -1,6 +1,6 @@
 //! Cargo builds each mod as a Rust dylib; the SDK executable remains unchanged.
 use super::{
-    api, dependencies, internals, prebuilt, registry_plan, registry_rustc, registry_shared,
+    api, crates, dependencies, internals, prebuilt, registry_plan, registry_rustc, registry_shared,
 };
 use crate::{
     host::{tr, trf},
@@ -138,45 +138,18 @@ pub fn compile(
             )
         })
         .collect();
+    let mut wanted = Vec::new();
     for (position, &index) in resolution.order.iter().enumerate() {
         let project = &projects[index];
         let bundle = project.bundle;
         let id = &bundle.manifest.id;
-        // Validate the whole local manifest closure without copying or executing its code.
-        let inert = out.join("validation").join(id);
-        super::registry_generate::stage(bundle, &inert)?;
-        let relative = format!("native-api/{id}");
+        let relative = format!("{}/{id}", crates::DIR);
         let dest = out.join(&relative);
         super::copy_bundle(bundle, &dest)?;
-        let mut todo = vec![PathBuf::new()];
-        let mut seen = std::collections::BTreeSet::new();
-        while let Some(local) = todo.pop() {
-            if !seen.insert(local.clone()) {
-                continue;
-            }
-            let path = dest.join(&local).join("Cargo.toml");
-            let mut manifest: toml::Table = fs::read_to_string(&path)
-                .map_err(|e| e.to_string())?
-                .parse()
-                .map_err(|e| format!("Cargo.toml: {e}"))?;
-            super::registry_generate::rewrite_dependencies(
-                bundle,
-                &local,
-                &mut manifest,
-                &mut todo,
-            )?;
-            if let Some(targets) = manifest
-                .get_mut("target")
-                .and_then(toml::Value::as_table_mut)
-            {
-                for (_, target) in targets.iter_mut() {
-                    if let Some(table) = target.as_table_mut() {
-                        super::registry_generate::rewrite_dependencies(
-                            bundle, &local, table, &mut todo,
-                        )?;
-                    }
-                }
-            }
+        let api_dependencies = project.api_dependencies();
+        let facade = (internals::needed(&bundle.manifest) || project.uses_internals())
+            .then(|| (internals::relative(id), internals::package(id)));
+        wanted.extend(crates::rewrite_manifests(&dest, project, |local, mut manifest| {
             if local.as_os_str().is_empty() {
                 let targets: Vec<_> = declared[index]
                     .iter()
@@ -200,6 +173,16 @@ pub fn compile(
                     );
                 }
                 wrapper_deps.insert(format!("mod_{position}"), dependency.into());
+                if let Some((relative, package)) = &facade {
+                    let dependencies = manifest
+                        .entry("dependencies")
+                        .or_insert_with(|| toml::Table::new().into())
+                        .as_table_mut()
+                        .expect("validated dependencies");
+                    for (alias, _) in api_dependencies.iter().filter(|(_, name)| *name == "internals") {
+                        dependencies.insert(alias.clone(), toml::toml! { path = (format!("../../{relative}")) package = (package.clone()) }.into());
+                    }
+                }
                 let lib = manifest
                     .entry("lib")
                     .or_insert_with(|| toml::Table::new().into())
@@ -237,8 +220,9 @@ pub fn compile(
                 mod_dirs.insert(id.clone(), dest.clone());
                 mod_roots.insert(id.clone(), root);
             }
-            fs::write(path, manifest.to_string()).map_err(|e| e.to_string())?;
-        }
+            fs::write(dest.join(local).join("Cargo.toml"), manifest.to_string())
+                .map_err(|e| e.to_string())
+        })?);
         let mut externs: BTreeMap<String, PathBuf> = BTreeMap::from([
             ("mod_api".into(), prebuilt::library(&deps, "mod_api")?),
             ("mod_vocab".into(), prebuilt::library(&deps, "mod_vocab")?),
@@ -246,25 +230,18 @@ pub fn compile(
         for (name, path) in &externs {
             prebuilt::refuse_closure_rlib(id, name, path)?;
         }
-        for (name, package) in project.api_dependencies() {
+        for (name, package) in api_dependencies {
             if package != "internals" {
                 let path = prebuilt::library(&deps, package)?;
                 prebuilt::refuse_closure_rlib(id, package, &path)?;
                 externs.insert(name, path);
             }
         }
-        if internals::needed(&bundle.manifest)
-            || project
-                .api_dependencies()
-                .iter()
-                .any(|(_, package)| *package == "internals")
-        {
+        if let Some((facade_relative, facade_package)) = facade {
             let facade = &generated[id.as_str()];
-            let facade_relative = internals::relative(id);
             let facade_dir = out.join(&facade_relative);
             fs::create_dir_all(facade_dir.join("src")).map_err(|e| e.to_string())?;
             fs::write(facade_dir.join("src/lib.rs"), &facade.source).map_err(|e| e.to_string())?;
-            let facade_package = internals::package(id);
             let manifest = toml::toml! { [package] name = (facade_package.clone()) version = "0.0.0" edition = "2024" };
             fs::write(facade_dir.join("Cargo.toml"), manifest.to_string())
                 .map_err(|e| e.to_string())?;
@@ -287,25 +264,6 @@ pub fn compile(
                 },
             );
             members.push(facade_relative.clone());
-            let mut manifest: toml::Table = fs::read_to_string(dest.join("Cargo.toml"))
-                .map_err(|e| e.to_string())?
-                .parse()
-                .map_err(|e| format!("Cargo.toml: {e}"))?;
-            let dependencies = manifest
-                .entry("dependencies")
-                .or_insert_with(|| toml::Table::new().into())
-                .as_table_mut()
-                .ok_or("invalid dependencies")?;
-            let aliases: Vec<_> = project
-                .api_dependencies()
-                .into_iter()
-                .filter(|(_, package)| *package == "internals")
-                .map(|(name, _)| name)
-                .collect();
-            for alias in aliases {
-                dependencies.insert(alias, toml::toml! { path = (format!("../../{facade_relative}")) package = (facade_package.clone()) }.into());
-            }
-            fs::write(dest.join("Cargo.toml"), manifest.to_string()).map_err(|e| e.to_string())?;
             wrapper_deps.insert(
                 format!("mod_{position}_internals"),
                 toml::toml! { path = facade_relative package = facade_package }.into(),
@@ -338,7 +296,7 @@ pub fn compile(
                 let krate = project.crate_name();
                 dependencies.insert(
                     krate,
-                    toml::toml! { path = (out.join("native-api").join(id).display().to_string()) package = (project.package.clone()) }
+                    toml::toml! { path = (out.join(crates::DIR).join(id).display().to_string()) package = (project.package.clone()) }
                         .into(),
                 );
             }
@@ -404,32 +362,23 @@ pub fn compile(
                 .into(),
         );
     manifest.insert("dependencies".into(), wrapper_deps.into());
-    fs::write(out.join("Cargo.toml"), manifest.to_string()).map_err(|e| e.to_string())?;
-    let declared_paths = projects
-        .iter()
-        .map(|project| {
-            (
-                project.bundle.manifest.id.as_str(),
-                project
-                    .bundle
-                    .manifest
-                    .dependencies
-                    .keys()
-                    .map(String::as_str)
-                    .collect(),
-            )
-        })
-        .collect();
-    let wanted = super::crates::wanted(out, &declared_paths)?;
+    wanted.sort_by(|a, b| (&a.mod_id, &a.name, &a.version).cmp(&(&b.mod_id, &b.name, &b.version)));
     let mut plan = registry_plan::Plan::read(lock, projects, &wanted)?;
     plan.authorize_game_patches(&patches);
-    registry_plan::apply_patches(out, &patches)?;
+    let mut game_names = plan.game.game_package_names();
+    for registry in patches.values() {
+        for name in registry.as_table().expect("validated SDK patches").keys() {
+            game_names.remove(name);
+        }
+    }
+    manifest.insert("patch".into(), patches.into());
+    fs::write(out.join("Cargo.toml"), manifest.to_string()).map_err(|e| e.to_string())?;
     fs::write(
         out.join("Cargo.lock"),
         plan.mods.seed("version=4\npackage=[]\n")?,
     )
     .map_err(|e| e.to_string())?;
-    plan.fetch_with_patches(rust, out, &patches)?;
+    plan.fetch(rust, out)?;
     let mut metadata = super::registry_inventory::read(rust, out)
         .map_err(|error| plan.explain_resolution(error))?;
     // When two or more mods link registry crates, those crates, as cargo just resolved them, come
@@ -501,17 +450,18 @@ pub fn compile(
         metadata = super::registry_inventory::read(rust, out)
             .map_err(|error| plan.explain_resolution(error))?;
     }
-    plan.allowed
-        .check_pins(&super::registry_lock::RegistryLock::parse(
-            &super::read_lock(out)?,
-        )?)?;
-    let mut game_names = plan.game.game_package_names();
-    for registry in patches.values() {
-        for name in registry.as_table().expect("validated SDK patches").keys() {
-            game_names.remove(name);
-        }
-    }
-    super::crates::check_game_graph_names(out, &super::read_lock(out)?, &game_names)?;
+    let resolved = super::registry_lock::RegistryLock::parse(&super::read_lock(out)?)?;
+    plan.allowed.check_pins(&resolved)?;
+    resolved.check_game_graph_names(
+        resolution.order.iter().map(|&index| {
+            let project = &projects[index];
+            (
+                project.bundle.manifest.id.as_str(),
+                project.package.as_str(),
+            )
+        }),
+        &game_names,
+    )?;
     let inventory = metadata.inventory(&super::registry_lock::RegistryLock::default(), links)?;
     if inventory.added_crates > 0 && !options.consent.is_some_and(|ask| ask(&inventory)) {
         return Err(crate::host::tr("The mods' crates.io dependencies were not compiled: the plan's \"registry\" field is false or the question was declined. \"registry\": true approves compiling them; their build scripts and proc macros then run on this computer").into());
@@ -584,7 +534,7 @@ pub fn compile(
             projects
                 .iter()
                 .map(|project| super::present::Staged {
-                    root: out.join("native-api").join(&project.bundle.manifest.id),
+                    root: out.join(crates::DIR).join(&project.bundle.manifest.id),
                     author: project.bundle.dir.clone(),
                 })
                 .collect(),

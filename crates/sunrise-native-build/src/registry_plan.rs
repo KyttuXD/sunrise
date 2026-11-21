@@ -1,4 +1,4 @@
-//! One dependency plan shared by source staging and immutable prebuilt SDK builds.
+//! The registry dependency plan for an immutable prebuilt SDK build.
 use super::{api::Project, crates::Wanted, registry_lock::RegistryLock};
 use std::path::Path;
 
@@ -93,15 +93,9 @@ impl Plan {
         }
     }
 
-    pub fn fetch_with_patches(
-        &self,
-        rust: &dyn crate::rust::Toolchain,
-        directory: &Path,
-        patches: &toml::Table,
-    ) -> Result<(), String> {
-        // Resolve the validated mod workspace with its actual aliases, features
-        // and defaults, rather than reconstructing package-only fetch roots.
-        apply_patches(directory, patches)?;
+    pub fn fetch(&self, rust: &dyn crate::rust::Toolchain, directory: &Path) -> Result<(), String> {
+        // Resolve the staged workspace with its actual aliases, features, defaults and
+        // SDK patch table, rather than reconstructing package-only fetch roots.
         self.resolve_and_fetch(directory, |subcommand| {
             super::cargo(rust, directory, subcommand)
         })
@@ -124,20 +118,16 @@ impl Plan {
     }
 }
 
-/// Only the SDK identity supplies patches; mod manifests cannot inject overrides.
-pub fn apply_patches(directory: &Path, patches: &toml::Table) -> Result<(), String> {
-    let path = directory.join("Cargo.toml");
-    let mut manifest: toml::Table = std::fs::read_to_string(&path)
-        .map_err(|e| e.to_string())?
-        .parse()
-        .map_err(|e| format!("Cargo.toml: {e}"))?;
-    manifest.insert("patch".into(), patches.clone().into());
-    std::fs::write(path, manifest.to_string()).map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_patch_fixture(root: &Path, patches: &toml::Table) {
+        let path = root.join("Cargo.toml");
+        let mut manifest = super::super::api::read(&path).unwrap();
+        manifest.insert("patch".into(), patches.clone().into());
+        std::fs::write(path, manifest.to_string()).unwrap();
+    }
     #[test]
     fn production_plan_preserves_isolated_game_patch_identity() {
         let original = "version=4\n[[package]]\nname='allocator-sys'\nversion='0.1.49'\n";
@@ -197,7 +187,7 @@ mod tests {
         )
         .parse()
         .unwrap();
-        apply_patches(root, &patches).unwrap();
+        write_patch_fixture(root, &patches);
         let output = std::process::Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
             .current_dir(root)
@@ -287,7 +277,7 @@ mod tests {
         );
         let mod_lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
         let pins = RegistryLock::parse(&mod_lock).unwrap();
-        apply_patches(root, &patches).unwrap();
+        write_patch_fixture(root, &patches);
         let output = std::process::Command::new("cargo")
             .args(["generate-lockfile", "--offline"])
             .current_dir(root)
