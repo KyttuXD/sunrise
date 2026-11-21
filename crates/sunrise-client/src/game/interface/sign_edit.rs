@@ -180,6 +180,7 @@ impl Game<'_> {
             dimension: self.dim,
             origin_dimension: self.dim,
             origin_player: self.player.is_some(),
+            native_console: false,
             level: None,
             block: None,
             cart: None,

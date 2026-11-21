@@ -27,6 +27,8 @@ pub(in crate::game) struct Source {
     pub origin_dimension: Dim,
     /// Whether a player submitted this source, unchanged by executor modifiers.
     pub origin_player: bool,
+    /// Whether the origin is the native console's output sink. Redirects keep this origin.
+    pub native_console: bool,
     /// The dimension `execute in` named, if any: a server teleports its
     /// players there (`TeleportCommand` into the source's level).
     pub level: Option<super::super::Dim>,
@@ -98,6 +100,7 @@ impl Game<'_> {
             dimension: self.dim,
             origin_dimension: self.dim,
             origin_player: self.player.is_some(),
+            native_console: false,
             level: None,
             block: None,
             cart: None,
@@ -118,6 +121,7 @@ impl Game<'_> {
             dimension: level,
             origin_dimension: level,
             origin_player: false,
+            native_console: false,
             level: None,
             block: None,
             cart: None,
