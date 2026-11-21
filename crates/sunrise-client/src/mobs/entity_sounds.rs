@@ -90,10 +90,15 @@ pub fn step(
     w: &super::MobWorld,
     pos: [i32; 3],
     state: sunrise_world::registry::BlockStateId,
-) -> Option<(Cow<'static, str>, f32, f32)> {
+) -> Option<super::MobEvent> {
     match m.kind.sound_overrides.step {
         Selection::Inherit => super::ai::inherited_step_sound(m, w, pos, state),
-        Selection::Id(id) => Some((Cow::Borrowed(id), 0.15, 1.0)),
+        Selection::Id(id) => Some(super::MobEvent::Sound(
+            id,
+            [m.position.x, m.position.y, m.position.z],
+            0.15,
+            1.0,
+        )),
         Selection::Mute => None,
     }
 }

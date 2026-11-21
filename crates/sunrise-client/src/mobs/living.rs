@@ -1266,18 +1266,12 @@ impl Mob {
                     if heard && !self.silent {
                         super::equine::play_step(self, w, legacy, legacy_state, events);
                     }
-                } else if let Some((sound, volume, pitch)) =
+                } else if let Some(sound) =
                     super::entity_sounds::step(self, w, legacy, legacy_state)
                     && heard
                     && !self.silent
                 {
-                    let at = [self.position.x, self.position.y, self.position.z];
-                    events.push(match sound {
-                        std::borrow::Cow::Borrowed(name) => {
-                            MobEvent::Sound(name, at, volume, pitch)
-                        }
-                        std::borrow::Cow::Owned(name) => MobEvent::SoundId(name, at, volume, pitch),
-                    });
+                    events.push(sound);
                 }
                 // Entity.vibrationAndSoundEffectsFromBlock: the step's game
                 // event, with the supporting block's state when the effect
@@ -1678,8 +1672,8 @@ impl Mob {
             if !w.facts.is_air(state) {
                 let sounds = w.block_sound_type(self, pos, state, mod_api::BlockSoundCause::Fall);
                 let at = [self.position.x, self.position.y, self.position.z];
-                events.push(MobEvent::SoundId(
-                    sounds.fall.as_str().to_owned(),
+                events.push(MobEvent::BlockSound(
+                    sounds.fall.clone(),
                     at,
                     sounds.volume * 0.5,
                     sounds.pitch * 0.75,
@@ -3875,7 +3869,7 @@ mod tests {
                         false,
                     );
                     assert!(
-                        matches!(events.as_slice(), [MobEvent::Sound("entity.hostile.small_fall", _, 1.0, 1.0), MobEvent::SoundId(id, _, 0.5, 0.75), ..] if id == block_sound),
+                        matches!(events.as_slice(), [MobEvent::Sound("entity.hostile.small_fall", _, 1.0, 1.0), MobEvent::BlockSound(id, _, 0.5, 0.75), ..] if id.as_str() == block_sound),
                         "{events:?}"
                     );
                 }

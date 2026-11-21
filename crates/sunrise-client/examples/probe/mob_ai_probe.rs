@@ -1755,6 +1755,14 @@ pub fn main() -> sunrise_client::Result<()> {
                     );
                 } else if let MobEvent::SoundId(name, _, volume, pitch) = e {
                     let _ = writeln!(out, "{t} sound {name} {} {}", f(*volume), f(*pitch));
+                } else if let MobEvent::BlockSound(event, _, volume, pitch) = e {
+                    let _ = writeln!(
+                        out,
+                        "{t} sound {} {} {}",
+                        event.as_str(),
+                        f(*volume),
+                        f(*pitch)
+                    );
                 } else if player_hurt(player.as_ref(), e) {
                     // The oracle's survival player, healed and made hurtable every tick,
                     // takes the damage (LivingEntity.playHurtSound).

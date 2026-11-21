@@ -1,7 +1,6 @@
 //! `Mob.playStepSound` and its overrides: the species' own footstep, or the block
 //! sound at 15%, and the block sound ids the facts carry.
-use super::{Mob, MobWorld, Species};
-use std::borrow::Cow;
+use super::{Mob, MobEvent, MobWorld, Species};
 
 /// `playStepSound`: the species' footstep, or the block's step sound at 15%.
 pub fn inherited_step_sound(
@@ -9,10 +8,12 @@ pub fn inherited_step_sound(
     w: &MobWorld,
     pos: [i32; 3],
     state: sunrise_world::registry::BlockStateId,
-) -> Option<(Cow<'static, str>, f32, f32)> {
+) -> Option<MobEvent> {
     use Species as S;
     let baby = m.is_baby();
-    let quiet = |s: &'static str| Some((Cow::Borrowed(s), 0.15, 1.0));
+    let at = [m.position.x, m.position.y, m.position.z];
+    let sound = |name, volume, pitch| Some(MobEvent::Sound(name, at, volume, pitch));
+    let quiet = |name| sound(name, 0.15, 1.0);
     match m.species() {
         // `playStepSound` overridden with an empty body: a fish, an allay, a bee,
         // a happy ghast and a nautilus have no footfall of their own, so the
@@ -79,25 +80,23 @@ pub fn inherited_step_sound(
                 (_, true) => ("entity.camel_husk.step_sand", 0.4, 1.0),
                 (_, false) => ("entity.camel_husk.step", 0.4, 1.0),
             };
-            Some((Cow::Borrowed(name), volume, pitch))
+            sound(name, volume, pitch)
         }
-        S::IronGolem => Some((Cow::Borrowed("entity.iron_golem.step"), 1.0, 1.0)),
+        S::IronGolem => sound("entity.iron_golem.step", 1.0, 1.0),
         // CopperGolem.playStepSound: its oxidation level's step.
-        S::CopperGolem => Some((
-            Cow::Borrowed(crate::mobs::copper_golem::sound(m, "step")),
-            1.0,
-            1.0,
-        )),
-        S::Strider if m.fluids.in_lava => {
-            Some((Cow::Borrowed("entity.strider.step_lava"), 1.0, 1.0))
-        }
-        S::Strider => Some((Cow::Borrowed("entity.strider.step"), 1.0, 1.0)),
-        S::Warden => Some((Cow::Borrowed("entity.warden.step"), 10.0, 1.0)),
+        S::CopperGolem => sound(crate::mobs::copper_golem::sound(m, "step"), 1.0, 1.0),
+        S::Strider if m.fluids.in_lava => sound("entity.strider.step_lava", 1.0, 1.0),
+        S::Strider => sound("entity.strider.step", 1.0, 1.0),
+        S::Warden => sound("entity.warden.step", 10.0, 1.0),
         _ => {
             // Entity.playStepSound: the block's sound type, as its parts answer.
             let sounds = w.block_sound_type(m, pos, state, mod_api::BlockSoundCause::Step);
-            let step = Cow::Owned(sounds.step.as_str().to_owned());
-            Some((step, sounds.volume * 0.15, sounds.pitch))
+            Some(MobEvent::BlockSound(
+                sounds.step.clone(),
+                at,
+                sounds.volume * 0.15,
+                sounds.pitch,
+            ))
         }
     }
 }
@@ -134,10 +133,12 @@ mod tests {
                     let state = w.world.block(0, 63, 0);
                     inherited_step_sound(&m, w, [0, 63, 0], state)
                 };
-                assert_eq!(stepped(Some("minecraft:stone")), None, "loaded");
+                assert!(stepped(Some("minecraft:stone")).is_none(), "loaded");
                 let empty = stepped(None);
-                assert!(empty.is_some(), "an empty cube takes the block's step");
-                assert_eq!(empty.unwrap().1, 0.15, "the block's 15%");
+                assert!(
+                    matches!(empty, Some(MobEvent::BlockSound(event, _, 0.15, 1.0))
+                    if event.as_str() == "minecraft:block.stone.step")
+                );
             },
         );
         assert!(ran, "vanilla data is missing");

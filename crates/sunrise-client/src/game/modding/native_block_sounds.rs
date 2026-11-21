@@ -251,10 +251,8 @@ mod tests {
                 glass,
             )
             .unwrap();
-            assert!(matches!(&step.0, std::borrow::Cow::Owned(_)));
-            assert_eq!(step.0, "mymod:block.x.step");
-            assert_eq!(step.1, 0.3);
-            assert_eq!(step.2, 1.5);
+            assert!(matches!(step, MobEvent::BlockSound(event, _, 0.3, 1.5)
+                if event.as_str() == "mymod:block.x.step"));
 
             let mut placed = Vec::new();
             for acting in [Some(7), None] {

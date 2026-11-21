@@ -86,6 +86,9 @@ fn ids(events: &[MobEvent]) -> Vec<String> {
                 server.play(&full_id(id), Some(*at), *volume, *pitch)
             }
             MobEvent::SoundId(id, at, volume, pitch) => server.play(id, Some(*at), *volume, *pitch),
+            MobEvent::BlockSound(id, at, volume, pitch) => {
+                server.play(id.as_str(), Some(*at), *volume, *pitch)
+            }
             _ => {}
         }
     }

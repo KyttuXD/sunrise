@@ -2486,6 +2486,9 @@ impl Game<'_> {
                 MobEvent::Sound(name, at, volume, pitch) => {
                     self.audio.play(&full_id(name), Some(at), volume, pitch)
                 }
+                MobEvent::BlockSound(event, at, volume, pitch) => {
+                    self.audio.play(event.as_str(), Some(at), volume, pitch)
+                }
                 MobEvent::ProfessionWorkSound(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
                 }

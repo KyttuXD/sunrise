@@ -1855,6 +1855,8 @@ pub enum MobEvent {
     },
     Sound(&'static str, [f64; 3], f32, f32),
     ProfessionWorkSound(Arc<str>, [f64; 3], f32, f32),
+    /// A step or fall carrying its already resolved event.
+    BlockSound(mod_api::SoundEventKey, [f64; 3], f32, f32),
     /// `level.playSound(null, mob, sound, source, volume, pitch)`: a sound
     /// bound to mob `mob` (`ServerLevel.playSeededSound`'s entity overload),
     /// in vanilla's `source`, from where the mob stands.
