@@ -78,8 +78,10 @@ undo these writes or effects. Use journaled capability handlers when you need ro
 Entities a transaction spawns or removes follow the same commit and rollback rules:
 
 - A spawn builds the entity at the call: its handle works, its attachments and Parts exist,
-  `entity_constructing` has run and selectors find it. Its `entity_join_level` does not run
-  until the outermost commit, in the order the entities were added, before any removal
+  `entity_constructing` has run and selectors find it if its section is accessible. A falling
+  block in a hidden section is usable through the returned handle, not through a selector.
+  Its `entity_join_level` does not run until the outermost commit, in the order the
+  entities were added, before any removal
   of the transaction takes effect. A listener reads the entity at the commit, not during the
   call. A join a listener cancels at the commit means the entity was never announced and the
   handle the spawn returned reads stale from then on.

@@ -121,8 +121,8 @@ pub trait LevelSpawningBackendMut {
     /// without altering the block at `pos`: it falls, lands and places itself as sand does, or
     /// drops as an item where it cannot. `falling` controls item dropping (`drop_item`) and
     /// anvil-style landing damage (`hurts`, 2 a block fallen up to 40, `AnvilBlock.falling`).
-    /// The live entity keeps
-    /// the exact `velocity` (network packets quantize through `LpVec3` on send), accepts any
+    /// The live entity keeps the exact `velocity` (network packets quantize through `LpVec3`
+    /// on send), accepts any
     /// valid block state including air (which vanilla discards on its first tick in
     /// `FallingBlockEntity.tick`), and imposes no per-level count cap.
     ///

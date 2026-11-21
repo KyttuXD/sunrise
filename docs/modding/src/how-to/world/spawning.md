@@ -405,7 +405,8 @@ Admission follows `ServerLevel.addFreshEntity`: no per-level count cap or `/summ
 check, and the call neither requires nor loads the destination chunk. A hidden section keeps the
 falling block out of entity lookups, spatial queries, tracking and ticking. Keep the returned
 handle for direct operations in its level until the entity unloads. Saving occupied hidden
-entity sections preserves their contents without loading terrain.
+entity sections preserves their contents without loading terrain, so `entities_load` and
+`entities_unload` can notify for columns whose terrain was never loaded.
 
 The spawn runs `entity_constructing` then `entity_join_level`, just like a natural fall. A natural
 fall asks for admission before the next scheduled block tick; if vetoed, the source block's
