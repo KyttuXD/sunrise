@@ -121,10 +121,13 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
-        let isolated_listen = hook.isolate && contract == Contract::Listen;
-        if isolated_listen && (hook.owner.is_some() || hook.context.is_some()) {
+        let isolated_listen =
+            hook.isolate && contract == Contract::Listen && hook.dispatch == DispatchStyle::Flat;
+        if isolated_listen
+            && (!hook.event_per_listener || hook.owner.is_some() || hook.context.is_some())
+        {
             return Err(format!(
-                "{name}: an isolated listen hook cannot have an owner filter or phase context"
+                "{name}: an isolated listen hook needs a fresh event per listener without an owner filter or phase context"
             ));
         }
         let output = if let Some(out) = out {
@@ -612,8 +615,6 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
-        } else if !surfaces.is_empty() {
-            "// no wire: this event borrows live callback surfaces.\n"
         } else {
             ""
         };
@@ -1272,12 +1273,6 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
-            None if isolated_listen => (
-                String::new(),
-                format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} super::runtime::invoke_isolated_listener(HookId::{hook_id}, {mod_entry}.id, \"{name}\", || {mod_item}.{name}({invoke})); }} }}"
-                ),
-            ),
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.
@@ -1285,6 +1280,19 @@ pub(super) fn emit<'a>(
                 format!(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke})))) {{ Ok(Ok(Some(answer))) => {o}(Answered {{ answer, mod_id }}), Ok(Ok(None)) => {{}}, Ok(Err(refusal)) => refusal.report(), Err(payload) => {{ if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {{ std::mem::forget(payload); }} super::runtime::poison(HookId::{hook_id}, mod_id); }} }} }} }}",
                     o = out.unwrap()
+                ),
+            ),
+            None if isolated_listen => (
+                String::new(),
+                format!(
+                    "let contained = super::runtime::outside_world(); \
+                     let mut {entered} = super::runtime::ListenerScope::new(); \
+                     for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ \
+                         {local_event} \
+                         let _ = {entered}.call_contained(\
+                             HookId::{hook_id}, \"{name}\", {mod_entry}, contained, \
+                             |{mod_item}| {mod_item}.{name}({invoke})); \
+                     }}"
                 ),
             ),
             None if mod_cancel && hook.isolate => (

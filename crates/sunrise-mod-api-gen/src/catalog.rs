@@ -175,10 +175,10 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global listen, cancel, or collect hook answered by mod: a listener that panics is
-    /// switched off for this hook for the session. A listen hook keeps completed surface edits
-    /// and continues. A cancel hook rolls outputs back and stops (#2414). A collector accepts
-    /// at most one returned answer per registration and continues after a failure.
+    /// A listener that panics is switched off for this hook for the session. A flat listen
+    /// hook keeps completed surface edits and continues. A cancel hook rolls outputs back and
+    /// stops (#2414). A collector accepts at most one returned answer per registration and
+    /// continues after a failure.
     pub isolate: bool,
     /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
     /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
@@ -512,15 +512,19 @@ impl Hook {
             return Err(CatalogError::InvalidContract(name));
         }
         let isolate = api.isolate.unwrap_or(false);
+        let flat_listener =
+            api.contract == Contract::Listen && entry.dispatch == DispatchStyle::Flat;
         if isolate
             && (scope.is_some()
-                || !(matches!(api.contract, Contract::Listen | Contract::Cancel)
+                || !(flat_listener
+                    || api.contract == Contract::Cancel
                     || api.contract == Contract::Collect && answered_by_mod))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error: "isolate is for a global listen, cancel, or collect hook answered by mod"
-                    .into(),
+                error:
+                    "isolate requires a global flat listener, cancellation, or answered collector"
+                        .into(),
             });
         }
         if let Some(validator) = &api.output_validator

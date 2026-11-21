@@ -781,9 +781,10 @@ and edit `event.output` directly; its methods do not take a Host. To append a co
 `stack` to both lists, call
 `event.output.insert(CreativeTabPlacement::Last, stack, CreativeTabVisibility::Both)`.
 You can also insert first, before or after a matching stack, or remove a matching stack.
-Matching ignores counts and uses exact item and components. Edits to both lists
-change parent first; a search error does not undo the parent edit. Feature
-filtering happens after listeners finish.
+Matching ignores counts and uses exact item and components. An insertion before or
+after another stack checks that the anchor exists before checking for a duplicate.
+Edits to both lists change parent first; a search error does not undo the parent
+edit. Feature filtering happens after listeners finish.
 
 Read the current entries in order with
 `event.output.entries(CreativeTabList::Parent, &mut |entry| { /* read entry */ })`.
@@ -793,8 +794,9 @@ keep it. `event.output.remove_if(visibility, &mut |entry| predicate)` visits eac
 entry of the selected lists once and keeps survivors in their original order.
 Neither the editor nor a borrowed entry can outlive its callback. Refused edits
 return a typed error and are logged. A panic disables just that mod's creative-build
-callback for the session; completed edits remain visible to later listeners, and
-the action that requested the catalog can continue.
+callback for the session and names the mod in the log and error toast. Completed
+edits remain visible to later listeners, and the action that requested the catalog
+can continue.
 
 From either side of an open world, call
 `host.creative_tabs(CreativeTabPermissions::Normal)` to read the catalog for

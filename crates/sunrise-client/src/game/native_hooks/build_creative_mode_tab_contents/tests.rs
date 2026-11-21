@@ -198,6 +198,22 @@ impl Hooks for Observe {
                 CreativeTabVisibility::Search,
             )
             .unwrap();
+        // A different effective component is a distinct entry; removing it by a
+        // count-42 key must leave the unpatched stone at the same position.
+        let mut limited = stone_key(32);
+        limited.set_count(1).unwrap();
+        event
+            .output
+            .insert(
+                CreativeTabPlacement::Last,
+                limited,
+                CreativeTabVisibility::Search,
+            )
+            .unwrap();
+        event
+            .output
+            .remove(&stone_key(32), CreativeTabVisibility::Search)
+            .unwrap();
 
         let gravel = stack("minecraft:gravel", 1).item();
         let clay = stack("minecraft:clay", 1).item();

@@ -167,13 +167,11 @@ pub fn isolated_failures() -> u64 {
 
 /// Disable a listener and signal failure to the owning action.
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
-    let (entered, failures) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered, failures.wrapping_add(1)));
+    let (entered, trapped) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
     disable_listener(hook, id);
 }
 
-/// Poison only `id`'s listener of `hook` for the session (#2414 ruling), leaving
-/// its other hooks and Parts untouched.
 fn disable_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
@@ -185,25 +183,6 @@ fn disable_listener(hook: generated::HookId, id: &'static str) {
     installed
         .poison_free
         .store(false, std::sync::atomic::Ordering::Release);
-}
-
-/// Contain one flat listener without rolling back the live surface it was lent.
-pub(crate) fn invoke_isolated_listener(
-    hook: generated::HookId,
-    mod_id: &'static str,
-    operation: &'static str,
-    invoke: impl FnOnce(),
-) {
-    use crate::callback_owner::{contain_unwind, report_callback_panic};
-    use crate::world::phase_refusal::contain_refusal;
-    match contain_unwind(|| contain_refusal(mod_id, invoke)) {
-        Ok(Ok(())) => {}
-        Ok(Err(refusal)) => refusal.report_each(),
-        Err(message) => {
-            disable_listener(hook, mod_id);
-            report_callback_panic(mod_id, "hook", operation, message);
-        }
-    }
 }
 
 /// Whether `id`'s listener of `hook` is poisoned for the session.
@@ -661,6 +640,33 @@ impl ListenerScope {
         );
         &*entry.hooks
     }
+
+    /// Run one subscriber without spreading a panic to later listeners or an unrelated action.
+    pub(crate) fn call_contained<T>(
+        &mut self,
+        hook_id: HookId,
+        name: &'static str,
+        entry: &'static ModEntry,
+        contained: bool,
+        call: impl FnOnce(&dyn Hooks) -> T,
+    ) -> Option<T> {
+        if poisoned(hook_id, entry.id) {
+            return None;
+        }
+        let hooks = self.enter(entry, name);
+        match crate::callback_owner::contain_unwind(|| refusable(contained, || call(hooks))) {
+            Ok(Ok(answer)) => Some(answer),
+            Ok(Err(refusal)) => {
+                refusal.report_each();
+                None
+            }
+            Err(message) => {
+                disable_listener(hook_id, entry.id);
+                crate::callback_owner::report_callback_panic(entry.id, "hook", name, message);
+                None
+            }
+        }
+    }
 }
 
 thread_local! {
@@ -670,8 +676,8 @@ thread_local! {
 
 #[inline]
 fn bump_listener_serial() {
-    let (entered, failures) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered.wrapping_add(1), failures));
+    let (entered, trapped) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered.wrapping_add(1), trapped));
 }
 
 pub(crate) fn listener_serial() -> u64 {

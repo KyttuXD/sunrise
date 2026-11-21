@@ -189,8 +189,21 @@ impl From<StackWriteError> for CreativeTabEditError {
 ///
 /// ```compile_fail
 /// use mod_api::{BuildCreativeModeTabContentsEvent, CreativeTabOutput};
-/// fn keep_editor(event: &mut BuildCreativeModeTabContentsEvent<'_>) -> &'static mut dyn CreativeTabOutput {
+/// fn keep_editor(
+///     event: &mut BuildCreativeModeTabContentsEvent<'_>,
+/// ) -> &'static mut dyn CreativeTabOutput {
 ///     event.output
+/// }
+/// ```
+///
+/// An entry cannot escape the visitor either; project it to keep an owned stack:
+///
+/// ```compile_fail
+/// use mod_api::{CreativeTabList, CreativeTabOutput, ItemStackView};
+/// fn keep_entry(output: &dyn CreativeTabOutput) -> Option<ItemStackView<'static>> {
+///     let mut saved = None;
+///     output.entries(CreativeTabList::Parent, &mut |entry| saved = Some(entry)).unwrap();
+///     saved
 /// }
 /// ```
 // no wire: borrows the live tab build and lends its entries in the current callback.
@@ -205,9 +218,9 @@ pub trait CreativeTabOutput {
         visit: &mut dyn FnMut(ItemStackView<'_>),
     ) -> Result<(), CreativeTabEditError>;
 
-    /// Insert a count-one stack. Checks the anchor and rejects duplicates by exact item and
-    /// components, ignoring count. When editing both lists, a search error leaves a successful
-    /// parent insertion in place.
+    /// Insert a count-one stack. For relative placement, the anchor must exist before checking
+    /// for a duplicate. Both checks compare exact item and components, ignoring count.
+    /// When editing both lists, a search error leaves a successful parent insertion in place.
     fn insert(
         &mut self,
         placement: CreativeTabPlacement,
