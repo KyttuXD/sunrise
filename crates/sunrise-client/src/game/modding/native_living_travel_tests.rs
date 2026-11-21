@@ -50,16 +50,18 @@ struct Probe {
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
     fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
-        self.heard
-            .lock()
-            .unwrap()
-            .push((event.entity, event.mode, *event.input, *event.velocity));
+        self.heard.lock().unwrap().push((
+            event.entity,
+            event.mode,
+            event.motion.input(),
+            event.motion.velocity(),
+        ));
         match self.answer {
             Answer::Continue => Flow::Continue,
             Answer::Cancel => Flow::Cancel,
             Answer::Replace { input, velocity } => {
-                *event.input = input;
-                *event.velocity = velocity;
+                let _ = event.motion.set_input(input);
+                let _ = event.motion.set_velocity(velocity);
                 Flow::Continue
             }
             Answer::Panic => panic!("probe listener unwinds"),

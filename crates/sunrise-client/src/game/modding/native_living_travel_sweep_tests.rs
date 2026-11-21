@@ -95,7 +95,7 @@ fn a_replaced_travel_velocity_steer_its_tick() {
     impl Hooks for Westward {
         fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
             if event.kind == "minecraft:zombie" {
-                *event.velocity = [-1.0, 0.0, 0.0];
+                let _ = event.motion.set_velocity([-1.0, 0.0, 0.0]);
             }
             Flow::Continue
         }

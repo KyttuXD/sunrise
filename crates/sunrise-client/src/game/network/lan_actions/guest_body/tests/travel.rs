@@ -31,9 +31,15 @@ impl Hooks for Reply {
         match self {
             Self::Continue => {}
             Self::Veto => return Flow::Cancel,
-            Self::Velocity => *event.velocity = [0.5, 0.0, 0.0],
-            Self::TinyInput => *event.input = [0.000001, 0.0, 0.0],
-            Self::Input => *event.input = [1.0, 0.0, 0.0],
+            Self::Velocity => {
+                let _ = event.motion.set_velocity([0.5, 0.0, 0.0]);
+            }
+            Self::TinyInput => {
+                let _ = event.motion.set_input([0.000001, 0.0, 0.0]);
+            }
+            Self::Input => {
+                let _ = event.motion.set_input([1.0, 0.0, 0.0]);
+            }
         }
         Flow::Continue
     }
@@ -305,7 +311,7 @@ fn an_edit_absorbed_by_collision_still_sends_one_correction() {
     impl Hooks for IntoWall {
         fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
             self.0.fetch_add(1, Ordering::Relaxed);
-            *event.velocity = [-0.5, 0.0, 0.0];
+            let _ = event.motion.set_velocity([-0.5, 0.0, 0.0]);
             Flow::Continue
         }
     }
