@@ -421,8 +421,8 @@ mod tests {
             let api_air = air.try_into_api().unwrap();
             let api_stone = stone.try_into_api().unwrap();
             let metadata = mod_api::__private::block_definitions().unwrap();
-            let air_filter = StatePredicate::block(metadata, api_air.block(), &[]).unwrap();
-            let stone_filter = StatePredicate::block(metadata, api_stone.block(), &[]).unwrap();
+            let air_filter = StatePredicate::block(api_air.block(), &[]).unwrap();
+            let stone_filter = StatePredicate::block(api_stone.block(), &[]).unwrap();
             let mut edit = BlockEdit {
                 palette: vec![api_stone],
                 // Start with the last index just out of bounds. If that index is narrowed to

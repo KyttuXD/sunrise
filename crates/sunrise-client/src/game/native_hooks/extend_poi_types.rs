@@ -30,31 +30,26 @@ mod tests {
             let additions = [
                 (
                     "minecraft:home",
-                    StatePredicate::block(metadata, key("minecraft:hay_block"), &[]).unwrap(),
+                    StatePredicate::block(key("minecraft:hay_block"), &[]).unwrap(),
                 ),
                 (
                     "minecraft:home",
-                    StatePredicate::block(metadata, key("minecraft:bell"), &[]).unwrap(),
+                    StatePredicate::block(key("minecraft:bell"), &[]).unwrap(),
                 ),
                 (
                     "minecraft:meeting",
-                    StatePredicate::block(
-                        metadata,
-                        key("minecraft:red_bed"),
+                    StatePredicate::block(key("minecraft:red_bed"),
                         &[StateConstraint::new("part", "foot")],
                     )
                     .unwrap(),
                 ),
                 (
                     "minecraft:nowhere",
-                    StatePredicate::block(metadata, key("minecraft:stone"), &[]).unwrap(),
+                    StatePredicate::block(key("minecraft:stone"), &[]).unwrap(),
                 ),
                 (
                     "minecraft:armorer",
-                    StatePredicate::tag(
-                        metadata,
-                        &Tags,
-                        mod_api::__private::tag_key(&Identifier::parse("minecraft:beds").unwrap())
+                    StatePredicate::tag(mod_api::__private::tag_key(&Identifier::parse("minecraft:beds").unwrap())
                             .unwrap(),
                         &[],
                     )
