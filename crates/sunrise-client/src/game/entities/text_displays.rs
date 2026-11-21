@@ -642,7 +642,7 @@ mod tests {
             game.others[0].display.as_ref().unwrap().append_metadata(
                 None,
                 false,
-                |_| None,
+                |_| unreachable!("a text display has no item stack"),
                 &mut metadata,
             );
             let mut client = RemoteTextDisplay::new(Shows::Text, [0.0; 3], 0.0);

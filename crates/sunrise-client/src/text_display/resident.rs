@@ -24,6 +24,7 @@ pub enum DisplayContents {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayText {
+    /// Retains the structured component; never reconstruct it from rendered spans.
     pub component: Arc<Text>,
     pub line_width: i32,
     pub background: i32,
@@ -108,7 +109,7 @@ impl DisplayState {
         &self,
         previous: Option<&Self>,
         force_start: bool,
-        encode_stack: impl FnOnce(&ItemStack) -> Option<Stack>,
+        encode_stack: impl FnOnce(&ItemStack) -> Stack,
         out: &mut Vec<(u8, i32, Value)>,
     ) {
         let mut put = |id, kind, value| out.push((id, kind, value));
@@ -208,7 +209,7 @@ impl DisplayState {
                     put(
                         23,
                         serializer::ITEM_STACK,
-                        Value::Item(stack.as_deref().and_then(encode_stack)),
+                        Value::Item(stack.as_deref().map(encode_stack)),
                     );
                 }
                 if *context != old_context {

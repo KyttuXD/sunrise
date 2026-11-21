@@ -5,7 +5,8 @@ use sunrise_client::{
     entity_nbt,
     nbt_path::int_value,
     save::{float, number, text},
-    scoreboard::{comp_text, component_tag, tag_to_json},
+    scoreboard::{component_tag, tag_to_json},
+    text::Text,
     text_display::{
         resident::{DisplayContents, DisplayState, DisplayText},
         transformation,
@@ -45,7 +46,9 @@ impl Game<'_> {
             "minecraft:text_display" => {
                 let mut value = DisplayText::default();
                 if let Some(component) = tag.get("text") {
-                    value.component = Arc::new(comp_text(&tag_to_json(component)));
+                    // Keep the source tree for the handle and the component codecs.
+                    // The rendered text would turn a keybind into the server's label.
+                    value.component = Arc::new(Text::from(tag_to_json(component)));
                 }
                 value.line_width = int("line_width", value.line_width);
                 value.background = int("background", value.background);

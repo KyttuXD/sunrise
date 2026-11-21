@@ -18,7 +18,7 @@ fn item_metadata_encodes_the_stack_only_when_sent() {
         false,
         |borrowed| {
             assert!(std::ptr::eq(borrowed, stack.as_ref()));
-            Some(Stack::new(42, 3))
+            Stack::new(42, 3)
         },
         &mut metadata,
     );

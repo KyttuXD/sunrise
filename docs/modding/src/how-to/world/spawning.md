@@ -105,9 +105,10 @@ the saved entity rejoins.
 
 Narrow a server entity with `host.display(entity)`. The resulting `DisplayRef` reads
 its current server settings, not the last save or the client's interpolated pose.
-`text(host)` projects just the text component of a text display; it returns `Ok(None)`
-for other display kinds. For an item display, `with_item` lends its stack only when
-nonempty. For example, read the count without copying the stack's components:
+`text(host)` projects just the structured text component of a text display; it returns
+`Ok(None)` for other display kinds. Keybind components retain their action IDs so each
+client displays its own binding. For an item display, `with_item` lends its stack only
+when nonempty. For example, read the count without copying the stack's components:
 
 ```rust,ignore
 let count = host.display(entity)?.with_item(host, |stack| stack.count());

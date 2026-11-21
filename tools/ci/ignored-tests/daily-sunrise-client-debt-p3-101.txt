@@ -1,1 +1,2 @@
 sunrise-client game::native_display_refs::tests::display_reads_use_live_values_and_write_a_fresh_save lib daily resources
+sunrise-client game::lan::display_pairing_tests::late_displays_pair_their_item_and_keybind_components lib daily resources

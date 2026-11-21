@@ -168,12 +168,11 @@ pub struct DisplayTracking {
 }
 
 impl DisplayTracking {
-    pub fn new(state: &Arc<DisplayState>, hub: Option<&Hub>) -> Self {
+    pub fn new(state: &Arc<DisplayState>, hub: &Hub) -> Self {
         Self {
             state: state.clone(),
-            item_codecs: hub
-                .filter(|_| matches!(state.contents, DisplayContents::Item { .. }))
-                .map(|hub| (hub.sync.clone(), hub.encoder.items.clone())),
+            item_codecs: matches!(state.contents, DisplayContents::Item { .. })
+                .then(|| (hub.sync.clone(), hub.encoder.items.clone())),
         }
     }
 
@@ -187,14 +186,17 @@ impl DisplayTracking {
             before.map(|old| old.state.as_ref()),
             force_start,
             |stack| {
-                let (sync, items) = self.item_codecs.as_ref()?;
+                let (sync, items) = self
+                    .item_codecs
+                    .as_ref()
+                    .expect("an item display snapshot has item codecs");
                 let item_id = |name: &str| {
                     sync.builtin
                         .get("minecraft:item")
                         .and_then(|items| items.id(name))
                         .unwrap_or(0)
                 };
-                Some(guest::resident_stack(stack, &item_id, sync, items))
+                guest::resident_stack(stack, &item_id, sync, items)
             },
             out,
         );
@@ -2159,12 +2161,12 @@ mod tests {
     fn forced_default_is_sent_on_each_write_but_equal_unforced_is_not() {
         let mut display = state(0.0);
         display.kind = "minecraft:block_display".into();
-        display.display = Some(DisplayTracking::new(
-            &Arc::new(DisplayState::new(DisplayContents::Block(
+        display.display = Some(DisplayTracking {
+            state: Arc::new(DisplayState::new(DisplayContents::Block(
                 sunrise_world::registry::BlockStateId(0),
             ))),
-            None,
-        ));
+            item_codecs: None,
+        });
         let mut tracker = added(&display);
         for _ in 0..2 {
             display.forced_meta[0] = 1 << 8;
@@ -2195,7 +2197,10 @@ mod tests {
             ..Default::default()
         })));
         Arc::make_mut(&mut display).billboard = Billboard::Vertical;
-        row.display = Some(DisplayTracking::new(&display, None));
+        row.display = Some(DisplayTracking {
+            state: display.clone(),
+            item_codecs: None,
+        });
         let mut tracker = added(&row);
         let mut pairing = Vec::new();
         assert!(tracker.pairing(&row, Kind::Type(100), &Riding::default(), &mut pairing));
@@ -2207,7 +2212,10 @@ mod tests {
             ]
         )));
         Arc::make_mut(&mut display).contents = DisplayContents::Text(DisplayText::default());
-        row.display = Some(DisplayTracking::new(&display, None));
+        row.display = Some(DisplayTracking {
+            state: display,
+            item_codecs: None,
+        });
         assert!(
             changes(&mut tracker, &row)
                 .iter()

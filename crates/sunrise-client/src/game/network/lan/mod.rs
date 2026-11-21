@@ -2,6 +2,8 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
+#[cfg(test)]
+mod display_pairing_tests;
 mod event_timings;
 #[cfg(test)]
 use sunrise_gameplay::lan::level_event_targets;
@@ -2577,49 +2579,44 @@ impl Game<'_> {
     /// described (their ids are above the counter the states were taken at),
     /// and nothing when the counter has not moved or no guest is in the level.
     pub(super) fn lan_note_joined(&mut self) {
-        let Some(host) = self.lan.take() else {
-            return;
-        };
-        let mut host = self.lan_flush_tracking(host);
-        host.states_next_entity = None;
-        self.lan = Some(host);
-        self.flush_attachment_sync();
-    }
-
-    /// Deliver start/stop callbacks before sounds and attachment snapshots.
-    /// A callback can spawn another entity, whose pairing is part of the same
-    /// operation, as a nested ChunkMap.addEntity would be in vanilla.
-    fn lan_flush_tracking(&mut self, mut host: LanHost) -> LanHost {
         loop {
-            self.lan_pair_joined(&mut host);
+            self.lan_pair_joined();
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
             host.hub.collect_tracking();
             if host.hub.native_tracking.is_empty() {
-                return host;
+                host.states_next_entity = None;
+                break;
             }
-            self.lan = Some(host);
+            // A start/stop callback can spawn an entity that pairs in this
+            // operation too, as a nested ChunkMap.addEntity would in vanilla.
             self.run_native_tracking();
-            host = self
-                .lan
-                .take()
-                .expect("the hub is back after the tracking events");
         }
+        self.flush_attachment_sync();
     }
 
     /// Pair late arrivals before a sound flush as well as at the end of the
     /// tick. The counter prevents taking or draining an entity's state twice.
-    pub(super) fn lan_pair_joined(&mut self, host: &mut LanHost) {
+    fn lan_pair_joined(&mut self) {
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
         if let Some(next) = host.states_next_entity
             && host.hub.guests.iter().any(|g| host.hub.here(g))
         {
+            // Leave the hub installed: the normal snapshot path uses its registries.
             self.lan_assign_ids();
+            let mut states = States::default();
             if self.next_entity != next {
-                let mut states = States::default();
                 self.lan_entities(&mut states, false, next, None);
                 self.lan_hook_states(&mut states);
                 self.lan_entity_uuids(&mut states);
-                host.hub.note_joined(states.as_slice());
             }
-            host.states_next_entity = Some(self.next_entity);
+            if let Some(host) = self.lan.as_mut() {
+                host.hub.note_joined(states.as_slice());
+                host.states_next_entity = Some(self.next_entity);
+            }
         }
     }
 

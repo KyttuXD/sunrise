@@ -70,8 +70,9 @@ pub trait DisplaysBackend {
     fn display_teleport_duration(&self, display: DisplayRef) -> Option<i32>;
     /// Side: server.
     /// `TextDisplay.getText`; None for another kind of display.
+    /// Returns the structured component, including keybind IDs, not rendered text.
+    /// Returns a [`TextFormError`] if the component cannot be projected to API text.
     #[access(WorldOnly)]
-    /// Refuses text deeper than 512 component nodes before applying any changes.
     fn display_text(&self, display: DisplayRef) -> Result<Option<Text>, TextFormError>;
     /// Side: server.
     /// `TextDisplay.getLineWidth`.
