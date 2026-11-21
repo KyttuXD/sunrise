@@ -10031,7 +10031,14 @@ mod tests {
             Folder::Entities => &save.entity_regions,
             Folder::Poi => &save.poi_regions,
         };
-        super::write_region_records(&save.root, cache, folder, &[((0, 0), &record)]).unwrap();
+        super::write_region_records(
+            &save.root,
+            cache,
+            folder,
+            &[((0, 0), &record)],
+            |(x, z), error| panic!("chunk ({x}, {z}): {error}"),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -10180,6 +10187,7 @@ mod tests {
             &nether.regions,
             "region",
             &[((1, 0), &current)],
+            |(x, z), error| panic!("chunk ({x}, {z}): {error}"),
         )
         .unwrap();
         assert!(nether.is_old_chunk(0, 0));

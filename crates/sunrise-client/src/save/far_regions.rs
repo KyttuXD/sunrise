@@ -160,7 +160,14 @@ mod tests {
         }))
     }
     fn write(save: &SaveDir, records: &[((i32, i32), &Record)]) {
-        write_region_records(&save.root, &save.regions, "region", records).unwrap();
+        write_region_records(
+            &save.root,
+            &save.regions,
+            "region",
+            records,
+            |(x, z), error| panic!("chunk ({x}, {z}): {error}"),
+        )
+        .unwrap();
     }
     /// What a far read finds for the chunk: `(xPos, zPos, version)`.
     fn far(save: &SaveDir, (x, z): (i32, i32)) -> Option<(i64, i64, i64)> {

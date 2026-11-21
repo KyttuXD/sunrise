@@ -618,8 +618,8 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     oversized.varint(ids::LEVEL_CHUNK_WITH_LIGHT);
     oversized.bytes(&vec![0; 1 << 21]);
     let taken = [(3, ()), (5, ()), (8, ())];
-    let bodies = [body((0, 0)), oversized.data.clone(), body((1, 0))];
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies);
+    let bodies = [body((0, 0)), Ok(oversized.data.clone()), body((1, 0))];
+    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &taken, &bodies).unwrap();
     assert_eq!(sent, vec![3, 8], "the queue places of the columns sent");
     let mut columns = Vec::new();
     for payload in &payloads {
@@ -642,7 +642,12 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
         }
     }
     assert_eq!(columns, vec![(0, 0), (1, 0)]);
-    let (payloads, sent) = batch_runs(Level::Index(NETHER_INDEX), &[(0, ())], &[oversized.data]);
+    let (payloads, sent) = batch_runs(
+        Level::Index(NETHER_INDEX),
+        &[(0, ())],
+        &[Ok(oversized.data)],
+    )
+    .unwrap();
     assert!(payloads.is_empty() && sent.is_empty(), "no empty batch");
 }
 
