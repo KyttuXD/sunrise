@@ -161,6 +161,29 @@ fn fits_judges_declared_game_code_by_each_builds_data() {
 
 #[test]
 #[ignore = "daily"]
+fn a_native_project_with_large_metadata_can_still_fit_a_new_build() {
+    let project = Project::new("large-metadata", &[]);
+    fs::create_dir(project.dir.join("src")).unwrap();
+    fs::write(project.dir.join("src/lib.rs"), "pub fn greet() {}\n").unwrap();
+    fs::write(
+        project.dir.join("Cargo.toml"),
+        "[package]\nname='example'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let path = project.dir.join(MANIFEST);
+    let text = fs::read_to_string(&path).unwrap();
+    let reason = "x".repeat(65 * 1024);
+    fs::write(
+        path,
+        format!("{text}\n[dependencies]\nextra={{version='*',optional=true,reason='{reason}'}}\n"),
+    )
+    .unwrap();
+    let stdout = assert_answer(project.run(&["fits", "--build", NEW]), 0, &[]);
+    assert!(stdout.contains("89abcde  fits"), "{stdout}");
+}
+
+#[test]
+#[ignore = "daily"]
 fn update_names_the_declared_game_code_the_new_build_changed() {
     let moved = Project::new("update-moved", &[STEADY, RESHAPED, DROPPED]);
     assert_answer(moved.run(&["update", "--sunrise", NEW]), 0, CHANGED_IDS);

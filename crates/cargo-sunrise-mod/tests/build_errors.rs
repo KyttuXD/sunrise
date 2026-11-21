@@ -89,6 +89,16 @@ fn a_failed_native_build_names_the_authors_file_and_not_the_cache_copy() {
 #[ignore = "book-quickstart.yml: the run's own SDK"]
 fn a_failed_registry_build_names_the_authors_file_and_a_good_one_still_builds() {
     let project = Mod::new("itoa = \"1\"\n");
+    let manifest = project
+        .project
+        .join(sunrise_mod_package::manifest::MANIFEST);
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let notes = "x".repeat(65 * 1024);
+    std::fs::write(
+        &manifest,
+        format!("{text}\n[properties]\nnotes='{notes}'\n"),
+    )
+    .unwrap();
     let built = project.build(|source| {
         source.replace(
             "fn greeting(player: &str) -> String {",
@@ -96,11 +106,20 @@ fn a_failed_registry_build_names_the_authors_file_and_a_good_one_still_builds() 
         )
     });
     assert!(built.status.success(), "{built:?}");
+    // Long display metadata must not stop a fit-checkable build from packing its uses list.
+    let package = project.project.join("target/sunrise-mod/greeter.smod");
+    let bytes = sunrise_mod_package::Package::entry(
+        &package,
+        mod_surface::uses::USES_FILE,
+        sunrise_mod_package::manifest::MAX_USES,
+    )
+    .unwrap()
+    .expect("the native package carries its uses table");
     assert!(
-        project
-            .project
-            .join("target/sunrise-mod/greeter.smod")
-            .is_file()
+        !mod_surface::uses::UsesTable::read(&bytes)
+            .unwrap()
+            .entries
+            .is_empty()
     );
     let built = project.build(type_error);
     project.assert_names_the_authors_file(&built);

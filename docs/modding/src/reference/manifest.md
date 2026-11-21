@@ -105,8 +105,9 @@ Versions refer to `sunrise-mod.toml`, not Cargo metadata. `optional` defaults to
 `side` defaults to `"both"`; `order` is `"after"` (default), `"before"` or `"none"`.
 After means the dependency's listeners/content precede the owner's; before reverses that
 **dispatch** edge; none removes it. `reason` is a string, and `url` must start with
-`https://`. Unknown fields and malformed values are reported when the manifest is parsed;
-there is no `kind` key or alternate optional spelling.
+`https://`. Unknown fields and malformed values are reported when the manifest is parsed.
+A missing dependency `version` names the dependency row; an invalid `url` points to the URL's
+line. There is no `kind` key or alternate optional spelling.
 
 Side is the **installation**, not the logical side executing a hook: an integrated server
 belongs to the client installation, a dedicated server to the server installation.
@@ -123,8 +124,8 @@ See [Dependencies between mods](../concepts/dependencies.md).
 
 Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only.
 Unsupported values, such as arrays or tables, are refused when the manifest is parsed. The complete
-`sunrise-mod.toml` byte limit applies; there is no separate limit on property count, property size or
-reason length. A mod reads any loaded package's manifest through
+`sunrise-mod.toml` byte limit applies when reading a package or scanning a project's source;
+there is no separate limit on property count, property size or reason length. A mod reads any loaded package's manifest through
 `context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
 `issues`, `icon_path`, `kind`, `dependencies` and `property(key)`. Each read-only `PackageDependency`
 exposes `id()`, `version()`, `kind()`, `order()`, `side()`, `reason()` and `url()`. `DependencyKind`

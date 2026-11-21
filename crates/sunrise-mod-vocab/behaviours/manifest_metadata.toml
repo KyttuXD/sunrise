@@ -5,4 +5,6 @@ tests = [
   "crates/sunrise-mod-package/src/manifest.rs::manifest_parse_rejects_input_over_the_published_byte_limit",
   "crates/sunrise-mod-package/src/dependencies.rs::long_policy_reasons_are_preserved_for_dependencies_and_pair_rules",
   "crates/sunrise-mod-package/src/dependencies.rs::policy_schema_errors_are_refused_when_the_manifest_is_parsed",
+  "crates/sunrise-mod-package/src/dependencies.rs::a_missing_dependency_version_names_the_row_and_its_location",
+  "crates/sunrise-mod-package/src/dependencies.rs::positional_dependency_policies_keep_their_fields_and_defaults",
 ]

@@ -2,24 +2,32 @@
 //!
 //! Native mixin schema adapted from horizon-mixins (Copyright (c) 2026 levzzz),
 //! MIT licensed; see `HORIZON_MIXINS_LICENSE` and `THIRD_PARTY_NOTICES.md`.
+mod dependency;
 mod hash;
 mod jar;
 pub mod loops;
 pub mod mixin;
+mod rule;
 mod runtime_files;
+pub use dependency::{Dependency, DependencyDetails};
 pub use hash::sha512_of;
 pub use jar::{
     JarConflict, JarInputsError, JarRef, JarRequirement, MissingJar, collect_jar_requirements,
     missing_jars,
 };
+pub use rule::{Rule, RuleDetails};
 pub use runtime_files::{
     MAX_RUNTIME_FILE, MAX_RUNTIME_FILES, MAX_RUNTIME_TOTAL, RUNTIME_DIR, RuntimeData, RuntimeTable,
 };
 
-use mod_surface::uses::USES_FILE;
+pub use mod_surface::manifest::{MANIFEST, MAX_MANIFEST};
+use mod_surface::{manifest::read as read_manifest, uses::USES_FILE};
 use serde::{
     Deserialize, Deserializer, Serialize,
-    de::{self, Visitor, value::MapAccessDeserializer},
+    de::{
+        self, Visitor,
+        value::{MapAccessDeserializer, SeqAccessDeserializer},
+    },
 };
 use std::{
     fmt,
@@ -27,8 +35,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The manifest's file name in a `.smod` or a mod folder.
-pub const MANIFEST: &str = "sunrise-mod.toml";
 /// The largest uses table ([`USES_FILE`]) a package may carry: what the surface crate reads.
 pub const MAX_USES: u64 = mod_surface::uses::MAX_USES_BYTES as u64;
 /// The content manifest API this build loads.
@@ -55,9 +61,6 @@ pub const RESERVED_IDS: [&str; 7] = [
 
 /// A mod's saved settings, shared by native mods and modpack overrides.
 pub const STORAGE_DIR: &str = ".sunrise-mod-data";
-
-/// Maximum bytes in the complete manifest, including properties and dependency explanations.
-pub const MAX_MANIFEST: u64 = 32 << 20;
 
 /// The most source files (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/**`, the root notices) a
 /// package selects: as many as its content files, so a port laid out one file per class fits.
@@ -192,97 +195,43 @@ pub enum Property {
     String(String),
 }
 
-/// A `[dependencies]` entry: a semver requirement or a detailed table.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Dependency {
-    Version(semver::VersionReq),
-    Detailed(DependencyDetails),
-}
+fn https_url<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    struct HttpsUrl;
 
-impl<'de> Deserialize<'de> for Dependency {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        version_or_details(deserializer, Self::Version, Self::Detailed, |details| {
-            details.url.as_deref()
-        })
-    }
-}
+    impl<'de> Visitor<'de> for HttpsUrl {
+        type Value = Option<String>;
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyDetails {
-    pub version: semver::VersionReq,
-    #[serde(default)]
-    pub optional: bool,
-    /// The installation on which this dependency declaration applies.
-    #[serde(default = "both_sides")]
-    pub side: Side,
-    /// A mod-provided explanation, bound only by the complete manifest's byte limit.
-    #[serde(default)]
-    pub reason: Option<String>,
-    /// An HTTPS link with more information.
-    #[serde(default)]
-    pub url: Option<String>,
-    /// Dispatch ordering only; `none` does not remove a code link requirement.
-    #[serde(default)]
-    pub order: mod_vocab::DependencyOrder,
-}
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a string")
+        }
 
-impl Dependency {
-    /// The dependency's typed declaration, with bare-version defaults filled in.
-    pub fn details(&self) -> DependencyDetails {
-        match self {
-            Self::Version(version) => DependencyDetails {
-                version: version.clone(),
-                optional: false,
-                side: Side::Both,
-                reason: None,
-                url: None,
-                order: mod_vocab::DependencyOrder::After,
-            },
-            Self::Detailed(details) => details.clone(),
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_str(self)
+        }
+
+        fn visit_str<E: de::Error>(self, url: &str) -> Result<Self::Value, E> {
+            if !url.starts_with("https://") {
+                return Err(E::custom("url is not https://"));
+            }
+            Ok(Some(url.to_owned()))
         }
     }
+
+    deserializer.deserialize_option(HttpsUrl)
 }
 
-/// An `[incompatible]` or `[discouraged]` entry: the versions of the other mod it matches
-/// (`"<2"`), or a table that also gives the player a reason and a link.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Rule {
-    Version(semver::VersionReq),
-    Detailed(RuleDetails),
-}
-
-impl<'de> Deserialize<'de> for Rule {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        version_or_details(deserializer, Self::Version, Self::Detailed, |details| {
-            details.url.as_deref()
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct RuleDetails {
-    /// Every version when left out.
-    #[serde(default = "any_version")]
-    pub version: semver::VersionReq,
-    /// Why, shown when the rule fails: bound only by the complete manifest's byte limit.
-    #[serde(default)]
-    pub reason: Option<String>,
-    /// Where to read more, shown with the reason: an `https://` link.
-    #[serde(default)]
-    pub url: Option<String>,
-    /// Where the rule holds: both sides, or only the client or the dedicated server.
-    #[serde(default = "both_sides")]
-    pub side: Side,
-}
-
-// Choose the form by its TOML type so mistakes in a detailed table retain their own errors.
+// Choose the form by its TOML type so failures retain the field and source span.
 fn version_or_details<'de, D, T, V>(
     deserializer: D,
     version: fn(semver::VersionReq) -> V,
     details: fn(T) -> V,
-    url: fn(&T) -> Option<&str>,
 ) -> Result<V, D::Error>
 where
     D: Deserializer<'de>,
@@ -291,14 +240,13 @@ where
     struct VersionOrDetails<T, V> {
         version: fn(semver::VersionReq) -> V,
         details: fn(T) -> V,
-        url: fn(&T) -> Option<&str>,
     }
 
     impl<'de, T: Deserialize<'de>, V> Visitor<'de> for VersionOrDetails<T, V> {
         type Value = V;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a semver requirement string or a dependency policy table")
+            f.write_str("a semver requirement string, dependency policy table or positional array")
         }
 
         fn visit_str<E: de::Error>(self, value: &str) -> Result<V, E> {
@@ -306,42 +254,26 @@ where
         }
 
         fn visit_map<M: de::MapAccess<'de>>(self, map: M) -> Result<V, M::Error> {
-            let details = T::deserialize(MapAccessDeserializer::new(map))?;
-            if (self.url)(&details).is_some_and(|url| !url.starts_with("https://")) {
-                return Err(de::Error::custom("url is not https://"));
+            T::deserialize(MapAccessDeserializer::new(map)).map(self.details)
+        }
+
+        fn visit_seq<S: de::SeqAccess<'de>>(self, mut seq: S) -> Result<V, S::Error> {
+            let details = T::deserialize(SeqAccessDeserializer::new(&mut seq))?;
+            // Match the old untagged enum's sequence replay, which required the whole row.
+            if seq.next_element::<de::IgnoredAny>()?.is_some() {
+                return Err(de::Error::custom(
+                    "unexpected extra field in dependency policy array",
+                ));
             }
             Ok((self.details)(details))
         }
     }
 
-    deserializer.deserialize_any(VersionOrDetails {
-        version,
-        details,
-        url,
-    })
+    deserializer.deserialize_any(VersionOrDetails { version, details })
 }
 
 fn both_sides() -> Side {
     Side::Both
-}
-
-fn any_version() -> semver::VersionReq {
-    semver::VersionReq::STAR
-}
-
-impl Rule {
-    /// The versions, reason, link and side, the bare form's as defaults.
-    pub fn details(&self) -> RuleDetails {
-        match self {
-            Self::Version(version) => RuleDetails {
-                version: version.clone(),
-                reason: None,
-                url: None,
-                side: Side::Both,
-            },
-            Self::Detailed(details) => details.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -490,7 +422,7 @@ impl Internal {
 
 /// A manifest's TOML error in the tool's words: no caret box, the missing field with a line to add,
 /// an unknown field with the nearest valid key when one is a few edits away.
-fn toml_error(text: &str, e: &toml::de::Error) -> String {
+fn toml_error(text: &str, mut e: toml::de::Error) -> String {
     let message = e.message();
     let line = e.span().map(|span| {
         text.as_bytes()[..span.start.min(text.len())]
@@ -505,6 +437,17 @@ fn toml_error(text: &str, e: &toml::de::Error) -> String {
         Some(rest.split('`').next()?.to_owned())
     };
     if let Some(field) = quoted("missing field `") {
+        if field == "version" {
+            // Without the source excerpt, TOML displays the enclosing key path, if any.
+            e.set_input(None);
+            let located = e.to_string();
+            if let Some((_, path)) = located.trim_end().split_once('\n') {
+                return format!(
+                    "{MANIFEST}: the field {field} is missing {}{at}",
+                    path.escape_debug()
+                );
+            }
+        }
         let example = match field.as_str() {
             "id" => "id = \"my_mod\"".to_owned(),
             "name" => "name = \"My Mod\"".to_owned(),
@@ -554,7 +497,11 @@ impl Manifest {
         if text.len() as u64 > MAX_MANIFEST {
             return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
         }
-        let m: Manifest = toml::from_str(text).map_err(|e| toml_error(text, &e))?;
+        Self::parse_bounded(text)
+    }
+
+    fn parse_bounded(text: &str) -> Result<Self, String> {
+        let m: Manifest = toml::from_str(text).map_err(|e| toml_error(text, e))?;
         Internal::check_all(&m.internals)?;
         if !m.internals.is_empty() && m.native.is_none() {
             return Err(format!("{MANIFEST}: internals need a [native] mod"));
@@ -877,13 +824,9 @@ impl Package {
             for (name, _) in crate::content::folder_files(path)? {
                 check_folder_file(path, &name)?;
             }
-            let mut text = String::new();
             std::fs::File::open(path.join(MANIFEST))
+                .and_then(read_manifest)
                 .map_err(|e| format!("{MANIFEST}: {e}"))?
-                .take(MAX_MANIFEST + 1)
-                .read_to_string(&mut text)
-                .map_err(|e| format!("{MANIFEST}: {e}"))?;
-            text
         } else {
             if !metadata.is_file() {
                 return Err(format!(
@@ -964,12 +907,10 @@ impl Package {
                 icon = Some(crate::icon::Icon::parse(bytes)?);
             }
         }
-        let mut toml = String::new();
-        zip.by_name(MANIFEST)
-            .map_err(|e| format!("{MANIFEST}: {e}"))?
-            .take(MAX_MANIFEST + 1)
-            .read_to_string(&mut toml)
+        let entry = zip
+            .by_name(MANIFEST)
             .map_err(|e| format!("{MANIFEST}: {e}"))?;
+        let toml = read_manifest(entry).map_err(|e| format!("{MANIFEST}: {e}"))?;
         let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
         if uses && !package.is_native() {
             return Err(format!("a content mod has no code, so no {USES_FILE}"));
@@ -1092,7 +1033,7 @@ impl Package {
         has_cargo: bool,
         has_source: bool,
     ) -> Result<Self, String> {
-        let manifest = Manifest::parse(text)?;
+        let manifest = Manifest::parse_bounded(text)?;
         if has_cargo != manifest.native.is_some() || has_source != has_cargo {
             return Err("[native] and Rust source must be declared together".into());
         }

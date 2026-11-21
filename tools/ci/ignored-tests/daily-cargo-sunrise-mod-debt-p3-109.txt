@@ -1,0 +1,1 @@
+cargo-sunrise-mod a_native_project_with_large_metadata_can_still_fit_a_new_build test:fits daily child-process # Runs the CLI and its source-scan child against offline SDK fixtures.

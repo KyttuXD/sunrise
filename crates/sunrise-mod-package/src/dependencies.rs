@@ -777,9 +777,11 @@ mod tests {
                     "id='owner'\nname='Owner'\nversion='1'\n[{table}]\n{entry}"
                 ))
             };
-            let url_error =
-                manifest("target={version='^1',url='http://example.test'}").unwrap_err();
-            assert_eq!(url_error, "sunrise-mod.toml: url is not https:// (line 5)");
+            let url_error = manifest(&format!(
+                "[{table}.target]\nversion='^1'\nurl='http://example.test'\n"
+            ))
+            .unwrap_err();
+            assert_eq!(url_error, "sunrise-mod.toml: url is not https:// (line 7)");
             let reason_error = manifest("target={version='^1',reason=42}").unwrap_err();
             assert!(
                 reason_error.contains("expected a string (line 5)"),
@@ -792,6 +794,58 @@ mod tests {
             );
             assert!(manifest("target='not a semver requirement'").is_err());
         }
+    }
+
+    #[test]
+    fn a_missing_dependency_version_names_the_row_and_its_location() {
+        let error = crate::Manifest::parse(
+            "id='owner'\nname='Owner'\nversion='1'\n[dependencies]\ntarget={optional=true}\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "sunrise-mod.toml: the field version is missing in `dependencies.target` (line 5)"
+        );
+    }
+
+    #[test]
+    fn positional_dependency_policies_keep_their_fields_and_defaults() {
+        let text = "[dependencies]\n\
+            target=['^1', true, 'client', 'Context', 'https://example.test', 'before']\n\
+            short=['^2']\n\
+            [incompatible]\n\
+            target=['<2', 'Conflicts', 'https://example.test/rule', 'server']\n\
+            [discouraged]\n\
+            short=[]\n";
+        let source = manifest("owner", text);
+        let dependency = source.dependencies["target"].details();
+        assert_eq!(dependency.version.to_string(), "^1");
+        assert!(dependency.optional);
+        assert_eq!(dependency.side, Side::Client);
+        assert_eq!(dependency.reason.as_deref(), Some("Context"));
+        assert_eq!(dependency.url.as_deref(), Some("https://example.test"));
+        assert_eq!(dependency.order, mod_vocab::DependencyOrder::Before);
+        let dependency = source.dependencies["short"].details();
+        assert_eq!(dependency.version.to_string(), "^2");
+        assert!(!dependency.optional);
+        assert_eq!(dependency.side, Side::Both);
+        assert_eq!(dependency.reason, None);
+        assert_eq!(dependency.url, None);
+        assert_eq!(dependency.order, mod_vocab::DependencyOrder::After);
+        let rule = source.incompatible["target"].details();
+        assert_eq!(rule.version.to_string(), "<2");
+        assert_eq!(rule.side, Side::Server);
+        assert_eq!(rule.reason.as_deref(), Some("Conflicts"));
+        assert_eq!(rule.url.as_deref(), Some("https://example.test/rule"));
+        let rule = source.discouraged["short"].details();
+        assert_eq!(rule.version, semver::VersionReq::STAR);
+        assert_eq!(rule.side, Side::Both);
+        assert_eq!(rule.reason, None);
+        assert_eq!(rule.url, None);
+        assert!(crate::Manifest::parse(&format!(
+            "id='owner'\nname='Owner'\nversion='1'\n{text}extra=['*', 'reason', 'https://example.test', 'both', 'extra']\n"
+        ))
+        .is_err());
     }
 
     #[test]

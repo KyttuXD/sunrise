@@ -36,6 +36,8 @@ it builds with a literal. The table it writes records, per item, its hash at the
 the type's trait impls and the public paths the mod writes it by. For each struct the mod names, it records
 whether the mod builds it in full, with `..`, or not at all, and the field set when built in full. For a trait's
 member, it records every host trait in the mod's list that leads to the member's trait.
+The scan reads `sunrise-mod.toml` under the same [whole-manifest byte limit](../../reference/manifest.md#sunrise-modtoml)
+as the package reader. Property values and dependency reasons do not have a smaller limit in the scan.
 
 `fits` exits 0 when the mod fits (`fits (N items, made for BUILD)`). It exits 1 when it does not, printing
 `does not fit: K of the N items it uses changed` and one line per changed item, for example

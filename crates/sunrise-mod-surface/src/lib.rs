@@ -75,6 +75,7 @@ pub mod build_data;
 pub mod child;
 pub mod diff;
 mod legacy_hash;
+pub mod manifest;
 pub mod records;
 pub mod scan;
 pub mod shape;

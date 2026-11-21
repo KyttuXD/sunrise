@@ -1,7 +1,7 @@
 //! What a code mod uses of the surface (design-fit.md 10.2): the scan of its source against the
 //! pinned SDK's `surface.json`, the table `build` packs as `uses.json`, and `check`'s summary.
 use crate::sdk_fetch::PinnedSdk;
-use mod_source::mod_uses::{self, ModInput, ReadError};
+use mod_source::mod_uses::{self, ReadError};
 use mod_surface::child::ChildEntry;
 use mod_surface::uses::{Built, Entry, ManifestFacts, Origin, Uses, UsesTable, uses_contained};
 use mod_surface::{Surface, leaf};
@@ -34,18 +34,13 @@ pub(crate) enum Scanned {
     Unread(String),
 }
 
-/// The manifest of the mod folder at `root`.
-fn manifest(root: &Path) -> Result<Manifest, String> {
-    let name = sunrise_mod_package::manifest::MANIFEST;
-    let text = std::fs::read_to_string(root.join(name)).map_err(|e| format!("{name}: {e}"))?;
-    Manifest::parse(&text)
-}
-
-/// The source of the mod folder at `root` read for the scan, or what the scan answers without
-/// one. A folder that cannot be read at all, or a manifest that does not parse, is an error.
-fn read(root: &Path) -> Result<Result<ModInput, Scanned>, String> {
-    let manifest = manifest(root)?;
-    if let Some(table) = game_uses::unjudged(&manifest) {
+/// The mod's own source at `root`, or why it cannot be judged from the surface. An I/O failure
+/// is an error; skipped game-only source comes from the already validated manifest.
+fn read(
+    root: &Path,
+    manifest: &Manifest,
+) -> Result<Result<Vec<(String, String)>, Scanned>, String> {
+    if let Some(table) = game_uses::unjudged(manifest) {
         return Ok(Err(Scanned::Exact(format!("it has a {table} table"))));
     }
     // A helper is compiled inside the game's code, where a name is the game's own, never the
@@ -59,27 +54,36 @@ fn read(root: &Path) -> Result<Result<ModInput, Scanned>, String> {
             .chain(native.r#loop.iter().map(|row| row.helper.as_str()))
             .collect()
     });
-    match mod_uses::read(root, &helpers) {
-        Ok(input) => Ok(Ok(input)),
-        Err(e @ (ReadError::Io { .. } | ReadError::Manifest(_))) => Err(e.to_string()),
+    match mod_uses::read_sources(root, &helpers) {
+        Ok(sources) => Ok(Ok(sources)),
+        Err(e @ ReadError::Io { .. }) => Err(e.to_string()),
         Err(e) => Ok(Err(Scanned::Unread(e.to_string()))),
     }
 }
 
-/// What the mod at `root` uses of `surface`.
-pub(crate) fn scan(entry: ChildEntry, root: &Path, surface: &Surface) -> Result<Scanned, String> {
-    let input = match read(root)? {
-        Ok(input) => input,
+/// What the mod at `root` uses of `surface`, using the manifest its caller already read.
+pub(crate) fn scan(
+    entry: ChildEntry,
+    root: &Path,
+    manifest: &Manifest,
+    surface: &Surface,
+) -> Result<Scanned, String> {
+    let sources = match read(root, manifest)? {
+        Ok(sources) => sources,
         Err(scanned) => return Ok(scanned),
     };
-    let manifest = ManifestFacts {
-        names: input.manifest_names,
+    let facts = ManifestFacts {
+        names: manifest
+            .capabilities
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     };
     Ok(
         match uses_contained(
             entry,
-            input.sources.iter().map(|(p, t)| (p.as_str(), t.as_str())),
-            &manifest,
+            sources.iter().map(|(p, t)| (p.as_str(), t.as_str())),
+            &facts,
             surface,
         ) {
             Ok(uses) => Scanned::Uses(uses),
@@ -91,15 +95,19 @@ pub(crate) fn scan(entry: ChildEntry, root: &Path, surface: &Surface) -> Result<
 /// The table the mod at `root`, pinned to `sdk`, packs: what the scan found, then the game code
 /// its manifest declares, each with its hash at the pinned build ([`game_uses::entries`]). The
 /// build data is fetched only for a mod that declares some.
-pub(crate) fn table(uses: &Uses, root: &Path, sdk: &PinnedSdk) -> Result<UsesTable, String> {
+pub(crate) fn table(
+    uses: &Uses,
+    root: &Path,
+    manifest: &Manifest,
+    sdk: &PinnedSdk,
+) -> Result<UsesTable, String> {
     let mut table = uses.table(sdk.build.clone());
-    let manifest = manifest(root)?;
-    if game_uses::declared(&manifest) {
+    if game_uses::declared(manifest) {
         let data = crate::sdk_fetch::build_data(root, &sdk.build)?;
         // An item the pinned build lacks is refused by the build, by name, and one its build data
         // cannot fingerprint is never shown unchanged; the list records the rest.
         table.entries.extend(
-            game_uses::entries(&manifest, &data, &sdk.build)?
+            game_uses::entries(manifest, &data, &sdk.build)?
                 .into_iter()
                 .filter_map(|(id, now)| match now {
                     game_uses::Now::Is(hash) => Some(Entry::plain(id, hash)),
@@ -201,17 +209,15 @@ mod tests {
     fn a_mod_including_build_script_output_is_unread_not_an_error() {
         let dir = std::env::temp_dir().join(format!("sunrise-mod-unread-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(
-            dir.join("sunrise-mod.toml"),
-            "id = \"bindings\"\nname = \"Bindings\"\nversion = \"0.1.0\"\n",
-        )
-        .unwrap();
+        let manifest =
+            Manifest::parse("id = \"bindings\"\nname = \"Bindings\"\nversion = \"0.1.0\"\n")
+                .unwrap();
         std::fs::write(
             dir.join("src/lib.rs"),
             "include!(concat!(env!(\"OUT_DIR\"), \"/b.rs\"));\n",
         )
         .unwrap();
-        let read = read(&dir);
+        let read = read(&dir, &manifest);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(matches!(read, Ok(Err(Scanned::Unread(_)))));
     }
@@ -219,24 +225,20 @@ mod tests {
     #[test]
     fn a_helper_compiled_inside_the_game_is_not_scanned_and_a_module_row_is_exact() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = format!(
+        let text = format!(
             "id = \"blur\"\nname = \"Blur\"\nversion = \"0.1.0\"\napi = \"0.2\"\n[native]\ngame = \"26.3\"\nsunrise = \"{}\"\n[[native.mixin]]\nid = \"m\"\ntarget = \"game::f\"\nkind = \"HEAD\"\nhelper = \"src/mixins/m.rs\"\n",
             "a".repeat(40)
         );
         std::fs::create_dir_all(dir.path().join("src/mixins")).unwrap();
-        std::fs::write(dir.path().join("sunrise-mod.toml"), &manifest).unwrap();
+        let manifest = Manifest::parse(&text).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "fn a() {}").unwrap();
         std::fs::write(
             dir.path().join("src/mixins/m.rs"),
             "{ World::game_only(); }",
         )
         .unwrap();
-        let input = read(dir.path()).unwrap().ok().unwrap();
-        let files: Vec<&str> = input
-            .sources
-            .iter()
-            .map(|(path, _)| path.as_str())
-            .collect();
+        let sources = read(dir.path(), &manifest).unwrap().ok().unwrap();
+        let files: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
         assert_eq!(files, ["src/lib.rs"]);
         // A helper's own includes are the game's to resolve, and never fail the mod's scan.
         std::fs::write(
@@ -244,31 +246,29 @@ mod tests {
             "include!(concat!(env!(\"OUT_DIR\"), \"/g.rs\"));",
         )
         .unwrap();
-        assert!(read(dir.path()).unwrap().is_ok());
+        assert!(read(dir.path(), &manifest).unwrap().is_ok());
         // A helper the mod's own source also brings in is both: the scan says it cannot judge.
         std::fs::write(dir.path().join("src/lib.rs"), "include!(\"mixins/m.rs\");").unwrap();
         assert!(matches!(
-            read(dir.path()),
+            read(dir.path(), &manifest),
             Ok(Err(Scanned::Unread(why))) if why.contains("src/mixins/m.rs")
         ));
         // And so is one a plain `mod` declaration may load.
         std::fs::write(dir.path().join("src/lib.rs"), "mod mixins;").unwrap();
         std::fs::write(dir.path().join("src/mixins.rs"), "mod m;").unwrap();
         assert!(matches!(
-            read(dir.path()),
+            read(dir.path(), &manifest),
             Ok(Err(Scanned::Unread(why))) if why.contains("src/mixins/m.rs")
         ));
         std::fs::remove_file(dir.path().join("src/mixins.rs")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "fn a() {}").unwrap();
-        std::fs::write(
-            dir.path().join("sunrise-mod.toml"),
-            manifest.clone()
-                + "[[native.module]]\nid = \"x\"\nfile = \"game.rs\"\nname = \"x\"\nsource = \"src/x.rs\"\n",
+        let manifest = Manifest::parse(
+            &(text + "[[native.module]]\nid = \"x\"\nfile = \"game.rs\"\nname = \"x\"\nsource = \"src/x.rs\"\n"),
         )
         .unwrap();
         std::fs::write(dir.path().join("src/x.rs"), "pub fn x() {}").unwrap();
         assert!(matches!(
-            read(dir.path()),
+            read(dir.path(), &manifest),
             Ok(Err(Scanned::Exact(why))) if why.contains("[[native.module]]")
         ));
     }

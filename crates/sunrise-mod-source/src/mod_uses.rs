@@ -1,5 +1,8 @@
 //! A mod folder as `sunrise-stage uses` scans it: its Rust sources and what its manifest names.
-use mod_surface::scan::{Token, tokens};
+use mod_surface::{
+    manifest::{self, MANIFEST},
+    scan::{Token, tokens},
+};
 use std::path::{Path, PathBuf};
 
 /// The largest Rust source file read, in bytes; a larger one is refused, never truncated.
@@ -8,8 +11,8 @@ pub const MAX_SOURCE_BYTES: u64 = 8 << 20;
 pub const MAX_TOTAL_BYTES: u64 = 64 << 20;
 /// The most Rust source files read from one mod.
 pub const MAX_FILES: usize = 4096;
-/// The largest `sunrise-mod.toml` read, in bytes.
-pub const MAX_MANIFEST_BYTES: u64 = 64 << 10;
+/// The most read from Cargo's own manifest when looking up its library root.
+const MAX_CARGO_TOML_BYTES: u64 = 64 << 10;
 
 /// What [`read`] found in a mod folder.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -41,7 +44,7 @@ pub enum ReadError {
     RootSkipped(String),
     /// More source than is read: a file, or the whole mod.
     TooLarge { what: String, size: u64, most: u64 },
-    /// `sunrise-mod.toml` is not valid TOML.
+    /// The manifest could not be read as TOML within its published file boundary.
     Manifest(String),
 }
 
@@ -69,7 +72,7 @@ impl std::fmt::Display for ReadError {
             Self::TooLarge { what, size, most } => {
                 write!(f, "{what} is {size} bytes; the most read is {most}")
             }
-            Self::Manifest(error) => write!(f, "sunrise-mod.toml: {error}"),
+            Self::Manifest(error) => write!(f, "{MANIFEST}: {error}"),
         }
     }
 }
@@ -247,7 +250,7 @@ fn references(text: &str, folder: &[String]) -> Result<Vec<String>, String> {
 fn library_root(dir: &Path) -> Result<String, ReadError> {
     let manifest = dir.join("Cargo.toml");
     let named = if manifest.is_file() {
-        let text = read_bounded(&manifest, "Cargo.toml", MAX_MANIFEST_BYTES)?;
+        let text = read_bounded(&manifest, "Cargo.toml", MAX_CARGO_TOML_BYTES)?;
         toml::from_str::<toml::Table>(&text)
             .ok()
             .and_then(|table| Some(table.get("lib")?.get("path")?.as_str()?.to_owned()))
@@ -312,17 +315,16 @@ fn read_bounded(path: &Path, shown: &str, most: u64) -> Result<String, ReadError
     })
 }
 
-/// Reads `dir`: every `.rs` file outside the mod's `target/` and hidden folders, and
-/// `sunrise-mod.toml` when there is one, but not the files `skip` names (relative and
-/// `/`-separated), which are not the mod's own source. A `#[path]` or `include!` of a file the
-/// scan does not read, a skipped one included, is refused, and so is a `mod` declaration that
-/// may load a skipped file, and so is a skipped file that is the mod's library root.
-pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
+/// Reads the mod's own Rust files outside the root `target/` and hidden folders, sorted by
+/// their relative, `/`-separated paths. The caller supplies any game-only source in `skip`.
+/// A library root, `mod`, `#[path]` or `include!` that can load a skipped file is refused, as is
+/// a `#[path]` or `include!` to any file not scanned.
+pub fn read_sources(dir: &Path, skip: &[&str]) -> Result<Vec<(String, String)>, ReadError> {
     let root = library_root(dir)?;
     if skip.contains(&root.as_str()) {
         return Err(ReadError::RootSkipped(root));
     }
-    let mut input = ModInput::default();
+    let mut sources = Vec::new();
     let mut total = 0u64;
     let mut brought: Vec<(String, String)> = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -354,9 +356,9 @@ pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
                 }
                 let text = read_bounded(&path, &shown, MAX_SOURCE_BYTES)?;
                 total += text.len() as u64;
-                if total > MAX_TOTAL_BYTES || input.sources.len() >= MAX_FILES {
+                if total > MAX_TOTAL_BYTES || sources.len() >= MAX_FILES {
                     return Err(ReadError::TooLarge {
-                        what: format!("the mod's source ({} files)", input.sources.len() + 1),
+                        what: format!("the mod's source ({} files)", sources.len() + 1),
                         size: total,
                         most: MAX_TOTAL_BYTES,
                     });
@@ -377,23 +379,36 @@ pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
                         });
                     }
                 }
-                input.sources.push((shown, text));
+                sources.push((shown, text));
             }
         }
     }
-    input.sources.sort();
+    sources.sort();
     for (file, target) in brought {
-        if input
-            .sources
+        if sources
             .binary_search_by(|(path, _)| path.as_str().cmp(&target))
             .is_err()
         {
             return Err(ReadError::NotScanned { file, target });
         }
     }
-    let manifest = dir.join("sunrise-mod.toml");
-    if manifest.is_file() {
-        let text = read_bounded(&manifest, "sunrise-mod.toml", MAX_MANIFEST_BYTES)?;
+    Ok(sources)
+}
+
+/// Reads the standalone fit scanner's project input, including the capability and game-code
+/// declarations in `sunrise-mod.toml` when present. Uses the same file boundary as packages.
+pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
+    let mut input = ModInput {
+        sources: read_sources(dir, skip)?,
+        ..ModInput::default()
+    };
+    let path = dir.join(MANIFEST);
+    if path.is_file() {
+        let text = std::fs::File::open(&path)
+            .map_err(io(&path))
+            .and_then(|file| {
+                manifest::read(file).map_err(|e| ReadError::Manifest(e.to_string()))
+            })?;
         let value: toml::Table =
             toml::from_str(&text).map_err(|e| ReadError::Manifest(e.to_string()))?;
         if let Some(capabilities) = value.get("capabilities").and_then(toml::Value::as_array) {
@@ -462,26 +477,48 @@ mod tests {
     }
 
     #[test]
-    fn the_manifest_and_each_source_are_read_with_a_cap() {
+    fn the_standalone_scan_uses_the_published_manifest_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(MANIFEST);
+        let metadata = "x".repeat(65 * 1024);
+        write(
+            dir.path(),
+            MANIFEST,
+            &format!(
+                "id='m'\nname='M'\nversion='1'\ncapabilities=['registries']\n[properties]\ndetails='{metadata}'\n"
+            ),
+        );
+        assert_eq!(
+            read(dir.path(), &[]).unwrap().manifest_names,
+            ["registries"]
+        );
+        std::fs::File::create(path)
+            .unwrap()
+            .set_len((32 << 20) + 1)
+            .unwrap();
+        assert_eq!(
+            read(dir.path(), &[]).unwrap_err().to_string(),
+            "sunrise-mod.toml: over 32 MiB"
+        );
+    }
+
+    #[test]
+    fn cargo_and_rust_sources_keep_their_own_bounds() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let big = format!(
-            "capabilities = []\n# {}\n",
-            "x".repeat(MAX_MANIFEST_BYTES as usize)
-        );
-        write(root, "sunrise-mod.toml", &big);
+        write(root, "Cargo.toml", &" ".repeat((64 << 10) + 1));
         assert!(matches!(
-            read(root, &[]).unwrap_err(),
-            ReadError::TooLarge { what, most: MAX_MANIFEST_BYTES, .. } if what == "sunrise-mod.toml"
+            read_sources(root, &[]).unwrap_err(),
+            ReadError::TooLarge { what, most, .. } if what == "Cargo.toml" && most == 64 << 10
         ));
-        write(root, "sunrise-mod.toml", "capabilities = []\n");
+        std::fs::remove_file(root.join("Cargo.toml")).unwrap();
         write(
             root,
             "src/lib.rs",
             &"/".repeat(MAX_SOURCE_BYTES as usize + 1),
         );
         assert!(matches!(
-            read(root, &[]).unwrap_err(),
+            read_sources(root, &[]).unwrap_err(),
             ReadError::TooLarge { what, most: MAX_SOURCE_BYTES, .. } if what == "src/lib.rs"
         ));
     }
