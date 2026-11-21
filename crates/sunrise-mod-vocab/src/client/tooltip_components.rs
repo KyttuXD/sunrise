@@ -9,6 +9,7 @@ use crate::{
 use std::{
     any::{Any, TypeId},
     fmt,
+    rc::Rc,
     sync::Arc,
 };
 
@@ -19,13 +20,33 @@ use std::{
 /// matching client factory in `register_client_tooltip_component_factories`.
 pub trait TooltipComponentData: Any + Send + Sync + 'static {}
 
+struct CustomData {
+    // `Option` lets the owner dispose of the last Arc's payload, not just the wrapper.
+    data: Option<Box<dyn Any + Send + Sync>>,
+    owner: Option<CallbackOwner>,
+}
+
+impl Drop for CustomData {
+    fn drop(&mut self) {
+        let data = self.data.take();
+        match &self.owner {
+            Some(owner) => owner.dispose("tooltip_component", "drop_data", data),
+            None => {
+                if let Err(message) = contain_unwind(move || drop(data)) {
+                    log::error!("unattributed tooltip component data panicked on drop: {message}");
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Repr {
-    Bundle(ItemStack),
+    Bundle(Arc<ItemStack>),
     Custom {
         type_id: TypeId,
         type_name: &'static str,
-        data: Arc<dyn Any + Send + Sync>,
+        payload: Arc<CustomData>,
     },
 }
 
@@ -41,18 +62,22 @@ impl TooltipComponent {
     /// Wrap a bundle stack for vanilla's built-in bundle contents tooltip component.
     pub fn bundle(stack: ItemStack) -> Self {
         Self {
-            repr: Repr::Bundle(stack),
+            repr: Repr::Bundle(Arc::new(stack)),
         }
     }
 
     /// Wrap mod-defined [`TooltipComponentData`] for resolution by a factory registered in
-    /// `register_client_tooltip_component_factories`.
+    /// `register_client_tooltip_component_factories`. A payload created in a mod callback
+    /// retains that mod as its owner, including when the last copy is dropped.
     pub fn custom<T: TooltipComponentData>(data: T) -> Self {
         Self {
             repr: Repr::Custom {
                 type_id: TypeId::of::<T>(),
                 type_name: std::any::type_name::<T>(),
-                data: Arc::new(data),
+                payload: Arc::new(CustomData {
+                    data: Some(Box::new(data)),
+                    owner: crate::content::crash::current_native_mod().map(CallbackOwner::for_mod),
+                }),
             },
         }
     }
@@ -67,10 +92,7 @@ impl TooltipComponent {
 
     /// Downcast a custom tooltip component payload to its concrete [`TooltipComponentData`] type.
     pub fn downcast_ref<T: TooltipComponentData>(&self) -> Option<&T> {
-        match &self.repr {
-            Repr::Custom { data, .. } => data.downcast_ref::<T>(),
-            Repr::Bundle(_) => None,
-        }
+        self.__as_any()?.downcast_ref::<T>()
     }
 
     /// The [`TypeId`] of the custom [`TooltipComponentData`], or `None` for a built-in bundle.
@@ -94,7 +116,16 @@ impl TooltipComponent {
     #[doc(hidden)]
     pub fn __as_any(&self) -> Option<&(dyn Any + Send + Sync)> {
         match &self.repr {
-            Repr::Custom { data, .. } => Some(&**data),
+            Repr::Custom { payload, .. } => payload.data.as_deref(),
+            Repr::Bundle(_) => None,
+        }
+    }
+
+    /// Identify the producer for preparation diagnostics.
+    #[doc(hidden)]
+    pub fn __producer(&self) -> Option<&'static str> {
+        match &self.repr {
+            Repr::Custom { payload, .. } => payload.owner.as_ref().map(CallbackOwner::id),
             Repr::Bundle(_) => None,
         }
     }
@@ -107,12 +138,12 @@ impl PartialEq for TooltipComponent {
             (
                 Repr::Custom {
                     type_id: a_id,
-                    data: a_data,
+                    payload: a_data,
                     ..
                 },
                 Repr::Custom {
                     type_id: b_id,
-                    data: b_data,
+                    payload: b_data,
                     ..
                 },
             ) => a_id == b_id && Arc::ptr_eq(a_data, b_data),
@@ -301,10 +332,10 @@ impl TooltipComponentFactory {
             None => contain_unwind(|| (self.create)(data)).ok().flatten(),
         };
         built.map(|component| PreparedTooltipComponent {
-            repr: PreparedRepr::Custom {
+            repr: PreparedRepr::Custom(Rc::new(PreparedCustom {
                 component: Some(component),
                 owner,
-            },
+            })),
         })
     }
 }
@@ -386,12 +417,29 @@ enum PreparedRepr {
     },
     Bundle {
         stack: ItemStack,
-        grid_rows: i32,
+        size: [i32; 2],
+        description: Option<Text>,
     },
-    Custom {
-        component: Option<Box<dyn AnyClientTooltipComponent>>,
-        owner: Option<CallbackOwner>,
-    },
+    Custom(Rc<PreparedCustom>),
+}
+
+struct PreparedCustom {
+    component: Option<Box<dyn AnyClientTooltipComponent>>,
+    owner: Option<CallbackOwner>,
+}
+
+impl Drop for PreparedCustom {
+    fn drop(&mut self) {
+        let Some(component) = self.component.take() else {
+            return;
+        };
+        match self.owner.as_ref() {
+            Some(owner) => owner.dispose("tooltip_component", "drop", component),
+            None => {
+                let _ = contain_unwind(move || drop(component));
+            }
+        }
+    }
 }
 
 // no wire: in-process prepared tooltip component.
@@ -402,39 +450,21 @@ pub struct PreparedTooltipComponent {
     repr: PreparedRepr,
 }
 
-impl Drop for PreparedTooltipComponent {
-    fn drop(&mut self) {
-        if let PreparedRepr::Custom { component, owner } = &mut self.repr
-            && let Some(component) = component.take()
-        {
-            match owner.as_ref() {
-                Some(owner) => owner.dispose("tooltip_component", "drop", component),
-                None => {
-                    let _ = contain_unwind(move || drop(component));
-                }
-            }
-        }
-    }
-}
-
 impl PreparedTooltipComponent {
     fn call_custom<R>(
         &self,
         operation: &'static str,
         f: impl FnOnce(&dyn AnyClientTooltipComponent) -> R,
     ) -> Option<R> {
-        let PreparedRepr::Custom {
-            component: Some(component),
-            owner,
-        } = &self.repr
-        else {
+        let PreparedRepr::Custom(prepared) = &self.repr else {
             return None;
         };
-        match owner.as_ref() {
+        let component = prepared.component.as_deref()?;
+        match prepared.owner.as_ref() {
             Some(owner) => owner
-                .call("tooltip_component", operation, || f(&**component))
+                .call("tooltip_component", operation, || f(component))
                 .ok(),
-            None => contain_unwind(|| f(&**component)).ok(),
+            None => contain_unwind(|| f(component)).ok(),
         }
     }
 
@@ -443,10 +473,8 @@ impl PreparedTooltipComponent {
     pub fn width(&self, font: &dyn TooltipFont) -> i32 {
         match &self.repr {
             PreparedRepr::Text { text, .. } => font.width(text).unwrap_or(0),
-            PreparedRepr::Bundle { .. } => 96,
-            PreparedRepr::Custom { .. } => {
-                self.call_custom("width", |c| c.width(font)).unwrap_or(0)
-            }
+            PreparedRepr::Bundle { size, .. } => size[0],
+            PreparedRepr::Custom(_) => self.call_custom("width", |c| c.width(font)).unwrap_or(0),
         }
     }
 
@@ -455,22 +483,17 @@ impl PreparedTooltipComponent {
     pub fn height(&self, font: &dyn TooltipFont) -> i32 {
         match &self.repr {
             PreparedRepr::Text { .. } => 10,
-            PreparedRepr::Bundle { grid_rows, .. } => {
-                if *grid_rows == 0 {
-                    let desc =
-                        Text::translate("item.minecraft.bundle.empty.description", Vec::new());
-                    font.split(&desc, 96)
-                        .map_or(0, |lines| {
-                            (lines.len() as i32).saturating_mul(font.line_height())
-                        })
-                        .saturating_add(21)
-                } else {
-                    grid_rows.saturating_mul(24).saturating_add(21)
-                }
+            PreparedRepr::Bundle {
+                size, description, ..
+            } => {
+                let lines = description
+                    .as_ref()
+                    .and_then(|text| font.split(text, size[0]).ok());
+                size[1].saturating_add(lines.map_or(0, |lines| {
+                    (lines.len() as i32).saturating_mul(font.line_height())
+                }))
             }
-            PreparedRepr::Custom { .. } => {
-                self.call_custom("height", |c| c.height(font)).unwrap_or(0)
-            }
+            PreparedRepr::Custom(_) => self.call_custom("height", |c| c.height(font)).unwrap_or(0),
         }
     }
 
@@ -480,7 +503,7 @@ impl PreparedTooltipComponent {
         match &self.repr {
             PreparedRepr::Text { .. } => false,
             PreparedRepr::Bundle { .. } => true,
-            PreparedRepr::Custom { .. } => self
+            PreparedRepr::Custom(_) => self
                 .call_custom("show_tooltip_with_item_in_hand", |c| {
                     c.show_tooltip_with_item_in_hand()
                 })
@@ -507,10 +530,9 @@ impl PreparedTooltipComponent {
     /// Downcast a custom prepared component to its concrete [`ClientTooltipComponent`] type.
     pub fn downcast_ref<C: ClientTooltipComponent + 'static>(&self) -> Option<&C> {
         match &self.repr {
-            PreparedRepr::Custom {
-                component: Some(component),
-                ..
-            } => component.as_any().downcast_ref::<C>(),
+            PreparedRepr::Custom(prepared) => {
+                prepared.component.as_deref()?.as_any().downcast_ref::<C>()
+            }
             _ => None,
         }
     }
@@ -524,12 +546,26 @@ impl PreparedTooltipComponent {
         }
     }
 
-    /// Build a prepared built-in bundle tooltip component (`grid_rows == 0` when empty).
-    // hidden: engine tooltip preparation constructs built-in bundle components.
+    /// Snapshot a built-in bundle's size before adding any font-dependent description lines.
     #[doc(hidden)]
-    pub fn __bundle(stack: ItemStack, grid_rows: i32) -> Self {
+    pub fn __bundle(stack: ItemStack, size: [i32; 2], description: Option<Text>) -> Self {
         Self {
-            repr: PreparedRepr::Bundle { stack, grid_rows },
+            repr: PreparedRepr::Bundle {
+                stack,
+                size,
+                description,
+            },
+        }
+    }
+
+    /// Lend the same renderer to a Pre event without rerunning its factory.
+    #[doc(hidden)]
+    pub fn __share_custom(&self) -> Option<Self> {
+        match &self.repr {
+            PreparedRepr::Custom(prepared) => Some(Self {
+                repr: PreparedRepr::Custom(Rc::clone(prepared)),
+            }),
+            _ => None,
         }
     }
 
@@ -545,7 +581,7 @@ impl PreparedTooltipComponent {
         draw: &mut dyn DrawContext,
     ) -> bool {
         match &self.repr {
-            PreparedRepr::Custom { .. } => self
+            PreparedRepr::Custom(_) => self
                 .call_custom("draw_text", |c| c.draw_text(font, x, y, draw))
                 .is_some(),
             PreparedRepr::Text { .. } | PreparedRepr::Bundle { .. } => true,
@@ -566,7 +602,7 @@ impl PreparedTooltipComponent {
         draw: &mut dyn DrawContext,
     ) -> bool {
         match &self.repr {
-            PreparedRepr::Custom { .. } => self
+            PreparedRepr::Custom(_) => self
                 .call_custom("draw_image", |c| {
                     c.draw_image(font, x, y, width, height, draw)
                 })
@@ -584,14 +620,14 @@ impl fmt::Debug for PreparedTooltipComponent {
                 .field("text", text)
                 .field("color", color)
                 .finish(),
-            PreparedRepr::Bundle { stack, grid_rows } => f
+            PreparedRepr::Bundle { stack, size, .. } => f
                 .debug_struct("PreparedTooltipComponent::Bundle")
                 .field("stack", stack)
-                .field("grid_rows", grid_rows)
+                .field("size", size)
                 .finish(),
-            PreparedRepr::Custom { owner, .. } => f
+            PreparedRepr::Custom(prepared) => f
                 .debug_struct("PreparedTooltipComponent::Custom")
-                .field("owner", &owner.as_ref().map(CallbackOwner::id))
+                .field("owner", &prepared.owner.as_ref().map(CallbackOwner::id))
                 .finish_non_exhaustive(),
         }
     }

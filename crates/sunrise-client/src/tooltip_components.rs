@@ -76,16 +76,41 @@ pub fn with_test_factories<R>(factories: TooltipComponentFactories, f: impl FnOn
     f()
 }
 
-/// Prepare a custom [`TooltipComponent`] using the registered client factory for its data type.
-///
-/// Built-in bundle components return `None` here (the tooltip pipeline prepares them directly
-/// with `Items`). Unregistered custom types log a warning and return `None` without panicking.
-pub fn create(component: &TooltipComponent) -> Option<PreparedTooltipComponent> {
-    if component.as_bundle().is_some() {
-        return None;
+/// A payload whose concrete type has no registered client factory.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MissingTooltipComponentFactory {
+    pub producer: Option<&'static str>,
+    pub type_name: &'static str,
+}
+
+impl std::fmt::Display for MissingTooltipComponentFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(producer) = self.producer {
+            write!(f, "mod {producer}: ")?;
+        }
+        write!(
+            f,
+            "unknown tooltip component {} (no client factory)",
+            self.type_name
+        )
     }
-    let (Some(type_id), Some(data)) = (component.type_id(), component.__as_any()) else {
-        return None;
+}
+
+/// Prepare a custom payload. A registered factory's isolated failure omits just that
+/// renderer; an unsupported type fails tooltip preparation, as in `ClientTooltipComponent.create`.
+pub fn create(
+    component: &TooltipComponent,
+) -> Result<Option<PreparedTooltipComponent>, MissingTooltipComponentFactory> {
+    let (Some(type_id), Some(type_name), Some(data)) = (
+        component.type_id(),
+        component.type_name(),
+        component.__as_any(),
+    ) else {
+        return Ok(None); // Built-in bundle data is prepared by the game, not the factory table.
+    };
+    let missing = || MissingTooltipComponentFactory {
+        producer: component.__producer(),
+        type_name,
     };
     #[cfg(any(test, feature = "test-tooltip-factories"))]
     if let Some(found) = TEST_FACTORIES.with(|slot| {
@@ -93,28 +118,14 @@ pub fn create(component: &TooltipComponent) -> Option<PreparedTooltipComponent> 
             .as_ref()
             .map(|frozen| frozen.factories.get(&type_id).cloned())
     }) {
-        return match found {
-            Some(entry) => entry.factory.__create(data, entry.owner),
-            None => {
-                log::warn!(
-                    "no client tooltip component factory registered for {}",
-                    component.type_name().unwrap_or("<unknown>")
-                );
-                None
-            }
-        };
+        let entry = found.ok_or_else(missing)?;
+        return Ok(entry.factory.__create(data, entry.owner));
     }
-    let Some(entry) = FACTORIES
+    let entry = FACTORIES
         .get()
         .and_then(|frozen| frozen.factories.get(&type_id))
-    else {
-        log::warn!(
-            "no client tooltip component factory registered for {}",
-            component.type_name().unwrap_or("<unknown>")
-        );
-        return None;
-    };
-    entry.factory.__create(data, entry.owner.clone())
+        .ok_or_else(missing)?;
+    Ok(entry.factory.__create(data, entry.owner.clone()))
 }
 
 /// Whether any custom tooltip component factory is registered in the active table.
@@ -175,14 +186,14 @@ mod tests {
     }
 
     #[test]
-    fn factories_create_replace_warn_unregistered_and_restore_on_unwind() {
+    fn factories_create_replace_reject_unregistered_and_restore_on_unwind() {
         let font = StubFont(Identifier::parse("minecraft:default").unwrap());
         let data = TooltipComponent::custom(MetricData(12));
         let unknown = TooltipComponent::custom(UnregisteredData);
 
         with_test_factories(TooltipComponentFactories::default(), || {
             assert!(!has_factories());
-            assert!(create(&data).is_none());
+            assert!(create(&data).is_err());
 
             let mut factories = TooltipComponentFactories::default();
             let registrar: &mut dyn ClientTooltipComponentFactoriesRegistrar = &mut factories;
@@ -198,15 +209,17 @@ mod tests {
 
             with_test_factories(factories, || {
                 assert!(has_factories());
-                let prepared = create(&data).expect("registered factory should prepare component");
+                let prepared = create(&data)
+                    .unwrap()
+                    .expect("registered factory should prepare component");
                 assert_eq!(prepared.width(&font), 36);
                 assert_eq!(prepared.height(&font), 20);
-                assert!(create(&unknown).is_none());
+                assert!(create(&unknown).is_err());
             });
 
             // Inner scope restored outer empty table.
             assert!(!has_factories());
-            assert!(create(&data).is_none());
+            assert!(create(&data).is_err());
 
             // Unwind safety: a panic inside with_test_factories still restores the prior table.
             let mut inner = TooltipComponentFactories::default();
@@ -343,39 +356,47 @@ mod tests {
         let font = StubFont(Identifier::parse("minecraft:default").unwrap());
         with_test_factories(factories, || {
             let panic_create = TooltipComponent::custom(PanicCreateData);
-            assert!(create(&panic_create).is_none());
+            assert!(create(&panic_create).unwrap().is_none());
             assert_eq!(create_calls.load(Ordering::Relaxed), 1);
             // Disabled after first panic: subsequent create skips invoking the factory.
-            assert!(create(&panic_create).is_none());
+            assert!(create(&panic_create).unwrap().is_none());
             assert_eq!(create_calls.load(Ordering::Relaxed), 1);
 
             let panic_width = TooltipComponent::custom(PanicWidthData);
-            let prepared = create(&panic_width).expect("factory succeeds before width panics");
+            let prepared = create(&panic_width)
+                .unwrap()
+                .expect("factory succeeds before width panics");
             assert_eq!(prepared.width(&font), 0);
             assert_eq!(width_calls.load(Ordering::Relaxed), 1);
             assert_eq!(prepared.width(&font), 0);
             assert_eq!(width_calls.load(Ordering::Relaxed), 1);
-            assert!(create(&panic_width).is_none());
+            assert!(create(&panic_width).unwrap().is_none());
 
             let panic_height = TooltipComponent::custom(PanicHeightData);
-            let prepared = create(&panic_height).expect("factory succeeds before height panics");
+            let prepared = create(&panic_height)
+                .unwrap()
+                .expect("factory succeeds before height panics");
             assert_eq!(prepared.height(&font), 0);
             assert_eq!(height_calls.load(Ordering::Relaxed), 1);
             assert_eq!(prepared.height(&font), 0);
             assert_eq!(height_calls.load(Ordering::Relaxed), 1);
-            assert!(create(&panic_height).is_none());
+            assert!(create(&panic_height).unwrap().is_none());
 
             let panic_hand = TooltipComponent::custom(PanicHandData);
-            let prepared = create(&panic_hand).expect("factory succeeds before hand check panics");
+            let prepared = create(&panic_hand)
+                .unwrap()
+                .expect("factory succeeds before hand check panics");
             assert!(!prepared.show_tooltip_with_item_in_hand());
             assert_eq!(hand_calls.load(Ordering::Relaxed), 1);
             assert!(!prepared.show_tooltip_with_item_in_hand());
             assert_eq!(hand_calls.load(Ordering::Relaxed), 1);
-            assert!(create(&panic_hand).is_none());
+            assert!(create(&panic_hand).unwrap().is_none());
 
             // Sibling mod factory remains completely unaffected.
             let healthy = TooltipComponent::custom(HealthyData(48));
-            let prepared = create(&healthy).expect("healthy sibling remains enabled");
+            let prepared = create(&healthy)
+                .unwrap()
+                .expect("healthy sibling remains enabled");
             assert_eq!(prepared.width(&font), 48);
             assert_eq!(prepared.height(&font), 14);
         });

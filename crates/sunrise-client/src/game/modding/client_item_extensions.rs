@@ -1,8 +1,8 @@
 //! Reload-owned item providers and baked humanoid equipment trees.
 use super::*;
 use mod_api::{
-    ArmorModelRef, ArmorTextureRef, ClientItemExtensions, ClientItemExtensionsRegistrar, ItemKey,
-    ModelPart,
+    __private::game::CallbackOwner, ArmorModelRef, ArmorTextureRef, ClientItemExtensions,
+    ClientItemExtensionsRegistrar, ItemKey, ModelPart,
 };
 use std::sync::{
     Arc,
@@ -15,6 +15,7 @@ use sunrise_client::{
 
 pub(super) struct ItemExtensionsPart {
     pub attached: mod_api::Attached<dyn ClientItemExtensions>,
+    tooltip_font_owner: CallbackOwner,
     pub failed: AtomicBool,
     pub reported_stale: AtomicBool,
 }
@@ -30,6 +31,7 @@ pub(super) struct ArmorExtensions {
     pub textures: Vec<String>,
     pub texture_keys: FxHashMap<String, u32>,
     pub items: FxHashMap<ItemKey, ItemExtensionsPart>,
+    tooltip_font_owners: FxHashMap<(ItemKey, &'static str), CallbackOwner>,
 }
 impl Default for ArmorExtensions {
     fn default() -> Self {
@@ -40,6 +42,7 @@ impl Default for ArmorExtensions {
             textures: Vec::new(),
             texture_keys: FxHashMap::default(),
             items: FxHashMap::default(),
+            tooltip_font_owners: FxHashMap::default(),
         }
     }
 }
@@ -133,6 +136,7 @@ impl ClientItemExtensionsRegistrar for Registration<'_> {
                 item,
                 ItemExtensionsPart {
                     attached,
+                    tooltip_font_owner: CallbackOwner::for_mod(owner),
                     failed: AtomicBool::new(false),
                     reported_stale: AtomicBool::new(false),
                 },
@@ -227,11 +231,25 @@ impl Game<'_> {
             &mod_api::RegistrationContext::new(),
             &mut registration,
         );
+        // The provider itself is reload-owned, but a panicking tooltip font callback stays
+        // disabled for the session, including across a failed or skipped registration.
+        let mut owners =
+            std::mem::take(&mut self.armor_stand_assets.extensions.tooltip_font_owners);
         if let Some(why) = registration.refused {
             log::warn!("Sunrise: client item extensions refused: {why}");
-            self.armor_stand_assets.extensions = ArmorExtensions::default();
+            self.armor_stand_assets.extensions = ArmorExtensions {
+                tooltip_font_owners: owners,
+                ..ArmorExtensions::default()
+            };
             return Err(why);
         }
+        for (&item, part) in &mut registration.state.items {
+            let owner = owners
+                .entry((item, part.attached.mod_id()))
+                .or_insert_with(|| part.tooltip_font_owner.clone());
+            part.tooltip_font_owner = owner.clone();
+        }
+        registration.state.tooltip_font_owners = owners;
         self.armor_stand_assets.extensions = registration.state;
         Ok(())
     }
@@ -249,6 +267,30 @@ fn hide_other_slots(part: &mut Part, slot: super::equipment_piece::ArmorSlot) {
 }
 
 impl Game<'_> {
+    /// The item-owned initial tooltip font, before Gather or Pre.
+    pub(super) fn item_tooltip_font(
+        &self,
+        stack: &sunrise_client::items::ItemStack,
+    ) -> Option<mod_api::Identifier> {
+        use super::api_values::TryIntoApi;
+        let items = &self.armor_stand_assets.extensions.items;
+        if items.is_empty() {
+            return None;
+        }
+        let part = items.get(&mod_api::__private::item_key(&stack.item)?)?;
+        let owner = &part.tooltip_font_owner;
+        if !owner.is_enabled() {
+            return None;
+        }
+        let stack = stack.try_into_api().ok()?;
+        owner
+            .call("client_item_extensions", "tooltip_font", || {
+                part.attached.part().tooltip_font(self, &stack)
+            })
+            .ok()
+            .flatten()
+    }
+
     pub(super) fn extended_equipment_materials<'a>(
         &'a self,
         piece: &super::equipment_piece::EquipmentPiece<'_>,

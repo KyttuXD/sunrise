@@ -1,5 +1,5 @@
-//! Item-owned client behaviour for worn equipment. Registered anew at resource load.
-use crate::{ClientHost, ItemKey, ItemStack, ModelPart};
+//! Item-owned client behaviour for tooltips and worn equipment, registered at resource load.
+use crate::{ClientHost, Identifier, ItemKey, ItemStack, ModelPart};
 use std::sync::Arc;
 
 /// The equipment asset's material list used for this piece.
@@ -97,12 +97,20 @@ impl EquipmentLayer {
     }
 }
 
-/// The single provider attached to one item for worn equipment rendering.
-/// Only visible equipped pieces which pass the equippable slot/asset gate are queried.
-/// Register trees and textures through the reload registrar and use the references it returns.
-/// If the callback panics, the game discards every layer of the piece, draws it with vanilla
-/// behaviour, and disables the provider until reload.
+/// The single client provider attached to an item. Register it at client resource load.
+/// Equipment queries only run for visible pieces which pass the equippable slot/asset gate.
+/// Register equipment trees and textures through the reload registrar and use its references.
+/// If an equipment callback panics, the game discards every layer of the piece, draws it with
+/// vanilla behaviour, and disables the equipment provider until reload.
 pub trait ClientItemExtensions: Send + Sync + 'static {
+    /// Select this stack's tooltip font (`IClientItemExtensions.getFont`, `FontContext.TOOLTIP`).
+    /// The font is used for wrapping after Gather and is the initial font lent to Pre. Return
+    /// `None` to use the default font. A panic disables this callback for the session.
+    fn tooltip_font(&self, host: &dyn ClientHost, stack: &ItemStack) -> Option<Identifier> {
+        let _ = (host, stack);
+        None
+    }
+
     /// Choose the tree for one material layer, after its nonzero tint and texture resolve.
     /// Humanoid pose and slot visibility are copied onto the registered tree.
     /// This per-layer selection deliberately differs from NeoForge's one model per piece:

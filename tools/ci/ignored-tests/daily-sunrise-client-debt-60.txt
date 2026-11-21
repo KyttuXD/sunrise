@@ -1,7 +1,11 @@
 sunrise-client game::stations::tooltip::component_tests::audit_88_no_listener_fast_path_and_invalid_text_skipped_individually lib daily resources
 sunrise-client game::stations::tooltip::component_tests::gather_wrapping_fixtures_preserve_empty_lines_and_exclude_components lib daily resources
+sunrise-client game::stations::tooltip::component_tests::item_font_wraps_once_and_pre_keeps_the_rounded_unedited_axis lib daily resources
+sunrise-client game::stations::tooltip::component_tests::original_engine_line_survives_gather_and_pre_snapshot_refusal lib daily resources
 sunrise-client game::stations::tooltip::component_tests::panic_containment_rolls_back_partial_paint_and_disables_only_failing_factory lib daily resources
+sunrise-client game::stations::tooltip::component_tests::payload_drop_after_gather_is_attributed_to_producer_and_does_not_stop_siblings lib daily resources
 sunrise-client game::stations::tooltip::component_tests::render_tooltip_pre_observes_components_replaces_font_without_rewrap_and_cancels lib daily resources
 sunrise-client game::stations::tooltip::component_tests::show_tooltip_with_item_in_hand_controls_carried_visibility lib daily resources
 sunrise-client game::stations::tooltip::component_tests::tooltip_texture_and_item_resource_tooltip_with_custom_components lib daily resources
 sunrise-client game::stations::tooltip::component_tests::two_pass_draw_order_geometry_and_zero_sized_components lib daily resources
+sunrise-client game::stations::tooltip::component_tests::unsupported_tooltip_component_stops_only_its_tooltip_before_pre_or_texture lib daily resources

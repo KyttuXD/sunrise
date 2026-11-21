@@ -583,20 +583,18 @@ impl Game<'_> {
             && tooltip.is_none()
             && tooltip_stack.is_none()
             && let Some(stack) = self.slot_mut(slot).clone()
-            && self.tooltip_with_carried(&stack)
         {
             tooltip_stack = Some(stack);
         }
         let browser_tip = self.draw_mod_browser(batch);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Foreground);
-        if self.carried.is_some() {
+        let carrying = self.carried.is_some();
+        if carrying {
             self.draw_carried(batch);
-            if let Some(stack) = tooltip_stack.filter(|s| self.tooltip_with_carried(s)) {
-                self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
-            }
-        } else if let Some(stack) = tooltip_stack {
+        }
+        if let Some(stack) = tooltip_stack.filter(|stack| self.tooltip_with_carried(stack)) {
             self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
-        } else if let Some(lines) = tooltip {
+        } else if !carrying && let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
         if let Some(tooltip) = browser_tip {

@@ -28,7 +28,6 @@ fn tooltip_position(
 
 use super::api_values::{TryIntoApi, TryIntoEngine};
 use super::{Game, Screen};
-use mod_api::TooltipElement;
 use std::cell::Cell;
 use sunrise_client::{
     block_entity_item, brewing,
@@ -2139,15 +2138,18 @@ impl Game<'_> {
         if lines.is_empty() {
             return None;
         }
-        let components: Vec<mod_api::PreparedTooltipComponent> = Self::resolved(lines)
+        let components: Vec<_> = Self::resolved(lines)
             .into_iter()
-            .filter_map(|(text, color)| {
-                text.try_into_api()
-                    .ok()
-                    .map(|api| mod_api::PreparedTooltipComponent::__text(api, color))
-            })
+            .map(|(text, color)| tooltip::PreparedComponent::Text(text, color))
             .collect();
-        self.draw_prepared_tooltip(batch, None, &components, (x, y), true)
+        self.draw_prepared_tooltip(
+            batch,
+            None,
+            &components,
+            [x.round() as i32, y.round() as i32],
+            tooltip::DEFAULT_FONT_ID.clone(),
+            true,
+        )
     }
     /// A tooltip's lines with their legacy codes resolved and their colours.
     fn resolved<T: Clone + Into<sunrise_client::text::Text>>(
@@ -2254,6 +2256,7 @@ impl Game<'_> {
         &self,
         batch: &mut HudBatch,
         layout: &sunrise_client::bundle::TooltipLayout,
+        description: &[sunrise_client::text::Text],
         default_font: &str,
     ) {
         for (i, (at, stack)) in layout.slots.iter().enumerate() {
@@ -2302,26 +2305,17 @@ impl Game<'_> {
                 default_font,
             );
         }
-        if let Some((at, description)) = layout
-            .empty_description
-            .zip(Some("item.minecraft.bundle.empty.description"))
-        {
-            let text = sunrise_client::text::Text::translate(description, &[]);
-            let mut ty = at[1];
-            for line in atlas
-                .font
-                .split_formatted_with_font(&text, layout.width, default_font)
-            {
+        if let Some([x, y]) = layout.empty_description {
+            for (i, line) in description.iter().enumerate() {
                 batch.text_styled_with_font(
                     atlas,
-                    &line,
-                    at[0],
-                    ty,
+                    line,
+                    x,
+                    y + (i as i32 * sunrise_client::bundle::TOOLTIP_LINE_HEIGHT) as f32,
                     0xFFAA_AAAA,
                     false,
                     default_font,
                 );
-                ty += 9.0;
             }
         }
         let [bx, by] = layout.bar;
@@ -2363,17 +2357,6 @@ impl Game<'_> {
                 default_font,
             );
         }
-    }
-    /// `AbstractContainerScreen.showTooltipWithItemInHand`: a hovered stack's
-    /// tooltip shows while a stack is carried only when its prepared tooltip
-    /// component says so, as a bundle's contents do (`ClientBundleTooltip`).
-    pub(super) fn tooltip_with_carried(&self, stack: &ItemStack) -> bool {
-        if self.carried.is_none() {
-            return true;
-        }
-        self.resolve_item_tooltip_image(stack)
-            .and_then(|component| self.prepare_tooltip_component(&component))
-            .is_some_and(|prepared| prepared.show_tooltip_with_item_in_hand())
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
@@ -3124,9 +3107,6 @@ mod tests {
         struct KnownData(i32, i32);
         impl TooltipComponentData for KnownData {}
 
-        struct UnknownData;
-        impl TooltipComponentData for UnknownData {}
-
         struct KnownClient(i32, i32);
         impl ClientTooltipComponent for KnownClient {
             fn width(&self, _: &dyn TooltipFont) -> i32 {
@@ -3168,11 +3148,6 @@ mod tests {
                             1,
                             TooltipElement::Component(TooltipComponent::custom(KnownData(16, 8))),
                         );
-                        event
-                            .elements
-                            .push(TooltipElement::Component(TooltipComponent::custom(
-                                UnknownData,
-                            )));
                     }
                     3 => {
                         *event.elements = vec![
@@ -3215,11 +3190,7 @@ mod tests {
                     let elements = gather(game).unwrap().components;
                     let wrapped: Vec<_> = elements
                         .iter()
-                        .filter_map(|e| {
-                            let (text, color) = e.as_text()?;
-                            let engine: Text = text.try_into_engine(&()).ok()?;
-                            Some((engine, color))
-                        })
+                        .filter_map(super::tooltip::PreparedComponent::as_text)
                         .collect();
                     let custom: Vec<_> = elements
                         .iter()
@@ -3233,7 +3204,6 @@ mod tests {
                         expected.iter().map(Text::plain).collect::<Vec<_>>()
                     );
                     assert!(wrapped.iter().all(|(t, _)| font.width_text(t) <= 40.0));
-                    // The unregistered custom component is dropped, the registered one stays.
                     assert_eq!(custom.len(), 1);
                     assert_eq!((custom[0].0, custom[0].1), (16, 8));
                     // Wrapping expands text in place, never moving the component behind later text.
@@ -3422,10 +3392,7 @@ mod cycling_tests {
     #[test]
     #[ignore = "daily"]
     fn a_tooltip_pre_answer_moves_or_cancels_the_tooltip() {
-        use mod_api::{
-            self, ClientHost, Hooks, Identifier, ModEntry, Mods, PreparedTooltipComponent,
-            RenderTooltipPreEvent,
-        };
+        use mod_api::{self, ClientHost, Hooks, Identifier, ModEntry, Mods, RenderTooltipPreEvent};
         use std::sync::atomic::{AtomicU8, Ordering};
 
         static MODE: AtomicU8 = AtomicU8::new(0);
@@ -3441,7 +3408,7 @@ mod cycling_tests {
                 assert!(
                     matches!(event.components[0].as_text(), Some((t, _)) if *t == mod_api::Text::literal("Tip"))
                 );
-                assert_eq!((event.place.x, event.place.y), (10, 20));
+                assert_eq!((event.place.x, event.place.y), (11, 20));
                 assert_eq!(event.screen, [320.0, 240.0]);
                 assert_eq!(*event.font, Identifier::parse("minecraft:default").unwrap());
                 assert_eq!(
@@ -3450,7 +3417,7 @@ mod cycling_tests {
                         [event.place.x, event.place.y],
                         [60, 20]
                     ),
-                    [22, 8]
+                    [23, 8]
                 );
                 match MODE.load(Ordering::Relaxed) {
                     1 => {
@@ -3479,7 +3446,8 @@ mod cycling_tests {
         }
         let default_font = Identifier::parse("minecraft:default").unwrap();
         let alt_font = Identifier::parse("minecraft:alt").unwrap();
-        let components = vec![PreparedComponent::Text(sunrise_client::text::Text::literal("Tip"),
+        let components = vec![super::tooltip::PreparedComponent::Text(
+            sunrise_client::text::Text::literal("Tip"),
             u32::MAX,
         )];
         let mods: Mods = vec![ModEntry::new("pre", Box::new(Mod))].into();
@@ -3491,17 +3459,18 @@ mod cycling_tests {
                         &mut batch,
                         None,
                         &components,
-                        (10.6, 20.4),
+                        [11, 20],
                         (320.0, 240.0),
+                        default_font.clone(),
                     )
                 };
                 MODE.store(0, Ordering::Relaxed);
-                // Unmoved, the cursor's own fractional point stays.
-                assert_eq!(pre(game), Some(((10.6, 20.4), default_font.clone())));
+                // An unedited anchor reaches placement unchanged.
+                assert_eq!(pre(game), Some(([11, 20], default_font.clone())));
                 MODE.store(1, Ordering::Relaxed);
-                assert_eq!(pre(game), Some(((50.0, 60.0), default_font.clone())));
+                assert_eq!(pre(game), Some(([50, 60], default_font.clone())));
                 MODE.store(3, Ordering::Relaxed);
-                assert_eq!(pre(game), Some(((10.6, 20.4), alt_font.clone())));
+                assert_eq!(pre(game), Some(([11, 20], alt_font.clone())));
                 MODE.store(2, Ordering::Relaxed);
                 assert_eq!(pre(game), None);
                 assert!(

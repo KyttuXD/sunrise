@@ -1,4 +1,4 @@
-use super::*;
+use super::Game;
 
 /// The hook points. Each does nothing in Sunrise.
 impl Game<'_> {
@@ -15,20 +15,8 @@ impl Game<'_> {
     /// frame the tooltip shows, never for one the stack hides. Client-side.
     pub(in crate::game) fn native_render_tooltip_gather_components(
         &self,
-        stack: &ItemStack,
-        screen_width: i32,
-        screen_height: i32,
-        elements: &mut Vec<TooltipElement>,
-        max_width: &mut i32,
-        cancel: &mut bool,
+        call: mod_api::__private::RenderTooltipGatherComponentsCall<'_>,
     ) {
-        self.fire_render_tooltip_gather_components(
-            stack,
-            screen_width,
-            screen_height,
-            elements,
-            max_width,
-            cancel,
-        );
+        self.fire_render_tooltip_gather_components(call);
     }
 }

@@ -123,8 +123,14 @@ fn register_client_tooltip_component_factories(
      `Flow::Cancel` to skip the tooltip (neither `render_tooltip_pre` nor
      `render_tooltip_texture` runs).
 
+   Register a factory for every custom payload type you emit. If a type has no factory,
+   preparation fails for that tooltip with a diagnostic naming the producer; Pre and Texture
+   do not run.
+
 4. **Inspect prepared components, replace the font, move or cancel in `render_tooltip_pre`.**
    After Gather wraps text and prepares every element into a `PreparedTooltipComponent`,
+   Implement `ClientItemExtensions::tooltip_font` on the item's registered provider to choose
+   its initial font. That font controls the one wrap after Gather and is the font Pre receives.
    `Hooks::render_tooltip_pre` runs before measurement and drawing (for both item tooltips and
    non-item tooltips where `event.stack` is `None`):
 
@@ -157,8 +163,7 @@ fn render_tooltip_pre(
 
 Every prepared component — including zero-width or zero-height components — participates in
 the two-pass draw order (`draw_text` for every component, then `draw_image` for every
-component, matching `GuiGraphicsExtractor.tooltip`). An unregistered custom payload logs a
-warning and is skipped. If a mod's factory, measurement, draw or drop panics, that mod's
+component, matching `GuiGraphicsExtractor.tooltip`). If a mod's factory, measurement, draw or drop panics, that mod's
 tooltip component callbacks are disabled for the session with a log entry and error toast,
 and any partial paint from the panicking draw pass is discarded.
 
