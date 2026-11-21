@@ -488,12 +488,20 @@ impl Game<'_> {
         self.capture(false);
         self.right = false;
     }
-    /// The trading mob's random before a menu click (it ticks meanwhile).
+    /// Lends an open menu the current values it uses from the real merchant.
     pub(super) fn merchant_sync_in(&self, session: &mut merchant::Session, mob: Option<u32>) {
         if let Some(m) = mob.and_then(|id| self.mobs.iter().find(|m| m.id == id)) {
             session.random.clone_from(&m.random);
             session.ambient_sound_time = m.ambient_timer;
             session.origin = [m.position.x, m.position.y, m.position.z];
+            if session.villager {
+                let kind = VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()];
+                if session.variant.strip_prefix("minecraft:") != Some(kind) {
+                    session.variant.clear();
+                    session.variant.push_str("minecraft:");
+                    session.variant.push_str(kind);
+                }
+            }
         }
     }
     /// After a menu click: the session back to the station, its random to

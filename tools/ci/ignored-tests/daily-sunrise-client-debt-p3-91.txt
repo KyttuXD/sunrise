@@ -1,0 +1,1 @@
+sunrise-client game::lan_trade_decisions_tests::a_trade_listener_can_change_the_villagers_type_without_losing_the_taken_offer lib daily resources

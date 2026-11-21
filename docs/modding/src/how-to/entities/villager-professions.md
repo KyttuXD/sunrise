@@ -62,3 +62,7 @@ its clients, with the mod declared for both sides. The mod-list handshake refuse
 missing or mismatched both-side mods; client-only mods do not take part in that
 comparison. Missing professions are not replaced with vanilla
 identities.
+
+A server mod can call `MerchantRef::set_villager_type` while a player is
+trading. The new type is synchronized as villager entity data; it does not
+replace the open menu's offers. Later offers use the new villager type.

@@ -426,6 +426,12 @@ pub fn set_profession(m: &mut Mob, table: &ResolvedProfessions, index: usize) ->
     true
 }
 
+/// `Villager.setVillagerData(withType)`: only the synchronized variant changes.
+/// Existing offers belong to the same profession and remain valid.
+pub fn set_type(m: &mut Mob, kind: u8) {
+    m.extra.variant = kind;
+}
+
 /// `VillagerProfession.workSound`.
 pub fn work_sound(index: u8) -> Option<&'static str> {
     Some(match profession(index).id.as_str() {

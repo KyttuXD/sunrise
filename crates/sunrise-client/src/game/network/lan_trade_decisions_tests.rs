@@ -39,6 +39,7 @@ struct Script {
     /// An answer whose result stack is not a valid one for the game.
     invalid_stack: bool,
     edit_other_merchant_and_board: bool,
+    change_villager_type: bool,
     effect_write: Option<EffectWrite>,
     player_write: Option<PlayerWrite>,
     raise_second_price: bool,
@@ -152,6 +153,10 @@ fn trade(host: &mut dyn ServerHost, event: &mut TradeWithVillagerEvent<'_>) {
         }
         if s.raise_second_price && call == 2 {
             event.offer.special_price_diff = 1;
+        }
+        if s.change_villager_type {
+            let villager = host.merchant(host.entity(event.merchant).unwrap()).unwrap();
+            assert!(villager.set_villager_type(host, "minecraft:swamp"));
         }
         if s.answer {
             event.offer.uses = 6;
@@ -292,6 +297,36 @@ fn open(game: &mut Game<'_>, payment: u32) -> ContainerClick {
         carried: None,
     }
 }
+#[test]
+#[ignore = "daily"]
+fn a_trade_listener_can_change_the_villagers_type_without_losing_the_taken_offer() {
+    with_mod(|| {
+        with_guests(|game| {
+            let click = open(game, 2);
+            script(Script {
+                change_villager_type: true,
+                ..Script::default()
+            });
+            assert!(game.lan_merchant_click(12, &click));
+            assert_eq!(CALLS.get(), 1);
+            let villager = game.merchant(game.entity(40).unwrap()).unwrap();
+            assert_eq!(
+                villager.villager_type(game).as_deref(),
+                Some("minecraft:swamp")
+            );
+            let session = game.lan_trade_session(12).unwrap();
+            assert_eq!(session.offers.len(), 1);
+            assert_eq!(session.offers[0].uses, 1);
+            assert_eq!(session.offers[0].result.item.as_ref(), "minecraft:emerald");
+            let guest = game.lan.as_ref().unwrap().hub.guest(12).unwrap();
+            assert_eq!(
+                guest.carried.as_ref().unwrap().item.as_ref(),
+                "minecraft:emerald"
+            );
+        });
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn refusal_restores_crafted_score_and_another_merchants_offers() {

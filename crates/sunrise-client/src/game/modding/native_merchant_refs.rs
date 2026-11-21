@@ -278,9 +278,9 @@ impl Game<'_> {
         Some(format!("minecraft:{name}"))
     }
 
-    /// `VillagerData.withType`: also the type a trading guest's session
-    /// rolls its next level-up offers with. False for an unknown id, a
-    /// wandering trader, or a trade open where this can't reach.
+    /// `Villager.setVillagerData` with a new type. The current offers stay as
+    /// they are, even during a trade; future offers use the new type. False
+    /// for an unknown id, a wandering trader, or a stale handle.
     pub(super) fn merchant_set_villager_type(&mut self, merchant: MerchantRef, kind: &str) -> bool {
         let Some(index) = self.native_villager_index(merchant) else {
             return false;
@@ -288,17 +288,8 @@ impl Game<'_> {
         let Some(kind) = registry_index(kind, &VILLAGER_TYPES) else {
             return false;
         };
-        let id = self.mobs[index].id;
-        if let Some(conn) = self.lan_trade_conn(id) {
-            let variant = format!("minecraft:{}", VILLAGER_TYPES[kind as usize]);
-            if !self.lan_trade_edit(conn, |session| session.variant = variant) {
-                return false;
-            }
-        } else if self.mobs[index].extra.flag2 {
-            return false;
-        }
-        self.journal_merchant_mob(id);
-        self.mobs[index].extra.variant = kind;
+        self.journal_merchant_mob(self.mobs[index].id);
+        villager::set_type(&mut self.mobs[index], kind);
         true
     }
 

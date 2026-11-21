@@ -92,9 +92,10 @@ pub trait MerchantsBackendMut {
     #[access(WorldOnly)]
     fn merchant_set_level(&mut self, merchant: MerchantRef, level: i32) -> bool;
     /// Side: server.
-    /// `VillagerData.withType`: also the type a trading guest's session
-    /// rolls its next level-up offers with. False for an unknown id, a
-    /// wandering trader, or a trade open where this can't reach.
+    /// `Villager.setVillagerData` with a new type. This works during a trade
+    /// without replacing its offers or refreshing its screen. Future offers
+    /// use the new type. False for an unknown id, a wandering trader, or a
+    /// stale handle.
     #[access(WorldOnly)]
     fn merchant_set_villager_type(&mut self, merchant: MerchantRef, kind: &str) -> bool;
     /// Side: server.

@@ -1,0 +1,3 @@
+ids = ["handle:MerchantRef::set_villager_type"]
+why = "Vanilla Villager.setVillagerData changes the type without invalidating or resending the current offers. Villager.updateTrades uses the new type for future offers. NeoForge leaves the setter unchanged and its TradeWithVillagerEvent receives the live villager. Sunrise now writes the villager's type directly rather than requiring access to the player's current menu."
+migrate = "Keep calling MerchantRef::set_villager_type(host, kind). An open or in-progress trade no longer makes the write return false. Do not expect a MerchantOffers refresh; existing offers are unchanged, and future offers use the new type."

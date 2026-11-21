@@ -1283,17 +1283,25 @@ mod tests {
     #[ignore = "daily"]
     fn a_type_change_reaches_the_open_session_before_a_level_up() {
         with_game(|game| {
-            let (villager, _rx, _) = open_trade(game, 4);
+            let (villager, rx, first) = open_trade(game, 4);
+            rx.try_iter().for_each(drop);
             assert!(villager.set_villager_type(game, "minecraft:swamp"));
-            assert_eq!(
-                game.lan_trade_session(12).unwrap().variant,
-                "minecraft:swamp"
-            );
-            assert_eq!(game.mobs[0].extra.variant, 5);
             assert_eq!(
                 villager.villager_type(game).as_deref(),
                 Some("minecraft:swamp")
             );
+            assert!(rx.try_recv().is_err(), "the setter does not sync the menu");
+            let gm = game.lan.as_ref().unwrap().play[&12]
+                .merchant
+                .as_ref()
+                .unwrap();
+            assert_eq!(gm.sent, [first.clone()]);
+            let (menu, _) = game
+                .read_merchant_menu(12, gm, super::MerchantRun::Plain, |_, _| {})
+                .unwrap();
+            let session = menu.merchant.as_ref().unwrap();
+            assert_eq!(session.variant, "minecraft:swamp");
+            assert_eq!(session.offers, [first]);
         });
     }
 
