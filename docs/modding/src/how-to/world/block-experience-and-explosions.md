@@ -10,10 +10,11 @@ and then vanilla. The query receives the dimension, state, position, optional
 block entity, breaker entity handle and tool. The level host reads without writing;
 `level.block_entity_data(entity)` reads the supplied entity's saved data without
 identity metadata and refuses stale handles. Negative answers are clamped to 0;
-positive values are awarded as given. Player breaks supply the part's answer to
-the global `break_block` event's `exp_to_drop`, after Silk Touch suppresses the
-starting amount (except for spawners). An explicit global override is applied as
-given. `block_drops` sees the resulting amount afterwards.
+positive values are awarded as given. A player break that starts uncancelled supplies the part's
+answer to the global `break_block` event's `exp_to_drop`, after Silk Touch suppresses the starting
+amount (except for spawners). An initially cancelled attempt doesn't run the part's query to
+prepare the event. An explicit global override is applied as given. `block_drops` sees the
+resulting amount afterwards.
 Level and mob breaks use the shared resource-drop path. A canceled player break
 or a break that does not harvest produces no award.
 

@@ -31,10 +31,15 @@ that player's packet would run it:
   the border and the attack range, the native mods' `attack_entity`, then the blow on a player, a mob or another
   entity, or a fireball, wind charge or shulker bullet turned back. The blow is scaled by the attack strength, as a
   player's is, so a fake that hits every tick does a fraction of a full blow. Mobs do not select the fake as a retaliation target;
-- `PlayerAction::BreakBlock { pos }` breaks the block at once (`ServerPlayerGameMode.destroyBlock`): reach, the build
-  height, spawn protection and the border, then the game mode's and the held tool's rules (adventure mode can't, a
-  sword in creative can't, and outside creative a block with destroy time -1, such as bedrock, cannot be broken), the native mods' `break_block`, `player_destroyed_block` once the block is out (its `state` is read just before the removal, so a sheared tripwire reads disarmed where vanilla passes `Block.destroy` the armed state), the tool's wear and the drops. There is no digging time:
-  a machine that digs over time counts its own progress and breaks the block when it is done.
+- `PlayerAction::BreakBlock { pos }` breaks the block at once. This action checks reach, build height,
+  spawn protection and the border; outside creative it also refuses blocks with destroy time -1, such
+  as bedrock. It then runs `ServerPlayerGameMode.destroyBlock`: the held item, game mode or
+  game-master permissions can pre-cancel `break_block`, and game-mode and game-master restrictions
+  still apply after the hook. `player_destroyed_block` fires once the block is out; its `state` is
+  read just before removal, so a sheared tripwire reads disarmed. Tool wear and drops follow. There
+  is no digging time: a machine that digs over time counts its own progress and breaks the block
+  when it is done. For the direct path without this action's admission checks, see
+  [Breaking blocks as a player](breaking-as-a-player.md).
 
 Its items are its own inventory: set the stack in its hand first (through `ENTITY_ITEMS` or an `ItemPlace`), and
 read what is left after. The answer says what happened:

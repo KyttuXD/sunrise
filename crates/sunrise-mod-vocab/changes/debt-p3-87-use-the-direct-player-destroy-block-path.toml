@@ -1,3 +1,13 @@
-ids = ["behaviour:player_destroy_block_direct"]
-why = "Use the main hand and the checks of vanilla 26.3 ServerPlayerGameMode.destroyBlock and NeoForge CommonHooks.fireBlockBreak, not the packet checks of ServerPlayerGameMode.handleBlockBreakAction. Remove Sunrise's fixed nesting limit. If a break listener already removed the target, do not apply its removal effects again. Each call owns its own drop collection."
-migrate = "Keep player.destroy_block(host, pos, into_inventory) and the same break_block signature. Do not use this call to decide whether a mining packet would pass spawn protection, reach or the mining-progress checks: it destroys the target directly, even bedrock in survival, subject to the main-hand item, game mode, game-master permissions and the break_block veto. Do not use false as a nesting-limit signal; callbacks that call destroy_block again on a live target must guard their own reentry. If a listener removes the target, the original call returns false because it did not remove a block itself."
+ids = [
+    "handle:PlayerRef::destroy_block",
+    "hook:break_block",
+    "type:BlockDropDestination",
+    "type:BlockDropDestination.World",
+    "type:BlockDropDestination.Inventory",
+]
+why = "Vanilla 26.3's ServerPlayerGameMode.destroyBlock is a direct break, not the reach, spawn protection and progress checks in handleBlockBreakAction. NeoForge's CommonHooks.fireBlockBreak posts initially canceled attempts before ServerPlayerGameMode.destroyBlock enforces the hard game-mode and game-master restrictions. Tracking completed nested removals prevents a second break of the same subject even when TurtleEggBlock.playerDestroy/decreaseEggs leaves eggs or a removal leaves a fluid. The named drop destination records the new direct-break contract on the method used by mods."
+migrate = '''
+Import `mod_api::BlockDropDestination`. Replace `player.destroy_block(host, pos, false)` with `player.destroy_block(host, pos, BlockDropDestination::World)`, or replace `true` with `BlockDropDestination::Inventory`. The latter collects only the block's own remaining item drops, with overflow dropped from the player. The result is still `bool`. Do not use the call to test mining-packet admission: it skips reach, spawn protection and mining progress. Do not use `false` as a recursion-limit signal; guard your own reentry on a live target. If a nested player break already removed the subject, the outer call returns `false` even if a block or fluid remains.
+
+`break_block` is hook version 2. Keep the `Hooks::break_block` signature. Listeners without `#[listener(receive_cancelled)]` still see only uncancelled attempts. Listeners already using that attribute can now also see a live target whose item, game mode or game-master permissions pre-cancelled the attempt. Check `event.cancelled` before running effects that assume an uncancelled attempt. To observe initially refused attempts, add `#[listener(receive_cancelled)]`. Leave `event.cancelled` set unless you mean to override a prior cancellation; clearing it can override the item's refusal, but cannot override the hard game-mode and game-master restrictions. Rebuild against the new SDK to regenerate `uses.json`.
+'''

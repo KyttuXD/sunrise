@@ -2,6 +2,14 @@
 //! (`Block.popResource` for a broken block), the destroy-progress cracks shown to everyone, and a
 //! bundle dropping its content.
 use super::*;
+use sunrise_core::nbt::Compound;
+
+pub(super) struct PlayerBreakAttempt {
+    epoch: Option<mod_api::WorldEpoch>,
+    dim: Dim,
+    pos: [i32; 3],
+    superseded: bool,
+}
 
 impl Game<'_> {
     /// `ItemStack.mineBlock` for the held stack once a survival player has
@@ -42,7 +50,47 @@ impl Game<'_> {
         pos: [i32; 3],
         collect: Option<&mut Vec<ItemStack>>,
     ) -> Result<bool> {
-        self.with_player_actor(|game| game.break_block_as_player(pos, collect))
+        struct ActiveBreak<'g, 'a>(&'g mut Game<'a>);
+        impl Drop for ActiveBreak<'_, '_> {
+            fn drop(&mut self) {
+                self.0.active_player_breaks.pop();
+            }
+        }
+
+        self.with_player_actor(|game| {
+            game.active_player_breaks.push(PlayerBreakAttempt {
+                epoch: game.native_lifecycle.epoch(),
+                dim: game.dim,
+                pos,
+                superseded: false,
+            });
+            let active = ActiveBreak(game);
+            active.0.break_block_as_player(pos, collect)
+        })
+    }
+
+    pub(super) fn player_break_was_superseded(&self) -> bool {
+        self.active_player_breaks
+            .last()
+            .is_some_and(|attempt| attempt.superseded)
+    }
+
+    /// Record a successful removal before notifying mods. Track the removal, not its resulting
+    /// state: the block may leave fluid behind, or `playerDestroy` may put part of it back.
+    pub(super) fn player_break_removed(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        block_entity: Option<Compound>,
+    ) {
+        let dim = self.dim;
+        let epoch = self.native_lifecycle.epoch();
+        for caller in self.active_player_breaks.iter_mut().rev().skip(1) {
+            if caller.epoch == epoch && caller.dim == dim && caller.pos == pos {
+                caller.superseded = true;
+            }
+        }
+        self.native_player_destroyed_block(pos, state, block_entity);
     }
 
     /// `BundleItem.dropContent`: `removeOneItemFromBundle` and `Player.drop`,

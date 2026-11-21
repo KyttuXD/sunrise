@@ -112,9 +112,11 @@ pub trait Notes {
   `Pass`, `Fail` and `TryWithEmptyHand` continue to the item; the empty method is never
   retried. Dispatch visits only the clicked state's parts.
 
-- Breaking and placing a block, on the server for every player: `break_block` hears a player break a
-  block once the game allowed it (`ServerPlayerGameMode.destroyBlock`) and may cancel it, which keeps the block and its
-  drops. Set `exp_to_drop` to `Some(amount)` to replace the vanilla XP sample later, after item drops are prepared;
+- Breaking and placing a block, on the server for every player: `break_block` hears an attempt to break a
+  live block (`CommonHooks.fireBlockBreak` at `ServerPlayerGameMode.destroyBlock`). Opt into canceled
+  events with `#[listener(receive_cancelled)]` to hear an initial item, game-mode or game-master refusal.
+  Setting `event.cancelled` to `false` can override the item refusal, but not the other restrictions.
+  A veto keeps the block and its drops. Set `exp_to_drop` to `Some(amount)` to replace the vanilla XP sample later, after item drops are prepared;
   `None` retains vanilla sampling. The subsequent `block_drops` event can edit the resulting experience or cancel
   the drops, and disabled block drops suppress both items and XP. `entity_place` (`EntityPlaceEvent`, `EntityMultiPlaceEvent`) hears a block placed from an item
   (`BlockItem.place`), an enderman putting its block down or a snow golem's trail, before it is written, and may cancel it:

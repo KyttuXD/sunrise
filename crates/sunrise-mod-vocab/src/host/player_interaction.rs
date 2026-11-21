@@ -87,21 +87,23 @@ pub trait PlayerInteractionBackendMut {
     /// Side: server.
     /// `ServerPlayerGameMode.destroyBlock`: breaks the block at `pos` in the player's level as
     /// this player breaks it, as FTB Ultimine does for each block of a vein. The player's game
-    /// mode, main-hand item's restrictions and game-master permissions still apply, and
-    /// `break_block` may veto the break. Unlike a dig packet (`handleBlockBreakAction`), this
-    /// does not check spawn protection, reach, or whether normal mining could finish the block.
+    /// mode, main-hand item and game-master permissions can pre-cancel `break_block`, and a
+    /// listener can veto any attempt. Clearing cancellation can override an item's refusal,
+    /// but not game-mode or game-master restrictions. Unlike a dig packet
+    /// (`handleBlockBreakAction`), this does not check spawn protection, reach, or whether
+    /// normal mining could finish the block.
     /// The break runs the block's effects, `player_destroyed_block`, the loot rolled for the
     /// main-hand item and its enchantments, `block_drops` with this player as the breaker, item
     /// wear, the mined statistic and exhaustion. A vein miner can take the drops and experience
     /// in `block_drops` and place them with `LevelRef::pop_resource` and
     /// `LevelRef::award_experience`. Indirect drops (such as a chest's contents) still spawn in
-    /// the world. With `into_inventory`, the block's remaining item drops go to the player's
-    /// inventory; overflow drops from them as in `Inventory.placeItemBackInInventory`.
+    /// the world. `BlockDropDestination::Inventory` puts the block's remaining item drops in
+    /// the player's inventory; overflow drops from them as in `Inventory.placeItemBackInInventory`.
     /// Chained calls fire the break hooks without a fixed nesting limit. Listeners that break
     /// again from `break_block` must guard their own reentry on a still-present block.
     /// True only if this call removed a block. False off the server, for a stale, dead or
-    /// out-of-level player, for air or an unloaded position, on a restriction or veto, or
-    /// if a listener already removed the block.
+    /// out-of-level player, for air or an unloaded position, on a restriction or veto, or if a
+    /// nested break already removed the subject, even if it left another block or fluid behind.
     #[access(WorldOnly)]
     fn player_destroy_block(
         &mut self,

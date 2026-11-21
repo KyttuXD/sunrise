@@ -1,19 +1,25 @@
 # Breaking blocks as a player
 
-`PlayerRef::destroy_block(host, pos, into_inventory)` breaks a block as that player breaks it,
+`PlayerRef::destroy_block(host, pos, destination)` breaks a block as that player breaks it,
 through vanilla's `ServerPlayerGameMode.destroyBlock`, as FTB Ultimine does for each block of a
-vein. Game mode, the main-hand item's restrictions, game-master permissions and the
-`break_block` veto still apply. This is not a dig packet: there is no check for spawn protection,
-reach or mining progress. For example, a survival player can directly destroy bedrock.
+vein. This is not a dig packet: there is no check for spawn protection, reach or mining progress.
+For example, a survival player can directly destroy bedrock.
+
+`break_block` fires on a live target at NeoForge's `CommonHooks.fireBlockBreak` site, before
+removal. The main-hand item, game mode or a game-master permission check can start it cancelled.
+Use `#[listener(receive_cancelled)]` on the hook method to observe those attempts. A listener can
+veto a break or clear a cancellation, but clearing it does not bypass game-mode or game-master
+restrictions.
 
 `player_destroyed_block` hears a successful removal. Loot is rolled for the main-hand item and
 its enchantments; `block_drops` sees the player as `breaker`; and item wear, statistics and
-exhaustion follow the player's break path. With `into_inventory`, the block's remaining item
-drops go to the player's inventory after `block_drops`, and overflow drops from them.
+exhaustion follow the player's break path. Pass `BlockDropDestination::World` to spawn the
+remaining item drops at the block or `BlockDropDestination::Inventory` to put them in the player's
+inventory. Overflow drops from the player. Experience and indirect drops still spawn in the world.
 
 The result is `true` only if this call removed the block. It is `false` for a player who is dead
-or not present in the hook's level, an absent block, a refusal or veto, or a block a listener
-already removed.
+or not present in the hook's level, an absent block, a refusal or veto, or a subject already
+removed by a nested break, even if it left water or another block behind.
 
 ## A vein miner
 

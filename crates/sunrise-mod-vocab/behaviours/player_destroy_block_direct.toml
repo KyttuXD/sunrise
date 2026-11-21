@@ -1,8 +1,0 @@
-version = 1
-doc = "PlayerRef::destroy_block uses the player's main hand and the direct break checks, not mining packet admission. A listener can chain direct breaks without a fixed nesting limit. Each invocation owns its drop destination and does not repeat removal effects if a listener left no block to remove."
-tests = [
-    "crates/sunrise-client/src/game/modding/native_player_break.rs::a_mod_breaks_stone_as_the_player_with_their_pickaxe",
-    "crates/sunrise-client/src/game/modding/native_player_break.rs::a_direct_break_ignores_spawn_protection_range_and_mining_progress",
-    "crates/sunrise-client/src/game/modding/native_player_break.rs::chained_breaks_keep_their_own_drops_without_a_depth_limit",
-    "crates/sunrise-client/src/game/modding/native_player_break.rs::a_break_does_not_disarm_tripwire_already_removed_by_its_listener",
-]

@@ -1,3 +1,5 @@
 sunrise-client game::native_player_break::tests::a_break_does_not_disarm_tripwire_already_removed_by_its_listener lib daily resources
 sunrise-client game::native_player_break::tests::a_direct_break_ignores_spawn_protection_range_and_mining_progress lib daily resources
+sunrise-client game::native_player_break::tests::a_nested_break_of_turtle_eggs_removes_one_egg_and_wears_the_tool_once lib daily resources
+sunrise-client game::native_player_break::tests::a_restricted_attempt_is_posted_before_enforcing_hard_block_break_checks lib daily resources
 sunrise-client game::native_player_break::tests::chained_breaks_keep_their_own_drops_without_a_depth_limit lib daily resources

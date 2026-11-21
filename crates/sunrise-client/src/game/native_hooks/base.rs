@@ -3353,12 +3353,9 @@ impl Game<'_> {
     ) {
         self.fire_release_using(stack, entity, time_left, used);
     }
-    /// A player breaks the block `state` at `pos`, once the game allowed it
-    /// (the held item can break blocks, the debug stick didn't take the
-    /// click): where `ServerPlayerGameMode.destroyBlock` starts. Set
-    /// `canceled` to keep the block: nothing is destroyed or dropped, and a
-    /// guest sees it back. Server-side, for every player of the world (the
-    /// helpers read the acting one).
+    /// The `CommonHooks.fireBlockBreak` event at the start of `ServerPlayerGameMode.destroyBlock`.
+    /// `canceled` starts with the result of the item's, game-mode and game-master checks.
+    /// Only listeners opted into canceled events see a pre-canceled attempt.
     pub(in crate::game) fn native_break_block(
         &mut self,
         pos: [i32; 3],
@@ -3366,7 +3363,9 @@ impl Game<'_> {
         canceled: &mut bool,
         exp_to_drop: &mut Option<u32>,
     ) {
-        self.prepare_part_break_experience(pos, state, exp_to_drop);
+        if !*canceled {
+            self.prepare_part_break_experience(pos, state, exp_to_drop);
+        }
         let initial = *exp_to_drop;
         self.fire_break_block(pos, state, canceled, exp_to_drop);
         *exp_to_drop = exp_to_drop.or(initial);

@@ -6,10 +6,9 @@ use mod_api::{BlockDropDestination, PlayerRef};
 use sunrise_client::first_person::Hand;
 
 impl Game<'_> {
-    /// `ServerPlayerGameMode.destroyBlock` at `pos` as `player` breaks it, as FTB Ultimine does
-    /// (`PlayerInteractionBackendMut::player_destroy_block` says what holds and what is refused). With
-    /// `into_inventory`, the drops `block_drops` leaves go to the player's inventory, and what
-    /// doesn't fit drops from them as `Inventory.placeItemBackInInventory` drops it.
+    /// `ServerPlayerGameMode.destroyBlock` at `pos` as `player` breaks it. Inventory routing
+    /// takes just the item drops `block_drops` leaves; what doesn't fit drops from the player
+    /// as in `Inventory.placeItemBackInInventory`.
     pub(super) fn player_destroy_block(
         &mut self,
         player: PlayerRef,
@@ -70,7 +69,7 @@ impl Game<'_> {
             )
         });
         if removed {
-            self.native_player_destroyed_block(pos, state, block_entity);
+            self.player_break_removed(pos, state, block_entity);
         }
         removed
     }
@@ -80,7 +79,10 @@ impl Game<'_> {
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
     use sunrise_client::{command::args::GameMode, items::ItemStack, motion::PlayerMotion};
     use sunrise_core::geometry::Vec3;
 
@@ -570,6 +572,99 @@ mod tests {
                 assert!(!game.player_destroy_block(player, pos, BlockDropDestination::World));
                 assert_eq!(block(game, pos), "minecraft:air");
                 assert_eq!(game.held().unwrap().damage, 1);
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_nested_break_of_turtle_eggs_removes_one_egg_and_wears_the_tool_once() {
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "finish-first",
+            Box::new(FinishFirst(false.into())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                );
+                let player = with_player(game, ItemStack::new("minecraft:diamond_pickaxe", 1));
+                let [x, y, z] = [6, 64, 4];
+                place(game, [x, y - 1, z], "minecraft:sand");
+                let egg = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:turtle_egg")
+                    .unwrap();
+                let three_eggs = game.with_props(egg, &[("eggs", "3")]).unwrap();
+                let two_eggs = game.with_props(egg, &[("eggs", "2")]).unwrap();
+                game.world.set(x, y, z, three_eggs).unwrap();
+
+                assert!(!player.destroy_block(game, [x, y, z], BlockDropDestination::World));
+                assert_eq!(game.world.block(x, y, z), two_eggs);
+                assert_eq!(game.held().unwrap().damage, 1);
+                assert_eq!(game.stats.get("mined", "minecraft:turtle_egg"), 1);
+            });
+        });
+    }
+
+    struct UncancelBreak(Arc<Mutex<Vec<[i32; 3]>>>);
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for UncancelBreak {
+        #[listener(receive_cancelled)]
+        fn break_block(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::BreakBlockEvent<'_>,
+        ) -> mod_api::Flow {
+            if event.cancelled {
+                self.0.lock().unwrap().push(event.pos);
+                event.cancelled = false;
+            }
+            mod_api::Flow::Continue
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_restricted_attempt_is_posted_before_enforcing_hard_block_break_checks() {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "observe-restrictions",
+            Box::new(UncancelBreak(Arc::clone(&heard))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                );
+                let player = with_player(game, ItemStack::new("minecraft:diamond_pickaxe", 1));
+                let command = [6, 64, 4];
+                let stone = [7, 64, 4];
+                game.ui.registries.permission = 0;
+                place(game, command, "minecraft:command_block");
+                place(game, stone, "minecraft:stone");
+
+                game.set_mode(GameMode::Creative);
+                assert!(!player.destroy_block(game, command, BlockDropDestination::World));
+                assert_eq!(block(game, command), "minecraft:command_block");
+
+                game.set_mode(GameMode::Spectator);
+                assert!(!player.destroy_block(game, stone, BlockDropDestination::World));
+                assert_eq!(block(game, stone), "minecraft:stone");
+
+                // NeoForge removes the separate tool check: an explicit uncancel can override it.
+                game.set_mode(GameMode::Creative);
+                game.inventory[game.selected] = Some(ItemStack::new("minecraft:diamond_sword", 1));
+                assert!(player.destroy_block(game, stone, BlockDropDestination::World));
+                assert_eq!(block(game, stone), "minecraft:air");
+                assert_eq!(*heard.lock().unwrap(), [command, stone, stone]);
             });
         });
     }

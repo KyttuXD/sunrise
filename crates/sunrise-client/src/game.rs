@@ -3867,6 +3867,8 @@ struct Game<'a> {
     /// The ender inventory (27 slots) and the ender chest showing it.
     ender_items: Vec<Option<ItemStack>>,
     ender_open: Option<(i32, i32, i32)>,
+    /// Player break calls in flight; a nested removal can supersede an outer call.
+    active_player_breaks: Vec<block_breaking::PlayerBreakAttempt>,
     /// Block entity data of broken blocks waiting for their dropped item.
     pending: spill::Pending,
     /// Item entities spawned and block entities removed while the block
@@ -6514,40 +6516,37 @@ impl Game<'_> {
         if self.res.behaviours().is_air(state) {
             return Ok(false);
         }
-        // DebugStickItem.canDestroyBlock: a left click selects a property and
-        // never destroys the block.
-        if !self.debug_stick_can_destroy(pos)?
+        // CommonHooks.fireBlockBreak posts even a refused live target. The debug stick's
+        // canDestroyBlock selects a property and pre-cancels, like another item's refusal.
+        let game_master_block = is_game_master_block(&self.res.facts().get(state).name);
+        let mut canceled = !self.debug_stick_can_destroy(pos)?
             || !self
                 .res
                 .items()
                 .can_destroy_block(self.held(), self.creative)
-        {
-            return Ok(false);
-        }
-        // ServerPlayerGameMode.destroyBlock: game-master permission and game-mode
-        // restrictions still apply to direct destruction.
-        if (!self.can_use_game_master_blocks()
-            && is_game_master_block(&self.res.facts().get(state).name))
+            || self.block_action_restricted(pos)
+            || (game_master_block && !self.can_use_game_master_blocks());
+        let mut exp_to_drop = None;
+        self.native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
+        // NeoForge lets listeners undo the item's pre-cancellation, but destroyBlock still
+        // enforces game-master permissions and game-mode restrictions after the event.
+        if canceled
+            || self.player_break_was_superseded()
+            || self.res.behaviours().is_air(self.world.block(x, y, z))
+            || (game_master_block && !self.can_use_game_master_blocks())
             || self.block_action_restricted(pos)
         {
             return Ok(false);
         }
-        // Native mods, once the game allowed the break: a canceled one keeps
-        // the block, and a guest's acknowledgement puts it back in its world.
-        let mut canceled = false;
-        let mut exp_to_drop = None;
-        self.native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
-        // The hook can break this block itself. Do not run the removal effects
-        // for a block that is no longer there.
-        if canceled || self.res.behaviours().is_air(self.world.block(x, y, z)) {
-            return Ok(false);
-        }
-        self.input_feedback(sunrise_client::input_source::Feedback::BlockBroken);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
         let held = self.held().cloned();
         let key = (pos[0], pos[1], pos[2]);
         self.unpack_loot(container_loot::LootTarget::Block(key), None);
+        if self.player_break_was_superseded() {
+            return Ok(false);
+        }
+        self.input_feedback(sunrise_client::input_source::Feedback::BlockBroken);
         let live = (!self.creative)
             .then(|| self.live_block_entity(key, &facts.name))
             .flatten();
@@ -13629,6 +13628,7 @@ impl<'a> Game<'a> {
             pending_vehicle: None,
             ender_items: vec![None; 27],
             ender_open: None,
+            active_player_breaks: Vec::with_capacity(1),
             pending: Default::default(),
             spill: Default::default(),
             recipe_ui: Default::default(),

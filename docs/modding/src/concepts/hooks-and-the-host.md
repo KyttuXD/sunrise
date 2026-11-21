@@ -114,7 +114,7 @@ impl Hooks for Protection {
 
 #[mod_api::sunrise_mod]
 impl Hooks for Override {
-    // Receives cancelled events and may clear cancellation.
+    // Receives both earlier vetoes and initially refused attempts, and may clear cancellation.
     #[listener(priority = -100, receive_cancelled)]
     fn break_block(&self, host: &mut dyn ServerHost, event: &mut BreakBlockEvent<'_>) -> Flow {
         if event.cancelled && self.allowed(host, event.pos) {
@@ -129,8 +129,11 @@ impl Hooks for Override {
 fixed once, when the mods are installed. Every cancellable hook's event has a `cancelled` field: a mod without
 `receive_cancelled` always sees `false`, since it is not called once the event is cancelled. A mod that receives cancelled events and sets it back to
 `false` lets the game's behaviour run, and the mods after it are told again. An event the game hands over already
-cancelled reaches only mods that receive cancelled events. `receive_cancelled` on a hook without a cancel does not
-compile, and `#[listener]` is for a mod's hooks only: a part is called for its own thing, in no order.
+cancelled reaches only mods that receive cancelled events. For `break_block`, that includes a refusal by the
+main-hand item, game mode or game-master permissions; clearing cancellation does not bypass the hard
+[game-mode and game-master checks](../how-to/entities/breaking-as-a-player.md).
+`receive_cancelled` on a hook without a cancel does not compile, and `#[listener]` is for a mod's hooks only:
+a part is called for its own thing, in no order.
 
 ## Events and shared state
 

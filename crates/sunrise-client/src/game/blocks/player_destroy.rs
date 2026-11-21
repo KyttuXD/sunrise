@@ -46,9 +46,12 @@ impl Game<'_> {
                 &mut destroyed,
             );
         }
+        if self.player_break_was_superseded() {
+            return (false, state, false);
+        }
         if let Some(removed) = destroyed {
             if removed {
-                self.native_player_destroyed_block(pos, state, block_entity);
+                self.player_break_removed(pos, state, block_entity);
             }
             return (removed, state, self.harvest_after_removal(pos, state));
         }
@@ -61,6 +64,9 @@ impl Game<'_> {
                 .is(sunrise_world::level::classes::Class::Door)
         {
             correct_tool = self.acting_can_harvest(pos, state);
+        }
+        if self.player_break_was_superseded() {
+            return (false, state, false);
         }
         let removed = self.remove_block_as_player(pos, creative, correct_tool);
         (removed, state, self.harvest_after_removal(pos, state))
