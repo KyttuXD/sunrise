@@ -404,6 +404,7 @@ mod tests {
             on_ground: true,
             fall_distance: 0.0,
             age: 0,
+            lifespan: ItemEntity::DEFAULT_LIFESPAN,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,

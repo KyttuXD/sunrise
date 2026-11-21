@@ -2592,6 +2592,7 @@ mod tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 0,
+            lifespan: ItemEntity::DEFAULT_LIFESPAN,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,
