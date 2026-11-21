@@ -17,27 +17,10 @@ use std::sync::Arc;
 
 pub(crate) mod limits;
 mod schema;
-mod static_strings;
 
 use limits::{Budget, PAYLOAD_MAX_DEPTH, PAYLOAD_MAX_LIST_ENTRIES, PAYLOAD_MAX_STRING_BYTES};
 
 pub use schema::WireSchema;
-
-/// Maximum static strings retained by the process.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const MAX_STATIC_STRINGS: usize = 4096;
-/// Maximum bytes in one static API string (the existing interning bound).
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub const MAX_STATIC_STRING_BYTES: usize = 256;
-
-/// Intern a static API string using the platform's bounded process-lifetime storage.
-// hidden: transport plumbing used by generated boundary code.
-#[doc(hidden)]
-pub fn intern(value: &str) -> Result<&'static str, WireError> {
-    static_strings::intern(value)
-}
 
 /// The deepest nesting of one value (a component of a component of…) a reader accepts.
 ///
@@ -358,23 +341,6 @@ impl<T: Wire> Put for T {
 impl Put for str {
     fn put_to(&self, out: &mut Writer) {
         out.put_str(self);
-    }
-}
-
-impl Wire for &str {
-    const MIN: usize = 4;
-    fn describe(schema: &mut WireSchema) -> u64 {
-        schema.ordinary_only();
-        WireSchema::leaf("process-interned-utf8:u32-le-length:v1")
-    }
-    fn put(&self, out: &mut Writer) {
-        if out.ordinary_only() {
-            out.put_str(self);
-        }
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        input.ordinary_only()?;
-        intern(input.take_str()?)
     }
 }
 

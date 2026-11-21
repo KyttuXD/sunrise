@@ -214,15 +214,10 @@ fn check_owned(ty: &Type) -> syn::Result<()> {
             }
         }
         fn visit_type_reference(&mut self, r: &'ast syn::TypeReference) {
-            let static_str = r.mutability.is_none()
-                && r.lifetime.as_ref().is_some_and(|l| l.ident == "static")
-                && matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str"));
-            if !static_str {
-                self.0 = Some(syn::Error::new_spanned(
-                    r,
-                    "Wire is for owned values; a borrowed record crosses as a call argument",
-                ));
-            }
+            self.0 = Some(syn::Error::new_spanned(
+                r,
+                "Wire is for owned values; a borrowed record crosses as a call argument",
+            ));
         }
     }
     let mut check = Borrowed(None);
@@ -247,7 +242,7 @@ mod tests {
             "struct Generic<T, const N: usize> { value: [T; N] }",
             "struct Recursive { children: Vec<Recursive> }",
             "#[wire(via = String)] struct Checked(String);",
-            "struct Static { text: &'static str }",
+            "struct OwnedCow { text: std::borrow::Cow<'static, str> }",
         ] {
             let expanded = expand(syn::parse_str(source).unwrap()).unwrap();
             syn::parse2::<syn::ItemImpl>(expanded).unwrap_or_else(|e| panic!("{source}: {e}"));
@@ -282,6 +277,8 @@ mod tests {
             "struct Borrow<'a> { value: &'a str }",
             "struct Borrow<'a> { value: Vec<&'a u8> }",
             "struct Borrow { value: &'static [u8] }",
+            "struct Borrow { value: &'static str }",
+            "struct Borrow { value: Option<&'static str> }",
             "struct Borrow { value: &'static mut str }",
             "struct Borrow<'a> { value: Option<Other<'a>> }",
         ] {

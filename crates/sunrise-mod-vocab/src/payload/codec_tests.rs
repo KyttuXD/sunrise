@@ -243,7 +243,6 @@ fn typed_forms_with_unmetered_conversions_are_refused() {
         assert_eq!(input.rest(), writer.bytes());
     }
 
-    ordinary_only(&"test:static-value");
     ordinary_only(&MeshDefinition::new());
     ordinary_only(&ModelPart::new(Vec::new(), Vec::new(), PartPose::ZERO));
     ordinary_only(&Text::literal("owned text"));
@@ -260,10 +259,6 @@ fn typed_forms_with_unmetered_conversions_are_refused() {
         decode_payload::<String>(&[1, 0, 0, 0, b'a']),
         Ok("a".to_owned())
     );
-    assert!(matches!(
-        decode_payload::<&str>(&[0xff]),
-        Err(WireError::Invalid(_))
-    ));
 }
 
 #[test]

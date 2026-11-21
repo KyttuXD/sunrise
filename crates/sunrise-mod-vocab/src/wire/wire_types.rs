@@ -442,7 +442,6 @@ mod tests {
             crate::SpawnerEntry::Builtin(crate::SpawnerKind::Cat),
         ]);
         assert!(Reader::decode::<crate::CustomSpawners>(out.bytes()).is_err());
-        assert!(crate::wire::intern(&"x".repeat(257)).is_err());
         for len in 0..64 {
             let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + len * 11) as u8).collect();
             let _ = Reader::decode::<crate::ItemStack>(&bytes);
