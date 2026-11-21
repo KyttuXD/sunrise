@@ -2515,18 +2515,6 @@ impl Game<'_> {
     ) {
         self.fire_furnace_smelt(pos, item, result);
     }
-    /// A server player took an output from a furnace at `pos`; `item` is the output item id and
-    /// `count` is how many were taken. The player's state is not swapped in.
-    pub(in crate::game) fn native_furnace_extract(
-        &mut self,
-        player: u128,
-        name: &str,
-        pos: [i32; 3],
-        item: &str,
-        count: u32,
-    ) {
-        self.fire_furnace_extract(player, name, pos, item, count);
-    }
     /// A server player applied an enchantment at `pos`; `item` is the finished item and `levels` the levels charged. The player's state is not swapped in.
     pub(in crate::game) fn native_enchant_item(
         &mut self,

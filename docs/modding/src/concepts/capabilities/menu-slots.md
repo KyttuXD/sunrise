@@ -144,6 +144,10 @@ the client's prediction ask the same number of times.
 took a stack out of one of the block's own slots, once per take. It refuses nothing (`may_pickup` above refuses); a
 result slot uses it to give experience, unlock a recipe or use up its inputs, through the `Host`. `item_crafted` and
 `item_smelted` stay the crafting grid's and the furnaces' events and are never heard for a mod menu.
+`item_smelted` fires during client prediction and on the server after the furnace awards recipes and experience.
+Use `event.amount_removed` for how many items moved; a shift-click passes the pre-move stack in `event.stack`.
+A hotbar swap has no `item_smelted` event, even when the server awards experience.
+Use `furnace_smelt` for the separate server-side moment when cooking finishes, not when a player takes the result.
 
 ```rust,ignore
 struct PotOutput;
