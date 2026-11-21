@@ -399,6 +399,12 @@ to match the mod's ID. An existing entity type cannot be overwritten. For the va
 builder's default features, pass `&[FeatureFlag::Vanilla]`; `&[]` requires no feature.
 Keep mod dependencies in `sunrise-mod.toml`.
 
+A panic in a spawn check or finalization listener is reported and disables that listener
+for that hook only. Other listeners can still run. The game does not rewind RNG draws or
+edits already made through a borrowed value or editor. Cancellation is accepted only
+from a listener that returns successfully. Refused host calls are reported without
+disabling the listener.
+
 Pass `pickable` after `summonable`. Pass `false` for vanilla's plain `Entity.isPickable` default. With `true`, the crosshair can hit
 the declared box once the row is shown. The ordinary use and attack packets name
 that row, and the existing `entity_interact` and `attack_entity` hooks receive

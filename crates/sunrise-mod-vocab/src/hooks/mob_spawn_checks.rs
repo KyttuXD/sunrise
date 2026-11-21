@@ -21,7 +21,8 @@ pub trait Hooks {
     /// `level` (also named by `dimension`) is the level the mob would spawn in. Like NeoForge's
     /// `SpawnPlacementCheck`, this hook carries no spawner identity — inspect `reason` instead.
     /// The hook lends a read-only host. Listeners should be pure functions of their inputs
-    /// because the checks run again on replayed ticks.
+    /// because the checks run again on replayed ticks. Panicking listeners are reported
+    /// and disabled for this hook; the check continues, without rewinding live writes or draws.
     ///
     /// Beyond NeoForge: one `SpawnCheck` answers this hook and `mob_spawn_position_check`;
     /// NeoForge gives them separate enums with the same three constants.
@@ -38,6 +39,7 @@ pub trait Hooks {
         host = "read",
         neoforge = "MobSpawnEvent.SpawnPlacementCheck",
         cancellable = false,
+        isolate = true,
         event_per_listener = true,
         version = 3
     )]
@@ -52,6 +54,8 @@ pub trait Hooks {
         result: &mut SpawnCheck,
     );
     /// NeoForge's `MobSpawnEvent.PositionCheck` (version 2): may the freshly created mob of type `kind` stand at `pos` (its position, a mob's centre) in `level` for `reason`? Vanilla's two checks are `Mob.checkSpawnRules` (the type's own rules) and `Mob.checkSpawnObstruction` (inside blocks or fluids, an ocelot's grass and sea level). `result` starts as `Default`, which runs them; `Succeed` or `Fail` answers instead and they are skipped. It runs on natural spawning, chunk generation's creature packs and `BaseSpawner` ticks (monster spawner blocks and spawner minecarts, where custom spawn rules skip `Mob.checkSpawnRules` on `Default`, as vanilla does). Trial spawners do not fire this hook, matching NeoForge. `spawner` (`MobSpawnEvent.PositionCheck.getSpawner`) is `Spawner::Block` for a monster spawner block, `Spawner::Minecart` for a spawner minecart, and `None` for natural spawning and chunk generation. A minecart handle reads the current cart state through the supplied read-only host. `mob` is the mob itself, in no level yet: read it through the host (`mob.kind(host)`, `mob.position(host)`, `mob.equipment(host, slot)`); after the hook returns the handle answers `Expired`. It is the mob that spawns if the check passes, handed on rather than created again, and dropped without trace if it fails. Where the game does not create the mob fresh (chunk generation's packs, a spawner whose spawn data carries entity data) the handle answers its kind and position and `Unsupported` for the rest. Server-side. With no listener or `Default` the checks and their random draws are vanilla's (creating the mob for the listener draws nothing from the level's random); `Succeed` and `Fail` skip the checks and so their draws, and the level random's order changes only then; a listener should be a pure function of its inputs, because ticks are replayed.
+    /// A listener panic is reported and disables that listener for this hook only; the check
+    /// proceeds with the other listeners. Live writes are not rolled back.
     #[hook(
         receiver = "read",
         dispatch = "api_carrier",
@@ -60,6 +64,7 @@ pub trait Hooks {
         host = "read",
         neoforge = "MobSpawnEvent.PositionCheck",
         cancellable = false,
+        isolate = true,
         version = 2
     )]
     fn mob_spawn_position_check(

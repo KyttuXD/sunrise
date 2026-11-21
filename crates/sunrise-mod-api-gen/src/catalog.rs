@@ -512,19 +512,26 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
-        // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
+        // A listener that unwinds is disabled for this hook. A read-only carrier
+        // continues on to the remaining listeners; a write cancel hook keeps its
+        // transactional failure policy (#2414).
         let isolate = api.isolate.unwrap_or(false);
+        let isolated_read_carrier = entry.host == Some(HostAccess::Read)
+            && entry.dispatch == DispatchStyle::ApiCarrier
+            && matches!(api.contract, Contract::Listen | Contract::Cancel)
+            && api.owner.is_none()
+            && api.output_validator.is_none()
+            && entry.context.is_none();
         if isolate
             && (scope.is_some()
-                || !(api.contract == Contract::Cancel
+                || !(isolated_read_carrier
+                    || api.contract == Contract::Cancel
                     || api.contract == Contract::Collect && answered_by_mod))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
                 error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
+                    "isolate requires a global cancellation, an answered collector, or a read-only API carrier".into(),
             });
         }
         if let Some(validator) = &api.output_validator

@@ -12,6 +12,70 @@ fn chat_line_exposes_text_conversion_failure() {
 }
 
 #[test]
+fn a_panicking_spawn_check_leaves_the_next_listener_and_spawn_attempt_running() {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    struct Panics(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Panics {
+        fn mob_spawn_position_check(&self, _: &dyn Host, _: &mut MobSpawnPositionCheckEvent<'_>) {
+            self.0.fetch_add(1, Relaxed);
+            panic!("spawn check failed");
+        }
+    }
+    struct Answers(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Answers {
+        fn mob_spawn_position_check(
+            &self,
+            _: &dyn Host,
+            event: &mut MobSpawnPositionCheckEvent<'_>,
+        ) {
+            self.0.fetch_add(1, Relaxed);
+            *event.result = SpawnCheck::Succeed;
+        }
+    }
+    let panics = Arc::new(AtomicUsize::new(0));
+    let answers = Arc::new(AtomicUsize::new(0));
+    install(
+        vec![
+            ModEntry::new(
+                "p3-34-panicking-spawn-check",
+                Box::new(Panics(panics.clone())),
+            ),
+            ModEntry::new(
+                "p3-34-answering-spawn-check",
+                Box::new(Answers(answers.clone())),
+            ),
+        ]
+        .into(),
+    );
+    let host = FakeHost::new();
+    let epoch = WorldEpoch::new(4);
+    let checkpoint = crate::runtime::isolated_failures();
+    for _ in 0..2 {
+        let mut result = SpawnCheck::Default;
+        dispatch_mob_spawn_position_check(
+            &host,
+            calls::MobSpawnPositionCheckCall {
+                dimension: "minecraft:overworld",
+                kind: "minecraft:cow",
+                reason: SpawnReason::Natural,
+                pos: [0.0, 64.0, 0.0],
+                level: LevelRef::new(epoch, DimensionKey::OVERWORLD),
+                spawner: None,
+                mob: UnspawnedMobRef::new(epoch, 1),
+                result: &mut result,
+            },
+        );
+        assert_eq!(result, SpawnCheck::Succeed);
+    }
+    assert_eq!(panics.load(Relaxed), 1);
+    assert_eq!(answers.load(Relaxed), 2);
+    assert_eq!(crate::runtime::isolated_failures(), checkpoint);
+}
+
+#[test]
 #[ignore = "optimized hot-hook microbenchmark"]
 fn subscriber_tick_benchmark() {
     use std::{hint::black_box, time::Instant};

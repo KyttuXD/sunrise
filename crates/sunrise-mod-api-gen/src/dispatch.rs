@@ -121,6 +121,14 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_read_carrier = hook.isolate
+            && hook.host == Some(HostAccess::Read)
+            && hook.dispatch == DispatchStyle::ApiCarrier
+            && matches!(contract, Contract::Listen | Contract::Cancel)
+            && hook.scope.is_none()
+            && hook.owner.is_none()
+            && hook.output_validator.is_none()
+            && hook.context.is_none();
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -505,7 +513,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && !isolated_read_carrier
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -546,7 +558,7 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
-            } else if hook.event_per_listener
+            } else if (hook.event_per_listener || isolated_read_carrier)
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
                 // Keep write-through access, but not changes to the reference itself.
@@ -946,13 +958,16 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
-            // A replace answer is returned outside the event. A regular collect
-            // output borrows one slot, reborrowed for each listener above. Answered
-            // collect batches and cancellation do not use this mode. An isolated collector's
-            // one return value is outside the event too; each mod gets the original inputs.
-            let reply_outside_event =
-                matches!(contract, Contract::Listen | Contract::Replace) || isolated_collect;
+        let (build, local_event) = if hook.event_per_listener
+            || isolated_collect
+            || isolated_read_carrier
+        {
+            // A replace answer or isolated collect answer is returned outside the event.
+            // A regular collect output borrows one slot. A read-only isolated cancel hook
+            // starts each event with the last accepted cancellation, just like a scalar output.
+            let reply_outside_event = matches!(contract, Contract::Listen | Contract::Replace)
+                || isolated_collect
+                || isolated_read_carrier;
             let shared_collect_output = collected.is_some() && !answered && !collect_cancel;
             if (!reply_outside_event && !shared_collect_output)
                 || !stack_outputs.is_empty()
@@ -969,7 +984,7 @@ pub(super) fn emit<'a>(
         };
         // A per-listener event is rebuilt from the current scalars for each listener and writes
         // its own scalars back, so the listeners chain only those outputs.
-        let (write_back, local_write_back) = if hook.event_per_listener {
+        let (write_back, local_write_back) = if hook.event_per_listener || isolated_read_carrier {
             (String::new(), write_back)
         } else {
             (write_back, String::new())
@@ -1126,35 +1141,36 @@ pub(super) fn emit<'a>(
         // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
         // **requested** outputs — not one an earlier listener had proposed — is skipped by this
         // hook for the session, and no later listener runs on this invocation.
-        let (isolate_snapshot, isolate_restore) = if mod_cancel && hook.isolate {
-            let snapshot = rollback
-                .iter()
-                .map(|(name, by_reference)| {
-                    format!(
-                        "let __requested_{name} = {}{event}.{name}; ",
-                        if *by_reference { "*" } else { "" }
-                    )
-                })
-                .chain(std::iter::once(format!(
-                    "let __requested_cancelled = {event}.cancelled; "
-                )))
-                .collect::<String>();
-            let restore = rollback
-                .iter()
-                .map(|(name, by_reference)| {
-                    format!(
-                        "{}{event}.{name} = __requested_{name}; ",
-                        if *by_reference { "*" } else { "" }
-                    )
-                })
-                .chain(std::iter::once(format!(
-                    "{event}.cancelled = __requested_cancelled; "
-                )))
-                .collect::<String>();
-            (snapshot, restore)
-        } else {
-            (String::new(), String::new())
-        };
+        let (isolate_snapshot, isolate_restore) =
+            if mod_cancel && hook.isolate && !isolated_read_carrier {
+                let snapshot = rollback
+                    .iter()
+                    .map(|(name, by_reference)| {
+                        format!(
+                            "let __requested_{name} = {}{event}.{name}; ",
+                            if *by_reference { "*" } else { "" }
+                        )
+                    })
+                    .chain(std::iter::once(format!(
+                        "let __requested_cancelled = {event}.cancelled; "
+                    )))
+                    .collect::<String>();
+                let restore = rollback
+                    .iter()
+                    .map(|(name, by_reference)| {
+                        format!(
+                            "{}{event}.{name} = __requested_{name}; ",
+                            if *by_reference { "*" } else { "" }
+                        )
+                    })
+                    .chain(std::iter::once(format!(
+                        "{event}.cancelled = __requested_cancelled; "
+                    )))
+                    .collect::<String>();
+                (snapshot, restore)
+            } else {
+                (String::new(), String::new())
+            };
         // A listener's stack-list commit follows the cancel statement, separated by `;` so the
         // generated `if` is never read as the start of an `else if`.
         let cancel_step = {
@@ -1255,6 +1271,36 @@ pub(super) fn emit<'a>(
                     owner = hook.owner.as_deref().unwrap(),
                 ),
             ),
+            None if isolated_read_carrier => {
+                let invoke = format!(
+                    "{entered}.call_contained(HookId::{hook_id}, \"{name}\", {mod_entry}, contained, |{mod_item}| {mod_item}.{name}({invoke}))"
+                );
+                let (receives, before, call) = if let Some(out) = cancel_out.filter(|_| mod_cancel)
+                {
+                    let flow = fresh_name("flow", &mut used);
+                    (
+                        receives.as_str(),
+                        format!("if *{out} && !{receives} {{ continue; }}"),
+                        format!(
+                            "if let Some({flow}) = {invoke} {{ {local_write_back} *{out} = {event}.cancelled || matches!({flow}, Flow::Cancel); }}"
+                        ),
+                    )
+                } else if local_write_back.is_empty() {
+                    ("_", String::new(), format!("let _ = {invoke};"))
+                } else {
+                    (
+                        "_",
+                        String::new(),
+                        format!("if {invoke}.is_some() {{ {local_write_back} }}"),
+                    )
+                };
+                (
+                    String::new(),
+                    format!(
+                        "let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ {before} {local_event} {call} }}"
+                    ),
+                )
+            }
             None if isolated_collect => (
                 // The callback receives only completed answers. Containment covers the mod's call
                 // and the panic payload destructor, not the engine's answer callback.
@@ -1347,7 +1393,7 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
+        let early_return = if isolated_read_carrier || body.contains("refusable(") {
             format!("{early_return} let contained = super::runtime::outside_world();")
         } else {
             early_return
