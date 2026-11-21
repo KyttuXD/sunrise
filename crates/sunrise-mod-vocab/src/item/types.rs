@@ -217,7 +217,7 @@ pub struct ItemDrop {
     /// Its motion in blocks per tick, as vanilla's constructor drew it.
     pub velocity: [f64; 3],
     /// Ticks before a player may pick it up.
-    pub pickup_delay: u32,
+    pub pickup_delay: i32,
     /// `ItemEntity.setThrower`: the UUID of the entity that threw it, none by default.
     pub thrower: Option<u128>,
     /// `ItemEntity.setTarget`: the UUID of the only player who may pick it up, none (anyone)
@@ -236,7 +236,7 @@ impl ItemDrop {
         stack: ItemStack,
         position: [f64; 3],
         velocity: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Self {
         Self {
             stack,

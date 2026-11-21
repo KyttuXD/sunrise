@@ -98,7 +98,7 @@ struct Case {
     kill: bool,
     room: u32,
     count: u32,
-    delay: u32,
+    delay: i32,
 }
 
 const CASE: Case = Case {
