@@ -3,7 +3,7 @@
 //! prepared or told while no enabled mod subscribes to `living_equipment_change`.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ServerHost};
+use mod_api::{self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::items::ItemStack;
 
 use super::api_values::TryIntoApi;
@@ -12,8 +12,8 @@ use super::native_guest_turn_tests::with_guests;
 /// What each call saw: the entity, its kind, the slot, and the stacks before and after.
 type Heard = Vec<(
     u32,
-    String,
-    String,
+    Option<mod_api::EntityTypeKey>,
+    EquipmentSlot,
     Option<mod_api::ItemStack>,
     Option<mod_api::ItemStack>,
 )>;
@@ -25,15 +25,18 @@ struct Counter {
 impl Hooks for Counter {
     fn living_equipment_change(
         &self,
-        _: &mut dyn ServerHost,
+        host: &mut dyn ServerHost,
         event: &mut LivingEquipmentChangeEvent<'_>,
     ) {
         self.heard.lock().unwrap().push((
-            event.entity,
-            event.kind.to_owned(),
-            event.slot.to_owned(),
-            event.from.cloned(),
-            event.to.cloned(),
+            event.entity.id(),
+            event.entity.entity().kind(host),
+            event.slot,
+            event
+                .from
+                .as_ref()
+                .and_then(mod_api::ItemStackView::project),
+            event.to.as_ref().and_then(mod_api::ItemStackView::project),
         ));
     }
 }
@@ -75,8 +78,18 @@ fn take(heard: &Mutex<Heard>) -> Heard {
     std::mem::take(&mut *heard.lock().unwrap())
 }
 
-fn player(slot: &str, from: Option<mod_api::ItemStack>, to: Option<mod_api::ItemStack>) -> Heard {
-    vec![(12, "minecraft:player".into(), slot.into(), from, to)]
+fn player(
+    slot: EquipmentSlot,
+    from: Option<mod_api::ItemStack>,
+    to: Option<mod_api::ItemStack>,
+) -> Heard {
+    vec![(
+        12,
+        mod_api::__private::resolved_entity_type_key("minecraft:player"),
+        slot,
+        from,
+        to,
+    )]
 }
 
 #[test]
@@ -87,7 +100,7 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
         let stone = ItemStack::new("minecraft:stone", 1);
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
         // Both guests start empty-handed in slot 0: counting from empty, nothing changed.
-        game.native_players_equipment();
+        game.native_player_equipment(12);
         assert_eq!(take(heard), Heard::new());
 
         // Selecting hotbar slot 1, which holds a sword, moves it into the main hand.
@@ -96,27 +109,36 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
             g.inventory[1] = Some(sword.clone());
             g.selected = 1;
         });
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", None, api(&sword)));
+        game.native_player_equipment(12);
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, None, api(&sword))
+        );
 
         // Back to the empty slot 0, then a stone picked up into it.
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.selected = 0);
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", api(&sword), None));
+        game.native_player_equipment(12);
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, api(&sword), None)
+        );
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.inventory[0] = Some(stone.clone()));
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", None, api(&stone)));
+        game.native_player_equipment(12);
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, None, api(&stone))
+        );
 
         // A helmet put on from the inventory screen (`armor` runs head to feet).
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.armor[0] = Some(helmet.clone()));
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("head", None, api(&helmet)));
+        game.native_player_equipment(12);
+        assert_eq!(take(heard), player(EquipmentSlot::Head, None, api(&helmet)));
 
         // A tick with no change tells nothing.
-        game.native_players_equipment();
+        game.native_player_equipment(12);
         assert_eq!(take(heard), Heard::new());
     });
 }
@@ -131,7 +153,7 @@ fn players_are_not_told_without_the_listened_opt_in() {
             g.selected = 1;
             g.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
         });
-        game.native_players_equipment();
+        game.native_player_equipment(12);
         assert_eq!(take(heard), Heard::new());
         assert!(
             game.lan

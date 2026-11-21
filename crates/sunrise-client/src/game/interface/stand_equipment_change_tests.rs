@@ -3,7 +3,7 @@
 //! `living_equipment_change` like the six hand and armor slots.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ServerHost};
+use mod_api::{self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::{entities::ArmorStand, items::ItemStack};
 use sunrise_core::geometry::Vec3;
 use sunrise_items::equipment::{BODY, HEAD, SADDLE};
@@ -13,7 +13,7 @@ use super::native_entity_refs::tests::with_game;
 use super::api_values::TryIntoApi;
 type Heard = Vec<(
     u32,
-    String,
+    EquipmentSlot,
     Option<mod_api::ItemStack>,
     Option<mod_api::ItemStack>,
 )>;
@@ -27,10 +27,13 @@ impl Hooks for Counter {
         event: &mut LivingEquipmentChangeEvent<'_>,
     ) {
         self.0.lock().unwrap().push((
-            event.entity,
-            event.slot.to_owned(),
-            event.from.cloned(),
-            event.to.cloned(),
+            event.entity.id(),
+            event.slot,
+            event
+                .from
+                .as_ref()
+                .and_then(mod_api::ItemStackView::project),
+            event.to.as_ref().and_then(mod_api::ItemStackView::project),
         ));
     }
 }
@@ -62,15 +65,35 @@ fn a_stands_body_and_saddle_writes_are_told_once_each() {
             let heard = heard.lock().unwrap();
             let told: Vec<_> = heard
                 .iter()
-                .map(|(id, slot, from, to)| (*id, slot.as_str(), from.clone(), to.clone()))
+                .map(|(id, slot, from, to)| (*id, *slot, from.clone(), to.clone()))
                 .collect();
             assert_eq!(
                 told,
                 vec![
-                    (16, "head", None, Some(helmet.try_into_api().unwrap())),
-                    (16, "body", None, Some(body.try_into_api().unwrap())),
-                    (16, "saddle", None, Some(saddle.try_into_api().unwrap())),
-                    (16, "body", Some(body.try_into_api().unwrap()), None),
+                    (
+                        16,
+                        EquipmentSlot::Head,
+                        None,
+                        Some(helmet.try_into_api().unwrap())
+                    ),
+                    (
+                        16,
+                        EquipmentSlot::Body,
+                        None,
+                        Some(body.try_into_api().unwrap())
+                    ),
+                    (
+                        16,
+                        EquipmentSlot::Saddle,
+                        None,
+                        Some(saddle.try_into_api().unwrap())
+                    ),
+                    (
+                        16,
+                        EquipmentSlot::Body,
+                        Some(body.try_into_api().unwrap()),
+                        None
+                    ),
                 ]
             );
         })

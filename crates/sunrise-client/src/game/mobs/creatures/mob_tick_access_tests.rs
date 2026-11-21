@@ -651,16 +651,19 @@ impl mod_api::Hooks for EquipmentListener {
         host: &mut dyn ServerHost,
         event: &mut mod_api::LivingEquipmentChangeEvent<'_>,
     ) {
-        assert_eq!(event.kind, "minecraft:pig");
-        assert_eq!(event.slot, "head");
+        assert_eq!(
+            event.entity.entity().kind(host),
+            mod_api::__private::resolved_entity_type_key("minecraft:pig")
+        );
+        assert_eq!(event.slot, mod_api::EquipmentSlot::Head);
         assert!(event.from.is_none());
         assert!(event.to.is_some());
-        let pos = host.entity(event.entity).unwrap().position(host).unwrap();
+        let pos = event.entity.entity().position(host).unwrap();
         self.0
             .heard
             .lock()
             .unwrap()
-            .push(EquippedTurn::Equipment(event.entity, pos));
+            .push(EquippedTurn::Equipment(event.entity.id(), pos));
     }
 
     fn entity_tick_post(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
