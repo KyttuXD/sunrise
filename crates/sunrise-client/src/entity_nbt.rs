@@ -2945,6 +2945,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         // Entity.load: getDoubleOr, any number widened.
         fall_distance: float(tag.get("fall_distance")).unwrap_or(0.0),
         age: i32::from(short("Age", 0)),
+        lifespan: ItemEntity::LIFETIME,
         pickup_delay: i64::from(short("PickupDelay", 0)),
         bob_offset,
         ticks: 0,

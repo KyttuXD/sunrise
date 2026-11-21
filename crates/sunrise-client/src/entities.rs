@@ -242,6 +242,8 @@ pub struct ItemEntity {
     /// `fallOn` on landing ([`ItemStep::landed`]), then reset.
     pub fall_distance: f64,
     pub age: i32,
+    /// The age at which the server asks whether this item should expire.
+    pub lifespan: i32,
     /// Signed NBT counter; widened to retain the legacy internal u32::MAX sentinel.
     pub pickup_delay: i64,
     pub bob_offset: f32,
@@ -482,6 +484,8 @@ impl ItemEntity {
     }
 }
 impl ItemEntity {
+    /// `ItemEntity.LIFETIME`: the default five-minute lifetime, in ticks.
+    pub const LIFETIME: i32 = 6000;
     pub const WIDTH: f64 = 0.25;
     /// `EntityTypes.ITEM` declares a float eye height, widened by `Entity.getEyeY`.
     pub const EYE_HEIGHT: f64 = 0.2125_f32 as f64;
@@ -2683,6 +2687,7 @@ mod fire_environment_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 0,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,
@@ -2877,6 +2882,7 @@ mod destroyed_bundle_environment_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 0,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,
@@ -3091,6 +3097,7 @@ mod merge_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: age.max(0) as u32,
@@ -3623,6 +3630,7 @@ mod honey_slide_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 10,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 10,
@@ -3777,6 +3785,7 @@ mod slime_bounce_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 10,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 10,
@@ -4655,6 +4664,7 @@ mod item_destroyed_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 0,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,
@@ -4928,6 +4938,7 @@ mod dropped_item_light_tests {
             vertical_collision: false,
             horizontal_collision: false,
             age: 0,
+            lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
             ticks: 0,
