@@ -364,16 +364,33 @@ fn mod_headers() -> Vec<String> {
         .collect()
 }
 
-/// Keep the existing report wait bounded: a callable can need a lock the crashing thread holds.
-const MOD_LINES_WAIT: Duration = Duration::from_secs(2);
+/// The crash reporter's existing two-second wait, applied to each callable so a stalled
+/// callback (e.g. waiting on the crashing thread) cannot spend its neighbors' wait.
+const CRASH_LINE_WAIT: Duration = Duration::from_secs(2);
 
 /// Append system details as in `SystemReport.setDetail`, or collect the headers separately.
-/// Run each callable off the panic hook's thread: a panic there would abort before it could be
-/// caught. Start all workers before reading their replies so one blocked callable cannot keep
-/// its neighbors from running. The report still uses registration order.
+/// Ask each callable in order and wait for it before starting the next. It has to run off the
+/// panic hook's thread: a panic there would abort before it could be caught. If a callable
+/// doesn't answer, leave that worker alone and move on; joining it could deadlock the report.
 fn mod_lines(headers: bool) -> Vec<(String, String)> {
-    let pending: Vec<_> = mod_api::__private::game::mod_crash_lines(headers)
-        .map(|(owner, label, call)| {
+    let continuation = if headers { "\n| " } else { "\n\t| " };
+    let render = |text: &str| {
+        let mut out = String::new();
+        for ch in text.chars() {
+            match ch {
+                // The report's ordinary writer puts the first line at the entry indent.
+                // Mark every subsequent line so none can look like another entry.
+                '\n' => out.push_str(continuation),
+                '\t' | '\'' | '"' => out.push(ch),
+                // Keep other control characters losslessly without letting them move the
+                // cursor (e.g. carriage return or escape); escape backslashes as well.
+                _ => out.extend(ch.escape_debug()),
+            }
+        }
+        out
+    };
+    mod_api::__private::game::mod_crash_lines(headers)
+        .filter_map(|(owner, label, call)| {
             let (send, answer) = std::sync::mpsc::channel();
             let worker = std::thread::Builder::new()
                 .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
@@ -381,34 +398,26 @@ fn mod_lines(headers: bool) -> Vec<(String, String)> {
                 .spawn(move || {
                     let _ = send.send(call());
                 });
-            (owner, label, worker.map(|_| answer))
-        })
-        .collect();
-    let deadline = Instant::now() + MOD_LINES_WAIT;
-    pending
-        .into_iter()
-        .filter_map(|(owner, label, answer)| {
-            let name = match label {
-                Some(label) => format!("{owner}: {label}"),
-                None => owner.to_owned(),
-            };
-            let reply = answer
-                .map_err(|error| error.to_string())
-                .and_then(|answer| {
-                    // Even after the deadline, read a reply that's already queued.
-                    answer
-                        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                        .map_err(|error| error.to_string())
-                });
+            let reply = worker.map_err(|error| error.to_string()).and_then(|_| {
+                answer
+                    .recv_timeout(CRASH_LINE_WAIT)
+                    .map_err(|error| error.to_string())
+            });
             let text = match reply {
                 Ok(Ok(value)) => value?,
                 Ok(Err(error)) => format!("~~ERROR~~ {error}"),
                 Err(error) => {
-                    log::warn!("Crash report entry {name:?} did not answer: {error}");
+                    log::warn!(
+                        "Crash report entry from {owner}, label {label:?}, did not answer: {error}"
+                    );
                     format!("~~ERROR~~ {error}")
                 }
             };
-            Some((name, text))
+            let name = match label {
+                Some(label) => format!("{owner}: {}", render(label)),
+                None => owner.to_owned(),
+            };
+            Some((name, render(&text)))
         })
         .collect()
 }
@@ -1464,19 +1473,17 @@ pub(crate) mod tests {
     fn crash_details_keep_the_full_text_from_the_mod_named_in_the_crash() {
         use std::sync::Arc;
 
-        let label = format!("{} cache", "é".repeat(2050));
-        let value = format!("{}\n\tlast cache: 3", "雪".repeat(1400));
-        let header = format!("{}\nsecond header line", "!".repeat(4100));
-        let detail = value.clone();
-        let banner = header.clone();
+        let long_label = "é".repeat(2050);
+        let long_value = "雪".repeat(1400);
+        let long_header = "!".repeat(4100);
+        let label = format!("{long_label}\n\tother_mod: forged label");
+        let value = format!("{long_value}\n\tSunrise Version: forged\roverwrite\n");
+        let header = format!("{long_header}\nTime: forged\nother_mod: forged header");
         with_crash_lines(
             vec![
-                (
-                    Some(label.clone()),
-                    Arc::new(Line(move || Some(detail.clone()))),
-                ),
+                (Some(label), Arc::new(Line(move || Some(value.clone())))),
                 (Some("idle".into()), Arc::new(Line(|| None))),
-                (None, Arc::new(Line(move || Some(banner.clone())))),
+                (None, Arc::new(Line(move || Some(header.clone())))),
             ],
             || {
                 let _crashing_mod = enter_native_mod(ModCall {
@@ -1484,24 +1491,69 @@ pub(crate) mod tests {
                     hook: "tick",
                     part: None,
                 });
-                let report = Report {
-                    headers: mod_headers(),
-                    details: mod_lines(false),
-                    error: attributed("crash".into()),
-                    ..report()
-                };
-                assert_eq!(
-                    report.details,
-                    [(format!("diagnostics: {label}"), value.clone())]
-                );
+                let mut report = report();
+                report.headers = mod_headers();
+                report.details.extend(mod_lines(false));
+                report.error = attributed("crash".into());
                 let text = report.text();
                 assert!(text.starts_with(&format!(
-                    "---- Minecraft Crash Report ----\ndiagnostics: {header}\n// "
+                    "---- Minecraft Crash Report ----\ndiagnostics: {long_header}\n| Time: forged\n| other_mod: forged header\n// "
                 )));
                 assert!(text.contains("crash\nin native mod diagnostics, hook tick\n"));
-                assert!(text.contains(&format!("\tdiagnostics: {label}: {value}\n")));
+                assert!(text.contains(&format!(
+                    "\tdiagnostics: {long_label}\n\t| \tother_mod: forged label: {long_value}\n\t| \tSunrise Version: forged\\roverwrite\n\t| \n"
+                )));
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.starts_with("\tSunrise Version:"))
+                        .collect::<Vec<_>>(),
+                    ["\tSunrise Version: 0.1.0"]
+                );
+                assert_eq!(report.details.len(), 4, "the idle callback is omitted");
             },
         );
+    }
+
+    #[test]
+    fn crash_callbacks_finish_in_registration_order() {
+        use std::sync::Arc;
+
+        for headers in [false, true] {
+            let snapshot = Arc::new(AtomicBool::new(false));
+            let capture = snapshot.clone();
+            let (reading, read) = std::sync::mpsc::channel();
+            let read = Mutex::new(read);
+            let create = Line(move || {
+                // Give an incorrectly concurrent reader a chance to run before publishing.
+                let _ = read
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_millis(100));
+                capture.store(true, Ordering::Release);
+                Some("snapshot taken".into())
+            });
+            let retrieve = Line(move || {
+                let captured = snapshot.load(Ordering::Acquire);
+                let _ = reading.send(());
+                captured.then(|| "snapshot read".into())
+            });
+            with_crash_lines(
+                vec![
+                    ((!headers).then(|| "create".into()), Arc::new(create)),
+                    ((!headers).then(|| "retrieve".into()), Arc::new(retrieve)),
+                ],
+                || {
+                    let lines = mod_lines(headers);
+                    assert_eq!(
+                        lines
+                            .iter()
+                            .map(|(_, text)| text.as_str())
+                            .collect::<Vec<_>>(),
+                        ["snapshot taken", "snapshot read"]
+                    );
+                },
+            );
+        }
     }
 
     #[test]
@@ -1563,8 +1615,12 @@ pub(crate) mod tests {
                         };
                         assert_eq!(bad_key, "diagnostics: broken");
                         assert!(error.starts_with("~~ERROR~~ "));
-                        assert!(error.contains(
-                            "a broken crash detail\nin native mod diagnostics, hook crash_section"
+                        let report = Report {
+                            details: details.clone(),
+                            ..report()
+                        };
+                        assert!(report.text().contains(
+                            "\n\t| a broken crash detail\n\t| in native mod diagnostics, hook crash_section\n"
                         ));
                         assert_eq!(good.0, "diagnostics: healthy");
                         assert_eq!(good.1, "still here");
@@ -1610,6 +1666,13 @@ pub(crate) mod tests {
                 assert!(details[0].1.starts_with("~~ERROR~~ "));
                 assert_eq!(details[1].0, "diagnostics: ready");
                 assert_eq!(details[1].1, "collected");
+                assert_eq!(
+                    mod_lines(false),
+                    [
+                        ("diagnostics: blocked".to_owned(), "too late".to_owned()),
+                        ("diagnostics: ready".to_owned(), "collected".to_owned()),
+                    ]
+                );
             },
         );
     }

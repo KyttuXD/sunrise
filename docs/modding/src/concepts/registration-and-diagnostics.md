@@ -80,14 +80,16 @@ Register callbacks inside `Hooks::register` (the counterpart to NeoForge's `Cras
 Both callbacks implement `CrashSection`. The report calls `value()` once when it is written,
 not during registration. Return `None` to omit an entry. The report includes the full label and
 value, including line breaks, and identifies the mod that registered them. That includes entries
-from the mod named in the crash itself.
+from the mod named in the crash itself. Continuation lines start with `| ` after the entry's
+indent so they cannot look like a new report entry. Carriage returns and other nonprinting
+controls that could change the display are shown as escapes.
 
-Entries appear in registration order on clients and dedicated servers, but callbacks run on
-separate workers and can run concurrently. Read your own diagnostic state and don't wait for
-locks the game thread may hold. The report bounds its wait so a blocked callback cannot hold up
-saving the report or hide replies from other callbacks.
+On clients and dedicated servers, the report runs and records callbacks in registration order
+within each section. It runs each on a worker and bounds its wait for a reply. If a callback
+blocks, the report records the failure and proceeds to the next one without joining the worker.
+Don't wait on locks the game thread may hold.
 
-A failed callback's entry begins with `~~ERROR~~`. A panic logs the mod's ID, queues an error
+A failed callback's value begins with `~~ERROR~~`. A panic logs the mod's ID, queues an error
 toast, and disables only that callback for the session. Other failures are reported on each
 occurrence and do not disable the callback.
 
