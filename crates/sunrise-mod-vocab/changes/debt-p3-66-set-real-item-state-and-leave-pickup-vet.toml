@@ -1,0 +1,21 @@
+ids = [
+    "hook:item_picked_up",
+    "handle:ItemEntityRef::set_stack",
+    "handle:ItemEntitySubjectView::set_stack",
+    "handle:ItemEntitySubjectView::pickup_delay",
+    "handle:LevelRef::spawn_item",
+    "handle:LevelRef::spawn_item_with_motion",
+    "type:ItemDrop",
+    "type:ItemDrop.pickup_delay",
+    "handle:ItemDrop::new",
+    "handle:PreparedDropView::pickup_delay",
+    "handle:PreparedDropMut::pickup_delay",
+    "handle:PreparedDropMut::set_pickup_delay",
+]
+why = "Vanilla 26.3 ItemEntity.setPickUpDelay stores a signed int; ItemEntity.tick uses 32767 for a pickup delay that never counts down and -32768 for an age that never increases. ItemEntity.addAdditionalSaveData and readAdditionalSaveData use signed shorts, not saturation. ItemEntity.setItem can empty the stack without removing the entity; tick discards an item that is still empty. NeoForge's ItemEntityPickupEvent.Pre at ItemEntity.playerTouch returns on a veto without changing the delay, target or stack or getting as far as inventory insertion or the post event. The item_picked_up hook version is now 3."
+migrate = """
+- `item.set_stack(host, stack)` -> `item.set_stack(host, Some(stack))`. On an `ItemEntitySubjectView`, `view.set_stack(stack)` -> `view.set_stack(Some(stack))`; match `Ok(())` instead of `Ok(true)` on the resident view. In either call pass `None` to empty the stack and leave discard to the entity's tick (`with_stack` will return `None`). Keep `item.entity().discard(host)` if you intend to remove the entity directly. For pickup listeners, change the post event's `remaining` instead of replacing the entity stack through its handle.
+- `ItemEntitySubjectView::pickup_delay()` returns `i32` directly: remove `unwrap`, `Some` matching or a default for a delay outside the old range. The saved handle's `item.pickup_delay(host)` still returns `Option<i32>`: `None` means the item is unavailable.
+- The delay in `ItemDrop::new(stack, position, velocity, delay)`, `ItemDrop::pickup_delay`, `PreparedDropView::pickup_delay()`, `PreparedDropMut::pickup_delay()`, `PreparedDropMut::set_pickup_delay(delay)`, `level.spawn_item(host, x, y, z, stack, delay)` and `level.spawn_item_with_motion(host, x, y, z, stack, motion, delay)` is now `i32`. Use `32767` instead of `u32::MAX`, or `item.set_never_pickup(host)` on a resident entity. For other computed unsigned delays, use `i32::try_from(delay)` and handle values beyond Java int range. Both age and delay are stored as ints in memory but save as signed shorts, keeping the low 16 bits; use signed-short values if the same value must survive saving and loading. `ItemDrop::UNLIMITED_LIFETIME` remains -32768.
+- `*event.can_pickup = TriState::False` still vetoes the current `item_picked_up` attempt. Re-evaluate the condition when the player touches the item again: a veto no longer schedules a cooldown. If you mean to change the real pickup delay, call `event.item.set_pickup_delay(host, ticks)` explicitly on a live item handle.
+"""

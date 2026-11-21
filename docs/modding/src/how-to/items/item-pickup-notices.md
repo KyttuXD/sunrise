@@ -1,5 +1,13 @@
 # Item pickup notices
 
+`item_picked_up` (NeoForge's `ItemEntityPickupEvent.Pre`) runs when a player
+touches a dropped item, before the pickup delay and target checks. Set
+`*event.can_pickup = TriState::False` to veto just that attempt. The veto does
+not change the item or start a cooldown; the next touch checks it again.
+`TriState::Default` uses the ordinary checks and `TriState::True` bypasses
+both checks, but not the inventory's capacity. Do not replace the stack
+through the entity handle during pickup; use `remaining` in the post event.
+
 Listen to the server hook `item_picked_up_post` (NeoForge's `ItemEntityPickupEvent.Post`) to track
 items a player receives from the ground. It fires once per pickup that put anything into the
 inventory: when the whole stack went in, and when only part of it did and the rest stayed on the

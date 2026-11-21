@@ -7,18 +7,18 @@ pub trait Hooks {
     /// checked: it is asked on every tick the two touch, even while the item
     /// can't be taken. Leave `can_pickup` at `Default` for vanilla's rule,
     /// set `True` to take it despite its delay or another player's target
-    /// (a full inventory still leaves it), or `False` to leave it there: the
-    /// fork sets a vanilla eligibility delay of at least 10 ticks. The hook
-    /// still runs on each touch, and a later `True` overrides that delay. The last mod to set it
-    /// decides. The handle reads the whole stack on the ground; for the
-    /// window's own player of a world it ticks itself, whose pickup pass
-    /// lifts the items out of the level, it reads as unavailable. Server-side.
+    /// (a full inventory still leaves it), or `False` to veto only this attempt
+    /// without changing the item. The last mod to set it decides. The handle
+    /// reads the ground stack except in a lifted local-player item pass. Do
+    /// not replace the stack during this hook: pickup may already hold it.
+    /// Use `item_picked_up_post`'s `remaining` to set what stays on the ground.
+    /// Server-side.
     #[hook(
         dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "ItemEntityPickupEvent.Pre",
-        version = 2
+        version = 3
     )]
     fn item_picked_up(player: u128, item: ItemEntityRef, can_pickup: &mut TriState);
 }

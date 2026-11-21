@@ -757,7 +757,7 @@ impl ItemEntityRef {
     /// transaction rolls back its journaled writes.
     ///
     /// Returns `Some` of `read`'s result, or `None` without calling it if the item was
-    /// removed, the handle is stale, or the stack is unavailable. Use
+    /// removed, the handle is stale, or the stack is empty or unavailable. Use
     /// [`ItemStackView::project`] to read components or keep an owned stack past the callback.
     pub fn with_stack<R>(
         self,

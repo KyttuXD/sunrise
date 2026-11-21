@@ -17,6 +17,7 @@ pub trait ItemEntitiesHost {
 pub trait ItemEntitiesBackend {
     /// Side: server.
     /// Lend `ItemEntity.getItem` once, as in [`ItemEntityRef::with_stack`].
+    /// An empty stack returns `None` without calling the reader.
     #[access(WorldOnly)]
     #[manual_handle]
     fn item_entity_stack(
@@ -25,8 +26,7 @@ pub trait ItemEntitiesBackend {
         read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
     ) -> Option<()>;
     /// Side: server.
-    /// The signed pickup delay; the legacy infinite sentinel reads as vanilla's
-    /// 32767. None also covers a stored value outside i32.
+    /// The live signed pickup delay (`32767` never ticks down), or `None` if the item is unavailable.
     #[access(WorldOnly)]
     fn item_entity_pickup_delay(&self, item: ItemEntityRef) -> Option<i32>;
     /// Side: server.
@@ -51,10 +51,10 @@ pub trait ItemEntitiesBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait ItemEntitiesBackendMut {
     /// Side: server.
-    /// Writes a nonempty complete stack using `ItemEntity.setItem`. Empty
-    /// stacks are refused: vanilla discards the item on its next tick. To
-    /// remove an item entity, use the removal handle. False also for an
-    /// unavailable item or outside a server.
+    /// Replaces the complete stack using `ItemEntity.setItem`. Use `None` for an
+    /// empty stack; the entity remains available until its normal tick discards
+    /// it, if still empty. Returns `Ok(false)` for an unavailable item or outside
+    /// a server. To remove the entity immediately, use its removal handle.
     ///
     /// The new stack is visible immediately. On an open transaction, abort
     /// restores the old stack for the same resident item. A block-entity tick
@@ -64,10 +64,11 @@ pub trait ItemEntitiesBackendMut {
     fn item_entity_set_stack(
         &mut self,
         item: ItemEntityRef,
-        stack: ItemStack,
+        stack: Option<ItemStack>,
     ) -> Result<bool, StackWriteError>;
     /// Side: server.
-    /// `ItemEntity.setPickUpDelay`.
+    /// `ItemEntity.setPickUpDelay`: stores the signed `i32` as given. The save
+    /// format narrows it to a signed short, just like vanilla.
     #[access(WorldOnly)]
     fn item_entity_set_pickup_delay(&mut self, item: ItemEntityRef, ticks: i32) -> bool;
     /// Side: server.

@@ -268,6 +268,7 @@ impl<'a> ItemEntitySubjectView<'a> {
         self.data.velocity()
     }
     /// Lend the live item stack without copying components unless projected (`ItemEntity.getItem`).
+    /// An empty stack returns `None` without calling `f`.
     pub fn with_stack<R>(&self, f: impl FnOnce(ItemStackView<'_>) -> R) -> Option<R> {
         let mut f = Some(f);
         let mut result = None;
@@ -278,9 +279,8 @@ impl<'a> ItemEntitySubjectView<'a> {
         });
         result
     }
-    /// The signed pickup delay; the infinite sentinel reads as vanilla's `32767`.
-    /// `None` if a stored value is outside `i32`.
-    pub fn pickup_delay(&self) -> Option<i32> {
+    /// The live signed pickup delay (`32767` never ticks down).
+    pub fn pickup_delay(&self) -> i32 {
         self.data.pickup_delay()
     }
     /// `ItemEntity.getAge`, including negative lifetime sentinels.
@@ -296,12 +296,13 @@ impl<'a> ItemEntitySubjectView<'a> {
         self.data.owner()
     }
 
-    /// Replace the item entity's stack (`ItemEntity.setItem`), journaled under any open
-    /// transaction. Empty stacks are refused and return `Ok(false)`.
-    pub fn set_stack(&mut self, stack: ItemStack) -> Result<bool, StackWriteError> {
+    /// Replace the stack (`ItemEntity.setItem`), journaled under any open transaction.
+    /// Use `None` for an empty stack; the entity's tick discards it if still empty.
+    pub fn set_stack(&mut self, stack: Option<ItemStack>) -> Result<(), StackWriteError> {
         self.data.set_stack(stack)
     }
-    /// `ItemEntity.setPickUpDelay`.
+    /// `ItemEntity.setPickUpDelay`: stores the signed `i32` as given. The save
+    /// format narrows it to a signed short, just like vanilla.
     pub fn set_pickup_delay(&mut self, ticks: i32) -> bool {
         self.data.set_pickup_delay(ticks)
     }
@@ -431,11 +432,11 @@ pub trait ResidentItemEntity {
     fn position(&self) -> [f64; 3];
     fn velocity(&self) -> [f64; 3];
     fn with_stack(&self, f: &mut dyn for<'a> FnMut(ItemStackView<'a>));
-    fn pickup_delay(&self) -> Option<i32>;
+    fn pickup_delay(&self) -> i32;
     fn age(&self) -> i32;
     fn target(&self) -> Option<u128>;
     fn owner(&self) -> Option<EntityRef>;
-    fn set_stack(&mut self, stack: ItemStack) -> Result<bool, StackWriteError>;
+    fn set_stack(&mut self, stack: Option<ItemStack>) -> Result<(), StackWriteError>;
     fn set_pickup_delay(&mut self, ticks: i32) -> bool;
     fn set_target(&mut self, target: Option<u128>) -> bool;
     fn set_velocity(&mut self, velocity: [f64; 3]) -> bool;

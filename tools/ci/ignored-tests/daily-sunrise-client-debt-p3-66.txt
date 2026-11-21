@@ -1,0 +1,1 @@
+sunrise-client game::native_item_entity_refs::tests::setting_an_empty_item_stack_leaves_discard_to_the_entity_tick lib daily resources

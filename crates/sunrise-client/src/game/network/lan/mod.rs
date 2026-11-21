@@ -1921,7 +1921,10 @@ impl Game<'_> {
             let Some(host) = self.lan.as_mut() else {
                 return;
             };
-            let stack = host.hub.stack(&Some(d.stack.clone()));
+            // ItemStack.OPTIONAL_STREAM_CODEC writes zero alone for an empty item stack.
+            let stack = (d.stack.count > 0)
+                .then(|| host.hub.stack(&Some(d.stack.clone())))
+                .flatten();
             // `ServerEntity.getRequiresPrecisePosition` is false for an item:
             // `needs_sync` asks for its data again, not for an exact position.
             // The collision case is `full_precision_required` in the tracker.

@@ -1296,17 +1296,22 @@ impl Game<'_> {
     // remote_tab_players: remote/sync.rs
     // update_remote_skins: remote/status.rs
     fn remote_item_data(&mut self, id: i32, stack: &Option<Stack>) {
-        let Some(stack) = self.to_stack(stack) else {
+        let decoded = self.to_stack(stack);
+        if let Some(item) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+            match decoded {
+                Some(stack) => item.stack = stack,
+                None if stack.is_none() => item.stack = ItemStack::empty(),
+                None => {}
+            }
+            return;
+        }
+        let Some(stack) = decoded else {
             return;
         };
         let pending = self
             .remote
             .as_mut()
             .and_then(|r| r.pending_items.remove(&id));
-        if let Some(item) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
-            item.stack = stack;
-            return;
-        }
         let Some(PendingItem {
             join,
             position: [x, y, z],

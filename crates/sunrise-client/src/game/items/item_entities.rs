@@ -52,7 +52,8 @@ impl Game<'_> {
         let mut nearby = Vec::new();
         let mut bubble_tops = Vec::new();
         let mut moves = ahead::Moves::work_out(self, &items, &obstacles, round, |item| {
-            !self.joined_during_entity_pass(item.id)
+            item.stack.count != 0
+                && !self.joined_during_entity_pass(item.id)
                 && ticking(
                     item.position.x.floor() as i32,
                     item.position.z.floor() as i32,
@@ -115,6 +116,13 @@ impl Game<'_> {
             }
             'tick: {
                 if round.halted(items[i].id) {
+                    break 'tick;
+                }
+                // ItemEntity.tick discards an empty stack before its base tick or movement.
+                if items[i].stack.count == 0 {
+                    removed[i] = true;
+                    gone = true;
+                    cells.remove(i, items[i].position);
                     break 'tick;
                 }
                 self.tick_saved_invulnerable_time(items[i].id);

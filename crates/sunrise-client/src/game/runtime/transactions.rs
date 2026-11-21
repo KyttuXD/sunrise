@@ -18,8 +18,9 @@
 //! whole on its first write, from wherever the player's state lives then: the acting fields
 //! or a parked guest's record. On abort, the journal follows that storage through guest turns.
 //! An item a write drops from a player waits for
-//! the root commit too. An item entity's stack is kept on its first write; one emptied stays,
-//! empty, until the root commit removes it. A guest's menu storage (ender chest, crafting grid,
+//! the root commit too. An item entity's stack is kept on its first write. An item place
+//! emptied by extraction discards the entity at root commit if still empty. A direct stack
+//! write only sets the stack. A guest's menu storage (ender chest, crafting grid,
 //! a mod's chest menu) is kept whole on its first write through a menu slot; a crafting grid
 //! changed by the transaction has its result made again at the root commit.
 //! `LivingRef::set_health` keeps the player's synced float storage and unpublished update
@@ -260,8 +261,8 @@ pub(super) struct Level {
     /// Each chested mob's item list's length before `entity_slots` first grew it to its slots
     /// in this transaction.
     mob_lengths: HashMap<u32, usize>,
-    /// Each item entity's stack before this transaction first wrote it.
-    item_entities: HashMap<u32, ItemStack>,
+    /// Each item entity's stack and tracking dirtiness before this transaction first wrote it.
+    item_entities: HashMap<u32, (ItemStack, bool)>,
     /// The merge fields of resident experience orbs before the first award touched them.
     orbs: HashMap<crate::join_seq::JoinSeq, (i32, u32, i32)>,
     /// Each detached station before the first click wrote it, by connection and owner.
@@ -511,7 +512,7 @@ pub(super) enum After {
     PlayerEquip(u128, String, Option<ItemStack>),
     /// An item split off an item entity, dropped where it is (`Block.popResource`'s delay).
     Spawn([f64; 3], ItemStack),
-    /// The item entity with this id was emptied: removed, unless it holds items again.
+    /// Item-place extraction emptied this entity: discard it unless it holds items again.
     Emptied(u32),
     /// A component-only mob equipment write must reach the normal tracker even if the mob is idle.
     EquipmentSync(u32),
@@ -2015,7 +2016,7 @@ impl Game<'_> {
         }
         for (id, kept) in level.item_entities {
             if let Some(e) = self.dropped.iter_mut().find(|e| e.id == id) {
-                e.stack = kept;
+                (e.stack, e.needs_sync) = kept;
             }
         }
         for (join, kept) in level.orbs {

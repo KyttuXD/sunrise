@@ -305,7 +305,7 @@ pub trait Notes {
 
 - Hearing players and mobs on the server for every player: `player_died`, `mob_spawned`,
   `mob_killed` (a player's melee blow, a sweep or a spear thrust too),
-  `item_toss` (`ItemTossEvent`: a throw, with the item entity made but not yet in the level, which the `item_entity_*` methods read and change; not the items scattered when a player dies; `canceled` keeps the entity out of the level and the items are lost) and `item_picked_up` (the ground item entity; `can_pickup`: `False` leaves the stack on the ground, `True` takes it despite its pickup delay or another player's target), then `item_picked_up_post` (`ItemEntityPickupEvent.Post`: the same item entity, a copy of the stack before the pickup and the live remainder on it, which a listener may set; heard on a whole or partial pickup, never when nothing went in). They name a player by UUID.
+  `item_toss` (`ItemTossEvent`: a throw, with the item entity made but not yet in the level, which the `item_entity_*` methods read and change; not the items scattered when a player dies; `canceled` keeps the entity out of the level and the items are lost) and `item_picked_up` (the ground item entity; `can_pickup`: `False` vetoes this touch without changing the item, `True` takes it despite its pickup delay or another player's target), then `item_picked_up_post` (`ItemEntityPickupEvent.Post`: the same item entity, a copy of the stack before the pickup and the live remainder on it, which a listener may set; heard on a whole or partial pickup, never when nothing went in). They name a player by UUID.
 
 - [Server data reload listeners](#server-data-reload-listeners) read a mod's pack resources with datapack overrides, once per reload.
 - [Client asset reload listeners](#client-asset-reload-listeners) read a mod's pack resources with resource-pack overrides, once per reload.
@@ -313,7 +313,7 @@ pub trait Notes {
 - The item entities near a block, for machines that pick up items as a hopper does:
   `native_item_entities(dimension, min, max)` lists those whose box meets `min`..`max` (vanilla's
   `Level.getEntitiesOfClass(ItemEntity.class, box)`), each with its entity ID, position, stack and pickup delay, and
-  `ItemEntityRef::set_stack` changes one's nonempty stack; discarding an entity is a separate operation. The query acts on
+  `ItemEntityRef::set_stack` replaces the stack; `None` leaves the item empty until its normal tick discards it. The query acts on
   the level in place.
 
 - `level.with_random(host, |rng| rng.next_int_bound(bound))` borrows the named server level's live

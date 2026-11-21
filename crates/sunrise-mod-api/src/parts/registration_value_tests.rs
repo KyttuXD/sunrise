@@ -736,8 +736,8 @@ fn an_item_update_reaches_only_the_parts_of_the_ticked_item_and_cancels_for_its_
             [0.0; 3]
         }
         fn with_stack(&self, _: &mut dyn for<'a> FnMut(crate::ItemStackView<'a>)) {}
-        fn pickup_delay(&self) -> Option<i32> {
-            Some(0)
+        fn pickup_delay(&self) -> i32 {
+            0
         }
         fn age(&self) -> i32 {
             0
@@ -748,8 +748,8 @@ fn an_item_update_reaches_only_the_parts_of_the_ticked_item_and_cancels_for_its_
         fn owner(&self) -> Option<EntityRef> {
             None
         }
-        fn set_stack(&mut self, _: ItemStack) -> Result<bool, crate::StackWriteError> {
-            Ok(false)
+        fn set_stack(&mut self, _: Option<ItemStack>) -> Result<(), crate::StackWriteError> {
+            Ok(())
         }
         fn set_pickup_delay(&mut self, _: i32) -> bool {
             false
@@ -1429,8 +1429,8 @@ fn scoped_views_reborrow_and_invalidate_after_removal() {
             self.velocity
         }
         fn with_stack(&self, _: &mut dyn for<'a> FnMut(crate::ItemStackView<'a>)) {}
-        fn pickup_delay(&self) -> Option<i32> {
-            Some(self.pickup_delay)
+        fn pickup_delay(&self) -> i32 {
+            self.pickup_delay
         }
         fn age(&self) -> i32 {
             12
@@ -1441,8 +1441,8 @@ fn scoped_views_reborrow_and_invalidate_after_removal() {
         fn owner(&self) -> Option<EntityRef> {
             Some(self.owner)
         }
-        fn set_stack(&mut self, _: ItemStack) -> Result<bool, crate::StackWriteError> {
-            Ok(false)
+        fn set_stack(&mut self, _: Option<ItemStack>) -> Result<(), crate::StackWriteError> {
+            Ok(())
         }
         fn set_pickup_delay(&mut self, ticks: i32) -> bool {
             self.pickup_delay = ticks;
@@ -1495,7 +1495,7 @@ fn scoped_views_reborrow_and_invalidate_after_removal() {
         assert!(view.set_pickup_delay(7));
         view.pickup_delay()
     });
-    assert_eq!(delay, Some(Some(7)));
+    assert_eq!(delay, Some(7));
     let _ = item_scope.host();
     assert!(item_scope.with_view(|_| ()).is_none());
 }

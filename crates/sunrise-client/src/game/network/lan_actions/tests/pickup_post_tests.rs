@@ -98,7 +98,7 @@ struct Case {
     kill: bool,
     room: u32,
     count: u32,
-    delay: u32,
+    delay: i32,
 }
 
 const CASE: Case = Case {
@@ -438,6 +438,11 @@ fn guest_pickup_tells_whole_and_partial_pickups_and_keeps_listener_changes() {
                 ..CASE
             };
             assert_eq!(guest_case(game, &probe, &refused), (vec![], Some(8), 56));
+            let item = game.next_entity;
+            arm(&probe, &CASE);
+            game.guest_pickups(game.guest_index(12).unwrap());
+            assert_eq!(ground(game, item), None, "the next touch needs no cooldown");
+            assert_eq!(probe.0.lock().unwrap().notices, [(12, 8, None)]);
 
             // A full inventory takes nothing, even when `True` forces the pickup.
             let full = Case { room: 0, ..CASE };
