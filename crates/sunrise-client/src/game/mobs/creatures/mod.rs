@@ -1993,7 +1993,7 @@ impl Game<'_> {
         &mut self,
         dying: &DyingDrops<'_>,
         stacks: Vec<(ItemStack, [f64; 3], i32)>,
-        pickup_delay: u32,
+        pickup_delay: i32,
         mut velocity: impl FnMut(&mut Self) -> Option<[f64; 3]>,
     ) {
         let Some(source) = &dying.source else {

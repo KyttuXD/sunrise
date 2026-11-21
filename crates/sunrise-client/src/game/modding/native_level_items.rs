@@ -26,7 +26,7 @@ impl Game<'_> {
         stack: ItemStack,
         at: [f64; 3],
         motion: Option<[f64; 3]>,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Option<EntityRef> {
         // `spawn_item` takes the next id.
         let id = self.next_entity + 1;
@@ -82,7 +82,7 @@ impl Game<'_> {
         y: f64,
         z: f64,
         stack: ItemStack,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Option<EntityRef> {
         self.spawn_item_at(level, x, y, z, stack, None, pickup_delay)
     }
@@ -99,7 +99,7 @@ impl Game<'_> {
         z: f64,
         stack: ItemStack,
         motion: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Option<EntityRef> {
         self.spawn_item_at(level, x, y, z, stack, Some(motion), pickup_delay)
     }
@@ -111,7 +111,7 @@ impl Game<'_> {
         z: f64,
         stack: ItemStack,
         motion: Option<[f64; 3]>,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Option<EntityRef> {
         if self.entity_ids_exhausted() {
             return None;

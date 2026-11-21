@@ -6,7 +6,7 @@ const ME: [i32; 4] = [1, 2, 3, 4];
 const OTHER: [i32; 4] = [5, 6, 7, 8];
 
 /// `(delay after, taken)` for an item with `delay` and `target` touched by `ME`.
-fn decide(mut delay: i64, target: Option<[i32; 4]>, answer: TriState) -> (i64, bool) {
+fn decide(mut delay: i32, target: Option<[i32; 4]>, answer: TriState) -> (i32, bool) {
     let taken = Game::pickup_decision(&mut delay, target, ME, answer);
     (delay, taken)
 }

@@ -242,8 +242,8 @@ pub struct ItemEntity {
     /// `fallOn` on landing ([`ItemStep::landed`]), then reset.
     pub fall_distance: f64,
     pub age: i32,
-    /// Signed NBT counter; widened to retain the legacy internal u32::MAX sentinel.
-    pub pickup_delay: i64,
+    /// `ItemEntity.pickupDelay`: signed in memory, `32767` never ticks down.
+    pub pickup_delay: i32,
     pub bob_offset: f32,
     /// `Entity.tickCount`: ticks since the item entered the level, which
     /// paces `ItemEntity.mergeWithNeighbours`.
@@ -774,7 +774,7 @@ impl ItemEntity {
         };
     }
     fn has_infinite_pickup_delay(&self) -> bool {
-        self.pickup_delay == i64::from(i16::MAX) || self.pickup_delay == i64::from(u32::MAX)
+        self.pickup_delay == i32::from(i16::MAX)
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
     /// delay isn't infinite, before its lifetime ends.
@@ -3249,14 +3249,12 @@ mod merge_tests {
 
     #[test]
     fn unmergeable_items_are_skipped() {
-        for delay in [i64::from(i16::MAX), i64::from(u32::MAX)] {
-            let mut items = [
-                item("minecraft:sand", 1, 0.5, 1),
-                item("minecraft:sand", 1, 0.5, 1),
-            ];
-            items[1].pickup_delay = delay;
-            assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
-        }
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 0.5, 1),
+        ];
+        items[1].pickup_delay = 32767;
+        assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
         // At age 6000 the other item's lifetime is over; this one's tick
         // started at 5999, so it may still merge into a live item.
         let mut items = [

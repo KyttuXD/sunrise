@@ -54,8 +54,7 @@ impl Game<'_> {
                 id: e.id,
                 position: [e.position.x, e.position.y, e.position.z],
                 stack: e.stack.clone(),
-                // The helper exposes an unsigned delay; keep its projection.
-                pickup_delay: e.pickup_delay.clamp(0, i64::from(u32::MAX)) as u32,
+                pickup_delay: e.pickup_delay,
             })
             .collect()
     }

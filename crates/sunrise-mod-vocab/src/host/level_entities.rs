@@ -196,7 +196,7 @@ pub trait LevelEntitiesBackendMut {
         y: f64,
         z: f64,
         stack: ItemStack,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Result<Option<EntityRef>, StackWriteError>;
     /// Side: server.
     /// `spawn_item` with the item entity's motion set to
@@ -213,7 +213,7 @@ pub trait LevelEntitiesBackendMut {
         z: f64,
         stack: ItemStack,
         motion: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Result<Option<EntityRef>, StackWriteError>;
     /// Side: server.
     /// Awards `amount` experience at `x y z` as vanilla's `ExperienceOrb.award`

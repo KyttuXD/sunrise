@@ -2779,8 +2779,7 @@ pub fn item_entity_to_nbt(
         (
             "PickupDelay",
             Tag::Short(
-                e.pickup_delay
-                    .clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16,
+                e.pickup_delay.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
             ),
         ),
     ] {
@@ -2945,7 +2944,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         // Entity.load: getDoubleOr, any number widened.
         fall_distance: float(tag.get("fall_distance")).unwrap_or(0.0),
         age: i32::from(short("Age", 0)),
-        pickup_delay: i64::from(short("PickupDelay", 0)),
+        pickup_delay: i32::from(short("PickupDelay", 0)),
         bob_offset,
         ticks: 0,
         needs_sync: false,
@@ -5628,10 +5627,6 @@ mod tests {
                 }
             }
         }
-        let mut legacy = item_entity_from_nbt(&fresh, 1, 0.0).unwrap();
-        legacy.pickup_delay = i64::from(u32::MAX);
-        assert!(tick(&mut legacy));
-        assert_eq!(legacy.pickup_delay, i64::from(u32::MAX));
     }
 
     #[test]

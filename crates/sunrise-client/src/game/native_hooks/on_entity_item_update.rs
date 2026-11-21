@@ -116,11 +116,7 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
     }
     fn pickup_delay(&self) -> Option<i32> {
         let delay = self.game.dropped[self.index].pickup_delay;
-        if delay == i64::from(u32::MAX) {
-            Some(i32::from(i16::MAX))
-        } else {
-            i32::try_from(delay).ok()
-        }
+        Some(delay)
     }
     fn age(&self) -> i32 {
         self.game.dropped[self.index].age
@@ -144,7 +140,7 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
             .journal_set_item_entity(self.subject.entity().id(), stack))
     }
     fn set_pickup_delay(&mut self, ticks: i32) -> bool {
-        self.game.dropped[self.index].pickup_delay = i64::from(ticks);
+        self.game.dropped[self.index].pickup_delay = ticks;
         true
     }
     fn set_target(&mut self, target: Option<u128>) -> bool {
