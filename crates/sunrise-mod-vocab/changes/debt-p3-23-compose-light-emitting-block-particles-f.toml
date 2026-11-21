@@ -1,0 +1,42 @@
+ids = [
+    "method:prelude::BlockStatesHost::lit_block_name",
+    "method:prelude::EffectsClientHost::flame_particle",
+]
+why = """
+The old helpers assumed the active world and embedded one effect's velocity and player-relative range in the host.
+Vanilla 26.3 checks chunk residency with LevelReader.hasChunkAt, reads the state's base emission with
+BlockBehaviour.BlockStateBase.getLightEmission (also the default of NeoForge IBlockExtension.getLightEmission),
+and passes ParticleTypes.FLAME or ParticleTypes.SOUL_FIRE_FLAME with a position and velocity to
+ClientLevel.addParticle. Use those general operations rather than a second particle path.
+"""
+migrate = """
+Replace `host.lit_block_name(pos)` with the following, using the `LevelRef` for
+the source block (from your callback or from `host.level(dimension)`):
+
+```rust,ignore
+use mod_api::HostBlockStates;
+
+let lit_block = level.block_state(host, pos)
+    .filter(|&state| host.block_states().light_emission(state).is_some_and(|light| light > 0))
+    .map(|state| state.block());
+```
+
+An unloaded position returns `None` without loading a chunk. This tests the
+state's base emission, not the ambient light or a dynamic light part's output.
+
+In `Hooks::register`, retain `r.particle_key("minecraft:flame")` as `flame` and
+`r.particle_key("minecraft:soul_fire_flame")` as `soul_flame`. Replace
+`host.flame_particle(at, soul)` with:
+
+```rust,ignore
+let key = if soul { soul_flame } else { flame };
+host.add_particle(&mod_api::ParticleOptions::simple(key), at, [0.0, 0.01, 0.0]);
+```
+
+Supply any velocity you want instead of the old helper's `[0.0, 0.01, 0.0]`.
+`at` is in the current client level. To keep the old cosmetic radius, read
+`host.local_player().and_then(|player| player.entity().position(host))` in the
+mod and submit only when that position exists and is at most 32 blocks from
+`at`. Keep any rate check in the mod, too. The vanilla camera-distance and
+settings checks still apply. The return value reports submission, not visibility.
+"""

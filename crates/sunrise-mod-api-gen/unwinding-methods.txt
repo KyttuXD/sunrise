@@ -62,7 +62,6 @@ block_states::fluid_state_validate
 block_states::fluid_type_properties
 block_states::item_block
 block_states::item_crafting_remainder
-block_states::lit_block_name
 block_states::set_block_property
 block_states::set_block_property_with
 boss_bars::boss_bar
@@ -231,7 +230,6 @@ effects::audio_device
 effects::audio_devices
 effects::clear_particles
 effects::create_fireworks
-effects::flame_particle
 effects::muffle_sounds
 effects::particle_count
 effects::play_local_sound

@@ -19,10 +19,6 @@ pub trait EffectsClientHost {
     #[access(ClientSetup)]
     fn muffle_sounds(&mut self, amount: f32, lowpass: f32, ticks: u32, exempt: &[&str]) -> bool;
     /// Side: client.
-    /// A small local vanilla particle; caller should rate-limit emission.
-    #[access(WorldOnly)]
-    fn flame_particle(&mut self, at: [f64; 3], soul: bool);
-    /// Side: client.
     /// Plays `sound` for this player only (`SoundPlay`'s event: `minecraft:ui.button.click`,
     /// or a mod's own from its `assets/<id>/sounds.json`): nothing is sent to the server, and
     /// other players don't hear it. It takes `&self`, so a screen, key or mouse hook can play
@@ -51,7 +47,13 @@ pub trait EffectsClientHost {
     #[access(ClientSetup)]
     fn clear_particles(&self) -> bool;
     /// Side: client.
-    /// ClientLevel.addParticle: submits one local particle through the ordinary provider, camera-distance, setting and population limits. False without a loaded client world, for non-finite input or for an item crumb whose colour has a component outside 0 to 1. True means submitted, not necessarily visible.
+    /// `ClientLevel.addParticle`: submits one local particle in the current client level
+    /// through the ordinary provider, camera-distance, setting and population limits.
+    /// For flames, use [`ParticleOptions::simple`] with the corresponding `minecraft:flame`
+    /// or `minecraft:soul_fire_flame` key retained from registration. The caller chooses
+    /// the position, velocity, and any extra cosmetic radius or rate.
+    /// False without a loaded client world, for non-finite input or for an item crumb
+    /// whose colour has a component outside 0 to 1. True means submitted, not necessarily visible.
     #[access(WorldOnly)]
     fn add_particle(&mut self, options: &ParticleOptions, at: [f64; 3], velocity: [f64; 3])
     -> bool;
