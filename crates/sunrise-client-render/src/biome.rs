@@ -470,6 +470,13 @@ impl Biomes {
             .copied()
             .unwrap_or(0)
     }
+    /// Lend the registered biome represented by this table's palette slot.
+    /// An absent or save-only placeholder slot does not identify a registered biome.
+    pub fn biome_ref(&self, slot: u16) -> Option<mod_api::BiomeRef<'_>> {
+        self.list
+            .get(usize::from(slot))
+            .map(|info| mod_api::__private::biome_ref(&info.name))
+    }
     /// Whether the game has the biome `name`.
     pub fn contains(&self, name: &str) -> bool {
         self.index.contains_key(name)

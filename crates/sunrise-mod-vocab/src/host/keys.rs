@@ -5,10 +5,11 @@ use crate::*;
 /// and reached through [`Host`].
 #[sunrise_mod_api_macros::host_area]
 pub trait KeysHost {
-    /// Side: server. The biome in the installed world registry, or None on a client,
-    /// before world data is installed, or for an unknown id. Reacquire after reload.
+    /// Side: server. Borrow the biome in the installed world registry by its full
+    /// namespaced id. `Ok(None)` for an unknown name; `Unavailable` without access
+    /// to a published server registry. Use [`BiomeRef::key`] to retain the identity.
     #[access(WorldOnly)]
-    fn biome_key(&self, id: &str) -> Option<BiomeKey>;
+    fn biome(&self, id: &str) -> Result<Option<BiomeRef<'_>>, LevelReadError>;
 
     /// Side: both. Exact startup game-event id; None before registry completion or for an unknown id.
     #[access(Metadata)]
@@ -88,11 +89,6 @@ pub trait KeysHost {
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait KeysBackend {
-    /// Side: server. Borrows the canonical biome id from the installed world generation.
-    /// A token from another world or reload returns `BiomeKeyError::WrongGeneration`.
-    #[access(WorldOnly)]
-    fn biome_key_id(&self, key: BiomeKey) -> Result<&str, BiomeKeyError>;
-
     /// Side: both.
     /// Resolve a live typed key's load-owned slot, never its protocol numeric id.
     #[access(WorldOnly)]

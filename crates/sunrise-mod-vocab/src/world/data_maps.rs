@@ -167,25 +167,21 @@ typed_entries! {
 impl DataMapEntry for BiomeKey {}
 impl entry::Entry for BiomeKey {
     const REGISTRY: &'static str = "minecraft:worldgen/biome";
-    fn id<'a>(&'a self, backend: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
-        backend
-            .biome_key_id(*self)
-            .map(EntryName::Borrowed)
-            .map_err(|error| match error {
-                crate::BiomeKeyError::Unavailable => DataMapError::Unavailable,
-                crate::BiomeKeyError::WrongGeneration => DataMapError::InvalidKey,
-            })
+    fn id<'a>(&'a self, _: &'a dyn Backend) -> Result<EntryName<'a>, DataMapError> {
+        Ok(EntryName::Borrowed(self.id()))
     }
 }
 impl BiomeKey {
-    /// Read this biome's data as for [`ItemKey::data`]. Expired or foreign tokens
-    /// return [`DataMapError::InvalidKey`]; no installed registry returns `Unavailable`.
+    /// Read this biome's value from the host's current published data map, as for
+    /// [`ItemKey::data`]. A retained key still names the same biome after a reload;
+    /// `Ok(None)` means the map gives the name no value, including when the biome
+    /// is no longer registered. No published server maps returns `Unavailable`.
     pub fn data<M: DataMap<Entry = BiomeKey>>(
-        self,
+        &self,
         host: &dyn Host,
         map: &M,
     ) -> Result<Option<M::Value>, DataMapError> {
-        data(&self, host, map)
+        data(self, host, map)
     }
 }
 impl DataMapEntry for ProfessionKey {}

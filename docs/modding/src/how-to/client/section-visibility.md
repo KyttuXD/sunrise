@@ -36,6 +36,11 @@ is the world's canonical `BlockState`, before any visibility answer, so an ore a
 loaded reads `SectionCell::Missing`: not air, but neither occluding nor matching anything. `cell` refuses a read
 beyond the border with `SectionVisibilityRefusal::OutsideInput`.
 
+`event.input.biome(local)` reads the registered biome before zoom or blending. It returns
+`Ok(None)` for a missing column or unregistered slot. A `BiomeRef` borrows the section's
+registry: use `biome.id()` for its name, or `biome.key()` to keep its canonical identity
+beyond the call. Palette indices are not exposed.
+
 ## What the answer does
 
 - `SectionVisibility::hide_terrain()`: none of the section's block models, fluids or section geometry quads draw,

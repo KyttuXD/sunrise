@@ -1495,6 +1495,10 @@ where
         self.worker.structure_biomes.insert(quart, id);
         id
     }
+    fn noise_biome_name(&mut self, quart: [i32; 3]) -> Option<&Arc<str>> {
+        let id = self.noise_biome(quart);
+        self.pipeline.data.biome_names().get(id.0 as usize)
+    }
     fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId> {
         let mut resolver = self.pipeline.source.resolver(
             &self.pipeline.climate,

@@ -29,7 +29,7 @@ impl Game<'_> {
         let poisoned = mod_api::__private::poisoned_listeners(mod_api::HookId::SectionVisibility);
         let mut refusals = std::mem::take(&mut self.streaming.section_visibility.refusals);
         for request in requests {
-            let input = capture_input(&request.region, request.key.1, |raw| {
+            let input = capture_input(&request.region, request.key.1, request.biomes(), |raw| {
                 index
                     .to_api(sunrise_world::registry::BlockStateId(raw))
                     .unwrap_or(air)

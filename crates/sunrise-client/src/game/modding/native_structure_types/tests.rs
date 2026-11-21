@@ -26,6 +26,12 @@ impl StructurePiece for BoxPiece {
 impl StructureType for Boxes {
     fn find_generation_point(&self, context: &mut dyn GenerationContext) -> Option<FoundStructure> {
         let chunk = context.chunk();
+        assert_eq!(
+            context
+                .noise_biome([chunk.x * 4, 0, chunk.z * 4])
+                .map(BiomeRef::id),
+            Some("minecraft:desert")
+        );
         let height = context.base_height(
             chunk.x * 16 + 8,
             chunk.z * 16 + 8,
@@ -284,6 +290,11 @@ impl sunrise_world::worldgen::structure::start::StartContext for StubContext {
     }
     fn noise_biome(&mut self, _: [i32; 3]) -> sunrise_world::worldgen::biome::BiomeId {
         sunrise_world::worldgen::biome::BiomeId(0)
+    }
+    fn noise_biome_name(&mut self, _: [i32; 3]) -> Option<&Arc<str>> {
+        static DESERT: std::sync::LazyLock<Arc<str>> =
+            std::sync::LazyLock::new(|| "minecraft:desert".into());
+        Some(&DESERT)
     }
     fn noise_biomes(
         &mut self,

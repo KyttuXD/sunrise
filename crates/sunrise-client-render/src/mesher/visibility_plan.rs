@@ -352,11 +352,12 @@ pub(super) fn hidden_terrain(
 
 /// Lend native listeners a raw view captured from the same region the worker uses, before any
 /// masks are applied. Above and below the world is air with the light the column gives it there.
-pub fn capture_input(
+pub fn capture_input<'a>(
     region: &Region,
     sy: i32,
+    biomes: &'a crate::biome::Biomes,
     mut state_of: impl FnMut(u32) -> BlockState,
-) -> SectionVisibilityInput {
+) -> SectionVisibilityInput<'a> {
     let centre = region[1][1].as_ref().expect("centre chunk");
     let base_y = centre.min_y() + sy * 16;
     SectionVisibilityInput::capture([centre.x * 16, base_y, centre.z * 16], |[x, y, z]| {
@@ -366,7 +367,7 @@ pub fn capture_input(
             Some(chunk) => (
                 SectionCell::State(state_of(chunk.get(lx, wy, lz))),
                 chunk.light(lx, wy, lz),
-                Some(mod_api::__private::biome_id(chunk.biome(lx, wy, lz).into())),
+                biomes.biome_ref(chunk.biome(lx, wy, lz)),
             ),
             None => (SectionCell::Missing, 0, None),
         }

@@ -47,7 +47,9 @@ cells), with each cell's light, raw biome and deterministic model seed. A cell i
 before any visibility answer: an ore a
 `block_render_visibility` part hides still reads as the ore. A neighbouring column not loaded reads `Missing`:
 not air, but neither occluding nor matching; the section is asked again when the column arrives or unloads.
-`SectionVisibilityInput::cell` refuses reads beyond the border.
+`SectionVisibilityInput::cell` refuses reads beyond the border. `input.biome(local)` lends the registered
+biome from this section's palette, not a numeric slot. Use `biome.id()` to read its full name or `biome.key()`
+to keep the identity after the callback.
 
 Answers only take away. A face mask removes faces after normal culling and never forces a culled face to show. A
 cell with neither model nor fluid no longer occludes, so its neighbours' faces toward it draw (also across a
@@ -72,7 +74,7 @@ it may read the `ClientHost`; it changes when the section meshes again, which a 
         out = "answers",
         answered_by = "mod",
         isolate = true,
-        version = 2,
+        version = 3,
         neoforge = "none verified"
     )]
     fn section_visibility(

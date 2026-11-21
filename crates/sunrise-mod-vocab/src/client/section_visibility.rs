@@ -89,7 +89,8 @@ impl<'a> SectionVisibilityInput<'a> {
         let packed = self.light[Self::index(local)?];
         Ok([packed >> 4, packed & 15])
     }
-    /// The raw, stored biome at `local`, before biome zoom and blending; `None` in a missing column.
+    /// The registered biome at `local`, before biome zoom and blending. The view borrows
+    /// this section's registry. A missing column or unregistered palette slot returns `None`.
     pub fn biome(&self, local: [i32; 3]) -> Result<Option<BiomeRef<'a>>, SectionVisibilityRefusal> {
         Ok(self.biomes[Self::index(local)?])
     }

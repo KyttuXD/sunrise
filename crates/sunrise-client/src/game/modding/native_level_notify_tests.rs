@@ -171,7 +171,9 @@ fn biome_writes_roll_back_and_only_the_root_commit_notifies_clients() {
         let old = 0_u16;
         assert_eq!(game.world.chunks[&(0, 0)].biome(0, 64, 0), 0);
         let target = 1_u16;
-        let name = world_biomes!(game).list[usize::from(target)].name.to_string();
+        let name = world_biomes!(game).list[usize::from(target)]
+            .name
+            .to_string();
         let old_name = world_biomes!(game).list[usize::from(old)].name.to_string();
         let host: &mut dyn mod_api::ServerHost = game;
         let aborted: Result<(), ()> = host.transaction(|host, _| {

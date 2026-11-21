@@ -117,8 +117,10 @@ impl GenerationContext for Start<'_> {
         self.inner.noise_column_into(x, z, &mut column);
         column.0
     }
-    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeRef<'_> {
-        mod_api::__private::biome_id(self.inner.noise_biome(quart).0)
+    fn noise_biome(&mut self, quart: [i32; 3]) -> Option<BiomeRef<'_>> {
+        self.inner
+            .noise_biome_name(quart)
+            .map(mod_api::__private::biome_ref)
     }
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool {
         self.inner.column_has_valid_biome(x, z, min_y, max_y)

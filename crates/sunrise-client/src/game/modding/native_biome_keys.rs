@@ -1,16 +1,18 @@
-//! Typed biome identities belong to the same installed snapshot as data maps.
+//! Borrow registered biomes from the installed server registry.
 use super::Game;
+use mod_api::{BiomeRef, LevelReadError};
+
 impl Game<'_> {
-    pub(in crate::game) fn biome_key(&self, id: &str) -> Option<mod_api::BiomeKey> {
-        self.loaded_data_maps().ok()?.biome_keys.key(id)
-    }
-    pub(in crate::game) fn biome_key_id(
-        &self,
-        key: mod_api::BiomeKey,
-    ) -> Result<&str, mod_api::BiomeKeyError> {
-        let maps = self
-            .loaded_data_maps()
-            .map_err(|_| mod_api::BiomeKeyError::Unavailable)?;
-        maps.biome_keys.id(key)
+    pub(in crate::game) fn biome(&self, id: &str) -> Result<Option<BiomeRef<'_>>, LevelReadError> {
+        let tables = self
+            .world_tables
+            .as_ref()
+            .filter(|_| self.is_logical_server())
+            .ok_or(LevelReadError::Unavailable)?;
+        let biomes = &tables.biomes;
+        Ok(biomes
+            .index
+            .get(id)
+            .and_then(|&slot| biomes.biome_ref(slot)))
     }
 }

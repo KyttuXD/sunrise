@@ -2984,6 +2984,8 @@ struct WorldTables {
     reload_sources: Option<Arc<sunrise_client::crafting::ResolvedSources>>,
     /// The values of the data map types native mods registered (`native_data_map_types`).
     data_maps: native_data_maps::DataMaps,
+    /// The world's biome registry the installed data maps were resolved against.
+    biomes: Arc<Biomes>,
     /// The entity type, biome, structure and damage type tags with the packs'
     /// over the game's own, by registry (`TagLoader.loadTagsForExistingRegistries`):
     /// what the predicates' `#tag`s of those registries read.
@@ -10803,7 +10805,8 @@ impl Game<'_> {
             } = &mut frame;
             dimension.clear();
             dimension.push_str(self.dim.id());
-            biome_name.clone_from(&info.name);
+            biome_name.clear();
+            biome_name.push_str(&info.name);
             (*temperature, *downfall) = (info.temperature, info.downfall);
             (*frame_rain, *frame_thunder) = (rain, thunder);
             (*game_time, *day_time) = (self.world.game_time, self.view_day_time());

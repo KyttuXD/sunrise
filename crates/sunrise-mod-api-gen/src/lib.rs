@@ -623,7 +623,7 @@ mod tests {
             ("add_server_reload_listeners", 2),
             ("register_entity_layers", 4),
             ("register_entity_renderers", 4),
-            ("section_visibility", 2),
+            ("section_visibility", 3),
             ("movement_input_update", 1),
         ] {
             let hook = points.iter().find(|hook| hook.name == name).unwrap();

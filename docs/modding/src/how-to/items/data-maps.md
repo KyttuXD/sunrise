@@ -173,19 +173,18 @@ it must be a boolean. An invalid target or flag skips the whole file layer, even
 Sunrise still derives its axe steps from the inverse maps, not from `generate_block_transform`.
 `neoforge:transformables` and `block_transform_appenders` are not read.
 
-`host.biome_key("minecraft:plains")` resolves a `BiomeKey` in the installed
-server world registry. Its `id(host)` borrows the canonical name from the installed snapshot
-(`Result<&str, BiomeKeyError>`): use `key.id(host)?` directly, or copy the result only to retain
-it beyond the host borrow. The borrow does not affect the result of `data(host, &map)`: it still
-returns an owned value from maps whose `DataMap::Entry` is `BiomeKey`, including
-`neoforge:villager_types` in `minecraft:worldgen/biome`. Missing entries return
-`Ok(None)`. Lookup returns `None` on clients and before world data is installed;
-data maps there return `DataMapError::Unavailable`. Reacquire biome keys after
-reload: tokens from earlier generations or another world return
-`BiomeKeyError::WrongGeneration` from `id`, or `DataMapError::InvalidKey` from
-`data`. An unavailable host returns `BiomeKeyError::Unavailable` from `id`.
-Validation uses the receiving host’s installed snapshot, so a mod retaining a
-key across reload receives an error without panicking the server.
+`host.biome("minecraft:plains")` borrows a `BiomeRef` from the installed server
+registry. `biome.id()` reads its full namespaced identifier; `biome.key()` retains
+that identity as a `BiomeKey` without copying the name. Keep the key, not the view,
+across a reload. `key.id()` reads its name without a host.
+
+Use `key.data(host, &map)` for a map with `DataMap::Entry = BiomeKey`, such as
+`neoforge:villager_types` in `minecraft:worldgen/biome`. The result is the current
+published value, decoded and owned. A retained key still names the same biome after
+reload; if the name no longer has a value, the result is `Ok(None)`. `host.biome`
+returns `Ok(None)` for unknown entries or `LevelReadError::Unavailable` without
+access to an installed server registry. Data maps on a client or before world
+data is installed return `DataMapError::Unavailable`.
 
 Game events use `GameEventKey`, resolved with `host.game_event_key("minecraft:step")`
 after startup registry completion. The key is load-owned and survives world data

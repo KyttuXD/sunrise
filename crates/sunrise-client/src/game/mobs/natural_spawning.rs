@@ -550,7 +550,9 @@ impl sunrise_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
     fn biome(&self, pos: [i32; 3]) -> String {
         // A spawn site without its chunk (a loaded marker mob) is neutral.
         super::finalize_spawn::biome_or_plains(
-            self.l.biome(pos[0], pos[1], pos[2]).map(|b| b.name.to_string()),
+            self.l
+                .biome(pos[0], pos[1], pos[2])
+                .map(|b| b.name.to_string()),
         )
     }
     fn biome_tag(&self, tag: &str, pos: [i32; 3]) -> bool {
