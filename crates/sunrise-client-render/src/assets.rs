@@ -504,6 +504,24 @@ impl RenderAssets {
         if draws {
             emissive = crate::native_emissive::load_optifine(root.source(), &mut sprites);
         }
+        if draws {
+            // `TextureAtlas.getSprite` uses this entry for names the block atlas does not contain.
+            sprites.insert_in_blocks(sunrise_assets::item_bake::MISSING_SPRITE)?;
+            if crate::mesher::has_section_geometry() {
+                // A section renderer can address an atlas sprite even if no model names it.
+                let unused: Vec<_> = sprites
+                    .materials()
+                    .listing()
+                    .sprites("minecraft:blocks")
+                    .keys()
+                    .filter(|id| !sprites.layers.contains_key(*id))
+                    .cloned()
+                    .collect();
+                for id in unused {
+                    sprites.insert_in_blocks(&id)?;
+                }
+            }
+        }
         sprites.save_disk_cache();
         if draws {
             sprites.finish();

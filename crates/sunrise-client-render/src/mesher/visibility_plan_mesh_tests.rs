@@ -141,22 +141,26 @@ fn hide_terrain_composes_with_state_visibility_and_section_geometry() {
     impl SectionGeometry for Geometry {
         fn add(&self, _: [i32; 3], context: &mut dyn SectionGeometryContext) {
             self.0.fetch_add(1, Ordering::Relaxed);
-            assert!(context.add(
-                "minecraft:block/gold_block",
-                SectionQuad {
-                    positions: [[2., 8., 2.], [2., 8., 3.], [3., 8., 3.], [3., 8., 2.]],
-                    uvs: [[0., 0.], [0., 1.], [1., 1.], [1., 0.]],
-                    color: 0xFFFF_FFFF,
-                    light: [15, 0],
-                    translucent: false,
-                }
-            ));
+            context
+                .add(
+                    "minecraft:block/gold_block",
+                    SectionQuad {
+                        positions: [[2., 8., 2.], [2., 8., 3.], [3., 8., 3.], [3., 8., 2.]],
+                        uvs: [[0., 0.], [0., 1.], [1., 1.], [1., 0.]],
+                        color: 0xFFFF_FFFF,
+                        light: [15, 0],
+                        translucent: false,
+                    },
+                )
+                .unwrap();
         }
     }
     let mut f = fixture();
     let geometry = Arc::new(Geometry::default());
-    f.tables.section_geometry =
-        Arc::new([super::super::mod_geometry::Renderer::new(geometry.clone())]);
+    f.tables.section_geometry = Arc::new([super::super::mod_geometry::Renderer::new(
+        "visibility_fixture",
+        geometry.clone(),
+    )]);
     let mut chunk = stone(&f, &[[1, 0, 1]]);
     let chest = state(&f, "minecraft:chest");
     let barrel = state(&f, "minecraft:barrel");

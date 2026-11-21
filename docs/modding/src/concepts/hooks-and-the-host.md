@@ -189,10 +189,13 @@ Part methods run elsewhere, and each one's own documentation says where:
   worker threads, several chunks at once. Feature placement also runs on the server thread when the game places a
   feature there: a sapling growing, a command, `LevelRef::place_feature`. A query asked once at start, such as
   `BiomeSource::possible_biomes`, is not a worker call. They get a `WorldgenHost` or no host at all, never a `Host`.
-- **Meshing workers.** `add_section_geometry` itself runs once at client start, to register renderers; each
-  renderer's `SectionGeometry::add` then runs on the renderer's meshing workers every time a section is meshed. A
-  block tint source is asked there too, and also outside meshing, for example for terrain particles and blocks a
-  piston moves. Both get no host.
+- **Meshing workers.** `add_section_geometry` runs once at client start. Each registered renderer's
+  `SectionGeometry::add` then runs on a meshing worker for each section rebuild. The section collector's
+  `add(sprite, quad)` appends one quad on success; an absent atlas sprite uses the missing texture, and a
+  refusal reports and skips only that quad. A panic disables just that callback for the session and reports
+  the mod in the log and an error toast; completed quads stay in that mesh. Block tint sources also run on
+  these workers and outside meshing (for example, for terrain particles and blocks a piston moves). Neither
+  callback gets a `Host`.
 - **Chunk workers.** `chunk_data_load` and `chunk_data_save` run where a chunk's record is decoded or encoded, with a
   restricted host. `host.job()` borrows the captured `ChunkDiskContext`; the callback edits only its job-local
   [attachment store](../how-to/chunk-data-save.md), never the live chunk.

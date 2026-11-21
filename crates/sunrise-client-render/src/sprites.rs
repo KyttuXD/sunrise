@@ -286,7 +286,7 @@ impl Sprites {
             disk.save();
         }
     }
-    fn materials(&self) -> &crate::atlas_sources::Materials {
+    pub(crate) fn materials(&self) -> &crate::atlas_sources::Materials {
         self.materials.get_or_init(|| {
             if self.serving {
                 let listing = crate::atlas_sources::Listing::build(

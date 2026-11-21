@@ -1,0 +1,12 @@
+ids = [
+    "hook:add_section_geometry",
+    "method:SectionGeometry::add",
+    "method:SectionGeometryContext::add",
+    "method:SectionGeometryContext::remaining",
+    "type:SectionQuad",
+    "type:SectionQuadError",
+    "type:SectionGeometryRegistry",
+    "method:SectionGeometryRegistry::into_renderers",
+]
+why = """The original staging and shared budgets in 9e58d42eb88 limited retained guest mesh bytes before merging a renderer's batch. NeoForge's AddSectionGeometryEvent.SectionRenderingContext.getOrCreateChunkBuffer and the SectionCompiler.compile patch instead append to the section's layer builders after terrain. The collector appends each accepted quad immediately. It does not reject finite positions outside the section or finite UVs outside the sprite edges, following vanilla 26.3 BufferBuilder.addVertex, BufferBuilder.setUv and TextureAtlasSprite.getU/getV. The only vertex-count limit is vanilla's BufferBuilder.beginVertex limit of 16,777,215 per layer. A name absent from the atlas resolves to its missing sprite, as in TextureAtlas.getSprite. A non-finite submission is refused independently so it cannot corrupt another contribution's bounds or texture inputs. Ordinary refusal reports every time and never disables the callback. A callback panic uses the shared session panic boundary, with a log and an error toast naming the mod; completed submissions remain. SectionQuad is an in-process submission, not Wire data. The hook is version 2."""
+migrate = """Keep registering with event.renderers.register(Arc::new(renderer)) in the same hook. Replace if context.add(sprite, quad) with if context.add(sprite, quad).is_ok(), or handle Err(SectionQuadError) directly (include a wildcard arm when matching the non-exhaustive enum). If you do not need to react to refusal, use let _ = context.add(sprite, quad); the collector reports it. Delete context.remaining() and submit each quad; do not discard or resubmit previous geometry on Err. Remove any Wire encoding or decoding of SectionQuad and construct it directly for context.add. Unknown sprite ids draw the missing sprite instead of failing. SectionGeometryRegistry and into_renderers are no longer mod API: implement SectionGeometry and use the hook's SectionGeometryRenderers to register it instead of creating a registry."""

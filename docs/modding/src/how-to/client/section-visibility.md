@@ -61,11 +61,11 @@ A listener that panics (`E_SECTION_VISIBILITY_PANIC`) is switched off for this h
 other listeners are asked as before and the level is remeshed without it, so no mask it gave earlier remains
 in a cached answer or can publish from a queued mesh.
 
-The snapshots, frozen plans and cached masks share a memory budget with section geometry. A section waits
-for room before it captures anything or asks a listener. Cached answers have a separate ceiling within that
-budget: at the ceiling a section meshes without its new mask (`E_SECTION_VISIBILITY_CAPACITY`) and is asked again
-when room frees up. An existing mask can still be replaced or cleared. Section geometry counts visibility storage
-against its per-section byte ceiling. `SectionVisibility::check` is the same per-answer check, for a mod's own tests.
+The snapshots, frozen plans and cached masks share visibility preparation storage. A section waits for room
+before it captures anything or asks a listener. Cached answers have a separate ceiling within that storage: at
+the ceiling a section meshes without its new mask (`E_SECTION_VISIBILITY_CAPACITY`) and is asked again when room
+frees up. An existing mask can still be replaced or cleared. Section geometry submissions do not charge this
+storage. `SectionVisibility::check` is the same per-answer check, for a mod's own tests.
 
 ## When it is asked
 

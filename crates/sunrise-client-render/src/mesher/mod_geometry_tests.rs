@@ -1,12 +1,9 @@
 //! The section geometry design's acceptance cases (docs/design/mod-api/section-geometry.md)
 //! that the mesher alone decides.
-use super::mod_geometry::{
-    Batch, Budget, MAX_IN_FLIGHT_BYTES, MAX_QUADS, MAX_SECTION_BYTES, QUAD_BYTES, Renderer,
-};
+use super::mod_geometry::Renderer;
 use super::mod_tint_tests::{resources, tint_values};
 use super::*;
-use mod_api::{LightLayer, SectionGeometry, SectionGeometryContext, SectionQuad};
-use std::collections::BTreeMap;
+use mod_api::{LightLayer, SectionGeometry, SectionGeometryContext, SectionQuad, SectionQuadError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use sunrise_assets::resource_source::ResourceRoot;
 
@@ -38,39 +35,37 @@ impl SectionGeometry for Decorative {
         let mut quad = quad(false);
         let above = [origin[0] + 2, origin[1] + 8, origin[2] + 2];
         quad.light = [quads.level().brightness(LightLayer::Sky, above) as u8, 3];
-        assert!(quads.add(GOLD, quad));
+        quads.add(GOLD, quad).unwrap();
     }
 }
 
-/// A good quad before a bad one, or too many quads: refused whole.
-enum Bad {
-    Corner(f32),
-    Sprite,
-    Many,
-}
-impl SectionGeometry for Bad {
+/// Submits valid geometry on both sides of individual refusals.
+struct Mixed;
+impl SectionGeometry for Mixed {
     fn add(&self, _: [i32; 3], quads: &mut dyn SectionGeometryContext) {
-        let good = quad(false);
-        assert!(quads.add(GOLD, good));
-        let mut bad = good;
-        let accepted = match self {
-            Bad::Corner(value) => {
-                bad.positions[1][0] = *value;
-                quads.add(GOLD, bad)
-            }
-            Bad::Sprite => quads.add("missing:block/nothing", bad),
-            Bad::Many => (1..=MAX_QUADS).all(|_| quads.add(GOLD, good)),
-        };
-        assert!(!accepted);
-        assert!(!quads.add(GOLD, good), "a refused batch stays refused");
-        assert_eq!(quads.remaining(), 0);
+        quads.add(GOLD, quad(false)).unwrap();
+        let mut bad = quad(false);
+        bad.positions[1][0] = f32::INFINITY;
+        assert_eq!(
+            quads.add(GOLD, bad),
+            Err(SectionQuadError::NonFinitePosition)
+        );
+        bad = quad(false);
+        bad.uvs[2][1] = f32::NAN;
+        assert_eq!(quads.add(GOLD, bad), Err(SectionQuadError::NonFiniteUv));
+        let mut outside = quad(false);
+        outside.positions[1][0] = 17.25;
+        outside.uvs[0] = [-0.25, 1.25];
+        quads.add("missing:block/nothing", outside).unwrap();
     }
 }
 
-struct Panics;
+#[derive(Default)]
+struct Panics(AtomicUsize);
 impl SectionGeometry for Panics {
     fn add(&self, _: [i32; 3], quads: &mut dyn SectionGeometryContext) {
-        quads.add(GOLD, quad(false));
+        self.0.fetch_add(1, Ordering::Relaxed);
+        quads.add(GOLD, quad(false)).unwrap();
         panic!("a broken renderer");
     }
 }
@@ -78,130 +73,8 @@ impl SectionGeometry for Panics {
 struct Translucent;
 impl SectionGeometry for Translucent {
     fn add(&self, _: [i32; 3], quads: &mut dyn SectionGeometryContext) {
-        assert!(quads.add("minecraft:block/glass", quad(true)));
+        quads.add("minecraft:block/glass", quad(true)).unwrap();
     }
-}
-
-fn sprites() -> BTreeMap<String, u32> {
-    BTreeMap::from([(GOLD.to_owned(), 7)])
-}
-
-fn full_budget() -> Budget {
-    Budget {
-        quads: MAX_QUADS,
-        bytes: MAX_SECTION_BYTES,
-    }
-}
-
-#[test]
-fn a_quad_past_the_section_budget_is_refused_before_it_is_kept() {
-    let sprites = sprites();
-    let shared = AtomicUsize::new(0);
-    let mut budget = Budget {
-        quads: 3,
-        bytes: MAX_SECTION_BYTES,
-    };
-    let mut batch = Batch::new(&sprites, &mut budget, &shared);
-    assert_eq!(batch.remaining(), 3);
-    assert!((0..3).all(|_| batch.add(GOLD, quad(false))));
-    assert_eq!(batch.staged.len(), 3);
-    assert_eq!(batch.remaining(), 0);
-    assert!(
-        !batch.add(GOLD, quad(false)),
-        "the fourth is past the budget"
-    );
-    assert_eq!(batch.staged.capacity(), 0, "the refused quads are freed");
-    assert!(batch.refused.is_some());
-    assert_eq!(batch.in_flight, 0);
-    assert_eq!(
-        shared.load(Ordering::Acquire),
-        0,
-        "in-flight bytes given back"
-    );
-    drop(batch);
-    assert_eq!(budget.quads, 3, "a refused batch gives its budget back");
-}
-
-#[test]
-fn the_section_budget_is_shared_by_its_blocks_and_every_renderer() {
-    let sprites = sprites();
-    let shared = AtomicUsize::new(0);
-    // A section whose own blocks already hold all but 5 quads.
-    let vertex = TerrainVertex::new([0.0; 3], [0.0; 2], 0, 0, 0);
-    let out = SectionMesh {
-        solid: vec![vertex; (MAX_QUADS - 5) * 4],
-        ..SectionMesh::default()
-    };
-    let mut budget = Budget::left_after(&out, 0);
-    assert_eq!(budget.quads, 5);
-    let visibility_bytes = budget.bytes - 2 * QUAD_BYTES;
-    let mut combined = Budget::left_after(&out, visibility_bytes);
-    let mut with_visibility = Batch::new(&sprites, &mut combined, &shared);
-    assert_eq!(with_visibility.remaining(), 2);
-    assert!((0..2).all(|_| with_visibility.add(GOLD, quad(false))));
-    assert!(!with_visibility.add(GOLD, quad(false)));
-    drop(with_visibility);
-    let mut first = Batch::new(&sprites, &mut budget, &shared);
-    assert!((0..3).all(|_| first.add(GOLD, quad(false))));
-    drop(first);
-    assert_eq!(shared.load(Ordering::Acquire), 0);
-    // The second renderer gets what the first left, 2, and its third quad refuses it whole.
-    let mut second = Batch::new(&sprites, &mut budget, &shared);
-    assert_eq!(second.remaining(), 2);
-    assert!(second.add(GOLD, quad(false)) && second.add(GOLD, quad(false)));
-    assert!(!second.add(GOLD, quad(false)));
-    drop(second);
-    assert_eq!(budget.quads, 2, "the first renderer's 3 stay counted");
-    // Bytes bind too: a section near its 32 MiB has room for whole quads only.
-    let mut bytes = Budget {
-        quads: MAX_QUADS,
-        bytes: 2 * QUAD_BYTES + QUAD_BYTES / 2,
-    };
-    let mut batch = Batch::new(&sprites, &mut bytes, &shared);
-    assert_eq!(batch.remaining(), 2);
-    assert!(batch.add(GOLD, quad(false)) && batch.add(GOLD, quad(false)));
-    assert!(!batch.add(GOLD, quad(false)));
-}
-
-#[test]
-fn the_meshing_workers_share_one_in_flight_budget() {
-    let sprites = sprites();
-    // Other sections' batches hold all but two quads' worth.
-    let shared = AtomicUsize::new(MAX_IN_FLIGHT_BYTES - 2 * QUAD_BYTES);
-    let mut budget = full_budget();
-    let mut batch = Batch::new(&sprites, &mut budget, &shared);
-    assert!(batch.add(GOLD, quad(false)) && batch.add(GOLD, quad(false)));
-    assert_eq!(shared.load(Ordering::Acquire), MAX_IN_FLIGHT_BYTES);
-    assert!(!batch.add(GOLD, quad(false)), "a third passes 128 MiB");
-    assert!(batch.staged.is_empty());
-    let others = MAX_IN_FLIGHT_BYTES - 2 * QUAD_BYTES;
-    assert_eq!(shared.load(Ordering::Acquire), others);
-    drop(batch);
-    assert_eq!(budget, full_budget());
-    // An accepted batch holds its bytes until it drops, after its quads are in the mesh.
-    let mut budget = full_budget();
-    let mut batch = Batch::new(&sprites, &mut budget, &shared);
-    assert!(batch.add(GOLD, quad(false)));
-    assert_eq!(shared.load(Ordering::Acquire), others + QUAD_BYTES);
-    drop(batch);
-    assert_eq!(shared.load(Ordering::Acquire), others);
-}
-
-#[test]
-fn an_invalid_quad_refuses_the_batch_and_its_earlier_quads() {
-    let sprites = sprites();
-    let shared = AtomicUsize::new(0);
-    let mut budget = full_budget();
-    let mut batch = Batch::new(&sprites, &mut budget, &shared);
-    assert!(batch.add(GOLD, quad(false)));
-    let mut bad = quad(false);
-    bad.uvs[2][1] = f32::NAN;
-    assert!(!batch.add(GOLD, bad));
-    assert!(batch.staged.is_empty());
-    assert_eq!(shared.load(Ordering::Acquire), 0);
-    assert!(!batch.add(GOLD, quad(false)));
-    drop(batch);
-    assert_eq!(budget, full_budget());
 }
 
 struct World {
@@ -235,7 +108,7 @@ impl World {
     }
 
     /// Mesh tables whose section geometry is `renderers`.
-    fn tables(&self, renderers: Vec<Arc<dyn SectionGeometry>>) -> MeshTables {
+    fn tables(&self, renderers: impl IntoIterator<Item = Renderer>) -> MeshTables {
         let mut tables = MeshTables::new(
             &self.assets,
             &self.render,
@@ -244,7 +117,7 @@ impl World {
             None,
         )
         .unwrap();
-        tables.section_geometry = renderers.into_iter().map(Renderer::new).collect();
+        tables.section_geometry = renderers.into_iter().collect();
         tables.mod_tints.values = Some(tint_values(self.assets.registry));
         tables
     }
@@ -290,12 +163,11 @@ fn quads(vertices: &[TerrainVertex]) -> usize {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_decorative_quad_joins_its_section_once_per_compilation() {
-    let Some(world) = World::load() else {
-        return;
-    };
+    let world = World::load().expect("prepared resources");
     let decorative = Arc::new(Decorative::default());
-    let tables = world.tables(vec![decorative.clone()]);
+    let tables = world.tables([Renderer::new("decorative", decorative.clone())]);
     let mut mesher = world.mesher(&tables);
     let chunk = world.cube();
     let mut region = [[None; 3]; 3];
@@ -329,41 +201,113 @@ fn a_decorative_quad_joins_its_section_once_per_compilation() {
 }
 
 #[test]
-fn a_refused_contribution_adds_nothing_and_the_built_in_cube_keeps_six_faces() {
-    let Some(world) = World::load() else {
-        return;
-    };
-    let renderers: Vec<Arc<dyn SectionGeometry>> = vec![
-        Arc::new(Panics),
-        Arc::new(Bad::Corner(f32::NAN)),
-        Arc::new(Bad::Corner(f32::INFINITY)),
-        Arc::new(Bad::Corner(16.5)),
-        Arc::new(Bad::Sprite),
-        Arc::new(Bad::Many),
-        Arc::new(Translucent),
-    ];
-    let tables = world.tables(renderers);
+#[ignore = "daily"]
+fn refusal_only_skips_its_quad_and_missing_sprites_draw() {
+    let world = World::load().expect("prepared resources");
+    let tables = world.tables([Renderer::new("mixed", Arc::new(Mixed))]);
     let mut mesher = world.mesher(&tables);
     let chunk = world.cube();
     let mut region = [[None; 3]; 3];
     region[1][1] = Some(&chunk);
     for _ in 0..2 {
         let mesh = mesher.mesh(&region, 0);
-        assert_eq!(quads(&mesh.solid), 6, "no offending quad added");
+        assert_eq!(quads(&mesh.solid), 8, "cube plus the two finite quads");
+        let gold = world.render.sprite_layers[GOLD] as u16;
+        let missing = world.render.sprite_layers["minecraft:missingno"] as u16;
         assert_eq!(
-            quads(&mesh.translucent),
-            1,
-            "the next renderer still adds its quad"
+            mesh.solid[24..28]
+                .iter()
+                .map(|v| v.layer)
+                .collect::<Vec<_>>(),
+            [gold; 4]
+        );
+        assert_eq!(
+            mesh.solid[28..32]
+                .iter()
+                .map(|v| v.layer)
+                .collect::<Vec<_>>(),
+            [missing; 4]
+        );
+        assert_eq!(mesh.solid[29].pos, [17.25, 8.0, 3.0]);
+        assert_eq!(
+            mesh.compute_bounds().unwrap()[1].x,
+            17.25 + SectionMesh::BOUNDS_PAD
         );
     }
-    assert!(
-        tables.section_geometry[0].failed(),
-        "the panicking one is disabled"
+}
+
+#[test]
+#[ignore = "daily"]
+fn panic_keeps_completed_quads_and_disables_only_its_callback() {
+    use mod_api::__private::game::{
+        RegistrationContextNew, SectionGeometryRegistry, take_callback_panic_notices,
+    };
+
+    // The client toast queue is process-wide. Check this callback's notices without draining
+    // notices from other tests running on their own threads.
+    const CHILD: &str = "SUNRISE_SECTION_GEOMETRY_PANIC_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "mesher::mod_geometry_tests::panic_keeps_completed_quads_and_disables_only_its_callback",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("run the isolated callback test");
+        let stdout = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child.status.success() && stdout.contains("test result: ok. 1 passed;"),
+            "isolated section callback test failed:\n{stdout}{}",
+            String::from_utf8_lossy(&child.stderr),
+        );
+        return;
+    }
+
+    struct Registrant(Arc<Panics>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Registrant {
+        fn add_section_geometry(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::AddSectionGeometryEvent<'_>,
+        ) {
+            event.renderers.register(self.0.clone());
+        }
+    }
+
+    let world = World::load().expect("prepared resources");
+    let panics = Arc::new(Panics::default());
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "broken_geometry",
+        Box::new(Registrant(panics.clone())),
+    )]
+    .into();
+    let mut registry = SectionGeometryRegistry::default();
+    mod_platform::testing::with_mods(mods, || {
+        mod_api::dispatch_add_section_geometry(&mod_api::RegistrationContext::new(), &mut registry);
+    });
+    let registered = registry.into_renderers();
+    let tables = world.tables(
+        registered
+            .into_iter()
+            .map(|(id, renderer)| Renderer::new(id, renderer))
+            .chain([Renderer::new("other_geometry", Arc::new(Translucent))]),
     );
-    // No listeners: the mesh is the built-in one.
-    let none = world.tables(Vec::new());
-    let baseline = world.mesher(&none).mesh(&region, 0);
-    assert_eq!(quads(&baseline.solid), 6);
-    assert!(baseline.translucent.is_empty());
-    assert!(world.mesher(&none).mesh(&region, 1).solid.is_empty());
+    let mut mesher = world.mesher(&tables);
+    let chunk = world.cube();
+    let mut region = [[None; 3]; 3];
+    region[1][1] = Some(&chunk);
+    for solid in [7, 6] {
+        let mesh = mesher.mesh(&region, 0);
+        assert_eq!(quads(&mesh.solid), solid);
+        assert_eq!(quads(&mesh.translucent), 1, "the other callback still runs");
+    }
+    assert_eq!(panics.0.load(Ordering::Relaxed), 1);
+    let notices = take_callback_panic_notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].mod_id, "broken_geometry");
+    assert_eq!(notices[0].operation, "add_section_geometry");
+    assert!(notices[0].message.contains("a broken renderer"));
 }
