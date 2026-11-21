@@ -1,0 +1,12 @@
+ids = [
+    "hook:living_travel",
+    "method:Hooks::living_travel",
+    "type:LivingTravelEvent",
+    "type:TravelMotion",
+    "method:TravelMotion::input",
+    "method:TravelMotion::velocity",
+    "method:TravelMotion::set_input",
+    "method:TravelMotion::set_velocity",
+]
+why = '''The per-listener guest-style validator introduced in 9367552729b let malformed output undo separate valid edits and a cancellation. The callback now writes the input passed to vanilla 26.3 LivingEntity.travel and travelInAir (or Player.travel after its swim steering) and the body's actual delta movement. Entity.getInputVector owns input normalization; Entity.setDeltaMovement admits finite vectors without a synthetic magnitude cap. NeoForge's LivingEntity.travelInWater patch changes the swim speed used by moveRelative, not its input/velocity admission, and adds no living-travel event. Non-finite edits refuse only their own write and log every refusal. The server still validates player reports through the existing path, anchored in ServerGamePacketListenerImpl.handleMovePlayer. A panic disables only the failed callback, logs and queues a named error toast, and leaves completed writes and earlier cancellation intact for the remaining listeners. The hook moves to version 2.'''
+migrate = '''Keep implementing Hooks::living_travel(&self, context: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow. Replace reads of *event.input and *event.velocity with event.motion.input() and event.motion.velocity(). Replace *event.input = v and *event.velocity = v with event.motion.set_input(v) and event.motion.set_velocity(v). To change one component, read the vector into a local array, change that component, and pass the array to the setter. Each setter returns false for a non-finite vector and leaves that vector unchanged; handle that result independently of other writes. Keep returning Flow::Cancel or setting event.cancelled = true to skip travel, but do not rely on cancellation to undo a successful velocity write. Rebuild against the new SDK and set hook_version = 2 if you pin living_travel.'''

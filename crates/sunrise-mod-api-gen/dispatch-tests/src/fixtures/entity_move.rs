@@ -122,9 +122,13 @@ mod root {
             pub(super) fn report(&self) {}
             pub(super) fn report_each(&self) {}
         }
-        pub(super) fn first_output_refusal(_: super::HookId, id: &'static str) -> bool {
-            super::OUTPUT_REFUSALS.with(|refusals| refusals.borrow_mut().push(id));
-            true
+        pub(super) fn listener_panicked(
+            hook: super::HookId,
+            id: &'static str,
+            _: &'static str,
+            _: String,
+        ) {
+            poison(hook, id);
         }
 
         pub(super) fn outside_world() -> bool {

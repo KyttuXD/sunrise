@@ -35,7 +35,7 @@ enum Answer {
     Continue,
     Cancel,
     Replace { input: [f64; 3], velocity: [f64; 3] },
-    Panic,
+    PanicAfterWrite,
 }
 
 /// What the probe heard: entity, mode, and the resolved input and velocity.
@@ -64,7 +64,11 @@ impl Hooks for Probe {
                 let _ = event.motion.set_velocity(velocity);
                 Flow::Continue
             }
-            Answer::Panic => panic!("probe listener unwinds"),
+            Answer::PanicAfterWrite => {
+                let _ = event.motion.set_velocity([71.0, 0.0, 0.0]);
+                event.cancelled = true;
+                panic!("probe listener unwinds")
+            }
         }
     }
 }
@@ -164,130 +168,69 @@ fn cancel_skips_the_invocation() {
     assert_eq!(log.lock().unwrap().len(), 1);
 }
 
-/// A replacement supplies the branch's starting values: both the input and
-/// the velocity, at the budgets' edges (input 1.0, velocity -64.0 — signed
-/// components inside the budget are valid; design #2308).
 #[test]
-fn a_replacement_supplies_the_starting_values() {
+fn finite_travel_edits_have_no_synthetic_component_caps() {
     let (_, input, velocity, _, _) = decided_with(
         Answer::Replace {
-            input: [-1.0, 1.0, 0.0],
-            velocity: [64.0, -64.0, 0.0],
+            input: [-2.0, 3.0, 0.0],
+            velocity: [80.0, -100.0, 0.0],
         },
         &server_context(),
     );
-    assert_eq!(input, Vec3::new(-1.0, 1.0, 0.0));
-    assert_eq!(velocity, Vec3::new(64.0, -64.0, 0.0));
+    assert_eq!(input, Vec3::new(-2.0, 3.0, 0.0));
+    assert_eq!(velocity, Vec3::new(80.0, -100.0, 0.0));
 }
 
-/// A replacement with a component outside its budget — an input component
-/// beyond 1.0 or 1.01, a velocity component beyond 64.0 or 64.5, a NaN or an
-/// infinity — is refused whole: both values stand as the game resolved them
-/// (design #2308: reject, never clamp).
+/// The live writes already completed when a callback panics are not replies to undo.
 #[test]
-fn a_malformed_replacement_is_refused_whole() {
-    for (input, velocity) in [
-        ([1.01, 0.0, 0.0], [0.0, 0.0, 0.0]),
-        ([0.0, f64::NAN, 0.0], [0.0, 0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [64.5, 0.0, 0.0]),
-        ([0.0, 0.0, 0.0], [0.0, -65.0, 0.0]),
-        ([0.0, 0.0, 0.0], [0.0, 0.0, f64::INFINITY]),
-    ] {
-        let (_, got_input, got_velocity, _, _) =
-            decided_with(Answer::Replace { input, velocity }, &server_context());
-        assert_eq!(
-            (got_input, got_velocity),
-            (Vec3::new(0.216, 0.0, 0.0), Vec3::new(1.0, -0.078_4, 0.0)),
-            "both resolved values stand: input {input:?}, velocity {velocity:?}"
-        );
-    }
-}
-
-/// A listener that unwinds keeps the **resolved** values — its writes die
-/// with it — and the poison skips **this hook** of its mod for the session:
-/// the next travel runs without it, and neither travel panics out of the
-/// gate (#2414 ruling A).
-#[test]
-fn a_panicking_listener_keeps_the_resolved_travel_and_is_disabled() {
-    let (log, mods) = install(Answer::Panic);
-    mod_platform::testing::with_mods(mods, || {
-        let mut input = Vec3::new(0.216, 0.0, 0.0);
-        let mut velocity = Vec3::new(1.0, -0.078_4, 0.0);
-        let runs = sunrise_client::travel_gate::decide(
-            &server_context(),
-            7,
-            "minecraft:zombie",
-            || sunrise_world::travel::TravelMode::Air,
-            &mut input,
-            &mut velocity,
-        );
-        assert!(runs, "the travel carries on past the panic");
-        assert_eq!(
-            (input, velocity),
-            (Vec3::new(0.216, 0.0, 0.0), Vec3::new(1.0, -0.078_4, 0.0))
-        );
-        // The poison skips this hook of the mod: this travel hears nobody.
-        let mut input = Vec3::new(2.0, 0.0, 0.0);
-        let runs = sunrise_client::travel_gate::decide(
-            &server_context(),
-            7,
-            "minecraft:zombie",
-            || sunrise_world::travel::TravelMode::Air,
-            &mut input,
-            &mut Vec3::new(0.0, 0.0, 0.0),
-        );
-        assert!(runs);
-        assert_eq!(input, Vec3::new(2.0, 0.0, 0.0));
-    });
-    assert_eq!(
-        log.lock().unwrap().len(),
-        1,
-        "the poisoned listener is not dispatched again"
-    );
-}
-
-/// The resolved values, not an earlier listener's replacement, are what a
-/// later panicking listener leaves behind (#2414 ruling A).
-#[test]
-fn a_panic_after_a_replacement_keeps_the_resolved_values() {
-    let mods: mod_api::Mods = vec![
-        mod_api::ModEntry::new(
+fn a_panic_leaves_completed_writes_and_only_disables_its_own_listener() {
+    let entries = [
+        (
             "replacer",
-            Box::new(Probe {
-                answer: Answer::Replace {
-                    input: [0.5, 0.0, 0.0],
-                    velocity: [9.0, 0.0, 0.0],
-                },
-                heard: Arc::new(Mutex::new(Vec::new())),
-            }),
+            Answer::Replace {
+                input: [0.5, 0.0, 0.0],
+                velocity: [9.0, 0.0, 0.0],
+            },
         ),
-        mod_api::ModEntry::new(
-            "panicker",
-            Box::new(Probe {
-                answer: Answer::Panic,
-                heard: Arc::new(Mutex::new(Vec::new())),
-            }),
-        ),
-    ]
-    .into();
+        ("panicker", Answer::PanicAfterWrite),
+        ("observer", Answer::Continue),
+    ];
+    let [first, panicked, later] = std::array::from_fn(|_| Arc::new(Mutex::new(Vec::new())));
+    let mods: mod_api::Mods = entries
+        .into_iter()
+        .zip([first, panicked.clone(), later.clone()])
+        .map(|((id, answer), heard)| mod_api::ModEntry::new(id, Box::new(Probe { answer, heard })))
+        .collect::<Vec<_>>()
+        .into();
     mod_platform::testing::with_mods(mods, || {
-        let mut input = Vec3::new(0.216, 0.0, 0.0);
-        let mut velocity = Vec3::new(1.0, -0.078_4, 0.0);
-        let runs = sunrise_client::travel_gate::decide(
-            &server_context(),
-            7,
-            "minecraft:zombie",
-            || sunrise_world::travel::TravelMode::Air,
-            &mut input,
-            &mut velocity,
-        );
-        assert!(runs);
-        assert_eq!(
-            (input, velocity),
-            (Vec3::new(0.216, 0.0, 0.0), Vec3::new(1.0, -0.078_4, 0.0)),
-            "the resolved values, not the replacer's (0.5, 9.0)"
-        );
+        for expected in [71.0, 9.0] {
+            let mut input = Vec3::ZERO;
+            let mut velocity = Vec3::ZERO;
+            let runs = sunrise_client::travel_gate::decide(
+                &server_context(),
+                7,
+                "minecraft:zombie",
+                || sunrise_world::travel::TravelMode::Air,
+                &mut input,
+                &mut velocity,
+            );
+            assert!(
+                runs,
+                "a listener that panicked did not complete its cancellation"
+            );
+            assert_eq!(input, Vec3::new(0.5, 0.0, 0.0));
+            assert_eq!(velocity, Vec3::new(expected, 0.0, 0.0));
+        }
     });
+    assert_eq!(panicked.lock().unwrap().len(), 1);
+    assert_eq!(
+        *later.lock().unwrap(),
+        [
+            (7, TravelMode::Air, [0.5, 0.0, 0.0], [71.0, 0.0, 0.0]),
+            (7, TravelMode::Air, [0.5, 0.0, 0.0], [9.0, 0.0, 0.0]),
+        ],
+        "the later listener runs both times and sees completed writes",
+    );
 }
 
 /// A client's own prediction asks nobody: the hook fires on the
@@ -396,62 +339,73 @@ fn a_poisoned_travel_listener_keeps_its_move_hook() {
     assert_eq!(*travels.lock().unwrap(), 1);
 }
 
-/// Each listener's pair is checked as it returns: a malformed pair is
-/// dropped alone, the earlier valid pair stands, and a later listener hears
-/// that accepted pair rather than the malformed proposal.
 #[test]
-fn a_refused_pair_keeps_the_preceding_valid_pair_and_is_never_heard() {
-    let heard = Arc::new(Mutex::new(Vec::new()));
-    let probe = |name: &'static str, answer, heard: &Arc<Mutex<Heard>>| {
-        mod_api::ModEntry::new(
-            name,
-            Box::new(Probe {
-                answer,
-                heard: Arc::clone(heard),
+fn a_refused_edit_leaves_the_other_write_and_cancellation_in_place() {
+    struct Decide {
+        invalid_input: bool,
+        accepted: Arc<Mutex<Vec<(bool, bool)>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Decide {
+        fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
+            let input = if self.invalid_input {
+                [0.0, f64::NAN, 0.0]
+            } else {
+                [2.0, 0.0, 0.0]
+            };
+            let velocity = if self.invalid_input {
+                [80.0, 0.0, 0.0]
+            } else {
+                [0.0, f64::INFINITY, 0.0]
+            };
+            let wrote_input = event.motion.set_input(input);
+            let wrote_velocity = event.motion.set_velocity(velocity);
+            self.accepted
+                .lock()
+                .unwrap()
+                .push((wrote_input, wrote_velocity));
+            if self.invalid_input {
+                event.cancelled = true;
+                Flow::Continue
+            } else {
+                Flow::Cancel
+            }
+        }
+    }
+
+    for (invalid_input, expected_input, expected_velocity) in
+        [(true, 0.25, 80.0), (false, 2.0, 1.0)]
+    {
+        let accepted = Arc::new(Mutex::new(Vec::new()));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "decide",
+            Box::new(Decide {
+                invalid_input,
+                accepted: accepted.clone(),
             }),
-        )
-    };
-    let mods: mod_api::Mods = vec![
-        probe(
-            "valid",
-            Answer::Replace {
-                input: [0.5, 0.0, 0.0],
-                velocity: [9.0, 0.0, 0.0],
-            },
-            &Arc::default(),
-        ),
-        probe(
-            "malformed",
-            Answer::Replace {
-                input: [1.01, 0.0, 0.0],
-                velocity: [2.0, 0.0, 0.0],
-            },
-            &Arc::default(),
-        ),
-        probe("later", Answer::Continue, &heard),
-    ]
-    .into();
-    mod_platform::testing::with_mods(mods, || {
-        let mut input = Vec3::new(0.216, 0.0, 0.0);
-        let mut velocity = Vec3::new(1.0, -0.078_4, 0.0);
-        let runs = sunrise_client::travel_gate::decide(
-            &server_context(),
-            7,
-            "minecraft:zombie",
-            || sunrise_world::travel::TravelMode::Air,
-            &mut input,
-            &mut velocity,
-        );
-        assert!(runs);
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            // Repeating a refusal must not disable this listener on the next invocation.
+            for _ in 0..2 {
+                let mut input = Vec3::new(0.25, 0.0, 0.0);
+                let mut velocity = Vec3::new(1.0, 0.0, 0.0);
+                let runs = sunrise_client::travel_gate::decide(
+                    &server_context(),
+                    7,
+                    "minecraft:zombie",
+                    || sunrise_world::travel::TravelMode::Air,
+                    &mut input,
+                    &mut velocity,
+                );
+                assert!(!runs);
+                assert_eq!(input, Vec3::new(expected_input, 0.0, 0.0));
+                assert_eq!(velocity, Vec3::new(expected_velocity, 0.0, 0.0));
+            }
+        });
         assert_eq!(
-            (input, velocity),
-            (Vec3::new(0.5, 0.0, 0.0), Vec3::new(9.0, 0.0, 0.0)),
-            "the valid pair stands; the malformed one, velocity 2.0 included, is gone"
+            *accepted.lock().unwrap(),
+            [(!invalid_input, invalid_input); 2]
         );
-    });
-    assert_eq!(
-        *heard.lock().unwrap(),
-        vec![(7, TravelMode::Air, [0.5, 0.0, 0.0], [9.0, 0.0, 0.0])],
-        "the later listener hears the accepted pair"
-    );
+    }
 }

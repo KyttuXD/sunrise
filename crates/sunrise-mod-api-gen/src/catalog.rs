@@ -146,6 +146,16 @@ pub enum RegistrationAppend {
     Custom,
 }
 
+/// How an isolated dispatch treats a failed listener's writes.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Isolation {
+    /// Restore the requested outputs and stop the walk when a cancel listener fails.
+    Restore,
+    /// Keep scoped writes, accept cancellation or an answer only on return, and keep walking.
+    Live,
+}
+
 /// One hook point: a moment the game tells mods about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hook {
@@ -175,17 +185,8 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global cancel hook, or a global collect hook answered by mod, whose dispatch runs every
-    /// listener inside `catch_unwind`: one that unwinds is switched off for this hook for the
-    /// session. A cancel hook rolls outputs back to the requested values and stops (#2414).
-    /// A collector receives at most one returned value per registration, and later listeners
-    /// still run after a failure.
-    pub isolate: bool,
-    /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
-    /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
-    /// vector/scalar outputs in declaration order and naming the first refused one. A refused
-    /// result, including its cancellation, rolls back; later listeners still run.
-    pub output_validator: Option<String>,
+    /// Contain each listener's unwind and disable the failed listener for this hook.
+    pub isolate: Option<Isolation>,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
     pub context: Option<PhaseContext>,
@@ -358,8 +359,7 @@ struct ModApiEntry {
     owner: Option<String>,
     collect_validator: Option<String>,
     registration_append: Option<RegistrationAppend>,
-    isolate: Option<bool>,
-    output_validator: Option<String>,
+    isolate: Option<Isolation>,
 }
 
 #[derive(Deserialize)]
@@ -512,29 +512,16 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
-        // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
-        let isolate = api.isolate.unwrap_or(false);
-        if isolate
+        if let Some(isolate) = api.isolate
             && (scope.is_some()
                 || !(api.contract == Contract::Cancel
-                    || api.contract == Contract::Collect && answered_by_mod))
+                    || isolate == Isolation::Live
+                        && api.contract == Contract::Collect
+                        && answered_by_mod))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
-            });
-        }
-        if let Some(validator) = &api.output_validator
-            && (!isolate
-                || api.contract != Contract::Cancel
-                || syn::parse_str::<syn::Path>(validator).is_err())
-        {
-            return Err(CatalogError::InvalidHook {
-                hook: name.clone(),
-                error: "output_validator is a path on an isolated cancel hook".into(),
+                error: "isolate is for a global cancel hook, or `live` on a global collect hook answered by mod".into(),
             });
         }
         let counterparts = Counterparts {
@@ -556,8 +543,7 @@ impl Hook {
             collect_validator: api.collect_validator,
             registration_append: api.registration_append,
             inert: entry.inert,
-            isolate,
-            output_validator: api.output_validator,
+            isolate: api.isolate,
             scope,
             host: entry.host,
             context: entry.context,
@@ -845,7 +831,6 @@ impl Declared {
                             "collect_validator",
                             "registration_append",
                             "isolate",
-                            "output_validator",
                         ] {
                             if let Some(value) = entry.remove(key) {
                                 api.insert(key.into(), value);
@@ -1019,8 +1004,7 @@ impl Hook {
             collect_validator: None,
             registration_append: None,
             inert: None,
-            isolate: false,
-            output_validator: None,
+            isolate: None,
             scope: None,
             host: None,
             context: None,

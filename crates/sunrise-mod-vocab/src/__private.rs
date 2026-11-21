@@ -97,13 +97,6 @@ pub fn mods_switched() -> u64 {
     crate::runtime::mods_switched()
 }
 
-/// Start a new tick's output diagnostics on the authoritative game thread.
-pub fn reset_output_refusals() {
-    if let Some(backend) = crate::dispatch_scope::backend() {
-        (backend.diagnostics.reset_output_refusals)();
-    }
-}
-
 /// Whether an installed mod subscribes to `hook`.
 pub fn listened(hook: HookId) -> bool {
     crate::listened(hook)

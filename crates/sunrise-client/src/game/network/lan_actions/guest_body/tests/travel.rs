@@ -38,7 +38,7 @@ impl Hooks for Reply {
                 let _ = event.motion.set_input([0.000001, 0.0, 0.0]);
             }
             Self::Input => {
-                let _ = event.motion.set_input([1.0, 0.0, 0.0]);
+                let _ = event.motion.set_input([2.0, 0.0, 0.0]);
             }
         }
         Flow::Continue
@@ -240,7 +240,8 @@ fn a_player_travel_replacement_commits_displacement_and_corrects_velocity() {
                     let position = [
                         3.0 + match reply {
                             Reply::Velocity => 0.5,
-                            // The default off-ground movement speed is the widened vanilla 0.02f.
+                            // Entity.getInputVector normalizes the replacement input before
+                            // applying the widened vanilla air speed of 0.02f.
                             _ => f64::from(0.02_f32),
                         },
                         64.0,

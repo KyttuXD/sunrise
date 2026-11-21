@@ -110,22 +110,27 @@ a squid reports `VelocityOnly` in or out of water. A replacement does not change
 the branch. A body that does not travel, such as a shulker, fires no hook; neither
 does a replayed player tick.
 
-Replacement input components must be finite and within [-1, 1]; replacement
-velocity components within ±64 blocks per tick. Untouched vectors are exempt.
-One malformed vector drops that listener's entire result, including its cancel
-flag. The preceding accepted result stands, and the log names the mod and field
-once per tick. An accepted cancellation cannot be cleared. It skips the branch,
-its nested moves and flying vertical damping, without undoing earlier work such
+Read `event.motion.input()` and `event.motion.velocity()`. To replace either,
+call `event.motion.set_input([x, y, z])` or `event.motion.set_velocity([x, y, z])`.
+These write to the branch's actual input or the body's current delta movement.
+Each setter returns `false` for a non-finite vector and logs the mod and field
+each time. That write alone is refused; a separate valid edit or cancellation
+stands. There are no magnitude caps on these setters: the ordinary branch
+still handles input normalization and collision.
+
+Set `event.cancelled = true` or return `Flow::Cancel` to skip the branch, its
+nested moves and flying vertical damping. Accepted cancellation cannot be
+cleared. It does not undo successful velocity writes or work already done such
 as swim steering. If the branch runs and calls `entity_move`, that move can
-still be vetoed. A listener panic restores the originally resolved values, ends
-the dispatch and disables the failed listener for this hook for the session;
-its other hooks remain enabled.
+still be vetoed. A listener panic logs and shows an error toast naming the mod
+and disables only that callback for the session. Completed edits and earlier
+cancellation stand, and other eligible listeners still run.
 
 For a player, a veto holds the position accepted at the server's travel boundary;
 it does not rewind reports already accepted before that tick. While the veto
-stands, the server corrects new reports that would move the player away. An
-edit that changes the input or velocity sends one correction, even if collision
-absorbs it, if the player remains eligible and no correction awaits
+stands, the server corrects new reports that would move the player away. If
+travel runs, an edit that changes its input or velocity sends one correction,
+even if collision absorbs it, if the player remains eligible and no correction awaits
 acknowledgement. A separate teleport in the same tick takes priority. The
 correction carries the live server position and velocity. The server compares
 the vectors bit for bit, except that inputs within vanilla's movement dead zone

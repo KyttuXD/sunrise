@@ -2,7 +2,11 @@
 
 > Historical: this design predates the removal of WebAssembly mods.
 > See [physical movement decisions](../../modding/src/how-to/entities/entity-hooks.md#physical-movement-decisions) for the current native API.
-> The current hook does not imply that the entire travel proposal shipped. Guest traps and the target axis of the old test matrix are historical; the LAN player route remains distinct.
+> The current hook does not imply that the entire travel proposal shipped. In particular,
+> the native travel hook lends the actual input and velocity, checks each write independently,
+> and keeps completed writes across cancellation or a listener panic. The travel-output budgets
+> and the result rollback described in the original proposal below are not the current contract.
+> Guest traps and the target axis of the old test matrix are historical; the LAN player route remains distinct.
 
 Proposal for [#1009](https://github.com/arismoko/horizon/issues/1009), not an implemented API.
 This is a clean-room Sunrise design from vanilla 26.3 and the requested use cases.
@@ -90,17 +94,12 @@ lands and route their actual Entity.move equivalents through this boundary.
 
 ## Transaction, prediction and replay
 
-Both hooks, ruled hostless (#2414), reduce to result validation: the gate holds
-the resolved values (travel's input and velocity, move's requested delta), a
-listener result that passes the budgets replaces them, malformed output is
-dropped and the preceding valid values stand (`living_travel` checks each
-listener's pair as it returns and names the mod and the field; `entity_move`
-checks the final delta), and cancellation skips the invocation. A panic keeps
-the resolved values while its poison disables that listener for this hook for
-the session. The decide/fire/apply lift with a real Host reopens only on a
-measured need from a real mod, as its own PR. Both take
-the existing path without snapshots, allocations or mod scans when nobody
-subscribes — dispatch only to subscribed mods, resolved once.
+Both hooks remain hostless. `entity_move` checks its final delta; `living_travel`
+now lends the input and the body's delta movement, with finite-only checks
+when each is written. A cancellation skips the invocation, not completed
+writes to the body's velocity. Both take the existing path without snapshots,
+allocations or mod scans when nobody subscribes — dispatch only to subscribed
+mods, resolved once.
 
 The first native travel hook runs only on the server. For players, its single
 `ServerPlayer.doTick` travel boundary governs new position reports, not reports

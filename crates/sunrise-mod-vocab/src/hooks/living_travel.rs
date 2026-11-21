@@ -9,25 +9,26 @@ pub trait Hooks {
     /// a replayed player tick. A branch that calls `entity_move` can still meet
     /// a move veto there.
     ///
-    /// Replace `input` (finite components in [-1, 1]) or `velocity` (finite
-    /// components within ±64 blocks per tick) to change the branch's starting
-    /// values, not the branch itself. An unchanged vector is not subject to the
-    /// replacement budget. A malformed vector drops that listener's entire
-    /// result, including cancellation; later listeners see the preceding accepted
-    /// values, and the log names the mod and refused field once per tick.
+    /// Use `motion.set_input` or `motion.set_velocity` to edit the branch's
+    /// input or the body's delta movement, not the chosen branch. Both accept
+    /// finite vectors without a magnitude limit. A refused edit returns
+    /// `false` and is logged with the mod and field; it does not undo the other
+    /// edit or affect cancellation. The branch still normalizes input and runs
+    /// its usual motion and collision code.
     ///
     /// Set `cancelled` or return `Flow::Cancel` to skip the branch, its nested
-    /// moves and flying vertical damping. An accepted cancellation cannot be
-    /// cleared. Work before travel, such as swim steering, is not undone. If a
-    /// listener panics, the game uses the originally resolved values, skips later
-    /// listeners for that invocation and disables the failed listener for this
-    /// hook for the session. The hook takes a loop context, not a `Host`.
+    /// moves and flying vertical damping. Neither travel already done (such as
+    /// swim steering) nor a successful velocity write is undone. A panic logs
+    /// and shows an error toast naming the mod, disables only that callback for
+    /// the session, and does not undo completed writes or stop later listeners.
+    /// Only a completed listener can cancel. The hook takes a loop context,
+    /// not a `Host`.
     ///
     /// For a player, the veto takes effect at the server's travel boundary:
     /// reports it already accepted are not rewound. While the veto stands,
     /// the server corrects new movement reports to its accepted position.
-    /// An edit that changes the input or velocity sends one correction, even
-    /// if collision absorbs it, if the player remains eligible and no
+    /// If travel runs, an edit to input or velocity sends one correction,
+    /// even if collision absorbs it, if the player remains eligible and no
     /// correction awaits acknowledgement. A separate teleport in the same
     /// tick takes priority. The correction carries the live server position
     /// and velocity. The server compares the vectors bit for bit, except that
@@ -40,8 +41,8 @@ pub trait Hooks {
         out = "canceled",
         context = "loop",
         cancellable = true,
-        isolate = true,
-        output_validator = "crate::entity::types::refused_travel_output",
+        isolate = "live",
+        version = 2,
         neoforge = "none (fork addition; see travel-and-move.md, #2308)",
         target = "sunrise_client_lib::travel_gate::native_living_travel"
     )]
@@ -49,8 +50,7 @@ pub trait Hooks {
         entity: u32,
         kind: &str,
         mode: TravelMode,
-        input: &mut [f64; 3],
-        velocity: &mut [f64; 3],
+        motion: TravelMotion<'_>,
         canceled: &mut bool,
     );
 }
