@@ -699,7 +699,6 @@ mod tests {
             super::super::dependencies::resolve_links(&[super::super::dependencies::Mod {
                 id: &bundle.manifest.id,
                 version: &bundle.manifest.version,
-                has_api: true,
                 code: true,
                 dependencies: &declared,
             }])

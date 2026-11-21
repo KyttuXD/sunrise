@@ -328,7 +328,6 @@ fn compile(
         .map(|(bundle, deps)| dependencies::Mod {
             id: &bundle.manifest.id,
             version: &bundle.manifest.version,
-            has_api: true,
             code: true,
             dependencies: deps,
         })

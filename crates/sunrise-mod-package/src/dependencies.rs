@@ -21,11 +21,6 @@ pub enum Error {
         target: String,
         note: String,
     },
-    NoApi {
-        owner: String,
-        target: String,
-        note: String,
-    },
     CargoConflict {
         owner: String,
         target: String,
@@ -63,16 +58,6 @@ impl fmt::Display for Error {
                 target,
                 note,
             } => write!(f, "{owner} requires missing mod {target}{note}"),
-            Self::NoApi {
-                owner,
-                target,
-                note,
-            } => {
-                write!(
-                    f,
-                    "{owner} depends on {target}, which has no [api] package{note}"
-                )
-            }
             Self::CargoConflict { owner, target } => {
                 write!(
                     f,
@@ -166,7 +151,6 @@ fn parse(owner: &str, value: Option<&toml::Value>) -> Result<Vec<Dependency>, Er
 pub struct Mod<'a> {
     pub id: &'a str,
     pub version: &'a Version,
-    pub has_api: bool,
     /// Code declarations also participate in physical library linking.
     pub code: bool,
     pub dependencies: &'a [Dependency],
@@ -241,7 +225,6 @@ pub fn resolve_manifests(
             Mod {
                 id: &manifest.id,
                 version: &manifest.version,
-                has_api: code,
                 code,
                 dependencies,
             }
@@ -428,13 +411,6 @@ fn resolve_all(
             let other = &mods[target];
             if links && !other.code {
                 continue;
-            }
-            if item.code && other.code && (!item.has_api || !other.has_api) {
-                return Err(Error::NoApi {
-                    owner: item.id.into(),
-                    target: dep.id.clone(),
-                    note,
-                });
             }
             if !links
                 && (crate::manifest::is_unresolved(other.version)
@@ -694,7 +670,6 @@ mod tests {
         Mod {
             id,
             version: Box::leak(Box::new(crate::manifest::parse_version(version).unwrap())),
-            has_api: true,
             code: true,
             dependencies,
         }
@@ -837,14 +812,12 @@ mod tests {
             Mod {
                 id: &addon.id,
                 version: &addon.version,
-                has_api: false,
                 code: false,
                 dependencies: &dependencies,
             },
             Mod {
                 id: &base.id,
                 version: &base.version,
-                has_api: false,
                 code: false,
                 dependencies: &[],
             },
@@ -854,7 +827,6 @@ mod tests {
         let incompatible = Mod {
             id: "base",
             version: &Version::new(2, 0, 0),
-            has_api: false,
             code: false,
             dependencies: &[],
         };
@@ -872,7 +844,6 @@ mod tests {
                 Mod {
                     id: "base",
                     version: &Version::new(1, 0, 0),
-                    has_api: false,
                     code: false,
                     dependencies: &back
                 }
@@ -1041,7 +1012,6 @@ mod tests {
         let code = Mod {
             id: &dependent.id,
             version: &dependent.version,
-            has_api: true,
             code: true,
             dependencies: &build,
         };
@@ -1237,17 +1207,10 @@ mod tests {
     }
 
     #[test]
-    fn malformed_and_no_api() {
+    fn malformed_dependency_is_refused() {
         let value: toml::Table = "[dependencies]\nbase = { version = '^1', optional = 'yes' }"
             .parse()
             .unwrap();
         assert!(parse("user", value.get("dependencies")).is_err());
-        let required = deps("[dependencies]\nbase = '^1'");
-        let mut base = item("base", "1.0.0", &[]);
-        base.has_api = false;
-        assert!(matches!(
-            resolve_links(&[item("user", "1.0.0", &required), base]),
-            Err(Error::NoApi { .. })
-        ));
     }
 }
