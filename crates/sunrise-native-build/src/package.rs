@@ -1,8 +1,9 @@
 //! Validated flat packages and launcher-owned horizon-mixins input.
 use super::{Bundle, MANIFEST};
 use std::{fs, path::Path};
+use sunrise_mod_package::Package;
+use sunrise_mod_package::manifest::{self, NativeStateRefusal};
 use sunrise_mod_package::mod_surface::uses::USES_FILE;
-use sunrise_mod_package::{Package, manifest};
 
 /// Return the validated native project, if this directory has a package manifest.
 /// A present but invalid manifest is reported by the canonical package reader.
@@ -20,7 +21,7 @@ pub fn read(dir: &Path) -> Result<Option<Bundle>, String> {
         }
         Err(e) => return Err(format!("{}: {e}", path.display())),
     }
-    let package = Package::read(dir)?;
+    let package = read_package(dir)?;
     if !package.is_native() {
         return Ok(None);
     }
@@ -70,8 +71,17 @@ pub fn tool_manifest(bundle: &Bundle) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+fn read_package(path: &Path) -> Result<Package, String> {
+    Package::read_with_diagnostics(path, |error| {
+        crate::host::trf(
+            NativeStateRefusal::TEMPLATE,
+            &[("mod", error.mod_id), ("state", error.row)],
+        )
+    })
+}
+
 fn checked_files(bundle: &Bundle) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-    Package::read(&bundle.dir)?.directory_files(&bundle.dir)
+    read_package(&bundle.dir)?.directory_files(&bundle.dir)
 }
 
 pub fn files(bundle: &Bundle) -> Result<Vec<(String, std::path::PathBuf)>, String> {

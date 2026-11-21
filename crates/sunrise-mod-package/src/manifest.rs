@@ -481,10 +481,37 @@ fn edit_distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// The `E_MIXIN_STATE_LAYOUT` diagnostic from a refused native state declaration.
+pub struct NativeStateRefusal<'a> {
+    /// The manifest's mod id, or its filename if the id is unavailable.
+    pub mod_id: &'a str,
+    /// The first state row's id, or `native.state` if it has no id.
+    pub row: &'a str,
+}
+
+impl NativeStateRefusal<'_> {
+    /// The stable diagnostic and translation key. `{mod}` is the mod id and `{state}` is the row.
+    pub const TEMPLATE: &str = "E_MIXIN_STATE_LAYOUT: {mod}:{state}: native state changes the prebuilt game's layout; use an attachment instead";
+}
+
+fn english_state_refusal(error: NativeStateRefusal<'_>) -> String {
+    // Insert from right to left so placeholders in an id are left as written.
+    NativeStateRefusal::TEMPLATE
+        .replacen("{state}", error.row, 1)
+        .replacen("{mod}", error.mod_id, 1)
+}
+
 impl Manifest {
     /// Read the package manifest. Native state declarations are refused with
     /// `E_MIXIN_STATE_LAYOUT`; they cannot enter the parsed native tables.
     pub fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_with_diagnostics(text, english_state_refusal)
+    }
+
+    fn parse_with_diagnostics(
+        text: &str,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
         let document = toml::de::DeTable::parse(text).map_err(|e| toml_error(text, &e))?;
         let root = document.get_ref();
         if let Some(state) = root
@@ -501,9 +528,7 @@ impl Manifest {
                 .and_then(|row| row.get_ref().get("id"))
                 .and_then(|id| id.get_ref().as_str())
                 .unwrap_or("native.state");
-            return Err(format!(
-                "E_MIXIN_STATE_LAYOUT: {id}:{row}: native state changes the prebuilt game's layout; use an attachment instead"
-            ));
+            return Err(render(NativeStateRefusal { mod_id: id, row }));
         }
         let m = Self::deserialize(toml::de::Deserializer::from(document))
             .map_err(|e| toml_error(text, &e))?;
@@ -818,6 +843,16 @@ impl Package {
     /// Read a flat `.smod` or project folder, without executing native code.
     /// A folder is read by its package paths, not by the names of unrelated files beside them.
     pub fn read(path: &Path) -> Result<Self, String> {
+        Self::read_with_diagnostics(path, english_state_refusal)
+    }
+
+    /// Read a package with the same validation as [`Self::read`], passing a native-state refusal
+    /// to `render` with its original arguments so a build host can localize it.
+    /// All other errors are reported as usual.
+    pub fn read_with_diagnostics(
+        path: &Path,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
         let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         let mut icon = None;
         let mut has_cargo = false;
@@ -874,15 +909,22 @@ impl Package {
             }
             let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-            return Self::read_zip(&mut zip);
+            return Self::read_zip_with_diagnostics(&mut zip, render);
         };
-        let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
+        let package = Self::from_parts(&toml, icon, has_cargo, has_source, render)?;
         package.check_runtime_layout(&crate::content::runtime_folder_files(path)?)?;
         Ok(package)
     }
 
     /// Read and validate an archive, including all selected source and resource entries.
     pub fn read_zip<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Result<Self, String> {
+        Self::read_zip_with_diagnostics(zip, english_state_refusal)
+    }
+
+    fn read_zip_with_diagnostics<R: Read + std::io::Seek>(
+        zip: &mut zip::ZipArchive<R>,
+        render: fn(NativeStateRefusal<'_>) -> String,
+    ) -> Result<Self, String> {
         let mut icon = None;
         let mut has_cargo = false;
         let mut has_source = false;
@@ -947,7 +989,7 @@ impl Package {
         if toml.len() as u64 > MAX_MANIFEST {
             return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
         }
-        let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
+        let package = Self::from_parts(&toml, icon, has_cargo, has_source, render)?;
         if uses && !package.is_native() {
             return Err(format!("a content mod has no code, so no {USES_FILE}"));
         }
@@ -1068,8 +1110,9 @@ impl Package {
         icon: Option<crate::icon::Icon>,
         has_cargo: bool,
         has_source: bool,
+        render: fn(NativeStateRefusal<'_>) -> String,
     ) -> Result<Self, String> {
-        let manifest = Manifest::parse(text)?;
+        let manifest = Manifest::parse_with_diagnostics(text, render)?;
         if has_cargo != manifest.native.is_some() || has_source != has_cargo {
             return Err("[native] and Rust source must be declared together".into());
         }

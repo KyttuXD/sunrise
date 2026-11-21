@@ -17,9 +17,11 @@ A native source package requires both `Cargo.toml` and `[native]`; inconsistent 
 are refused. A content-only package omits both. The mod's id and version come only from `sunrise-mod.toml`,
 not Cargo's package name or version. An id is a plain `[a-z0-9_]{1,64}` name, also used as its resource namespace.
 A native mod has no `rust-toolchain.toml`: the pinned Sunrise commit decides the toolchain that builds it.
-The native builder stages the crate and writes the tool's manifest itself. Keep source under `src/` and
-pack data under `assets/` or `data/`. Unrelated files beside a project are not package inputs; loose Rust
-or TOML files outside the supported paths are refused when selecting files for a build or package.
+The native builder stages the crate and writes the tool's manifest itself. If you have a handwritten
+`horizon-mixin.toml`, move its declarations into `sunrise-mod.toml`'s `[[native.*]]` tables and remove
+`horizon-mixin.toml` from the project. Keep source under `src/` and pack data under `assets/` or `data/`.
+Unrelated files beside a project are not package inputs; loose Rust or TOML files outside the
+supported paths are refused when selecting files for a build or package.
 The [archive layout](../../reference/manifest.md#project-and-archive-layout) does not allow extra files.
 
 The manifest keeps the [content fields](../content-mods.md#the-manifest), except that
