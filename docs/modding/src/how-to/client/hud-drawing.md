@@ -158,6 +158,11 @@ renderer slot selects a built-in no-op, and `has_custom_renderer()` reports that
 the fire slot afterward restores vanilla fire without uncanceling. To cancel and still draw vanilla fire,
 select a renderer that returns `false` instead of leaving the slot empty at cancellation.
 
+If you replace `native_extract_block_screen_effect` on the [unstable native route](../../concepts/native-route/2-mixins.md),
+its `extraction` argument owns both cancellation and renderer selection. Call
+`extraction.set_cancelled(true)` instead of writing a flag. It selects the same fire no-op as the event;
+`extraction.clear_custom_renderer()` afterward restores vanilla fire while leaving cancellation set.
+
 A failed submission drops its quads without changing the vanilla drawing decision. A panic names the
 mod in the log and client error toast. It disables the panicking extraction listener or, for a panic
 in submission or while the game releases the renderer, that mod's submission for that overlay kind.

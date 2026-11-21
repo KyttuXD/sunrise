@@ -77,7 +77,7 @@ impl ExtractBlockScreenEffectEvent<'_> {
     /// Whether a renderer is currently selected, including an earlier listener's choice or
     /// the built-in no-op selected when fire's cancellation is set with an empty slot.
     pub fn has_custom_renderer(&self) -> bool {
-        self.renderer.selected.is_some()
+        self.extraction.has_custom_renderer()
     }
 
     /// Select or replace the renderer for this overlay. Clone a renderer you already own so
@@ -94,10 +94,10 @@ impl ExtractBlockScreenEffectEvent<'_> {
         });
         if let Some(owners) = owners {
             let owned = OwnedOverlayRenderer {
-                owner: &owners[self.renderer.effect as usize],
+                owner: &owners[self.extraction.effect as usize],
                 renderer: Some(renderer),
             };
-            self.renderer.selected = Some(SelectedBlockScreenEffectRenderer(Some(owned)));
+            self.extraction.selected = Some(SelectedBlockScreenEffectRenderer(Some(owned)));
         } else {
             log::error!("extract_block_screen_effect: renderer selection has no listener owner");
         }
@@ -106,7 +106,41 @@ impl ExtractBlockScreenEffectEvent<'_> {
     /// Clear the current choice without changing cancellation. Canceled block and water still
     /// do not draw. For fire, clearing the slot lets vanilla fire draw even if canceled.
     pub fn clear_custom_renderer(&mut self) {
-        self.renderer.selected = None;
+        self.extraction.clear_custom_renderer();
+    }
+
+    /// Whether cancellation is set, independently of the current renderer choice.
+    pub fn cancelled(&self) -> bool {
+        self.extraction.cancelled()
+    }
+
+    /// Set cancellation. As in NeoForge, setting either value on fire with no renderer
+    /// selects a built-in no-op. Clear the choice afterward if you want vanilla fire to draw.
+    /// Returning [`crate::Flow::Cancel`] is equivalent to setting `true` as the listener ends.
+    pub fn set_cancelled(&mut self, cancelled: bool) {
+        self.extraction.set_cancelled(cancelled);
+    }
+}
+
+// no wire: the extraction holds an in-process renderer selection.
+/// Cancellation and renderer selection shared by the native hook and the listener event.
+#[doc(hidden)]
+#[derive(Clone)]
+// exhaustive: engine-only bookkeeping with private fields.
+pub struct BlockScreenEffectExtraction {
+    effect: BlockScreenEffect,
+    cancelled: bool,
+    selected: Option<SelectedBlockScreenEffectRenderer>,
+}
+
+impl BlockScreenEffectExtraction {
+    /// Start extraction uncanceled and with no renderer selected.
+    pub fn new(effect: BlockScreenEffect) -> Self {
+        Self {
+            effect,
+            cancelled: false,
+            selected: None,
+        }
     }
 
     /// Whether cancellation is set, independently of the current renderer choice.
@@ -114,34 +148,23 @@ impl ExtractBlockScreenEffectEvent<'_> {
         self.cancelled
     }
 
-    /// Set cancellation. As in NeoForge, setting either value on fire with no renderer
-    /// selects a built-in no-op. Clear the choice afterward if you want vanilla fire to draw.
-    /// Returning [`crate::Flow::Cancel`] is equivalent to setting `true` as the listener ends.
+    /// Set cancellation. Either value selects a built-in no-op for fire if no renderer is
+    /// selected at the time of the write. An existing renderer is left in place.
     pub fn set_cancelled(&mut self, cancelled: bool) {
         self.cancelled = cancelled;
-        if self.renderer.effect == BlockScreenEffect::Fire && self.renderer.selected.is_none() {
-            self.renderer.selected = Some(SelectedBlockScreenEffectRenderer::NO_OP);
+        if self.effect == BlockScreenEffect::Fire && self.selected.is_none() {
+            self.selected = Some(SelectedBlockScreenEffectRenderer::NO_OP);
         }
     }
-}
 
-// no wire: this slot holds the choice for an in-process callback.
-/// The current choice for an overlay and the effect it actually belongs to.
-#[doc(hidden)]
-#[derive(Clone)]
-// exhaustive: engine-only bookkeeping with private fields.
-pub struct BlockScreenEffectRendererSlot {
-    effect: BlockScreenEffect,
-    selected: Option<SelectedBlockScreenEffectRenderer>,
-}
+    /// Whether a renderer is selected, including the built-in fire no-op.
+    pub fn has_custom_renderer(&self) -> bool {
+        self.selected.is_some()
+    }
 
-impl BlockScreenEffectRendererSlot {
-    /// Start extraction with no renderer selected.
-    pub fn new(effect: BlockScreenEffect) -> Self {
-        Self {
-            effect,
-            selected: None,
-        }
+    /// Clear the current choice without changing cancellation; vanilla fire can draw again.
+    pub fn clear_custom_renderer(&mut self) {
+        self.selected = None;
     }
 
     /// Move the final choice out for submission.

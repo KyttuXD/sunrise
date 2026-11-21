@@ -1,0 +1,1 @@
+sunrise-client game::block_screen_effect_tests::native_fire_cancellation_selects_a_renderer_until_cleared lib daily child-process

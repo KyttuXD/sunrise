@@ -23,10 +23,10 @@ pub trait Hooks {
         dispatch = "flat",
         side = "client",
         contract = "cancel",
-        out = "canceled",
+        out = "extraction",
         neoforge = "ExtractBlockScreenEffectEvent",
         cancellable = true,
-        cancel_setter = true,
+        cancel_state = true,
         version = 5
     )]
     #[notes = r##"## Block screen effects
@@ -40,7 +40,6 @@ After extraction, the game calls each selected renderer's `submit` in block, wat
         pos: BlockPos,
         partial_tick: f32,
         player_partial_tick: f32,
-        canceled: &mut bool,
-        #[event_private] renderer: &mut mod_api::__private::BlockScreenEffectRendererSlot,
+        extraction: &mut mod_api::__private::BlockScreenEffectExtraction,
     );
 }

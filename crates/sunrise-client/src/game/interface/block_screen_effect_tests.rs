@@ -1305,6 +1305,75 @@ fn a_later_listener_can_clear_cancelled_fire_and_restore_vanilla_fire() {
 
 #[test]
 #[ignore = "daily"]
+fn native_fire_cancellation_selects_a_renderer_until_cleared() {
+    use super::api_values::TryIntoApi;
+    use mod_api::__private::BlockScreenEffectExtraction;
+
+    let name = "game::block_screen_effect_tests::native_fire_cancellation_selects_a_renderer_until_cleared";
+    if run_fresh_cases(name, "SUNRISE_NATIVE_FIRE_CANCELLATION_CHILD", &["fire"]) {
+        return;
+    }
+
+    struct ClearFire;
+    #[mod_api::__subscriptions]
+    impl Hooks for ClearFire {
+        #[listener(receive_cancelled)]
+        fn extract_block_screen_effect(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ExtractBlockScreenEffectEvent<'_>,
+        ) -> Flow {
+            assert!(event.cancelled());
+            assert!(event.has_custom_renderer());
+            event.clear_custom_renderer();
+            Flow::Continue
+        }
+    }
+
+    with_client_game(|game| {
+        let fire = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:fire")
+            .unwrap()
+            .try_into_api()
+            .unwrap();
+        for (clear_in_native, clear_in_listener, expect_renderer) in [
+            (false, false, true),
+            (true, false, false),
+            (false, true, false),
+        ] {
+            let mut extraction = BlockScreenEffectExtraction::new(Fire);
+            // A replacement may cancel (and optionally clear) before forwarding to listeners.
+            extraction.set_cancelled(true);
+            assert!(extraction.has_custom_renderer());
+            if clear_in_native {
+                extraction.clear_custom_renderer();
+            }
+            let mods = if clear_in_listener {
+                vec![ModEntry::new("clear-fire", Box::new(ClearFire))]
+            } else {
+                Vec::new()
+            };
+            mod_platform::testing::with_mods(mods.into(), || {
+                game.native_extract_block_screen_effect(
+                    Fire,
+                    fire,
+                    BlockPos::new(0, 64, 0),
+                    0.25,
+                    0.25,
+                    &mut extraction,
+                );
+            });
+            assert!(extraction.cancelled());
+            assert_eq!(extraction.into_renderer().is_some(), expect_renderer);
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn submit_runs_as_the_mod_that_selected_the_renderer() {
     use mod_api::content::crash::current_native_mod;
 

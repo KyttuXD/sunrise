@@ -3,8 +3,7 @@
 use super::{Dim, Game, api_values::TryIntoApi, host::draw::GameCameraDrawContext};
 use mod_api::{
     __private::{
-        BlockScreenEffectRendererSlot, SelectedBlockScreenEffectRenderer,
-        block_screen_effect_render,
+        BlockScreenEffectExtraction, SelectedBlockScreenEffectRenderer, block_screen_effect_render,
     },
     BlockScreenEffect,
 };
@@ -621,25 +620,24 @@ impl Game<'_> {
         custom: &mut Option<ExtractedBlockScreenEffect>,
     ) -> bool {
         let pos = BlockPos::new(pos[0], pos[1], pos[2]);
-        let mut canceled = false;
-        let mut renderer = BlockScreenEffectRendererSlot::new(effect);
+        let mut extraction = BlockScreenEffectExtraction::new(effect);
         self.native_extract_block_screen_effect(
             effect,
             state,
             pos,
             partial_tick,
             player_partial_tick,
-            &mut canceled,
-            &mut renderer,
+            &mut extraction,
         );
-        *custom = renderer
+        let kept = !extraction.cancelled();
+        *custom = extraction
             .into_renderer()
             .map(|renderer| ExtractedBlockScreenEffect {
                 state,
                 pos,
                 renderer,
             });
-        !canceled
+        kept
     }
     /// `Lightmap.getBrightness(getMaxLocalRawBrightness(eye))`.
     fn eye_brightness(&self, eye: [f64; 3]) -> f32 {

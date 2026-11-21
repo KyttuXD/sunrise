@@ -1,0 +1,24 @@
+ids = [
+    "hook:extract_block_screen_effect",
+    "fn:sunrise_client::game::native_hooks::extract_block_screen_effect::Game<'_>::native_extract_block_screen_effect",
+    "fn:dispatch_extract_block_screen_effect",
+    "type:BlockScreenEffectRendererSlot",
+]
+why = """
+Vanilla 26.3's LevelExtractor.extractPlayerState keeps fire eligibility separate from submission in
+ScreenEffectRenderer.submit. NeoForge's ExtractBlockScreenEffectEvent.setCanceled selects a no-op as soon as
+cancellation is written with an empty fire renderer slot. Native replacements and hook listeners now use the
+same operation; clearing the slot afterward restores vanilla fire without uncanceling. The public listener
+contract is unchanged.
+"""
+migrate = """
+In a replacement for Game::native_extract_block_screen_effect, replace the trailing `canceled: &mut bool` and
+`renderer: &mut mod_api::__private::BlockScreenEffectRendererSlot` parameters with
+`extraction: &mut mod_api::__private::BlockScreenEffectExtraction`. Replace `*canceled = value` with
+`extraction.set_cancelled(value)` and `*canceled` reads with `extraction.cancelled()`. To restore vanilla fire
+without uncanceling, call `extraction.clear_custom_renderer()` after setting cancellation. To forward to
+`fire_extract_block_screen_effect` or `dispatch_extract_block_screen_effect`, pass `extraction` as the one
+trailing argument instead of the previous pair. If constructing the state yourself, use
+`BlockScreenEffectExtraction::new(effect)` instead of `BlockScreenEffectRendererSlot::new(effect)` and a bool;
+`into_renderer()` still moves out the final selection. Ordinary hook listeners need no changes.
+"""
