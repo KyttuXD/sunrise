@@ -1,0 +1,18 @@
+ids = [
+    "hook:client_disconnecting",
+    "method:Hooks::client_disconnecting",
+    "type:ClientDisconnectingEvent",
+    "hook:client_player_logging_out",
+    "method:Hooks::client_player_logging_out",
+    "type:ClientPlayerLoggingOutEvent",
+    "hook:client_player_logging_out.player_id",
+    "hook:client_player_logging_out.uuid",
+    "hook:client_player_logging_out.player",
+    "hook:client_player_logging_out.game_mode",
+    "type:ClientPlayerLoggingOutEvent.player_id",
+    "type:ClientPlayerLoggingOutEvent.uuid",
+    "type:ClientPlayerLoggingOutEvent.player",
+    "type:ClientPlayerLoggingOutEvent.game_mode",
+]
+why = "Keep one client logout hook (`client_player_logging_out`, version 2) at vanilla 26.3 `Minecraft.disconnect`, where NeoForge `ClientHooks.firePlayerLogout` posts `ClientPlayerNetworkEvent.LoggingOut`. Delete `client_disconnecting`, which fired later during cleanup. The remaining hook sees a live player and game mode when present. It also runs at no-player disconnects, such as `Minecraft.exitWorldAndClose`, `Minecraft.doWorldLoad`, `ConnectScreen.startConnecting`, and `ClientCommonPacketListenerImpl.onDisconnect` during configuration. `ConnectScreen` Cancel and `ClientHandshakePacketListenerImpl.onDisconnect` only end the attempt, so they do not fire it again."
+migrate = "Replace `fn client_disconnecting(&self, host: &dyn ClientHost, event: &mut ClientDisconnectingEvent)` with `fn client_player_logging_out(&self, host: &mut dyn ClientHost, event: &mut ClientPlayerLoggingOutEvent)`. If you already implement `client_player_logging_out`, keep just that listener. Read `event.player: Option<PlayerRef>` and `event.game_mode: Option<GameMode>`. Replace reads of `event.player_id` with `event.player.map(|player| player.entity().id())` (now `Option<u32>`), and reads of `event.uuid` with `event.player.map(|player| player.uuid())`. The player handle is live for host queries during the callback. Both fields are `None` on no-player disconnects; do not expect an extra event for a connection attempt that is canceled or fails before configuration."

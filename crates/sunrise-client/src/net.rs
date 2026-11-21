@@ -145,6 +145,8 @@ pub enum Event {
         /// The reason's translation key, when it had one.
         key: Option<String>,
         from_server: bool,
+        /// Configuration or play had taken over from the login listener.
+        login_finished: bool,
     },
 }
 
@@ -192,11 +194,9 @@ impl Event {
                 .saturating_add(dynamic(registries)),
             Self::Transfer { host, port: _ } => host.capacity(),
             Self::ServerLinks(links) => links.owned_heap_bytes(),
-            Self::Disconnected {
-                reason,
-                key,
-                from_server: _,
-            } => reason.capacity().saturating_add(key.owned_heap_bytes()),
+            Self::Disconnected { reason, key, .. } => {
+                reason.capacity().saturating_add(key.owned_heap_bytes())
+            }
         };
         // Layout-derived allowance for a frozen receiving vector, actor backlog,
         // decoder marker and retained receipt, including vector spare capacity.
@@ -375,6 +375,7 @@ impl Session {
             .name("sunrise-net".into())
             .spawn(move || {
                 sunrise_threads::favour_current();
+                let mut login_finished = false;
                 let result = captured_payloads.map_err(Reason::plain).and_then(|_| {
                     run(
                         local,
@@ -394,6 +395,7 @@ impl Session {
                         lan,
                         &thread_recorder,
                         &thread_payloads,
+                        &mut login_finished,
                     )
                 });
                 thread_payloads.close();
@@ -412,6 +414,7 @@ impl Session {
                     reason: why.text,
                     key: why.key,
                     from_server,
+                    login_finished,
                 });
             })
             .inspect_err(|error| {
@@ -420,6 +423,7 @@ impl Session {
                     reason: format!("network thread: {error}"),
                     key: None,
                     from_server: false,
+                    login_finished: false,
                 });
             })
             .ok();
@@ -914,6 +918,7 @@ fn run(
     lan: bool,
     recorder: &RecorderSlot,
     payloads: &Arc<crate::raw_payloads::Transport>,
+    login_finished: &mut bool,
 ) -> Result<Reason, Reason> {
     let singleplayer = local.is_some();
     let (host, port, mut c) = if let Some(pipe) = local {
@@ -976,6 +981,8 @@ fn run(
         match login::Clientbound::decode(id, &payload).map_err(e)? {
             login::Clientbound::Compression(p) => c.set_compression(p.threshold),
             login::Clientbound::LoginFinished(p) => {
+                // handleLoginFinished installs the configuration listener before sending the ack.
+                *login_finished = true;
                 c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
                     .map_err(e)?;
                 break p.profile;

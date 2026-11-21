@@ -251,6 +251,8 @@ impl Endpoint {
                     reason: reason.plain(),
                     key: None,
                     from_server: false,
+                    // Raw application payloads only run in configuration or play.
+                    login_finished: true,
                 });
                 if let Some(writer) = writer.lock().unwrap().as_ref() {
                     writer.shutdown();

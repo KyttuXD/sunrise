@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod client_logging_out_tests;
+
 impl Game<'_> {
     pub(in crate::game) fn connect_remote_session(
         &mut self,
@@ -595,12 +598,53 @@ impl Game<'_> {
         self.stats = Default::default();
         Ok(())
     }
+
+    /// `Minecraft.disconnect`: notify before retiring the local player and level,
+    /// including resets before world entry and quit without a level. Canceling a
+    /// connection attempt does not run this boundary.
+    pub(in crate::game) fn client_logging_out(&mut self) {
+        if !self.options.is_client_start() {
+            return;
+        }
+        let player = if let Some(remote) = self.remote.as_mut() {
+            if std::mem::replace(&mut remote.logged_out, true) {
+                return;
+            }
+            if remote.has_level() {
+                self.local_player()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.native_client_player_logging_out(player, player.map(|_| self.mode));
+        if self.remote.is_none() {
+            return;
+        }
+        self.reset_client_item_use();
+        if self.mod_screen.is_some() {
+            self.remote_close_local();
+        }
+        self.native_lifecycle.begin_close();
+        self.native_lifecycle_world_closed();
+        self.recipe_ui.server_properties = Default::default();
+        self.recipe_ui.server_stations = None;
+        self.refresh_recipe_property_context();
+    }
+
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(in crate::game) fn leave_server(&mut self, reason: Option<Text>) -> Result<()> {
         if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }
         self.client_logging_out();
+        self.finish_leave_server(reason)
+    }
+
+    /// Tear down a connection after logout, or abandon an attempt that never reached logout.
+    pub(in crate::game) fn finish_leave_server(&mut self, reason: Option<Text>) -> Result<()> {
+        self.reset_book_view();
         self.finish_perf();
         // The one boundary every network session passes when it closes here: the player leaving,
         // or this client ending it with a reason (a raw disconnect closed it already, with the
@@ -640,9 +684,6 @@ impl Game<'_> {
         }
         if let Some(old) = self.remote.as_mut().and_then(|r| r.heard_level.take()) {
             self.native_client_level_unload(&old);
-        }
-        if self.remote.is_some() {
-            self.native_client_disconnecting();
         }
         self.native_net.holds.borrow_mut().clear();
         if let Some(mut r) = self.remote.take() {

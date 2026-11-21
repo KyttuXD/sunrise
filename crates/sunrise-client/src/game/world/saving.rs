@@ -49,6 +49,11 @@ impl Game<'_> {
             save.quit |= quit;
             return Ok(());
         }
+        // Minecraft.disconnect runs before stopping the integrated server, and
+        // exitWorldAndClose runs it on quit even with no client level.
+        if !self.saved_for_exit && (quit || (self.title.is_none() && self.integrated.is_some())) {
+            self.client_logging_out();
+        }
         if self.title.is_some() || self.saved_for_exit {
             // A quit from the title still needs the event loop to finish.
             self.pending_save = Some(ClosingSave {
@@ -59,10 +64,6 @@ impl Game<'_> {
                 stage: Stage::Quit,
             });
             return Ok(());
-        }
-        if self.integrated.is_some() {
-            // Minecraft.disconnect: the client logs out before its server halts.
-            self.client_logging_out();
         }
         // Stop client-side terrain work before the integrated server is shut down. The
         // server's own stop path aborts its workers, but the window's streaming registration
@@ -82,7 +83,6 @@ impl Game<'_> {
                 return self.leave_server(None);
             }
             self.connection_left(sunrise_hooks::connection::Left::Quit);
-            self.client_logging_out();
             if let Some(mut remote) = self.remote.take() {
                 remote.session.disconnect();
             }
@@ -169,12 +169,13 @@ impl Game<'_> {
                     if !server.stopped() {
                         return Ok(false);
                     }
-                    // Drop/join only after completion; leave_server's teardown
-                    // can then run without blocking on the server's writes.
+                    // Drop/join only after completion; finish_leave_server's teardown
+                    // can then run without blocking on the server's writes or firing
+                    // client_logging_out a second time.
                     if save.quit {
                         self.integrated.take().unwrap().stop()?;
                     } else {
-                        self.leave_server(None)?;
+                        self.finish_leave_server(None)?;
                     }
                     Ok(true)
                 }

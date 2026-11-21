@@ -238,8 +238,8 @@ impl Game<'_> {
                     reason,
                     key,
                     from_server,
+                    login_finished,
                 } => {
-                    self.reset_book_view();
                     log::info!("Sunrise: disconnected: {reason}");
                     // ClientboundTransferPacket left a target: connect there
                     // instead of showing the disconnect, the stored cookies
@@ -262,7 +262,14 @@ impl Game<'_> {
                         sunrise_hooks::connection::By::Connection
                     };
                     self.connection_ended(&reason, key.as_deref(), by);
-                    self.leave_server(Some(Text::literal(reason)))?;
+                    let reason = Some(Text::literal(reason));
+                    if login_finished {
+                        // ClientCommonPacketListenerImpl.onDisconnect calls Minecraft.disconnect.
+                        self.leave_server(reason)?;
+                    } else {
+                        // Connection setup and the login listener only change the screen.
+                        self.finish_leave_server(reason)?;
+                    }
                     return Ok(());
                 }
                 Event::RawPayload(incoming) => {
