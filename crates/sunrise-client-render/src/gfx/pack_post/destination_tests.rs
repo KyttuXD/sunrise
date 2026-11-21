@@ -487,7 +487,6 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         entity_motion: &[],
         entity_motion_posed: &[],
         colored_lights: &[],
-        emissive_layers: &[],
         shadow_only: &[],
         entity_spans: &[],
         skin: None,

@@ -28,8 +28,6 @@ pub(super) struct Globals {
     pub(super) dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
     pub(super) colored_lights: [crate::dynamic_light::Colored; crate::dynamic_light::MAX],
     pub(super) colored_count: [u32; 4],
-    pub(super) emissive_layers: [[u32; 4]; crate::native_emissive::MAX],
-    pub(super) emissive_count: [u32; 4],
     /// The sunrise fan's triangles as the sky shader tests them (`sunrise_fan::normals`).
     pub(super) sunrise_fan: [[f32; 4]; 2 * sunrise_fan::TRIANGLES],
     /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width;
@@ -219,7 +217,6 @@ pub struct Frame<'a> {
     /// Sunrise Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.
     pub dynamic_lights: &'a [[f32; 4]],
     pub colored_lights: &'a [crate::dynamic_light::Colored],
-    pub emissive_layers: &'a [[u32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
     pub clouds: Option<crate::clouds::Input<'a>>,
     /// Retained lightning bolts, drawn before the other additive entities.

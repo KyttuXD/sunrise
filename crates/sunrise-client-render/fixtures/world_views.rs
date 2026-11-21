@@ -948,7 +948,6 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         glowing: &[],
         dynamic_lights: &[],
         colored_lights: &[],
-        emissive_layers: &[],
         clouds: None,
         lightning: Default::default(),
         additive: &[],

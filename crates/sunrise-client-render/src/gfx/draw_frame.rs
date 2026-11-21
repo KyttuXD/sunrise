@@ -272,19 +272,6 @@ impl Renderer {
                 frame.pvp.glint,
                 0,
             ],
-            emissive_layers: {
-                let mut layers = [[0; 4]; crate::native_emissive::MAX];
-                for (to, from) in layers.iter_mut().zip(frame.emissive_layers) {
-                    *to = *from;
-                }
-                layers
-            },
-            emissive_count: [
-                frame.emissive_layers.len().min(crate::native_emissive::MAX) as u32,
-                0,
-                0,
-                0,
-            ],
             sunrise_fan: sunrise_fan::normals(frame.sky.sunrise_color[3], sun),
             filtering: [
                 self.texture_filtering as f32,
