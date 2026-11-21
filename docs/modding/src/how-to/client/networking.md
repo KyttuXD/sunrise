@@ -99,10 +99,15 @@ A typed payload sends a value of your own type on a registered channel. Its body
 little-endian numbers and lengths; it is not the vanilla packet codec. Use a raw channel
 when another implementation requires a specific byte format.
 
-Use owned `String` fields, not static strings or interned level keys: the network codec never
-interns incoming text. The registrar also refuses Wire forms that allocate outside the shared
-budget, such as `Identifier`, `SpawnerKey`, `CustomSpawners`, `ModelPart`, JSON values and `Text`,
-even in nested fields. Send bounded owned fields and convert explicitly where you need those types.
+Use owned `String` fields for text and `Identifier` fields for resource names. Wire writes an
+`Identifier` as the namespace and path, in that order, with the normal string framing and limits
+for each component. This is not the vanilla encoding of a single `namespace:path` string. Replacing
+an existing `String` field with an `Identifier` changes the channel's negotiated schema; keep the
+`String` field and parse it in the handler if you need to keep that channel's byte contract.
+
+The network codec never interns incoming text. Static strings and interned level keys are not
+accepted. The registrar also refuses Wire forms that allocate outside the shared budget, such as
+`SpawnerKey`, `CustomSpawners`, `ModelPart`, JSON values and `Text`, even in nested fields.
 
 Derive `Wire` for the value, register it in `Hooks::register`, and keep the token the
 registrar returns:

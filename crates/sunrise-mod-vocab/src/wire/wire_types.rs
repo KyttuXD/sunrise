@@ -167,18 +167,22 @@ slot_keys!(registries;
 slot_keys!(u64; UnresolvedFluid);
 
 impl Wire for crate::Identifier {
-    layout_fields!(ordinary_only "validated-identifier:v1"; "namespace" => String, "path" => String);
+    layout_fields!(payload "validated-identifier:v1"; "namespace" => String, "path" => String);
     const MIN: usize = 8;
     fn put(&self, out: &mut Writer) {
-        if out.ordinary_only() {
+        if out.charge_with(|budget| budget.identifier_data()) {
             out.put_str(self.namespace());
             out.put_str(self.path());
         }
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        input.ordinary_only()?;
-        Self::from_parts(input.take_str()?, input.take_str()?)
-            .map_err(|_| WireError::Invalid("invalid identifier"))
+        let namespace = input.take_str()?;
+        let path = input.take_str()?;
+        input.charge_with(|budget| {
+            budget.identifier_data()?;
+            budget.bytes(namespace.len() as u64 + path.len() as u64)
+        })?;
+        Self::from_parts(namespace, path).map_err(|_| WireError::Invalid("invalid identifier"))
     }
 }
 impl Wire for crate::LevelKey {

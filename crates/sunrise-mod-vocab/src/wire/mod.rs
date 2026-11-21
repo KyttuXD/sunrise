@@ -1096,11 +1096,16 @@ impl Wire for std::time::Duration {
 }
 
 // The same declarations feed the runtime fingerprint and the SDK surface generator.
+// A checked contract names the validation independently of payload admission.
 macro_rules! layout_fields {
+    (@admission $schema:ident payload) => {};
+    (@admission $schema:ident ordinary_only) => {
+        $schema.ordinary_only();
+    };
     ($($availability:ident $contract:literal;)? $($field:literal => $ty:ty),* $(,)?) => {
         fn describe(schema: &mut $crate::wire::WireSchema) -> u64 {
             use $crate::wire::WireSchema;
-            $(schema.$availability();)?
+            $($crate::wire::layout_fields!(@admission schema $availability);)?
             schema.named::<Self>(|schema| {
                 let hash = WireSchema::leaf("wire-layout-v1");
                 $(let hash = WireSchema::mix(hash, WireSchema::leaf($contract));)?

@@ -1,12 +1,17 @@
 //! Validated resource identifiers, with Java hashing and path-first ordering.
 use crate::java_hash_map::JavaKey;
-use std::{cmp::Ordering, fmt, sync::Arc};
+use std::{alloc::Layout, cmp::Ordering, fmt, sync::Arc};
 #[derive(Debug, PartialEq, Eq)]
 struct Data {
     namespace: Box<str>,
     path: Box<str>,
     hash: i32,
 }
+
+/// Layout of the shared value, excluding the Arc header and string buffers.
+#[doc(hidden)]
+pub const IDENTIFIER_DATA_LAYOUT: Layout = Layout::new::<Data>();
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identifier(Arc<Data>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

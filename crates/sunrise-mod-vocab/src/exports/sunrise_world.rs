@@ -1,6 +1,8 @@
 /// The structure box a piece's `bounding_box` answers, in world blocks.
 pub use sunrise_core::bounding_box::BoundingBox;
 pub use sunrise_core::equipment_slot::EquipmentSlot;
+/// An owned, validated resource name, not a process-local registry key.
+/// In Wire (including typed payloads), the namespace and path are two separate UTF-8 strings.
 pub use sunrise_core::identifier::Identifier;
 /// A level's key (`LevelDimension::Custom`).
 pub use sunrise_core::level_key::LevelKey;
