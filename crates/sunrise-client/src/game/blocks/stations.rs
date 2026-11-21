@@ -3208,11 +3208,11 @@ mod tests {
                         game.gather_tooltip_components(&stick, lines.clone(), 10, (320.0, 240.0))
                     };
                     MODE.store(0, Ordering::Relaxed);
-                    let plain = gather(game).unwrap();
+                    let plain = gather(game).unwrap().components;
                     assert_eq!(plain.len(), 1);
                     assert!(plain[0].as_text().is_some());
                     MODE.store(1, Ordering::Relaxed);
-                    let elements = gather(game).unwrap();
+                    let elements = gather(game).unwrap().components;
                     let wrapped: Vec<_> = elements
                         .iter()
                         .filter_map(|e| {
@@ -3244,14 +3244,14 @@ mod tests {
                             .is_some()
                     );
                     MODE.store(3, Ordering::Relaxed);
-                    let mixed = gather(game).unwrap();
+                    let mixed = gather(game).unwrap().components;
                     assert_eq!(mixed.len(), 4);
                     assert!(mixed[0].as_text().is_some());
                     assert!(mixed[1].downcast_ref::<KnownClient>().is_some());
                     assert!(mixed[2].as_text().is_some());
                     assert!(mixed[3].as_text().is_some());
                     MODE.store(2, Ordering::Relaxed);
-                    assert!(gather(game).is_none());
+                    assert!(gather(game).unwrap().components.is_empty());
                 });
             });
         });
@@ -3479,8 +3479,7 @@ mod cycling_tests {
         }
         let default_font = Identifier::parse("minecraft:default").unwrap();
         let alt_font = Identifier::parse("minecraft:alt").unwrap();
-        let components = vec![PreparedTooltipComponent::__text(
-            mod_api::Text::literal("Tip"),
+        let components = vec![PreparedComponent::Text(sunrise_client::text::Text::literal("Tip"),
             u32::MAX,
         )];
         let mods: Mods = vec![ModEntry::new("pre", Box::new(Mod))].into();

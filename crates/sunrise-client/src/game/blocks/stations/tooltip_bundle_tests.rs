@@ -105,7 +105,7 @@ fn bundle_no_listener_order_and_draw_position() {
         ];
         let elements = game
             .gather_tooltip_components(&stack, lines, 10, (320.0, 240.0))
-            .unwrap();
+            .unwrap().components;
         let font = crate::game::host::draw::EngineTooltipFont {
             font: &game.gui.atlas.font,
             id: &DEFAULT_FONT_ID,
@@ -166,7 +166,7 @@ fn bundle_empty_text_gathers_image_at_zero() {
     run(None, |game| {
         let elements = game
             .gather_tooltip_components(&bundle(), vec![], 10, (320.0, 240.0))
-            .unwrap();
+            .unwrap().components;
         let font = crate::game::host::draw::EngineTooltipFont {
             font: &game.gui.atlas.font,
             id: &DEFAULT_FONT_ID,
@@ -188,7 +188,7 @@ fn bundle_empty_contents_keeps_image() {
         let lines = vec![(sunrise_client::text::Text::literal("Name"), u32::MAX)];
         let elements = game
             .gather_tooltip_components(&stack, lines, 10, (320.0, 240.0))
-            .unwrap();
+            .unwrap().components;
         let font = crate::game::host::draw::EngineTooltipFont {
             font: &game.gui.atlas.font,
             id: &DEFAULT_FONT_ID,
