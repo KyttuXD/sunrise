@@ -150,11 +150,9 @@ pub(in crate::game) struct GuestMenuEffects {
 
 pub(in crate::game) struct FurnaceMenuEffects {
     uuid: u128,
-    entity_id: i32,
     pos: (i32, i32, i32),
     at: [f64; 3],
-    smelted: Vec<(Option<ItemStack>, u32)>,
-    extracted: Option<(ItemStack, u32)>,
+    smelted: Vec<(ItemStack, u32)>,
 }
 
 impl GuestMenuEffects {
@@ -315,7 +313,6 @@ impl Game<'_> {
         );
         load_player(menu, &host.hub.guests[gi]);
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
-        menu.item_smelted_hook = menu.brewed_potion_hook;
         let result = op(menu, &env);
         if let Some(maps) = maps {
             self.register_made_maps(maps);
@@ -329,30 +326,43 @@ impl Game<'_> {
     }
 
     pub(super) fn publish_furnace_menu_effects(&mut self, effects: FurnaceMenuEffects) {
+        use super::api_values::{project_stack, stack_read_metadata};
         let FurnaceMenuEffects {
             uuid,
-            entity_id,
             pos,
             at,
             smelted,
-            extracted,
         } = effects;
-        for (stack, removed) in smelted {
-            self.native_item_smelted(uuid, entity_id, stack.as_ref(), removed);
+        // Vanilla pays out the recorded recipes before NeoForge posts the event.
+        self.award_furnace_recipes(pos, at);
+        if smelted.is_empty() {
+            return;
         }
-        if let Some((stack, taken)) = extracted {
-            if mod_api::__private::listened(mod_api::HookId::FurnaceExtract)
-                && let Some(name) = self.lan.as_ref().and_then(|host| {
-                    host.hub
-                        .guests
-                        .iter()
-                        .find(|g| g.uuid == uuid)
-                        .map(|g| g.name.clone())
-                })
-            {
-                self.native_furnace_extract(uuid, &name, [pos.0, pos.1, pos.2], &stack.item, taken);
-            }
-            self.award_furnace_recipes(pos, at);
+        let Some(player) = self.player(uuid) else {
+            log::warn!("item_smelted: player {uuid:032x} is no longer available");
+            return;
+        };
+        for (stack, amount_removed) in &smelted {
+            let metadata = match stack_read_metadata(stack) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    log::warn!("item_smelted: cannot borrow result stack: {error:?}");
+                    continue;
+                }
+            };
+            let project = |metadata| match project_stack(stack, metadata) {
+                Ok(stack) => Some(stack),
+                Err(error) => {
+                    log::warn!("item_smelted: cannot project result stack: {error:?}");
+                    None
+                }
+            };
+            let stack = mod_api::ItemStackView::resident(metadata, &project);
+            self.native_item_smelted(mod_api::__private::ItemSmeltedCall {
+                player,
+                stack: &stack,
+                amount_removed: *amount_removed,
+            });
         }
     }
 
@@ -655,7 +665,6 @@ impl Game<'_> {
             }
         };
         overlay_links(&self.world, &mut items);
-        let furnace = matches!(kind, Kind::Furnace(_));
         // CrafterBlockEntity.containerData: the disabled slots, then triggered.
         let crafter_data = match self.world.block_entities.get(&pos) {
             Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.is_triggered())),
@@ -677,6 +686,8 @@ impl Game<'_> {
             .filter(|(window, m)| *window == p.container && m.kind() == kind)
             .map_or_else(|| Box::new(Menu::new(kind)), |(_, m)| m);
         menu.set_registry_id(Some(&menu_id));
+        menu.item_smelted_hook = matches!(kind, Kind::Furnace(_))
+            && mod_api::__private::listened(mod_api::HookId::ItemSmelted);
         for &slot in &hidden {
             menu.hide_slot(slot);
         }
@@ -755,29 +766,16 @@ impl Game<'_> {
                 }
                 _ => {}
             }
-            // FurnaceResultSlot.checkTakeAchievements and its observable effects may run
-            // only after the click, including any outer menu decision, is committed.
-            let smelted = std::mem::take(&mut menu.item_smelted);
-            let extracted = if furnace {
-                items[2].as_ref().and_then(|output| {
-                    let taken = output
-                        .count
-                        .saturating_sub(menu.slot(2).map_or(0, |stack| stack.count));
-                    (taken > 0).then(|| (output.clone(), taken))
-                })
-            } else {
-                None
-            };
-            if (!smelted.is_empty() || extracted.is_some())
+            // A result check's observable effects only run after commit, including
+            // when an outer menu decision can still abort the click.
+            if std::mem::take(&mut menu.furnace_taken)
                 && let Some(guest) = game.lan.as_ref().and_then(|host| host.hub.guest(conn))
             {
                 let effects = FurnaceMenuEffects {
                     uuid: guest.uuid,
-                    entity_id: guest.entity_id,
                     pos,
                     at: guest.position,
-                    smelted,
-                    extracted,
+                    smelted: std::mem::take(&mut menu.item_smelted),
                 };
                 game.after_commit(After::FurnaceMenu(Box::new(effects)));
             }

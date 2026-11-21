@@ -1,0 +1,18 @@
+ids = [
+    "hook:furnace_extract",
+    "method:Hooks::furnace_extract",
+    "type:FurnaceExtractEvent",
+    "type:FurnaceExtractEvent.player",
+    "type:FurnaceExtractEvent.name",
+    "type:FurnaceExtractEvent.pos",
+    "type:FurnaceExtractEvent.item",
+    "type:FurnaceExtractEvent.count",
+    "hook:item_smelted",
+    "method:Hooks::item_smelted",
+    "type:ItemSmeltedEvent",
+    "type:ItemSmeltedEvent.player",
+    "type:ItemSmeltedEvent.player_entity_id",
+    "type:ItemSmeltedEvent.stack",
+]
+why = "One furnace result-slot take could send both the old extraction notice and ItemSmeltedEvent. Follow vanilla FurnaceResultSlot.checkTakeAchievements and AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience, and NeoForge EventHooks.firePlayerSmeltedEvent: pay out recorded recipe experience separately, then notify only for a nonzero removed count. Furnace cooking is a different moment and does not send this event."
+migrate = "Implement Hooks::item_smelted(&self, host: &mut dyn ServerHost, event: &mut ItemSmeltedEvent<'_>) instead of furnace_extract and remove its subscription. If you already implement item_smelted, keep its name. Use event.player.uuid() for the old UUID and event.player.entity().id() for the old numeric entity id. Read the item key with event.stack.item(), or use event.stack.project() for an owned stack and its components. Use event.amount_removed in place of count, not the stack count: a partial shift-click lends the original result stack. The old extraction name and position fields are not event arguments. The stack is no longer optional and zero-count checks, including hotbar swaps, no longer send events. Keep furnace_smelt for cooking, not for takes."

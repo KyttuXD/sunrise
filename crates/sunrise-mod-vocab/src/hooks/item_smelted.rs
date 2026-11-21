@@ -1,26 +1,24 @@
-//! The `item_smelted` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
+//! The `item_smelted` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// `FurnaceResultSlot.checkTakeAchievements` ran for a server player at a
-    /// furnace, blast furnace or smoker's result slot: `player` is their UUID
-    /// and `player_entity_id` their network id; `stack` and `amount_removed`
-    /// are what vanilla passes there (`getSmelting`, `getAmountRemoved`). A
-    /// click or a throw passes the taken stack and its count; a shift-click
-    /// passes the slot's stack as it was with the count moved, then what
-    /// stayed in the slot (`None` once it is empty) with 0; a hotbar swap
-    /// passes the taken stack with 0. Fires before `furnace_extract`.
-    /// Server-side.
+    /// NeoForge's `PlayerEvent.ItemSmeltedEvent` at `FurnaceResultSlot.checkTakeAchievements`.
+    /// Reports a committed result take from a furnace, blast furnace or smoker, after the
+    /// furnace's recipe experience has been paid out. `player` is the live player;
+    /// `stack` borrows the result (`ItemStackView::project` copies components on demand).
+    /// For a shift-click it describes the original result stack; `amount_removed` is only
+    /// the count moved. Checks with zero removed (including the follow-up after shift-click
+    /// and a hotbar swap) do not notify. The hook does not fire for cooking or automation.
+    /// Non-cancellable; fires on the integrated and dedicated server. A panicking
+    /// listener is disabled for the session without interrupting other listeners.
     #[hook(
-        dispatch = "flat",
+        dispatch = "api_carrier",
         side = "server",
         contract = "listen",
         neoforge = "PlayerEvent.ItemSmeltedEvent",
-        cancellable = false
+        cancellable = false,
+        isolate = true,
+        event_per_listener = true,
+        version = 2
     )]
-    fn item_smelted(
-        player: u128,
-        player_entity_id: i32,
-        stack: Option<&ItemStack>,
-        amount_removed: u32,
-    );
+    fn item_smelted(player: PlayerRef, stack: &ItemStackView<'_>, amount_removed: u32);
 }

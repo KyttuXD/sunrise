@@ -517,13 +517,13 @@ impl Hook {
         let isolate = api.isolate.unwrap_or(false);
         if isolate
             && (scope.is_some()
-                || !(api.contract == Contract::Cancel
+                || !(matches!(api.contract, Contract::Cancel | Contract::Listen)
                     || api.contract == Contract::Collect && answered_by_mod))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
                 error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
+                    "isolate is for a global listener, cancel hook or collect hook answered by mod"
                         .into(),
             });
         }

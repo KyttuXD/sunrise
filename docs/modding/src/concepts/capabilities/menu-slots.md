@@ -145,6 +145,13 @@ took a stack out of one of the block's own slots, once per take. It refuses noth
 result slot uses it to give experience, unlock a recipe or use up its inputs, through the `Host`. `item_crafted` and
 `item_smelted` stay the crafting grid's and the furnaces' events and are never heard for a mod menu.
 
+`item_smelted` is the non-cancellable result-take event for furnaces, smokers and blast furnaces. It fires
+on the server after the take commits and the furnace pays out its recorded recipe experience. Use
+`event.player` for the live player, `event.stack` to read the result and `event.amount_removed` for the
+count taken. A shift-click can move fewer items than the original stack holds; use `amount_removed`, not
+`stack.count()`, to count that transfer. A zero-count result check (such as a hotbar swap) can still pay out
+experience but does not notify a listener. Furnace cooking itself is a separate event (`furnace_smelt`).
+
 ```rust,ignore
 struct PotOutput;
 #[mod_api::sunrise_part]

@@ -818,6 +818,7 @@ impl Menu {
                 brewed: Vec::new(),
                 brewed_potion_hook: false,
                 brewed_potion_takes: Vec::new(),
+                furnace_taken: false,
                 item_smelted_hook: false,
                 item_smelted: Vec::new(),
                 item_smithed_hook: false,
@@ -2116,15 +2117,16 @@ impl Menu {
         self.state.containers[RESULT][0] = result;
     }
 
-    /// `FurnaceResultSlot.checkTakeAchievements`: what `carried` and
-    /// `removeCount` were, kept for `ItemSmeltedEvent` when a server caller
-    /// listens; the count starts again.
+    /// `FurnaceResultSlot.checkTakeAchievements`: pay out recorded recipes even when
+    /// `removeCount` is zero. NeoForge only posts `ItemSmeltedEvent` for a nonzero count.
     fn furnace_take(&mut self, env: &Env, carried: &ItemStack) {
         self.touch();
         let removed = std::mem::take(&mut self.state.output_removed);
-        if self.state.item_smelted_hook && env.loop_context.side() == LoopSide::Server {
-            let carried = (carried.count > 0).then(|| carried.clone());
-            self.state.item_smelted.push((carried, removed));
+        if env.loop_context.side() == LoopSide::Server {
+            self.state.furnace_taken = true;
+            if self.state.item_smelted_hook && removed != 0 {
+                self.state.item_smelted.push((carried.clone(), removed));
+            }
         }
     }
 
@@ -3509,12 +3511,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// `FurnaceResultSlot.checkTakeAchievements` as `ItemSmeltedEvent` sees
-    /// it: a pickup passes the taken stack and its count; a shift-click with
-    /// room for 2 of 64 passes the 64 with 2 removed (`onQuickCraft`), then
-    /// the 62 left with 0 (`onTake`); nothing is kept without a listener.
+    /// NeoForge posts for a nonzero `removeCount`, but vanilla pays out recorded
+    /// recipes on a result-slot check even with zero removed or no listener.
     #[test]
-    fn a_furnace_take_keeps_what_check_take_achievements_passes() {
+    fn a_furnace_result_check_notifies_once_for_a_nonzero_count() {
         bare_env(|env| {
             let furnace = |hook: bool| {
                 let mut menu = Menu::new(Kind::Furnace("smelting"));
@@ -3525,9 +3525,10 @@ pub(crate) mod tests {
 
             let mut menu = furnace(true);
             menu.click(env, 2, 0, Input::Pickup).unwrap();
-            assert_eq!(menu.item_smelted, [(stack("iron_ingot", 64), 64)]);
+            assert_eq!(menu.item_smelted, [(stack("iron_ingot", 64).unwrap(), 64)]);
+            assert!(menu.furnace_taken);
 
-            // The inventory full of dirt but for one stack with room for 2.
+            // The inventory is full of dirt but for one stack with room for 2.
             let mut menu = furnace(true);
             for s in 3..39 {
                 menu.set_slot(env, s, stack("dirt", 64));
@@ -3535,14 +3536,19 @@ pub(crate) mod tests {
             menu.set_slot(env, 3, stack("iron_ingot", 62));
             menu.click(env, 2, 0, Input::QuickMove).unwrap();
             assert_eq!(menu.slot(2), stack("iron_ingot", 62).as_ref());
-            assert_eq!(
-                menu.item_smelted,
-                [(stack("iron_ingot", 64), 2), (stack("iron_ingot", 62), 0),]
-            );
+            assert_eq!(menu.item_smelted, [(stack("iron_ingot", 64).unwrap(), 2)]);
+            assert!(menu.furnace_taken);
+
+            let mut menu = furnace(true);
+            menu.click(env, 2, 0, Input::Swap).unwrap();
+            assert_eq!(menu.player_item(0), stack("iron_ingot", 64).as_ref());
+            assert!(menu.item_smelted.is_empty());
+            assert!(menu.furnace_taken);
 
             let mut menu = furnace(false);
             menu.click(env, 2, 0, Input::Pickup).unwrap();
             assert!(menu.item_smelted.is_empty());
+            assert!(menu.furnace_taken);
         });
     }
 

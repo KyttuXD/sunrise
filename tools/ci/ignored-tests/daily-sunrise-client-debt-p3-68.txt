@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::item_smelted::tests::a_committed_furnace_result_take_reports_the_live_player_after_experience lib daily resources

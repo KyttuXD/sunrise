@@ -146,13 +146,14 @@ pub struct State {
     /// Stacks taken from brewing stand bottle slots, for
     /// `PlayerBrewedPotionEvent`.
     pub brewed_potion_takes: Vec<ItemStack>,
-    /// Set by a server caller when a mod listens: every
-    /// `FurnaceResultSlot.checkTakeAchievements` then goes to `item_smelted`.
+    /// A furnace result slot ran `checkTakeAchievements`: the server must pay out
+    /// the furnace's recorded recipes, regardless of the amount removed or listeners.
+    pub furnace_taken: bool,
+    /// Set by a server caller when a mod listens for `ItemSmeltedEvent`.
     pub item_smelted_hook: bool,
-    /// What each `checkTakeAchievements` of a furnace's result slot passed,
-    /// for `ItemSmeltedEvent`: the stack (`None` for vanilla's empty one)
-    /// and `removeCount`.
-    pub item_smelted: Vec<(Option<ItemStack>, u32)>,
+    /// What the result slot passes to `ItemSmeltedEvent`: the stack and nonzero
+    /// `removeCount` from `FurnaceResultSlot.checkTakeAchievements`.
+    pub item_smelted: Vec<(ItemStack, u32)>,
     /// Set by a server caller when a mod listens: every smithing result
     /// taken then goes to `item_smithed`.
     pub item_smithed_hook: bool,

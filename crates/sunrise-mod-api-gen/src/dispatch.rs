@@ -1264,6 +1264,12 @@ pub(super) fn emit<'a>(
                     o = out.unwrap()
                 ),
             ),
+            None if contract == Contract::Listen && hook.isolate => (
+                String::new(),
+                format!(
+                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} super::runtime::observe_isolated(HookId::{hook_id}, mod_id, \"{name}\", || {mod_item}.{name}({invoke})); }} }}"
+                ),
+            ),
             None if mod_cancel && hook.isolate => (
                 String::new(),
                 format!(

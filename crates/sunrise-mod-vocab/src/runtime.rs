@@ -449,6 +449,28 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Run an isolated notice. A phase refusal affects only this invocation; a panic
+/// disables the one listener without stopping the other mods from seeing the event.
+pub(crate) fn observe_isolated(
+    hook: HookId,
+    id: &'static str,
+    operation: &'static str,
+    call: impl FnOnce(),
+) {
+    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    match contain_unwind(|| refusable(outside_world(), call)) {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => refusal.report_each(),
+        Err(message) => {
+            poison(hook, id);
+            log::error!(
+                "mod {id}: hook {operation} panicked and is disabled for this session: {message}"
+            );
+            record_callback_panic(id, "hook", operation, message);
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,
