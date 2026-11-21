@@ -269,12 +269,7 @@ impl Drop for Batch<'_> {
 
 /// Asks every renderer to add the quads of the section `tints` is set up for, and adds them to
 /// `out` after the section's own blocks. A renderer's quads are taken whole or refused whole.
-pub(super) fn add(
-    mesher: &Mesher<'_>,
-    tints: &mut Tints<'_>,
-    out: &mut SectionMesh,
-    visibility_bytes: usize,
-) {
+pub(super) fn add(mesher: &Mesher<'_>, tints: &mut Tints<'_>, out: &mut SectionMesh) {
     let [cx, cz, base_y] = tints.origin;
     let origin = [cx * 16, base_y, cz * 16];
     let region = Region {
@@ -282,7 +277,7 @@ pub(super) fn add(
         tints: RefCell::new(tints),
         nether: mesher.nether_shading,
     };
-    let mut budget = Budget::left_after(out, visibility_bytes);
+    let mut budget = Budget::left_after(out, 0);
     for renderer in mesher.tables.section_geometry.iter() {
         if renderer.failed.load(Ordering::Relaxed) {
             continue;
