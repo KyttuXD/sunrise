@@ -286,7 +286,7 @@ pub struct ItemInfo {
     pub cushion_color: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
-    /// Has a default `bundle_contents` (the bundles, `BundleItem`).
+    /// Registered `BundleItem` behaviour, independent of the component defaults.
     pub bundle: bool,
     /// The ids of the item's default components (its prototype's keys).
     pub components: Vec<String>,
@@ -1163,6 +1163,18 @@ impl Items {
                 extra,
             };
             let villager_food = component_prototype.villager_food(None);
+            let template = mod_templates.get(name);
+            let behavior = template.map_or(name.as_str(), String::as_str);
+            // `Items.BUNDLE` and `Items.DYED_BUNDLE` are registered as BundleItem.
+            let bundle = behavior == "minecraft:bundle"
+                || behavior
+                    .strip_prefix("minecraft:")
+                    .and_then(|path| path.strip_suffix("_bundle"))
+                    .is_some_and(|color| {
+                        crate::firework::DYE_FIREWORK_COLORS
+                            .iter()
+                            .any(|(name, _)| *name == color)
+                    });
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -1236,7 +1248,7 @@ impl Items {
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
                     cushion_color: c["minecraft:cushion/color"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
-                    bundle: c.get("minecraft:bundle_contents").is_some(),
+                    bundle,
                     components: c
                         .as_object()
                         .map(|c| c.keys().cloned().collect())
@@ -1258,7 +1270,7 @@ impl Items {
                         .find(|(item, _)| *item == name)
                         .map(|(_, rest)| (*rest).to_owned())
                         .or_else(|| mod_remainders.get(name).cloned()),
-                    template: mod_templates.get(name).map(|t| Arc::from(t.as_str())),
+                    template: template.map(|t| Arc::from(t.as_str())),
                     villager_food,
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()

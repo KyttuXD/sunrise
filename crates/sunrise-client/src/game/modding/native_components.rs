@@ -551,7 +551,7 @@ mod item_resource_property_tests {
         use mod_api::{ComponentId, ItemResource, Tag};
         use serde_json::json;
         use std::{fs, path::Path};
-        use sunrise_client::items::ItemStack;
+        use sunrise_client::{bundle, item_tooltip::bundle_tooltip, items::ItemStack};
         fn link_fixture_source(source: &Path, target: &Path) {
             #[cfg(unix)]
             std::os::unix::fs::symlink(source, target).unwrap();
@@ -588,6 +588,14 @@ mod item_resource_property_tests {
         defaults["minecraft:bundle"]["minecraft:bundle_contents"] =
             json!([{"id": "minecraft:stone", "count": 32}]);
         defaults["sunrise:consumable_fixture"] = defaults["minecraft:stick"].clone();
+        defaults["minecraft:stick"]["minecraft:bundle_contents"] =
+            defaults["minecraft:bundle"]["minecraft:bundle_contents"].clone();
+        defaults["minecraft:red_bundle"]
+            .as_object_mut()
+            .unwrap()
+            .remove("minecraft:bundle_contents");
+        defaults["minecraft:black_bundle"]["minecraft:bundle_contents"] =
+            json!([{"id": "minecraft:black_bundle"}]);
         // A mod item belongs to the registry as well as the component report.
         let mut registries: Value =
             serde_json::from_slice(&fs::read(resources.join("command-registries.json")).unwrap())
@@ -663,25 +671,78 @@ mod item_resource_property_tests {
             assert_eq!(engine(&removed, 1).effective_damage(info), 0);
             assert!(removed.bar(game).is_none());
 
-            let bundle = ItemResource::of(&super::super::api_values::test_snapshot(
-                &ItemStack::new("minecraft:bundle", 1),
-            ));
-            // Vanilla BundleItem: half a stack weighs 1/2, showing 1 + floor(12 / 2)
-            // pixels in the not-full colour. An explicitly empty or removed component
-            // suppresses the prototype's bar rather than inheriting its contents.
+            let items = game.items();
+            let stone = ItemStack::new("minecraft:stone", 32);
+            let mut inner = ItemStack::new("minecraft:bundle", 1);
+            let bundle = ItemResource::of(&super::super::api_values::test_snapshot(&inner));
+            // Vanilla BundleItem and ClientBundleTooltip: 32 stone weighs half,
+            // leaving room for 32 more with a 7-pixel item bar and 47-pixel tooltip fill.
             let bar = bundle.bar(game).unwrap();
             assert_eq!((bar.width, bar.color), (7, 0x7087FF));
+            let tooltip = bundle_tooltip(items, &inner, 0.0, 0.0, 96.0, 1).unwrap();
+            assert_eq!(tooltip.slots[0].1, stone);
+            assert_eq!(tooltip.fill, 47.0);
+            assert_eq!(game.item_bundle_capacity(&inner, 0, &stone), 32);
+            assert_eq!(
+                game.item_bundle_slots(&inner),
+                Some(vec![Some(stone.clone())])
+            );
+
+            let mut outer = ItemStack::new("minecraft:bundle", 1);
+            outer.data_mut().bundle_contents = vec![inner.clone()];
+            let outer_resource = ItemResource::of(&super::super::api_values::test_snapshot(&outer));
+            // 1/2 + the 1/16 nested bundle overhead: floor(12 * 9/16) + 1.
+            let bar = outer_resource.bar(game).unwrap();
+            assert_eq!((bar.width, bar.color), (7, 0x7087FF));
+            assert_eq!(game.item_bundle_capacity(&outer, 0, &stone), 28);
+            assert_eq!(
+                bundle_tooltip(items, &outer, 0.0, 0.0, 96.0, 1)
+                    .unwrap()
+                    .fill,
+                52.0
+            );
+
             let contents = ComponentId::new("minecraft:bundle_contents").unwrap();
             let empty = bundle
                 .with_component(game, &contents, Tag::List(Vec::new()))
                 .unwrap();
             assert!(empty.bar(game).is_none());
-            assert!(
-                bundle
-                    .without_component(game, &contents)
-                    .bar(game)
-                    .is_none()
+            assert_eq!(game.item_bundle_capacity(&engine(&empty, 1), 0, &stone), 64);
+            let removed = bundle.without_component(game, &contents);
+            assert!(removed.bar(game).is_none());
+            assert!(game.item_bundle_slots(&engine(&removed, 1)).is_none());
+
+            // Menu selection and removal must work on inherited contents; writing the
+            // last item out leaves an explicit empty component, not an absent patch.
+            bundle::toggle_selected(items, &mut inner, 0);
+            let mut menu = bundle::Contents::of(items, &inner).unwrap();
+            assert_eq!(menu.selected(), 0);
+            assert_eq!(menu.remove_one(items), Some(stone.clone()));
+            menu.store(items, &mut inner);
+            assert!(game.item_resource_bar(&inner).is_none());
+            assert_eq!(game.item_bundle_slots(&inner), Some(Vec::new()));
+            assert_eq!(game.item_bundle_capacity(&inner, 0, &stone), 64);
+            let patch = sunrise_items::item_data::encode_components(&inner, items).unwrap();
+            assert_eq!(
+                patch.get("minecraft:bundle_contents"),
+                Some(&Tag::List(Vec::new()))
             );
+
+            let stick = ItemStack::new("minecraft:stick", 1);
+            assert!(game.item_resource_bar(&stick).is_none());
+            let mut red = ItemStack::new("minecraft:red_bundle", 1);
+            assert!(game.item_bundle_slots(&red).is_none());
+            red.data_mut().bundle_contents = vec![stone.clone()];
+            let bar = game.item_resource_bar(&red).unwrap();
+            assert_eq!((bar.width, bar.color), (7, 0x7087FF));
+
+            // An uncomputable weight follows the vanilla error presentation and
+            // refuses insertion instead of recursing through a cyclic prototype.
+            let cyclic = ItemStack::new("minecraft:black_bundle", 1);
+            let bar = game.item_resource_bar(&cyclic).unwrap();
+            assert_eq!((bar.width, bar.color), (13, 0xFF5454));
+            assert_eq!(game.item_bundle_capacity(&cyclic, 0, &stone), 0);
+            assert!(bundle_tooltip(items, &cyclic, 0.0, 0.0, 96.0, 1).is_none());
 
             let enchanted = resource
                 .with_component(
