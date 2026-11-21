@@ -19,11 +19,8 @@ type Held = (i32, Option<String>, Option<String>);
 pub(in crate::game) struct Heard {
     knocks: Vec<Held>,
     pub(in crate::game) credits: Vec<(i32, Option<String>)>,
-    /// The entry of `LivingEntity.knockback` each push came through, as the hook named it.
-    entries: Vec<mod_api::KnockbackEntry>,
     incoming_causing: Vec<i32>,
     cancel: bool,
-    repeat_short: bool,
     pub(in crate::game) reduce_sword_credit: bool,
 }
 
@@ -48,15 +45,11 @@ impl Hooks for Probe {
         heard
             .credits
             .push((event.kill_credit, id(event.kill_credit_main)));
-        heard.entries.push(event.entry);
         if heard.reduce_sword_credit {
             if id(event.kill_credit_main).as_deref() == Some("minecraft:iron_sword") {
                 event.strength *= 0.5;
             }
         } else {
-            event.strength *= 2.0;
-        }
-        if heard.repeat_short && event.entry == mod_api::KnockbackEntry::Short {
             event.strength *= 2.0;
         }
         event.x = -event.x;
@@ -499,72 +492,36 @@ fn a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow() {
     );
 }
 
-/// The hook fires once per call of the full entry and names the entry the push came through:
-/// `Short` for `knockback(power, x, z)` (which delegates to the full entry), `Full` for a direct
-/// call of the full entry. A listener that wants a mixin's double change on the short entry
-/// applies its change twice on `Short`.
 #[test]
 #[ignore = "daily"]
-fn the_hook_names_the_entry_a_push_came_through_once_per_full_entry_call() {
-    use mod_api::KnockbackEntry::{Full, Short};
+fn one_event_per_living_knockback_operation() {
     let heard = heard(|game, log| {
-        log.lock().unwrap().repeat_short = true;
         let hit = Damage::of(DamageKind::Generic);
         zombie_at(game, 42, Vec3::ZERO);
         let mut mob = game.mobs.pop().unwrap();
-        mob.velocity = Vec3::ZERO;
         mob.on_ground = false;
-        with_detached_credit(game, 42, |level| {
-            mob.knockback(level, 0.4, 1.0, 0.0, &hit, 0.0)
-        });
-        assert_eq!(mob.velocity, Vec3::new(1.6, 0.0, 0.0));
-        mob.velocity = Vec3::ZERO;
-        assert_eq!(log.lock().unwrap().entries, [Short], "mob, short entry");
-        with_detached_credit(game, 42, |level| {
-            mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, false)
-        });
-        assert_eq!(
-            log.lock().unwrap().entries,
-            [Short, Full],
-            "mob, full entry"
-        );
-        assert_eq!(mob.velocity, Vec3::new(0.8, 0.0, 0.0));
-        with_detached_credit(game, 42, |level| {
-            mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, true)
-        });
-        assert_eq!(
-            log.lock().unwrap().entries,
-            [Short, Full, Full],
-            "mob, full entry for an effect push"
-        );
+        for (i, from_effect) in [false, true].into_iter().enumerate() {
+            mob.velocity = Vec3::ZERO;
+            with_detached_credit(game, 42, |level| {
+                if from_effect {
+                    mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, true);
+                } else {
+                    mob.knockback(level, 0.4, 1.0, 0.0, &hit, 0.0);
+                }
+            });
+            assert_eq!(mob.velocity, Vec3::new(0.8, 0.0, 0.0));
+            assert_eq!(log.lock().unwrap().knocks.len(), i + 1);
+        }
 
         player_with_sword(game);
         game.player.as_mut().unwrap().ground.on_ground = false;
-        let attack = &NO_ATTACK;
-        game.knock_back_player(0.4, 1.0, 0.0, source(0), attack, 0.0);
-        assert_eq!(
-            game.player.as_ref().unwrap().velocity,
-            Vec3::new(1.6, 0.0, 0.0)
-        );
-        game.player.as_mut().unwrap().velocity = Vec3::ZERO;
-        game.knock_back_player_full(0.4, 1.0, 0.0, source(0), attack, 0.0, false);
+        game.knock_back_player(0.4, 1.0, 0.0, source(0), &NO_ATTACK, 0.0);
         assert_eq!(
             game.player.as_ref().unwrap().velocity,
             Vec3::new(0.8, 0.0, 0.0)
         );
-        let entries = log.lock().unwrap().entries.clone();
-        assert_eq!(
-            &entries[3..],
-            [Short, Full],
-            "player, short then full entry"
-        );
-        // The short entry leaves nothing behind: a full call after it is `Full` again.
-        with_detached_credit(game, 42, |level| {
-            mob.knockback_full(level, 0.4, 1.0, 0.0, &hit, 0.0, false)
-        });
-        assert_eq!(log.lock().unwrap().entries.last(), Some(&Full));
     });
-    assert_eq!(heard.entries.len(), 6, "one event per full-entry call");
+    assert_eq!(heard.knocks.len(), 3);
 }
 
 fn with_detached_credit(

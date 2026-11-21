@@ -30,11 +30,7 @@ fn main() {
             last_hurt_by_player: (),
         };
         let attack = Attack { attacker: 0 };
-        if full {
-            game.knock_back_player_full(0.2, 1.0, 0.0, HurtSource("test"), &attack, 3.0, true);
-        } else {
-            game.knock_back_player(0.2, 1.0, 0.0, HurtSource("test"), &attack, 3.0);
-        }
+        game.knock_back_player(0.2, 1.0, 0.0, HurtSource("test"), &attack, 3.0);
         let velocity = game.player.as_ref().unwrap().velocity;
         assert_eq!((velocity.x, velocity.y, velocity.z), (expected_x, expected_y, 0.0));
         assert_eq!(*game.level.heard, 2, "player must delegate exactly one push, including vetoed pushes");

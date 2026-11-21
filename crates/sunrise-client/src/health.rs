@@ -283,9 +283,6 @@ pub struct DamageLevel<'a> {
     attack: &'a Attack,
     /// Whether this is a client's level, for a hook asked on both sides ([`Self::on_client`]).
     client_side: bool,
-    /// Which entry of `LivingEntity.knockback` a push in progress came through, for
-    /// `living_knockback` ([`Self::through_short_knockback`]).
-    knock_entry: mod_api::KnockbackEntry,
     /// Who a push credits: the site's per-victim loan, or [`KnockbackCredit`]'s memory
     /// resolution where the level was built without one.
     credit: Credit<'a>,
@@ -324,7 +321,6 @@ impl<'a> DamageLevel<'a> {
             hooks,
             attack: &NO_ATTACK,
             client_side: false,
-            knock_entry: mod_api::KnockbackEntry::Full,
             credit: Credit::Memory,
             effects: None,
         }
@@ -351,7 +347,6 @@ impl<'a> DamageLevel<'a> {
             hooks,
             attack: &NO_ATTACK,
             client_side: false,
-            knock_entry: mod_api::KnockbackEntry::Full,
             credit: Credit::Memory,
             effects: None,
         }
@@ -371,7 +366,6 @@ impl<'a> DamageLevel<'a> {
             hooks: self.hooks,
             attack: self.attack,
             client_side: self.client_side,
-            knock_entry: self.knock_entry,
             credit: self.credit.reborrow(),
             effects: self.effects.as_mut().map(HitEffects::reborrow),
         }
@@ -421,20 +415,6 @@ impl<'a> DamageLevel<'a> {
         }
     }
 
-    /// Runs `push` as the short entry of `LivingEntity.knockback` (power and direction), which
-    /// delegates to the full entry: the knockback hook, fired once inside the full entry, tells
-    /// its listener the push came in as [`mod_api::KnockbackEntry::Short`]. A direct call of the
-    /// full entry stays `Full`.
-    pub fn through_short_knockback<R>(&mut self, push: impl FnOnce(&mut Self) -> R) -> R {
-        let before = std::mem::replace(&mut self.knock_entry, mod_api::KnockbackEntry::Short);
-        let out = push(self);
-        self.knock_entry = before;
-        out
-    }
-    /// Which entry of `LivingEntity.knockback` the push in progress came through.
-    pub fn knockback_entry(&self) -> mod_api::KnockbackEntry {
-        self.knock_entry
-    }
     /// The same level, on a client when `client_side`: a hook asked on both sides tells its
     /// listener so.
     pub fn on_client(self, client_side: bool) -> Self {

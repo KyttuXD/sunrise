@@ -1858,7 +1858,6 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
     let (Ok(main), Ok(off)) = (main.try_into_api(), off.try_into_api()) else {
         return false;
     };
-    let entry = level.knockback_entry();
     HitLevel(level).native_living_knockback(mod_api::__private::LivingKnockbackCall {
         entity,
         kind,
@@ -1868,7 +1867,6 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
         attacker_off: off.as_ref(),
         kill_credit,
         kill_credit_main: credit_main.as_ref(),
-        entry,
         strength: &mut knock.strength,
         x: &mut knock.x,
         z: &mut knock.z,

@@ -1,14 +1,9 @@
 use super::*;
-use mod_api::KnockbackEntry;
 
 impl Game<'_> {
-    /// `LivingEntity.knockback` on the player: pushed `power` away from the
-    /// direction (`xd`, `zd`), less its knockback resistance, and up only from
-    /// the ground.
-    /// The native knockback hook runs before resistance is applied, with
-    /// `source`, the hit's. This short entry enters `knock_back_player_full` once.
-    /// Both entries are native internals points. API access refuses `HurtSource` and
-    /// `Attack`, which have no point mirrors.
+    /// `LivingEntity.knockback` on the player: push away from (`xd`, `zd`), with the
+    /// living knockback hook before resistance and motion changes. Unlike some mobs,
+    /// players apply damage pushes and effect pushes the same way.
     pub(in crate::game) fn knock_back_player(
         &mut self,
         power: f64,
@@ -17,34 +12,6 @@ impl Game<'_> {
         source: HurtSource<'_>,
         attack: &Attack,
         _damage: f32,
-    ) {
-        self.knock_back_player_entry(power, xd, zd, source, attack, KnockbackEntry::Short);
-    }
-
-    /// Full living knockback entry. Effect pushes enter here directly.
-    /// Damage and the effect flag are carried even though vanilla players do not use them.
-    pub(in crate::game) fn knock_back_player_full(
-        &mut self,
-        power: f64,
-        xd: f64,
-        zd: f64,
-        source: HurtSource<'_>,
-        attack: &Attack,
-        _damage: f32,
-        _comes_from_effect: bool,
-    ) {
-        self.knock_back_player_entry(power, xd, zd, source, attack, KnockbackEntry::Full);
-    }
-
-    /// The player's push, entered through `entry`: what `living_knockback` tells its listener.
-    fn knock_back_player_entry(
-        &mut self,
-        power: f64,
-        xd: f64,
-        zd: f64,
-        source: HurtSource<'_>,
-        attack: &Attack,
-        entry: KnockbackEntry,
     ) {
         // No attacker named: the mob the player was last hurt by.
         let credited;
@@ -64,13 +31,7 @@ impl Game<'_> {
         let mut credit = plan.lend(&mut self.last_hurt_by_player);
         if let Some(p) = self.player.as_mut() {
             let level = crate::game::entity::damage_level_of!(self, attack, &mut credit, None);
-            let mut push = |level: &mut sunrise_client::health::DamageLevel<'_>| {
-                apply_player_knockback(p, level, power, (xd, zd), source);
-            };
-            match entry {
-                KnockbackEntry::Short => level.through_short_knockback(push),
-                KnockbackEntry::Full => push(level),
-            }
+            apply_player_knockback(p, level, power, (xd, zd), source);
         }
     }
 }

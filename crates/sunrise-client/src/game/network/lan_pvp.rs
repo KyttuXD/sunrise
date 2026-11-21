@@ -404,15 +404,7 @@ impl Game<'_> {
                 g.combat.player_attacker = None;
                 let (strength, xd, zd) = s.knockback;
                 if hurt && strength > 0.0 {
-                    g.knock_back_player_full(
-                        f64::from(strength),
-                        xd,
-                        zd,
-                        PVP_SOURCE,
-                        &attack,
-                        s.amount,
-                        true,
-                    );
+                    g.knock_back_player(f64::from(strength), xd, zd, PVP_SOURCE, &attack, s.amount);
                 }
                 // Entity.igniteForSeconds on the victim: the fire timer only
                 // rises, and a fire-immune victim (no player is by type) is spared.
