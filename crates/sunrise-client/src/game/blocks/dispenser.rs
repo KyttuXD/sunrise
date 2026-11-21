@@ -2617,7 +2617,7 @@ mod tests {
             let mut game = server_with_guest(&mut resources);
             // Open the world and admit the guest as a join does, so its handle resolves.
             game.native_lifecycle
-                .begin_open(mod_api::Authority::IntegratedServer);
+                .begin_open(Some(mod_api::Authority::IntegratedServer));
             game.reset_entity_residency();
             let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap().entity_id as u32;
             assert_eq!(

@@ -2459,7 +2459,7 @@ mod tests {
             game.world.chunks.insert((0, 0), Arc::new(chunk));
             game.save = Arc::new(save);
             game.native_lifecycle
-                .begin_open(mod_api::Authority::IntegratedServer);
+                .begin_open(Some(mod_api::Authority::IntegratedServer));
             let reopened = game.level(game.dim.id()).unwrap();
             assert_ne!(level.epoch(), reopened.epoch());
             assert!(!reopened.has_water_ticket(game, [4, 64, 4]));

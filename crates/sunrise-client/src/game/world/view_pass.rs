@@ -817,7 +817,7 @@ pub(in crate::game) mod tests {
         assert!(all.sounds.is_empty());
         // A mod's handle needs the world's epoch, which this test world never began.
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         let nether = game.level(Dim::Nether.id()).unwrap();
         let blocks = mod_api::SoundSource::Blocks;
         let at = [648.5, 70.0, 650.25];
@@ -857,7 +857,7 @@ pub(in crate::game) mod tests {
         assert!(tracks(&game), "the view tracks the pig");
         game.enter_level(Dim::Nether).unwrap();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         let emitter = game.entity(pig as u32).unwrap();
         let neutral = mod_api::SoundSource::Neutral;
         let sound = "minecraft:entity.pig.ambient";

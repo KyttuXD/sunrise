@@ -487,8 +487,7 @@ fn creative_catalog_builds_lazily_and_edits_before_filtering_on_both_sides() {
         });
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.native_lifecycle
-                .begin_open(mod_api::Authority::RemoteClient);
+            game.native_lifecycle.begin_open(None);
             replace_client_definition(game, 2);
             let old = check(game, LogicalSide::Client);
             replace_client_definition(game, 4);

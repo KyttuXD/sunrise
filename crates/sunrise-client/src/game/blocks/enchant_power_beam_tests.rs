@@ -164,8 +164,7 @@ fn enchant_particles_share_native_power_and_rebuild_only_on_parts_reload() {
         root,
         crate::game::execution_role::ExecutionRole::Client,
         |game| {
-            game.native_lifecycle
-                .begin_open(mod_api::Authority::RemoteClient);
+            game.native_lifecycle.begin_open(None);
             game.resolve_parts().unwrap();
             game.world
                 .chunks

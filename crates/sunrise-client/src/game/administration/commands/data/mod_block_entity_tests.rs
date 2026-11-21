@@ -256,7 +256,7 @@ fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
         assert_eq!(game.data_of(&DataRef::Block(POS)).unwrap(), saved);
 
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         game.options.dedicated = Some(Vec::new());
         let level = game.level("minecraft:overworld").unwrap();
         let handle = game.block_entity(level, POS).unwrap();

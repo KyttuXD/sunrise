@@ -1732,7 +1732,7 @@ pub(in crate::game) mod tests {
         .unwrap();
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         // Match the server fixture this replaces: commands can force this
         // resident column without starting terrain generation.
         game.world.chunks.insert(
