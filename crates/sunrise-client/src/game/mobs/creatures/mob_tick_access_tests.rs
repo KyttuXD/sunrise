@@ -3,9 +3,7 @@
 use super::*;
 use crate::game::Dim;
 use crate::game::native_entity_refs::tests::with_game;
-use mod_api::{
-    Despawn, EntityTickListenedEvent, EntityTickPreEvent, HostSide, ModEntry, ServerHost,
-};
+use mod_api::{Despawn, EntityTickPreEvent, HostSide, ModEntry, ServerHost};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU32, Ordering},
@@ -46,9 +44,6 @@ struct MoveOnPre {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for MoveOnPre {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
@@ -431,9 +426,6 @@ struct DiscardOnPre {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for DiscardOnPre {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
@@ -532,9 +524,6 @@ type TickCalls = Vec<(&'static str, Vec<u32>, Option<[f64; 3]>)>;
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for TickTiming {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let mut heard = self.heard.lock().unwrap();
         heard.push(("pre", event.entities.to_vec(), None));
@@ -699,9 +688,6 @@ struct MoveOnArrowPost {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for MoveOnArrowPost {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_post(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");

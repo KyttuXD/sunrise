@@ -257,13 +257,6 @@ mod on_entity_item_update_tests {
 
     #[mod_api::__subscriptions]
     impl Hooks for Mod {
-        fn entity_tick_listened(
-            &self,
-            _: mod_api::HostSide<'_>,
-            event: &mut mod_api::EntityTickListenedEvent,
-        ) {
-            event.listened = true;
-        }
         fn entity_tick_pre(
             &self,
             _: mod_api::HostSide<'_>,

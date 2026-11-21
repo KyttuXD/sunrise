@@ -3,7 +3,7 @@
 //! told while no mod sets `living_equipment_listened`.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent, ServerHost};
+use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::items::ItemStack;
 
 use super::api_values::TryIntoApi;
@@ -24,13 +24,6 @@ struct Counter {
 }
 #[mod_api::__subscriptions]
 impl Hooks for Counter {
-    fn living_equipment_listened(
-        &self,
-        _: &mut dyn ServerHost,
-        event: &mut LivingEquipmentListenedEvent,
-    ) {
-        event.listened |= self.listens;
-    }
     fn living_equipment_change(
         &self,
         _: &mut dyn ServerHost,

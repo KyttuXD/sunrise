@@ -49,14 +49,6 @@ struct Probe {
 
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
-    fn hears_projectile_impacts(
-        &self,
-        _: &dyn mod_api::Host,
-        event: &mut mod_api::HearsProjectileImpactsEvent,
-    ) {
-        event.hears = self.hears;
-    }
-
     fn projectile_impact(
         &self,
         host: &mut dyn ServerHost,

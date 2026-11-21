@@ -1499,13 +1499,6 @@ mod entity_tick_tests {
 
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Listener {
-        fn entity_tick_listened(
-            &self,
-            _: mod_api::HostSide<'_>,
-            event: &mut mod_api::EntityTickListenedEvent,
-        ) {
-            event.listened = true;
-        }
         fn entity_tick_pre(
             &self,
             host: mod_api::HostSide<'_>,
@@ -1527,13 +1520,6 @@ mod entity_tick_tests {
 
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Named {
-        fn entity_tick_listened(
-            &self,
-            _: mod_api::HostSide<'_>,
-            event: &mut mod_api::EntityTickListenedEvent,
-        ) {
-            event.listened = true;
-        }
         fn entity_tick_pre(
             &self,
             host: mod_api::HostSide<'_>,

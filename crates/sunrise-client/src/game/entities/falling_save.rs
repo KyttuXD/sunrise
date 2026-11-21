@@ -8,13 +8,6 @@ mod tests {
     struct Observer;
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Observer {
-        fn entity_tick_listened(
-            &self,
-            _: mod_api::HostSide<'_>,
-            event: &mut mod_api::EntityTickListenedEvent,
-        ) {
-            event.listened = true;
-        }
         fn entity_tick_pre(
             &self,
             _: mod_api::HostSide<'_>,

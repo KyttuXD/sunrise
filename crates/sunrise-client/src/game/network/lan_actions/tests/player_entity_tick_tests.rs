@@ -2,7 +2,7 @@
 //! a Pre that cancels it skips each of its parts for that guest alone (a batched one included),
 //! and a player riding a pig is told around its own tick as the pig is around its own.
 
-use mod_api::{EntityTickListenedEvent, EntityTickPreEvent, HostSide, ModEntry, Mods};
+use mod_api::{EntityTickPreEvent, HostSide, ModEntry, Mods};
 use std::sync::{Arc, Mutex};
 use sunrise_client::{chunk::Chunk, containers::BlockEntity, lan::menu::Slots, mobs::Mob};
 use sunrise_core::geometry::Vec3;
@@ -22,9 +22,6 @@ struct Players {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Players {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         self.heard
             .lock()
