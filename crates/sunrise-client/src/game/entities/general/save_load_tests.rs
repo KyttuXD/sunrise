@@ -9,14 +9,21 @@ use super::*;
 use crate::game::native_entity_refs::tests::with_game;
 use std::collections::HashMap;
 
-/// Declares the fixture's two types: `mymod:robot`, which saves, and
-/// `mymod:ghost`, which never does.
+/// Declares a saved type, a `noSave` type, and a type an experiment enables.
 struct Declare;
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Declare {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
-        for (path, save) in [("robot", true), ("ghost", false)] {
+        for (path, save, features) in [
+            ("robot", true, &[][..]),
+            ("ghost", false, &[][..]),
+            (
+                "experimental",
+                true,
+                &[mod_api::FeatureFlag::RedstoneExperiments][..],
+            ),
+        ] {
             r.declare_general_entity(
                 path,
                 mod_api::GeneralEntityCategory::Misc,
@@ -34,14 +41,14 @@ impl mod_api::Hooks for Declare {
                 8,
                 3,
                 1,
-                &[],
+                features,
             )
             .unwrap();
         }
     }
 }
 
-/// A fixture game whose frozen registry holds the two declared types. The
+/// A fixture game whose frozen registry holds the declared types. The
 /// registration phase is scoped around the whole fixture: the game harness
 /// re-runs the installed mods' `register`, and a general type is only
 /// declared while that phase is current. The runtime initializes first: a
@@ -79,6 +86,118 @@ fn record_tag(type_key: &str, uuid: [i32; 4], payload: &[u8], riders: Vec<Tag>) 
         map.insert(format::PASSENGERS.into(), Tag::List(riders));
     }
     tag
+}
+
+#[test]
+#[ignore = "daily"]
+fn bare_level_feature_enables_host_query_and_general_spawn() {
+    use mod_api::{EntitySpawn, FeatureFlag, SpawnBody};
+    use sunrise_client::{
+        chunk::Chunk,
+        save::{Level, write_dat},
+    };
+
+    with_types(|game| {
+        let _world = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        game.world
+            .chunks
+            .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+        let level = game.level(game.dim.id()).unwrap();
+        let at = [0.5, 64.0, 0.5];
+        let spawn = EntitySpawn::new(SpawnBody::General);
+        assert!(
+            !level
+                .enabled_features(game)
+                .unwrap()
+                .contains_flag(FeatureFlag::RedstoneExperiments)
+        );
+        assert!(
+            level
+                .spawn_entity(game, "mymod:experimental", at, &spawn)
+                .is_none()
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        write_dat(
+            &dir.path().join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("DataVersion", Tag::Int(sunrise_core::version::DATA_VERSION)),
+                    (
+                        "enabled_features",
+                        Tag::List(vec![Tag::String("redstone_experiments".into())]),
+                    ),
+                ]),
+            )]),
+        )
+        .unwrap();
+        game.level.enabled_features = Level::read(dir.path()).unwrap().enabled_features;
+
+        let flags = level.enabled_features(game).unwrap();
+        assert!(flags.contains_flag(FeatureFlag::RedstoneExperiments));
+        assert!(
+            !flags.contains_flag(FeatureFlag::Vanilla),
+            "a present list is not the default set"
+        );
+        assert_eq!(
+            flags.iter().collect::<Vec<_>>(),
+            ["minecraft:redstone_experiments"]
+        );
+        let entity = level
+            .spawn_entity(game, "mymod:experimental", at, &spawn)
+            .unwrap();
+        assert_eq!(entity.position(game), Some(at));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn feature_disabled_saved_branches_do_not_enter_summon_uuid_admission() {
+    use crate::game::commands::Target;
+    use sunrise_client::snbt::to_snbt;
+
+    with_types(|game| {
+        let _world = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+        let collision = [1, 2, 3, 4];
+        game.spawn_loaded_entity(
+            (0, 0),
+            record_tag("mymod:robot", collision, b"", vec![]),
+            None,
+        );
+        assert!(game.uuid_admission_refused(Some(collision)));
+        let child = record_tag("mymod:robot", collision, b"", vec![]);
+        let disabled = |uuid| record_tag("mymod:experimental", uuid, b"", vec![child.clone()]);
+
+        // A disabled root excludes its entire branch on a disk load too.
+        game.spawn_loaded_entity((0, 0), disabled([8, 0, 0, 1]), None);
+        assert_eq!(game.resident_entities.general.rows.len(), 1);
+
+        for (index, kind) in ["mymod:robot", "minecraft:minecart"]
+            .into_iter()
+            .enumerate()
+        {
+            let root = record_tag(
+                kind,
+                [9, 0, 0, index as i32],
+                b"",
+                vec![disabled(collision), disabled([8, 0, 0, 2])],
+            );
+            let mount = game
+                .summon_with_nbt(kind, [0.5, 64.0, 0.5], &to_snbt(&root))
+                .unwrap();
+            let id = match mount {
+                Some(Target::General(id) | Target::Cart(id)) => id,
+                other => panic!("expected the eligible mount, got {other:?}"),
+            };
+            assert!(game.vehicle_passenger_ids(id).is_empty());
+        }
+        assert_eq!(
+            game.resident_entities.general.rows.len(),
+            2,
+            "only the live control and general mount remain"
+        );
+    });
 }
 
 #[test]

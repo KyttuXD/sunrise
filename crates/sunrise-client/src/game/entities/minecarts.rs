@@ -1509,6 +1509,14 @@ impl Game<'_> {
             }
             // MinecartSpawner.tick: `BaseSpawner.serverTick` at the cart's block.
             CartKind::Spawner => {
+                if c.spawner.as_ref().is_some_and(|s| s.spawn_delay <= 0)
+                    && (mod_api::__private::listened(mod_api::HookId::MobSpawnPositionCheck)
+                        || mod_api::__private::listened(mod_api::HookId::FinalizeSpawn))
+                {
+                    // Publish this tick's cart state to the spawner's shared hooks only.
+                    // It remains held out of any mutable hooks as the spawn is added.
+                    self.store_cart_back(slot, c.clone());
+                }
                 if let Some(mut spawner) = c.spawner.take() {
                     let key = (
                         c.position.x.floor() as i32,

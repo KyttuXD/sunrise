@@ -579,11 +579,8 @@ impl GeneralTypeCatalog {
 
     /// Whether every Minecraft feature flag this type requires is enabled in `enabled_features`
     /// (`EntityType.isEnabled(FeatureFlagSet)`).
-    pub fn is_enabled(&self, slot: usize, enabled_features: &[String]) -> bool {
-        self.entries[slot]
-            .required_features
-            .iter()
-            .all(|flag| enabled_features.iter().any(|id| id == flag.id()))
+    pub fn is_enabled(&self, slot: usize, enabled_features: &mod_api::FeatureFlags) -> bool {
+        enabled_features.contains_all(self.required_features(slot))
     }
 }
 
@@ -1092,6 +1089,57 @@ impl Game<'_> {
         Ok(true)
     }
 
+    /// `EntityType.loadEntityRecursive`: an entity that cannot be created never
+    /// brings its passengers into the candidate tree. Prune before UUID checks
+    /// or decoding general payloads, including under vanilla vehicle records.
+    pub(in crate::game) fn retain_feature_eligible_entity_tree(&self, tag: &mut Tag) -> bool {
+        let catalog = general_type_catalog();
+        if catalog.entries.is_empty() {
+            return true;
+        }
+        let features = mod_api::FeatureFlags::new(self.level.enabled_features.as_arc().clone());
+        fn retain(
+            game: &Game<'_>,
+            tag: &mut Tag,
+            catalog: &GeneralTypeCatalog,
+            features: &mod_api::FeatureFlags,
+        ) -> bool {
+            let Some(kind) = sunrise_client::entity_nbt::kind(tag) else {
+                return true;
+            };
+            let slot = catalog.slot(&kind);
+            // An unavailable mod's raw record is opaque and stays intact for quarantine.
+            if slot.is_none()
+                && quarantined_kind(&kind)
+                && !game.res.mob_types().contains_key(&kind)
+            {
+                return true;
+            }
+            if let Some(slot) = slot
+                && !catalog.is_enabled(slot, features)
+            {
+                let missing: Vec<_> = catalog
+                    .required_features(slot)
+                    .iter()
+                    .filter(|&&flag| !features.contains_flag(flag))
+                    .map(|flag| flag.id())
+                    .collect();
+                log::warn!(
+                    "Skipping entity with id {kind}: missing feature flags {}",
+                    missing.join(", ")
+                );
+                return false;
+            }
+            if let Tag::Compound(compound) = tag
+                && let Some(Tag::List(riders)) = compound.get_mut(&format::PASSENGERS.into())
+            {
+                riders.retain_mut(|rider| retain(game, rider, catalog, features));
+            }
+            true
+        }
+        retain(self, tag, catalog, &features)
+    }
+
     /// Load one saved general entity tree whose root kind the frozen
     /// registry holds: tag → record → every check, then the whole tree
     /// publishes through the same join boundary a fresh spawn takes. A
@@ -1163,13 +1211,6 @@ impl Game<'_> {
                 return Ok(None);
             }
         }
-        // Enforce `EntityType.isEnabled(level.enabledFeatures())` on admission
-        // (matching vanilla `EntityType.create` / `EntityType.loadEntityRecursive`).
-        if let Some(slot) = catalog.slot(&record.envelope.type_key)
-            && !catalog.is_enabled(slot, &self.level.enabled_features)
-        {
-            return Ok(None);
-        }
         // A UUID a live entity of the level already owns refuses the whole
         // tree (`uuid_admission_refused`, the boundary every loaded kind
         // shares), before any row of it exists.
@@ -1234,16 +1275,11 @@ impl Game<'_> {
         // The decoder parsed the general rows; load vanilla mobs through the
         // same path that reads them on a vanilla vehicle, in original seat order.
         if let Some(Tag::List(list)) = tag.get(format::PASSENGERS) {
-            let catalog = general_type_catalog();
             let mut general = record.passengers.into_iter();
             for rider in list {
                 if self.loads_as_mob_passenger(rider) {
-                    self.load_mob(rider.clone(), Some(id));
-                } else if let Some(record) = general.next()
-                    && catalog
-                        .slot(&record.envelope.type_key)
-                        .is_some_and(|slot| catalog.is_enabled(slot, &self.level.enabled_features))
-                {
+                    self.load_mob_transferred(rider.clone(), Some(id), None);
+                } else if let Some(record) = general.next() {
                     self.insert_general_record(record, rider, Some(id), None);
                 }
             }

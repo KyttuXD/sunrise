@@ -6,7 +6,7 @@ Use spawn hooks to accept or reject a spawn, edit a mob before finalization, or 
 |---|---|---|
 | The spawn predicate for a type and position | `mob_spawn_placement_check` | `SpawnCheck::{Default, Succeed, Fail}` |
 | The mob's own position and obstruction checks | `mob_spawn_position_check` | `SpawnCheck::{Default, Succeed, Fail}` |
-| Just before `finalizeSpawn` | `finalize_spawn` | `Flow::Cancel`, `spawn_cancelled`, a new `difficulty`, edits to `mob`, a new `group` |
+| Before `finalizeSpawn`, or after loading a spawner's configured mob | `finalize_spawn` | `Flow::Cancel`, `spawn_cancelled`, a new `difficulty`, edits to `mob`, a new `group` |
 | Each tick, before a mob's `checkDespawn` | `mob_despawn` | `Despawn::{Default, Allow, Deny}` |
 
 ## Registering a spawn predicate
@@ -236,7 +236,8 @@ fn mob_spawn_placement_check(&self, _: &dyn mod_api::Host, event: &mut mod_api::
 
 In `mob_spawn_position_check` version 2 (NeoForge's `MobSpawnEvent.PositionCheck`), `event.spawner` is
 `Some(Spawner::Block { pos })` for a monster spawner block, `Some(Spawner::Minecart { entity })` for a spawner
-minecart, and `None` for natural spawning and chunk generation. Like NeoForge, trial spawners do not fire
+minecart, and `None` for natural spawning and chunk generation. A minecart's `entity.kind(host)` and
+`entity.position(host)` read the live cart at this spawn attempt. Like NeoForge, trial spawners do not fire
 `mob_spawn_position_check`. The position check also gets `event.mob`, the mob about to spawn, as an `UnspawnedMobRef`
 with the same reads as `finalize_spawn`'s (no editor: the hook only reads). Vanilla creates the mob before this check;
 Sunrise creates it there only when the hook has a listener, the same way the spawn would, and the spawn then goes on
@@ -253,11 +254,14 @@ fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api
 
 Where the game does not create the mob fresh, the handle answers only `kind` and `position` (the rest is
 `UnspawnedMobError::Unsupported`): chunk generation's packs, which the world generator creates and finalizes after the
-check, and a spawner whose spawn data carries entity data, which the game loads after the tick.
+check, and configured spawner NBT, whose loaded mob is available in `finalize_spawn`.
 
 ## Stopping a spawn or leaving a mob plain
 
-`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips finalization: the mob spawns, but with no equipment, attributes or class setup. Setting `event.spawn_cancelled = true` adds no mob at all. `event.spawner` carries the shared `Option<Spawner>` identity (`Spawner::Block { pos }`, `Spawner::Trial { pos }`, or `Spawner::Minecart { entity }`, matching NeoForge's `FinalizeSpawnEvent.getSpawner`).
+`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips vanilla finalization (its setup and random rolls),
+not the spawn itself. Setting `event.spawn_cancelled = true` adds no mob at all. `event.spawner` carries the shared
+`Option<Spawner>` identity (`Spawner::Block { pos }`, `Spawner::Trial { pos }`, or `Spawner::Minecart { entity }`,
+matching NeoForge's `FinalizeSpawnEvent.getSpawner`). The minecart is readable through the same host as in the position check.
 
 ```rust,ignore
 fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpawnEvent<'_>) -> mod_api::Flow {
@@ -268,7 +272,11 @@ fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpa
 }
 ```
 
-`finalize_spawn` fires only where vanilla calls `finalizeSpawn`, so a breeding, an infested block's silverfish or a thrown egg's chick does not tell it.
+`finalize_spawn` version 2 also fires when a monster spawner block, spawner minecart, or trial spawner uses
+configured mob NBT. Its `mob` and `edits` reach the loaded mob. Vanilla finalization does not run on that mob,
+regardless of the returned `Flow`; use `spawn_cancelled` to reject the attempt. Trial-spawner persistence and
+any configured equipment table are applied after the hook. Outside spawners, the hook fires only where
+vanilla calls `finalizeSpawn`: breeding, an infested block's silverfish and a thrown egg's chick do not fire it.
 
 For `/summon minecraft:ender_dragon` without NBT, command placement starts at zero
 rotation and consumes no random yaw draw. Skipping finalization also skips its
@@ -380,7 +388,7 @@ Every mod is asked about every key, so a mod ignores keys it does not own. See [
 
 - `SpawnBody::Thrown { item }`: a thrown item projectile (vanilla's snowball, egg, ender pearl, experience bottle, wind charge, splash or lingering potion, or a content mod's thrown type) through `Projectile.spawnProjectile`, the route a thrown snowball takes. Its owner is set before it joins (`Projectile.setOwner`: hit credit, saved as `Owner`, and the shot keeps clear of its owner until it has left the owner's box), `projectile_launch` fires, and it carries one of `item`. With no `rotation` it faces along its velocity, as `Projectile.shoot` leaves it. Its owner is a player, a mob, a boat or a minecart: the shot needs the owner's collision identity to keep clear of it, so any other owner refuses the spawn.
 - `SpawnBody::Living { reason }`: a mob (vanilla's or a content living type) through `EntityType.spawn`, the route `/summon` takes: made as any of its type is, Parts, attachments and `entity_constructing` included, then `finalize_spawn` and `finalizeSpawn` run with `reason`, and it joins the level (`entity_join_level`), not persistent. With no `rotation` it takes `EntityType.spawn`'s yaw. Both calls refuse a type that is disallowed in Peaceful when the level is Peaceful, before the mob is built or any spawn hooks run. A mob takes no owner. `kind` resolves as `/summon`'s does (`cow` is `minecraft:cow`). The ender dragon takes its own creation, facing `rotation`'s yaw; it has no velocity or pitch here, so a dragon given either is refused.
-- `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
+- `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Every declared `FeatureFlag` must be enabled in the world. For example, check `level.enabled_features(host).is_some_and(|flags| flags.contains_flag(FeatureFlag::RedstoneExperiments))`, or use `flags.contains_all(&required)` for a slice of requirements. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
 
 A general row can move to another position in its level through `EntityRef::teleport_to`. A row teleported on its own dismounts; a teleported vehicle takes its riders with it. Removing the vehicle dismounts its riders and leaves them in the level. `EntityRef::set_rotation` turns a general row without moving or dismounting it; the new angles reach clients through ordinary tracking.
 

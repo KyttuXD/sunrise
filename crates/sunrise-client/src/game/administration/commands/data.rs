@@ -1795,22 +1795,19 @@ impl Game<'_> {
     /// Spawn an entity from its compound (`EntityType.loadEntityRecursive`);
     /// returns what was created.
     pub(in crate::game) fn spawn_entity_from_nbt(&mut self, tag: Tag) -> Option<Target> {
+        self.spawn_staged_entity_from_nbt(self.stage_entity_tree(tag)?)
+    }
+
+    fn spawn_staged_entity_from_nbt(
+        &mut self,
+        tree: crate::game::persist::StagedEntityTree,
+    ) -> Option<Target> {
         let key = {
-            let p = entity_nbt::position(&tag)?;
+            let p = entity_nbt::position(tree.tag())?;
             ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
-        // Only this stack spawns now: the entities of chunks that finished
-        // loading wait for the level's entity tick, as in vanilla
-        // (PersistentEntitySectionManager.processPendingLoads), and must not
-        // take the ids counted as this stack's.
-        let mut waiting = std::mem::take(&mut self.world.loaded_entities);
         let before = self.next_entity;
-        let mut tag = tag;
-        crate::game::persist::mark_fresh(&mut tag);
-        self.world.queue_entity_nbt(key, vec![tag]);
-        self.spawn_loaded_entities();
-        waiting.append(&mut self.world.loaded_entities);
-        self.world.loaded_entities = waiting;
+        self.spawn_staged_entity_tree(key, tree);
         if self.next_entity == before {
             return None;
         }
@@ -1891,10 +1888,12 @@ impl Game<'_> {
             self.prune_peaceful_summon_passengers(&mut tag);
         }
         place_summoned(&mut tag, pos);
-        // ServerLevel.tryAddFreshEntityWithPassengers: a UUID of the tree that
-        // an entity in the level holds refuses the whole tree, before any of
-        // it joins (players are not looked at here).
-        if self.summon_tree_uuids(&tag).into_iter().any(|u| {
+        let Some(tree) = self.stage_entity_tree(tag) else {
+            return Ok(None);
+        };
+        // ServerLevel.tryAddFreshEntityWithPassengers checks the same tree that
+        // will be published: feature-disabled riders and their descendants never enter it.
+        if self.summon_tree_uuids(tree.tag()).into_iter().any(|u| {
             self.target_with_uuid(u)
                 .is_some_and(|t| t != Target::Player)
         }) {
@@ -1902,7 +1901,7 @@ impl Game<'_> {
         }
         let from = self.mobs.len();
         let canceled = self.persist.joins_canceled;
-        let target = self.spawn_entity_from_nbt(tag);
+        let target = self.spawn_staged_entity_from_nbt(tree);
         self.native_mobs_joined(from, false);
         // A mod kept the entity out: tryAddFreshEntityWithPassengers is false.
         if self.persist.joins_canceled != canceled

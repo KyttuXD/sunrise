@@ -6,6 +6,7 @@ mod display;
 pub(super) use sunrise_gameplay::entity_uuids::EntityUuids;
 #[path = "persist/loaded_pass.rs"]
 mod loaded_pass;
+pub(in crate::game) use loaded_pass::StagedEntityTree;
 #[path = "persist/object_memory.rs"]
 mod object_memory;
 #[path = "persist/unload_sweep.rs"]
@@ -1206,7 +1207,10 @@ impl Game<'_> {
     }
 
     /// A saved mob and, under `Passengers`, the mobs riding it.
-    pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
+    pub(super) fn load_mob(&mut self, mut tag: Tag, mount: Option<u32>) -> Option<u32> {
+        if !self.retain_feature_eligible_entity_tree(&mut tag) {
+            return None;
+        }
         self.load_mob_transferred(tag, mount, None)
     }
 
@@ -1226,7 +1230,7 @@ impl Game<'_> {
         let mut unknown = Vec::new();
         for rider in riders {
             if self.loads_as_mob_passenger(&rider) {
-                if let Some(id) = self.load_mob(rider, Some(vehicle))
+                if let Some(id) = self.load_mob_transferred(rider, Some(vehicle), None)
                     && let Some(mob) = self.mob_object_mut(vehicle)
                 {
                     mob.extra.rider.get_or_insert(id);

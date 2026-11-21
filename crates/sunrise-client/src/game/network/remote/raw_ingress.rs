@@ -121,7 +121,19 @@ impl Game<'_> {
                 }
                 Event::Features(features) => {
                     if let Some(remote) = &mut self.remote {
-                        remote.features = features.into();
+                        // ClientConfigurationPacketListenerImpl.handleEnabledFeatures resolves
+                        // network identifiers through FeatureFlags.REGISTRY.fromNames.
+                        let flags: sunrise_client::save::FeatureFlagIds = features
+                            .iter()
+                            .filter_map(|id| {
+                                let flag = mod_api::FeatureFlag::from_id(id);
+                                if flag.is_none() {
+                                    log::warn!("Unknown feature flag: {id}");
+                                }
+                                flag
+                            })
+                            .collect();
+                        remote.features = flags.as_arc().clone();
                     }
                 }
                 Event::Brand(brand) => {

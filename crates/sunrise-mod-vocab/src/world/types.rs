@@ -542,18 +542,18 @@ impl FeatureFlag {
         }
     }
 
-    /// Parse a canonical or bare-minecraft feature flag id (`minecraft:redstone_experiments` or
-    /// `redstone_experiments`).
+    /// Resolve a feature flag id as `FeatureFlags.REGISTRY` does. Like `Identifier.CODEC`,
+    /// this uses the `minecraft` namespace if the namespace is omitted or empty.
     pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "minecraft:vanilla" | "vanilla" => Some(Self::Vanilla),
-            "minecraft:trade_rebalance" | "trade_rebalance" => Some(Self::TradeRebalance),
-            "minecraft:redstone_experiments" | "redstone_experiments" => {
-                Some(Self::RedstoneExperiments)
-            }
-            "minecraft:minecart_improvements" | "minecart_improvements" => {
-                Some(Self::MinecartImprovements)
-            }
+        let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+        if !matches!(namespace, "" | "minecraft") {
+            return None;
+        }
+        match path {
+            "vanilla" => Some(Self::Vanilla),
+            "trade_rebalance" => Some(Self::TradeRebalance),
+            "redstone_experiments" => Some(Self::RedstoneExperiments),
+            "minecart_improvements" => Some(Self::MinecartImprovements),
             _ => None,
         }
     }

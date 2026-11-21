@@ -492,25 +492,47 @@ impl Game<'_> {
             return Some(id);
         }
         self.next_entity += 1;
-        // Structure mobs that generation left to finish: saves from before
-        // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
         Self::normalize_loaded_mob_tags(&mut tag);
+        let (mob, uuid) = self.decode_loaded_mob(&tag, self.next_entity, uuid)?;
+        Some(self.publish_loaded_mob(mob, uuid, tag, mount, transferred))
+    }
+
+    /// Construct the authoritative mob once. Spawners lend it before the world
+    /// takes ownership; saved entities publish it immediately.
+    pub(in crate::game) fn decode_loaded_mob(
+        &self,
+        tag: &Tag,
+        id: u32,
+        uuid: Option<[i32; 4]>,
+    ) -> Option<(Mob, [i32; 4])> {
+        let (own, fresh) = sunrise_client::mobs::living_random();
+        let mob = entity_nbt::mob_from_nbt_with_random(
+            tag,
+            self.res.mob_types(),
+            id,
+            Some(self.pack.assets.registry),
+            own,
+        )?;
+        Some((mob, uuid.unwrap_or(fresh)))
+    }
+
+    pub(in crate::game) fn publish_loaded_mob(
+        &mut self,
+        mut m: Mob,
+        uuid: [i32; 4],
+        mut tag: Tag,
+        mount: Option<u32>,
+        transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
+    ) -> u32 {
+        // Structure mobs that generation left to finish: saves from before
+        // they were finalized at placement, or a placement that could not.
         let mut finalize = false;
         if let Tag::Compound(c) = &mut tag {
             finalize = c.remove(&"sunrise:finalize".into()).is_some();
         }
         let riders = self.take_passengers(&mut tag);
-        // The mob's own random makes its UUID, kept unless the tag has one.
-        let (own, fresh) = sunrise_client::mobs::living_random();
-        let uuid = Some(uuid.unwrap_or(fresh));
-        let mut m = entity_nbt::mob_from_nbt_with_random(
-            &tag,
-            self.res.mob_types(),
-            self.next_entity,
-            Some(self.pack.assets.registry),
-            own,
-        )?;
+        let uuid = Some(uuid);
         self.resolve_loaded_profession(&mut m);
         if sunrise_client::mobs::camel::is_camel(m.species()) {
             sunrise_client::mobs::camel::finish_load(&mut m, self.world.game_time);
@@ -583,7 +605,7 @@ impl Game<'_> {
             self.native_restore_loaded_target(id, anger_uuid);
         }
         self.load_passengers(id, riders);
-        Some(id)
+        id
     }
 
     /// The supported records under an entity's `Passengers`, taken out of it; the

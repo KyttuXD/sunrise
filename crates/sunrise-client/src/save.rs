@@ -3641,6 +3641,19 @@ impl<T: Into<Arc<[String]>>> From<T> for FeatureFlagIds {
     }
 }
 
+impl FromIterator<mod_api::FeatureFlag> for FeatureFlagIds {
+    fn from_iter<T: IntoIterator<Item = mod_api::FeatureFlag>>(flags: T) -> Self {
+        let mut ids = Vec::new();
+        for flag in flags {
+            let id = flag.id();
+            if !ids.iter().any(|present| present == id) {
+                ids.push(id.to_owned());
+            }
+        }
+        Self(ids.into())
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Level {
     pub name: String,
@@ -3908,15 +3921,16 @@ impl Level {
             level.difficulty_locked = n(d.get("locked")) != 0;
         }
         level.allow_commands = Some(n(data.get("allowCommands")) != 0);
-        // WorldDataConfiguration.MAP_CODEC's lenient optional field uses the default
-        // for both absent and malformed input. A valid empty list is not the default.
+        // Identifier.CODEC resolves each name before FeatureFlags.REGISTRY looks it up.
+        // WorldDataConfiguration.MAP_CODEC defaults the whole set on a decode error;
+        // a valid empty set is not the default.
         if let Some(Tag::List(flags)) = data.get("enabled_features")
             && let Some(flags) = flags
                 .iter()
-                .map(|flag| text(Some(flag)))
-                .collect::<Option<Arc<[_]>>>()
+                .map(|flag| mod_api::FeatureFlag::from_id(text(Some(flag))?.as_str()))
+                .collect::<Option<FeatureFlagIds>>()
         {
-            level.enabled_features = flags.into();
+            level.enabled_features = flags;
         }
         level.saved_mods = level_mods::saved(&root);
         if let Some(packs) = data.get("DataPacks") {

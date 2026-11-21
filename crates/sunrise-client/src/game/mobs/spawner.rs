@@ -31,9 +31,9 @@ pub(super) enum Planned {
     /// `finalizeSpawn` ran on a fresh mob (its provisional id in `Mob::id`);
     /// the spawn data's `equipment`.
     Finalized(Mob, Option<Tag>),
-    /// A mob loaded from the spawn data (with its passengers) and its
-    /// `equipment`; the provisional id its events carry.
-    Loaded(Tag, Option<Tag>, u32),
+    /// The configured mob lent to `finalize_spawn`, its UUID, its raw record (including
+    /// passengers), and the spawn data's `equipment`.
+    Loaded(Mob, [i32; 4], Tag, Option<Tag>),
 }
 
 /// What the spawner code keeps between ticks.
@@ -162,8 +162,8 @@ impl Game<'_> {
                 pos: mod_api::BlockPos::new(key.0, key.1, key.2),
             },
         });
-        let extras = {
-            let mut level = self.natural_level();
+        let mut plan = |game: &Self| {
+            let mut level = game.natural_level();
             level.spawner = source;
             let mut spawn = |l: &super::natural_spawning::GameLevel,
                              rng: &mut LevelRandom,
@@ -176,8 +176,12 @@ impl Game<'_> {
                 std::mem::take(&mut *level.rides.borrow_mut()),
             )
         };
+        let (created, rides) = if let Some(cart) = cart {
+            self.with_held_entity_read(cart, plan)
+        } else {
+            plan(self)
+        };
         self.world.random = random;
-        let (created, rides) = extras;
         let ids = self.add_planned(planned, created, rides);
         self.apply_spawner_events(key, events, &ids, cart)
     }
@@ -193,14 +197,16 @@ impl Game<'_> {
         let _save_lease = sunrise_client::join_seq::visibility::PassLease::enter();
         let mut finalized: Vec<Mob> = Vec::new();
         let mut gears: Vec<Option<Tag>> = Vec::new();
-        let mut loads: Vec<(Tag, Option<Tag>, u32)> = Vec::new();
+        let mut loads = Vec::new();
         for plan in planned {
             match plan {
                 Planned::Finalized(mob, equipment) => {
                     finalized.push(mob);
                     gears.push(equipment);
                 }
-                Planned::Loaded(tag, equipment, key) => loads.push((tag, equipment, key)),
+                Planned::Loaded(mob, uuid, tag, equipment) => {
+                    loads.push((mob, uuid, tag, equipment))
+                }
             }
         }
         // Real ids for finalizeSpawn's provisional mobs, in spawn order, the
@@ -222,14 +228,16 @@ impl Game<'_> {
             self.mobs.push(mob);
             self.native_mobs_joined(i, false);
         }
-        for (tag, equipment, key) in loads {
-            if let Some(id) = self.load_mob(tag, None) {
-                // `nextSpawnData.getEquipment().ifPresent(mob::equip)`.
-                if let Some(table) = equipment {
-                    self.equip_from_table(id, &table);
-                }
-                ids.insert(key, id);
+        for (mut mob, uuid, tag, equipment) in loads {
+            let key = mob.id;
+            self.next_entity += 1;
+            mob.id = self.next_entity;
+            let id = self.publish_loaded_mob(mob, uuid, tag, None, None);
+            // `nextSpawnData.getEquipment().ifPresent(mob::equip)`.
+            if let Some(table) = equipment {
+                self.equip_from_table(id, &table);
             }
+            ids.insert(key, id);
         }
         ids
     }
@@ -246,40 +254,78 @@ impl Game<'_> {
         let kind = self.res.mob_types().get(r.id)?.clone();
         let [x, y, z] = r.position;
         let at = Vec3::new(x, y, z);
-        let (bounds, key) = if r.finalize {
+        let (mut mob, loaded) = if r.finalize {
             // The mob a listened position check created, else a new one.
-            let mut mob = l
+            let mob = l
                 .take_checked(r.id, r.position, r.yaw)
                 .unwrap_or_else(|| Mob::new(l.provisional_id(), kind, at, r.yaw));
-            let reason = if r.trial {
-                SpawnReason::TrialSpawner
-            } else {
-                SpawnReason::Spawner
-            };
-            // TrialSpawner.spawnMob: setPersistenceRequired.
-            mob.persistent = r.trial;
-            let mut group = None;
-            match self.finalize_spawn_event(&mut mob, reason, source, &mut group) {
-                (Finalized::Cancelled, _) => return None,
-                (outcome, difficulty) => {
-                    if outcome == Finalized::Done {
-                        let mut level = super::natural_spawning::PassLevel::new(l);
-                        let mut cx = sunrise_client::mobs::finalize::Ctx {
-                            level: &mut level,
-                            random,
-                            difficulty,
-                            created: Vec::new(),
-                            jockey_rider: None,
-                        };
-                        sunrise_client::mobs::finalize::finalize(&mut cx, &mut mob, reason, group);
-                        for m in cx.created {
-                            let bounds = m.bounds();
-                            l.pending.borrow_mut().push(bounds);
-                            l.pending_ids.borrow_mut().push((m.kind.id.clone(), bounds));
-                            l.spawned.borrow_mut().push(m);
-                        }
-                    }
+            (mob, None)
+        } else {
+            let mut tag = r.entity.clone();
+            // Only structure placement can request deferred vanilla finalization.
+            tag.remove(&"sunrise:finalize".into());
+            tag.insert(
+                "Rotation".into(),
+                Tag::List(vec![
+                    Tag::Float(r.yaw.to_bits()),
+                    Tag::Float(0f32.to_bits()),
+                ]),
+            );
+            let mut tag = Tag::Compound(tag);
+            // EntityType.loadEntityRecursive applies the spawner's placement
+            // callback to every passenger as well as the root.
+            super::commands::place_summoned(&mut tag, r.position);
+            if !self.retain_feature_eligible_entity_tree(&mut tag) {
+                return None;
+            }
+            Self::normalize_loaded_mob_tags(&mut tag);
+            let uuid = sunrise_client::entity_nbt::uuid(&tag);
+            let (mob, uuid) = self.decode_loaded_mob(&tag, l.provisional_id(), uuid)?;
+            (mob, Some((tag, uuid)))
+        };
+        let reason = if r.trial {
+            SpawnReason::TrialSpawner
+        } else {
+            SpawnReason::Spawner
+        };
+        // The loaded tags normally live in the raw record. Lend these too so
+        // an edit operates on the configured set, rather than adding to it later.
+        let configured_tags = loaded.as_ref().and_then(|(tag, _)| {
+            mod_api::__private::listened(mod_api::HookId::FinalizeSpawn).then(|| {
+                match tag.get("Tags") {
+                    Some(Tag::List(tags)) => tags
+                        .iter()
+                        .filter_map(|tag| sunrise_client::save::text(Some(tag)))
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
                 }
+            })
+        });
+        if let Some(given) = &configured_tags {
+            mob.extra.spawn_tags.clone_from(given);
+        }
+        let mut group = None;
+        let (outcome, difficulty) = self.finalize_spawn_event(&mut mob, reason, source, &mut group);
+        if outcome == Finalized::Cancelled {
+            return None;
+        }
+        // NeoForge always posts FinalizeSpawnEvent for spawners. Its `def`
+        // (vanilla's `hasNoConfiguration`) controls only Mob.finalizeSpawn.
+        if r.finalize && outcome == Finalized::Done {
+            let mut level = super::natural_spawning::PassLevel::new(l);
+            let mut cx = sunrise_client::mobs::finalize::Ctx {
+                level: &mut level,
+                random,
+                difficulty,
+                created: Vec::new(),
+                jockey_rider: None,
+            };
+            sunrise_client::mobs::finalize::finalize(&mut cx, &mut mob, reason, group);
+            for m in cx.created {
+                let bounds = m.bounds();
+                l.pending.borrow_mut().push(bounds);
+                l.pending_ids.borrow_mut().push((m.kind.id.clone(), bounds));
+                l.spawned.borrow_mut().push(m);
             }
             // Shulker.finalizeSpawn faces it south.
             if mob.species() == sunrise_client::mobs::Species::Shulker {
@@ -290,48 +336,53 @@ impl Game<'_> {
                 mob.head_yaw = 0.0;
                 mob.previous_head_yaw = 0.0;
             }
-            let bounds = mob.bounds();
-            let key = mob.id;
-            planned.push(Planned::Finalized(mob, r.equipment.cloned()));
-            (bounds, key)
-        } else {
-            // A UUID already in the level is refused.
-            let mut tag = r.entity.clone();
-            if let Some(uuid) = sunrise_client::entity_nbt::uuid(&Tag::Compound(tag.clone()))
-                && self.persist.uuids.values().any(|u| *u == uuid)
-            {
+        }
+        // TrialSpawner.spawnMob sets persistence after finalization, before equipment.
+        if r.trial {
+            mob.persistent = true;
+        }
+        let bounds = mob.bounds();
+        let key = mob.id;
+        let equipment = r.equipment.cloned();
+        if let Some((mut tag, uuid)) = loaded {
+            // BaseSpawner attempts admission only after the finalize event.
+            if self.uuid_admission_refused(Some(uuid)) {
                 return None;
             }
-            let double = |v: f64| Tag::Double(v.to_bits());
-            tag.insert(
-                "Pos".into(),
-                Tag::List(vec![double(x), double(y), double(z)]),
-            );
-            tag.insert(
-                "Rotation".into(),
-                Tag::List(vec![
-                    Tag::Float(r.yaw.to_bits()),
-                    Tag::Float(0f32.to_bits()),
-                ]),
-            );
-            if r.trial {
-                tag.insert("PersistenceRequired".into(), Tag::Byte(1));
+            if let Some(given) = configured_tags {
+                let edited = std::mem::take(&mut mob.extra.spawn_tags);
+                if edited != given
+                    && let Tag::Compound(raw) = &mut tag
+                {
+                    let key = "Tags".into();
+                    let original = match raw.remove(&key) {
+                        Some(Tag::List(tags)) => tags,
+                        _ => Vec::new(),
+                    };
+                    // Keep the original NBT strings (including their UTF-16 units)
+                    // for tags the listener did not remove.
+                    let mut saved = HashMap::<_, std::collections::VecDeque<_>>::new();
+                    for (name, tag) in given.into_iter().zip(original) {
+                        saved.entry(name).or_default().push_back(tag);
+                    }
+                    let tags: Vec<_> = edited
+                        .into_iter()
+                        .map(|name| {
+                            saved
+                                .get_mut(&name)
+                                .and_then(|tags| tags.pop_front())
+                                .unwrap_or_else(|| Tag::String(name.into()))
+                        })
+                        .collect();
+                    if !tags.is_empty() {
+                        raw.insert(key, Tag::List(tags));
+                    }
+                }
             }
-            let mut tag = Tag::Compound(tag);
-            // EntityType.loadEntityRecursive applies the spawner's placement
-            // callback to every passenger as well as the root.
-            super::commands::place_summoned(&mut tag, r.position);
-            let mob = sunrise_client::entity_nbt::mob_from_nbt(
-                &tag,
-                self.res.mob_types(),
-                0,
-                Some(self.pack.assets.registry),
-            )?;
-            let bounds = mob.bounds();
-            let key = l.provisional_id();
-            planned.push(Planned::Loaded(tag, r.equipment.cloned(), key));
-            (bounds, key)
-        };
+            planned.push(Planned::Loaded(mob, uuid, tag, equipment));
+        } else {
+            planned.push(Planned::Finalized(mob, equipment));
+        }
         l.pending.borrow_mut().push(bounds);
         l.pending_ids.borrow_mut().push((r.id.to_owned(), bounds));
         Some(SpawnerAdded {
