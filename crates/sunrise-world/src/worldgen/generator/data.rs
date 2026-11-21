@@ -112,6 +112,28 @@ fn read_optional_bundle(
         Ok(None)
     }
 }
+/// The registry of prepared biome parameter lists, with the world's packs over it.
+fn read_presets(dir: &Path, overrides: &WorldgenOverrides) -> Result<Bundle, GeneratorError> {
+    let mut presets = read_optional_bundle(dir, overrides, "presets")?.unwrap_or_default();
+    let reports = dir.join("biome_parameters");
+    if reports.is_dir() {
+        for entry in fs::read_dir(&reports)? {
+            let path = entry?.path();
+            let Some(stem) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|_| path.extension().is_some_and(|e| e == "json"))
+            else {
+                continue;
+            };
+            presets
+                .entry(format!("minecraft:{stem}"))
+                .or_insert(quantize_parameter_report(&fs::read_to_string(&path)?)?);
+        }
+    }
+    Ok(presets)
+}
+
 /// The tags of the bundle `name`, the data packs' tag files after the
 /// prepared ones. A tag naming what is not there fails on its own, as
 /// vanilla's TagLoader leaves it out. Without packs the prepared tags must
@@ -155,6 +177,38 @@ pub(super) fn build_tags(
     Ok(built.tags)
 }
 impl GeneratorData {
+    /// Decode the biome source of terrain that needs no vanilla terrain stages. Only the
+    /// biome registries are read: no noise router, structures or decoration are built.
+    pub fn resolve_terrain_biome_source(
+        dir: &Path,
+        overrides: &WorldgenOverrides,
+        source: &Value,
+        seed: i64,
+    ) -> Result<super::super::biome_source::ResolvedBiomeSource, GeneratorError> {
+        let biomes = read_bundle(dir, overrides, "biomes")?;
+        let mut warnings = Vec::new();
+        let tags = build_tags(
+            &read_bundle(dir, overrides, "biome_tags")?,
+            overrides,
+            "biome_tags",
+            &mut warnings,
+            |name| biomes.contains_key(name),
+        )?;
+        for warning in warnings {
+            log::warn!("Sunrise: biome source: {warning}");
+        }
+        let presets = read_presets(dir, overrides)?;
+        let catalog = BiomeSourceCatalog::new(
+            &biomes.into_keys().collect(),
+            &tags,
+            &presets.keys().cloned().collect(),
+        )?;
+        catalog
+            .decode(&source.to_string())?
+            .resolve(&presets, seed)
+            .map_err(|e| resource(format!("biome source: {e}")))
+    }
+
     /// Load a worldgen bundle directory. Required files are JSON objects mapping
     /// resource identifiers to the resource's JSON text: `noises`, `densities`,
     /// `rules` (material rules), `conditions` (material conditions), `settings`
@@ -274,23 +328,7 @@ impl GeneratorData {
             &biome_set,
             &biome_tags,
         )?;
-        let mut presets = read_optional_bundle(dir, ov, "presets")?.unwrap_or_default();
-        let reports = dir.join("biome_parameters");
-        if reports.is_dir() {
-            for entry in fs::read_dir(&reports)? {
-                let path = entry?.path();
-                let Some(stem) = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .filter(|_| path.extension().is_some_and(|e| e == "json"))
-                else {
-                    continue;
-                };
-                presets
-                    .entry(format!("minecraft:{stem}"))
-                    .or_insert(quantize_parameter_report(&fs::read_to_string(&path)?)?);
-            }
-        }
+        let presets = read_presets(dir, ov)?;
         let source_catalog =
             BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
         let carvers = CarverCatalog::from_json(&read_bundle(dir, ov, "carvers")?)?;

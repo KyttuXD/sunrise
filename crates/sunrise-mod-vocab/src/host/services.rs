@@ -237,14 +237,13 @@ pub trait Players {
 /// leaves the id unpublished and free to retry; a failed unload keeps it open for retry.
 pub trait RuntimeLevels {
     /// Side: server.
-    /// Open the level `id` (`mymod:instance/ab`), in the calling mod's namespace, as `level`
+    /// Open the level `id` (`mymod:instance/ab`) as `level`
     /// describes. The request is checked now and applied after this server tick's levels have
     /// ticked, never inside a level's tick: the level is not open, and `is_open` says false, until
     /// then. The handle names this open of the level and never a later one. A folder that
     /// exists under the id is reopened as it was saved. `level_load` fires when it opens.
-    /// Refused with [`RuntimeLevelError`] for an id outside the mod's namespace, one already
-    /// open or waiting, an unknown dimension type or generator, a noise generator, and when
-    /// the server's cap of open runtime levels (`sunrise-max-runtime-levels`, 64) is reached.
+    /// Refused with [`RuntimeLevelError`] for an invalid or reserved id, an id already
+    /// open or waiting, or an unknown stem, dimension type or unsupported generator.
     fn open(&mut self, id: &str, level: RuntimeLevel) -> Result<LevelRef, RuntimeLevelError> {
         crate::world::phase::unprovided(
             "RuntimeLevels::open",
@@ -253,7 +252,7 @@ pub trait RuntimeLevels {
         )
     }
     /// Side: server.
-    /// Save and close the level `id` the calling mod opened, keeping its folder, once this server
+    /// Save and close the runtime level `id`, keeping its folder, once this server
     /// tick's levels have ticked: `level_unload` fires then. Refused with
     /// [`RuntimeLevelError::PlayersInside`] while a player or an arrival not yet landed is in the
     /// level, now and again when it is applied: the mod moves its players out first
@@ -266,7 +265,7 @@ pub trait RuntimeLevels {
         )
     }
     /// Side: server.
-    /// Remove the level `id` the calling mod owns, folder and all, once this server tick's levels
+    /// Remove the runtime level `id`, folder and all, once this server tick's levels
     /// have ticked. A level that is open is saved and closed first (`level_unload` fires), as by
     /// `unload`; a level that is not open, such as the leftovers of a crash, only has its files
     /// removed, and a level with no files is nothing to delete. The structure references the

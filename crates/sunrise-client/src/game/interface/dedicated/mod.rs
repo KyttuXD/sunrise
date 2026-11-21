@@ -1189,7 +1189,6 @@ impl Game<'_> {
             host.hub.transfers = Some(transfers);
         }
         self.sync_ops(&lists);
-        self.read_runtime_level_cap(|key| props.raw.get(key));
         if let Some(host) = self.lan.as_mut() {
             // The viewed areas' chunk caps (#3716): server.toml's `max_viewed_*` settings.
             let (caps, clamped) = viewed::ViewedCaps::from_properties(|key| props.raw.get(key));

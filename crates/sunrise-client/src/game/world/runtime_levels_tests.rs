@@ -1,7 +1,7 @@
 //! Levels a mod opens at run time: the table's rules, and a mod's calls against a game.
 
 use super::native_entity_refs::tests::with_game;
-use super::runtime_levels::RuntimeTable;
+use super::runtime_levels::{OpenLevel, RuntimeTable};
 use mod_api::{
     Hooks, HostSide, LevelLoadEvent, LevelRef, LevelTickPostEvent, LevelUnloadEvent, ModEntry,
     RuntimeLevel, RuntimeLevelError,
@@ -13,47 +13,41 @@ fn flat() -> RuntimeLevel {
     RuntimeLevel::flat("minecraft:overworld", 1)
 }
 
-#[test]
-fn the_cap_refuses_the_open_past_it_and_a_removal_frees_a_place() {
-    let mut table = RuntimeTable::default();
-    table.set_cap(2);
-    assert!(table.queue_open("test", "cap:a", flat()).is_ok());
-    assert!(table.queue_open("test", "cap:b", flat()).is_ok());
-    assert_eq!(
-        table.queue_open("test", "cap:c", flat()),
-        Err(RuntimeLevelError::CapReached)
-    );
-    table.remove("cap:a");
-    assert!(table.queue_open("test", "cap:c", flat()).is_ok());
+fn prepared_flat(id: &str, seed: i64) -> OpenLevel {
+    OpenLevel::resolve(
+        Default::default(),
+        id,
+        RuntimeLevel::flat("minecraft:overworld", seed),
+        |_| false,
+    )
+    .unwrap()
 }
 
 #[test]
-fn the_default_cap_is_64() {
+fn the_runtime_table_does_not_limit_the_number_of_levels() {
     let mut table = RuntimeTable::default();
-    for n in 0..64 {
-        assert!(
-            table
-                .queue_open("test", &format!("cap:l{n}"), flat())
-                .is_ok()
-        );
+    for n in 0..65 {
+        let id = format!("instances:l{n}");
+        assert!(table.queue_open("test", &id, prepared_flat(&id, 1)).is_ok());
     }
-    assert_eq!(
-        table.queue_open("test", "cap:l64", flat()),
-        Err(RuntimeLevelError::CapReached)
-    );
+    assert_eq!(table.seeds().len(), 65);
 }
 
 #[test]
 fn an_id_is_open_once_and_each_open_has_its_own_generation() {
     let mut table = RuntimeTable::default();
-    let first = table.queue_open("test", "gen:a", flat()).unwrap();
+    let first = table
+        .queue_open("test", "gen:a", prepared_flat("gen:a", 1))
+        .unwrap();
     assert_eq!(
-        table.queue_open("test", "gen:a", flat()),
+        table.queue_open("test", "gen:a", prepared_flat("gen:a", 1)),
         Err(RuntimeLevelError::AlreadyOpen)
     );
     assert_eq!(table.generation_of("gen:a"), first);
     table.remove("gen:a");
-    let second = table.queue_open("test", "gen:a", flat()).unwrap();
+    let second = table
+        .queue_open("test", "gen:a", prepared_flat("gen:a", 1))
+        .unwrap();
     assert_ne!(first, second);
     assert_eq!(table.generation_of("gen:a"), second);
     assert_eq!(table.generation_of("minecraft:the_nether"), 0);
@@ -62,7 +56,9 @@ fn an_id_is_open_once_and_each_open_has_its_own_generation() {
 #[test]
 fn a_level_is_open_after_its_request_is_applied_and_until_its_close_is() {
     let mut table = RuntimeTable::default();
-    table.queue_open("test", "state:a", flat()).unwrap();
+    table
+        .queue_open("test", "state:a", prepared_flat("state:a", 1))
+        .unwrap();
     assert!(!table.is_open("state:a"));
     assert_eq!(
         table.queue_unload("test", "state:a"),
@@ -295,15 +291,12 @@ fn tick_post(game: &mut super::Game<'_>) {
 
 #[test]
 #[ignore = "daily"]
-fn a_mod_opens_only_ids_in_its_own_namespace() {
+fn runtime_ids_can_cross_namespaces_but_must_be_safe_and_unreserved() {
     for (id, expected) in [
-        ("other:x", Err(RuntimeLevelError::OutsideNamespace)),
+        ("other:x", Ok(())),
         ("mymod:../x", Err(RuntimeLevelError::InvalidId)),
         ("mymod:a//b", Err(RuntimeLevelError::InvalidId)),
-        (
-            "minecraft:overworld",
-            Err(RuntimeLevelError::OutsideNamespace),
-        ),
+        ("minecraft:overworld", Err(RuntimeLevelError::ReservedId)),
         // Names Windows maps to a device or to another folder: refused before any folder exists.
         ("mymod:con", Err(RuntimeLevelError::InvalidId)),
         ("mymod:a/nul.txt", Err(RuntimeLevelError::InvalidId)),
@@ -627,11 +620,11 @@ fn a_delete_of_a_level_that_is_not_open_removes_its_leftovers() {
     });
 }
 
-/// The folder of another mod's level, of a vanilla level and of a path that leaves the world is
-/// never touched.
+/// Runtime removal uses the id, not the caller’s namespace, without touching reserved
+/// levels or following unsafe paths.
 #[test]
 #[ignore = "daily"]
-fn a_delete_outside_the_mods_namespace_is_refused_and_removes_nothing() {
+fn delete_accepts_other_namespaces_but_protects_builtin_levels_and_unsafe_paths() {
     with_opener("mine", "mine:a", flat(), |game, _| {
         let other = game.world_root.join("dimensions/other/x/region/r.0.0.mca");
         let vanilla = game
@@ -642,16 +635,17 @@ fn a_delete_outside_the_mods_namespace_is_refused_and_removes_nothing() {
         write_file(&vanilla);
         write_file(&escape.join("keep.txt"));
         for (id, expected) in [
-            ("other:x", RuntimeLevelError::OutsideNamespace),
-            ("minecraft:overworld", RuntimeLevelError::OutsideNamespace),
+            ("minecraft:overworld", RuntimeLevelError::ReservedId),
             ("mine:../other/x", RuntimeLevelError::InvalidId),
             ("mine:x/../../other/x", RuntimeLevelError::InvalidId),
             ("mine:con", RuntimeLevelError::InvalidId),
         ] {
             assert_eq!(delete_as(game, "mine", id), Err(expected), "{id}");
         }
+        assert_eq!(delete_as(game, "mine", "other:x"), Ok(()));
         game.apply_runtime_levels();
-        assert!(other.is_file() && vanilla.is_file() && escape.join("keep.txt").is_file());
+        assert!(!other.exists());
+        assert!(vanilla.is_file() && escape.join("keep.txt").is_file());
     });
 }
 
@@ -795,7 +789,9 @@ fn a_delete_of_a_level_still_waiting_to_open_is_refused() {
 #[test]
 fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() {
     let mut table = RuntimeTable::default();
-    table.queue_open("test", "del:a", flat()).unwrap();
+    table
+        .queue_open("test", "del:a", prepared_flat("del:a", 1))
+        .unwrap();
     assert_eq!(
         table.queue_delete("test", "del:a"),
         Err(RuntimeLevelError::AlreadyOpen)
@@ -808,7 +804,7 @@ fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() 
         Err(RuntimeLevelError::NotOpen)
     );
     assert_eq!(
-        table.queue_open("test", "del:a", flat()),
+        table.queue_open("test", "del:a", prepared_flat("del:a", 1)),
         Err(RuntimeLevelError::AlreadyOpen),
         "no reopen until the delete is applied"
     );
@@ -1320,7 +1316,7 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
         let key = sunrise_core::LevelKey::parse("cycle:a").unwrap();
         let mut first = None;
         for seed in [1, 2, 3, i64::MIN, i64::MAX] {
-            let level = RuntimeLevel::flat("minecraft:overworld", seed);
+            let level = prepared_flat("cycle:a", seed);
             game.levels
                 .runtime
                 .queue_open("cycle", "cycle:a", level)

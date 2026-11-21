@@ -9,7 +9,7 @@ Return `Some(1)` after `open` accepts the request or `None` if it refuses:
 
 ```rust,ignore
 event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
-    let level = RuntimeLevel::new("mymod:pocket", RuntimeGenerator::Mod("mymod:arena".into()), 4242);
+    let level = RuntimeLevel::from_stem("mymod:pocket", 4242);
     // On success the level opens after this tick's levels have ticked.
     host.runtime_levels().open("mymod:instance/ab12", level).ok()?;
     Some(1)
@@ -18,23 +18,22 @@ event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
 
 ## What a level is made of
 
-- **The id** is `namespace:path` in a namespace the mod owns (its own id, or one its manifest
-  lists). The folder is `dimensions/<namespace>/<path>/` of the world, derived from the id and
-  nothing else, so an id that is not a folder name (`mymod:../x`, an empty segment) is refused
-  with `InvalidId`, and one in another mod's namespace with `OutsideNamespace`. A vanilla level, a
-  level a mod registered at startup and a level a data pack gave are `ReservedId`.
-- **`dimension_type`** is a type known since startup: a vanilla type (`minecraft:overworld`) or the
-  type of a level a mod registered with [`register_dimension`](dimension-shape.md#registering-a-dimension)
-  (`mymod:pocket`). Nothing new crosses the network, so every client already has it. Any other
-  name is `UnknownDimensionType`; a data pack's own dimension types are not offered yet.
-- **`generator`** is `RuntimeGenerator::Flat` (bedrock, two dirt, a grass block, over plains),
-  `Void` (air), or `Mod(name)`, a chunk generator a native mod registered
-  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). An unregistered generator returns `UnknownGenerator`. A noise
-  generator is `NoiseUnsupported` for now.
-- **`seed`** is the level's own. It reaches the mod generator (`ChunkAccess::seed`), the level's block-tick
-  and level randoms and the hashed seed clients are sent. It does not change structures or
-  biomes. `ChunkAccess::level` tells a generator which level it fills, so one generator serves
-  every instance and looks its plan up by id.
+- **The instance id** is a folder-safe `namespace:path`. Its folder is
+  `dimensions/<namespace>/<path>/`; it need not be in the calling mod's namespace. An unsafe
+  folder name (`mymod:../x`, an empty segment) is `InvalidId`. The id of a vanilla or other startup
+  level is `ReservedId`; an existing runtime id is `AlreadyOpen`.
+- **`RuntimeLevel::from_stem(stem, seed)`** uses the complete configuration of a registered level
+  (`mymod:pocket` in the example). Declare it at startup with
+  [`register_dimension`](dimension-shape.md#registering-a-dimension) or a dimension data pack.
+  The stem supplies the registered dimension type, the chunk generator, the biome source and the
+  generator's settings together. It must name a registered dimension type and use vanilla noise
+  or a registered chunk generator. An absent stem is `UnknownStem`.
+- **`RuntimeLevel::flat(dimension_type, seed)`** and **`RuntimeLevel::void(dimension_type, seed)`**
+  use the default superflat layers or air, respectively, over plains. Both take an existing
+  dimension type, not a stem id.
+- **`seed`** controls generation (including biome and structure sampling when the generator uses
+  the seed), the level's randoms and the hashed seed clients receive. `ChunkAccess::level` tells
+  a registered chunk generator which instance it fills.
 
 ## When it happens
 
@@ -79,9 +78,9 @@ it stays open: `is_open` still says true, and the level opens again from its fol
 `delete(id)` removes a level for good: its folder `dimensions/<namespace>/<path>/` and the
 structure references the game keeps beside the world for it
 (`data/sunrise_structure_references_<namespace>_<path>.json`, kept if another id would share that
-file and its level exists: `a_b:c` and `a:b_c` do), then the folders those leave empty. It works for the levels of the calling mod's namespace only, with the same refusals as
-`unload` (`InvalidId`, `OutsideNamespace`, `ReservedId`), and the folder it removes comes from
-the validated id and nothing else.
+file and its level exists: `a_b:c` and `a:b_c` do), then the folders those leave empty. The folder
+comes from the validated id alone. A vanilla or other startup level cannot be deleted.
+
 
 - A level that is **open** is unloaded first, as by `unload` (saved, `level_unload` fires), and
   its files are removed in the same pass. It refuses with `PlayersInside` while a player or an
@@ -136,12 +135,5 @@ levels it views by their place in the list it got at login, where such a level i
 there are kept, but nothing of the level is sent to it, and it sees the level only by going in.
 When a runtime level closes, by `unload` or `delete`, every client that viewed it drops its world
 of it; the areas stay, and show the level again once it is open again.
-
-## The cap
-
-A server keeps at most 64 runtime levels open or waiting, whichever mods opened them: the
-65th `open` is `CapReached`. A server sets another number with `sunrise-max-runtime-levels` in
-`server.properties`; a server run by `sunrise-server` sets it under `[properties]` in `server.toml`
-([hosting](https://github.com/sunrise-org/sunrise/blob/main/docs/hosting.md)). An unloaded or deleted level frees its place when the request is applied; the idle close does not free it.
 
 Every refusal is also logged with the name of the mod that asked.

@@ -8,7 +8,7 @@
 //! later open of the same id. A delete is an unload and then the removal of the level's files, on
 //! the server thread in the same pass, so a reopen is applied only after the files are gone.
 use super::{Dim, Game};
-use mod_api::{LevelRef, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
+use mod_api::{LevelRef, RuntimeLevel, RuntimeLevelError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
@@ -18,12 +18,9 @@ use sunrise_world::{
     dimension_type::DimensionFacts,
     worldgen::{
         mod_generators::mod_chunk_generators,
-        overrides::{DIMENSION_TYPES, DIMENSIONS, WorldgenOverrides, mod_dimensions},
+        overrides::{DIMENSIONS, WorldgenOverrides},
     },
 };
-
-/// How many runtime levels a server keeps open unless `sunrise-max-runtime-levels` says otherwise.
-pub(in crate::game) const DEFAULT_CAP: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -37,15 +34,12 @@ enum State {
 struct Entry {
     generation: u32,
     state: State,
-    level: RuntimeLevel,
-    /// The mod that opened it, named when a request of its fails after the call.
-    owner: &'static str,
+    level: OpenLevel,
 }
 
 enum Request {
-    Open(String),
-    Unload(String),
-    /// The mod that asked, which a level with no entry cannot name any other way.
+    Open(&'static str, String),
+    Unload(&'static str, String),
     Delete(&'static str, String),
 }
 
@@ -58,7 +52,6 @@ pub(in crate::game) struct RuntimeTable {
     queue: Vec<Request>,
     /// The last generation given; never reset, so no two opens of an id share one.
     last_generation: u32,
-    cap: usize,
     #[cfg(test)]
     pub(super) fail_open_after_publication: bool,
     #[cfg(test)]
@@ -72,7 +65,6 @@ impl Default for RuntimeTable {
             erasing: BTreeSet::new(),
             queue: Vec::new(),
             last_generation: 0,
-            cap: DEFAULT_CAP,
             #[cfg(test)]
             fail_open_after_publication: false,
             #[cfg(test)]
@@ -82,33 +74,25 @@ impl Default for RuntimeTable {
 }
 
 impl RuntimeTable {
-    /// Forget every level, at the end of a world open. The cap and the generations stay.
+    /// Forget every level, at the end of a world open. The generations stay.
     pub(in crate::game) fn clear(&mut self) {
         self.entries.clear();
         self.erasing.clear();
         self.queue.clear();
     }
 
-    pub(in crate::game) fn set_cap(&mut self, cap: usize) {
-        self.cap = cap;
-    }
-
-    /// Queue the open of `id`, which the caller has checked except against the table: the cap and
-    /// a repeat. Returns the generation of this open.
-    pub(in crate::game) fn queue_open(
+    /// Queue the checked level, refusing to replace a pending or existing open.
+    pub(super) fn queue_open(
         &mut self,
         owner: &'static str,
         id: &str,
-        level: RuntimeLevel,
+        level: OpenLevel,
     ) -> Result<u32, RuntimeLevelError> {
         if self.entries.contains_key(id) {
             return Err(RuntimeLevelError::AlreadyOpen);
         }
         if self.erasing.contains(id) {
             return Err(RuntimeLevelError::Removing);
-        }
-        if self.entries.len() >= self.cap {
-            return Err(RuntimeLevelError::CapReached);
         }
         self.last_generation += 1;
         let generation = self.last_generation;
@@ -118,19 +102,22 @@ impl RuntimeTable {
                 generation,
                 state: State::Opening,
                 level,
-                owner,
             },
         );
-        self.queue.push(Request::Open(id.to_owned()));
+        self.queue.push(Request::Open(owner, id.to_owned()));
         Ok(generation)
     }
 
     /// Queue the close of `id`: it must be open, not waiting to open or to close.
-    pub(in crate::game) fn queue_unload(&mut self, id: &str) -> Result<(), RuntimeLevelError> {
+    pub(in crate::game) fn queue_unload(
+        &mut self,
+        owner: &'static str,
+        id: &str,
+    ) -> Result<(), RuntimeLevelError> {
         match self.entries.get_mut(id) {
             Some(entry) if entry.state == State::Open => {
                 entry.state = State::Closing;
-                self.queue.push(Request::Unload(id.to_owned()));
+                self.queue.push(Request::Unload(owner, id.to_owned()));
                 Ok(())
             }
             _ => Err(RuntimeLevelError::NotOpen),
@@ -173,7 +160,7 @@ impl RuntimeTable {
         self.entries.get(id).map_or(0, |entry| entry.generation)
     }
 
-    pub(in crate::game) fn level_of(&self, id: &str) -> Option<&RuntimeLevel> {
+    fn level_of(&self, id: &str) -> Option<&OpenLevel> {
         self.entries.get(id).map(|entry| &entry.level)
     }
 
@@ -221,11 +208,6 @@ impl RuntimeTable {
             .collect()
     }
 
-    /// The mod that opened `id`, or "?" for a level the table no longer holds.
-    fn owner_of(&self, id: &str) -> &'static str {
-        self.entries.get(id).map_or("?", |entry| entry.owner)
-    }
-
     /// The requests waiting, in the order made. Later requests wait for the next tick.
     fn take_queue(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.queue)
@@ -252,36 +234,19 @@ impl RuntimeTable {
     }
 }
 
-/// The JSON of the stem a runtime level is generated from, as a mod's registered level has one:
-/// the generator of the registered level `dimension_type` names, if any, with the generator
-/// `name` in place of its own.
-fn mod_stem(dimension_type: &str, name: &str) -> serde_json::Value {
-    let mut generator = mod_dimensions()
-        .iter()
-        .find(|dimension| dimension.id == dimension_type)
-        .and_then(|dimension| serde_json::from_str::<serde_json::Value>(&dimension.stem).ok())
-        .map(|stem| stem["generator"].clone())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "settings": "minecraft:overworld",
-                "biome_source": {"type": "minecraft:fixed", "biome": "minecraft:plains"},
-            })
-        });
-    generator["type"] = name.into();
-    serde_json::json!({"type": dimension_type, "generator": generator})
-}
-
 /// What runtime levels' opens leaked into the game's `&'static` tables, kept so that every later
 /// open reuses it: opening and unloading one id over and over leaks once (#4019).
 #[derive(Default)]
 struct Leaked {
-    /// A level's names and dimension type, by its id and the dimension type it was opened with.
-    /// `resolve_type` reads only startup data, so the same pair always gives the same facts.
-    levels: HashMap<(String, String), (&'static str, &'static str, &'static DimensionFacts)>,
+    // A pack may replace a type under the same id between worlds, so its definition
+    // participates in the identity of the facts.
+    levels: HashMap<LevelDefinition, LeakedLevel>,
     /// Every table of extra levels an open or unload made, reused when the same set comes back.
     tables: Vec<&'static [ExtraLevel]>,
 }
+
+type LevelDefinition = (String, String, Option<String>);
+type LeakedLevel = (&'static str, &'static str, &'static DimensionFacts);
 
 static LEAKED: LazyLock<Mutex<Leaked>> = LazyLock::new(Mutex::default);
 
@@ -290,12 +255,13 @@ static LEAKED: LazyLock<Mutex<Leaked>> = LazyLock::new(Mutex::default);
 fn leaked_level(
     id: &str,
     dimension_type: &str,
+    type_json: Option<String>,
     facts: DimensionFacts,
-) -> (&'static str, &'static str, &'static DimensionFacts) {
+) -> LeakedLevel {
     let mut leaked = LEAKED.lock().unwrap_or_else(|e| e.into_inner());
     *leaked
         .levels
-        .entry((id.to_owned(), dimension_type.to_owned()))
+        .entry((id.to_owned(), dimension_type.to_owned(), type_json))
         .or_insert_with(|| {
             (
                 id.to_owned().leak(),
@@ -319,41 +285,90 @@ fn leaked_table(levels: Vec<ExtraLevel>) -> &'static [ExtraLevel] {
     table
 }
 
-/// The shape and facts of the dimension type `level` names, for the level `id`: a vanilla type,
-/// or the type of a level a mod registered at startup. None for any other. Nothing is kept: the
-/// level's names are leaked into the game's tables only when it first opens (`leaked_level`).
-fn resolve_type(id: &str, level: &RuntimeLevel) -> Option<(LevelShape, DimensionFacts)> {
-    let mut overrides = WorldgenOverrides::default();
-    if let Some(registered) = mod_dimensions()
-        .iter()
-        .find(|dimension| dimension.id == level.dimension_type)
-    {
-        overrides.set(
-            DIMENSION_TYPES,
-            &registered.id,
-            registered.dimension_type.clone(),
-        );
-    } else if sunrise_world::worldgen::overrides::LevelHeight::vanilla(&level.dimension_type)
-        .is_none()
-    {
-        return None;
+/// The checked stem and type the open request carries to the end of the tick.
+pub(super) struct OpenLevel {
+    dimension_type: String,
+    shape: LevelShape,
+    facts: DimensionFacts,
+    type_json: Option<String>,
+    generate: Generate,
+    seed: i64,
+}
+
+impl OpenLevel {
+    pub(super) fn resolve(
+        mut overrides: WorldgenOverrides,
+        id: &str,
+        level: RuntimeLevel,
+        known_generator: impl Fn(&str) -> bool,
+    ) -> Result<Self, RuntimeLevelError> {
+        let (ty, generate, seed) = match level {
+            RuntimeLevel::Flat {
+                dimension_type,
+                seed,
+            } => (
+                serde_json::Value::String(dimension_type),
+                Generate::Flat,
+                seed,
+            ),
+            RuntimeLevel::Void {
+                dimension_type,
+                seed,
+            } => (
+                serde_json::Value::String(dimension_type),
+                Generate::Void,
+                seed,
+            ),
+            RuntimeLevel::Stem { stem, seed } => {
+                let stem: serde_json::Value = overrides
+                    .entries(DIMENSIONS)
+                    .find(|(key, _)| *key == stem)
+                    .and_then(|(_, json)| serde_json::from_str(json).ok())
+                    .ok_or(RuntimeLevelError::UnknownStem)?;
+                if !stem["generator"]["type"]
+                    .as_str()
+                    .is_some_and(|name| name == "minecraft:noise" || known_generator(name))
+                {
+                    return Err(RuntimeLevelError::UnknownGenerator);
+                }
+                (stem["type"].clone(), Generate::Stem(stem), seed)
+            }
+            _ => return Err(RuntimeLevelError::UnknownGenerator),
+        };
+        let dimension_type = ty
+            .as_str()
+            .ok_or(RuntimeLevelError::UnknownDimensionType)?
+            .to_owned();
+        overrides.set(DIMENSIONS, id, serde_json::json!({"type": ty}).to_string());
+        let shape = overrides
+            .level_height(id)
+            .and_then(|height| {
+                LevelShape::new(
+                    height.min_y,
+                    height.height,
+                    height.logical_height,
+                    height.has_skylight,
+                    height.has_ceiling,
+                )
+                .ok()
+            })
+            .ok_or(RuntimeLevelError::UnknownDimensionType)?;
+        let facts = overrides
+            .level_facts(id)
+            .and_then(Result::ok)
+            .ok_or(RuntimeLevelError::UnknownDimensionType)?;
+        let type_json = overrides
+            .level_type_json(id)
+            .map(|(_, json)| json.to_string());
+        Ok(Self {
+            dimension_type,
+            shape,
+            facts,
+            type_json,
+            generate,
+            seed,
+        })
     }
-    overrides.set(
-        DIMENSIONS,
-        id,
-        serde_json::json!({"type": level.dimension_type}).to_string(),
-    );
-    let height = overrides.level_height(id)?;
-    let shape = LevelShape::new(
-        height.min_y,
-        height.height,
-        height.logical_height,
-        height.has_skylight,
-        height.has_ceiling,
-    )
-    .ok()?;
-    let facts = overrides.level_facts(id)?.ok()?;
-    Some((shape, facts))
 }
 
 /// Whether every component of `id`'s namespace and path names one folder on every system: no
@@ -490,7 +505,7 @@ fn ensure_no_links(path: &Path, stop: &Path, include_path: bool) -> std::io::Res
 /// Remove the files of the level `id` from the world `root`: its folder, and the structure
 /// references kept beside the world for it unless `references` says another level shares that
 /// file, with the folders they leave empty. Whatever is not there is not an error; a link on the
-/// way is, before anything is removed. `id` has passed `owned_level_id`; the folder comes from it
+/// way is, before anything is removed. `id` has passed `validate_runtime_id`; the folder comes from it
 /// alone.
 pub(in crate::game) fn erase_level_files(
     root: &Path,
@@ -544,19 +559,8 @@ pub(in crate::game) enum Generate {
     Flat,
     /// Air.
     Void,
-    /// A mod's generator, by the stem that names it.
+    /// A registered stem, including the generator and its biome source.
     Stem(serde_json::Value),
-}
-
-impl Generate {
-    fn of(level: &RuntimeLevel) -> Option<Self> {
-        match &level.generator {
-            RuntimeGenerator::Flat => Some(Self::Flat),
-            RuntimeGenerator::Void => Some(Self::Void),
-            RuntimeGenerator::Mod(name) => Some(Self::Stem(mod_stem(&level.dimension_type, name))),
-            _ => None,
-        }
-    }
 }
 
 impl Dim {
@@ -571,19 +575,6 @@ impl Dim {
 }
 
 impl Game<'_> {
-    /// The cap on open runtime levels `server.properties` sets (`sunrise-max-runtime-levels`,
-    /// docs/hosting.md): the default, 64, for a missing or unreadable value.
-    pub(in crate::game) fn read_runtime_level_cap(
-        &mut self,
-        property: impl Fn(&str) -> Option<String>,
-    ) {
-        if let Some(cap) = property("sunrise-max-runtime-levels")
-            .and_then(|value| value.trim().parse::<usize>().ok())
-        {
-            self.levels.runtime.set_cap(cap);
-        }
-    }
-
     /// The mod running, if it is one and a server world is open: who a runtime level request
     /// belongs to.
     fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
@@ -593,16 +584,10 @@ impl Game<'_> {
         mod_api::content::crash::current_native_mod().ok_or(RuntimeLevelError::Unavailable)
     }
 
-    /// `id` as a level the calling mod `owner` may open or close: a valid, portable id in a
-    /// namespace the mod owns. The folder of a level is only ever derived from an id that passed
-    /// this.
-    fn owned_level_id(owner: &str, id: &str) -> Result<(), RuntimeLevelError> {
+    /// Check the resource id before it is ever used as a save folder.
+    fn validate_runtime_id(id: &str) -> Result<(), RuntimeLevelError> {
         if !sunrise_core::level_id::valid_level_id(id) || !portable_level_id(id) {
             return Err(RuntimeLevelError::InvalidId);
-        }
-        let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
-        if !mod_api::__private::owns_namespace(owner, namespace) {
-            return Err(RuntimeLevelError::OutsideNamespace);
         }
         Ok(())
     }
@@ -626,21 +611,26 @@ impl Game<'_> {
         level: RuntimeLevel,
     ) -> Result<LevelRef, RuntimeLevelError> {
         let owner = self.runtime_caller()?;
-        Self::owned_level_id(owner, id)?;
+        Self::validate_runtime_id(id)?;
         if !self.levels.runtime.holds(id) && Dim::exists(id) {
             return Err(RuntimeLevelError::ReservedId);
         }
-        if resolve_type(id, &level).is_none() {
-            return Err(RuntimeLevelError::UnknownDimensionType);
+        let mut overrides = super::world_loading::worldgen_overrides_of(
+            &self.world_root,
+            &self.options.resources,
+            self.world_biomes
+                .as_ref()
+                .unwrap_or_else(|| self.res.biomes()),
+            &self.level.enabled_features,
+            &self.pack.additional_data,
+        )
+        .0;
+        if let Some(generator) = &self.level.generator {
+            generator.merge_dimensions(&mut overrides);
         }
-        match &level.generator {
-            RuntimeGenerator::Mod(name) if !mod_chunk_generators().contains_key(name) => {
-                return Err(RuntimeLevelError::UnknownGenerator);
-            }
-            RuntimeGenerator::Noise => return Err(RuntimeLevelError::NoiseUnsupported),
-            RuntimeGenerator::Flat | RuntimeGenerator::Void | RuntimeGenerator::Mod(_) => {}
-            _ => return Err(RuntimeLevelError::UnknownGenerator),
-        }
+        let level = OpenLevel::resolve(overrides, id, level, |name| {
+            mod_chunk_generators().contains_key(name)
+        })?;
         let generation = self.levels.runtime.queue_open(owner, id, level)?;
         let epoch = self
             .native_lifecycle
@@ -667,11 +657,11 @@ impl Game<'_> {
 
     fn runtime_level_queue_unload(&mut self, id: &str) -> Result<(), RuntimeLevelError> {
         let owner = self.runtime_caller()?;
-        Self::owned_level_id(owner, id)?;
+        Self::validate_runtime_id(id)?;
         if self.levels.runtime.is_open(id) && self.level_has_players(Dim::from_id(id)) {
             return Err(RuntimeLevelError::PlayersInside);
         }
-        self.levels.runtime.queue_unload(id)
+        self.levels.runtime.queue_unload(owner, id)
     }
 
     /// `RuntimeLevels::delete`: check the request now, queue it for after the level loop.
@@ -688,7 +678,7 @@ impl Game<'_> {
 
     fn runtime_level_queue_delete(&mut self, id: &str) -> Result<(), RuntimeLevelError> {
         let owner = self.runtime_caller()?;
-        Self::owned_level_id(owner, id)?;
+        Self::validate_runtime_id(id)?;
         if !self.levels.runtime.holds(id) && Dim::exists(id) {
             return Err(RuntimeLevelError::ReservedId);
         }
@@ -769,16 +759,14 @@ impl Game<'_> {
     pub(in crate::game) fn apply_runtime_levels(&mut self) {
         for request in self.levels.runtime.take_queue() {
             match request {
-                Request::Open(id) => {
-                    let owner = self.levels.runtime.owner_of(&id);
+                Request::Open(owner, id) => {
                     if let Err(why) = self.apply_runtime_open(&id) {
                         // Nothing of it stays: `is_open` says false and the id opens again.
                         self.unpublish_runtime_level(&id);
                         log::warn!("mod {owner}: runtime level {id} did not open: {why}");
                     }
                 }
-                Request::Unload(id) => {
-                    let owner = self.levels.runtime.owner_of(&id);
+                Request::Unload(owner, id) => {
                     if let Err(why) = self.apply_runtime_unload(&id) {
                         // Still open: `is_open` says true and the mod can unload it again.
                         self.levels.runtime.keep_open(&id);
@@ -800,13 +788,16 @@ impl Game<'_> {
             .levels
             .runtime
             .level_of(id)
-            .cloned()
             .ok_or("the request is gone")?;
-        let (shape, facts) =
-            resolve_type(id, &level).ok_or("its dimension type is no longer known")?;
+        let shape = level.shape;
         // The tables the game reads a level's shape, type and place from learn it first; a failure
         // below takes it out of them again (`unpublish_runtime_level`).
-        let (id_name, dimension_type, facts) = leaked_level(id, &level.dimension_type, facts);
+        let (id_name, dimension_type, facts) = leaked_level(
+            id,
+            &level.dimension_type,
+            level.type_json.clone(),
+            level.facts.clone(),
+        );
         let mut extras = self.level_shapes.extra.to_vec();
         extras.push(ExtraLevel {
             id: id_name,
@@ -864,7 +855,7 @@ impl Game<'_> {
     /// close, or has a level below it, stays as it was. One that closed but whose files cannot
     /// all be removed stays closed, with its id kept from `open` until a `delete` finishes.
     fn apply_runtime_delete(&mut self, owner: &'static str, id: &str) {
-        if let Err(why) = self.close_to_delete(owner, id) {
+        if let Err(why) = self.close_to_delete(id) {
             // Still open, for another try.
             self.levels.runtime.keep_open(id);
             log::warn!("mod {owner}: runtime level {id} was not deleted: {why}");
@@ -882,9 +873,7 @@ impl Game<'_> {
         }
     }
 
-    fn close_to_delete(&mut self, owner: &'static str, id: &str) -> sunrise_client::Result<()> {
-        // The request passed this when it was made; the folder is derived from nothing less.
-        Self::owned_level_id(owner, id).map_err(|error| format!("{error:?}"))?;
+    fn close_to_delete(&mut self, id: &str) -> sunrise_client::Result<()> {
         if !self.levels.runtime.holds(id) && Dim::exists(id) {
             return Err("a level every world has".into());
         }
@@ -935,8 +924,42 @@ impl Game<'_> {
 
     /// What the level `dim` is opened with: its generator, and its seed, which the world's is for
     /// a level every world has.
-    pub(in crate::game) fn runtime_terrain(&self, dim: Dim) -> Option<(Generate, i64)> {
+    pub(in crate::game) fn runtime_terrain(&self, dim: Dim) -> Option<(&Generate, i64)> {
         let level = self.levels.runtime.level_of(dim.id())?;
-        Some((Generate::of(level)?, level.seed))
+        Some((&level.generate, level.seed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_runtime_instance_uses_the_registered_stem_without_substituting_its_generator() {
+        let mut overrides = WorldgenOverrides::default();
+        let stem = json!({
+            "type": "minecraft:the_nether",
+            "generator": {
+                "type": "terrain:arena",
+                "settings": "terrain:arena_noise",
+                "biome_source": {"type": "biomes:stripes"},
+            },
+        });
+        overrides.set(DIMENSIONS, "maps:arena", stem.to_string());
+        let level = OpenLevel::resolve(
+            overrides,
+            "instances:round_one",
+            RuntimeLevel::from_stem("maps:arena", 42),
+            |id| id == "terrain:arena",
+        )
+        .unwrap();
+        assert_eq!(level.dimension_type, "minecraft:the_nether");
+        assert!(!level.shape.sky_light);
+        assert_eq!(level.seed, 42);
+        let Generate::Stem(generator) = level.generate else {
+            panic!("expected a registered stem")
+        };
+        assert_eq!(generator, stem);
     }
 }
