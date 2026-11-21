@@ -136,19 +136,26 @@ fn the_raw_input_reads_the_world_and_names_missing_columns() {
         let state = |raw: u32| mod_api::__private::block_state_from_ordinal(block, raw as u16);
         let mut chunk = Chunk::empty(0, 0);
         chunk.set(15, MIN_Y + 31, 15, 7);
+        chunk.set_biome_cell(3, 4, 0, 6);
         let mut east = Chunk::empty(1, 0);
         east.set(0, MIN_Y + 16, 0, 9);
         east.set_biome_cell(0, 4, 0, 5);
         let mut region: Region = Default::default();
         region[1][1] = Some(Arc::new(chunk));
         region[1][2] = Some(Arc::new(east));
-        let input = capture_input(&region, 1, state);
+        let biomes = crate::biome::Biomes::from_jsons(&[
+            ("minecraft:plains", serde_json::json!({})),
+            ("minecraft:forest", serde_json::json!({})),
+            ("minecraft:swamp", serde_json::json!({})),
+            ("minecraft:savanna", serde_json::json!({})),
+            ("minecraft:river", serde_json::json!({})),
+            ("test:marsh", serde_json::json!({})),
+        ]);
+        let input = capture_input(&region, 1, &biomes, state);
         assert_eq!(input.cell([15, 15, 15]), Ok(SectionCell::State(state(7))));
         assert_eq!(input.cell([16, 0, 0]), Ok(SectionCell::State(state(9))));
-        assert_eq!(
-            input.biome([16, 0, 0]),
-            Ok(Some(mod_api::__private::biome_id(5)))
-        );
+        assert_eq!(input.biome([16, 0, 0]).unwrap().unwrap().id(), "test:marsh");
+        assert_eq!(input.biome([12, 0, 0]), Ok(None));
         assert_eq!(input.cell([0, 0, 0]), Ok(SectionCell::State(state(0))));
         assert_eq!(input.cell([-1, 0, 0]), Ok(SectionCell::Missing));
         assert_eq!(input.cell([16, 0, 16]), Ok(SectionCell::Missing));

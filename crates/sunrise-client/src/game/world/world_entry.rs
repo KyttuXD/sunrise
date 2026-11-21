@@ -1,13 +1,6 @@
 //! Entering a world without blocking the window: the deferred entry, world creation, the world
 //! resources' background load, and the world's own content tables.
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static BIOME_KEYS_SESSION: AtomicU64 = AtomicU64::new(1);
-
-fn next_biome_keys_session() -> u64 {
-    BIOME_KEYS_SESSION.fetch_add(1, Ordering::Relaxed)
-}
 
 impl Game<'_> {
     /// The server's data-pack enchantments, or the local world's registry.
@@ -495,14 +488,12 @@ impl Game<'_> {
             },
         )?;
         let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
-            .with_builtins(builtin)
-            .with_biome_keys(mod_api::__private::BiomeKeys::new(
-                next_biome_keys_session(),
-                self.world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .registry_order(),
-            ));
+            .with_builtins(builtin);
+        let biomes = Arc::clone(
+            self.world_biomes
+                .as_ref()
+                .unwrap_or_else(|| self.res.biomes()),
+        );
         drop(registries);
         // The API's key order is live state as well: do not change it for a
         // candidate refused by the condition readers.
@@ -537,6 +528,7 @@ impl Game<'_> {
                 stations,
                 reload_sources: reload.then_some(sources),
                 data_maps,
+                biomes,
                 pack_tags,
             }),
             advancements,

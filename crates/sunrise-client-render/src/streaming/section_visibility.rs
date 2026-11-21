@@ -79,6 +79,13 @@ pub struct VisibilityRequest {
     lease: Lease,
 }
 
+impl VisibilityRequest {
+    /// The registry whose palette slots this request's chunks use.
+    pub fn biomes(&self) -> &crate::biome::Biomes {
+        &self.context.biomes
+    }
+}
+
 impl SectionPreparation {
     /// Admit before copying the snapshot. A job that cannot fit stays dirty, not in a second
     /// queue holding an uncharged snapshot or answers.
@@ -522,7 +529,7 @@ pub(super) mod tests {
                     for request in streaming.take_visibility_requests() {
                         let mut builder = SectionPlanBuilder::new();
                         if request.key == CENTRE {
-                            let input = capture_input(&request.region, 0, state);
+                            let input = capture_input(&request.region, 0, request.biomes(), state);
                             assert_eq!(input.cell([16, 4, 8]), Ok(expected));
                             captured = true;
                         } else if request.key == (1, 0, 0) {
@@ -609,7 +616,8 @@ pub(super) mod tests {
                     for request in streaming.take_visibility_requests() {
                         let mut answer = SectionPlanBuilder::new();
                         if request.key == EAST
-                            && capture_input(&request.region, EAST.1, state).cell([8, 4, 8])
+                            && capture_input(&request.region, EAST.1, request.biomes(), state)
+                                .cell([8, 4, 8])
                                 == Ok(SectionCell::State(state(marker.0)))
                         {
                             answer.restrict([0, 4, 8], false, false, 0);

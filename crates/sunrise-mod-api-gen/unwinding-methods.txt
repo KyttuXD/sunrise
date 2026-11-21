@@ -469,8 +469,6 @@ items::scratch_slots
 items::scratch_stack
 items::scratch_take
 items::scratch_take_slots
-keys::biome_key
-keys::biome_key_id
 keys::block_entity_type_key_id
 keys::block_key
 keys::block_key_id

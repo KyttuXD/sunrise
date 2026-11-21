@@ -26,9 +26,14 @@ same pieces, even when workers generate neighbouring chunks concurrently.
 | `seed`, `chunk`, `sea_level`, `min_y`, `max_y` | World and chunk coordinates and bounds |
 | `random` | `&mut dyn RandomSource` ([Randomness](../../concepts/randomness.md)) seeded with vanilla's `setLargeFeatureSeed` for the chunk |
 | `base_height`, `base_columns`, `noise_column` | Height and base-column queries |
-| `noise_biome`, `column_has_valid_biome` | Opaque biome identities and the structure's valid-biome test |
+| `noise_biome`, `column_has_valid_biome` | A registered `BiomeRef` at a quart position and the structure's valid-biome test |
 | `metadata` | Borrowed immutable block metadata |
 | `config` | The structure JSON converted to a shared `Arc<Tag>` |
+
+`noise_biome(quart)` borrows the biome from the generator's registry before biome zoom.
+Use `biome.id()` to inspect the full namespaced name, or `biome.key()` to retain the same
+`BiomeKey` used for server data maps. The view itself cannot outlive the context borrow;
+`None` means the sampled slot has no registered biome.
 
 Config conversion runs when definitions load or reload, not per start. Nested JSON nulls are
 refused at load. The engine handles structure-set spacing, `biomes` and `terrain_adaptation`.

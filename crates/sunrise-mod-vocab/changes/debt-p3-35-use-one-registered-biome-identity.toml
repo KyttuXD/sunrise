@@ -1,0 +1,46 @@
+ids = [
+    "type:BiomeId",
+    "type:BiomeKey",
+    "type:BiomeKeyError",
+    "type:BiomeRef",
+    "method:BiomeRef::id",
+    "method:BiomeRef::key",
+    "method:BiomeKey::id",
+    "method:BiomeKey::data",
+    "method:KeysHost::biome_key",
+    "method:KeysHost::biome",
+    "method:GenerationContext::noise_biome",
+    "type:SectionVisibilityInput",
+    "method:SectionVisibilityInput::biome",
+    "type:SectionVisibilityEvent",
+    "hook:section_visibility",
+]
+why = """
+Vanilla 26.3 separates the name (ResourceKey.create and ResourceKey.identifier) from a
+registered biome in a particular registry (Holder.Reference.unwrapKey and
+BiomeSource / BiomeResolver.getNoiseBiome). Structure.GenerationContext.isValidBiome
+uses that same holder. NeoForge's BiomeModifier.modify receives Holder<Biome> and
+BaseMappedRegistry.getData looks up data-map values by ResourceKey. Sunrise now lends
+biomes from the actual registry and uses the same canonical name for retained keys and
+data-map reads, rather than wrapping unrelated palette slots or issuing reload tokens.
+Vanilla's saved biome names and network registry IDs still belong to their own codecs.
+"""
+migrate = """
+- Replace `host.biome_key(name)` with `host.biome(name)?` in a fallible caller. The new
+  return type is `Result<Option<BiomeRef<'_>>, LevelReadError>`: `Ok(None)` for an unknown
+  name, `Err(Unavailable)` outside the readable phase or without an installed server registry.
+  Use `biome.id()` to inspect it, or `biome.key()` to keep a `BiomeKey` outside the host borrow.
+- Replace `key.id(host)?` and any `BiomeKeyError` handling with `key.id()` (`&str`).
+  A `BiomeKey` is `Clone`, not `Copy`; borrow it or clone it where ownership is necessary.
+  Keep `DataMap::Entry = BiomeKey` and `key.data(host, &map)`; the read borrows the key
+  and returns the current published value. Removed names and missing values give `Ok(None)`,
+  rather than a wrong-generation error. Without published server data it returns `Unavailable`.
+- `GenerationContext::noise_biome(quart)` and `input.biome(local)?` now return
+  `Option<BiomeRef<'_>>`, not a `BiomeId` or an optional `BiomeId`. Compare `biome.id()`
+  or retain/compare `biome.key()`. An unregistered slot gives `None`; section reads
+  also give `None` for a missing column. For explicit input type annotations use
+  `SectionVisibilityInput<'_>`; rebuild `section_visibility` listeners for hook version 3.
+- Remove attempts to encode biome slots or generations with `Wire`. In a mod-owned packet or
+  saved record, encode the canonical `key.id()` text instead, then resolve it with
+  `host.biome(name)` when an installed server registry is available. Handle an absent name normally.
+"""

@@ -999,6 +999,8 @@ pub trait StartContext: JigsawContext {
     fn generation(&self) -> WorldGenerationContext;
     /// Noise biome at a quart position (caching resolver, no zoom).
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
+    /// The same resolved biome's registered name, borrowed from this generator's registry.
+    fn noise_biome_name(&mut self, quart: [i32; 3]) -> Option<&std::sync::Arc<str>>;
     /// Noise biomes of `quarts` in order through one resolver, as
     /// BiomeSource.findBiomeHorizontal samples: each climate lookup starts
     /// from the previous result, which a tie keeps.
