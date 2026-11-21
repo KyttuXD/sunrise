@@ -148,7 +148,7 @@ impl Game<'_> {
     /// Up to `count` out of slot `slot` of `view`, without `setChanged`.
     fn take_up_to(&mut self, view: &View, slot: usize, count: u32) -> Option<ItemStack> {
         if matches!(view.kind, Kind::Composter(_)) {
-            let (x, y, z) = view.parts[0].0;
+            let (x, y, z) = view.first.0;
             return self.composter_capability_extract([x, y, z], count);
         }
         self.containers().get(view, slot)?;
@@ -192,7 +192,7 @@ impl Game<'_> {
         if matches!(view.kind, Kind::Composter(_)) {
             return false;
         }
-        for &(pos, _) in &view.parts {
+        for (pos, _) in view.parts() {
             self.journal_block_entity(pos);
             self.world.set_container_stack_limit(pos, limit);
         }
@@ -237,7 +237,7 @@ impl Game<'_> {
         if slot_only && let Some((pos, slot)) = view.locate(slot) {
             return self.journal_block_entity_slot(pos, slot);
         }
-        for &(part, _) in &view.parts {
+        for (part, _) in view.parts() {
             self.journal_block_entity(part);
         }
     }
@@ -246,7 +246,7 @@ impl Game<'_> {
         if matches!(view.kind, Kind::Composter(_)) {
             return;
         }
-        for &(pos, _) in &view.parts {
+        for (pos, _) in view.parts() {
             self.after_commit(After::Changed(pos));
         }
     }
@@ -515,7 +515,8 @@ mod tests {
 
     fn view(kind: Kind, slots: usize) -> View {
         View {
-            parts: vec![((0, 0, 0), slots)],
+            first: ((0, 0, 0), slots),
+            second: None,
             kind,
             container: (kind == Kind::Mod).then(|| {
                 Arc::new(ModContainer {
