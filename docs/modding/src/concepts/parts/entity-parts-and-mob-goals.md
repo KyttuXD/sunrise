@@ -127,6 +127,9 @@ let full = Robot::edit_state(host, robot, |_, charge| {
     `edit_state` creates no map;
   - an entity resident in another level than the host's gives `OtherLevel`;
   - an entity out of its level's lists for its own tick gives `HolderBusy`.
+- `entity.residency(host)` reports the moving entity's status in `entity_entering_section`,
+  including when the hook runs inside the position write: a lent server mob is `Busy`,
+  not `Gone`, and the local client player is `InPlace`.
 - A reloaded entity has a new handle, which reads the saved value; a value without a codec is gone.
 - Changing level, a lone mob or general entity is rebuilt under a new id: the old handle is `Stale`,
   and the state arrives with the entity under its new id. A vehicle a player rides keeps its id, and

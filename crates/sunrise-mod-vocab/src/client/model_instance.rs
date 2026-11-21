@@ -150,6 +150,8 @@ pub enum InstanceError {
 
 /// Persistent copies of one resolved model, retired on reload, world close, owner mod disable or destroy.
 /// Retired handles never become valid again, even when their storage slot is reused.
+/// Any mod holding this handle can update, submit, or destroy the group. Share it only with
+/// mods that may perform those operations. The creating mod remains the owner for retirement.
 /// Static groups cache CPU conversion; all visible GPU-routed copies still upload every frame.
 /// Frequent group pose changes rebuild the live cache and can cost more than transient copies.
 // no wire: decoding from_parts rejects generation zero (an unpublished instance group handle).
@@ -219,7 +221,8 @@ impl InstanceGroupRef {
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum GroupError {
     /// The group was destroyed, its owner was disabled, or its world/resources retired.
-    /// Re-enabling or slot reuse cannot revive it.
+    /// Re-enabling or slot reuse cannot revive it. The caller's mod identity does not affect
+    /// whether a group handle is stale.
     Stale,
     /// The model could not be resolved.
     Model(crate::ModelError),

@@ -221,17 +221,13 @@ impl Game<'_> {
     ) -> Result<(), GroupError> {
         let mut storage = self.instance_groups.borrow_mut();
         let group = storage.get(handle, self.standalone_geometry.generation())?;
-        if !draw.group_room() {
-            return Err(GroupError::CapacityExceeded);
-        }
         self.draw_cached_model_instances(
             draw,
             group.model,
             &group.composed[..group.len],
             Some(&group.records[..group.len]),
-        )?;
-        draw.record_group_submission();
-        Ok(())
+        )
+        .map_err(GroupError::from)
     }
 }
 

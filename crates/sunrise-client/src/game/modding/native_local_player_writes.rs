@@ -337,7 +337,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn local_displacements_out_and_back_notify_both_section_crossings() {
-        type Crossing = ([i32; 3], [i32; 3], [f64; 3], Option<bool>);
+        use mod_api::EntityResidency;
+
+        type Crossing = ([i32; 3], [i32; 3], [f64; 3], Option<bool>, EntityResidency);
         #[derive(Default)]
         struct Walk(Arc<Mutex<Vec<Crossing>>>);
         #[mod_api::__subscriptions]
@@ -379,6 +381,7 @@ mod tests {
                         event.new_section,
                         event.entity.position(host).unwrap(),
                         event.entity.on_ground(host),
+                        event.entity.residency(host),
                     ));
                 }
             }
@@ -398,8 +401,20 @@ mod tests {
                 assert_eq!(
                     *crossings.lock().unwrap(),
                     [
-                        ([0, 4, 0], [1, 4, 0], [16.5, 64.5, 0.5], Some(true)),
-                        ([1, 4, 0], [0, 4, 0], [0.5, 64.5, 0.5], Some(false))
+                        (
+                            [0, 4, 0],
+                            [1, 4, 0],
+                            [16.5, 64.5, 0.5],
+                            Some(true),
+                            EntityResidency::InPlace,
+                        ),
+                        (
+                            [1, 4, 0],
+                            [0, 4, 0],
+                            [0.5, 64.5, 0.5],
+                            Some(false),
+                            EntityResidency::InPlace,
+                        )
                     ],
                 );
             });

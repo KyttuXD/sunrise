@@ -276,9 +276,9 @@ draw.terrain_model(self.belt, options)?;
 
 Each mod may reserve 65,536 copies across all its groups; a zero-capacity group
 reserves one slot. Destroying a group releases that reservation immediately. A view
-accepts 16,384 visible copies shared across transient batches, groups and listeners,
-and at most 16,384 group submissions. Culled copies do not consume the visible-copy
-budget. Refusal is atomic: no prefix of a refused submission draws.
+accepts 16,384 visible copies shared across transient batches, groups and listeners.
+Empty submissions and culled copies do not consume the budget. Refusal is atomic:
+no prefix of a refused submission draws.
 
 Groups cache converted records on the CPU. Unchanged groups avoid pose, normal and
 tint conversion, but cull and stage visible copies each frame. Every visible
@@ -293,7 +293,8 @@ There is no simulation-tick work.
 A destroyed group, a group after resource reload or world close, or a group whose
 creating mod was disabled returns `GroupError::Stale`. Re-enabling starts without
 groups: recreate them from the newly published model handles. Slot reuse never revives
-an old handle.
+an old handle. `Stale` is not a caller-identity check: any mod you share a live handle
+with can update, draw, or destroy the group. Share it only with mods that may do so.
 
 ## Still fluids in a block entity
 

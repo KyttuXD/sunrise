@@ -59,18 +59,23 @@ impl Hooks for Listener {
     }
 }
 
-type Positions = Arc<Mutex<Vec<Option<[f64; 3]>>>>;
+type SectionRead = (Option<[f64; 3]>, EntityResidency);
+type SectionReads = Arc<Mutex<Vec<SectionRead>>>;
 
-struct PositionListener(Positions);
+struct PositionListener(SectionReads);
 
 #[mod_api::__subscriptions]
 impl Hooks for PositionListener {
     fn entity_entering_section(&self, host: HostSide<'_>, event: &mut EntityEnteringSectionEvent) {
-        let position = match host {
-            HostSide::Server(host) => event.entity.position(host),
-            HostSide::Client(host) => event.entity.position(host),
+        let host: &dyn mod_api::Host = match host {
+            HostSide::Server(host) => host,
+            HostSide::Client(host) => host,
         };
-        self.0.lock().unwrap().push(position);
+        let entity = event.entity;
+        self.0
+            .lock()
+            .unwrap()
+            .push((entity.position(host), entity.residency(host)));
     }
 }
 
@@ -84,8 +89,8 @@ fn observe(test: impl FnOnce(Calls)) {
     mod_platform::testing::with_mods(mods, || test(calls));
 }
 
-fn observe_positions(test: impl FnOnce(Positions)) {
-    let positions = Positions::default();
+fn observe_positions(test: impl FnOnce(SectionReads)) {
+    let positions = SectionReads::default();
     let mods = vec![mod_api::ModEntry::new(
         "section-positions",
         Box::new(PositionListener(positions.clone())),
@@ -420,12 +425,13 @@ fn a_real_mob_tick_exposes_each_intermediate_position_to_the_listener() {
             let id = floating_cow(game, [8.5, 100.0, 8.5]);
             teleport_then_walk(game, id, &[[8.5, 127.75, 8.5]], [0.0, 0.6, 0.0]);
             let positions = positions.lock().unwrap();
-            assert_eq!(
-                positions.first().copied().flatten(),
-                Some([8.5, 127.75, 8.5])
-            );
             assert_eq!(positions.len(), 2);
-            assert!(positions[1].is_some_and(|at| at[1] >= 128.0));
+            assert_eq!(
+                positions[0],
+                (Some([8.5, 127.75, 8.5]), EntityResidency::Busy),
+                "the live teleport sees a lent mob, not a removed one"
+            );
+            assert!(positions[1].0.is_some_and(|at| at[1] >= 128.0));
         })
     });
 }

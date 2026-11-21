@@ -928,6 +928,52 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn empty_and_culled_groups_leave_room_for_a_visible_group() {
+        use mod_api::InstanceGroups;
+
+        let _fixture =
+            sunrise_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let _restore = Restore;
+            let model = grass(game);
+            let empty = game.create_group(model, 1).unwrap();
+            let culled = game.create_group(model, 1).unwrap();
+            let visible = game.create_group(model, 1).unwrap();
+            let copy = ModelInstance::at([0.0; 3], u32::MAX).with_color(0xFF80_FFFF);
+            culled
+                .write(game, 0, &[ModelInstance::at([40.0, 0.0, 0.0], u32::MAX)])
+                .unwrap();
+            visible.write(game, 0, &[copy]).unwrap();
+            game.view_frustum = Some(sunrise_client::gfx::test_frustum([
+                glam::Vec4::new(-1.0, 0.0, 0.0, 4.0),
+                glam::Vec4::W,
+                glam::Vec4::W,
+                glam::Vec4::W,
+                glam::Vec4::W,
+                glam::Vec4::W,
+            ]));
+            let mut draw = WorldGeometry::default();
+            for group in [empty, culled] {
+                draw.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+                let capacity = draw.usage().instances_capacity;
+                let mut ctx = context(game, &mut draw);
+                for _ in 0..capacity {
+                    ctx.draw_instance_group(group).unwrap();
+                }
+                assert_eq!(draw.usage().instances_used, 0);
+                assert_eq!(draw.copy_count(), 0);
+                assert!(game.prepared_model_draws.borrow().is_empty());
+                context(game, &mut draw)
+                    .draw_instance_group(visible)
+                    .unwrap();
+                assert_eq!(draw.usage().instances_used, 1);
+                assert_eq!(draw.copy_count(), 1);
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn persistent_groups_cpu_routes_and_lifetime() {
         use mod_api::__private::game::Fields;
         use mod_api::{GroupError, InstanceGroups};

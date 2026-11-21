@@ -2,7 +2,7 @@
 
 use super::{EntitySections, Game, PlayerMoveState, Scope, SectionWriter, tell_live};
 use crate::game::native_lifecycle::NativeLifecycle;
-use mod_api::{EntityRef, PlayerRef};
+use mod_api::{EntityRef, EntityResidency, PlayerRef};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -16,8 +16,9 @@ use sunrise_core::geometry::Vec3;
 #[derive(Clone, Copy)]
 pub(in crate::game) struct PlayerSectionScope {
     scope: Scope,
-    id: u32,
+    entity: EntityRef,
     body_id: i32,
+    residency: EntityResidency,
     local_player: Option<PlayerRef>,
     server: bool,
 }
@@ -38,14 +39,18 @@ impl PositionObserver for PlayerSectionObserver {
             return;
         };
         let to = player.position.components();
-        self.sections
-            .borrow_mut()
-            .moved(active.scope, active.id, Some(from.components()), to);
+        self.sections.borrow_mut().moved(
+            active.scope,
+            active.entity.id(),
+            Some(from.components()),
+            to,
+        );
         tell_live(
             &self.sections,
             SectionWriter {
-                entity: EntityRef::new(active.scope.epoch, active.id),
+                entity: active.entity,
                 position: to,
+                residency: active.residency,
                 player: Some(PlayerMoveState {
                     local_player: active.local_player,
                     on_ground: player.ground.on_ground,
@@ -93,10 +98,12 @@ impl Game<'_> {
         let id = u32::try_from(self.own_entity_id())
             .ok()
             .filter(|id| *id != 0)?;
+        let entity = EntityRef::new(scope.epoch, id);
         Some(PlayerSectionScope {
             scope,
-            id,
+            entity,
             body_id: self.player.as_ref()?.entity_id,
+            residency: self.entity_residency(entity),
             local_player: self.local_player(),
             server: self.is_logical_server(),
         })

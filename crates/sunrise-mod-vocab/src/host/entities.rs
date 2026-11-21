@@ -112,7 +112,9 @@ pub trait EntitiesBackend {
     /// resident in the level this host is in, out of its lists for its own tick, resident in
     /// another level, or gone (removed or its removal pending, unloaded, moved under a new
     /// id, or a handle of another world open). On a client, in place for an entity the
-    /// client has in the level it shows.
+    /// client has in the level it shows. The `entity_entering_section` hook can query the
+    /// moving entity even during a borrowed write: the local client player is in place,
+    /// and a server mob lent out for its tick is busy, not gone.
     #[access(WorldOnly)]
     fn entity_residency(&self, entity: EntityRef) -> EntityResidency;
 }

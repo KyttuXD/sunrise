@@ -560,8 +560,8 @@ pub trait CameraDrawContext {
 pub trait WorldDrawContext {
     /// Submit a retained group's live copies for this view, with per-view culling and the batch
     /// route rules. Each call submits explicitly; repeated submissions of the same group in one
-    /// view each draw again. Only visible copies consume the visible-copy budget. The shared limit
-    /// is 16,384 visible copies and 16,384 group submissions per view. Refusal is atomic.
+    /// view each draw again. Empty submissions and culled copies do not consume the shared
+    /// instance budget. Refusal is atomic.
     /// Shader packs and overlays use the same CPU path as transient model batches.
     /// Retired groups return [`GroupError::Stale`], even if drawn earlier this view.
     fn draw_instance_group(&mut self, group: InstanceGroupRef) -> Result<(), GroupError> {

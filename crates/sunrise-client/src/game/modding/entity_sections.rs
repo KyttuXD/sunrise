@@ -39,7 +39,7 @@ pub(super) use player::PlayerSectionObserver;
 use super::Game;
 use crate::mobs::living::section_writes::PositionWrite;
 use mod_api::__private::game::BackendRefOf;
-use mod_api::{DimensionKey, EntityRef, WorldEpoch};
+use mod_api::{DimensionKey, EntityRef, EntityResidency, WorldEpoch};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -184,6 +184,7 @@ impl EntitySections {
 struct SectionWriter {
     entity: EntityRef,
     position: [f64; 3],
+    residency: EntityResidency,
     player: Option<PlayerMoveState>,
 }
 
@@ -203,7 +204,12 @@ mod_api::impl_server_host_areas!(LiveSectionHost);
 mod_api::impl_client_host_areas!(LiveSectionHost, except(client_render, menus));
 mod_api::impl_backend_areas!(
     LiveSectionHost,
-    partial(entity_position, entity_on_ground, entity_velocity)
+    partial(
+        entity_position,
+        entity_residency,
+        entity_on_ground,
+        entity_velocity
+    )
 );
 
 impl mod_api::prelude::ClientRenderClientHost for LiveSectionHost {
@@ -228,6 +234,12 @@ impl LiveSectionHost {
     fn entity_position(&self, entity: EntityRef) -> Option<[f64; 3]> {
         let writer = self.0.filter(|writer| writer.entity == entity)?;
         Some(writer.position)
+    }
+
+    fn entity_residency(&self, entity: EntityRef) -> EntityResidency {
+        self.0
+            .filter(|writer| writer.entity == entity)
+            .map_or(EntityResidency::Gone, |writer| writer.residency)
     }
 
     fn entity_on_ground(&self, entity: EntityRef) -> Option<bool> {
@@ -307,6 +319,8 @@ impl crate::mobs::living::section_writes::WriteObserver for LiveSectionObserver 
             SectionWriter {
                 entity: EntityRef::new(self.scope.epoch, id),
                 position: to.components(),
+                // The running mob is lent out of its list, not removed.
+                residency: EntityResidency::Busy,
                 player: None,
             },
             true,
