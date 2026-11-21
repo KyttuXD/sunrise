@@ -44,7 +44,7 @@ pub fn changes_game(manifest: &Manifest, cargo: &toml::Table) -> Option<&'static
         mixin,
         module,
         bridge,
-        state,
+        state: _,
         r#loop,
     }) = &manifest.native
     {
@@ -52,7 +52,6 @@ pub fn changes_game(manifest: &Manifest, cargo: &toml::Table) -> Option<&'static
             (mixin.is_empty(), "[[native.mixin]]"),
             (module.is_empty(), "[[native.module]]"),
             (bridge.is_empty(), "[[native.bridge]]"),
-            (state.is_empty(), "[[native.state]]"),
             (r#loop.is_empty(), "[[native.loop]]"),
         ] {
             if !empty {

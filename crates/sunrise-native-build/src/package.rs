@@ -60,7 +60,6 @@ pub fn tool_manifest(bundle: &Bundle) -> Result<(), String> {
     for (name, rows) in [
         ("injection", toml::Value::try_from(&bundle.native().mixin)),
         ("bridge", toml::Value::try_from(&bundle.native().bridge)),
-        ("state", toml::Value::try_from(&bundle.native().state)),
     ] {
         let rows = rows.map_err(|error| error.to_string())?;
         if rows.as_array().is_some_and(|rows| !rows.is_empty()) {
