@@ -96,6 +96,10 @@ struct Page {
 }
 
 impl Page {
+    fn bytes(&self) -> u64 {
+        self.buffer.size() + self.sources.as_ref().map_or(0, wgpu::Buffer::size)
+    }
+
     /// Vertices in the page's free ranges.
     fn free_vertices(&self) -> u64 {
         self.free.0.values().sum()
@@ -113,6 +117,7 @@ const SHRINK_MIN_BYTES: u64 = 64 << 20;
 /// buffer sizes): a section's vertices sit in one page.
 pub struct Arena {
     pages: Vec<Option<Page>>,
+    page_bytes: u64,
     stride: u64,
     page_limit: u64,
     initial_capacity: u64,
@@ -202,6 +207,7 @@ impl Arena {
         let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
             pages: Vec::new(),
+            page_bytes: 0,
             stride,
             page_limit,
             initial_capacity: capacity,
@@ -258,11 +264,7 @@ impl Arena {
     }
     /// Bytes of every page's buffer.
     pub fn bytes(&self) -> u64 {
-        self.pages
-            .iter()
-            .flatten()
-            .map(|p| p.capacity * self.stride + p.sources.as_ref().map_or(0, wgpu::Buffer::size))
-            .sum()
+        self.page_bytes
     }
     /// The most vertices a page holds.
     pub fn page_vertices(&self) -> u64 {
@@ -330,11 +332,13 @@ impl Arena {
             self.sources_enabled = true;
             for p in self.pages.iter_mut().flatten() {
                 p.sources = Self::source_buffer(device, p.capacity);
+                self.page_bytes += p.sources.as_ref().map_or(0, wgpu::Buffer::size);
             }
         }
         let p = self.pages[page as usize].as_mut().expect("live arena page");
         if p.sources.is_none() && !sources.is_empty() {
             p.sources = Self::source_buffer(device, p.capacity);
+            self.page_bytes += p.sources.as_ref().map_or(0, wgpu::Buffer::size);
         }
         if let Some(buffer) = &p.sources {
             let bytes = vertices / 4 * 8;
@@ -424,6 +428,7 @@ impl Arena {
                 self.pages.push(None);
                 self.pages.len() - 1
             });
+        self.page_bytes += page.bytes();
         self.pages[index] = Some(page);
         Some((index as u32, start))
     }
@@ -525,7 +530,7 @@ impl Arena {
             return false;
         };
         let free = FreeList::new(capacity);
-        self.pages.push(Some(Page {
+        let page = Page {
             buffer,
             sources: self
                 .sources_enabled
@@ -534,7 +539,9 @@ impl Arena {
             capacity,
             free,
             host,
-        }));
+        };
+        self.page_bytes += page.bytes();
+        self.pages.push(Some(page));
         true
     }
     /// Stops placing vertices in `page` until `reopen`.
@@ -645,12 +652,14 @@ impl Arena {
         if let (Some(from), Some(to)) = (&old.sources, &sources) {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, from.size());
         }
+        self.page_bytes -= old.bytes();
         old.sources = sources;
         let previous = old.capacity;
         old.buffer = buffer;
         old.host = host;
         old.capacity = capacity;
         old.free.give(previous, capacity - previous);
+        self.page_bytes += old.bytes();
         true
     }
     /// Reclaim after an upload batch, so replacing a section can reuse its range. Gives back
@@ -663,6 +672,7 @@ impl Arena {
                 .is_some_and(|p| p.free.0.len() == 1 && p.free.0.get(&0) == Some(&p.capacity))
                 && let Some(p) = page.take()
             {
+                self.page_bytes -= p.bytes();
                 released.push(p.buffer);
             }
         }
@@ -678,6 +688,7 @@ impl Arena {
     /// Drops every page; gives back their buffers, for a [`Graveyard`].
     pub fn clear(&mut self) -> Vec<wgpu::Buffer> {
         self.closing = None;
+        self.page_bytes = 0;
         self.pages.drain(..).flatten().map(|p| p.buffer).collect()
     }
 }

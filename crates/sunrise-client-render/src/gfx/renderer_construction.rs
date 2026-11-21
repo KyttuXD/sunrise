@@ -2369,6 +2369,7 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             lods: FxHashMap::default(),
+            lod_vertex_bytes: 0,
             lod_cells: lod::TileGrid::default(),
             lod_cull_free: Vec::new(),
             lod_cull_next: 0,

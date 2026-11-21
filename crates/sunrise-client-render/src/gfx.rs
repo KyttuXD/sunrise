@@ -173,6 +173,7 @@ mod arena;
 pub mod capture;
 mod celestial;
 mod census;
+pub use census::RendererMemorySnapshot;
 pub mod compositor;
 pub(crate) mod core_clouds;
 pub(crate) mod core_lightmap;

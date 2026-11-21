@@ -283,6 +283,8 @@ pub struct Renderer {
     pub(crate) depth: wgpu::TextureView,
     pub(crate) sections: resident::Resident<SectionGpu>,
     pub(crate) lods: FxHashMap<crate::lod::TileKey, lod::Tile>,
+    /// Vertex bytes of the current tile meshes (not their fading stand-ins).
+    pub(crate) lod_vertex_bytes: u64,
     /// The same tiles by cell (`lod::TileGrid`), to test them a handful of
     /// boxes at a time (`draw_frame`).
     pub(crate) lod_cells: lod::TileGrid,
@@ -362,7 +364,7 @@ pub struct Renderer {
     /// The shadow camera's draws by page, in bands of distance from the light.
     pub(crate) shadow_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
-    pub(crate) block_entities: FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    pub(crate) block_entities: super::census::SectionLists,
     /// Changes on every mesh upload for that section; block-entity static
     /// geometry also depends on the section's packed light.
     pub(crate) block_entity_section_revisions: FxHashMap<SectionKey, u64>,
@@ -382,7 +384,7 @@ pub struct Renderer {
     /// Changes whenever `block_entities` does (unique across renderers).
     pub(crate) block_entity_revision: u64,
     /// The light sources of each section and their revision, for `block_light`.
-    pub(crate) light_blocks: FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    pub(crate) light_blocks: super::census::SectionLists,
     pub(crate) light_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     pub(crate) occlusion: occlusion::Occlusion,

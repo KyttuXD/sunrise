@@ -403,13 +403,17 @@ impl Renderer {
     /// never miss one that is there (the frame walk trusts them).
     fn add_lod_tile(&mut self, key: TileKey, tile: Tile) {
         self.lod_cells.insert(key, tile.bounds);
-        self.lods.insert(key, tile);
+        self.lod_vertex_bytes += tile.mesh.vertex_bytes();
+        if let Some(old) = self.lods.insert(key, tile) {
+            self.lod_vertex_bytes -= old.mesh.vertex_bytes();
+        }
     }
 
     /// A far tile out, with its cell.
     fn take_lod_tile(&mut self, key: TileKey) -> Option<Tile> {
         let tile = self.lods.remove(&key)?;
         self.lod_cells.remove(key);
+        self.lod_vertex_bytes -= tile.mesh.vertex_bytes();
         Some(tile)
     }
 
@@ -504,6 +508,7 @@ impl Renderer {
                 self.release_section(key);
             }
         }
+        self.lod_vertex_bytes = 0;
         for (_, tile) in std::mem::take(&mut self.lods) {
             self.release_tile(tile);
         }

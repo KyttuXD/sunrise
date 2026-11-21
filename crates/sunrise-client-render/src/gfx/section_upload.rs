@@ -659,6 +659,7 @@ impl Renderer {
         self.sections.clear();
         self.ray_clear();
         self.lods.clear();
+        self.lod_vertex_bytes = 0;
         self.lod_cells.clear();
         self.lod_cutout.clear();
         self.lod_retiring.clear();
@@ -874,10 +875,10 @@ impl Renderer {
             let retiring = !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(x, z));
             for sy in 0..self.layout.sections() as i32 {
                 let key = (x, sy, z);
-                block_entities |= self.block_entities.remove(&key).is_some();
+                block_entities |= self.block_entities.remove(&key);
                 self.block_entity_section_revisions.remove(&key);
                 self.block_entity_membership_revisions.remove(&key);
-                if self.light_blocks.remove(&key).is_some() {
+                if self.light_blocks.remove(&key) {
                     self.light_revision += 1;
                 }
                 self.section_uploaded.remove(&key);
@@ -913,12 +914,12 @@ impl Renderer {
         self.occlusion.remove_columns(&gone);
         let kept = |key: &SectionKey| !gone.contains(&(key.0, key.2));
         let before = self.block_entities.len();
-        self.block_entities.retain(|key, _| kept(key));
+        self.block_entities.retain(kept);
         if self.block_entities.len() != before {
             self.block_entity_revision = next_block_entity_revision();
         }
         let before = self.light_blocks.len();
-        self.light_blocks.retain(|key, _| kept(key));
+        self.light_blocks.retain(kept);
         self.light_revision += (before - self.light_blocks.len()) as u64;
         self.section_uploaded.retain(|key, _| kept(key));
         let released = self.sections.remove_columns(&gone);
