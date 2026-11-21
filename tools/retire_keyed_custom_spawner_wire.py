@@ -29,6 +29,16 @@ remove(
 )
 remove(
     VOCAB + "wire/wire_layout_tests.rs",
+    '    fields(\n        SpawnerKey::new("example:spawn").unwrap(),\n',
+    '    fields(\n        LevelKey::try_from("example:moon".to_owned()).unwrap(),\n',
+)
+remove(
+    VOCAB + "wire/wire_layout_tests.rs",
+    "    fields(\n        SpawnerEntry::Builtin(SpawnerKind::Cat),\n",
+    "    fields(ReductionChange::Add(1.25), (0u8, 1.25f32));\n",
+)
+remove(
+    VOCAB + "wire/wire_layout_tests.rs",
     "    let spawners = vec![\n        SpawnerEntry::Builtin(SpawnerKind::Cat),\n",
     '    let modifier = AttributeModifier::new(id("example:boost"), 1.75, AttributeOperation::AddValue);\n',
 )

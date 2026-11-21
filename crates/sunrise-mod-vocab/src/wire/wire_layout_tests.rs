@@ -21,10 +21,6 @@ fn checked_records_have_declared_field_bytes() {
         ("gear/options.toml".to_owned(),),
     );
     fields(
-        SpawnerKey::new("example:spawn").unwrap(),
-        ("example:spawn".to_owned(),),
-    );
-    fields(
         LevelKey::try_from("example:moon".to_owned()).unwrap(),
         ("example:moon".to_owned(),),
     );
@@ -207,14 +203,6 @@ fn handle_records_have_declared_field_bytes() {
 
 #[test]
 fn payload_enum_cases_have_declared_field_bytes() {
-    fields(
-        SpawnerEntry::Builtin(SpawnerKind::Cat),
-        (0u32, SpawnerKind::Cat),
-    );
-    fields(
-        SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
-        (1u32, SpawnerKey::new("example:spawn").unwrap()),
-    );
     fields(ReductionChange::Add(1.25), (0u8, 1.25f32));
     fields(ReductionChange::Scale(2.5), (1u8, 2.5f32));
     fields(ReductionChange::AtLeast(3.75), (2u8, 3.75f32));
