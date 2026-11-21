@@ -1,4 +1,16 @@
-//! Refusals when a mod shows, places or acknowledges blocks as a player, or asks what a player sees.
+//! Block interactions a mod invokes as a player.
+
+/// Where [`PlayerRef::destroy_block`](crate::PlayerRef::destroy_block) sends the broken block's
+/// own item drops after `block_drops`. Experience and indirect drops still spawn in the world.
+// no wire: drop routing is an in-process option for a player break.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlockDropDestination {
+    /// Spawn the drops at the block, as in a normal break.
+    World,
+    /// Put the drops in the player's inventory. Overflow drops from the player.
+    Inventory,
+}
 
 /// Why `player.sees`, `player.ack_block_changes`, `player.show_block` or `player.place_block`
 /// answered with nothing done: nothing was sent, written or queued.

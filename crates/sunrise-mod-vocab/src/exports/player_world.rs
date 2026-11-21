@@ -1,1 +1,1 @@
-pub use entity::player_world::PlayerWorldRefusal;
+pub use entity::player_world::{BlockDropDestination, PlayerWorldRefusal};
