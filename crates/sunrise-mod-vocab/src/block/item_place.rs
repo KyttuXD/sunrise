@@ -55,7 +55,9 @@ impl ScratchSlot {
 }
 
 /// Where a stack lives.
-// no wire: preserves stable explicit variant tags (Equipment is 9) and interns Mod.provider into a bounded static string.
+///
+/// This is a process-local handle and does not implement `Wire`.
+// no wire: live process-local item place handle; cannot cross Wire.
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ItemPlace {
@@ -156,7 +158,7 @@ pub enum ItemPlace {
     /// doesn't fit (`forHandlerIndex`, as a changed item split off a stack does).
     ///
     /// The place lives only for the scope of that callback; its final stack or slots are
-    /// returned on commit, and an abort restores or drops it. It cannot cross Wire.
+    /// returned on commit, and an abort restores or drops it.
     Scratch(ScratchSlot),
     /// The place inside, where an insert goes into that slot only
     /// (`ItemAccess.forHandlerIndexStrict`): around a [`BlockEntity`](Self::BlockEntity),

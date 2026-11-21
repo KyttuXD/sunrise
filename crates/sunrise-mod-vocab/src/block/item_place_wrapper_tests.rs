@@ -199,22 +199,3 @@ fn one_by_one_caps_both_inserts_and_extracts_at_one() {
     assert_eq!(extract(&mut host, &one, dirt, 4), 1);
     assert_eq!(slots(&host), [(3, 5)]);
 }
-
-#[test]
-fn wire_decode_refuses_wrappers_nested_past_its_depth() {
-    // `Strict` `wrappers` deep around a player slot, as the wire writes it.
-    let wrapped = |wrappers: usize| {
-        let mut bytes = Vec::new();
-        for _ in 0..wrappers {
-            bytes.extend(11u32.to_le_bytes());
-        }
-        bytes.extend(0u32.to_le_bytes());
-        bytes.extend(STEVE.to_le_bytes());
-        bytes.extend(3i32.to_le_bytes());
-        crate::wire::Reader::decode::<ItemPlace>(&bytes)
-    };
-    // Each wrapper takes two of the wire's 32 levels, its box and the place inside.
-    assert!(wrapped(15).is_ok());
-    assert_eq!(wrapped(16), Err(crate::wire::WireError::Depth));
-    assert_eq!(wrapped(100_000), Err(crate::wire::WireError::Depth));
-}

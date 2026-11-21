@@ -411,141 +411,6 @@ impl Wire for crate::ReductionChange {
     }
 }
 
-impl Wire for crate::ItemPlace {
-    layout_fields!("tag" => u32, "0:PlayerSlot.player" => u128, "0:PlayerSlot.slot" => i32, "1:PlayerHand.player" => u128, "1:PlayerHand.hand" => crate::Hand, "2:PlayerCursor.menu" => crate::MenuRef, "3:BlockEntity.level" => crate::LevelRef, "3:BlockEntity.pos" => [i32;3], "3:BlockEntity.side" => Option<crate::Direction>, "3:BlockEntity.slot" => usize, "4:ItemEntity.id" => u32, "5:EntitySlot.entity" => u32, "5:EntitySlot.slot" => usize, "6:Nested.parent" => Box<crate::ItemPlace>, "6:Nested.slot" => usize, "7:MenuSlot.menu" => crate::MenuRef, "7:MenuSlot.slot" => usize, "8:Mod.provider" => &'static str, "8:Mod.key" => u64, "9:Equipment.entity" => u32, "9:Equipment.slot" => crate::EquipmentSlot, "11:Strict.0" => Box<crate::ItemPlace>, "12:OneByOne.0" => Box<crate::ItemPlace>, "13:InfiniteMaterials.player" => u128, "13:InfiniteMaterials.inner" => Box<crate::ItemPlace>);
-    const MIN: usize = 4;
-    fn put(&self, out: &mut Writer) {
-        out.record(|out| {
-            use crate::ItemPlace::*;
-            match self {
-                PlayerSlot { player, slot } => {
-                    out.put(&0u32);
-                    out.put(player);
-                    out.put(slot)
-                }
-                PlayerHand { player, hand } => {
-                    out.put(&1u32);
-                    out.put(player);
-                    out.put(hand)
-                }
-                PlayerCursor { menu } => {
-                    out.put(&2u32);
-                    out.put(menu)
-                }
-                BlockEntity {
-                    level,
-                    pos,
-                    side,
-                    slot,
-                } => {
-                    out.put(&3u32);
-                    out.put(level);
-                    out.put(pos);
-                    out.put(side);
-                    out.put(slot)
-                }
-                ItemEntity { id } => {
-                    out.put(&4u32);
-                    out.put(id)
-                }
-                EntitySlot { entity, slot } => {
-                    out.put(&5u32);
-                    out.put(entity);
-                    out.put(slot)
-                }
-                Nested { parent, slot } => {
-                    out.put(&6u32);
-                    out.put(parent);
-                    out.put(slot)
-                }
-                MenuSlot { menu, slot } => {
-                    out.put(&7u32);
-                    out.put(menu);
-                    out.put(slot)
-                }
-                Equipment { entity, slot } => {
-                    out.put(&9u32);
-                    out.put(entity);
-                    out.put(slot)
-                }
-                Mod { provider, key } => {
-                    out.put(&8u32);
-                    out.put(provider);
-                    out.put(key)
-                }
-                Scratch(_) => out.fail(WireError::Invalid(
-                    "lent scratch item place cannot cross Wire",
-                )),
-                Strict(inner) => {
-                    out.put(&11u32);
-                    out.put(inner)
-                }
-                OneByOne(inner) => {
-                    out.put(&12u32);
-                    out.put(inner)
-                }
-                InfiniteMaterials { player, inner } => {
-                    out.put(&13u32);
-                    out.put(player);
-                    out.put(inner)
-                }
-            }
-        });
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        use crate::ItemPlace::*;
-        input.record(|input| {
-            Ok(match input.take::<u32>()? {
-                0 => PlayerSlot {
-                    player: input.take()?,
-                    slot: input.take()?,
-                },
-                1 => PlayerHand {
-                    player: input.take()?,
-                    hand: input.take()?,
-                },
-                2 => PlayerCursor {
-                    menu: input.take()?,
-                },
-                3 => BlockEntity {
-                    level: input.take()?,
-                    pos: input.take()?,
-                    side: input.take()?,
-                    slot: input.take()?,
-                },
-                4 => ItemEntity { id: input.take()? },
-                5 => EntitySlot {
-                    entity: input.take()?,
-                    slot: input.take()?,
-                },
-                6 => Nested {
-                    parent: input.take()?,
-                    slot: input.take()?,
-                },
-                7 => MenuSlot {
-                    menu: input.take()?,
-                    slot: input.take()?,
-                },
-                9 => Equipment {
-                    entity: input.take()?,
-                    slot: input.take()?,
-                },
-                8 => Mod {
-                    provider: input.take()?,
-                    key: input.take()?,
-                },
-                11 => Strict(input.take()?),
-                12 => OneByOne(input.take()?),
-                13 => InfiniteMaterials {
-                    player: input.take()?,
-                    inner: input.take()?,
-                },
-                n => return Err(WireError::Tag(n)),
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,13 +430,6 @@ mod tests {
         round(crate::SpawnerKey::new("example:spawner").unwrap());
         round(crate::CustomSpawners::vanilla());
         round(crate::Identifier::parse("example:thing").unwrap());
-        round(crate::ItemPlace::Nested {
-            parent: Box::new(crate::ItemPlace::Mod {
-                provider: "example:provider",
-                key: 3,
-            }),
-            slot: 4,
-        });
         let mut out = Writer::new();
         out.put_str("../escape");
         assert!(Reader::decode::<crate::ConfigPath>(out.bytes()).is_err());
@@ -587,7 +445,6 @@ mod tests {
         assert!(crate::wire::intern(&"x".repeat(257)).is_err());
         for len in 0..64 {
             let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + len * 11) as u8).collect();
-            let _ = Reader::decode::<crate::ItemPlace>(&bytes);
             let _ = Reader::decode::<crate::ItemStack>(&bytes);
             let _ = Reader::decode::<crate::ParticleOptions>(&bytes);
         }

@@ -15,7 +15,7 @@ POLICIES = {
     "Compound": "iterative Tag codec; vanilla 512; wire/depth_tests.rs",
     "Tag": "iterative Tag codec; vanilla 512; wire/depth_tests.rs",
     "Ingredient": "generic 32; wire/depth_tests.rs",
-    "ItemPlace": "generic 32; wire/depth_tests.rs",
+    "ItemPlace": "no Wire; process-local item place handle",
     "LootEntity": "generic 32; wire/depth_tests.rs",
     "RecipeSlotDisplay": "generic 32; wire/depth_tests.rs",
     "Text": "iterative TextForm; vanilla 512; wire/depth_tests.rs",

@@ -426,13 +426,6 @@ fn spawner_and_attribute_records_have_declared_field_bytes() {
         sunrise_mod_runtime::attachments::AttachmentBatch::<AttachmentHolder>::empty(),
     ));
     assert!(rows.is_empty());
-    fields(
-        ItemPlace::Mod {
-            provider: "example:bag",
-            key: 37,
-        },
-        (8u32, "example:bag".to_owned(), 37u64),
-    );
 }
 
 #[test]
@@ -568,119 +561,7 @@ fn newtype_widths_and_unit_enum_tags_match_their_encodings() {
     fields(Direction::North, (2u32,));
     fields(EquipmentSlotGroup::Head, (7u32,));
     fields(EquipmentSlot::Head, (5u32,));
-    fields(
-        ItemPlace::Equipment {
-            entity: 17,
-            slot: EquipmentSlot::Head,
-        },
-        (9u32, 17u32, EquipmentSlot::Head),
-    );
     fields(Tag::End, (0u32,));
-}
-
-#[test]
-fn every_item_place_case_has_declared_tag_and_field_types() {
-    let epoch = WorldEpoch::new(47);
-    let level = LevelRef::new(epoch, DimensionKey::OVERWORLD);
-    let entity = EntityRef::new(epoch, 29);
-    let player = crate::__private::game::player_ref(entity, 0x1234);
-    let menu = MenuRef {
-        player,
-        window: -2,
-        generation: 91,
-    };
-    fields(
-        ItemPlace::PlayerSlot {
-            player: 0x1234,
-            slot: -106,
-        },
-        (0u32, 0x1234u128, -106i32),
-    );
-    fields(
-        ItemPlace::PlayerHand {
-            player: 0x1234,
-            hand: Hand::Off,
-        },
-        (1u32, 0x1234u128, Hand::Off),
-    );
-    fields(ItemPlace::PlayerCursor { menu }, (2u32, menu));
-    fields(
-        ItemPlace::BlockEntity {
-            level,
-            pos: [7, -8, 9],
-            side: Some(Direction::West),
-            slot: 13,
-        },
-        (3u32, level, [7i32, -8, 9], Some(Direction::West), 13usize),
-    );
-    fields(ItemPlace::ItemEntity { id: 71 }, (4u32, 71u32));
-    fields(
-        ItemPlace::EntitySlot {
-            entity: 29,
-            slot: 17,
-        },
-        (5u32, 29u32, 17usize),
-    );
-    let parent = Box::new(ItemPlace::ItemEntity { id: 71 });
-    fields(
-        ItemPlace::Nested {
-            parent: parent.clone(),
-            slot: 19,
-        },
-        (6u32, parent, 19usize),
-    );
-    fields(
-        ItemPlace::MenuSlot { menu, slot: 23 },
-        (7u32, menu, 23usize),
-    );
-    fields(
-        ItemPlace::Mod {
-            provider: "example:bag",
-            key: 37,
-        },
-        (8u32, "example:bag".to_owned(), 37u64),
-    );
-    fields(
-        ItemPlace::Equipment {
-            entity: 29,
-            slot: EquipmentSlot::Saddle,
-        },
-        (9u32, 29u32, EquipmentSlot::Saddle),
-    );
-    let parent = Box::new(ItemPlace::ItemEntity { id: 71 });
-    fields(ItemPlace::Strict(parent.clone()), (11u32, parent.clone()));
-    fields(ItemPlace::OneByOne(parent.clone()), (12u32, parent.clone()));
-    fields(
-        ItemPlace::InfiniteMaterials {
-            player: 0x1234,
-            inner: parent.clone(),
-        },
-        (13u32, 0x1234u128, parent),
-    );
-    // The other four holder cases are exercised in handle_records above.
-    fields(AttachmentHolder::Level(level), (4u32, level));
-    fields(AttachmentRowError::StaleHolder, (1u32,));
-}
-
-#[test]
-fn scratch_item_place_cannot_cross_wire() {
-    let slot = ScratchSlot::fresh();
-    let mut out = Writer::new();
-    out.put(&ItemPlace::Scratch(slot));
-    assert!(matches!(out.error(), Some(WireError::Invalid(_))));
-
-    let mut wrapped = Writer::new();
-    wrapped.put(&ItemPlace::OneByOne(Box::new(ItemPlace::Scratch(slot))));
-    assert!(matches!(wrapped.error(), Some(WireError::Invalid(_))));
-
-    for tag in [10u32, 14] {
-        let mut raw = Writer::new();
-        raw.put(&(tag, 41u64));
-        assert_eq!(
-            Reader::decode::<ItemPlace>(raw.bytes()),
-            Err(WireError::Tag(tag))
-        );
-    }
 }
 
 #[test]
