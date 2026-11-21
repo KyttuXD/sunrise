@@ -16,7 +16,6 @@ use sunrise_client::{
         },
     },
 };
-use sunrise_core::nbt::Tag;
 use sunrise_core::{
     geometry::Vec3,
     random::{LegacyRandom, LevelRandom, RandomSource},
