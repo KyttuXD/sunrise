@@ -1,0 +1,16 @@
+ids = [
+    "hook:client_disconnecting",
+    "method:Hooks::client_disconnecting",
+    "type:ClientDisconnectingEvent",
+    "hook:client_player_logging_out",
+    "hook:client_player_logging_out.player_id",
+    "hook:client_player_logging_out.uuid",
+    "type:ClientPlayerLoggingOutEvent",
+    "type:ClientPlayerLoggingOutEvent.player_id",
+    "type:ClientPlayerLoggingOutEvent.uuid",
+    "method:Hooks::client_player_logging_out",
+]
+why = "Vanilla Minecraft.disconnect tears down the client player and level together. NeoForge ClientHooks.firePlayerLogout posts ClientPlayerNetworkEvent.LoggingOut before that teardown with the current player and controller, either of which can be absent. Sunrise now tells this moment once rather than calling another listener later in cleanup."
+migrate = """
+Move any `Hooks::client_disconnecting` work into `fn client_player_logging_out(&self, host: &mut dyn ClientHost, event: &mut ClientPlayerLoggingOutEvent)`. If you already implement both, keep only that one listener; it runs before the level unloads. Replace `event.uuid` with `event.player.map(|player| player.uuid())` and `event.player_id` with `event.player.map(|player| player.entity().id())` (an unsigned entity ID). Read `event.game_mode` for the current `Option<GameMode>`; handle `None` for either field, such as before login. Use the handle during the callback, not after the old level is gone.
+"""

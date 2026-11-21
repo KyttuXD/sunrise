@@ -1022,7 +1022,7 @@ one of these moments has to move that logic into a client native mod.
 | `client_player_clone.rs` | `client_player_clone` |
 | `client_player_logging_in.rs` | `client_player_logging_in` |
 | `client_player_logging_out.rs` | `client_player_logging_out` |
-| `client_services.rs` | `client_disconnecting`, `menu_background` |
+| `client_services.rs` | `menu_background` |
 | `client_setup.rs` | `client_setup` |
 | `client_stopped.rs` | `client_stopped` |
 | `client_stopping.rs` | `client_stopping` |

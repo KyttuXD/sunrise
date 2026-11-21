@@ -2,14 +2,12 @@ use super::*;
 
 /// The hook points. Each does nothing in Sunrise.
 impl Game<'_> {
-    /// Before client disconnect teardown (NeoForge's
-    /// `ClientPlayerNetworkEvent.LoggingOut`). The player may be absent.
-    /// Client-side.
+    /// Before client disconnect teardown, with the live player and current mode when present.
     pub(in crate::game) fn native_client_player_logging_out(
         &mut self,
-        player_id: Option<i32>,
-        uuid: Option<u128>,
+        player: Option<mod_api::PlayerRef>,
+        game_mode: Option<mod_api::GameMode>,
     ) {
-        self.fire_client_player_logging_out(player_id, uuid);
+        self.fire_client_player_logging_out(player, game_mode);
     }
 }

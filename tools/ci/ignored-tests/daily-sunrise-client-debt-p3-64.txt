@@ -1,0 +1,1 @@
+sunrise-client game::remote::tests::client_player_logging_out_tests::logout_reports_the_live_player_before_unload_once_and_allows_no_player lib daily child-process

@@ -60,7 +60,7 @@ impl Game<'_> {
             });
             return Ok(());
         }
-        if self.integrated.is_some() {
+        if self.integrated.is_some() && self.remote.is_some() {
             // Minecraft.disconnect: the client logs out before its server halts.
             self.client_logging_out();
         }

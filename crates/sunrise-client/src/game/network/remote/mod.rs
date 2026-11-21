@@ -2265,6 +2265,9 @@ pub(crate) mod tests {
     mod client_menu_tests {
         include!("client_menu_tests.rs");
     }
+    mod client_player_logging_out_tests {
+        include!("client_player_logging_out_tests.rs");
+    }
     mod client_player_reads_tests {
         include!("client_player_reads_tests.rs");
     }

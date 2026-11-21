@@ -23,9 +23,10 @@ outline for the current client render. Leave the existing value unchanged to
 preserve vanilla glowing; `None` disables it. These read-only client hooks
 receive `&dyn ClientHost`. They do not grant server writes.
 
-`Hooks::client_disconnecting` runs before an actual connection is discarded,
-not for a dimension change. Initialization and final shutdown still use the
-existing `client_setup` and `client_stopping` hooks, with no parallel aliases."#]
+`Hooks::client_player_logging_out` runs before the departing player and
+level are torn down, not for a dimension change. Its player and game mode
+are optional. Initialization and final shutdown still use `client_setup`
+and `client_stopping`."#]
     #[hook(
         receiver = "read",
         dispatch = "flat",
