@@ -2,7 +2,10 @@
 pub use sunrise_core::bounding_box::BoundingBox;
 pub use sunrise_core::equipment_slot::EquipmentSlot;
 /// An owned, validated resource name, not a process-local registry key.
-/// In Wire (including typed payloads), the namespace and path are two separate UTF-8 strings.
+///
+/// In Wire, including typed payloads, the namespace and path are written in that order.
+/// Each is a UTF-8 string with a little-endian `u32` byte length. Typed payloads apply
+/// their usual string framing and allocation budget; decoding does not resolve or intern a key.
 pub use sunrise_core::identifier::Identifier;
 /// A level's key (`LevelDimension::Custom`).
 pub use sunrise_core::level_key::LevelKey;

@@ -122,18 +122,29 @@ fn identifier_payloads_keep_the_ordinary_wire_layout_and_string_framing() {
 fn identifier_payloads_charge_for_both_the_text_and_its_shared_storage() {
     use crate::Identifier;
 
-    // Leave exactly enough room for the UTF-8 bytes, but not the owned identifier that holds them.
-    let id = Identifier::from_parts("test", &"a".repeat(252)).unwrap();
+    let component = "a".repeat(128);
+    let id = Identifier::from_parts(&component, &component).unwrap();
     let mut ordinary = Writer::new();
     ordinary.put(&id);
+    let bytes = ordinary.bytes();
 
-    let mut input = Reader::for_payload(ordinary.bytes());
-    input.charge::<u8>(PAYLOAD_DECODE_BUDGET - 256).unwrap();
-    assert_eq!(input.take::<Identifier>(), Err(WireError::Budget));
-    let mut out = Writer::for_payload(PAYLOAD_DECODE_BUDGET);
-    assert!(out.charge::<u8>(PAYLOAD_DECODE_BUDGET - 256));
-    out.put(&id);
-    assert_eq!(out.finish_payload(), Err(WireError::Budget));
+    // 256 fits the string buffers alone; 512 fits both buffers and their shared value.
+    for (remaining, fits) in [(256, false), (512, true)] {
+        // A usize is charged as eight bytes on both 32- and 64-bit targets.
+        let spent = (PAYLOAD_DECODE_BUDGET - remaining) / 8;
+        let mut input = Reader::for_payload(bytes);
+        input.charge::<usize>(spent).unwrap();
+        let mut out = Writer::for_payload(bytes.len());
+        assert!(out.charge::<usize>(spent));
+        out.put(&id);
+        if fits {
+            assert_eq!(input.take::<Identifier>().as_ref(), Ok(&id));
+            assert_eq!(out.finish_payload().unwrap(), bytes);
+        } else {
+            assert_eq!(input.take::<Identifier>(), Err(WireError::Budget));
+            assert_eq!(out.finish_payload(), Err(WireError::Budget));
+        }
+    }
 }
 
 #[test]
