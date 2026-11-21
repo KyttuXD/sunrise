@@ -389,13 +389,17 @@ impl DatapackRegistrySet {
             .ok_or(DatapackReadError::MissingEntry)
     }
 
-    /// The entry ids of `registry` in this set, sorted.
-    pub fn entries(&self, registry: &str) -> Result<Vec<&str>, DatapackReadError> {
+    /// Borrow the entry IDs of `registry` in lexical order. The iterator borrows the set,
+    /// not the lookup key. A known empty registry yields an empty iterator.
+    pub fn entries<'set>(
+        &'set self,
+        registry: &str,
+    ) -> Result<impl ExactSizeIterator<Item = &'set str> + use<'set>, DatapackReadError> {
         let entries = self
             .registries
             .get(registry)
             .ok_or(DatapackReadError::UnknownRegistry)?;
-        Ok(entries.keys().map(String::as_str).collect())
+        Ok(entries.keys().map(String::as_str))
     }
 
     /// Whether the current set contains this entry.
@@ -479,7 +483,10 @@ mod tests {
         )];
         let set = DatapackRegistrySet::from_candidate(candidate(&files));
         assert_eq!(power(&set, "example:fire"), DatapackValue::Int(7));
-        assert_eq!(set.entries("example:spell").unwrap(), ["example:fire"]);
+        assert_eq!(
+            set.entries("example:spell").unwrap().collect::<Vec<_>>(),
+            ["example:fire"]
+        );
         assert!(set.contains_entry("example:spell", "example:fire"));
         assert!(!set.contains_entry("example:spell", "example:missing"));
         assert!(!set.contains_entry("example:unknown", "example:fire"));
@@ -501,14 +508,17 @@ mod tests {
             file("data/addon/example/spell/ice.txt", &[r#"{"power": 1}"#]),
         ];
         let set = DatapackRegistrySet::from_candidate(candidate(&files));
+        let registry = String::from("example:spell");
+        let ids = set.entries(&registry).unwrap();
+        drop(registry); // The iterator borrows only the published set.
         assert_eq!(
-            set.entries("example:spell").unwrap(),
+            ids.collect::<Vec<_>>(),
             ["addon:ice", "addon:nested/hail", "example:fire"]
         );
-        assert_eq!(
+        assert!(matches!(
             set.entries("example:nothing"),
             Err(DatapackReadError::UnknownRegistry)
-        );
+        ));
     }
 
     /// Publishing a new candidate reflects updated values and removed entries while leaving
@@ -658,10 +668,10 @@ mod tests {
         )];
         let candidate = DatapackCandidate::build(&[], &files).unwrap();
         let set = DatapackRegistrySet::from_candidate(candidate);
-        assert_eq!(
+        assert!(matches!(
             set.entries("example:spell"),
             Err(DatapackReadError::UnknownRegistry)
-        );
+        ));
     }
 
     /// `{"power": 7}` padded with spaces to exactly `len` bytes.

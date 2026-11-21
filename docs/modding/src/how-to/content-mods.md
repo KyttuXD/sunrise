@@ -984,9 +984,13 @@ registries have it. The game decodes entries against the schema without running 
 the entry, and a default never stands in for invalid data. The engine adds no entry-size or field-count limit
 of its own. Only both-side packages may declare registries. The game loads entries from mod content and enabled data packs.
 
-Use `level.datapack_entries(host, registry)` to list owned entry IDs in sorted order and
-`level.datapack_read(host, registry, entry_id, &mut visit)` to borrow the published entry
-through a visitor. For example, keep only the `power` number:
+Use `level.visit_datapack_entries(host, registry, &mut visit)` to borrow entry IDs in
+lexical order. Return `std::ops::ControlFlow::Continue(())` for the next ID or `Break(())`
+to stop. `None` means the level or registry is unavailable; an empty registry completes
+with `Some(Continue(()))` and never calls the visitor. On a client level, a declared
+registry omitted from the server's snapshot is empty. Copy an ID inside the visitor only
+if you need to retain it. Use `level.datapack_read(host, registry, entry_id, &mut visit)` to
+borrow one published entry. For example, keep only the `power` number:
 
 ```rust,ignore
 let mut power = None;

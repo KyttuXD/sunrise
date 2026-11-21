@@ -175,7 +175,8 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
                         .as_ref()
                         .unwrap()
                         .entries("registry_test:spell")
-                        .unwrap(),
+                        .unwrap()
+                        .collect::<Vec<_>>(),
                     ["registry_test:fire"]
                 );
                 let old = game.mods.datapack_registries.as_ref().unwrap().clone();

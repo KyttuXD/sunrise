@@ -225,8 +225,8 @@ pub fn registry_contains(id: &str) -> Option<bool> {
     Some(REGISTRY.get()?.contains_key(id))
 }
 /// The identities of the same immutable registry gameplay reads.
-pub fn registry_ids() -> Option<Vec<&'static str>> {
-    Some(REGISTRY.get()?.keys().map(String::as_str).collect())
+pub fn registry_ids() -> Option<impl Iterator<Item = &'static str>> {
+    Some(REGISTRY.get()?.keys().map(String::as_str))
 }
 
 fn float(t: &Tag) -> Option<f32> {

@@ -1,0 +1,12 @@
+ids = [
+    "method:KeysHost::registry_entries",
+    "handle:LevelRef::datapack_entries",
+    "handle:DatapackRegistrySet::entries",
+]
+why = "Registry enumeration now borrows IDs from the current side's published tables instead of building a list on every read. It follows vanilla Level.registryAccess, MappedRegistry.keySet and MappedRegistry.listElements, HolderLookup.listElements and listElementIds, and NeoForge IRegistryExtension.getDataMap's lookup on the registry itself. Protocol order, local lexical order, and registry visibility are unchanged."
+migrate = '''
+- Replace `host.registry_entries(registry)` with `host.visit_registry_entries(registry, &mut |id| { /* read id: &str */ ControlFlow::Continue(()) })`. Import `std::ops::ControlFlow`; use `Identifier::parse(id)` inside the callback only if you need to retain a typed ID.
+- Replace `level.datapack_entries(host, registry)` with `level.visit_datapack_entries(host, registry, &mut |id| { /* read id: &str */ ControlFlow::Continue(()) })`. Copy `id.to_owned()` inside the callback if you need to retain the string. A client level still treats a declared registry omitted from sync as empty; the generic host visit still does not expose that registry.
+- Both visitors return `None` for an unavailable registry (or level), `Some(ControlFlow::Continue(()))` for a complete visit, including an empty one, or `Some(ControlFlow::Break(()))` when your callback returns `ControlFlow::Break(())`.
+- Iterate `set.entries(registry)?` directly: it now returns an exact-size iterator borrowing the set rather than `Vec<&str>`. To retain the old vector shape, call `.collect::<Vec<_>>()`; to retain IDs beyond the set's lifetime, use `.map(str::to_owned)` before collecting. `DatapackCandidate::entries` is unchanged.
+'''

@@ -132,10 +132,16 @@ resource generation retained by their worker.
 ### Ordinary Host reads
 
 In World, both client and server hosts expose `registry_entry(registry, id)`,
-`registry_entries(registry)` and `registry_entry_in_tag(&entry, tag)`. These read the
-current side's live registry and merged tags, not pending reload data. Unknown or
-unavailable registries and entries return `None`; an absent tag or a tag that does
-not contain the entry returns `Some(false)`. Enumeration yields each identity once.
+`visit_registry_entries(registry, &mut visit)` and `registry_entry_in_tag(&entry, tag)`.
+These read the current side's live registry and merged tags, not pending reload data.
+Unknown or unavailable registries and entries return `None`; an absent tag or a tag
+that does not contain the entry returns `Some(false)`.
+
+The registry visitor receives a borrowed canonical `&str` for each ID, in the table's
+order. Return `std::ops::ControlFlow::Continue(())` for the next ID or `Break(())` to
+stop immediately. The visit returns `Some(Continue(()))` when it finishes, even for
+an available but empty registry, or `Some(Break(()))` when stopped. To retain an ID
+past the visitor call, copy the string or parse it with `Identifier::parse(id)`.
 
 `ConfigHost::setting` still returns `Option<String>` on an ordinary `Host`; it is not the
 captured `Option<&str>` read on a load, loop or worldgen context.

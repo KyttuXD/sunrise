@@ -97,7 +97,7 @@ impl<'a> WorldRegistries<'a> {
                 .or_insert_with(|| {
                     self.datapack
                         .and_then(|set| set.entries(registry).ok())
-                        .map(|entries| entries.into_iter().map(String::from).collect())
+                        .map(|entries| entries.map(String::from).collect())
                         .unwrap_or_default()
                 })
                 .clone(),

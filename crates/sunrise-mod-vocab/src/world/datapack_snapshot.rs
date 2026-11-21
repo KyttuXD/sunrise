@@ -536,7 +536,7 @@ mod tests {
         let optional = spell(DatapackRegistrySync::Optional);
         let candidate = empty.candidate(std::slice::from_ref(&optional)).unwrap();
         let client = DatapackRegistrySet::received(candidate);
-        assert_eq!(client.entries("example:spell").unwrap(), Vec::<&str>::new());
+        assert_eq!(client.entries("example:spell").unwrap().next(), None);
     }
 
     #[test]
@@ -696,7 +696,7 @@ mod tests {
             assert!(!client.registry_available(registry));
         }
         for registry in ["example:empty", "example:omitted", "example:secret"] {
-            assert!(client.entries(registry).unwrap().is_empty());
+            assert_eq!(client.entries(registry).unwrap().len(), 0);
         }
         snapshot
             .registries
@@ -704,7 +704,7 @@ mod tests {
         let next = DatapackRegistrySet::received(snapshot.candidate(&declarations).unwrap());
         assert!(!next.registry_available("example:empty"));
         assert!(next.registry_available("example:spell"));
-        assert!(next.entries("example:empty").unwrap().is_empty());
+        assert_eq!(next.entries("example:empty").unwrap().next(), None);
         assert!(
             client.registry_available("example:empty"),
             "the previous publication remains intact"
@@ -757,7 +757,7 @@ mod tests {
         let client = DatapackRegistrySet::received(candidate);
         assert!(client.registry_available("example:payload"));
         assert!(!client.registry_available("client:optional"));
-        assert!(client.entries("client:optional").unwrap().is_empty());
+        assert_eq!(client.entries("client:optional").unwrap().next(), None);
         let Some(DatapackValue::Text(body)) = client
             .get("example:payload", "example:e63")
             .unwrap()

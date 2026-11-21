@@ -2,14 +2,14 @@
 //! fuel times, brewing times), evaluated from the data pack's JSON.
 use crate::items::{ItemStack, Items};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 /// Evaluator for `context_int_provider` / `context_float_provider` values.
 pub struct Providers {
-    ints: HashMap<String, Value>,
-    floats: HashMap<String, Value>,
+    ints: BTreeMap<String, Value>,
+    floats: BTreeMap<String, Value>,
 }
-fn load_dir(dir: &Path, namespace: &str, out: &mut HashMap<String, Value>) {
+fn load_dir(dir: &Path, namespace: &str, out: &mut BTreeMap<String, Value>) {
     let Ok(folder) = sunrise_world::json_folder::read(dir) else {
         return;
     };
@@ -23,8 +23,8 @@ fn load_dir(dir: &Path, namespace: &str, out: &mut HashMap<String, Value>) {
 }
 impl Providers {
     pub fn load(root: &Path) -> Self {
-        let mut ints = HashMap::new();
-        let mut floats = HashMap::new();
+        let mut ints = BTreeMap::new();
+        let mut floats = BTreeMap::new();
         let mut namespaces: std::collections::BTreeSet<String> =
             std::iter::once("minecraft".to_owned())
                 .chain(sunrise_items::content_namespaces::namespaces(root))
@@ -49,14 +49,14 @@ impl Providers {
         Self { ints, floats }
     }
     /// The accepted definitions used by provider evaluation, never a resource-file inventory.
-    pub fn registry(&self, registry: &str) -> Option<&HashMap<String, Value>> {
+    pub fn registry(&self, registry: &str) -> Option<&BTreeMap<String, Value>> {
         match registry {
             "minecraft:context_int_provider" => Some(&self.ints),
             "minecraft:context_float_provider" => Some(&self.floats),
             _ => None,
         }
     }
-    fn eval(v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
+    fn eval(v: &Value, fast: bool, table: &BTreeMap<String, Value>, depth: u32) -> f64 {
         if depth > 16 {
             return 0.0;
         }
@@ -143,8 +143,8 @@ impl Providers {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            ints: HashMap::new(),
-            floats: HashMap::new(),
+            ints: BTreeMap::new(),
+            floats: BTreeMap::new(),
         }
     }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {

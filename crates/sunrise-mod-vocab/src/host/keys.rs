@@ -32,10 +32,18 @@ pub trait KeysHost {
     #[access(WorldOnly)]
     fn registry_entry(&self, registry: &str, id: &str) -> Option<RegistryEntry>;
     /// Side: both.
-    /// Entry identifiers in the current table, each once. None for an unavailable or unknown
-    /// registry; an available empty registry returns an empty list.
+    /// Visit the canonical entry IDs in the current side's registry. Local tables with no
+    /// protocol order list unique IDs lexically; protocol tables retain their numeric order.
+    /// IDs are borrowed for each call; use [`Identifier::parse`] if you need to retain a typed ID.
+    /// Return `ControlFlow::Break(())` to stop, or `ControlFlow::Continue(())` to keep visiting.
+    /// Returns `None` for an unavailable or unknown registry and `Some(Continue(()))` on
+    /// completion (including an empty registry); an early stop returns `Some(Break(()))`.
     #[access(WorldOnly)]
-    fn registry_entries(&self, registry: &str) -> Option<Vec<Identifier>>;
+    fn visit_registry_entries(
+        &self,
+        registry: &str,
+        visit: &mut dyn FnMut(&str) -> core::ops::ControlFlow<()>,
+    ) -> Option<core::ops::ControlFlow<()>>;
     /// Side: both.
     /// Membership in the current side's merged tags. None for an unavailable registry or
     /// entry; an absent tag, or a tag not containing the entry, returns false.

@@ -170,6 +170,7 @@ pub const MINECART_IMPROVEMENTS: &str = "minecraft:minecart_improvements";
 #[derive(Debug, PartialEq)]
 pub struct RuleRegistry {
     rules: Vec<Rule>,
+    by_name: BTreeMap<String, usize>,
     categories: Vec<String>,
 }
 /// Failure while validating declarations collected from all mods.
@@ -190,6 +191,16 @@ impl Default for RuleRegistry {
 impl RuleRegistry {
     /// Create a fresh vanilla-backed registry for a session.
     pub fn vanilla() -> Self {
+        let rules: Vec<_> = RULES
+            .iter()
+            .chain(std::iter::once(&MAX_MINECART_SPEED))
+            .map(Rule::from)
+            .collect();
+        let by_name = rules
+            .iter()
+            .enumerate()
+            .map(|(slot, rule)| (rule.name.clone(), slot))
+            .collect();
         Self {
             categories: [
                 "chat", "drops", "misc", "mobs", "player", "spawning", "updates",
@@ -197,11 +208,8 @@ impl RuleRegistry {
             .into_iter()
             .map(|s| format!("minecraft:{s}"))
             .collect(),
-            rules: RULES
-                .iter()
-                .chain(std::iter::once(&MAX_MINECART_SPEED))
-                .map(Rule::from)
-                .collect(),
+            rules,
+            by_name,
         }
     }
     /// Build a fresh session registry from validated category declarations.
@@ -239,6 +247,9 @@ impl RuleRegistry {
                 });
                 continue;
             }
+            registry
+                .by_name
+                .insert(rule.name.clone(), registry.rules.len());
             registry.rules.push(rule.clone());
         }
         if errors.is_empty() {
@@ -249,10 +260,11 @@ impl RuleRegistry {
     }
     /// Resolve an identifier once when loading.
     pub fn position(&self, id: &str) -> Option<u32> {
-        self.rules
-            .iter()
-            .position(|rule| rule.name == id)
-            .and_then(|slot| u32::try_from(slot).ok())
+        u32::try_from(*self.by_name.get(id)?).ok()
+    }
+    /// All registered IDs in lexical order, independent of their rule slots.
+    pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
     }
     pub fn available_rules(&self, minecart_improvements: bool) -> impl Iterator<Item = &Rule> {
         self.rules
@@ -761,15 +773,19 @@ mod tests {
 
     #[test]
     fn disabled_feature_does_not_shift_later_dense_positions() {
-        let mut registry = RuleRegistry::vanilla();
-        registry.rules.push(Rule {
-            name: "example:later".into(),
-            category: "minecraft:misc".into(),
-            default: Value::Int(4),
-            min: 0,
-            max: 9,
-        });
-        let registry = Arc::new(registry);
+        let registry = Arc::new(
+            RuleRegistry::with_mod_rules(
+                &[],
+                &[Rule {
+                    name: "example:later".into(),
+                    category: "minecraft:misc".into(),
+                    default: Value::Int(4),
+                    min: 0,
+                    max: 9,
+                }],
+            )
+            .unwrap(),
+        );
         let mut rules = GameRules::with_registry(registry, &[]);
         assert_eq!(rules.get("example:later"), Some(Value::Int(4)));
         assert!(rules.set("example:later", Value::Int(7)));

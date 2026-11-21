@@ -60,7 +60,7 @@ pub struct Advancement {
 #[derive(Default)]
 pub struct Tree {
     pub list: Vec<Advancement>,
-    pub by_id: HashMap<String, usize>,
+    pub by_id: BTreeMap<String, usize>,
     /// trigger id -> (advancement index, criterion index).
     pub by_trigger: HashMap<String, Vec<(usize, usize)>>,
     /// `recipe_unlocked` criteria by the recipe they name (`index_recipes`);

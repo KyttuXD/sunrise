@@ -490,11 +490,11 @@ keys::item_keys
 keys::item_registry_id
 keys::menu_key_id
 keys::menu_keys
-keys::registry_entries
 keys::registry_entry
 keys::registry_entry_in_tag
 keys::registry_entry_key_slot
 keys::registry_protocol_id
+keys::visit_registry_entries
 level_block_updates::level_block_event
 level_block_updates::level_capability_generation
 level_block_updates::level_invalidate_capabilities
@@ -525,10 +525,10 @@ level_collision::level_clip
 level_collision::level_collision_boxes
 level_collision::level_has_collisions
 level_collision::level_line_of_sight
-level_datapacks::level_datapack_entries
 level_datapacks::level_datapack_read
 level_datapacks::level_recipe_for
 level_datapacks::level_roll_loot
+level_datapacks::level_visit_datapack_entries
 level_dimension::dimension_key_id
 level_dimension::level_dimension_shape
 level_dimension::level_dimension_type

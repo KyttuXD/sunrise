@@ -1,23 +1,42 @@
 use super::*;
 use mod_api::{
     DatapackEntry, DatapackField, DatapackFieldKind, DatapackReadError as E, DatapackRegistrySync,
-    DimensionKey, LevelRef, Registrar, RegistrationContext, WorldEpoch,
+    DimensionKey, Host, LevelRef, Registrar, RegistrationContext, WorldEpoch,
 };
+use std::ops::ControlFlow;
+
 struct SyncedRegistryMod;
 #[mod_api::__subscriptions]
 impl Hooks for SyncedRegistryMod {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-        r.declare_datapack_registry(
-            "spell",
-            DatapackRegistrySync::Required,
-            vec![DatapackField::required(
-                "power",
-                DatapackFieldKind::Int { min: 0, max: 100 },
-            )],
-        )
-        .unwrap();
+        for (name, sync) in [
+            ("spell", DatapackRegistrySync::Required),
+            ("server_only", DatapackRegistrySync::ServerOnly),
+        ] {
+            r.declare_datapack_registry(
+                name,
+                sync,
+                vec![DatapackField::required(
+                    "power",
+                    DatapackFieldKind::Int { min: 0, max: 100 },
+                )],
+            )
+            .unwrap();
+        }
     }
 }
+fn assert_spell_ids(host: &dyn Host, level: LevelRef, expected: &[&str]) {
+    let mut ids = Vec::new();
+    assert_eq!(
+        level.visit_datapack_entries(host, "registry_test:spell", &mut |id| {
+            ids.push(id.to_owned());
+            ControlFlow::Continue(())
+        }),
+        Some(ControlFlow::Continue(()))
+    );
+    assert_eq!(ids, expected);
+}
+
 #[test]
 #[ignore = "daily"]
 fn native_datapack_host_reads_enforce_level_session_and_generation() {
@@ -50,9 +69,14 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                     mod_api::DatapackRegistrySet::from_candidate(candidate(7)),
                 ));
                 let level = game.level(game.dim.id()).unwrap();
+                assert_spell_ids(game, level, &["addon:ice", "registry_test:fire"]);
                 assert_eq!(
-                    level.datapack_entries(game, "registry_test:spell"),
-                    Some(vec!["addon:ice".into(), "registry_test:fire".into()])
+                    level.visit_datapack_entries(game, "registry_test:spell", &mut |id| {
+                        // Insertion order was fire then ice. Ice must be first and only visited.
+                        assert_eq!(id, "addon:ice");
+                        ControlFlow::Break(())
+                    }),
+                    Some(ControlFlow::Break(()))
                 );
                 let published = game
                     .mods
@@ -77,7 +101,12 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 assert_eq!(visits, 1);
                 let mut visited_refusal = false;
                 let mut unexpected_visit = |_: &DatapackEntry| visited_refusal = true;
-                assert_eq!(level.datapack_entries(game, "missing:registry"), None);
+                let mut unexpected_id =
+                    |_: &str| -> ControlFlow<()> { panic!("unexpected entry ID") };
+                assert_eq!(
+                    level.visit_datapack_entries(game, "missing:registry", &mut unexpected_id),
+                    None
+                );
                 assert_eq!(
                     level.datapack_read(
                         game,
@@ -100,7 +129,14 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                     LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension()),
                     LevelRef::new(level.epoch(), DimensionKey::NETHER),
                 ] {
-                    assert_eq!(refused.datapack_entries(game, "registry_test:spell"), None);
+                    assert_eq!(
+                        refused.visit_datapack_entries(
+                            game,
+                            "registry_test:spell",
+                            &mut unexpected_id
+                        ),
+                        None
+                    );
                     assert_eq!(
                         refused.datapack_read(
                             game,
@@ -115,10 +151,7 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 game.enter_level(crate::game::Dim::Nether).unwrap();
                 game.enter_level(crate::game::Dim::Overworld).unwrap();
                 let parked = LevelRef::new(level.epoch(), DimensionKey::NETHER);
-                assert_eq!(
-                    parked.datapack_entries(game, "registry_test:spell"),
-                    Some(vec!["addon:ice".into(), "registry_test:fire".into()])
-                );
+                assert_spell_ids(game, parked, &["addon:ice", "registry_test:fire"]);
                 let mut parked_visits = 0;
                 parked
                     .datapack_read(
@@ -170,7 +203,10 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 sunrise_client::datapack_net::clear_received();
                 sunrise_client::datapack_net::accept(&bytes).unwrap();
                 game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
-                assert_eq!(parked.datapack_entries(game, "registry_test:spell"), None);
+                assert_eq!(
+                    parked.visit_datapack_entries(game, "registry_test:spell", &mut unexpected_id),
+                    None
+                );
                 assert_eq!(
                     parked.datapack_read(
                         game,
@@ -180,9 +216,15 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                     ),
                     Err(E::UnknownRegistry)
                 );
+                assert_spell_ids(game, level, &["registry_test:fire"]);
                 assert_eq!(
-                    level.datapack_entries(game, "registry_test:spell"),
-                    Some(vec!["registry_test:fire".into()])
+                    level.visit_datapack_entries(
+                        game,
+                        "registry_test:server_only",
+                        &mut unexpected_id
+                    ),
+                    Some(ControlFlow::Continue(())),
+                    "an omitted declared registry is an empty level listing"
                 );
                 let mut visits = 0;
                 level

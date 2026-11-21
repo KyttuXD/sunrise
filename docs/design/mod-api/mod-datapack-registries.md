@@ -98,10 +98,11 @@ File none. Stage 1: obtain exact public 26.3 contract and vanilla load/reload ca
 
 Built in `sunrise-mod-vocab` (`world/datapack_registry_set.rs`), engine-neutral and tested without a world: `DatapackCandidate::build` decodes the winning file of every entry of every declared registry and resolves references against the whole candidate (forward references work, an absent target refuses everything, a reference to an undeclared registry is left to its owner); `DatapackRegistrySet::from_candidate` publishes it infallibly. The game builds the candidate in `build_world_tables` and publishes it at world open and on `/reload`. Every route in the table above ends in `install_world_tables`, so each publishes once: explicit `/reload` and datapack selection, a content inventory change (`reload_datapacks(true)`) and the additional content refresh all prepare their tables with `prepare_world_reload` and install them there, and a world open publishes through `open_world_tables`. A remote client builds no tables, so it publishes nothing. Not built yet: the listener ordering (candidate-local writes until publication).
 
-Mods use `level.datapack_entries(host, registry)` for sorted owned entry IDs and
-`level.datapack_read(host, registry, entry_id, &mut visit)` to borrow one entry directly by
-`(registry, entry_id)`. A known empty registry has an empty list; an unavailable level or
-registry has no list. On the logical server, both the active dimension and any loaded parked
+Mods use `level.visit_datapack_entries(host, registry, &mut visit)` for borrowed entry IDs
+in lexical order and `level.datapack_read(host, registry, entry_id, &mut visit)` to borrow
+one entry directly by `(registry, entry_id)`. Listing a known empty registry completes
+without calling the visitor; listing an unavailable level or registry returns `None`.
+On the logical server, both the active dimension and any loaded parked
 server dimension are accepted (matching vanilla `Level.registryAccess()` on `ServerLevel`); on a
 client only the active client dimension is accepted. `UnknownRegistry` and `MissingEntry` are
 refusals, not successful visits. A stale epoch, unloaded dimension, unavailable registry, or

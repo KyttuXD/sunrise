@@ -500,6 +500,13 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                 );
                 let mut replacement = game.remote.as_ref().unwrap().registries.as_ref().clone();
                 replacement.registries.remove("minecraft:damage_type");
+                replacement
+                    .registries
+                    .insert("test:empty".into(), Vec::new());
+                replacement.registries.insert(
+                    "test:protocol_order".into(),
+                    vec![("test:z".into(), None), ("test:a".into(), None)],
+                );
                 replacement.add_tags(&UpdateTags {
                     registries: vec![RegistryTags {
                         registry: "minecraft:game_event".into(),
@@ -507,16 +514,29 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     }],
                 });
                 game.remote.as_mut().unwrap().registries = Arc::new(replacement);
+                let host = host(game);
                 assert_eq!(
-                    host(game).registry_entry_in_tag(&fall, "minecraft:is_fall"),
-                    None
+                    host.visit_registry_entries("test:empty", &mut |_| panic!(
+                        "empty registry visited"
+                    )),
+                    Some(ControlFlow::Continue(()))
                 );
+                let mut names = Vec::new();
                 assert_eq!(
-                    host(game).registry_entry_in_tag(&step, "minecraft:vibrations"),
+                    host.visit_registry_entries("test:protocol_order", &mut |id| {
+                        names.push(id.to_owned());
+                        ControlFlow::Continue(())
+                    }),
+                    Some(ControlFlow::Continue(()))
+                );
+                assert_eq!(names, ["test:z", "test:a"]);
+                assert_eq!(host.registry_entry_in_tag(&fall, "minecraft:is_fall"), None);
+                assert_eq!(
+                    host.registry_entry_in_tag(&step, "minecraft:vibrations"),
                     Some(false)
                 );
                 sunrise_client::datapack_net::clear_received();
-                assert_eq!(host(game).registry_entry_in_tag(&remote, "addon:hot"), None);
+                assert_eq!(host.registry_entry_in_tag(&remote, "addon:hot"), None);
             });
         },
     );
