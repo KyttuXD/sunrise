@@ -1117,21 +1117,15 @@ impl TrialSpawnerExt for TrialSpawner {
             width * scale,
             height * scale,
         );
-        let pending = spawn_selection::Pending {
-            yaw,
-            fresh: data.unconfigured(),
-        };
-        if !spawn_selection::position_ok(l, &id, Reason::TrialSpawner, placed, pending, || {
-            spawn_selection::spawn_obstruction(
-                species,
-                l,
-                bounds,
-                Some(&[]),
-                own[0],
-                own[1],
-                own[2],
-            )
-        }) {
+        if !spawn_selection::spawn_obstruction(
+            species,
+            l,
+            bounds,
+            Some(&[]),
+            own[0],
+            own[1],
+            own[2],
+        ) {
             return None;
         }
         let request = SpawnerSpawn {

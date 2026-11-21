@@ -151,16 +151,20 @@ impl Game<'_> {
         );
         let mut events = Vec::new();
         let mut planned: Vec<Planned> = Vec::new();
-        // A minecart spawner has no block.
-        let source = cart
-            .is_none()
-            .then(|| mod_api::SpawnSource::Block(mod_api::BlockPos::new(key.0, key.1, key.2)));
+        // `BaseSpawner` belongs either to a monster spawner block (`SpawnerBlockEntity`) or to a
+        // spawner minecart (`MinecartSpawner`); both `mob_spawn_position_check` (`PositionCheck`)
+        // and `finalize_spawn` (`FinalizeSpawnEvent`) receive that typed spawner identity.
+        let source = Some(match cart {
+            Some(id) => mod_api::Spawner::Minecart {
+                entity: mod_api::EntityRef::new(self.lend_epoch(), id),
+            },
+            None => mod_api::Spawner::Block {
+                pos: mod_api::BlockPos::new(key.0, key.1, key.2),
+            },
+        });
         let extras = {
             let mut level = self.natural_level();
-            // A minecart spawner has no block to tell the spawn checks of.
-            level.spawner = cart.is_none().then_some(mod_api::Spawner::Block {
-                pos: mod_api::BlockPos::new(key.0, key.1, key.2),
-            });
+            level.spawner = source;
             let mut spawn = |l: &super::natural_spawning::GameLevel,
                              rng: &mut LevelRandom,
                              r: &SpawnerSpawn| {
@@ -235,7 +239,7 @@ impl Game<'_> {
         &self,
         l: &super::natural_spawning::GameLevel,
         r: &SpawnerSpawn,
-        source: Option<mod_api::SpawnSource>,
+        source: Option<mod_api::Spawner>,
         planned: &mut Vec<Planned>,
         random: &mut sunrise_core::random::LegacyRandom,
     ) -> Option<SpawnerAdded> {

@@ -571,6 +571,20 @@ impl GeneralTypeCatalog {
     pub fn save_policy(&self, slot: usize) -> mod_api::GeneralSavePolicy {
         self.entries[slot].save_policy
     }
+
+    /// The Minecraft feature flags this type requires (`EntityType.requiredFeatures`).
+    pub fn required_features(&self, slot: usize) -> &[mod_api::FeatureFlag] {
+        &self.entries[slot].required_features
+    }
+
+    /// Whether every Minecraft feature flag this type requires is enabled in `enabled_features`
+    /// (`EntityType.isEnabled(FeatureFlagSet)`).
+    pub fn is_enabled(&self, slot: usize, enabled_features: &[String]) -> bool {
+        self.entries[slot]
+            .required_features
+            .iter()
+            .all(|flag| enabled_features.iter().any(|id| id == flag.id()))
+    }
 }
 
 /// The game's frozen registry, built from the installed declarations: the
@@ -1149,6 +1163,13 @@ impl Game<'_> {
                 return Ok(None);
             }
         }
+        // Enforce `EntityType.isEnabled(level.enabledFeatures())` on admission
+        // (matching vanilla `EntityType.create` / `EntityType.loadEntityRecursive`).
+        if let Some(slot) = catalog.slot(&record.envelope.type_key)
+            && !catalog.is_enabled(slot, &self.level.enabled_features)
+        {
+            return Ok(None);
+        }
         // A UUID a live entity of the level already owns refuses the whole
         // tree (`uuid_admission_refused`, the boundary every loaded kind
         // shares), before any row of it exists.
@@ -1213,11 +1234,16 @@ impl Game<'_> {
         // The decoder parsed the general rows; load vanilla mobs through the
         // same path that reads them on a vanilla vehicle, in original seat order.
         if let Some(Tag::List(list)) = tag.get(format::PASSENGERS) {
+            let catalog = general_type_catalog();
             let mut general = record.passengers.into_iter();
             for rider in list {
                 if self.loads_as_mob_passenger(rider) {
                     self.load_mob(rider.clone(), Some(id));
-                } else if let Some(record) = general.next() {
+                } else if let Some(record) = general.next()
+                    && catalog
+                        .slot(&record.envelope.type_key)
+                        .is_some_and(|slot| catalog.is_enabled(slot, &self.level.enabled_features))
+                {
                     self.insert_general_record(record, rider, Some(id), None);
                 }
             }
@@ -1564,6 +1590,43 @@ mod tests {
             Err(refusal) => assert!(refusal.contains("duplicate general entity type amod:same")),
             Ok(_) => panic!("a duplicate type key froze"),
         }
+    }
+
+    #[test]
+    fn catalog_enforces_required_minecraft_feature_flags() {
+        let mut plain = declaration("amod", "amod:plain");
+        plain.required_features = Vec::new();
+        let mut redstone = declaration("amod", "amod:redstone");
+        redstone.required_features = vec![mod_api::FeatureFlag::RedstoneExperiments];
+        let mut both = declaration("amod", "amod:both");
+        both.required_features = vec![
+            mod_api::FeatureFlag::RedstoneExperiments,
+            mod_api::FeatureFlag::MinecartImprovements,
+        ];
+        let catalog = GeneralTypeCatalog::freeze(&[plain, redstone, both]).unwrap();
+        let plain_slot = catalog.slot("amod:plain").unwrap();
+        let redstone_slot = catalog.slot("amod:redstone").unwrap();
+        let both_slot = catalog.slot("amod:both").unwrap();
+
+        let vanilla_only = vec!["minecraft:vanilla".to_owned()];
+        assert!(catalog.is_enabled(plain_slot, &vanilla_only));
+        assert!(!catalog.is_enabled(redstone_slot, &vanilla_only));
+        assert!(!catalog.is_enabled(both_slot, &vanilla_only));
+
+        let with_redstone = vec![
+            "minecraft:vanilla".to_owned(),
+            "minecraft:redstone_experiments".to_owned(),
+        ];
+        assert!(catalog.is_enabled(plain_slot, &with_redstone));
+        assert!(catalog.is_enabled(redstone_slot, &with_redstone));
+        assert!(!catalog.is_enabled(both_slot, &with_redstone));
+
+        let with_both = vec![
+            "minecraft:vanilla".to_owned(),
+            "minecraft:redstone_experiments".to_owned(),
+            "minecraft:minecart_improvements".to_owned(),
+        ];
+        assert!(catalog.is_enabled(both_slot, &with_both));
     }
 
     #[test]

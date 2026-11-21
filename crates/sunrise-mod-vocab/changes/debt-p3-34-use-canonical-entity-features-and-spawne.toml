@@ -1,0 +1,32 @@
+ids = [
+    "method:GeneralTypesRegistrar::declare_general_entity",
+    "type:GeneralEntityTypeDeclaration",
+    "type:GeneralEntityTypeDeclaration.required_features",
+    "type:GeneralEntityRegistrationError",
+    "type:GeneralEntityRegistrationError.UnknownDependency",
+    "type:FeatureFlag",
+    "handle:FeatureFlags::contains_flag",
+    "handle:FeatureFlags::contains_all",
+    "type:SpawnSource",
+    "type:Spawner",
+    "type:Spawner.Minecart",
+    "hook:finalize_spawn",
+    "hook:finalize_spawn.spawner",
+    "type:FinalizeSpawnEvent.spawner",
+    "hook:mob_spawn_placement_check",
+    "hook:mob_spawn_placement_check.spawner",
+    "type:MobSpawnPlacementCheckEvent.spawner",
+    "hook:mob_spawn_position_check",
+    "method:EntityPart::spawn_cluster_size",
+]
+why = """
+Removed the synthetic 256-byte general entity type key limit (`MAX_GENERAL_ENTITY_KEY`) from registration and kept string bounds strictly at the protocol boundary, using vanilla's `Identifier.STREAM_CODEC` / `ByteBufCodecs.STRING_UTF8` limit (32,767 UTF-16 code units, `FriendlyByteBuf.DEFAULT_MAX_STRING_LENGTH`) and `ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE` (1,048,576 bytes). \
+`GeneralTypesRegistrar::declare_general_entity` now returns the canonical registered `EntityTypeKey` and takes typed Minecraft feature flags (`FeatureFlag`, matching vanilla `net.minecraft.world.flag.FeatureFlags.REGISTRY` and `EntityType.Builder.requiredFeatures`) instead of checking mod IDs against `loaded_mods()`, removing `GeneralEntityRegistrationError::UnknownDependency`. \
+General entity spawn and load enforce `EntityType.isEnabled(level.enabledFeatures())` (matching vanilla `EntityType.canSpawn` and `EntityType.create`). \
+Removed `SpawnSource` and unified spawner identity on `Spawner::{Block, Trial, Minecart}` across applicable hooks while preserving each hook's NeoForge 26.3 source domain: `finalize_spawn` (`FinalizeSpawnEvent.getSpawner()` -> `Either<BlockEntity, Entity>`) now preserves `Spawner::Block`, `Spawner::Trial`, and `Spawner::Minecart`; `mob_spawn_position_check` (version 2, `MobSpawnEvent.PositionCheck.getSpawner()` -> `@Nullable BaseSpawner`) now delivers `Spawner::Block` and `Spawner::Minecart` and no longer fires on `TrialSpawner` (matching NeoForge's `TrialSpawner.java.patch`); `mob_spawn_placement_check` (`MobSpawnEvent.SpawnPlacementCheck`) removes its non-NeoForge `spawner` field; and `EntityPart::spawn_cluster_size` (`SpawnClusterSizeEvent`, called only from `NaturalSpawner.spawnCategoryForPosition`) removes its unused `reason` and `spawner` parameters."""
+migrate = """
+Update `r.declare_general_entity(...)` calls to pass `&[FeatureFlag]` (e.g. `&[]` or `&[FeatureFlag::RedstoneExperiments]`) for `required_features` instead of `&[&str]`, and bind or discard the returned `Result<EntityTypeKey, GeneralEntityRegistrationError>`. Move any mod dependency requirements to `sunrise-mod.toml` and remove match arms on `GeneralEntityRegistrationError::UnknownDependency`. \
+Replace `SpawnSource` matches in `finalize_spawn` with `Spawner::{Block { pos }, Trial { pos }, Minecart { entity }}`. \
+Remove reads of `event.spawner` from `mob_spawn_placement_check` listeners (inspect `event.reason` instead). \
+Rebuild `mob_spawn_position_check` listeners for version 2: spawner minecarts now deliver `Some(Spawner::Minecart { entity })` and trial spawners no longer fire `mob_spawn_position_check`. \
+Update `EntityPart::spawn_cluster_size` implementations to `fn spawn_cluster_size(&self, host: &dyn Host, mob: UnspawnedMobRef, vanilla: u32) -> Option<u32>`."""

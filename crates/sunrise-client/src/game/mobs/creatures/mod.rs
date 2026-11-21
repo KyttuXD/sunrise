@@ -1189,7 +1189,7 @@ impl Game<'_> {
         &mut self,
         mob: &mut Mob,
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
     ) -> Finalized {
         let mut group = None;
         let (outcome, difficulty) = self.finalize_spawn_event(mob, reason, spawner, &mut group);
@@ -1207,7 +1207,7 @@ impl Game<'_> {
         &self,
         mob: &mut Mob,
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
         group: &mut Option<Group>,
     ) -> (Finalized, spawning::LocalDifficulty) {
         let at = [mob.position.x, mob.position.y, mob.position.z];
@@ -1219,16 +1219,11 @@ impl Game<'_> {
         self.finalize_spawn_lent(&kind, at, reason, spawner, difficulty, Some(mob), group)
     }
     /// `Mob.getMaxSpawnClusterSize` as the entity parts of the finalized `mob`'s type answer it
-    /// (`EntityPart::spawn_cluster_size`), asked with `mob` lent as it stands before it joins the
-    /// level: the first part in dispatch order to answer wins, and none answering leaves vanilla's
-    /// `vanilla` to the spawner. A type with no part costs one table lookup. Server-side.
-    pub(super) fn spawn_cluster_size(
-        &self,
-        mob: &mut Mob,
-        reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
-        vanilla: u32,
-    ) -> Option<u32> {
+    /// (`EntityPart::spawn_cluster_size`, NeoForge's `SpawnClusterSizeEvent`), asked in natural
+    /// spawning with `mob` lent as it stands before it joins the level: the first part in dispatch
+    /// order to answer wins, and none answering leaves vanilla's `vanilla` to the spawner. A type
+    /// with no part costs one table lookup. Server-side.
+    pub(super) fn spawn_cluster_size(&self, mob: &mut Mob, vanilla: u32) -> Option<u32> {
         if !mod_api::__private::has_entity_parts() {
             return None;
         }
@@ -1249,9 +1244,7 @@ impl Game<'_> {
                     });
                 // Called outside the world (a reload or setup) a refused Host call is no answer.
                 match mod_api::__private::contain_outside_world(|| {
-                    attached
-                        .part()
-                        .spawn_cluster_size(self, lent, reason, spawner, vanilla)
+                    attached.part().spawn_cluster_size(self, lent, vanilla)
                 }) {
                     Ok(answer) => answer,
                     Err(refusal) => {
@@ -1270,7 +1263,7 @@ impl Game<'_> {
         kind: &str,
         at: [f64; 3],
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
     ) -> (Finalized, spawning::LocalDifficulty) {
         let difficulty = self.local_difficulty(at);
         if !mod_api::__private::listened(mod_api::HookId::FinalizeSpawn) {
@@ -1286,7 +1279,7 @@ impl Game<'_> {
         kind: &str,
         at: [f64; 3],
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
         difficulty: spawning::LocalDifficulty,
         mob: Option<&mut Mob>,
         group: &mut Option<Group>,

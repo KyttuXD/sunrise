@@ -171,6 +171,11 @@ impl Game<'_> {
     ) -> Option<u32> {
         let catalog = general_type_catalog();
         let slot = catalog.slot(kind)?;
+        // `EntityType.canSpawn`: refuse types whose required Minecraft feature flags are not
+        // enabled in this world.
+        if !catalog.is_enabled(slot, &self.level.enabled_features) {
+            return None;
+        }
         let record = GeneralEntityRecord {
             position: pos,
             velocity,

@@ -208,14 +208,13 @@ you need a list after the call, collect the handles you need in your visitor.
 ## Checking a spawn
 
 `mob_spawn_placement_check` and `mob_spawn_position_check` both get the `level` the mob would join (a `LevelRef`, so a
-listener can read the blocks around `pos` through the host) and the `spawner` that asked: `Spawner::Block { pos }` for a
-spawner block, `Spawner::Trial { pos }` for a trial spawner, and `None` when no block asked, including a spawner
-minecart. Set `*event.result` to `SpawnCheck::Succeed` or `Fail` to override that
-check; `Default` keeps the check's own answer.
+listener can read the blocks around `pos` through the host). Set `*event.result` to `SpawnCheck::Succeed` or `Fail` to
+override that check; `Default` keeps the check's own answer.
 
 In `mob_spawn_placement_check` version 2, `event.default_result` is the effective predicate result. It can differ
 from vanilla even for a vanilla type, because registrations can add to or replace its predicate. The hook fires
-after the predicates at `SpawnPlacements.checkSpawnRules`. For a probabilistic decision, draw from `event.random`,
+after the predicates at `SpawnPlacements.checkSpawnRules`. Like NeoForge's `SpawnPlacementCheck`, it has no spawner
+field; inspect `event.reason` instead. For a probabilistic decision, draw from `event.random`,
 the caller's live `&mut dyn RandomSource` lent to each listener in turn. Reassigning `event.random` only changes that
 listener's local reference; draws from the caller's stream and writes through `event.result` carry to the next
 listener. Keeping `Default` or refusing a spawn does not undo any draws, and this hook does not decide later checks.
@@ -235,11 +234,14 @@ fn mob_spawn_placement_check(&self, _: &dyn mod_api::Host, event: &mut mod_api::
 }
 ```
 
-The position check also gets `event.mob`, the mob about to spawn, as an `UnspawnedMobRef` with the same reads as
-`finalize_spawn`'s (no editor: the hook only reads). Vanilla creates the mob before this check; Sunrise creates it there
-only when the hook has a listener, the same way the spawn would, and the spawn then goes on with that very mob, so what
-the listener read is what joins the level. A refused check drops the mob: it never joins the level. Creating it draws
-nothing from the level's random, so a listener that answers `Default` changes no draw.
+In `mob_spawn_position_check` version 2 (NeoForge's `MobSpawnEvent.PositionCheck`), `event.spawner` is
+`Some(Spawner::Block { pos })` for a monster spawner block, `Some(Spawner::Minecart { entity })` for a spawner
+minecart, and `None` for natural spawning and chunk generation. Like NeoForge, trial spawners do not fire
+`mob_spawn_position_check`. The position check also gets `event.mob`, the mob about to spawn, as an `UnspawnedMobRef`
+with the same reads as `finalize_spawn`'s (no editor: the hook only reads). Vanilla creates the mob before this check;
+Sunrise creates it there only when the hook has a listener, the same way the spawn would, and the spawn then goes on
+with that very mob, so what the listener read is what joins the level. A refused check drops the mob: it never joins
+the level. Creating it draws nothing from the level's random, so a listener that answers `Default` changes no draw.
 
 ```rust,ignore
 fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobSpawnPositionCheckEvent<'_>) {
@@ -251,11 +253,11 @@ fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api
 
 Where the game does not create the mob fresh, the handle answers only `kind` and `position` (the rest is
 `UnspawnedMobError::Unsupported`): chunk generation's packs, which the world generator creates and finalizes after the
-check, and a spawner or trial spawner whose spawn data carries entity data, which the game loads after the tick.
+check, and a spawner whose spawn data carries entity data, which the game loads after the tick.
 
 ## Stopping a spawn or leaving a mob plain
 
-`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips finalization: the mob spawns, but with no equipment, attributes or class setup. Setting `event.spawn_cancelled = true` adds no mob at all.
+`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips finalization: the mob spawns, but with no equipment, attributes or class setup. Setting `event.spawn_cancelled = true` adds no mob at all. `event.spawner` carries the shared `Option<Spawner>` identity (`Spawner::Block { pos }`, `Spawner::Trial { pos }`, or `Spawner::Minecart { entity }`, matching NeoForge's `FinalizeSpawnEvent.getSpawner`).
 
 ```rust,ignore
 fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpawnEvent<'_>) -> mod_api::Flow {
@@ -313,7 +315,7 @@ See [the `finalize_spawn` contract](https://github.com/sunrise-org/sunrise/blob/
 
 ## Changing how large a spawn group grows
 
-A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, why and from what it spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
+A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size` (NeoForge's `SpawnClusterSizeEvent`), which gets the read-only host, the mob just spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
 
 ```rust,ignore
 struct ZombiePacks;
@@ -323,8 +325,6 @@ impl mod_api::EntityPart for ZombiePacks {
         &self,
         _: &dyn mod_api::Host,
         _: mod_api::UnspawnedMobRef,
-        _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
         vanilla: u32,
     ) -> Option<u32> {
         Some(vanilla * 2)

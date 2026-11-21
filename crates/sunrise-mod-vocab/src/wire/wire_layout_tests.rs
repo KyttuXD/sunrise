@@ -120,6 +120,47 @@ fn feature_flag_wire_preserves_the_effective_set() {
     let flags = FeatureFlags::new(["minecraft:vanilla".to_owned()].into());
     assert!(flags.contains("minecraft:vanilla"));
     assert!(flags.contains("vanilla"));
+    assert!(flags.contains_flag(FeatureFlag::Vanilla));
+    assert!(!flags.contains_flag(FeatureFlag::RedstoneExperiments));
+    assert!(flags.contains_all(&[FeatureFlag::Vanilla]));
+    assert!(!flags.contains_all(&[FeatureFlag::Vanilla, FeatureFlag::MinecartImprovements]));
+    assert_eq!(
+        FeatureFlag::from_id("minecraft:trade_rebalance"),
+        Some(FeatureFlag::TradeRebalance)
+    );
+    assert_eq!(
+        FeatureFlag::from_id("redstone_experiments"),
+        Some(FeatureFlag::RedstoneExperiments)
+    );
+    assert_eq!(FeatureFlag::from_id("unknown:flag"), None);
+    for flag in FeatureFlag::ALL {
+        assert_eq!(FeatureFlag::from_id(flag.id()), Some(flag));
+        let mut flag_out = Writer::new();
+        flag_out.put(&flag);
+        assert_eq!(
+            Reader::decode::<FeatureFlag>(flag_out.bytes()).unwrap(),
+            flag
+        );
+    }
+    let spawners = [
+        Spawner::Block {
+            pos: BlockPos::new(1, 2, 3),
+        },
+        Spawner::Trial {
+            pos: BlockPos::new(-4, 5, 6),
+        },
+        Spawner::Minecart {
+            entity: EntityRef::new(WorldEpoch::new(7), 88),
+        },
+    ];
+    for spawner in spawners {
+        let mut spawner_out = Writer::new();
+        spawner_out.put(&spawner);
+        assert_eq!(
+            Reader::decode::<Spawner>(spawner_out.bytes()).unwrap(),
+            spawner
+        );
+    }
     assert_eq!(flags.iter().collect::<Vec<_>>(), ["minecraft:vanilla"]);
     // Independent bytes: one flag, then the 17-byte UTF-8 resource id.
     let expected = b"\x01\0\0\0\x11\0\0\0minecraft:vanilla";

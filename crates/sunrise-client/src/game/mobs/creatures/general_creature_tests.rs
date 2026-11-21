@@ -347,8 +347,6 @@ impl mod_api::EntityPart for GatedCluster {
         &self,
         host: &dyn mod_api::Host,
         _: mod_api::UnspawnedMobRef,
-        _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
         _: u32,
     ) -> Option<u32> {
         let _ = host.level("minecraft:overworld");
@@ -370,7 +368,7 @@ impl mod_api::Hooks for GatedClusterMod {
 #[ignore = "daily"]
 fn a_spawn_cluster_size_outside_the_world_is_refused_not_a_panic() {
     use mod_api::__private::{ModPhase, PhaseOwner};
-    use sunrise_client::mobs::{Mob, spawn_rules::Reason};
+    use sunrise_client::mobs::Mob;
     use sunrise_core::geometry::Vec3;
 
     let entries = vec![mod_api::ModEntry::new("gated", Box::new(GatedClusterMod))];
@@ -387,14 +385,8 @@ fn a_spawn_cluster_size_outside_the_world_is_refused_not_a_panic() {
         for reloading in [false, true] {
             let setup = PhaseOwner::scope(ModPhase::Setup);
             let _reload = reloading.then(|| setup.reloading().unwrap());
-            assert_eq!(
-                game.spawn_cluster_size(&mut cow, Reason::Command, None, 4),
-                None
-            );
+            assert_eq!(game.spawn_cluster_size(&mut cow, 4), None);
         }
-        assert_eq!(
-            game.spawn_cluster_size(&mut cow, Reason::Command, None, 4),
-            Some(1)
-        );
+        assert_eq!(game.spawn_cluster_size(&mut cow, 4), Some(1));
     });
 }
