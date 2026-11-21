@@ -898,18 +898,22 @@ impl Game<'_> {
             };
             slot += 1;
             let (id, kind) = (projectiles[i].id, projectiles[i].entity_type());
-            let mut ticks = true;
-            let changed;
-            (projectiles, tridents, changed) =
-                self.remote_projectiles_told(projectiles, tridents, |game| {
-                    ticks = game.native_tick_pre_one(round, id, kind);
-                });
-            if changed.0 {
-                places = Some(places_of(projectiles.iter().map(|p| p.id)));
+            let mut i = i;
+            if round.pre_listened() {
+                let mut ticks = true;
+                let changed;
+                (projectiles, tridents, changed) =
+                    self.remote_projectiles_told(projectiles, tridents, |game| {
+                        ticks = game.native_tick_pre_one(round, id, kind);
+                    });
+                if changed.0 {
+                    places = Some(places_of(projectiles.iter().map(|p| p.id)));
+                }
+                let Some(at) = slot_place(&places, &slots, slot - 1).filter(|_| ticks) else {
+                    continue;
+                };
+                i = at;
             }
-            let Some(i) = slot_place(&places, &slots, slot - 1).filter(|_| ticks) else {
-                continue;
-            };
             {
                 let rain = self.arrow_rain();
                 let scene = self.arrow_scene(&rain);
@@ -923,13 +927,15 @@ impl Game<'_> {
                     remote_projectile_step(p, &scene, &world, arrow_events)
                 });
             }
-            let changed;
-            (projectiles, tridents, changed) =
-                self.remote_projectiles_told(projectiles, tridents, |game| {
-                    game.native_tick_post_one(round, id, kind);
-                });
-            if changed.0 {
-                places = Some(places_of(projectiles.iter().map(|p| p.id)));
+            if round.post_listened() {
+                let changed;
+                (projectiles, tridents, changed) =
+                    self.remote_projectiles_told(projectiles, tridents, |game| {
+                        game.native_tick_post_one(round, id, kind);
+                    });
+                if changed.0 {
+                    places = Some(places_of(projectiles.iter().map(|p| p.id)));
+                }
             }
         }
         // The tridents, all of one type: each alone when it is named, else as before.
@@ -955,21 +961,24 @@ impl Game<'_> {
         let mut places = None;
         for slot in 0..slots.len() {
             let id = slots[slot];
-            if slot_place(&places, &slots, slot).is_none() {
-                continue;
-            }
-            let mut ticks = true;
-            let changed;
-            (projectiles, tridents, changed) =
-                self.remote_projectiles_told(projectiles, tridents, |game| {
-                    ticks = game.native_tick_pre_one(round, id, TRIDENT);
-                });
-            if changed.1 {
-                places = Some(places_of(tridents.iter().map(|t| t.id)));
-            }
-            let Some(i) = slot_place(&places, &slots, slot).filter(|_| ticks) else {
+            let Some(mut i) = slot_place(&places, &slots, slot) else {
                 continue;
             };
+            if round.pre_listened() {
+                let mut ticks = true;
+                let changed;
+                (projectiles, tridents, changed) =
+                    self.remote_projectiles_told(projectiles, tridents, |game| {
+                        ticks = game.native_tick_pre_one(round, id, TRIDENT);
+                    });
+                if changed.1 {
+                    places = Some(places_of(tridents.iter().map(|t| t.id)));
+                }
+                let Some(at) = slot_place(&places, &slots, slot).filter(|_| ticks) else {
+                    continue;
+                };
+                i = at;
+            }
             {
                 let w = self.mob_world_base(&[]);
                 let world = super::creatures::ProjWorld {
@@ -980,13 +989,15 @@ impl Game<'_> {
                 let eye = self.remote_eye(tridents[i].owner);
                 super::trident::remote_tick(&mut tridents[i], &world, eye);
             }
-            let changed;
-            (projectiles, tridents, changed) =
-                self.remote_projectiles_told(projectiles, tridents, |game| {
-                    game.native_tick_post_one(round, id, TRIDENT);
-                });
-            if changed.1 {
-                places = Some(places_of(tridents.iter().map(|t| t.id)));
+            if round.post_listened() {
+                let changed;
+                (projectiles, tridents, changed) =
+                    self.remote_projectiles_told(projectiles, tridents, |game| {
+                        game.native_tick_post_one(round, id, TRIDENT);
+                    });
+                if changed.1 {
+                    places = Some(places_of(tridents.iter().map(|t| t.id)));
+                }
             }
         }
         (projectiles, tridents)
@@ -1443,9 +1454,9 @@ mod entity_tick_tests {
     type Event = (bool, &'static str, Vec<u32>, Vec<String>, Vec<[f64; 3]>);
     type Heard = Arc<Mutex<Vec<Event>>>;
 
-    /// A server's `AddEntity` of an arrow, through the packet path that tracks it: a listener's
+    /// A server's `AddEntity`, through the packet path that tracks the projectile: a listener's
     /// handle for a client entity resolves only for one the server told this client of.
-    fn add_arrow(game: &mut crate::game::Game<'_>, id: i32, position: [f64; 3]) {
+    fn add_projectile(game: &mut crate::game::Game<'_>, key: &str, id: i32, position: [f64; 3]) {
         let kind = game
             .remote
             .as_ref()
@@ -1453,7 +1464,7 @@ mod entity_tick_tests {
             .builtin
             .get("minecraft:entity_type")
             .unwrap()
-            .id("minecraft:arrow")
+            .id(key)
             .unwrap();
         game.handle_packet(sunrise_protocol::packets::play::Clientbound::AddEntity(
             sunrise_protocol::packets::play::AddEntity {
@@ -1488,7 +1499,10 @@ mod entity_tick_tests {
                     .iter()
                     .map(|&id| host.entity(id).unwrap().position(*host).unwrap())
                     .collect(),
-                _ => Vec::new(),
+                mod_api::HostSide::Server(host) => entities
+                    .iter()
+                    .map(|&id| host.entity(id).unwrap().position(&**host).unwrap())
+                    .collect(),
             };
             self.0
                 .lock()
@@ -1562,7 +1576,7 @@ mod entity_tick_tests {
                     .unwrap();
                 let _server = crate::game::native_client_session::tests::logged_client(game);
                 for (id, z) in [(71, 3.5), (72, 5.5)] {
-                    add_arrow(game, id, [3.5, 80.0, z]);
+                    add_projectile(game, "minecraft:arrow", id, [3.5, 80.0, z]);
                 }
                 game.tick_remote_projectiles(|_, at| at);
                 positions.extend(
@@ -1594,6 +1608,137 @@ mod entity_tick_tests {
         assert!(positions.iter().all(|p| p[0] > 3.5));
     }
 
+    struct PreOnly(Listener);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PreOnly {
+        fn entity_tick_pre(
+            &self,
+            host: mod_api::HostSide<'_>,
+            event: &mut mod_api::EntityTickPreEvent<'_>,
+        ) {
+            self.0.record(&host, "pre", event.entities, event.kinds);
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_tick_each("minecraft:arrow");
+            r.entity_tick_each("minecraft:trident");
+        }
+    }
+
+    struct PostOnly(Listener);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PostOnly {
+        fn entity_tick_post(
+            &self,
+            host: mod_api::HostSide<'_>,
+            event: &mut mod_api::EntityTickPostEvent<'_>,
+        ) {
+            self.0.record(&host, "post", event.entities, event.kinds);
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_tick_each("minecraft:arrow");
+            r.entity_tick_each("minecraft:trident");
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn named_projectiles_hand_back_only_for_the_subscribed_phase_on_both_sides() {
+        use crate::game::native_entity_refs::tests::with_client_game;
+        use crate::game::native_projectiles::impact_probe::with_impact_game;
+        use sunrise_client::join_seq::residency::{Change, Kind};
+
+        for pre in [true, false] {
+            let heard: Heard = Arc::default();
+            let listener = Listener(heard.clone());
+            let entry = if pre {
+                mod_api::ModEntry::new("one-phase", Box::new(PreOnly(listener)))
+            } else {
+                mod_api::ModEntry::new("one-phase", Box::new(PostOnly(listener)))
+            };
+            mod_platform::testing::with_mods(vec![entry].into(), || {
+                with_client_game(|game| {
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    game.block_ticks
+                        .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                        .unwrap();
+                    let _server = crate::game::native_client_session::tests::logged_client(game);
+                    add_projectile(game, "minecraft:arrow", 71, [3.5, 80.0, 3.5]);
+                    add_projectile(game, "minecraft:trident", 72, [3.5, 80.0, 6.5]);
+                    let journal = game
+                        .resident_entities
+                        .table
+                        .borrow()
+                        .producer()
+                        .observe_structural_events();
+                    game.tick_remote_projectiles(|_, at| at);
+                    let mut events = Vec::new();
+                    journal.drain_into(&mut events);
+                    for kind in [Kind::Projectile, Kind::Trident] {
+                        // Each list is lifted for the pass, once after the arrow's hook and once
+                        // after the trident's hook. An absent phase must not lift either list.
+                        assert_eq!(
+                            events
+                                .iter()
+                                .filter(
+                                    |e| e.owner.kind == kind && matches!(e.change, Change::Lifted)
+                                )
+                                .count(),
+                            3,
+                            "{kind:?}"
+                        );
+                    }
+                });
+                with_impact_game(|game| {
+                    assert!(game.run_command(
+                        "summon minecraft:arrow 3.5 80 3.5 {HasBeenShot:1b,NoGravity:1b,Motion:[1.0d,0.0d,0.0d]}"
+                    ));
+                    let id = game.creatures.projectiles[0].id;
+                    game.ticked_entities_through = u32::MAX;
+                    let journal = game
+                        .resident_entities
+                        .table
+                        .borrow()
+                        .producer()
+                        .observe_structural_events();
+                    game.tick_projectiles().unwrap();
+                    let mut events = Vec::new();
+                    journal.drain_into(&mut events);
+                    // One lift to start the pass and one after the subscribed hook.
+                    assert_eq!(
+                        events
+                            .iter()
+                            .filter(|e| e.owner.kind == Kind::Projectile
+                                && matches!(e.change, Change::Lifted))
+                            .count(),
+                        2
+                    );
+                    assert_eq!(heard.lock().unwrap()[2].2, [id]);
+                });
+            });
+            let seen = heard.lock().unwrap();
+            assert_eq!(seen.len(), 3);
+            let phase = if pre { "pre" } else { "post" };
+            let x = if pre { 3.5 } else { 4.5 };
+            for (i, (client, kind, z)) in [
+                (true, "minecraft:arrow", 3.5),
+                (true, "minecraft:trident", 6.5),
+                (false, "minecraft:arrow", 3.5),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_eq!(seen[i].0, client);
+                assert_eq!(seen[i].1, phase);
+                assert_eq!(seen[i].3, [kind]);
+                assert_eq!(seen[i].4, [[x, 80.0, z]]);
+            }
+            assert_eq!(seen[0].2, [71]);
+            assert_eq!(seen[1].2, [72]);
+        }
+    }
+
     /// A client's listener hears a remote arrow's own tick there, between the server's
     /// updates: its Pre before the arrow flies on, its Post after, on the client side.
     #[test]
@@ -1616,7 +1761,7 @@ mod entity_tick_tests {
                     .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
                     .unwrap();
                 let _server = crate::game::native_client_session::tests::logged_client(game);
-                add_arrow(game, 71, [3.5, 80.0, 3.5]);
+                add_projectile(game, "minecraft:arrow", 71, [3.5, 80.0, 3.5]);
                 game.tick_remote_projectiles(|_, at| at);
                 let arrow = game.creatures.projectiles.iter().find(|p| p.id == 71);
                 let p = arrow.unwrap().position;

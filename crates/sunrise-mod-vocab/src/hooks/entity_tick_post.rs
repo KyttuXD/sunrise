@@ -3,13 +3,12 @@
 
 pub trait Hooks {
     /// The entities `entities` ticked in the level `dimension`, and `kinds` holds the type of
-    /// each, in the same order (NeoForge's `EntityTickEvent.Post`): those `entity_tick_pre`
-    /// was told and did not cancel, also one that died or was removed in its tick. An entity
-    /// `entity_tick_pre` was told alone is told alone here too, right after its own tick; a
-    /// family is told once, after its last tick. Told where `entity_tick_pre` is, on the
-    /// server and on a client (`host` says which side). Version 4 fires whenever a mod
-    /// subscribes to `entity_tick_post` directly (the separate `entity_tick_listened` opt-in
-    /// poll hook is removed).
+    /// each, in the same order (NeoForge's `EntityTickEvent.Post`). A canceled Pre prevents
+    /// Post, but an entity that dies or is removed while ticking still gets it. A type named with
+    /// `entity_tick_each` is told alone right after its own tick, even without a Pre
+    /// subscriber; a family is told once, after its last tick. Told where `entity_tick_pre`
+    /// is, on the server and on a client (`host` says which side). Subscribe to Post
+    /// directly; no Pre subscription or separate opt-in poll is needed.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_post",
         dispatch = "flat",

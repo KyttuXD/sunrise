@@ -37,9 +37,13 @@ does not change that decision for the current tick.
 `entity_tick_pre` and `entity_tick_post` version 4 observe the covered entity families on both logical sides
 whenever an enabled mod subscribes directly (with zero preparation when neither is subscribed); the separate
 `entity_tick_listened` opt-in poll hook is removed. Whether a call represents one entity or a family depends
-on the tick route and the types named in registration. Keep cancellations within the current Pre call. The
-player connection body remains separate from the server-side entity tick, and the local client avatar is not
-observed by these hooks.
+on the tick route and the types named in registration. Either phase can be subscribed to on its own; a type named with `entity_tick_each` still gets
+its own Post when no mod listens to Pre. Keep cancellations within the current Pre call. The player
+connection body remains separate from the server-side entity tick, and these hooks do not observe the local
+client avatar.
+
+`living_equipment_change` is a server-side notification. For a mob, it fires during equipment detection in
+its own living tick, before AI and Post. Canceling that tick in Pre also skips its equipment detection.
 
 Removing a general entity during its own Pre skips its tick and Post. A passenger dismounted by that
 removal can still tick as a root if it is eligible, has not ticked, and its join-order slot is still ahead.

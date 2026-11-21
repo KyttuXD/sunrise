@@ -9,9 +9,11 @@ pub trait Hooks {
     /// `EquipmentSlot` (`mainhand`, `offhand`, `feet`, `legs`, `chest`, `head`,
     /// `body`, `saddle`), `from` what the slot held when this was last heard
     /// (none for empty) and `to` what it holds now. Once for each slot that
-    /// changed, in that order, after the mobs' tick, so a mob that joins the
-    /// level wearing something counts from empty on its first tick. It only
-    /// hears: change the entity with its own helpers.
+    /// changed, in that order. For mobs this runs during their own living
+    /// tick, before AI and `entity_tick_post`; a mob canceled in
+    /// `entity_tick_pre` does not reach equipment detection. A mob that joins
+    /// wearing something counts from empty on its first living tick. This is
+    /// a notification, not a veto: change the entity with its own helpers.
     ///
     /// Players are told the same way, once a tick, for the players connected
     /// to the server (a dedicated server's, a published world's guests): a

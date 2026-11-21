@@ -215,6 +215,14 @@ impl TickRound {
     pub(super) fn sections(&self) -> bool {
         self.sections
     }
+    /// Whether the round has an enabled Pre subscription.
+    pub(super) fn pre_listened(&self) -> bool {
+        self.told.pre
+    }
+    /// Whether the round has an enabled Post subscription.
+    pub(super) fn post_listened(&self) -> bool {
+        self.told.post
+    }
     /// Whether either entity tick hook (`entity_tick_pre` or `entity_tick_post`) is subscribed.
     pub(super) fn told_listening(&self) -> bool {
         self.told.listening()
@@ -455,6 +463,9 @@ impl Game<'_> {
             return round;
         };
         if round.alone_kind(PLAYER) {
+            if !round.pre_listened() {
+                return round;
+            }
             // Taken one by one by index: a Pre's listener may change the guests.
             for gi in 0..host.hub.guests.len() {
                 let Some((conn, id)) = self.lan.as_ref().and_then(|host| {

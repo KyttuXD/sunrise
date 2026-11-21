@@ -9,9 +9,8 @@ impl Game<'_> {
         index: usize,
         r: Rocket,
         hit: ProjectileHit,
-        hears: bool,
     ) -> Option<(Rocket, bool)> {
-        if !hears || matches!(hit, ProjectileHit::None) {
+        if matches!(hit, ProjectileHit::None) || !self.native_hears_impacts() {
             return Some((r, false));
         }
         let (id, join, position, velocity) = (r.id, r.join, r.position, r.velocity);

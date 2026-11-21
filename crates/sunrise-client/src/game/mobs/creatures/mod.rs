@@ -311,13 +311,11 @@ fn pickable_projectile_hitboxes_into(
 
 /// What the server's projectile loop keeps to hand its list back for a projectile told alone,
 /// made only in a tick where a mod named a projectile type: each slot's projectile by id, the
-/// ids of the list's rows, where those are once a hook changed the list, and the projectile
-/// whose own Post is still to tell.
+/// ids of the list's rows and where those are once a hook changed the list.
 struct ProjectileHandBack {
     slots: Vec<u32>,
     rows: Vec<u32>,
     places: Option<sunrise_client::fast_hash::FxHashMap<u32, usize>>,
-    told: Option<(u32, &'static str)>,
 }
 
 impl ProjectileHandBack {
@@ -327,7 +325,6 @@ impl ProjectileHandBack {
             rows: slots.clone(),
             slots,
             places: None,
-            told: None,
         })
     }
 
@@ -4711,38 +4708,36 @@ impl Game<'_> {
                 projectiles.update(i, |p| p.previous = at);
                 continue;
             }
-            // Of a type a mod named: its own Pre, with the list handed back.
-            let i = match hand_back.as_deref_mut() {
-                None => i,
-                Some(back) => {
-                    let (id, kind) = (projectiles[i].id, projectiles[i].entity_type());
-                    if !round.alone_kind(kind) {
-                        i
-                    } else {
-                        let mut ticks = true;
-                        let same;
-                        let read = self.projectile_targets_read();
-                        (projectiles, same) = self.projectiles_told(projectiles, |game| {
-                            ticks = game.native_tick_pre_one(&mut round, id, kind);
-                        });
-                        // A hook that wrote what the hit tests read: the next projectile sees
-                        // its writes.
-                        if self.projectile_targets_changed(&read, &seen) {
-                            seen = self.projectile_tick_targets();
-                        }
-                        if !same {
-                            back.follow(&projectiles, &mut keep_flags, &mut impacts);
-                        }
-                        match back.place(slot) {
-                            Some(at) if ticks => {
-                                back.told = Some((id, kind));
-                                at
-                            }
-                            _ => continue,
-                        }
-                    }
+            // Hand back the list only for a subscribed phase of a named projectile.
+            let named = hand_back.as_ref().and_then(|_| {
+                let p = &projectiles[i];
+                let kind = p.entity_type();
+                round.alone_kind(kind).then_some((p.id, kind))
+            });
+            let mut i = i;
+            if round.pre_listened()
+                && let Some((id, kind)) = named
+                && let Some(back) = hand_back.as_deref_mut()
+            {
+                let mut ticks = true;
+                let same;
+                let read = self.projectile_targets_read();
+                (projectiles, same) = self.projectiles_told(projectiles, |game| {
+                    ticks = game.native_tick_pre_one(&mut round, id, kind);
+                });
+                // A hook that wrote what the hit tests read: the next projectile sees
+                // its writes.
+                if self.projectile_targets_changed(&read, &seen) {
+                    seen = self.projectile_tick_targets();
                 }
-            };
+                if !same {
+                    back.follow(&projectiles, &mut keep_flags, &mut impacts);
+                }
+                let Some(at) = back.place(slot).filter(|_| ticks) else {
+                    continue;
+                };
+                i = at;
+            }
             // A mod canceled its tick: it stays as it is.
             if round.canceled(projectiles[i].id) {
                 continue;
@@ -4964,8 +4959,9 @@ impl Game<'_> {
                 );
             // Its own Post, right after its tick, also when it ended in it. Its block effects and
             // hits land after the family's ticks, as they do for every projectile.
-            if let Some(back) = hand_back.as_deref_mut()
-                && let Some((id, kind)) = back.told.take()
+            if round.post_listened()
+                && let Some((id, kind)) = named
+                && let Some(back) = hand_back.as_deref_mut()
             {
                 let same;
                 let read = self.projectile_targets_read();

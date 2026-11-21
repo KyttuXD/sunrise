@@ -419,8 +419,12 @@ impl Game<'_> {
                                 })
                         })
                         .flatten();
-                    // A mob of a type a mod named: its own Pre, right before its tick.
-                    if !checked && round.alone_mob(&m.kind) {
+                    // A named mob checks its sleep at its own turn even when it has no Pre.
+                    if !checked
+                        && round.alone_mob(&m.kind)
+                        && (round.pre_listened()
+                            || mod_api::__private::listened(mod_api::HookId::CanContinueSleeping))
+                    {
                         tell_pre = Some((m.id, std::sync::Arc::clone(&m.kind), i));
                         break;
                     }
@@ -568,6 +572,17 @@ impl Game<'_> {
                                 air,
                                 known_speed,
                                 resume_air_answer.take(),
+                                &mut events,
+                                &mut trample,
+                            )
+                        }
+                        Some(Pause::Equipment { was_on_fire, .. }) => {
+                            sunrise_client::mobs::riders::resume_after_equipment(
+                                &mut mobs,
+                                i,
+                                &w,
+                                &mut level,
+                                was_on_fire,
                                 &mut events,
                                 &mut trample,
                             )
@@ -756,7 +771,7 @@ impl Game<'_> {
                     keep[slot] = kept;
                     gone_rows |= !kept;
                     // Its own Post, right after its tick, also when it died or went in it.
-                    if round.alone_mob(&m.kind) {
+                    if round.post_listened() && round.alone_mob(&m.kind) {
                         tell_post = Some((m.id, std::sync::Arc::clone(&m.kind)));
                     }
                     // ServerLevel ticks entities one after another: the ones
@@ -802,19 +817,20 @@ impl Game<'_> {
             lent.give_back(&mut self.world);
             // Earlier mobs' pushes become visible before a real pause callback
             // can read or replace another actor's velocity. A section-only
-            // or a told-alone yield must not change the normal end-of-pass
+            // or notification-only yield must not change the normal end-of-pass
             // push ordering.
-            if pause.is_some() || retry_rider.is_some() || removing_vehicle.is_some() {
+            let equipment = matches!(pause, Some(Pause::Equipment { .. }));
+            if (pause.is_some() && !equipment)
+                || retry_rider.is_some()
+                || removing_vehicle.is_some()
+            {
                 for m in &mut mobs {
                     sunrise_client::mobs::apply_mob_pushes(m, &mut pushes);
                 }
             }
-            // A yield only to tell a named mob alone changes nothing of the loop's own: the list
-            // goes back as it is (the rows that left the pass taken out first, when there are
-            // any) and is taken again as it is, so the loop's views of it (snapshot, grid,
-            // index, places) stay valid unless the call wrote a mob or added one. The list's
-            // write stamp says whether it did: any mutable access moves it.
-            let told_only = pause.is_none()
+            // A notification-only yield does not itself change any rows. The list stamp
+            // tracks listener writes, and rows that already left the pass still come out.
+            let told_only = (pause.is_none() || equipment)
                 && retry_rider.is_none()
                 && removing_vehicle.is_none()
                 && !section_yield;
@@ -843,11 +859,10 @@ impl Game<'_> {
             if let Some(host) = self.lan.as_mut() {
                 std::mem::swap(&mut host.mob_players, &mut bindings);
             }
-            // The lift is a position write made by the owning game, not by
-            // the borrowed mob. Give it the live section table as well.
+            // Give the owning host the live section table for writes in the entity's tick.
             let trampling = matches!(pause, Some(Pause::Trample));
-            let trample_sections = section_table.as_ref().filter(|_| trampling);
-            if let Some(sections) = trample_sections {
+            let callback_sections = section_table.as_ref().filter(|_| trampling || equipment);
+            if let Some(sections) = callback_sections {
                 std::mem::swap(
                     &mut self.native_lifecycle.entity_sections,
                     &mut sections.borrow_mut(),
@@ -869,6 +884,22 @@ impl Game<'_> {
                         }
                         Pause::Breathing { air, .. } => {
                             air_answer = self.ask_mob_breath(air);
+                        }
+                        Pause::Equipment {
+                            entity,
+                            kind,
+                            changes,
+                            ..
+                        } => {
+                            for change in changes {
+                                self.native_living_equipment_change(
+                                    *entity,
+                                    &kind.id,
+                                    sunrise_items::equipment::SLOT_NAMES[change.slot as usize],
+                                    change.from.as_ref(),
+                                    change.to.as_ref(),
+                                );
+                            }
                         }
                         Pause::Trample => {
                             let trample = trample.as_ref().expect("the trample pause was stored");
@@ -910,7 +941,7 @@ impl Game<'_> {
                 }
             }))
             .err();
-            if let Some(sections) = trample_sections {
+            if let Some(sections) = callback_sections {
                 std::mem::swap(
                     &mut self.native_lifecycle.entity_sections,
                     &mut sections.borrow_mut(),

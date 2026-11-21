@@ -3676,8 +3676,8 @@ impl Game<'_> {
     /// `LivingEntity.collectEquipmentChanges`): `entity` its ID, `kind` its type
     /// (`minecraft:player` for a player), `slot` the `EquipmentSlot`, `from` what
     /// the slot held when last heard and `to` what it holds now. Once per changed
-    /// slot, after the mobs' tick; one new to the level counts from empty. A
-    /// player's `mainhand` is the selected hotbar slot; their `body` and `saddle`
+    /// slot. A mob is told during equipment detection in its living tick;
+    /// one new to the level counts from empty. A player's `mainhand` is the selected hotbar slot; their `body` and `saddle`
     /// are never told. The world host's own player is heard by `native_on_equip`.
     /// It only hears. Server-side.
     pub(in crate::game) fn native_living_equipment_change(

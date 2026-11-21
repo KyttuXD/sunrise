@@ -24,11 +24,13 @@ use super::{
 use crate::blocks::Fluid;
 use crate::breathing::{AirStep, Breath};
 use crate::health::DamageLevel;
+use crate::items::ItemStack;
 use sunrise_core::{
+    equipment_slot::EquipmentSlot,
     geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape},
     random::RandomSource,
 };
-use sunrise_world::native_load_context::LoopContext;
+use sunrise_world::native_load_context::{LoopContext, LoopSide};
 
 #[cfg(test)]
 mod inside_walk_tests {
@@ -1106,8 +1108,22 @@ pub enum Pause {
         /// `Entity.computeSpeed`, read before the tick moved the mob.
         known_speed: Vec3,
     },
+    /// Changed equipment, before sleeping and `aiStep`.
+    Equipment {
+        entity: u32,
+        kind: std::sync::Arc<super::MobType>,
+        changes: Vec<EquipmentChange>,
+        was_on_fire: bool,
+    },
     /// The caller's trample slot holds the continuation.
     Trample,
+}
+
+#[derive(Debug)]
+pub struct EquipmentChange {
+    pub slot: EquipmentSlot,
+    pub from: Option<ItemStack>,
+    pub to: Option<ItemStack>,
 }
 
 #[derive(Debug)]
@@ -1201,14 +1217,14 @@ pub fn tick(
                 let breath = Some(air.step.vanilla);
                 resume_after_breathing(m, w, level, events, air, known_speed, breath, None)
             }
-            TickProgress::Paused(Pause::Trample) => {
-                unreachable!("hostless travel cannot pause")
+            TickProgress::Paused(Pause::Equipment { .. } | Pause::Trample) => {
+                unreachable!("a hostless tick cannot pause for equipment or trample")
             }
         };
     }
 }
 
-/// Stop before a fox's effect draws, a watched `living_breathe` update, or a
+/// Stop before a fox's effect draws, a watched air or equipment update, or a
 /// decided trample, so the owner can provide a mutable host. Only a trample
 /// writes the caller's continuation slot.
 pub fn tick_until_consumption(
@@ -1327,6 +1343,55 @@ fn after_base_tick(
     if m.alive() {
         super::spear_use::update_using_item(m, w, known_speed, events);
     }
+    // LivingEntity.tick -> detectEquipmentUpdates, before the sleep check and aiStep.
+    // The observed stacks are separate from modifiers, which also refresh on writes.
+    // Only a pausable tick can give the live mob back to its owner for dispatch.
+    if trample.is_some()
+        && w.loop_context.side() == LoopSide::Server
+        && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+        && !(m.extra.equipment.is_empty() && m.extra.equipment_heard.is_none())
+    {
+        let now = m.equipment_stacks();
+        let mut changes = Vec::new();
+        for (slot, to) in EquipmentSlot::ALL.into_iter().zip(now) {
+            let index = slot as usize;
+            let from = m
+                .extra
+                .equipment_heard
+                .as_deref()
+                .and_then(|worn| worn.get(index));
+            let same = match (from, to.as_ref()) {
+                (Some(from), Some(to)) => from.matches(to),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                let heard = m.extra.equipment_heard.get_or_insert_with(Default::default);
+                let from = std::mem::replace(&mut heard[index], to.clone());
+                changes.push(EquipmentChange { slot, from, to });
+            }
+        }
+        if !changes.is_empty() {
+            return TickProgress::Paused(Pause::Equipment {
+                entity: m.id,
+                kind: m.kind.clone(),
+                changes,
+                was_on_fire,
+            });
+        }
+    }
+    resume_after_equipment(m, w, level, events, was_on_fire, trample)
+}
+
+/// The remainder of `LivingEntity.tick` after equipment detection.
+pub(super) fn resume_after_equipment(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    was_on_fire: bool,
+    trample: Option<&mut Option<MobTrample>>,
+) -> TickProgress {
     super::sulfur_cube::adopt_body(m);
     let sleep_answer = m
         .extra
