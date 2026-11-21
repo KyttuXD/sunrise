@@ -421,11 +421,11 @@ impl TravelTail {
                 mob.finish_fluid_travel(w, falling, old_y, gravity, water_slow);
             }
             Self::Flying { drag } => {
-                mob.velocity = Vec3::new(
+                mob.set_velocity(Vec3::new(
                     mob.velocity.x * drag,
                     mob.velocity.y * drag,
                     mob.velocity.z * drag,
-                );
+                ));
             }
             Self::FallFlying { before } => {
                 if mob.horizontal_collision {
@@ -935,7 +935,7 @@ impl Mob {
         if self.stuck_multiplier.length_squared() > 1.0e-7 {
             wanted = wanted.multiply(self.stuck_multiplier);
             self.stuck_multiplier = Vec3::ZERO;
-            self.velocity = Vec3::ZERO;
+            self.set_velocity(Vec3::ZERO);
         }
         let step = self.kind.step_height as f32;
         let from = self.position;
@@ -1016,7 +1016,10 @@ impl Mob {
         // Entity.move's last step: soul sand, honey and the like slow the
         // horizontal speed of whatever the mob stands in or on.
         let factor = self.block_speed_factor(w);
-        self.velocity = sunrise_world::entity_move::scale_by_block_speed(self.velocity, factor);
+        self.set_velocity(sunrise_world::entity_move::scale_by_block_speed(
+            self.velocity,
+            factor,
+        ));
     }
     /// `Entity.restituteMovementAfterCollisions`, shared by travel and piston pushes.
     pub fn restitute_movement(
@@ -1932,7 +1935,7 @@ impl Mob {
         // handleOnClimbable, the move, then the climb up a wall.
         if self.on_climbable(w) {
             self.fall_distance = 0.0;
-            self.velocity = Self::climbable_velocity(self.velocity);
+            self.set_velocity(Self::climbable_velocity(self.velocity));
         }
         self.travel_move_with(
             w,
@@ -1969,7 +1972,7 @@ impl Mob {
             || self.extra.frog.discard_friction
             || self.extra.goat.discard_friction
         {
-            self.velocity = Vec3::new(movement.x, y, movement.z);
+            self.set_velocity(Vec3::new(movement.x, y, movement.z));
             return;
         }
         let air_drag_modifier = self.air_drag_modifier();
@@ -1980,11 +1983,11 @@ impl Mob {
         } else {
             Self::modified_friction(0.98, air_drag_modifier)
         };
-        self.velocity = Vec3::new(
+        self.set_velocity(Vec3::new(
             movement.x * f64::from(f),
             y * f64::from(vertical),
             movement.z * f64::from(f),
-        );
+        ));
     }
     fn travel_in_fluid(
         &mut self,
@@ -2053,22 +2056,26 @@ impl Mob {
                 m.y * f64::from(0.8_f32),
                 m.z * f64::from(slow),
             );
-            self.velocity = fluid_falling(gravity, falling, self.extra.sprinting, m);
+            self.set_velocity(fluid_falling(gravity, falling, self.extra.sprinting, m));
         } else {
             if self.fluids.lava <= self.fluid_jump_threshold() {
-                self.velocity = Vec3::new(
+                self.set_velocity(Vec3::new(
                     self.velocity.x * 0.5,
                     self.velocity.y * f64::from(0.8_f32),
                     self.velocity.z * 0.5,
-                );
-                self.velocity =
-                    fluid_falling(gravity, falling, self.extra.sprinting, self.velocity);
+                ));
+                self.set_velocity(fluid_falling(
+                    gravity,
+                    falling,
+                    self.extra.sprinting,
+                    self.velocity,
+                ));
             } else {
-                self.velocity = Vec3::new(
+                self.set_velocity(Vec3::new(
                     self.velocity.x * 0.5,
                     self.velocity.y * 0.5,
                     self.velocity.z * 0.5,
-                );
+                ));
             }
             if gravity != 0.0 {
                 self.velocity.y -= gravity / 4.0;

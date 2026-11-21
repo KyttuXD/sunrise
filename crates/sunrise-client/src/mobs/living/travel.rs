@@ -69,7 +69,7 @@ impl Mob {
             && super::super::camel::refuse_to_move(self)
         {
             let vertical = Vec3::new(0.0, 1.0, 0.0);
-            self.velocity = self.velocity.multiply(vertical);
+            self.set_velocity(self.velocity.multiply(vertical));
             input = input.multiply(vertical);
         }
         match route {

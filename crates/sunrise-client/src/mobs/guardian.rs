@@ -217,7 +217,7 @@ pub(super) fn travel(
 ) -> Result<(), super::living::TravelTrample> {
     m.move_relative(0.1, input);
     m.travel_move(w, level, events, pause, |m, _, _, _| {
-        m.velocity = m.velocity.scale(0.9);
+        m.set_velocity(m.velocity.scale(0.9));
         if !m.extra.flag2 && m.ai.target.is_none() {
             m.velocity.y -= 0.005;
         }
