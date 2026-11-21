@@ -24,9 +24,13 @@ pub struct CallbackPanicNotice {
     pub operation: &'static str,
     /// Panic message payload, if it was a string.
     pub message: String,
+    /// Whether the engine disabled a retained callback for the session.
+    pub disabled: bool,
 }
 
 static PANIC_NOTICES: Mutex<VecDeque<CallbackPanicNotice>> = Mutex::new(VecDeque::new());
+#[cfg(test)]
+pub(crate) static PANIC_NOTICE_LOCK: Mutex<()> = Mutex::new(());
 
 thread_local! {
     static CONTAINED: Cell<u32> = const { Cell::new(0) };
@@ -165,21 +169,11 @@ pub fn take_callback_panic_notices() -> Vec<CallbackPanicNotice> {
     queue.drain(..).collect()
 }
 
-pub(crate) fn record_callback_panic(
-    owner: &'static str,
-    kind: &'static str,
-    operation: &'static str,
-    message: String,
-) {
+pub(crate) fn record_callback_panic(notice: CallbackPanicNotice) {
     PANIC_NOTICES
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .push_back(CallbackPanicNotice {
-            mod_id: owner,
-            kind,
-            operation,
-            message,
-        });
+        .push_back(notice);
 }
 
 /// Owner identity and poison state for one retained mod callback.
@@ -450,7 +444,13 @@ fn call_opt<T>(
             log::error!(
                 "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {msg}"
             );
-            record_callback_panic(owner, kind, operation, msg.clone());
+            record_callback_panic(CallbackPanicNotice {
+                mod_id: owner,
+                kind,
+                operation,
+                message: msg.clone(),
+                disabled: true,
+            });
             Err(format!("{kind} callback panicked; it is disabled: {msg}"))
         }
     }

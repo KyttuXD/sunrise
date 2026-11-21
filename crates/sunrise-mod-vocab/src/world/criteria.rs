@@ -94,7 +94,7 @@ pub fn run_criterion_test(
     test: &mut dyn CriterionTest,
     context: &dyn CriterionContext,
 ) -> Result<bool, TriggerCriterionError> {
-    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    use crate::callback_owner::{CallbackPanicNotice, contain_unwind, record_callback_panic};
     use crate::world::phase_refusal::contain_refusal;
 
     let owner = crate::content::crash::current_native_mod().unwrap_or("unknown");
@@ -113,7 +113,13 @@ pub fn run_criterion_test(
         }
         Err(message) => {
             log::error!("mod {owner}: criterion {trigger} test panicked: {message}");
-            record_callback_panic(owner, "criterion predicate", "trigger_criterion", message);
+            record_callback_panic(CallbackPanicNotice {
+                mod_id: owner,
+                kind: "criterion predicate",
+                operation: "trigger_criterion",
+                message,
+                disabled: false,
+            });
             Err(TriggerCriterionError::TestPanicked)
         }
     }
@@ -126,6 +132,8 @@ mod tests {
 
     #[test]
     fn a_panicking_matcher_does_not_disable_the_next_matcher_for_the_same_trigger() {
+        use crate::callback_owner::{PANIC_NOTICE_LOCK, take_callback_panic_notices};
+
         struct Context;
         impl CriterionContext for Context {
             fn conditions(&self) -> &serde_json::Value {
@@ -147,6 +155,9 @@ mod tests {
             }
         }
 
+        let _guard = PANIC_NOTICE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::testing::with_dispatch(Vec::new().into(), || {
             let mut calls = 0;
             let mut test = Test(&mut calls);
@@ -161,6 +172,11 @@ mod tests {
                 run_criterion_test("test:first", &mut test, &Context),
                 Err(TriggerCriterionError::TestPanicked)
             );
+            assert!(take_callback_panic_notices().iter().any(|notice| {
+                notice.mod_id == "p3-81-criteria"
+                    && notice.operation == "trigger_criterion"
+                    && !notice.disabled
+            }));
             assert_eq!(calls, 2);
             struct Healthy;
             impl CriterionTest for Healthy {

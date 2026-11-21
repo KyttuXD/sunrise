@@ -1,13 +1,13 @@
 use super::*;
 use crate::{
-    Hooks, ModEntry, PartPose, callback_owner::take_callback_panic_notices, testing::with_dispatch,
+    Hooks, ModEntry, PartPose,
+    callback_owner::{PANIC_NOTICE_LOCK, take_callback_panic_notices},
+    testing::with_dispatch,
 };
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-
-static PANIC_NOTICE_LOCK: Mutex<()> = Mutex::new(());
 
 struct QuietMod;
 #[mod_api::__subscriptions]

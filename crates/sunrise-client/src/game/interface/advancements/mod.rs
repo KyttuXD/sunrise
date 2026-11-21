@@ -2551,14 +2551,19 @@ impl Game<'_> {
             }
         }
     }
-    /// Retained callback faults use system toasts but bypass `toast_add`: a mod
-    /// must not be able to hide the message naming the callback that failed.
+    /// Callback faults use system toasts but bypass `toast_add`: a mod must not
+    /// be able to hide the message naming the callback that failed.
     pub(super) fn draw_mod_callback_toasts(&mut self, batch: &mut HudBatch) {
         use sunrise_client::toasts::SystemToast;
         for notice in mod_api::__private::game::take_callback_panic_notices() {
+            let title = if notice.disabled {
+                "sunrise.toast.mod_callback_disabled"
+            } else {
+                "sunrise.toast.mod_callback_failed"
+            };
             self.mod_callback_toasts.push(
                 SystemToast::new(
-                    Text::tr("sunrise.toast.mod_callback_disabled", &[&notice.mod_id]),
+                    Text::tr(title, &[&notice.mod_id]),
                     Some(Text::literal(notice.message)),
                 )
                 .with_title_color(0xffff5555)
