@@ -1706,8 +1706,8 @@ pub enum Event {
     NativePackOptions(usize),
     /// Native mod `.0`'s page opened: the game reads its settings' kept values again.
     NativeSettings(usize),
-    /// Setting `.1` of native mod `.0`'s page changed (`settings.mods`): the game keeps it and
-    /// tells the mod (`setting_changed`).
+    /// Setting `.1` of native mod `.0`'s page changed (`settings.mods`): the game saves it through
+    /// the live settings owner and reports an actual change on the client tick.
     NativeSetting(usize, usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,

@@ -1,9 +1,6 @@
 //! Settings a mod declares for its page in Options > Mods (NeoForge's `ModConfigSpec`): the
-//! game draws them with its own widgets and keeps the player's values; the mod reads them typed
-//! (`ConfigClientHost::setting_bool` and its siblings), never as text it has to parse.
-
-/// Longest setting key, in bytes.
-pub const SETTING_KEY_MAX: usize = 64;
+//! game draws them with its own widgets and keeps the player's values. An owner-bound
+//! `SettingKey` reads and writes the typed `SettingValue`, without exposing its file.
 
 /// What a setting is, with its default.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,8 +58,8 @@ pub enum SettingValue {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct SettingSpec {
-    /// The setting's key within its mod (`zoom_speed`): `a-z`, `0-9`, `_`, `-` and `.`, at most
-    /// [`SETTING_KEY_MAX`] bytes, not starting with `.`.
+    /// The setting's key within its mod (`zoom_speed`): `a-z`, `0-9`, `_`, `-` and `.`,
+    /// not starting with `.`.
     pub key: String,
     /// The translation key of the label its row shows.
     pub label: String,
@@ -77,7 +74,7 @@ pub struct SettingSpec {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum SettingError {
-    /// The key is empty, too long, starts with `.` or holds another character than `a-z`,
+    /// The key is empty, starts with `.` or holds another character than `a-z`,
     /// `0-9`, `_`, `-` and `.`.
     InvalidKey(String),
     /// The mod registered a setting with this key already.
@@ -112,6 +109,43 @@ impl std::fmt::Display for SettingError {
 }
 
 impl std::error::Error for SettingError {}
+
+// no wire: returned by the in-process client settings owner.
+/// Why the client couldn't keep a setting value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SettingWriteError {
+    /// Settings are unavailable from this host, or the key is not registered in this client.
+    Unavailable,
+    /// The value does not match the registered kind or is outside its declared bounds.
+    InvalidValue,
+    /// The file could not be saved; the details are in the game log.
+    SaveFailed,
+}
+
+impl crate::NoBackend for SettingWriteError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl crate::AccessRefusal for SettingWriteError {
+    fn unavailable() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl std::fmt::Display for SettingWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "setting is not available on this host",
+            Self::InvalidValue => "value does not match the registered setting",
+            Self::SaveFailed => "could not save setting",
+        })
+    }
+}
+
+impl std::error::Error for SettingWriteError {}
 
 impl SettingSpec {
     fn new(key: impl Into<String>, label: impl Into<String>, kind: SettingKind) -> Self {
@@ -171,7 +205,6 @@ impl SettingSpec {
     /// Whether the registrar takes it: the key's form, a label, and a kind whose default fits.
     pub fn check(&self) -> Result<(), SettingError> {
         let key_ok = !self.key.is_empty()
-            && self.key.len() <= SETTING_KEY_MAX
             && !self.key.starts_with('.')
             && self
                 .key
@@ -335,14 +368,7 @@ mod tests {
             SettingSpec::toggle("on", "", true).check(),
             Err(SettingError::EmptyLabel)
         );
-        for key in [
-            "",
-            ".hidden",
-            "../up",
-            "Zoom",
-            "a/b",
-            &"k".repeat(SETTING_KEY_MAX + 1),
-        ] {
+        for key in ["", ".hidden", "../up", "Zoom", "a/b"] {
             let refused = SettingSpec::toggle(key, "l", true).check();
             assert_eq!(
                 refused,

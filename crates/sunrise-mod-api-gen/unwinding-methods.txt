@@ -158,13 +158,8 @@ config::server_set_simulation_distance
 config::server_set_view_distance
 config::server_simulation_distance
 config::server_view_distance
-config::set_setting
 config::set_tick_rate
 config::setting
-config::setting_bool
-config::setting_choice
-config::setting_color
-config::setting_f64
 config::sunrise_version
 config::tick_rate_is_frozen
 config::tick_stats

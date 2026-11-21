@@ -7,7 +7,7 @@ A mod keeps its options in one of two ways:
 | Lives in | The game's `config/` folder (on a server, `serverconfig/` per world) | `sunrise-mods/.sunrise-mod-data/<mod id>/`, one file per key |
 | Edited by | The player, in a text editor | The player, on the mod's page in **Options > Mods** |
 | You declare it with | `Hooks::register_configs` | `Registrar::register_setting` |
-| You read it in | `config_loading` and `config_reloading` | `Host::setting` and the typed `setting_*` reads |
+| You read it in | `config_loading` and `config_reloading` | `ClientHost::setting(&key)` |
 | NeoForge counterpart | `ModContainer.registerConfig`, `ModConfigEvent` | `ModConfigSpec` entries on the config screen |
 
 ## Config files
@@ -61,20 +61,38 @@ Use `ConfigPath::root()` to list your own root, and stop when a page is empty.
 
 ## Settings
 
-Register each setting from `Hooks::register` with `Registrar::register_setting(SettingSpec { … })`: a key
-(`a-z`, `0-9`, `_`, `-` and `.`, not starting with `.`), translation keys for its label and tooltip, and its kind
-with the default. A setting the spec check refuses, or a key you registered already, comes back as the error.
-Settings are client settings and appear on your mod's page in **Options > Mods**, opened from its **Config**
-button.
+Register each client setting from `Hooks::register` with `Registrar::register_setting`. Pass a `SettingSpec`
+with a key (`a-z`, `0-9`, `_`, `-` and `.`, not starting with `.`), a translation key for the label, the kind
+and its default. Use `.tooltip(...)` to add a tooltip translation key. Registration returns a `SettingKey`
+bound to your declaration, or a `SettingError` if the declaration is invalid or its key is already registered.
+Settings appear on your mod's page in **Options > Mods**, opened from its **Config** button.
 
-- Read a setting with `host.setting(mod_id, key)` or a typed read. Typed reads are cached per data folder and key.
-- `host.set_setting(mod_id, key, value)` keeps a value. A successful write updates the cache; a failed one leaves
-  it. This write does not fire `setting_changed`.
-- When the player edits a setting, the value is kept first, then `setting_changed` tells your mod alone.
+Keep the returned key in your mod. In a client callback, use it instead of passing a mod ID or file name:
 
-A mod reads and writes only its own settings: another mod's id, or a key its owner never registered, reads
-`None` and writes nothing.
+```rust,ignore
+fn register_enabled(registrar: &mut dyn Registrar) -> Result<SettingKey, SettingError> {
+    registrar.register_setting(SettingSpec::toggle("enabled", "example.enabled", false))
+}
 
-The settings folder is settings only, not bulk storage: ordinary files there are read as setting keys and
-subfolders or unsafe entries still warn during snapshots. Use the bulk services above instead; their files are
-not included in settings snapshots.
+// Call from a client callback with the key your mod retained from registration.
+fn enable(host: &mut dyn ClientHost, key: &SettingKey) -> Result<(), SettingWriteError> {
+    host.set_setting(key, SettingValue::Toggle(true))
+}
+
+fn enabled(host: &dyn ClientHost, key: &SettingKey) -> bool {
+    matches!(host.setting(key), Some(SettingValue::Toggle(true)))
+}
+```
+
+`setting` reads the live value, without parsing or file I/O. A missing or invalid saved value uses the declared
+default. `set_setting` validates the value against the registered kind and persists it through the same path as
+the UI. An unavailable key, invalid value or failed save returns a `SettingWriteError` and leaves the live value
+unchanged. An Options > Mods page open rereads that mod's values; a client resource reload rereads them all.
+
+A successful change, whether made by the player, by a mod or by a reload, is visible before the client tick
+notifies only the registered mod through `setting_changed`. Read the current value using the retained key.
+Writes performed inside that notification are delivered on the next tick, not recursively. A panic disables
+only that mod's `setting_changed` callback for the session and reports the mod in the log and error toast.
+
+The one-file-per-key format is unchanged. These live settings are separate from the frozen inputs of load,
+loop and worldgen callbacks. Keep bulk storage in the bulk data folders above, not in the settings folder.

@@ -11,8 +11,8 @@ The worker host supplies only the job identity and immutable resource reads.
 Borrow the identity with `let job = host.job();` (`&ChunkDiskContext`).
 `registry(name)` lends `Option<&[String]>` in registry ID order from the frozen generation
 retained by the worker. `None` means that generation has no such registry. Use the slice within
-the callback, or copy it if it must outlive the callback. Neither metadata getter reads files;
-`ConfigHost::setting` still returns an owned `Option<String>` from the same snapshot.
+the callback, or copy it if it must outlive the callback. `ChunkDiskHost::setting(mod_id, key)`
+borrows `Option<&str>` from the same snapshot. Neither operation reads files or accesses live client settings.
 The host has no live backend and is not a `ServerHost`. Typed values need a
 persistence codec, not `Wire`. Unknown bounded attachment entries are preserved opaquely.
 

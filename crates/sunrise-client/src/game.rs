@@ -3504,7 +3504,6 @@ struct Game<'a> {
     /// This thread's authority over the game's tick-owned state (`parallel::TickThread`): a
     /// `Game` never leaves the thread that built it.
     tick: sunrise_client::parallel::TickThread,
-    setting_overrides: std::cell::RefCell<std::collections::BTreeMap<(String, String), String>>,
     /// The native damage hooks every level of this game lends to its hits.
     damage_hooks: sunrise_client::health::DamageHooks,
     music: sunrise_client::music::MusicManager,
@@ -3970,6 +3969,8 @@ struct Game<'a> {
     held_out: Vec<u32>,
     /// Native mods' config files this game loaded (game/modding/native_configs.rs).
     native_configs: native_configs::NativeConfigs,
+    /// The window's live typed mod settings, separate from frozen load inputs.
+    native_settings: native_hooks::mod_settings::NativeSettings,
     mod_phase: mod_api::__private::PhaseOwner,
     /// Private custom-book connection and placement state.
     native_net: native_net::NativeNet,
@@ -13419,7 +13420,6 @@ impl<'a> Game<'a> {
             audio,
             loop_context: Arc::new(res.core.item_data.context().loop_context(loop_side, [])),
             tick: sunrise_client::parallel::TickThread::mint(),
-            setting_overrides: Default::default(),
             damage_hooks: native_hooks::DAMAGE_HOOKS,
             music: {
                 // The manager starts with the saved option (MusicManager's constructor).
@@ -13697,6 +13697,14 @@ impl<'a> Game<'a> {
             lent_mobs: Default::default(),
             held_out: Vec::with_capacity(4),
             native_configs: Default::default(),
+            native_settings: if loop_side == sunrise_world::native_load_context::LoopSide::Client {
+                native_hooks::mod_settings::NativeSettings::load(
+                    &Self::mod_data_root(),
+                    mod_api::__private::settings(),
+                )
+            } else {
+                Default::default()
+            },
             mod_phase,
             native_net: Default::default(),
             native_mod_screen: None,

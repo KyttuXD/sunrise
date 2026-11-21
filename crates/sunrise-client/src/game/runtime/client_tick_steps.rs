@@ -47,6 +47,7 @@ impl Game<'_> {
             }
             self.tick_win_screen()?;
             self.native_configs_tick_client();
+            self.notify_native_setting_changes();
             // Gui.tick runs ChatListener.tick paused or not; Hud.tickCount advances
             // only when unpaused, including when there is no level on the title screen.
             if !self.pause {

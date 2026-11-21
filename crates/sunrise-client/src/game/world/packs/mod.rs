@@ -663,6 +663,7 @@ impl Game<'_> {
             &mut self.native_shaders.picked,
         ));
         self.ui.chat.rescale(&self.gui.atlas);
+        self.reload_native_settings();
         super::client_reload::apply_client_reload(&self.mod_phase, client_applies);
         self.install_loop_context(loop_context);
         // A reload from the title can apply before the start's world-rest worker is done.

@@ -282,7 +282,6 @@ mod tests {
                     HostSide::Server(host) => &**host,
                     HostSide::Client(host) => &**host,
                 };
-                let _ = read.setting("phase_probe", "unused");
                 let refused =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read.entity(1)))
                         .unwrap_err();

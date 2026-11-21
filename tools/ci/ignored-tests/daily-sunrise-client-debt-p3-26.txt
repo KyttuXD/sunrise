@@ -1,0 +1,1 @@
+sunrise-client game::native_hooks::mod_settings::tests::client_host_and_mod_page_notify_only_the_registered_owner lib daily resources

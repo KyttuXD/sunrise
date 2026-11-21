@@ -3045,12 +3045,10 @@ impl Game<'_> {
     }
     /// The settings mod `mod_id` registered, with their kept values, as its page shows them.
     fn native_page_settings(&self, mod_id: &str) -> Vec<NativeSetting> {
-        mod_api::__private::settings()
-            .iter()
-            .filter(|(owner, _)| *owner == mod_id)
-            .map(|(_, spec)| {
-                let kept = self.stored_setting(mod_id, &spec.key);
-                let value = match (&spec.kind, spec.read(kept.as_deref())) {
+        self.native_settings
+            .owner_settings(mod_id)
+            .map(|(spec, kept)| {
+                let value = match (&spec.kind, kept) {
                     (_, mod_api::SettingValue::Toggle(on)) => NativeSettingValue::Toggle(on),
                     (
                         mod_api::SettingKind::Choice { options, .. },
@@ -3069,7 +3067,7 @@ impl Game<'_> {
                         value,
                     },
                     (_, mod_api::SettingValue::Color(rgb)) => NativeSettingValue::Color(rgb),
-                    _ => NativeSettingValue::Toggle(false),
+                    _ => unreachable!("the live value matches its registered setting kind"),
                 };
                 NativeSetting {
                     key: spec.key.clone(),
@@ -3080,8 +3078,7 @@ impl Game<'_> {
             })
             .collect()
     }
-    /// Setting `j` of native mod `i`'s page (its index in Options > Mods) changed on the page:
-    /// kept as the mod registered it, then the mod is told (`setting_changed`).
+    /// Setting `j` of native mod `i`'s page changed; save it through the live owner.
     pub(super) fn native_setting_event(&mut self, i: usize, j: usize) {
         let Some(row) = self.settings.mods.installed.get(i) else {
             return;
@@ -3089,29 +3086,38 @@ impl Game<'_> {
         let Some(setting) = row.native.as_ref().and_then(|page| page.settings.get(j)) else {
             return;
         };
-        let (id, key) = (row.id.clone(), setting.key.clone());
+        let Some(key) = self.native_settings.key_for(&row.id, &setting.key) else {
+            log::warn!(
+                "mod {} setting {}: registration is no longer available",
+                row.id,
+                setting.key
+            );
+            return;
+        };
         let value = match &setting.value {
             NativeSettingValue::Toggle(on) => mod_api::SettingValue::Toggle(*on),
             NativeSettingValue::Choice { index, .. } => mod_api::SettingValue::Choice(*index),
             NativeSettingValue::Range { value, .. } => mod_api::SettingValue::Range(*value),
             NativeSettingValue::Color(rgb) => mod_api::SettingValue::Color(*rgb),
         };
-        let kept = mod_api::__private::setting(&id, &key).and_then(|spec| spec.store(value));
-        let Some(kept) = kept else {
-            return;
-        };
-        if self.store_setting(&id, &key, &kept) {
-            self.native_setting_changed(&id, &key);
+        if self.native_settings.set_setting(&key, value).is_err() {
+            // The widget had already applied the edit. Restore the unchanged live value.
+            self.sync_native_settings_page(i);
         }
     }
-    /// Native mod `i`'s page opened: its settings' kept values read again.
+    /// Native mod `i`'s page opened: reread the kept values into the live settings owner.
     pub(super) fn native_settings_refresh(&mut self, i: usize) {
-        let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
+        if let Some(row) = self.settings.mods.installed.get(i) {
+            self.native_settings.reload(Some(&row.id));
+            self.sync_native_settings_page(i);
+        }
+    }
+    pub(super) fn sync_native_settings_page(&mut self, i: usize) {
+        let Some(row) = self.settings.mods.installed.get(i) else {
             return;
         };
-        let settings = self.native_page_settings(&id);
-        let row = self.settings.mods.installed.get_mut(i);
-        if let Some(page) = row.and_then(|m| m.native.as_mut()) {
+        let settings = self.native_page_settings(&row.id);
+        if let Some(page) = &mut self.settings.mods.installed[i].native {
             page.settings = settings;
         }
     }
