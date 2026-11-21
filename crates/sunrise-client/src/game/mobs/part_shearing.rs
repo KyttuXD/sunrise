@@ -178,7 +178,7 @@ mod tests {
             _: &dyn mod_api::Host,
             _: mod_api::EntityRef,
             player: Option<PlayerRef>,
-            shears: &mod_api::ItemStack,
+            shears: mod_api::ItemStackView<'_>,
         ) -> Option<bool> {
             assert!(player.is_none(), "a dispenser has no player");
             assert_eq!(shears.count(), 1);
@@ -189,7 +189,7 @@ mod tests {
             _: &mut dyn mod_api::ServerHost,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Vec<mod_api::ItemStack> {
             let leather = mod_api::__private::item_key("minecraft:leather").unwrap();
             vec![mod_api::ItemStack::new(leather, 1).unwrap()]
@@ -204,7 +204,7 @@ mod tests {
             _: &dyn mod_api::Host,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Option<bool> {
             Some(false)
         }
@@ -251,7 +251,14 @@ mod tests {
             add(1, "minecraft:cow", 0);
             add(2, "minecraft:sheep", 4);
 
-            assert!(game.shear_entity((0, 64, 0)).unwrap(), "the cow is sheared");
+            assert!(
+                game.shear_entity(
+                    (0, 64, 0),
+                    &sunrise_client::items::ItemStack::new("minecraft:shears", 1)
+                )
+                .unwrap(),
+                "the cow is sheared"
+            );
             let leather: Vec<_> = game
                 .dropped
                 .iter()
@@ -260,7 +267,15 @@ mod tests {
                 .collect();
             assert_eq!(leather, [1]);
 
-            assert!(!game.shear_entity((4, 64, 0)).unwrap(), "the sheep refuses");
+            assert!(
+                !game
+                    .shear_entity(
+                        (4, 64, 0),
+                        &sunrise_client::items::ItemStack::new("minecraft:shears", 1)
+                    )
+                    .unwrap(),
+                "the sheep refuses"
+            );
             assert!(!game.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
             assert!(!game.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
         });
@@ -275,7 +290,7 @@ mod tests {
             host: &dyn mod_api::Host,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Option<bool> {
             let _ = host.level("minecraft:overworld");
             Some(true)
@@ -285,7 +300,7 @@ mod tests {
             host: &mut dyn mod_api::ServerHost,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Vec<mod_api::ItemStack> {
             let _ = host.level("minecraft:overworld");
             let leather = mod_api::__private::item_key("minecraft:leather").unwrap();
@@ -302,7 +317,7 @@ mod tests {
             _: &dyn mod_api::Host,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Option<bool> {
             Some(true)
         }
@@ -311,7 +326,7 @@ mod tests {
             host: &mut dyn mod_api::ServerHost,
             _: mod_api::EntityRef,
             _: Option<PlayerRef>,
-            _: &mod_api::ItemStack,
+            _: mod_api::ItemStackView<'_>,
         ) -> Vec<mod_api::ItemStack> {
             let _ = host.level("minecraft:overworld");
             Vec::new()
@@ -366,7 +381,12 @@ mod tests {
                 assert!(game.dropped.is_empty(), "a refused part drops nothing");
                 // The dispenser's shearing is not a success when the part's performing is refused.
                 assert!(
-                    !game.shear_entity((4, 64, 0)).unwrap(),
+                    !game
+                        .shear_entity(
+                            (4, 64, 0),
+                            &sunrise_client::items::ItemStack::new("minecraft:shears", 1)
+                        )
+                        .unwrap(),
                     "a refused on_sheared shears nothing"
                 );
                 assert!(!game.mobs[1].extra.sheared);
