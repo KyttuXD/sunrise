@@ -1,5 +1,6 @@
 //! The JSON contract of `cargo sunrise-mod native-build`: one plan line in, one event per line out.
 use crate::prebuilt::{self, Package, Route};
+use crate::registry_inventory::Inventory;
 use crate::rust::Unpacked;
 use crate::{Target, api, dependencies, library_record, scan_bundles};
 use serde::{Deserialize, Serialize};
@@ -345,7 +346,7 @@ fn compile(
     }
     let route = Route::of(&projects);
     let asked = std::cell::RefCell::new(input);
-    let consent = |inventory: &crate::RegistryInventory| {
+    let consent = |inventory: &Inventory| {
         plan.registry.unwrap_or_else(|| {
             let question = Event::Consent {
                 added_crates: inventory.added_crates,
@@ -364,7 +365,7 @@ fn compile(
         &projects,
         &declared,
         &resolution,
-        Some(&consent),
+        &consent,
         &|id, done, total| {
             let _ = say(Event::Mod {
                 id: id.to_owned(),

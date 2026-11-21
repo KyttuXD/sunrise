@@ -1,0 +1,1 @@
+sunrise-native-build tests::build_command_stays_in_the_builders_process_group lib daily child-process

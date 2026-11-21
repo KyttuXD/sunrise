@@ -1,0 +1,35 @@
+# SDK tooling history: these Rust exports were not part of the mod API surface.
+ids = [
+    "type:sunrise_native_build::Cargo",
+    "type:sunrise_native_build::RegistryInventory",
+    "type:sunrise_native_build::registry_compile::Options",
+    "method:sunrise_native_build::RegistryInventory::label",
+    "method:sunrise_native_build::RegistryInventory::detail",
+    "const:sunrise_native_build::CANCELLED",
+    "fn:sunrise_native_build::cancel",
+    "fn:sunrise_native_build::check_cancelled",
+    "fn:sunrise_native_build::clear_cancel",
+    "fn:sunrise_native_build::parse_cargo",
+    "fn:sunrise_native_build::bundles",
+    "fn:sunrise_native_build::scan_bundles",
+    "fn:sunrise_native_build::run",
+    "fn:sunrise_native_build::run_diagnosed",
+    "fn:sunrise_native_build::failure",
+    "fn:sunrise_native_build::prebuilt::compile",
+    "fn:sunrise_native_build::registry_compile::compile",
+]
+why = """
+The launcher split (4e9b6d2a0a2) moved native compilation to the SDK's command-line tool. The old linked launcher
+entry points for builds, progress, consent display, and cancellation are no longer used. On Unix compiler commands
+now inherit the tool's process group, so cancelling it also stops those commands, without a polling thread on every
+command. This is Sunrise-only SDK tooling; there is no vanilla or NeoForge site.
+"""
+migrate = """
+No change to mod code, manifests or the JSON contract. Tooling that called `prebuilt::compile`,
+`registry_compile::compile` or the linked command runner should start the SDK's `cargo-sunrise-mod native-build`
+subprocess and write its contract-2 plan as the first line of stdin. Pass the project or folder of projects in
+`mods` instead of scanning with `bundles` or `scan_bundles`. Read `mod` events for per-mod progress, `consent` events
+for registry dependency details, and `failed` events or `work/build.log` for diagnostics; per-crate Cargo progress
+is not a JSON event. To cancel, stop the tool's process group on Unix or its process tree on Windows instead of
+calling `cancel` or looking for `CANCELLED`.
+"""

@@ -17,25 +17,6 @@ pub struct Inventory {
     pub proc_macros: Vec<String>,
 }
 
-impl Inventory {
-    pub fn label(&self) -> String {
-        crate::host::trf(
-            "Native mod adds {count} registry crates",
-            &[("count", &self.added_crates.to_string())],
-        )
-    }
-    pub fn detail(&self) -> String {
-        let none = crate::host::tr("None");
-        let scripts = self.build_scripts.join(", ");
-        let macros = self.proc_macros.join(", ");
-        [
-            crate::host::tr("Registry dependencies are native code. Their build scripts and proc macros run during compilation, before the game starts.").to_owned(),
-            crate::host::trf("Build scripts: {crates}", &[("crates", if self.build_scripts.is_empty() { none } else { &scripts })]),
-            crate::host::trf("Proc macros: {crates}", &[("crates", if self.proc_macros.is_empty() { none } else { &macros })]),
-        ].join("\n\n")
-    }
-}
-
 #[derive(Deserialize)]
 pub struct Metadata {
     pub packages: Vec<Package>,
@@ -248,11 +229,7 @@ impl Metadata {
             .map(|ids| ids.into_iter().map(str::to_owned).collect())
     }
 
-    pub fn inventory(
-        &self,
-        game: &super::registry_lock::RegistryLock,
-        links: &[NativeLink],
-    ) -> Result<Inventory, String> {
+    pub fn inventory(&self, links: &[NativeLink]) -> Result<Inventory, String> {
         let reachable = self.reachable(false)?;
         let runtime = self.reachable(true)?;
         let mut scripts = BTreeSet::new();
@@ -273,13 +250,6 @@ impl Metadata {
                     "Native library {library}: mod package {} {} would compile a second provider of SDK package {} {}; the prebuilt game cannot be relinked with a different provider",
                     package.name, package.version, existing.name, existing.version
                 ));
-            }
-            if game
-                .packages
-                .keys()
-                .any(|id| id.name == package.name && id.version.to_string() == package.version)
-            {
-                continue;
             }
             added.insert(label.clone());
             if package
@@ -345,9 +315,7 @@ mod tests {
     }
     #[test]
     fn consent_counts_only_reachable_build_packages_and_names_executable_code() {
-        let inventory = metadata()
-            .inventory(&super::super::registry_lock::RegistryLock::default(), &[])
-            .unwrap();
+        let inventory = metadata().inventory(&[]).unwrap();
         assert_eq!(inventory.added_crates, 2);
         assert_eq!(inventory.build_scripts, ["native-sys 2.0.0"]);
         assert_eq!(inventory.proc_macros, ["derive-example 1.0.0"]);
@@ -357,14 +325,11 @@ mod tests {
         let mut metadata = metadata();
         metadata.resolve.nodes[0].deps[0].dep_kinds[0].kind = Some("build".into());
         let inventory = metadata
-            .inventory(
-                &super::super::registry_lock::RegistryLock::default(),
-                &[NativeLink {
-                    name: "sdk-sys".into(),
-                    version: "1.0.0".into(),
-                    library: "example".into(),
-                }],
-            )
+            .inventory(&[NativeLink {
+                name: "sdk-sys".into(),
+                version: "1.0.0".into(),
+                library: "example".into(),
+            }])
             .unwrap();
         assert_eq!(inventory.build_scripts, ["native-sys 2.0.0"]);
         assert_eq!(inventory.added_crates, 2);
@@ -373,14 +338,11 @@ mod tests {
     #[test]
     fn a_second_native_provider_is_refused_with_both_packages_versions_and_library() {
         let error = metadata()
-            .inventory(
-                &super::super::registry_lock::RegistryLock::default(),
-                &[NativeLink {
-                    name: "sdk-sys".into(),
-                    version: "1.0.0".into(),
-                    library: "example".into(),
-                }],
-            )
+            .inventory(&[NativeLink {
+                name: "sdk-sys".into(),
+                version: "1.0.0".into(),
+                library: "example".into(),
+            }])
             .unwrap_err();
         for detail in ["native-sys", "2.0.0", "sdk-sys", "1.0.0", "example"] {
             assert!(error.contains(detail), "{error}");

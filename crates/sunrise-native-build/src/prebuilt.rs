@@ -648,7 +648,7 @@ fn own_folder(builds: &Path, out: &Path) -> Result<(), String> {
 // Unlike the source workspace, this route invokes rustc with only selected --extern
 // libraries; it does not resolve or compile arbitrary transitive Cargo dependencies.
 #[allow(clippy::too_many_arguments)]
-pub fn compile(
+pub(super) fn compile(
     rust: &dyn Toolchain,
     package: &Package,
     builds: &Path,
@@ -657,7 +657,7 @@ pub fn compile(
     projects: &[api::Project<'_>],
     declared: &[Vec<dependencies::Dependency>],
     resolution: &dependencies::Resolution,
-    consent: Option<&dyn Fn(&super::RegistryInventory) -> bool>,
+    consent: &dyn Fn(&super::registry_inventory::Inventory) -> bool,
     // Each mod is its own library: told which one starts, and how far through them.
     on_mod: &dyn Fn(&str, usize, usize),
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {

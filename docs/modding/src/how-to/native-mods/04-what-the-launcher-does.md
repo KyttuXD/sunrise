@@ -7,8 +7,8 @@ Install them into the selected instance from the Mods page, then choose **Build*
 sunrise-launcher native-build path/to/mod --instance INSTANCE --trust-native-code
 ```
 
-The compile steps below are `cargo sunrise-mod native-build`'s too, the tool every SDK ships for each host
-([`native-build`](../../reference/sdk/08-native-build.md)).
+For the compile steps below, the launcher starts `cargo sunrise-mod native-build` in a separate process using the tool
+that ships with the SDK ([`native-build`](../../reference/sdk/08-native-build.md)).
 This is the player's side: a developer builds and runs with `cargo sunrise-mod build` and `run` ([Your first native mod](../../start/first-mod.md#5-build-against-the-prebuilt-game)).
 
 Omit the folder to build the instance's enabled native mods. The launcher keeps the instance on
@@ -43,7 +43,7 @@ that commit's SDK.
 
 A matching installed build is reused. A failed build stops with its diagnostic; it never compiles
 the game as a fallback. The build log is `native/build.log`. The Mods page shows the running step
-and lets you cancel it.
+and lets you cancel it. The launcher stops the build tool and its compiler subprocesses together.
 
 ## Build refusals
 
