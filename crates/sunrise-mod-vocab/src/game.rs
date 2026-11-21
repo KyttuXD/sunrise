@@ -13,9 +13,9 @@ pub enum Heightmap {
 }
 /// A run: `height` blocks up a column from `y` (from the column's `surface` height when one is
 /// given), set to palette entry `block`, only where filter `only` matches when one is given.
+// no wire: a run indexes the same in-process bulk edit's palette and filters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockRun {
     pub x: i32,
     pub z: i32,
@@ -26,13 +26,14 @@ pub struct BlockRun {
     pub only: Option<u32>,
 }
 /// A bulk edit of complete typed states and partial predicates, named by run indices; NBT is not supported.
+// no wire: bulk edits use native block states and predicates directly.
 #[derive(Clone, Debug, PartialEq, Default)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockEdit {
     /// Complete states to write; properties are never parsed from command strings.
     pub palette: Vec<BlockState>,
-    /// Partial block or tag predicates; omitted properties are wildcards.
+    /// Validated block or tag predicates; omitted properties are wildcards. A run can address
+    /// any existing filter at its `only` index.
     pub filters: Vec<StatePredicate>,
     pub runs: Vec<BlockRun>,
 }

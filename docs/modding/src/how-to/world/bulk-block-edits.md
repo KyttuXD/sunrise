@@ -11,10 +11,15 @@ Omitted properties are wildcards, never default-state requirements. An unknown o
 missing property on a tag member never matches. Sparse, non-Cartesian state tables
 are supported: a partial predicate does not need to form a complete state with defaults.
 
-All palette entries, predicates and run indices are prepared before any mutation.
-NBT is not representable. At most 65,536 filters are allowed. Unloaded chunks and
-out-of-height portions of runs are skipped. Edits preserve strict block-entity behavior,
-notify no neighbors and send whole changed chunks.
+Construct predicates once and pass them directly. To inspect a predicate, use
+`block_key()` or `tag_key()` and borrow `constraints()`. Predicates and edits are
+native values, not Wire payloads.
+
+Before any mutation, the game resolves palette states and filter names and checks
+run indices. `BlockRun.only` can refer to any existing filter at that index. NBT
+is not representable. Unloaded chunks and out-of-height portions of runs are
+skipped. Edits preserve strict block-entity behavior, notify no neighbors and
+send whole changed chunks.
 
 ## Read column palettes
 

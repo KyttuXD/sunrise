@@ -70,18 +70,10 @@ fn strict_block_predicates_validate_schema_without_default_bias() {
             error
         );
     }
-    let decoded = StatePredicate::from(StatePredicateRecord::new(
-        StatePredicateTarget::Block(key),
-        vec![StateConstraint::new("left", "invalid")],
-    ));
-    assert_eq!(
-        validate_state_predicate(&metadata, &decoded),
-        Err(BlockStateError::InvalidValue(0))
-    );
 }
 
 #[test]
-fn tag_predicates_keep_vague_properties_and_refuse_duplicate_transport() {
+fn tag_predicates_keep_vague_properties_and_refuse_duplicates() {
     let metadata = metadata();
     let vague = StatePredicate::tag(
         &metadata,
@@ -94,20 +86,19 @@ fn tag_predicates_keep_vague_properties_and_refuse_duplicate_transport() {
     )
     .unwrap();
     assert_eq!(vague.constraints()[0].name, "property_no_member_has");
+    assert_eq!(vague.constraints()[0].value, "arbitrary_value");
     assert_eq!(vague.tag_key(), Some(TagKey(0)));
     assert_eq!(
-        StatePredicate::from(StatePredicateRecord::from(&vague)),
-        vague
-    );
-    let decoded = StatePredicate::from(StatePredicateRecord::new(
-        StatePredicateTarget::Tag(TagKey(0)),
-        vec![
-            StateConstraint::new("unknown", "a"),
-            StateConstraint::new("unknown", "b"),
-        ],
-    ));
-    assert_eq!(
-        validate_state_predicate(&metadata, &decoded),
-        Err(BlockStateError::DuplicateProperty(1))
+        StatePredicate::tag(
+            &metadata,
+            &TagsAvailable,
+            TagKey(0),
+            &[
+                StateConstraint::new("unknown", "a"),
+                StateConstraint::new("unknown", "b"),
+            ],
+        )
+        .unwrap_err(),
+        BlockStateError::DuplicateProperty(1)
     );
 }

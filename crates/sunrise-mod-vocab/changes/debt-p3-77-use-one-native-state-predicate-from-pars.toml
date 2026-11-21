@@ -1,0 +1,33 @@
+ids = [
+    "type:StatePredicate",
+    "type:StatePredicateTarget",
+    "type:StatePredicateTarget.Block",
+    "type:StatePredicateTarget.Tag",
+    "type:StatePredicateRecord",
+    "method:StatePredicateRecord::new",
+    "type:StatePredicateRecord.target",
+    "type:StatePredicateRecord.constraints",
+    "fn:__private::validate_state_predicate",
+    "type:BlockEdit",
+    "type:BlockRun",
+    "method:WorldEditServerHost::edit_blocks",
+]
+why = "StatePredicate now stays native from construction through matching. Vanilla BlockStateParser.readProperties and readVagueProperties check explicit properties at parse time; BlockPredicateArgument.parse then uses those properties to match, without checking them again. NeoForge leaves those argument rules unchanged. Sunrise's bulk edit has no vanilla equivalent; it no longer rejects filter lists at an artificial 65,536 entries."
+migrate = """
+Replace `StatePredicate::from(StatePredicateRecord::new(StatePredicateTarget::Block(key), constraints))`
+with `StatePredicate::block(metadata, key, &constraints)?`. For `StatePredicateTarget::Tag(key)`, use
+`StatePredicate::tag(metadata, tags, key, &constraints)?`. Handle `BlockStateError` at that call
+instead of calling `__private::validate_state_predicate` or waiting for the edit to check properties.
+If you already used those constructors, the calls do not change.
+
+Replace `StatePredicateRecord::from(&predicate).target` with `predicate.block_key()` or
+`predicate.tag_key()`, and `record.constraints` with `predicate.constraints()` (a borrowed slice).
+Drop any Wire encoding of `StatePredicate`, `StatePredicateRecord`, `StatePredicateTarget`,
+`BlockEdit`, or `BlockRun`; pass the native values directly. If a mod has its own persistence or
+network format, store canonical block or tag names and explicit property pairs in that format, then
+resolve the names and use the checked constructors when reading. Do not store process-local keys.
+
+Keep `BlockRun.only: Option<u32>` as the index into `BlockEdit.filters`. A run may address filters
+beyond the former limit; the index still has to name an existing filter. There is no need to split
+edits solely to stay under 65,536 filters.
+"""

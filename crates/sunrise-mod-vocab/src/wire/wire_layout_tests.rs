@@ -279,18 +279,6 @@ impl Drop for Keys {
 
 #[test]
 fn snapshot_records_have_declared_field_bytes() {
-    let _keys = Keys::new();
-    let block = BlockKey::from_slot(0).unwrap();
-    fields(
-        StatePredicate::from(StatePredicateRecord::new(
-            StatePredicateTarget::Block(block),
-            vec![],
-        )),
-        (
-            StatePredicateTarget::Block(block),
-            Vec::<StateConstraint>::new(),
-        ),
-    );
     let values = DamageValues {
         original: 31.0,
         new_damage: 29.0,

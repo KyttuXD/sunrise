@@ -1285,9 +1285,9 @@ It names the level it means by its `dimension` (`minecraft:overworld`), as `nati
   changed, and they go to the players whole. A block replaced by another loses its block entity, and a new block gets
   the one `native_set_block` would give it (a mod block's own, included).
 - It answers the number of blocks changed. Runs in chunks that aren't loaded, and the parts of runs outside the level's
-  height, are left out. It answers `Err`, changing nothing, on a client, for another dimension, a palette entry or filter
-  or predicate that fails validation (NBT is not representable), a run naming a palette entry or filter past
-  the end, or more than 65536 filters.
+  height, are left out. It answers `Err`, changing nothing, on a client, for another dimension, when a palette state
+  or filter name cannot be resolved, or when a run names a palette entry or filter past the end. Filter properties are
+  checked when the mod makes the predicate; NBT is not representable.
 
 ### Column reads
 

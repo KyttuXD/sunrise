@@ -10,9 +10,9 @@ pub trait WorldEditServerHost {
     /// block replaced by another loses its block entity, and a new block gets the one `native_set_block` would
     /// give it, a mod block's included); no neighbour is told, and the chunks changed go to the players whole.
     /// Runs in chunks not loaded, and the parts of runs outside the column, are left out. The blocks changed, or
-    /// why the edit was left out, with nothing changed: another dimension, a client of a server, a palette entry
-    /// or predicate that fails typed validation, a run naming a palette entry or filter past the end,
-    /// or more than 65536 filters.
+    /// why the edit was left out, with nothing changed: another dimension, a client of a server,
+    /// a palette state or filter name that could not be resolved, or an out-of-bounds run index.
+    /// Filter properties are validated when the predicate is constructed.
     #[access(WorldOnly)]
     fn edit_blocks(&mut self, dimension: &str, edit: &BlockEdit) -> Result<u64, String>;
     /// Side: server.
