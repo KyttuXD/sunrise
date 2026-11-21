@@ -5,7 +5,9 @@
 [native crafting recipe values](../crafting-recipe-kinds.md), and recipe placement and recipe-book sync.
 A typed body is one bounded Wire value with no extra envelope; raw channels carry caller-supplied bytes.
 Derive `mod_api::Wire` explicitly on a type that needs this encoding. The build never adds the derive.
-Every field of a derived type must also implement `Wire`.
+Every field of a derived type must also implement `Wire`. `Wire` decodes owned strings (`String`,
+`Cow<'static, str>`, `Box<str>`, `Arc<str>`), never `&'static str`; `#[derive(Wire)]` rejects borrowed
+fields including `&'static str`, and `ItemPlace` stays process-local and does not implement `Wire`.
 
 Hook events are native callback records, not binary messages. If you need to send data from
 an event, copy the fields you intend to send into your own `Wire` payload type. The same applies to
@@ -34,7 +36,7 @@ variants and `Box`/`Arc` values (`MAX_DEPTH`). Collection iteration, `Option`
 and tuples do not consume a level. The reader returns `WireError::Depth` before
 entering level 33; the writer records the same error. Always check `Writer::error`
 before sending its bytes. This is a transport budget for unbounded mod-defined
-trees, including ingredients, item places, loot vehicles and recipe slot displays.
+trees, including ingredients, loot vehicles and recipe slot displays.
 
 Typed payloads use the same encoding with their own limits. They count lists, present
 options, boxes, shared pointers, NBT containers and explicit recursion, not derived record

@@ -109,7 +109,7 @@ These correspond to NeoForge's other `ItemAccess` factories:
   - Each loan mints a process-unique `ScratchSlot` and is removed when its scope closes, so it
     is never kept in a longer-lived outer transaction's journal and never collides with a later
     or foreign host. A handle copied out of the callback reads empty and writes nothing, and
-    `ItemPlace::Scratch` refuses `Wire` encoding.
+    `ItemPlace` stays process-local (it does not implement `Wire`).
 - `ItemPlace::Strict(place)` (`forHandlerIndexStrict`) refuses what a block entity's, entity's
   or nested item's slot doesn't take, where the plain place would spread it to the other slots.
 - `ItemPlace::OneByOne(place)` (`oneByOne`, `OneByOneItemAccess`) lends and projects a count of
