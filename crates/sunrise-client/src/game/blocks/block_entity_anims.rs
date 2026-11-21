@@ -666,7 +666,7 @@ impl Game<'_> {
                 ambient: true,
                 ..EffectInstance::new("conduit_power", 260, 0)
             };
-            g.potions.effects.add(power);
+            g.add_player_effect(power);
         });
     }
     /// `Entity.isInRain`: rain at the block position or at the top of the box.

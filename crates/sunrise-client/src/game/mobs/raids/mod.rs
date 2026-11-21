@@ -715,7 +715,7 @@ impl Game<'_> {
                 let mut effect =
                     EffectInstance::new("hero_of_the_village", raid::HERO_DURATION, amplifier);
                 effect.visible = false;
-                g.potions.effects.add(effect);
+                g.add_player_effect(effect);
                 g.award_custom_stat("raid_win", 1);
                 g.trigger_player("minecraft:hero_of_the_village");
             }),
