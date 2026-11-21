@@ -126,7 +126,7 @@ pub struct GoalSelector {
 pub(super) struct GoalMovementPause {
     pub(super) movement: super::living::TravelPause,
     slot: usize,
-    force: bool,
+    pub(super) force: bool,
 }
 
 impl GoalSelector {

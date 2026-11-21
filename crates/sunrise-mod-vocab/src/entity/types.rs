@@ -589,7 +589,8 @@ pub enum GoalSpec {
     },
     /// `EatBlockGoal`. Vanilla parameters: none.
     EatBlock,
-    /// `BreathAirGoal`. Vanilla parameters: none.
+    /// `BreathAirGoal`. Vanilla parameters: none. In either selector, damage from
+    /// the goal's move finishes (including `living_damage_post`) before the next goal.
     BreathAir,
     /// `TryFindWaterGoal`. Vanilla parameters: none.
     TryFindWater,

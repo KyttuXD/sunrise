@@ -181,8 +181,9 @@ before the bee updates nectar and anger and runs its movement controls.
 A server player's landing hurt settles death or protection and Post on the landing body before
 `HIT_GROUND`, the fall-distance reset, and the next accepted move. In a mob's own tick, landing
 hurt settles before the fall-distance reset, the rest of movement, a gliding collision hurt or
-another goal. This includes the dolphin's moves to reach air or follow a rider.
-Trampling farmland is still decided before the landing hurt.
+another goal. This includes moves by `GoalSpec::BreathAir` in either selector on any mob that
+accepts it, and a dolphin's move to follow a rider. A paused target goal finishes before the
+ordinary goal selector runs. Trampling farmland is still decided before the landing hurt.
 A pufferfish's sting on a mob finishes the hurt, including any death and `living_damage_post`,
 before applying that sting's poison or starting the next sting. The fish's own `entity_tick_post`
 follows all of its stings.

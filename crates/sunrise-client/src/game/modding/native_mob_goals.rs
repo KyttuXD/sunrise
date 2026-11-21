@@ -408,7 +408,7 @@ impl Game<'_> {
                 Some(Box::new(FleeSun::new(*speed)))
             }
             GoalSpec::EatBlock => Some(Box::new(EatBlock::default())),
-            GoalSpec::BreathAir => Some(Box::new(BreathAir)),
+            GoalSpec::BreathAir => Some(Box::new(BreathAir::default())),
             GoalSpec::TryFindWater => Some(Box::new(TryFindWater::default())),
             GoalSpec::NearestTarget {
                 prey,

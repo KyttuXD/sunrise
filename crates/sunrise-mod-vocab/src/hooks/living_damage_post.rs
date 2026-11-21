@@ -14,8 +14,8 @@ pub trait Hooks {
     /// before nectar and anger bookkeeping and movement controls.
     /// A server player's landing hurt finishes before the landing's `HIT_GROUND` and fall reset,
     /// and before the next accepted move. A mob landing in its own tick finishes its hurt before
-    /// the fall reset, movement restitution, travel's collision hurt or a later goal, including
-    /// when a dolphin moves to reach air or follow a rider.
+    /// the fall reset, movement restitution, travel's collision hurt or a later goal. This
+    /// includes `BreathAir` in either selector and a dolphin's move to follow a rider.
     /// A pufferfish sting on a mob finishes the hit before applying poison or starting the
     /// next sting, and before the fish's own `entity_tick_post`.
     /// A projectile hit finishes before its enchantment effects, levitation or a follow-up

@@ -1576,7 +1576,7 @@ enum MobLandingMoment {
     Death(Option<mod_api::Tag>, Option<[f64; 3]>),
     Post,
     Repath,
-    NextGoal,
+    NextGoal(&'static str),
     NextHit,
     TickFinished(Option<mod_api::Tag>),
 }
@@ -1761,7 +1761,7 @@ fn borrowed_mob_landing_posts_before_the_travel_tail() {
 
 #[test]
 #[ignore = "daily"]
-fn a_dolphin_goal_move_posts_before_the_next_goal() {
+fn a_goal_move_posts_before_the_next_goal() {
     use super::native_entity_refs::tests::run_fresh_cases;
     use sunrise_client::mobs::{
         dolphin::FollowPlayerRidden,
@@ -1769,15 +1769,17 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
         living::TravelPause,
     };
 
-    const CASE: &str = "SUNRISE_DOLPHIN_GOAL_DAMAGE_CHILD";
+    const CASE: &str = "SUNRISE_GOAL_DAMAGE_CHILD";
     if run_fresh_cases(
-        "game::native_damage_tests::a_dolphin_goal_move_posts_before_the_next_goal",
+        "game::native_damage_tests::a_goal_move_posts_before_the_next_goal",
         CASE,
-        &["follow", "breath"],
+        &["dolphin-follow", "dolphin-breath", "pig-target-breath"],
     ) {
         return;
     }
-    let breath = std::env::var(CASE).unwrap() == "breath";
+    let case = std::env::var(CASE).unwrap();
+    let follow = case == "dolphin-follow";
+    let target = case == "pig-target-breath";
 
     // Use the real goal, observing its completion separately from the next goal's tick.
     #[derive(Clone, Debug)]
@@ -1808,7 +1810,7 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
     }
 
     #[derive(Clone, Debug)]
-    struct FollowingGoal(MobLandingTrace);
+    struct FollowingGoal(MobLandingTrace, &'static str);
     impl Goal for FollowingGoal {
         fn flags(&self) -> u8 {
             0
@@ -1817,7 +1819,10 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
             true
         }
         fn tick(&mut self, _: &mut Mob, _: &mut Cx) {
-            self.0.lock().unwrap().push(MobLandingMoment::NextGoal);
+            self.0
+                .lock()
+                .unwrap()
+                .push(MobLandingMoment::NextGoal(self.1));
         }
         fn box_clone(&self) -> Box<dyn Goal> {
             Box::new(self.clone())
@@ -1851,7 +1856,7 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
             trace: Arc::clone(&trace),
         }),
     )];
-    if breath {
+    if !follow {
         mods.push(mod_api::ModEntry::new(
             "keep-low-air",
             Box::new(KeepLowAir(id)),
@@ -1871,7 +1876,7 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                 .unwrap();
             game.world.set(1, 79, 1, stone).unwrap();
 
-            if !breath {
+            if follow {
                 let at = Vec3::new(3.5, 80.0, 1.5);
                 let mut boat = super::boats::Boat::new(225049, "oak".into(), at, 0.0);
                 boat.velocity.x = 0.2;
@@ -1880,25 +1885,42 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                 game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
             }
 
-            let mut dolphin = mob(game, id, "minecraft:dolphin");
-            dolphin.position = Vec3::new(1.5, 80.0, 1.5);
-            dolphin.velocity.y = -0.5;
-            dolphin.fall_distance = 6.0;
-            dolphin.health = 0.5;
-            dolphin.ai.goals = Default::default();
-            dolphin.ai.targets = Default::default();
-            if breath {
-                dolphin.air = 20;
-                dolphin.ai.goals.add(0, BreathAir::default());
+            let kind = if target {
+                "minecraft:pig"
             } else {
-                dolphin.ai.goals.add(
+                "minecraft:dolphin"
+            };
+            let mut mob = mob(game, id, kind);
+            mob.position = Vec3::new(1.5, 80.0, 1.5);
+            mob.velocity.y = -0.5;
+            mob.fall_distance = 6.0;
+            mob.health = 0.5;
+            mob.ai.goals.clear();
+            mob.ai.targets.clear();
+            if follow {
+                mob.ai.goals.add(
                     0,
                     Follow(FollowPlayerRidden::new(false), Arc::clone(&trace)),
                 );
+            } else {
+                mob.air = 20;
+                if !target {
+                    mob.ai.goals.add(0, BreathAir::default());
+                }
             }
-            dolphin.ai.goals.add(1, FollowingGoal(Arc::clone(&trace)));
-            game.mobs.push(dolphin);
+            mob.ai
+                .goals
+                .add(1, FollowingGoal(Arc::clone(&trace), "ordinary"));
+            game.mobs.push(mob);
             game.entity_section_joined(id, [1.5, 80.0, 1.5]);
+            if target {
+                let mob = game.mob(game.entity(id).unwrap()).unwrap();
+                assert!(game.mob_add_target_goal(mob, 0, &mod_api::GoalSpec::BreathAir));
+                game.mobs[0]
+                    .ai
+                    .targets
+                    .add(1, FollowingGoal(Arc::clone(&trace), "target"));
+            }
 
             game.tick_creature_entities().unwrap();
 
@@ -1909,11 +1931,14 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                 ),
                 MobLandingMoment::Post,
             ];
-            if !breath {
+            if follow {
                 expected.push(MobLandingMoment::Repath);
             }
+            if target {
+                expected.push(MobLandingMoment::NextGoal("target"));
+            }
             expected.extend([
-                MobLandingMoment::NextGoal,
+                MobLandingMoment::NextGoal("ordinary"),
                 MobLandingMoment::TickFinished(Some(mod_api::Tag::Double(0))),
             ]);
             assert_eq!(*trace.lock().unwrap(), expected);

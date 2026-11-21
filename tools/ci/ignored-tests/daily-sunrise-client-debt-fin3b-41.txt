@@ -1,0 +1,1 @@
+sunrise-client game::native_damage_tests::a_goal_move_posts_before_the_next_goal lib daily child-process
