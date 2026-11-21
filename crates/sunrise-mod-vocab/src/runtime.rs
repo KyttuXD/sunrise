@@ -156,22 +156,25 @@ pub(crate) fn install(mods: Mods) -> &'static Installed {
     }
 }
 
-/// Checkpoint for an owning action around isolated dispatch. A trapped listener
-/// resets its outputs, but the owner must also abort any tentative Host writes.
-/// Unrelated threads do not affect the checkpoint.
+/// Checkpoint for owning actions that must abort their tentative Host writes on
+/// isolated dispatch failure. A panic contained in a listen hook does not abort
+/// the owning action. Unrelated threads do not affect the checkpoint.
 // hidden: the game's own decide/fire/apply actions read it; it is not a mod-facing call.
 #[doc(hidden)]
 pub fn isolated_failures() -> u64 {
     LISTENER_SERIAL.get().1
 }
 
-/// Mark `id`'s listener of `hook` poisoned for the session (#2414 ruling):
-/// it is skipped by that one hook alone — its other hooks and Parts are
-/// untouched, unlike a whole-mod disable. Called only from a listener's
-/// `catch_unwind` handler, so an installation is always in place.
+/// Disable a listener and signal failure to the owning action.
 pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
-    let (entered, trapped) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    let (entered, failures) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered, failures.wrapping_add(1)));
+    disable_listener(hook, id);
+}
+
+/// Poison only `id`'s listener of `hook` for the session (#2414 ruling), leaving
+/// its other hooks and Parts untouched.
+fn disable_listener(hook: generated::HookId, id: &'static str) {
     let installed = installed().expect("a poison lands inside a dispatch");
     let mut poisons = installed.poisons.lock().unwrap();
     let sets =
@@ -197,7 +200,7 @@ pub(crate) fn invoke_isolated_listener(
         Ok(Ok(())) => {}
         Ok(Err(refusal)) => refusal.report_each(),
         Err(message) => {
-            poison(hook, mod_id);
+            disable_listener(hook, mod_id);
             report_callback_panic(mod_id, "hook", operation, message);
         }
     }
@@ -661,14 +664,14 @@ impl ListenerScope {
 }
 
 thread_local! {
-    /// Listener entries (including nested hooks) and poisoned traps on this thread.
+    /// Listener entries (including nested hooks) and action-aborting failures on this thread.
     static LISTENER_SERIAL: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 #[inline]
 fn bump_listener_serial() {
-    let (entered, trapped) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered.wrapping_add(1), trapped));
+    let (entered, failures) = LISTENER_SERIAL.get();
+    LISTENER_SERIAL.set((entered.wrapping_add(1), failures));
 }
 
 pub(crate) fn listener_serial() -> u64 {
