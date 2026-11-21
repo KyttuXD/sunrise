@@ -105,7 +105,7 @@ ClientPacketListener.getPlayerInfo	skip:java		a map lookup by UUID; Sunrise keep
 ClientPacketListener.getPlayerInfoIgnoreCase	missing		unsure: a case-insensitive name lookup for profiles (LocalPlayerResolver); Sunrise has none
 ClientPacketListener.markMessageAsProcessed	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::mark_message_processed	when the chat takes the message, past any Chat Delay
 ClientPacketListener.sendChatAcknowledgement	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_chat_acknowledgement	the tracker's offset, and a ServerboundChatAck when it is above zero; after a configuration transition too
-ClientPacketListener.sendCommand	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_command	message arguments signed with a chat session; the unsigned packet otherwise
+ClientPacketListener.sendCommand	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_chat	message arguments signed with a chat session; the unsigned packet otherwise
 ClientPacketListener.verifyCommand	port	crates/sunrise-client/src/game/network/remote_chat.rs::verify_command	over the tree the server sent
 ClientPacketListener.isValidCommand	port	crates/sunrise-command/src/lib.rs::ParseResults::is_valid
 ClientPacketListener.openSendConfirmationWindow	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_unattended_command	no returns to the book or dialog the click left; the screen is drawn over the chat behind, not in its place

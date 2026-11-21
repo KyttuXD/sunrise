@@ -447,6 +447,13 @@ fn listener_commands_do_not_count_as_command_block_successes() {
 #[test]
 #[ignore = "daily"]
 fn nested_say_passes_through_the_same_recipient_checks() {
+    if run_fresh_cases(
+        "game::native_chat_recipients_tests::nested_say_passes_through_the_same_recipient_checks",
+        "SUNRISE_NESTED_SAY_CASE",
+        &["delivery"],
+    ) {
+        return;
+    }
     let asked = Asked::default();
     let nested = Arc::new(Mutex::new(None));
     let mods = vec![mod_api::ModEntry::new(
@@ -549,6 +556,13 @@ fn panicking_chat_filter_is_reported_without_losing_other_vetoes() {
 fn guest_public_command_selectors_change_display_not_the_signed_body() {
     use play::Clientbound as C;
     use sunrise_client::scoreboard::{comp_text, tag_to_json};
+    if run_fresh_cases(
+        "game::native_chat_recipients_tests::guest_public_command_selectors_change_display_not_the_signed_body",
+        "SUNRISE_GUEST_CHAT_SELECTOR_CASE",
+        &["selectors"],
+    ) {
+        return;
+    }
     let asked = Asked::default();
     mod_platform::testing::with_mods(
         vec![mod_api::ModEntry::new(
@@ -563,11 +577,10 @@ fn guest_public_command_selectors_change_display_not_the_signed_body() {
                 lines(&second);
                 let plain = |tag| comp_text(&tag_to_json(&tag)).plain();
                 let body = "hello @s";
-                let signed_message = signed(body);
                 assert!(game.guest_message_command(
                     12,
                     "say hello @s",
-                    Some(&[("message".into(), signed_message.clone())])
+                    Some(&[("message".into(), signed(body))])
                 ));
                 for receiver in [&first, &second] {
                     let C::PlayerChat(chat) = packets(receiver)
@@ -578,10 +591,7 @@ fn guest_public_command_selectors_change_display_not_the_signed_body() {
                     };
                     assert_eq!(
                         chat.signature.as_deref(),
-                        signed_message
-                            .signature
-                            .as_ref()
-                            .map(|signature| signature.as_slice())
+                        Some([9; sunrise_protocol::secure_chat::SIGNATURE_BYTES].as_slice())
                     );
                     assert_eq!(chat.content, body);
                     assert_eq!(plain(chat.unsigned_content.unwrap()), "hello guest12");

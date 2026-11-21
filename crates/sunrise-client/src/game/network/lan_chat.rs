@@ -20,10 +20,6 @@ pub(super) enum ChatDelivery<'a> {
     Disguised(&'a Tag),
 }
 
-/// The signing context of a command: each message argument as the chain
-/// let it through, by argument name (CommandSigningContext.SignedArguments).
-type Signed = Vec<(String, ChatMessage)>;
-
 impl Game<'_> {
     /// CommandDispatcher.parse with the guest's permission level.
     fn parse_as(&mut self, permission: u8, command: &str) -> ParseResults {
@@ -259,14 +255,14 @@ impl Game<'_> {
 
     /// SayCommand, EmoteCommands and MsgCommand for a guest: chat to the
     /// players, signed when the guest signed it (a disguised chat after an
-    /// unsigned command packet). False when the command is another one, or
-    /// one this can't run (selectors other than `@s` and `@a`), for the
-    /// game's dispatcher to handle.
+    /// unsigned command packet). `signed` holds each verified message argument by name,
+    /// as in `CommandSigningContext.SignedArguments`. Returns false for commands that
+    /// need the regular dispatcher, which includes redirected commands and complex whisper targets.
     pub(super) fn guest_message_command(
         &mut self,
         conn: u32,
         command: &str,
-        signed: Option<&Signed>,
+        signed: Option<&[(String, ChatMessage)]>,
     ) -> bool {
         let Some(host) = self.lan.as_ref() else {
             return false;

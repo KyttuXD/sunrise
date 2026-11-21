@@ -65,8 +65,8 @@ mod tests {
     fn open_chat_replaces_screens_but_a_veto_keeps_the_old_chat() {
         use crate::game::Screen;
         use mod_api::{
-            ClientHost, Hooks, ScreenClosingEvent, ScreenInitPostEvent, ScreenOpening,
-            ScreenOpeningEvent,
+            ClientChatEvent, ClientHost, Flow, Hooks, ScreenClosingEvent, ScreenInitPostEvent,
+            ScreenOpening, ScreenOpeningEvent,
         };
         use std::sync::{
             Arc, Mutex,
@@ -74,6 +74,7 @@ mod tests {
         };
         use sunrise_client::motion::PlayerMotion;
         use sunrise_core::geometry::Vec3;
+        use sunrise_protocol::packets::play::Serverbound;
 
         if run_fresh_cases(
             "game::native_net::tests::open_chat_replaces_screens_but_a_veto_keeps_the_old_chat",
@@ -120,6 +121,11 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(format!("init {}", event.screen.id));
+            }
+
+            fn client_chat(&self, host: &mut dyn ClientHost, _: &mut ClientChatEvent<'_>) -> Flow {
+                host.open_chat("replacement on submit").unwrap();
+                Flow::Continue
             }
         }
         let probe = Arc::new(Probe::default());
@@ -187,6 +193,20 @@ mod tests {
                 assert!(
                     peer.recv().unwrap_err().is_timed_out(),
                     "opening neither answers the prompt nor sends the prefill"
+                );
+                peer.reader
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                game.chat_key_code(winit::keyboard::KeyCode::Enter, None);
+                let (id, body) = peer.recv().unwrap();
+                let Serverbound::Chat(chat) = Serverbound::decode(id, &body).unwrap() else {
+                    panic!("expected the submitted chat line");
+                };
+                assert_eq!(chat.message, "second draft");
+                assert_eq!(
+                    game.ui.chat_screen.as_ref().unwrap().value(),
+                    "replacement on submit",
+                    "the callback's new chat screen must not close with the submitted one"
                 );
             });
         });

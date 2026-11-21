@@ -9,6 +9,7 @@ pub trait NetworkClientHost {
     /// send; nothing is sent. It can replace an open screen, including another
     /// chat screen or foreground prompt. A new chat instance fires normal opening,
     /// closing and initialization hooks; a veto leaves the old screen untouched.
+    /// If called while a chat line is being submitted, the new screen stays open.
     /// Returns an error when there is no local player.
     #[access(WorldOnly)]
     fn open_chat(&mut self, text: &str) -> Result<(), String>;

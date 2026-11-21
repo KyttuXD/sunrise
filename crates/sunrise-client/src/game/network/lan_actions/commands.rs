@@ -36,7 +36,7 @@ impl Game<'_> {
         if canceled {
             return;
         }
-        if self.guest_message_command(conn, command, signed.as_ref()) {
+        if self.guest_message_command(conn, command, signed.as_deref()) {
             return;
         }
         // ListPlayersCommand needs no permission and lists every player.

@@ -133,7 +133,7 @@ SharedSuggestionProvider.suggestRegistryElements	port	crates/sunrise-command/src
 SharedSuggestionProvider.listSuggestions	port	crates/sunrise-command/src/args.rs::ArgType::suggest	suggestions per argument type
 SharedSuggestionProvider.suggest2DCoordinates	port	crates/sunrise-command/src/args.rs::suggest_coordinates	x z suggestions
 AngleArgument.SingleAngle.getAngle	port	crates/sunrise-command/src/args.rs::Coord::get	gap: minor: the wrap to -180..180 is not confirmed
-ArgumentSignatures.signCommand	port	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_command	each message argument at the next chain link
+ArgumentSignatures.signCommand	inline	crates/sunrise-client/src/game/network/remote_chat.rs::Game::send_chat	each message argument at the next chain link
 DimensionArgument.listSuggestions	port	crates/sunrise-command/src/args.rs::ArgType::suggest	dimension suggestions
 DimensionArgument.getDimension	inline	crates/sunrise-client/src/game/administration/commands/execute.rs::Game::modify	dimension resolved where execute in reads it
 EntityAnchorArgument.parse	port	crates/sunrise-command/src/args.rs::ArgType::parse	eyes or feet

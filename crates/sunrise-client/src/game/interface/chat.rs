@@ -237,6 +237,8 @@ impl Default for SessionDispatcher {
 pub struct UiState {
     pub chat: Chat,
     pub chat_screen: Option<ChatScreen>,
+    /// Identity of the last chat instance, even when it replaced another chat screen.
+    pub(super) chat_instance: u64,
     /// `ChatComponent.latestDraft`.
     pub chat_draft: Option<ChatDraft>,
     /// `ChatScreen.isDraft`: the box opened with the draft and is unchanged since.
@@ -999,6 +1001,7 @@ impl Game<'_> {
             );
             screen.auto_suggestions = game.settings.auto_suggestions;
             game.ui.chat_screen = Some(screen);
+            game.ui.chat_instance = game.ui.chat_instance.wrapping_add(1);
             game.ui.chat_draft_shown = is_draft;
             game.ui.chat_opened = Some(std::time::Instant::now());
             game.keys.clear();
@@ -1259,18 +1262,29 @@ impl Game<'_> {
                 self.close_chat(ChatExit::Intentional);
             }
             ChatAction::Submit(message) => {
-                // InBedChatScreen sends without closing (`closeOnSubmit` is
-                // false): the box empties and the screen stays.
-                if self.ui.in_bed_chat && self.sleeping.is_some() {
-                    screen.suggest_command(&m, &c, "");
-                    self.ui.chat.reset_scroll();
-                    self.ui.chat_screen = Some(screen);
-                } else {
-                    self.ui.chat_screen = Some(screen);
-                    self.close_chat(ChatExit::Done);
-                }
-                if !message.is_empty() {
-                    self.handle_chat_input(&message);
+                let instance = self.ui.chat_instance;
+                self.ui.chat_screen = Some(screen);
+                self.handle_chat_input(&message);
+                // NeoForge's ChatScreen.keyPressed closes only the instance that submitted,
+                // not a screen opened by the chat or command callback.
+                if self.ui.chat_instance == instance
+                    && self.screen == Screen::Chat
+                    && !self.screen_over_playing()
+                {
+                    // `InBedChatScreen` clears the input instead of closing (`closeOnSubmit`).
+                    if self.ui.in_bed_chat && self.sleeping.is_some() {
+                        let m = Measure(&self.gui.atlas.font);
+                        let c = Commands {
+                            dispatcher: chat_tree(&self.remote),
+                            registries: &self.ui.registries,
+                        };
+                        if let Some(screen) = &mut self.ui.chat_screen {
+                            screen.suggest_command(&m, &c, "");
+                        }
+                        self.ui.chat.reset_scroll();
+                    } else {
+                        self.close_chat(ChatExit::Done);
+                    }
                 }
             }
             ChatAction::None => {

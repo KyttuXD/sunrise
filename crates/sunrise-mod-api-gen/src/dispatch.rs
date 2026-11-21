@@ -372,6 +372,11 @@ pub(super) fn emit<'a>(
         // A mod listener may still be told of a cancelled event, and see and clear its cancel; a
         // part never is.
         let mod_cancel = (contract == Contract::Cancel || collect_cancel) && scoped.is_none();
+        let independent_cancel = hook.event_per_listener
+            && hook.isolate
+            && contract == Contract::Cancel
+            && mod_cancel
+            && hook.output_validator.is_none();
         if mod_cancel && !is_render {
             cancel_hooks.push_str(&format!("pub const {name}: () = ();\n"));
         }
@@ -399,6 +404,8 @@ pub(super) fn emit<'a>(
         let mut fields = String::new();
         let mut inits = Vec::new();
         let mut write_back = String::new();
+        let mut staged_fields = String::new();
+        let mut publish_fields = String::new();
         // The fields an isolated dispatch rolls back to the requested values on a listener's
         // unwind (#2414 ruling), each with whether the event holds it behind a `&mut`.
         let mut rollback: Vec<(String, bool)> = Vec::new();
@@ -501,26 +508,31 @@ pub(super) fn emit<'a>(
                 rollback.push((name.clone(), false));
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
-                if matches!(&field_ty, Type::Reference(reference) if matches!(*reference.elem, Type::TraitObject(_)))
-                {
-                    surfaces.push(name.clone());
-                }
-                if hook.isolate
-                    && !hook.event_per_listener
-                    && batch_entry.is_none()
-                    && !rollback_pointee_is_copy(&field_ty)
-                {
+                let surface = matches!(&field_ty, Type::Reference(reference) if matches!(*reference.elem, Type::TraitObject(_)));
+                if independent_cancel && surface {
                     return Err(format!(
-                        "{}: isolate rolls a listener's writes back to the requested values; \
-                         its mutable argument {name} must be a Copy primitive or a fixed array \
-                         of them",
+                        "{}: an independent veto cannot write through a trait object",
                         hook.name
                     ));
                 }
-                if !rollback_pointee_is_copy(&field_ty) {
-                    cloned.push(name.clone());
+                if surface {
+                    surfaces.push(name.clone());
                 }
-                rollback.push((name.clone(), true));
+                if !independent_cancel {
+                    if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty)
+                    {
+                        return Err(format!(
+                            "{}: isolate rolls a listener's writes back to the requested values; \
+                             its mutable argument {name} must be a Copy primitive or a fixed array \
+                             of them",
+                            hook.name
+                        ));
+                    }
+                    if !rollback_pointee_is_copy(&field_ty) {
+                        cloned.push(name.clone());
+                    }
+                    rollback.push((name.clone(), true));
+                }
             }
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
@@ -553,8 +565,20 @@ pub(super) fn emit<'a>(
             } else if hook.event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
-                // Keep write-through access, but not changes to the reference itself.
-                inits.push(format!("{name}: &mut *{name}"));
+                if independent_cancel {
+                    let proposed = fresh_name(&format!("proposed_{name}"), &mut used);
+                    let initial = if rollback_pointee_is_copy(&field_ty) {
+                        format!("*{name}")
+                    } else {
+                        format!("ToOwned::to_owned(&*{name})")
+                    };
+                    staged_fields.push_str(&format!("let mut {proposed} = {initial};"));
+                    inits.push(format!("{name}: &mut {proposed}"));
+                    publish_fields.push_str(&format!("*{name} = {proposed};"));
+                } else {
+                    // Keep write-through access, but not changes to the reference itself.
+                    inits.push(format!("{name}: &mut *{name}"));
+                }
             } else {
                 inits.push(name.clone());
             }
@@ -947,14 +971,8 @@ pub(super) fn emit<'a>(
                 inits.join(", "),
             )
         };
-        // Each listener gets a fresh event with the original inputs. Writable borrowed
-        // payloads can still share their pointee. Write-back, the owner filter and chunk
-        // I/O checks use the outer event and cannot use a listener-local one.
-        let independent_cancel = hook.event_per_listener
-            && hook.isolate
-            && contract == Contract::Cancel
-            && mod_cancel
-            && hook.output_validator.is_none();
+        // Each listener gets a fresh event with the original inputs. An independent
+        // veto borrows its own proposed edits, which only publish on completion.
         let (build, local_event) = if hook.event_per_listener || isolated_collect {
             // A replace or isolated collect answer is returned outside the event. A regular
             // collect output borrows one slot. Independent vetoes merge only completed answers.
@@ -1004,7 +1022,6 @@ pub(super) fn emit<'a>(
         let mut restores: Vec<String> = Vec::new();
         // A `&mut dyn Trait` field is a registrar or a draw surface: its effects stand, as the
         // surface has no whole value to copy.
-        let mut independent_fields = Vec::new();
         for (field, by_reference) in rollback
             .iter()
             .filter(|(field, _)| !surfaces.contains(field))
@@ -1013,9 +1030,6 @@ pub(super) fn emit<'a>(
                 continue;
             }
             let index = snaps.len();
-            if independent_cancel && *by_reference {
-                independent_fields.push(index);
-            }
             if event_type == "RegisterConfigurationTasksEvent" && field == "registration" {
                 snaps.push(format!("{event}.{field}.checkpoint()"));
                 restores.push(format!("{event}.{field}.rollback({saved}.{index});"));
@@ -1065,20 +1079,6 @@ pub(super) fn emit<'a>(
             format!(
                 "if let Some({saved}) = {snapshot} {{ {} }} ",
                 restores.join(" ")
-            )
-        };
-        // A fresh listener event already discards local fields on failure. Only
-        // write-through fields need to preserve the preceding listener's value.
-        let (independent_snapshot, independent_restore) = if independent_fields.is_empty() {
-            (String::new(), String::new())
-        } else {
-            (
-                format!("let {saved} = ({},);", snaps.join(", ")),
-                independent_fields
-                    .iter()
-                    .map(|&i| restores[i].as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
             )
         };
         // Answered collectors drain this private batch after each mod. The refused mod has
@@ -1293,7 +1293,7 @@ pub(super) fn emit<'a>(
             None if independent_cancel => (
                 String::new(),
                 format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) || (*{o} && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {independent_snapshot} match crate::callback_owner::contain_unwind(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{ Ok(Ok(flow)) => {{ *{o} = {event}.cancelled || matches!(flow, Flow::Cancel); }} Ok(Err(refusal)) => {{ {independent_restore} refusal.report_each(); }} Err(message) => {{ {independent_restore} super::runtime::poison(HookId::{hook_id}, mod_id); crate::callback_owner::report_hook_panic(mod_id, \"{name}\", message); }} }} }} }}",
+                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) || (*{o} && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {staged_fields} {local_event} match crate::callback_owner::contain_unwind(|| super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{ Ok(Ok(flow)) => {{ *{o} = {event}.cancelled || matches!(flow, Flow::Cancel); {local_write_back} {publish_fields} }} Ok(Err(refusal)) => refusal.report_each(), Err(message) => {{ super::runtime::poison(HookId::{hook_id}, mod_id); crate::callback_owner::report_hook_panic(mod_id, \"{name}\", message); }} }} }} }}",
                     o = out.unwrap()
                 ),
             ),
