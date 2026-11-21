@@ -137,9 +137,11 @@ fn replace_entries(tag: &mut NamedTag, entries: Compound) -> std::io::Result<()>
 }
 
 impl SaveDir {
-    /// Bind disk callbacks before this server level starts any chunk workers.
-    /// The world epoch belongs to the existing lifecycle owner. Remote caches
-    /// never call this method. With no subscribers no context is retained.
+    /// Bind disk callbacks once when the server level adopts this save directory,
+    /// before streaming can load or save a chunk. The epoch belongs to the world
+    /// lifecycle; the dimension and resources belong to this save, even when its
+    /// level is parked. Remote caches never bind a context; no context is retained
+    /// without subscribers.
     pub fn set_chunk_disk_context(
         &self,
         world: WorldEpoch,

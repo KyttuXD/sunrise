@@ -1,29 +1,27 @@
-//! Server capture seams. Disk callbacks run only in the persistence owner.
+//! Server-level disk context and save admission for chunk callbacks.
 use super::*;
 
 impl Game<'_> {
-    /// Bind the existing world's identity and immutable resources, before workers start.
-    pub(super) fn bind_chunk_disk_worker(
-        &self,
-        save: &sunrise_client::save::SaveDir,
-        dim: super::Dim,
-    ) {
+    /// Bind the level's shared persistence owner before adopting its streamer.
+    /// The level and its `Persistent` generator submit to this same `SaveDir`.
+    pub(super) fn bind_chunk_disk_worker(&self, save: &SaveDir, dim: Dim) -> Result<()> {
         if self.options.execution_role.is_client()
             || (!mod_api::__private::listened(mod_api::HookId::ChunkDataLoad)
                 && !mod_api::__private::listened(mod_api::HookId::ChunkDataSave))
         {
-            return;
+            return Ok(());
         }
-        if let (Some(world), Some(resources)) = (
-            self.native_lifecycle.epoch(),
-            sunrise_world::native_worldgen_hooks::context(),
-        ) {
+        if let Some(world) = self.native_lifecycle.epoch() {
+            let id = dim.id();
+            let dimension = mod_api::Identifier::parse(id)
+                .map_err(|error| format!("chunk disk context for {id}: {error}"))?;
             save.set_chunk_disk_context(
                 world,
-                mod_api::Identifier::parse(dim.id()).expect("registered dimension"),
-                resources,
+                dimension,
+                Arc::new(self.loop_context.worldgen_context()),
             );
         }
+        Ok(())
     }
 
     /// Chunks whose subscribed save was refused or failed become dirty again.

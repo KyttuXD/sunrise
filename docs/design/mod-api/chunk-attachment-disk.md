@@ -2,7 +2,8 @@
 
 > Historical: this design predates the removal of WebAssembly mods.
 > See [saving chunk attachments](../../modding/src/how-to/chunk-data-save.md) for the current native API.
-> The old guest adapter, registration refusals and test plan are historical.
+> The old guest adapter, registration refusals and test plan are historical. The level
+> now binds its disk context at open, and the worker observes only submitted disk records.
 
 Provisional proposal for [#857](https://github.com/arismoko/horizon/issues/857); no implementation or adopted guarantee. This answers the worker Host versus server-thread snapshot question: retain the existing server-thread capture seams, but execute mod load, save and persistence codec callbacks on a chunk worker with a restricted Host. Do not pass Game to a worker or silently relocate the requested callbacks to the server thread.
 
@@ -12,9 +13,10 @@ Vanilla 26.3 was inspected from `/workspace/sunrise` with `python3 tools/rea_van
 
 The issue names NeoForge 26.3 ChunkDataEvent.Load/Save. The public [attachment documentation](https://docs.neoforged.net/docs/datastorage/attachments/) describes optional persistence serializers but is labelled 26.1. The [26.3 event Javadoc](https://aldak.netlify.app/javadoc/26.3.x/net/neoforged/neoforge/event/level/ChunkDataEvent.html) was inaccessible. Therefore NeoForge 26.3 thread, event ordering, cancellation, exception, size and data-loss limits are **unverified**. Require public 26.3 event and attachment lifecycle documentation before adopting a parity contract. No NeoForge source, patches or other project's source were consulted. The rules below are Sunrise recommendations pending that evidence.
 
-## Verified current owners and route audit
+## Original route audit
 
-Paths and lines refer to this checkout; these are inspected owners, not completed callback routes.
+Paths and lines refer to the pre-worker checkout. The snapshot seams described here have since
+been removed; the worker receives full and proto records from the level's save directory.
 
 | Route | Current owner and required integration |
 | --- | --- |

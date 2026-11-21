@@ -1,0 +1,3 @@
+version = 1
+doc = "A chunk disk job reports the world epoch and dimension of the level that owns its save directory, even when another level is active. The chunk coordinates and kind describe the actual submitted record."
+tests = ["crates/sunrise-client/src/game/world/levels.rs::late_chunk_saves_use_their_opened_levels_disk_context"]

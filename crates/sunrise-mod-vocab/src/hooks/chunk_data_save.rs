@@ -1,12 +1,13 @@
 //! Chunk attachment snapshot encoding boundary.
 
 pub trait Hooks {
-    /// A committed chunk snapshot is about to encode on the chunk worker.
-    /// `data` belongs only to that snapshot: typed edits change the disk record,
+    /// The chunk worker is about to encode the submitted save record.
+    /// `data` belongs only to that record: typed edits change the saved data,
     /// never the live chunk. Exactly once per captured record, for full and proto
     /// chunks alike. The restricted Host cannot resolve live chunks or mutate the
-    /// world; `host.job()` borrows the captured metadata. A failed job, including
-    /// invalid or over-budget disk NBT, retains its snapshot and the prior disk record.
+    /// world; `host.job()` borrows the owning level's identity and the record's
+    /// metadata. A failed job, including invalid or over-budget disk NBT, retains
+    /// its snapshot and the prior disk record.
     #[hook(
         side = "server",
         contract = "listen",

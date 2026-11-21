@@ -11,12 +11,13 @@ The event's `data` is a typed, job-local attachment store. Use its `get`, `set`
 and `remove` methods with an `AttachmentType<T>` that has a persistence codec.
 `T` does not need `Wire`. An ignored codec error still refuses the whole job.
 
-The callback runs on the persistence worker after capture and before encoding.
-For example, capturing 7, writing 8 in the callback and later writing 9 in the
-live chunk produces disk value 8 without changing live value 9. The host's
-`job()` borrows a `&ChunkDiskContext` identifying the world epoch, dimension,
-coordinates, full/proto kind and phase. It grants no live chunk lookup,
-scheduling, packets or world writes.
+The callback runs on the persistence worker for the submitted record, before
+encoding it. For example, capturing 7, writing 8 in the callback and later
+writing 9 in the live chunk produces disk value 8 without changing live value 9.
+The host's `job()` borrows a `&ChunkDiskContext` with the world epoch and
+dimension of the level that owns the save, even if another level is active.
+The coordinates, full/proto kind and phase describe the record being written.
+The host grants no live chunk lookup, scheduling, packets or world writes.
 `registry(name)` lends `Option<&[String]>` in registry ID order from the frozen generation
 retained by the worker. `None` means that generation has no such registry. Use the slice within
 the callback, or copy it if it must outlive the callback. Neither metadata getter reads files;

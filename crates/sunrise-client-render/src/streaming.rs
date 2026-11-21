@@ -144,6 +144,7 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn proto_heap_bytes(&self, _proto: &Proto) -> ([usize; 6], [usize; 16]) {
         ([0; 6], [0; 16])
     }
+    /// What to save of a proto chunk dropped before it became final.
     fn saved_proto(&self, _proto: &Proto) -> Option<crate::chunk::SavedProto> {
         None
     }
@@ -485,7 +486,7 @@ pub enum SaveStep {
     Protos(Vec<ProtoSave>),
 }
 
-/// Work retained while a late full-chunk save callback runs.
+/// Planning work retained while the caller submits a deferred full-chunk save.
 pub struct PlanResume {
     sweep: bool,
     uploads: Vec<MeshUpload>,
@@ -1571,7 +1572,7 @@ impl Streaming {
         }
         None
     }
-    /// Finish a generated column's deferred save after its snapshot callback.
+    /// Submit a generated column's deferred full-chunk save to persistence.
     pub fn save_finished(&self, chunk: Chunk) {
         self.saves.save_finished(chunk);
     }
@@ -1824,7 +1825,7 @@ impl Streaming {
         }
     }
 
-    /// Start planning, yielding before any late-generated column is saved.
+    /// Start planning, yielding before submitting a late-generated column's save.
     pub fn begin_plan_update(&mut self, world: &mut World) -> PlanStep {
         let mut hz_laps = crate::spans::laps();
         if self.paused {
@@ -1878,7 +1879,7 @@ impl Streaming {
         )
     }
 
-    /// Resume processing the same batch after the caller saves a late column.
+    /// Resume processing the same batch after the caller submits a late column's save.
     pub fn resume_plan_update(&mut self, world: &mut World, mut resume: PlanResume) -> PlanStep {
         let mut hz_laps = crate::spans::laps();
         while let Some(done) = resume
