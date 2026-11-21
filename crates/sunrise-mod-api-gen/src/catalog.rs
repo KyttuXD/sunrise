@@ -208,6 +208,8 @@ pub struct Hook {
     pub stack_count: Option<StackCount>,
     /// Rebuild a listener event from its original inputs for every subscriber.
     pub event_per_listener: bool,
+    /// One copyable input whose binding is read-only through a getter.
+    pub read_only_input: Option<String>,
 }
 
 /// A drawing surface of the game's that drawing hooks get as a trait object (the catalog's
@@ -339,6 +341,7 @@ struct HookEntry {
     stack_count: Option<StackCount>,
     #[serde(default)]
     event_per_listener: bool,
+    read_only_input: Option<String>,
     inert: Option<String>,
     neoforge: Option<serde_json::Value>,
     fabric: Option<serde_json::Value>,
@@ -571,6 +574,7 @@ impl Hook {
             engine_inert,
             stack_count: entry.stack_count,
             event_per_listener: entry.event_per_listener,
+            read_only_input: entry.read_only_input,
         })
     }
 }
@@ -1034,6 +1038,7 @@ impl Hook {
             engine_inert: false,
             stack_count: None,
             event_per_listener: false,
+            read_only_input: None,
         }
     }
 }

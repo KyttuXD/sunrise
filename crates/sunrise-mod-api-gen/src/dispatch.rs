@@ -397,6 +397,16 @@ pub(super) fn emit<'a>(
 
         let mut lifetimes = EventLifetimes::default();
         let mut fields = String::new();
+        let mut read_only_getter = String::new();
+        if let Some(input) = &hook.read_only_input
+            && !args
+                .iter()
+                .any(|(name, ty)| name == input && matches!(ty, Type::Path(_)))
+        {
+            return Err(format!(
+                "{name}: read_only_input must name a by-value event input"
+            ));
+        }
         let mut inits = Vec::new();
         let mut write_back = String::new();
         // The fields an isolated dispatch rolls back to the requested values on a listener's
@@ -520,6 +530,13 @@ pub(super) fn emit<'a>(
             }
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
+                None if hook.read_only_input.as_deref() == Some(name.as_str()) => {
+                    let ty = field.to_token_stream();
+                    read_only_getter = format!(
+                        "/// The original `{name}` supplied by the game.\npub fn {name}(&self) -> {ty} {{ self.{name} }}\n"
+                    );
+                    ""
+                }
                 Some((RegistrationAppend::Register, _)) => "",
                 Some((RegistrationAppend::Custom, _)) => "pub(super)",
                 None if task_registration
@@ -600,9 +617,14 @@ pub(super) fn emit<'a>(
         } else {
             ""
         };
-        let event_struct = format!(
+        let mut event_struct = format!(
             "/// An in-process callback record built by the game and passed to the listener.\n{wire_comment}#[non_exhaustive]\n#[allow(missing_docs)]\npub struct {event_type}{generics} {{\n{fields}}}\n"
         );
+        if !read_only_getter.is_empty() {
+            event_struct.push_str(&format!(
+                "impl{generics} {event_type}{generics} {{\n{read_only_getter}}}\n"
+            ));
+        }
         if is_render {
             render_dispatch.push_str(&event_struct);
             // The raw function is still the replaceable entry point. Its real caller goes

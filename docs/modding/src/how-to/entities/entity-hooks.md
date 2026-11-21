@@ -75,16 +75,17 @@ See the [generated API reference](../../reference/api.md) and the hook's
 ## Taking an experience orb
 
 `pickup_xp` runs on the server before a player takes an orb, when their pickup
-cooldown is zero. `event.orb` is the live `ExperienceOrbRef`. Read its value and
-count with `event.orb.value(host)` and `event.orb.count(host)`; write them with
-`event.orb.set_value(host, value)` and `event.orb.set_count(host, count)`. Later
-listeners see those writes. Values are signed `i32` in play and saved as signed
+cooldown is zero. `event.orb()` returns the live `ExperienceOrbRef`. Read its
+value and count with `event.orb().value(host)` and `event.orb().count(host)`;
+write them with `event.orb().set_value(host, value)` and
+`event.orb().set_count(host, count)`. Later listeners see those writes on the same
+orb. Values are signed `i32` in play and saved as signed
 shorts; Count must be positive and fit the saved `ExtraCodecs.POSITIVE_INT`
 (`1..=i32::MAX`). An invalid count returns `ExperienceOrbWriteError::InvalidCount`
 without changing the orb.
 
 Return `Flow::Cancel` to skip the pickup without starting its cooldown or undoing
-writes. To remove the orb without taking it, call `event.orb.entity().discard(host)`
+writes. To remove the orb without taking it, call `event.orb().entity().discard(host)`
 and return `Flow::Cancel`. Otherwise the player takes the orb, Mending runs with
 its signed value, only positive remaining XP is awarded, and the orb loses one
 count. It disappears when that count reaches zero.

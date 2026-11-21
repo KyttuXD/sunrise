@@ -2397,7 +2397,7 @@ mod pickup_xp_tests {
     #[mod_api::__subscriptions]
     impl Hooks for Listen {
         fn pickup_xp(&self, host: &mut dyn ServerHost, event: &mut PickupXpEvent<'_>) -> Flow {
-            (self.0)(host, event.orb)
+            (self.0)(host, event.orb())
         }
     }
 

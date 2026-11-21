@@ -6,7 +6,7 @@ use crate::ExperienceOrbRef;
 pub trait Hooks {
     /// Before `player` takes the live `orb` in `dimension` (`ExperienceOrb.playerTouch`,
     /// NeoForge's `PlayerXpEvent.PickupXp`). Fires only when `takeXpDelay` is 0.
-    /// Use `orb` to read or edit its value and count: later listeners see the same
+    /// Use `event.orb()` to read or edit its value and count: later listeners see the same
     /// orb, including edits made by earlier listeners. Canceling skips the pickup
     /// without starting the delay or undoing a listener's writes.
     ///
@@ -22,6 +22,7 @@ pub trait Hooks {
         side = "server",
         contract = "cancel",
         out = "canceled",
+        read_only_input = "orb",
         neoforge = "PlayerXpEvent.PickupXp",
         cancellable = true,
         version = 2
