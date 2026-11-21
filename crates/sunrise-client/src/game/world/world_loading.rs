@@ -1698,7 +1698,7 @@ mod tests {
         impl Hooks for Migrating {
             fn mod_mismatch(&self, _: HostSide, event: &mut ModMismatchEvent<'_>) {
                 self.0.lock().unwrap().push(event.mismatches.to_vec());
-                event.resolved.push("mismatch_test".to_owned().into());
+                event.mark_resolved("mismatch_test");
             }
         }
         struct Erasing;

@@ -25,7 +25,7 @@ impl mod_api::Hooks for Sets {
             ("BAD:input", vec!["minecraft:diamond"]),
             ("minecraft:furnace_input", vec!["minecraft:diamond"]),
         ] {
-            event.additions.push(mod_api::RecipePropertyAddition::new(
+            event.register(mod_api::RecipePropertyAddition::new(
                 key,
                 items.into_iter().map(str::to_owned).collect(),
             ));
@@ -40,11 +40,11 @@ impl mod_api::Hooks for Extend {
         _: &dyn mod_api::DataLoadContext,
         event: &mut mod_api::RecipePropertySetsEvent<'_>,
     ) {
-        event.additions.push(mod_api::RecipePropertyAddition::new(
+        event.register(mod_api::RecipePropertyAddition::new(
             "pot:input",
             vec!["minecraft:diamond".into()],
         ));
-        event.additions.push(mod_api::RecipePropertyAddition::new(
+        event.register(mod_api::RecipePropertyAddition::new(
             "pot:foreign_new",
             vec!["minecraft:diamond".into()],
         ));
