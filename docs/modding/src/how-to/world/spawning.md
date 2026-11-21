@@ -397,6 +397,24 @@ to leave the row in place. The declared reaction is readable on either side.
 `EntityRef::owner(host)` reads the owner back (`TraceableEntity.getOwner`) for a projectile or a general row (`ProjectileRef::owner` answers the same for a projectile): a general type's own tick uses it to skip its shooter and to name the attacker of the damage it deals. A spawn is refused for a kind of another family than its body, a position, velocity or rotation that isn't finite, a position outside `Level.isInSpawnableBounds` or in an unloaded chunk, an owner that is stale, in another level, or without a collision identity for a thrown spawn, a level not in place, a client, or a mod that cancelled the spawn or kept the entity out.
 Inside a transaction the join waits for the root commit, so a spawn a mod then keeps out still returns a handle, which reads stale from the commit on. The level's spawn limits, flags and spawn rules don't apply, as they don't to `/summon`; nor does a general type's `summonable`, which is `/summon`'s alone. Items, experience and block drops have their own calls (`spawn_item`, `award_experience`, `pop_resource`), and any other entity `summon`.
 
+### Throwing a falling block
+
+Use `level.spawn_falling_block(host, state, pos, velocity, falling)` to throw a block from its bottom centre at `pos`.
+The entity carries the supplied `BlockState`, properties included, and uses the ordinary falling block's landing rules.
+The source cell is not edited. If the block should come out of the world, remove the source yourself with
+[`level.remove_block`](placing-a-block.md) before spawning. `Falling::default()` allows item drops and keeps the
+block's ordinary damage rules; set `drop_item` to `false` to suppress item drops or `hurts` to `true` to enable
+anvil-style damage (`AnvilBlock.falling`). Set velocity in blocks per tick. The server keeps it as given;
+`ClientboundAddEntityPacket` quantizes the copy sent to clients, not the moving entity.
+
+`Ok(Some(entity))` gives the new entity's handle. `Ok(None)` means nothing joined: the state was air, position or
+velocity was non-finite, the position was outside `Level.isInSpawnableBounds` or in an unloaded chunk, the entity
+ids were exhausted, or `entity_join_level` vetoed the spawn. A stale level, an invalid registry state or a host
+without the server level in place returns `LevelWriteError`. Inside a transaction the join runs at root commit;
+a veto then makes the returned handle stale.
+
+### Natural spawning policy
+
 A level's natural spawning (`NaturalSpawner.spawnForChunk`) also has a policy a mod can change:
 
 - `spawn_limits(host)` and `set_spawn_limits(host, limits)`: a `SpawnLimits` with each spawning category's `getMaxInstancesPerChunk`, `SpawnLimits::VANILLA` (70 monsters, 10 creatures, 15 ambient, 5 axolotls, underground water and water creatures each, 20 water ambient) until a mod sets others. A limit caps the category twice, as vanilla's does: over the level, under `limit * spawnable chunks / 289`, and around each player near the chunk, under `limit`. A limit of 0 stops the category.

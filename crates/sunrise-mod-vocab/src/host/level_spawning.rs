@@ -33,6 +33,30 @@ pub trait LevelSpawningBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelSpawningBackendMut {
     /// Side: server.
+    /// Throw a falling block from `pos` (its bottom centre) with `velocity`
+    /// in blocks per tick. It carries the exact supplied `state`; the source
+    /// cell is untouched. It is made as in `FallingBlockEntity.fall`, then
+    /// lands, places or drops the block according to the ordinary falling
+    /// rules and `falling`. Finite velocity is stored unchanged, as in
+    /// `Entity.setDeltaMovement`; only transport quantizes it.
+    ///
+    /// `Ok(Some(entity))` names the new entity. `Ok(None)` means an air state,
+    /// non-finite position or velocity, a position outside
+    /// `Level.isInSpawnableBounds` or in an unloaded chunk, exhausted entity
+    /// ids, or a veto by `entity_join_level`. In a transaction, the join runs
+    /// at root commit; a veto then makes the returned handle stale. An invalid
+    /// registry state, stale level handle, or host without the server level in
+    /// place returns `Err`.
+    #[access(WorldOnly)]
+    fn level_spawn_falling_block(
+        &mut self,
+        level: LevelRef,
+        state: BlockState,
+        pos: [f64; 3],
+        velocity: [f64; 3],
+        falling: Falling,
+    ) -> Result<Option<EntityRef>, LevelWriteError>;
+    /// Side: server.
     /// Spawns a mob of `kind` (`minecraft:zombie`) at `pos` in the level as
     /// `EntityType.spawn` does with `reason`: the entity type creates it (its
     /// Parts and attachments with it, and `entity_constructing`), with a random

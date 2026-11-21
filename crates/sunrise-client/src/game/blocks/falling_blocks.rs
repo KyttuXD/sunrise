@@ -3,6 +3,50 @@
 use super::*;
 
 impl Game<'_> {
+    /// Fresh construction shared by block physics and level actions. The caller owns any
+    /// source-cell edit: `FallingBlockEntity.fall` leaves the source fluid there, whereas a
+    /// throwing action only adds the entity.
+    pub(in crate::game) fn add_fresh_falling_block(
+        &mut self,
+        state: BlockStateId,
+        start_pos: BlockPos,
+        position: Vec3,
+        velocity: Vec3,
+        drop_item: bool,
+        hurt_per_distance: Option<f32>,
+    ) -> u32 {
+        let id = self.take_entity_id();
+        let mut damage =
+            sunrise_client::falling_block::Damage::falling(&self.res.facts().get(state).name);
+        if let Some(per_distance) = hurt_per_distance {
+            damage.hurt_entities = true;
+            damage.per_distance = per_distance;
+        }
+        self.falling.push(FallingBlock {
+            attachment_lifetime: Default::default(),
+            rotation: [0.0, 0.0],
+            join: Default::default(),
+            id,
+            state,
+            start_pos,
+            position,
+            previous: position,
+            velocity,
+            age: 0,
+            no_gravity: false,
+            on_ground: false,
+            fire_ticks: 0,
+            sync_velocity: false,
+            drop_item,
+            fall_distance: 0.0,
+            stuck: Vec3::ZERO,
+            damage,
+            saved: None,
+            portal: Default::default(),
+        });
+        id
+    }
+
     /// Cache only model-dependent work, never an entity's seed, light or pose.
     pub(super) fn falling_model_vertices(
         &self,

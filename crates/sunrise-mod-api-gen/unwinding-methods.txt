@@ -248,7 +248,6 @@ entities::entity_sprint_particles
 entities::experience_orbs
 entities::level
 entities::set_experience_orb
-entities::spawn_falling_block
 entities::summon
 entity_actions::entity_broadcast_event
 entity_actions::entity_game_event

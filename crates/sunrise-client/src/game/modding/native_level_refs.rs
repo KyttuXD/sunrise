@@ -973,7 +973,7 @@ impl Game<'_> {
         pos: [i32; 3],
     ) -> Option<bool> {
         self.native_level_read_world(level)?;
-        Some(horizontal_in_bounds(pos) && (-20_000_000..20_000_000).contains(&pos[1]))
+        Some(spawnable_block_position(pos))
     }
     /// The ticks the server has run (`Level.getGameTime`), shared by every
     /// level as in vanilla. API 381.
@@ -1005,6 +1005,11 @@ impl Game<'_> {
         self.dimension_type_of(dim).default_clock.as_ref()?;
         Some(self.command_clock_time(&self.level_clock_name(dim)))
     }
+}
+
+/// `Level.isInSpawnableBounds`: validate a block position for entity placement.
+pub(super) fn spawnable_block_position(pos: [i32; 3]) -> bool {
+    horizontal_in_bounds(pos) && (-20_000_000..20_000_000).contains(&pos[1])
 }
 
 /// `Level.isInWorldBoundsHorizontal`: x and z inside the 30,000,000-block limit.

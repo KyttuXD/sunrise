@@ -1257,17 +1257,13 @@ devices probes each one: ask from setup or a settings screen, not every frame.
 
 ### Falling blocks
 
-`crates/sunrise-client/src/game/modding/native_falling.rs`: a helper for server mods, for the level in place, on a server only. It
-names the level it means by its `dimension` (`minecraft:overworld`), as `native_set_block` does.
+`level.spawn_falling_block(host, state, pos, velocity, falling)` throws a falling block of `state` from `pos` (its
+bottom centre) in the server level in place. It uses the same entity construction as naturally falling blocks and
+returns its entity handle. Finite velocity is kept in blocks per tick without a packet clamp. The block at `pos`
+is untouched, and the entity carries the state and properties supplied by the mod.
 
-- `native_spawn_falling_block(dimension, state, pos, velocity, falling)` throws a falling block of `state` from `pos` (its
-  bottom centre) at `velocity` in blocks a tick, each axis cut to 3.9. It flies, lands and places itself as sand does, or
-  drops as an item where it can't be placed. `Falling` holds `drop_item` (default true) and `hurts` (hurts what it
-  lands on as an anvil does, 2 a block fallen and 40 at most; default false).
-- The block at `pos` stays: take it away first with `native_set_block` to make a block fall out of the world, as an
-  explosion's debris or a collapsing tower would.
-- It answers false, throwing nothing, on a client, for another dimension, air or an unknown state, a chunk that isn't
-  loaded, a value that isn't finite, or with 1024 falling blocks in the level already.
+`Falling` controls item drops and can enable anvil-style damage. See [spawning from a level](how-to/world/spawning.md#throwing-a-falling-block)
+for the return values and transaction behavior.
 
 ### Bulk block edits
 
@@ -1814,7 +1810,7 @@ still go on each event or registrar.
 
 - The open screen hears of a mouse button going down (`screen_mouse_button_pressed_pre`) or up (`screen_mouse_button_released_pre`) before it acts, as vanilla's `ScreenEvent.MouseButtonPressed.Pre` and `.MouseButtonReleased.Pre`: the screen, the GLFW button (0 left, 1 right, 2 middle, 3 back, 4 forward; a button past those is the platform's own number, which differs between systems) and GLFW's modifier bits (shift 1, control 2, alt 4, super 8), with the pointer in `screen.mouse`. A cancelled press goes no further (no slot, screen button, drag or hotbar key); cancel a release only when its press was cancelled, or a drag it ended stays held. They fire on the window only, never on the title screen itself (Options and the pack list opened from it do fire), the connect and loading screens, the prompts, books and sign editors drawn over gameplay, or while a world loads or saves, and never for a gamepad or keyboard-focus click.
 
-- [falling blocks](#falling-blocks) for server mods: `native_spawn_falling_block(dimension, state, pos, velocity, falling)`
+- [Falling blocks](#falling-blocks) for server mods: `level.spawn_falling_block(host, state, pos, velocity, falling)`
   throws a block that flies, lands and places itself as sand does, for debris and collapsing structures.
 
 - Camera shake for client mods: `camera_shake(partial, shake)` asks each frame for turns in degrees and an

@@ -1,108 +1,52 @@
-//! Falling blocks for native server mods (docs/modding/src/how-to/native-mods.md, "Falling
-//! blocks"): a mod throws a block as a `FallingBlockEntity` that flies, lands
-//! and places itself (or drops as an item) as sand does. It acts where the
-//! world is simulated, in the level in place, which it names by its
-//! `dimension` (`minecraft:overworld`) as `native_set_block` does.
-use super::{FallingBlock, Game};
+//! `LevelRef::spawn_falling_block`: throw a block through the same entity
+//! construction path as a block that starts to fall on its own.
+use super::{Game, native_level_refs::spawnable_block_position};
+use mod_api::{EntityRef, Falling, LevelRef, LevelWriteError};
 use sunrise_core::{geometry::Vec3, position::BlockPos};
 use sunrise_world::registry::BlockStateId;
 
-/// The most falling blocks a level holds before `spawn_falling_block`
-/// refuses more: a mod's debris shouldn't take the server's tick with it.
-pub(super) const NATIVE_FALLING_MAX: usize = 1024;
-/// The largest speed a thrown block starts with, in blocks a tick on each
-/// axis (`Entity.setDeltaMovement` takes any; a packet's speed is cut to 3.9).
-const NATIVE_FALLING_MAX_SPEED: f64 = 3.9;
-
-/// `velocity` with each axis cut to the largest start speed; none for a
-/// value that isn't finite.
-fn start_velocity(velocity: [f64; 3]) -> Option<Vec3> {
-    velocity.iter().all(|v| v.is_finite()).then(|| {
-        let [x, y, z] =
-            velocity.map(|v| v.clamp(-NATIVE_FALLING_MAX_SPEED, NATIVE_FALLING_MAX_SPEED));
-        Vec3::new(x, y, z)
-    })
-}
-
 impl Game<'_> {
-    /// Throws a falling block of `state` from `pos` (its bottom centre) at
-    /// `velocity` (blocks a tick) in the level in place, `dimension`: it
-    /// falls, lands and places itself as sand does, or drops as an item
-    /// where it can't. The block at `pos` is left as it is: take it away first
-    /// with `native_set_block` to make a block fall out of the world. False,
-    /// with nothing thrown, on a client's copy of the world, for another
-    /// dimension, an air or unknown state, a chunk that isn't loaded, a value
-    /// that isn't finite, or with 1024 falling blocks in the level already.
-    /// Each axis of `velocity` is cut to 3.9.
-    pub(super) fn spawn_falling_block(
+    pub(super) fn level_spawn_falling_block(
         &mut self,
-        dimension: &str,
+        level: LevelRef,
         state: BlockStateId,
         pos: [f64; 3],
         velocity: [f64; 3],
-        falling: mod_api::Falling,
-    ) -> bool {
-        if self.entity_ids_exhausted() {
-            return false;
+        falling: Falling,
+    ) -> Result<Option<EntityRef>, LevelWriteError> {
+        let world = self.native_level_world_result(level)?;
+        if level.dimension() != self.dim.key() {
+            return Err(LevelWriteError::Unavailable);
         }
-        if (self.serving.is_none() && self.options.dedicated.is_none())
-            || dimension != self.dim.id()
-            || self.pack.assets.registry.state(state).is_none()
+        let [x, y, z] = pos.map(|v| v.floor() as i32);
+        if !pos.iter().chain(&velocity).all(|v| v.is_finite())
+            || !spawnable_block_position([x, y, z])
+            || !world.loaded(x, z)
             || self.res.facts().is_air(state)
-            || self.falling.len() >= NATIVE_FALLING_MAX
-            || !pos.iter().all(|v| v.is_finite() && v.abs() <= 30_000_000.0)
+            || self.entity_ids_exhausted()
         {
-            return false;
+            return Ok(None);
         }
-        let Some(velocity) = start_velocity(velocity) else {
-            return false;
-        };
-        let cell = BlockPos::new(
-            pos[0].floor() as i32,
-            pos[1].floor() as i32,
-            pos[2].floor() as i32,
-        );
-        if !self.world.chunks.contains_key(&(cell.x >> 4, cell.z >> 4)) {
-            return false;
-        }
-        let mut damage =
-            sunrise_client::falling_block::Damage::falling(&self.res.facts().get(state).name);
-        if falling.hurts {
-            damage.hurt_entities = true;
-            damage.per_distance = 2.0;
-            damage.max = 40;
-        }
-        let at = Vec3::new(pos[0], pos[1], pos[2]);
-        self.next_entity += 1;
-        self.falling.push(FallingBlock {
-            attachment_lifetime: Default::default(),
-            rotation: [0.0, 0.0],
-            join: Default::default(),
-            id: self.next_entity,
+        let id = self.add_fresh_falling_block(
             state,
-            start_pos: cell,
-            position: at,
-            previous: at,
-            velocity,
-            age: 0,
-            no_gravity: false,
-            on_ground: false,
-            fire_ticks: 0,
-            sync_velocity: false,
-            drop_item: falling.drop_item,
-            fall_distance: 0.0,
-            stuck: Vec3::ZERO,
-            damage,
-            saved: None,
-            portal: Default::default(),
-        });
-        true
+            BlockPos::new(x, y, z),
+            Vec3::new(pos[0], pos[1], pos[2]),
+            Vec3::new(velocity[0], velocity[1], velocity[2]),
+            falling.drop_item,
+            falling
+                .hurts
+                .then_some(sunrise_client::falling_block::Damage::anvil().per_distance),
+        );
+        Ok(self
+            .native_joins_flush(false, id)
+            .then_some(EntityRef::new(level.epoch(), id)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::FallingBlock;
 
     use std::sync::{Arc, Mutex};
     use sunrise_mod_runtime::attachments::{
@@ -344,16 +288,137 @@ mod tests {
     }
 
     #[test]
-    fn a_throw_is_cut_to_the_largest_speed_and_refuses_what_isnt_finite() {
-        assert_eq!(
-            start_velocity([0.5, 9.0, -9.0]),
-            Some(Vec3::new(
-                0.5,
-                NATIVE_FALLING_MAX_SPEED,
-                -NATIVE_FALLING_MAX_SPEED
-            ))
+    #[ignore = "daily"]
+    fn falling_block_join_veto_uses_ordinary_admission() {
+        struct Veto;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Veto {
+            fn entity_join_level(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::EntityJoinLevelEvent<'_>,
+            ) -> mod_api::Flow {
+                if event.kind == "minecraft:falling_block" {
+                    mod_api::Flow::Cancel
+                } else {
+                    mod_api::Flow::Continue
+                }
+            }
+        }
+
+        crate::game::in_own_process(
+            "game::native_falling::tests::falling_block_join_veto_uses_ordinary_admission",
+            || {
+                let mods: mod_api::Mods =
+                    vec![mod_api::ModEntry::new("veto", Box::new(Veto))].into();
+                mod_platform::testing::with_mods(mods, || {
+                    super::super::native_entity_refs::tests::with_game(|game| {
+                        use super::super::api_values::TryIntoApi;
+
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                        let level = game.level("minecraft:overworld").unwrap();
+                        let state = game
+                            .pack
+                            .assets
+                            .registry
+                            .default_state("minecraft:sand")
+                            .unwrap()
+                            .try_into_api()
+                            .unwrap();
+                        let spawn = |game: &mut Game<'_>| {
+                            level.spawn_falling_block(
+                                game,
+                                state,
+                                [1.5, 70.0, 1.5],
+                                [0.0; 3],
+                                Falling::default(),
+                            )
+                        };
+                        assert_eq!(spawn(game), Ok(None));
+                        assert!(game.falling.is_empty());
+
+                        let seal = game.transaction_open();
+                        assert!(spawn(game).unwrap().is_some());
+                        assert_eq!(game.falling.len(), 1);
+                        game.transaction_close(&seal, true);
+                        assert!(game.falling.is_empty());
+                    });
+                });
+            },
         );
-        assert_eq!(start_velocity([0.0, f64::NAN, 0.0]), None);
-        assert_eq!(start_velocity([f64::INFINITY, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn falling_block_spawns_keep_live_motion_and_flags_past_the_old_quota() {
+        crate::game::in_own_process(
+            "game::native_falling::tests::falling_block_spawns_keep_live_motion_and_flags_past_the_old_quota",
+            || {
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    use super::super::api_values::TryIntoApi;
+
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    let level = game.level("minecraft:overworld").unwrap();
+                    let sand = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:red_sand")
+                        .unwrap();
+                    let state = sand.try_into_api().unwrap();
+                    let pos = [2.25, 70.5, 3.75];
+                    let mut falling = Falling::default();
+                    falling.drop_item = false;
+                    falling.hurts = true;
+                    assert_eq!(
+                        level.spawn_falling_block(game, state, pos, [f64::NAN, 0.0, 0.0], falling),
+                        Ok(None)
+                    );
+                    assert_eq!(
+                        level.spawn_falling_block(
+                            game,
+                            state,
+                            [2.25, 20_000_000.0, 3.75],
+                            [0.0; 3],
+                            falling
+                        ),
+                        Ok(None)
+                    );
+                    assert!(game.falling.is_empty());
+
+                    let source = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:stone")
+                        .unwrap();
+                    assert!(game.world.set_stored(2, 70, 3, source));
+                    let mut last = None;
+                    for _ in 0..=1024 {
+                        last = level
+                            .spawn_falling_block(game, state, pos, [12.5, -8.0, 0.25], falling)
+                            .unwrap();
+                        assert!(last.is_some());
+                    }
+                    assert_eq!(game.falling.len(), 1025);
+                    let thrown = &game.falling[1024];
+                    assert_eq!(last, Some(EntityRef::new(level.epoch(), thrown.id)));
+                    assert_eq!(thrown.state, sand);
+                    assert_eq!(thrown.start_pos, BlockPos::new(2, 70, 3));
+                    assert_eq!(thrown.position, Vec3::new(2.25, 70.5, 3.75));
+                    assert_eq!(thrown.previous, thrown.position);
+                    assert_eq!(thrown.velocity, Vec3::new(12.5, -8.0, 0.25));
+                    assert!(!thrown.drop_item);
+                    assert!(thrown.damage.hurt_entities);
+                    assert_eq!(thrown.damage.per_distance, 2.0);
+                    assert_eq!(thrown.damage.max, 40);
+                    assert_eq!(game.world.block(2, 70, 3), source);
+                })
+            },
+        );
     }
 }

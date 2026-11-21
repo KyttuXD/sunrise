@@ -1,0 +1,2 @@
+sunrise-client game::native_falling::tests::falling_block_join_veto_uses_ordinary_admission lib daily resources
+sunrise-client game::native_falling::tests::falling_block_spawns_keep_live_motion_and_flags_past_the_old_quota lib daily resources
