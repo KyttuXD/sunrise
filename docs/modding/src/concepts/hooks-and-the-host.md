@@ -272,9 +272,21 @@ containers. Both require the owning game thread, not a worker-thread hook body.
 
 `block_entity(pos)` reads this level's block entity without loading a chunk; it returns `None`
 when absent, unloaded or out for its tick. On a client it returns only the local block entity
-handle. `container_size(at)` and `container_stack(at, slot)` are the same side-local capability
-snapshots as `ItemsHost` supplies; neither generates unopened loot, and both refuse clients and
-unloaded positions.
+handle. `container_size(at)` and `with_container_stack(at, slot, read)` use the same side-local
+slots as the game's `ITEMS` provider (`ItemsBackend`); neither generates unopened loot or loads
+chunks. A client, unloaded position, or level without container access returns `None`. A slot
+read also returns `None` for an empty slot, without calling `read`.
+
+`with_container_stack` lends an `ItemStackView` to the reader. Read the item, count or damage
+without copying the stack. Use `stack.project()` inside the callback to inspect components or
+retain an owned stack; a failed projection returns `None`. For a `LevelTicksHost`,
+`LevelRandomHost` or `LevelWriteHost`, upcast to a shared `LevelHost` first:
+
+```rust,ignore
+let read: &dyn LevelHost = level;
+let count = read.with_container_stack(at, slot, |stack| stack.count());
+let snapshot = read.with_container_stack(at, slot, |stack| stack.project()).flatten();
+```
 
 `BlockEntityPartState::state_in(level, entity)` and `state_existing_in` read the same attachment
 snapshots as their `Host` equivalents, without inserting a default, generating loot or loading
@@ -282,7 +294,7 @@ chunks. A level view in an open transaction sees tentative Part-state writes in 
 Unloaded or stale holders fail; clients have no server Part state. All of these reads require the
 owning game thread and are never available in worker hook bodies.
 
-`LevelRandomHost::container_signal(pos)` is the engine comparator container read. Unlike the immutable slot snapshot, it generates unopened loot once, as vanilla's `getItem` does, then calculates 0 to 15 using each stack's maximum size. It returns `None` on clients and unloaded positions, never loads a chunk, and runs only on the owning game thread. `analog_output` version 2 receives this mutable host so the loot generation and random draws happen in vanilla order; it permits no other world edit.
+`LevelRandomHost::container_signal(pos)` is the engine comparator container read. Unlike the read-only slot loan, it generates unopened loot once, as vanilla's `getItem` does, then calculates 0 to 15 using each stack's maximum size. It returns `None` on clients and unloaded positions, never loads a chunk, and runs only on the owning game thread. `analog_output` version 2 receives this mutable host so the loot generation and random draws happen in vanilla order; it permits no other world edit.
 
 Redstone and shape reads on `LevelHost`, for placement and survival: `signal(pos, direction)`
 (`SignalGetter.getSignal`), `direct_signal`, `direct_signal_to`, `best_neighbor_signal(pos)`,

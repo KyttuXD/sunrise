@@ -147,7 +147,9 @@ pub struct ItemResource(pub(crate) ItemStack);
 impl ItemResource {
     /// What `stack` is, whatever its count.
     pub fn of(stack: &ItemStack) -> Self {
-        let mut stack = stack.clone();
+        Self::from_owned_stack(stack.clone())
+    }
+    pub(crate) fn from_owned_stack(mut stack: ItemStack) -> Self {
         stack.set_count(1).expect("one item is nonempty");
         Self(stack)
     }

@@ -240,8 +240,9 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
 }
 
 /// Generate the defaults of a host area from each method's access declaration. An optional
-/// callback method marked `#[decline_unavailable]` returns without calling it; others panic if
-/// unimplemented. The same declarations drive game forwarders in the build-time API generator.
+/// callback method marked `#[decline_unavailable]` returns without calling it, with `None`
+/// for an `Option<()>` result; others panic if unimplemented. The same declarations drive
+/// game forwarders in the build-time API generator.
 /// A backend trait may carry `#[table_backend("path")]`: the game answers its reads from the
 /// borrowed view at `path`, which implements the trait, and `Game` forwards to it. Methods can
 /// opt out of generated conversion in either direction with `#[forward_api_inputs]` or
@@ -303,15 +304,24 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
                 && !attr.path().is_ident("manual_handle")
         });
         method.default = Some(if decline {
-            if !matches!(method.sig.output, syn::ReturnType::Default) {
-                return syn::Error::new_spanned(
-                    &method.sig.output,
-                    "#[decline_unavailable] requires an optional callback method with no return value",
+            match &method.sig.output {
+                syn::ReturnType::Default => syn::parse_quote!({}),
+                syn::ReturnType::Type(_, ty)
+                    if matches!(ty.as_ref(), syn::Type::Path(path) if
+                        path.qself.is_none() && path.path.segments.last().is_some_and(|segment|
+                            segment.ident == "Option" && matches!(&segment.arguments,
+                                syn::PathArguments::AngleBracketed(args) if args.args.len() == 1
+                                    && matches!(args.args.first(), Some(syn::GenericArgument::Type(syn::Type::Tuple(unit))) if unit.elems.is_empty())
+                            )
+                        )
+                    ) => syn::parse_quote!({ None }),
+                output => return syn::Error::new_spanned(
+                    output,
+                    "#[decline_unavailable] requires an optional callback method returning () or Option<()>",
                 )
                 .to_compile_error()
-                .into();
+                .into(),
             }
-            syn::parse_quote!({})
         } else {
             let operation = method.sig.ident.to_string();
             let label = format!("{union}::{operation}");

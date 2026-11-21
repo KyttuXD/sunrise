@@ -731,8 +731,14 @@ pub mod tests {
         fn container_size(&self, BlockSide { pos, .. }: BlockSide) -> Option<usize> {
             (pos == SHELF).then_some(3)
         }
-        fn container_stack(&self, _: BlockSide, slot: usize) -> Option<ItemStack> {
-            self.slots.get(slot)?.clone()
+        fn lend_container_stack(
+            &self,
+            _: BlockSide,
+            slot: usize,
+            read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+        ) -> Option<()> {
+            read(ItemStackView::from_stack(self.slots.get(slot)?.as_ref()?));
+            Some(())
         }
     }
     #[cfg(test)]

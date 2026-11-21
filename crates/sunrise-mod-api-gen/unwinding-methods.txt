@@ -412,7 +412,6 @@ items::container_kind_amount
 items::container_kind_space
 items::container_set_stack_limit
 items::container_size
-items::container_stack
 items::creative_search_items
 items::creative_stack_key
 items::creative_tab_change

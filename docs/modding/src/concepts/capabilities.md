@@ -44,6 +44,12 @@ the game's handler, but do not assume precedence over another mod at the same pr
 Disabled mods' providers are skipped. A stale level handle or a level that is not in place returns
 `None` without asking providers.
 
+For the game's `ITEMS` handler, `amount(host, slot)` reads the resident stack's count without
+copying the stack or encoding its components. `resource(host, slot)` still returns an owned,
+count-free `ItemResource` with the item's components. Restricted level hooks can read the
+same resident slot through [`with_container_stack`](hooks-and-the-host.md#level-hosts)
+without asking registered capability providers.
+
 Registration queries see the game's coverage, earlier mods in registration order, and providers already
 added by the current mod; they do not see later registrations. For example, `ITEMS` covers
 `minecraft:chest` without a mod provider. Use these queries to add a fallback only when no provider

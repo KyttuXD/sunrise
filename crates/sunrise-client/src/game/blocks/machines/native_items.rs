@@ -3,8 +3,11 @@
 //! Side-local slots are numbered from zero. It acts where the world is simulated, never on
 //! a client's copy, and only on the level in place.
 use super::{Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, View};
-use crate::game::transactions::After;
-use mod_api::{BlockSide, ItemResource, LevelReadError, LevelRef, Transaction};
+use crate::game::{
+    api_values::{project_stack, stack_read_metadata},
+    transactions::After,
+};
+use mod_api::{BlockSide, ItemResource, ItemStackView, LevelReadError, LevelRef, Transaction};
 use sunrise_client::items::ItemStack;
 use sunrise_core::geometry::Direction;
 
@@ -40,14 +43,19 @@ impl super::Containers<'_> {
     pub(in crate::game) fn capability_size(&self, at: BlockSide) -> Option<usize> {
         Some(self.capability_view(at)?.capability_slots(at.side).count())
     }
-    pub(in crate::game) fn capability_stack(
+    pub(in crate::game) fn lend_capability_stack(
         &self,
         at: BlockSide,
         slot: usize,
-    ) -> Option<ItemStack> {
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
         let view = self.capability_view(at)?;
         let slot = view.capability_slots(at.side).nth(slot)?;
-        self.get(&view, slot).cloned()
+        let stack = self.get(&view, slot)?;
+        let metadata = stack_read_metadata(stack).ok()?;
+        let project = |metadata| project_stack(stack, metadata).ok();
+        read(ItemStackView::resident(metadata, &project));
+        Some(())
     }
 }
 impl Game<'_> {
@@ -197,10 +205,15 @@ impl Game<'_> {
         self.level_in_place(at.level).then_some(())?;
         self.containers().capability_size(at)
     }
-    /// The stack in slot `slot` of those `at`'s side reaches (`container_size`).
-    pub(in crate::game) fn container_stack(&self, at: BlockSide, slot: usize) -> Option<ItemStack> {
+    /// Lend the resident stack in a side-local slot of the level in place.
+    pub(in crate::game) fn lend_container_stack(
+        &self,
+        at: BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
         self.level_in_place(at.level).then_some(())?;
-        self.containers().capability_stack(at, slot)
+        self.containers().lend_capability_stack(at, slot, read)
     }
     /// Keeps what a capability write to slot `slot` of `view` changes: that slot alone where a
     /// write there changes nothing else, else each block entity of the view whole.

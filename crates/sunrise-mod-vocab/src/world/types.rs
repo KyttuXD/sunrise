@@ -1467,17 +1467,24 @@ pub trait LevelHost {
     fn block_entity(&self, _pos: [i32; 3]) -> Option<crate::BlockEntityRef> {
         None
     }
-    /// The slots on this side, as `ItemsHost::container_size` reads them.
-    /// Snapshot only: never generates loot or loads chunks. None for unloaded positions,
-    /// clients or unsupported storage. Owning game thread only, never in worker hook bodies.
-    fn container_size(&self, _at: crate::BlockSide) -> Option<usize> {
+    /// The number of slots on this side, as [`ItemsBackend::container_size`](crate::prelude::ItemsBackend::container_size) reads it.
+    /// Never generates loot or loads chunks. None for unloaded positions, clients or
+    /// unsupported storage. Owning game thread only, never in worker hook bodies.
+    fn container_size(&self, _at: BlockSide) -> Option<usize> {
         None
     }
-    /// A side-local slot snapshot, as `ItemsHost::container_stack` reads it.
-    /// Never generates unopened container loot or loads chunks; unopened slots remain empty.
-    /// None for unloaded positions, clients, empty slots or unsupported storage.
-    /// Owning game thread only, never reachable from a worker-thread hook body.
-    fn container_stack(&self, _at: crate::BlockSide, _slot: usize) -> Option<crate::ItemStack> {
+    /// Lend the resident stack in this side-local slot once, as
+    /// [`ItemsBackend::lend_container_stack`](crate::prelude::ItemsBackend::lend_container_stack) reads it.
+    /// Never loads chunks or generates loot; unopened slots remain empty. Returns `None`
+    /// without invoking `read` for empty or unreadable slots or when storage is unavailable
+    /// in this view, including at unloaded positions and on clients. Owning game thread only.
+    /// Use `with_container_stack` on `&dyn LevelHost` to return a value from the loan.
+    fn lend_container_stack(
+        &self,
+        _at: BlockSide,
+        _slot: usize,
+        _read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
         None
     }
     /// Borrow the host for a snapshot read in the transaction that captured it.
@@ -1650,6 +1657,23 @@ pub trait LevelHost {
     /// level has no shape view. `LevelRef::block_shape` is the same read from a handle.
     fn collision_shape(&self, _pos: [i32; 3]) -> Option<Vec<[f64; 6]>> {
         None
+    }
+}
+
+impl dyn LevelHost + '_ {
+    /// Read a side-local resident stack without taking ownership. Returns `None` if
+    /// [`LevelHost::lend_container_stack`] cannot lend the slot. Item, count and damage need
+    /// no projection; call [`ItemStackView::project`] inside `read` to keep an owned stack
+    /// or inspect its component patch. The view itself cannot leave the callback.
+    pub fn with_container_stack<R>(
+        &self,
+        at: BlockSide,
+        slot: usize,
+        read: impl for<'a> FnOnce(ItemStackView<'a>) -> R,
+    ) -> Option<R> {
+        crate::item::item_stack::read_stack_view(read, |lend| {
+            self.lend_container_stack(at, slot, lend)
+        })
     }
 }
 

@@ -4,6 +4,7 @@
 //! is given the host, so a handler may look up and call a neighbour's capability (a pipe), and
 //! it keeps its state where the game keeps the block entity's (its slots, its saved compound, its
 //! attachments).
+use super::item_stack::read_stack_view;
 use crate::{
     Direction, Host, ItemResource, LevelRef, Overanswered, ResourceHandler, ServerHost,
     Transaction, backend_mut_of, backend_of,
@@ -227,13 +228,21 @@ impl ResourceHandler<ItemResource> for GameItems {
             .unwrap_or(0)
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
-        let stack = backend_of(&*host)?.container_stack(self.0, index)?;
-        Some(ItemResource::of(&stack))
+        let backend = backend_of(&*host)?;
+        read_stack_view(
+            |view| view.project().map(ItemResource::from_owned_stack),
+            |lend| backend.lend_container_stack(self.0, index, lend),
+        )?
     }
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         backend_of(&*host)
-            .and_then(|backend| backend.container_stack(self.0, index))
-            .map_or(0, |stack| stack.count())
+            .and_then(|backend| {
+                read_stack_view(
+                    |view| view.count(),
+                    |lend| backend.lend_container_stack(self.0, index, lend),
+                )
+            })
+            .unwrap_or(0)
     }
     fn capacity(
         &self,
@@ -272,8 +281,13 @@ impl ResourceHandler<ItemResource> for GameItems {
         resource: &ItemResource,
         amount: u32,
     ) -> u32 {
-        let held = backend_of(&*host).and_then(|backend| backend.container_stack(self.0, index));
-        if !held.is_some_and(|held| resource.matches(&held)) {
+        let matches = backend_of(&*host).and_then(|backend| {
+            read_stack_view(
+                |view| resource.matches_view(&view),
+                |lend| backend.lend_container_stack(self.0, index, lend),
+            )
+        });
+        if matches != Some(true) {
             return 0;
         }
         let Some(backend) = backend_mut_of(host) else {
@@ -342,5 +356,100 @@ impl BlockSide {
     pub(crate) fn kind(self, host: &dyn Host) -> Option<crate::BlockEntityTypeKey> {
         let entity = host.block_entity(self.level, self.pos)?;
         entity.kind(host)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Backend, BackendRef, ComponentId, DimensionKey, ItemKey, ItemStack, ItemStackView, Tag,
+        WorldEpoch,
+        prelude::{ItemsBackend, LevelTickingBackend},
+    };
+    use std::cell::Cell;
+
+    struct ResidentSlot {
+        at: BlockSide,
+        stack: ItemStack,
+        projections: Cell<usize>,
+    }
+
+    impl ItemsBackend for ResidentSlot {
+        fn container_size(&self, at: BlockSide) -> Option<usize> {
+            (at == self.at).then_some(1)
+        }
+
+        fn lend_container_stack(
+            &self,
+            at: BlockSide,
+            slot: usize,
+            read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+        ) -> Option<()> {
+            (at == self.at && slot == 0).then_some(())?;
+            let project = |_| {
+                self.projections.set(self.projections.get() + 1);
+                Some(self.stack.clone())
+            };
+            read(ItemStackView::resident(
+                self.stack.read_metadata(),
+                &project,
+            ));
+            Some(())
+        }
+    }
+
+    impl LevelTickingBackend for ResidentSlot {
+        fn level_in_place(&self, level: LevelRef) -> bool {
+            level == self.at.level
+        }
+    }
+
+    impl Backend for ResidentSlot {}
+    impl Host for ResidentSlot {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(BackendRef::of(self))
+        }
+    }
+    impl ServerHost for ResidentSlot {}
+    crate::impl_backend_areas!(ResidentSlot, except(items, level_ticking));
+    crate::impl_host_areas!(ResidentSlot);
+    crate::impl_server_host_areas!(ResidentSlot);
+
+    #[test]
+    fn resident_container_amount_does_not_project_but_resource_projects_once() {
+        let level = LevelRef::new(WorldEpoch::new(1), DimensionKey::OVERWORLD);
+        let pos = [1, 64, 0];
+        let at = BlockSide {
+            level,
+            pos,
+            side: Some(Direction::Up),
+        };
+        let item = ItemKey(17);
+        let component = ComponentId::new("minecraft:custom_data").unwrap();
+        let custom_data = Tag::Compound([("marker".into(), Tag::Int(42))].into_iter().collect());
+        let mut stack = ItemStack::new(item, 7).unwrap();
+        stack
+            .set_components(
+                [(component.as_str().into(), custom_data.clone())]
+                    .into_iter()
+                    .collect(),
+            )
+            .unwrap();
+        let mut host = ResidentSlot {
+            at,
+            stack,
+            projections: Cell::new(0),
+        };
+
+        let items = level.capability(&mut host, &ITEMS, pos, at.side).unwrap();
+        assert_eq!(items.amount(&mut host, 0), 7);
+        assert_eq!(host.projections.get(), 0);
+
+        let resource = items.resource(&mut host, 0).unwrap();
+        assert_eq!(resource.item(), item);
+        assert_eq!(resource.component(&component), Some(custom_data));
+        assert_eq!(resource.as_stack().count(), 1);
+        assert_eq!(host.projections.get(), 1);
     }
 }

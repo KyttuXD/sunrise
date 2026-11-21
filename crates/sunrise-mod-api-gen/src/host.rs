@@ -657,8 +657,14 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         .iter()
                         .any(|attr| attr.path().is_ident("decline_unavailable"));
                     let access = if decline {
+                        // `host_area` admits only unit and Option<()> callbacks here.
+                        let refusal = if matches!(entry.sig.output, syn::ReturnType::Default) {
+                            "return;"
+                        } else {
+                            "return None;"
+                        };
                         format!(
-                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ return; }}"
+                            "if !mod_api::__private::access_allowed({name:?}, mod_api::__private::LoadAccess::{level}) {{ {refusal} }}"
                         )
                     } else if let Some(error) = refusal_shaped(&entry.sig.output, &refusals) {
                         let error = error.to_token_stream();

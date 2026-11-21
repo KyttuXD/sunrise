@@ -315,6 +315,10 @@ impl FakeHost {
             },
         });
     }
+    fn container_slot(&self, at: BlockSide, slot: usize) -> Option<&ItemStack> {
+        let items = self.level.standing(at.level, at.pos)?.items.as_ref()?;
+        items.slots.get(slot)?.as_ref()
+    }
     fn max_stack(&self, resource: &crate::ItemResource) -> u32 {
         match resource.value_id(self, "minecraft:max_stack_size") {
             Some(Tag::Int(size)) if (1..=99).contains(&size) => size as u32,
@@ -557,9 +561,14 @@ impl crate::prelude::ItemsBackend for FakeHost {
         let items = self.level.standing(at.level, at.pos)?.items.as_ref()?;
         Some(items.slots.len())
     }
-    fn container_stack(&self, at: BlockSide, slot: usize) -> Option<ItemStack> {
-        let items = self.level.standing(at.level, at.pos)?.items.as_ref()?;
-        items.slots.get(slot)?.clone()
+    fn lend_container_stack(
+        &self,
+        at: BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        read(ItemStackView::from_stack(self.container_slot(at, slot)?));
+        Some(())
     }
     fn container_capacity(&self, at: BlockSide, slot: usize, stack: Option<&ItemStack>) -> u32 {
         let items = self
@@ -756,8 +765,7 @@ impl crate::prelude::ItemsBackendMut for FakeHost {
                 if left == 0 {
                     break;
                 }
-                let held = self.container_stack(at, slot);
-                let pick = match &held {
+                let pick = match self.container_slot(at, slot) {
                     Some(held) => holding && resource.matches(held),
                     None => !holding,
                 };
@@ -789,8 +797,8 @@ impl crate::prelude::ItemsBackendMut for FakeHost {
                 break;
             }
             if self
-                .container_stack(at, slot)
-                .is_some_and(|held| resource.matches(&held))
+                .container_slot(at, slot)
+                .is_some_and(|held| resource.matches(held))
             {
                 let ask = left.min(u32::MAX as u64) as u32;
                 left -= self
