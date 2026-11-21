@@ -174,7 +174,7 @@ The game then maps no display to a slot and answers a recipe click through your
 `MenuPart`'s `recipe_book_place` hook. Before the hook runs the game checks what vanilla checks: the
 player is not a spectator, the window is the open menu of this type, the menu is still valid, the
 player's book holds the recipe, and its `PlacementInfo` is not `NOT_PLACEABLE`. Every recipe of a
-`Mod` menu supplies a `PlacementInfo`; its ingredients are what `place_recipe_in_grid` moves.
+`Mod` menu supplies a `PlacementInfo`; its ingredients are what `MenuRef::place_recipe_in_grid` moves.
 
 ```rust,ignore
 fn recipe_book_place(
@@ -183,25 +183,31 @@ fn recipe_book_place(
     event: &mut mod_api::RecipeBookPlaceEvent<'_>,
 ) {
     // The first five slots take ingredients, as a 3 by 2 grid with a slot to spare.
-    let grid: Vec<u16> = (0..5).collect();
-    let clear: Vec<u16> = (0..6).collect();
-    if let Ok(missing) =
-        host.place_recipe_in_grid(event.recipe, 3, 2, grid, clear, event.use_max_items)
+    let grid: [u16; 5] = [0, 1, 2, 3, 4];
+    let clear: [u16; 6] = [0, 1, 2, 3, 4, 5];
+    if let Some(menu) = host
+        .players()
+        .acting_player()
+        .and_then(|player| player.container_menu(host))
+        && let Ok(missing) =
+            menu.place_recipe_in_grid(host, event.recipe, 3, 2, &grid, &clear, event.use_max_items)
     {
         event.ghost = missing;
     }
 }
 ```
 
-`place_recipe_in_grid` is vanilla's `ServerPlaceRecipe.placeRecipe`: the grid's width and height, the
+`MenuRef::place_recipe_in_grid` is vanilla's `RecipeBookMenu.handlePlacement` and
+`ServerPlaceRecipe.placeRecipe`: the grid's width and height, the
 menu slot of each cell, the slots to clear first (the grid's slots are cleared too) and whether to
-place the maximum. It returns whether items were missing: the grid is cleared and `ghost` asks the client
-for the recipe's ghosts. A refusal (outside the hook, another recipe, a slot the menu lacks or
-hides, a repeated slot, a recipe with more cells than slots, a slot whose pickup a part refuses, no
-room for the cleared items) changes nothing and says why. A recipe never reaches a cell past the last slot
-given. The whole answer is one action: a write the part makes to the player's inventory, cursor or the
-menu's storage through the `Host`, or a change to a block behind the menu, refuses it and undoes the
-placement. A menu with no part that listens refuses every click.
+place the maximum. It returns `Result<bool, RecipePlaceError>`, where `Ok(missing)` means the grid
+was cleared and `ghost` asks the client for the recipe's ghosts. A refusal (`OutsideHook`,
+`WrongMenu`, `AlreadyPlaced`, `WrongRecipe`, `NotPlaceable`, `InvalidLayout`, `HiddenSlot`,
+`UnbackedSlot`, `Denied`, `NoRoom`, `Changed`, or `Unavailable`) changes nothing. A recipe never
+reaches a cell past the last slot given. The whole answer is one action: a write the part makes to
+the player's inventory, cursor or the menu's storage through the `Host`, or a change to a block
+behind the menu, refuses it and undoes the placement. A menu with no part that listens refuses
+every click.
 
 ## Drawing the ghosts yourself
 

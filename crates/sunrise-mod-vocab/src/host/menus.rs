@@ -1,65 +1,6 @@
 //! Host method declarations; access defaults and game forwarders are generated.
 #![allow(unused_variables)]
 use crate::*;
-/// The server host's methods of the `menus` area, implemented by the game and reached through [`ServerHost`].
-#[sunrise_mod_api_macros::host_area]
-pub trait MenusServerHost {
-    /// Side: server.
-    /// Opens a chest menu of `rows` rows (1 to 6) titled `title` for the
-    /// player, showing `items` (by slot, padded with empty ones), in place of
-    /// the menu they had open: its window id, a new one each time
-    /// (`ServerPlayer.openMenu`). The old menu closes as a close does, its
-    /// cursor stack going back to the player's inventory; `replace` says
-    /// whether the client is first sent a close for it
-    /// (`MenuProvider.shouldTriggerClientSideContainerClosingOnOpen`).
-    /// `MenuReplace::InPlace` changes the title and rows without the client
-    /// centring the mouse again. Packets for the old window are ignored. The
-    /// items of an open menu change through its slots (`menu`), not by
-    /// opening it again. An active speculative menu click refuses the open with `Ok(None)`.
-    #[access(WorldOnly)]
-    fn open_menu(
-        &mut self,
-        uuid: u128,
-        rows: u8,
-        title: Text,
-        items: Vec<Option<ItemStack>>,
-        replace: MenuReplace,
-    ) -> Result<Option<i32>, StackWriteError>;
-    /// Side: server.
-    /// The menu `open_menu` opened that the player has open as window
-    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_closed`
-    /// give). Its slots are written as `ItemPlace::MenuSlot` in a
-    /// transaction, and the client is sent each changed slot with the next
-    /// tick's container sync (`AbstractContainerMenu.broadcastChanges`), as
-    /// for any open menu. None for another window, a menu the game opened, or
-    /// a player who isn't here.
-    #[access(WorldOnly)]
-    fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef>;
-    /// Side: server.
-    /// Closes the player's native menu (a `menu_closed` follows). During an active menu click,
-    /// the close waits for the transaction to commit; an abort leaves the window open.
-    #[access(WorldOnly)]
-    fn close_menu(&mut self, uuid: u128);
-    /// Side: server.
-    /// Replaces everything the player's open `open_menu` menu `window` shows with `items` (by
-    /// slot, padded with empty ones, extra ones dropped, as `open_menu` takes them) and sends
-    /// it at once as one `ClientboundContainerSetContentPacket`
-    /// (`AbstractContainerMenu.sendAllDataToRemote`), without reopening the menu: the title,
-    /// the cursor and the screen stay. Writing slots through `menu` sends each changed slot with
-    /// the next tick's sync instead; this is the whole-contents form, for a page turned or a
-    /// list rebuilt. Each refusal sends nothing and changes nothing, and is named by
-    /// `MenuItemsRefusal`: `Client`, `NoPlayer` (no placed player of that UUID), `NotOpen`
-    /// (`window` is not their open native menu), `Stack` (a stack the game's item conversion
-    /// refuses), or `OwnedSlots` (use `ItemPlace::MenuSlot` for an owned window). Inside a
-    /// transaction, an abort puts the display contents back without sending a packet.
-    #[access(WorldOnly)]
-    fn menu_set_items(
-        &mut self,
-        uuid: u128,
-        window: i32,
-        items: Vec<Option<ItemStack>>,
-    ) -> Result<(), MenuItemsRefusal>;
-}
 /// The client host's methods of the `menus` area, implemented by the game and reached through [`crate::ClientHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait MenusClientHost {
@@ -202,8 +143,9 @@ pub trait MenusBackendMut {
     /// Side: server.
     /// Close a player's open menu as `ServerPlayer.closeContainer` does. The server queues
     /// `ContainerClose`, then removes the menu, returns the carried stack to the inventory,
-    /// and fires `player_container_close`. Refuses stale menus, clients, a player whose state
-    /// is swapped in for a turn, a pending disconnect, and the player's own inventory menu.
+    /// and fires `player_container_close`. In the player's own turn, uses their active
+    /// inventory and cursor. Refuses stale menus, clients, a pending disconnect, and
+    /// the player's own inventory menu.
     /// During a click action, true accepts a request to close that same window at commit; an
     /// aborted action leaves it open. A client closes its own screen with `close`.
     #[access(WorldOnly)]
@@ -222,4 +164,50 @@ pub trait MenusBackendMut {
         index: usize,
         value: i32,
     ) -> Result<bool, MenuDataRefusal>;
+    /// Side: server.
+    /// Replaces everything the open native menu `menu` shows with `items` (by slot, padded with
+    /// empty ones, extra ones dropped, as [`PlayerRef::open_chest_menu`] takes them) and sends
+    /// it at once as one `ClientboundContainerSetContentPacket`
+    /// (`AbstractContainerMenu.sendAllDataToRemote`), without reopening the menu: the title,
+    /// the cursor and the screen stay. Writing slots through `ItemPlace::MenuSlot` sends each
+    /// changed slot with the next tick's sync instead; this is the whole-contents form, for a
+    /// page turned or a list rebuilt. Each refusal sends nothing and changes nothing, and is
+    /// named by [`MenuItemsRefusal`]: `Client`, `NoPlayer`, `NotOpen` (stale or not an open
+    /// native menu), `Stack` (a stack the game's item conversion refuses), `OwnedSlots` (use
+    /// `ItemPlace::MenuSlot` for an owned window), or `Unavailable` (outside the world phase).
+    /// Inside a transaction, an abort puts the display contents back without sending a packet.
+    #[access(WorldOnly)]
+    fn menu_set_items(
+        &mut self,
+        menu: MenuRef,
+        items: Vec<Option<ItemStack>>,
+    ) -> Result<(), MenuItemsRefusal>;
+    /// Side: server.
+    /// Only inside `recipe_book_place`, once per click: places `recipe`, the recipe that hook
+    /// was asked about, into a grid of the open mod menu `menu` as vanilla's
+    /// `RecipeBookMenu.handlePlacement` and `ServerPlaceRecipe.placeRecipe` do. `grid_width`
+    /// and `grid_height` give the grid's cells, row by row; `grid_slots` the menu slot of each
+    /// cell (a recipe never fills a cell past the last slot given); `clear_slots` the slots
+    /// emptied first, their items going back to the player's inventory (the grid's slots are
+    /// cleared too). `use_max_items` places as many sets as the items allow (Shift), else one
+    /// more than the grid holds when it already matches. Items are taken from the player's
+    /// inventory and from what the menu's sources lend. Candidate IDs and client displays do
+    /// not replace the server's recheck of live stacks, including custom predicates. Returns
+    /// whether items were missing: the grid was cleared and the answer for `ghost`. Refused
+    /// (and nothing changes) with [`RecipePlaceError`] outside that hook, for a different or
+    /// stale menu, on a second call, for another recipe, a slot the menu lacks or hides, a
+    /// slot without backing storage, a repeated slot, an empty grid, a recipe larger than the
+    /// slots given, a slot whose pickup a part refuses, or a player with no room for the
+    /// cleared items outside creative mode.
+    #[access(WorldOnly)]
+    fn menu_place_recipe_in_grid(
+        &mut self,
+        menu: MenuRef,
+        recipe: &str,
+        grid_width: u16,
+        grid_height: u16,
+        grid_slots: &[u16],
+        clear_slots: &[u16],
+        use_max_items: bool,
+    ) -> Result<bool, RecipePlaceError>;
 }

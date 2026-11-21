@@ -17,8 +17,9 @@ pub trait Hooks {
     /// `PlacementInfo` is not `NOT_PLACEABLE`. Nothing is asked of a part for
     /// a menu with another layout; the game places those itself.
     ///
-    /// To place, call `ServerHost::place_recipe_in_grid` once with the grid's
-    /// width and height, its slots and the slots to clear, as vanilla's
+    /// To place, call [`MenuRef::place_recipe_in_grid`] once on the acting player's
+    /// open menu (`host.players().acting_player().and_then(|p| p.container_menu(host))`)
+    /// with the grid's width and height, its slots and the slots to clear, as vanilla's
     /// `ServerPlaceRecipe.placeRecipe` takes them: it returns whether items
     /// were missing, which is the answer to give in `ghost`. Everything the
     /// part and that call write is one action: it is applied once or, when the

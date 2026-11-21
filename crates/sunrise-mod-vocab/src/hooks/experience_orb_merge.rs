@@ -7,19 +7,21 @@ pub trait Hooks {
     /// `experience_orb_can_merge` said yes (`from` is 0 and `from_count` 1 for a new orb
     /// that is spawning). Set `canceled` to stop it: both orbs stay, and a spawning orb
     /// tries the next orb in reach, then spawns on its own. Left alone, `into` adds
-    /// `from`'s count, as vanilla does. A mod that writes `into`'s value or count with
-    /// `set_experience_orb` here makes that write the merged orb: `from` is taken in
-    /// without adding its count, so `into_value = 11, into_count = 1` pays 11 once. The
-    /// merge is refused, and `into` put back as it was (value, count and age), when `from`
-    /// has changed or left reach by the time the merge applies. A merge whose count would
-    /// pass `i32::MAX` (what a save holds) is refused the same way. A write the listener made
-    /// to `from` itself is not undone. Server-side.
+    /// `from`'s count, as vanilla does. A mod that narrows `into` via `host.entity(into)`
+    /// and `host.experience_orb(entity)` and writes its value or count with
+    /// `ExperienceOrbRef::set_value` / `set_count` here makes that write the merged orb:
+    /// `from` is taken in without adding its count, so `into_value = 11, into_count = 1`
+    /// pays 11 once. The merge is refused, and `into` put back as it was (value, count
+    /// and age), when `from` has changed or left reach by the time the merge applies. A
+    /// merge whose count would pass `i32::MAX` (`ExtraCodecs.POSITIVE_INT`) is refused
+    /// the same way. A write the listener made to `from` itself is not undone.
+    /// Server-side.
     #[notes = r#"## Experience orb merge
 
 - **`experience_orb_merge(dimension, into, from, into_value, into_count, from_value, from_count, canceled)`** follows a yes from `experience_orb_can_merge` and may cancel the merge: neither orb is absorbed, and a spawning orb (`from` 0, `from_count` 1) tries the next orb in reach, then spawns on its own. `into_value` is signed and reported as the orb holds it, so a negative orb is not clamped to the 0 points it pays.
-- Left alone, `into` adds `from`'s count. A mod that writes `into` with `set_experience_orb` here makes that write the merged orb: `from` is taken in without adding its count, so `into_value = 11, into_count = 1` pays 11 once.
-- The merge is refused, and `into` put back as it was (value, count and age), when the mod cancels, when `from` changed or left reach during the hook, or when the count would pass `i32::MAX`, what a save holds. Neither orb is absorbed; a write the listener made to `from` itself is not undone.
-- `set_experience_orb` writes a `value` within -32768..=32767 (a save keeps it as a short) and a `count` from 1 to `i32::MAX`; it refuses anything else with nothing written, so an accepted write reloads unchanged.
+- Left alone, `into` adds `from`'s count. A mod that narrows `into` via `host.entity(into)` + `host.experience_orb(entity)` and writes `into` with `ExperienceOrbRef::set_value` / `set_count` here makes that write the merged orb: `from` is taken in without adding its count, so `into_value = 11, into_count = 1` pays 11 once.
+- The merge is refused, and `into` put back as it was (value, count and age), when the mod cancels, when `from` changed or left reach during the hook, or when the count would pass `i32::MAX` (`ExtraCodecs.POSITIVE_INT`). Neither orb is absorbed; a write the listener made to `from` itself is not undone.
+- `ExperienceOrbRef::set_value` and `set_age` write full live `i32` values (saving truncates `Value` and `Age` to `(short)` as vanilla `ExperienceOrb.addAdditionalSaveData` does); `set_count` accepts `1..=i32::MAX` and returns `Err(ExperienceOrbWriteError::InvalidCount)` otherwise without mutating the orb.
 - Version 2 adds `into_value`, `into_count` and `from_count`; rebuild listeners against this SDK."#]
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_experience_orb_merge",

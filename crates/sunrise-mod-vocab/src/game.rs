@@ -81,41 +81,6 @@ pub struct Clock {
     /// it modulo 24000 for the hour; `/time set` can make it negative.
     pub day_time: i64,
 }
-/// The generator's undecorated surface, without slope rules or chunk allocation.
-/// Created only by the game.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct TerrainColumn {
-    /// One above the highest solid block, skipping fluids (OceanFloor).
-    pub height: i32,
-    /// The block at height minus one.
-    pub block: BlockKey,
-    /// One above the highest fluid over the surface, absent on dry land.
-    pub water: Option<i32>,
-    /// Identifier from the world's biome table, including data pack biomes.
-    pub biome: String,
-}
-
-/// The metadata of one column read by [`LevelRef::visit_column_blocks`].
-// no wire: returned by an in-process column visit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ColumnRead {
-    /// Heightmap base (one above the highest matching block), if the chunk is resident.
-    pub base: Option<i32>,
-    /// `BiomeSpecialEffects.waterColor` at the top block (`base - 1`), as `0xRRGGBB`;
-    /// zero for a nonresident chunk. This is not a blended client colormap tint.
-    pub water_color: u32,
-}
-impl ColumnRead {
-    /// Construct the result at the game boundary.
-    // hidden: a game-side constructor, not a mod API method
-    #[doc(hidden)]
-    pub fn new(base: Option<i32>, water_color: u32) -> Self {
-        Self { base, water_color }
-    }
-}
 /// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
 /// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level
 /// of its own. There is no size refusal.
@@ -237,20 +202,6 @@ pub struct ModMismatch {
     pub saved_version: String,
     /// Its version now; `None` when the mod is no longer loaded.
     pub current_version: Option<String>,
-}
-/// An experience orb as a server mod reads it (`experience_orbs`).
-/// Read by mods only.
-#[derive(Clone, Debug)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ExperienceOrb {
-    /// The entity's ID, as `entity_join_level` names it.
-    pub id: u32,
-    pub position: [f64; 3],
-    /// `ExperienceOrb.value`: the signed points value saved by vanilla.
-    pub value: i32,
-    /// `ExperienceOrb.count`: orbs merged into this one, each worth `value`.
-    pub count: u32,
 }
 /// What a mod's falling block does when it lands and when it hits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -402,24 +353,6 @@ impl<'a> CubeFace<'a> {
 pub(crate) mod built {
     #[allow(unused_imports)]
     use super::*;
-    // exhaustive: the game builds it with a literal; mods only read it
-    #[derive(sunrise_mod_api_macros::Wire)]
-    pub struct TerrainColumn {
-        pub height: i32,
-        pub block: BlockKey,
-        pub water: Option<i32>,
-        pub biome: String,
-    }
-    impl From<TerrainColumn> for super::TerrainColumn {
-        fn from(v: TerrainColumn) -> Self {
-            Self {
-                height: v.height,
-                block: v.block,
-                water: v.water,
-                biome: v.biome,
-            }
-        }
-    }
     // no wire: the in-process config loader builds this projection for callbacks.
     // exhaustive: the game builds it with a literal; mods only read it
     pub struct ConfigFile {

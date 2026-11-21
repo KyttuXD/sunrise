@@ -205,6 +205,7 @@ fn place_recipe_in_grid_places_once_per_click() {
             .unwrap()
             .recipe_book
             .clone();
+        let uuid = before.uuid;
         game.native_net.placement.session = Some(Session {
             recipe: selection.display.recipe.as_str().to_owned(),
             graph: Backings::capture(game, &before, &plan).unwrap(),
@@ -216,16 +217,18 @@ fn place_recipe_in_grid_places_once_per_click() {
             use_max: false,
             placed: false,
         });
+        let player = game.player(uuid).unwrap();
+        let menu = game.player_container_menu(player).unwrap();
         let recipe = "review:recipe";
-        let first = game.place_recipe_in_grid(recipe, 1, 1, vec![0], vec![0], false);
+        let first = game.menu_place_recipe_in_grid(menu, recipe, 1, 1, &[0], &[0], false);
         assert_eq!(
             first,
             Ok(true),
             "no iron ore anywhere: the grid is cleared and ghosted"
         );
         assert_eq!(
-            game.place_recipe_in_grid(recipe, 1, 1, vec![0], vec![0], false),
-            Err("place_recipe_in_grid was already called for this click".to_owned())
+            game.menu_place_recipe_in_grid(menu, recipe, 1, 1, &[0], &[0], false),
+            Err(mod_api::RecipePlaceError::AlreadyPlaced)
         );
     });
 }
@@ -248,8 +251,13 @@ impl mod_api::MenuPart for Placer {
         host: &mut dyn mod_api::ServerHost,
         event: &mut mod_api::RecipeBookPlaceEvent<'_>,
     ) {
-        event.ghost = host
-            .place_recipe_in_grid(event.recipe, 1, 1, vec![0], vec![0], event.use_max_items)
+        let menu = host
+            .players()
+            .acting_player()
+            .and_then(|player| player.container_menu(host))
+            .unwrap();
+        event.ghost = menu
+            .place_recipe_in_grid(host, event.recipe, 1, 1, &[0], &[0], event.use_max_items)
             .unwrap();
     }
 }
@@ -287,7 +295,7 @@ fn a_listening_part_places_the_recipe_through_the_real_stage() {
                 ));
             });
             game.player_menu_opening(opened.conn);
-            let menu = game.menu(opened.uuid, opened.window).unwrap();
+            let menu = game.native_menu_ref(opened.uuid, opened.window).unwrap();
             let places = (0..3)
                 .map(|slot| MenuSlotPlace::HeldItem {
                     hand: Hand::Main,

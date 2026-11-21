@@ -701,8 +701,13 @@ fn sea_level_takes_a_host(host: &dyn Host, level: LevelRef) -> Option<i32> {
 fn client_heights_take_a_client_host(
     host: &dyn ClientHost,
     level: LevelRef,
-) -> Result<Option<i32>, LevelReadError> {
-    level.surface_height(host, [16, -16], Heightmap::MotionBlocking)
+) -> Result<(), LevelReadError> {
+    level.visit_surface_heights(
+        host,
+        &[(16, -16)],
+        Heightmap::MotionBlocking,
+        &mut |_, _| std::ops::ControlFlow::Continue(()),
+    )
 }
 
 /// Compile-only: a client mod moves the view onto an entity and back through the `&mut dyn ClientHost`

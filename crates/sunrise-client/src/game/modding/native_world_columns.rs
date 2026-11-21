@@ -1,62 +1,42 @@
-//! Loaded and undecorated column queries through a level handle.
+//! Resident and undecorated column reads through a level handle.
 use super::Game;
-use mod_api::{BlockState, ColumnRead, Heightmap, LevelReadError, LevelRef, TerrainColumn};
-use std::ops::ControlFlow;
+use core::ops::ControlFlow;
+use mod_api::{BlockState, ColumnRead, ColumnReadError, Heightmap, LevelReadError, LevelRef};
 
 impl Game<'_> {
-    pub(super) fn level_surface_height(
+    pub(super) fn level_visit_surface_heights(
         &self,
         level: LevelRef,
-        [x, z]: [i32; 2],
+        columns: &[(i32, i32)],
         heightmap: Heightmap,
-    ) -> Result<Option<i32>, LevelReadError> {
+        visit: &mut dyn FnMut((i32, i32), Option<i32>) -> ControlFlow<()>,
+    ) -> Result<(), LevelReadError> {
         let world = if self.is_logical_server() {
             self.native_level_world_result(level)?
         } else {
             self.native_level_read_world(level)
                 .ok_or(LevelReadError::Unavailable)?
         };
-        Ok(world
-            .chunks
-            .contains_key(&(x >> 4, z >> 4))
-            .then(|| self.edit_height(world, heightmap, x, z)))
-    }
-
-    pub(super) fn level_terrain_surface(
-        &self,
-        level: LevelRef,
-        [x, z]: [i32; 2],
-    ) -> Result<Option<TerrainColumn>, LevelReadError> {
-        self.native_level_world_result(level)?;
-        let Some(terrain) = self.level_locator(level) else {
-            return Ok(None);
-        };
         let started = std::time::Instant::now();
-        let surface = terrain.terrain_surface(x, z);
-        let ms = started.elapsed().as_secs_f32() * 1000.0;
-        if self.options.spikes.is_some_and(|threshold| ms > threshold) {
-            log::info!("Sunrise: slow mod terrain surface query {ms:.1} ms at ({x}, {z})");
-        }
-        let Some(surface) = surface else {
-            return Ok(None);
-        };
-        let index = super::native_worldgen::prepare(self.pack.assets.registry)
-            .map_err(|_| LevelReadError::Unavailable)?;
-        let block = index
-            .to_api(surface.state)
-            .map_err(|_| LevelReadError::Unavailable)?
-            .block();
-        Ok(Some(
-            mod_api::__private::built::TerrainColumn {
-                height: surface.height,
-                block,
-                water: surface.water.map(|(height, _)| height),
-                biome: world_biomes!(self).name(surface.biome).to_owned(),
+        let mut last: Option<((i32, i32), bool)> = None;
+        for &(x, z) in columns {
+            let key = (x >> 4, z >> 4);
+            let loaded = match last {
+                Some((k, l)) if k == key => l,
+                _ => {
+                    let l = world.chunks.contains_key(&key);
+                    last = Some((key, l));
+                    l
+                }
+            };
+            let height = loaded.then(|| self.world_column_height(world, heightmap, x, z));
+            if visit((x, z), height).is_break() {
+                break;
             }
-            .into(),
-        ))
+        }
+        self.native_read_logged(started, "height query", columns.len());
+        Ok(())
     }
-
     pub(super) fn level_visit_column_blocks(
         &self,
         level: LevelRef,
@@ -64,40 +44,98 @@ impl Game<'_> {
         heightmap: Heightmap,
         (below, above): (u32, u32),
         visit: &mut dyn FnMut(BlockState) -> ControlFlow<()>,
-    ) -> Result<ColumnRead, LevelReadError> {
+    ) -> Result<ColumnRead, ColumnReadError> {
         let world = self.native_level_world_result(level)?;
         let chunk = world.chunks.get(&(x >> 4, z >> 4));
-        let base = chunk.map(|_| self.edit_height(world, heightmap, x, z));
+        let base = chunk.map(|_| self.world_column_height(world, heightmap, x, z));
         let water_color = chunk.zip(base).map_or(0, |(chunk, y)| {
             world_biomes!(self).get(chunk.biome(x, y - 1, z)).water
         });
-        let total = i64::from(below) + i64::from(above);
-        let start = i64::from(base.unwrap_or(0)) - i64::from(below);
-        if total != 0 {
-            let index = super::native_worldgen::prepare(self.pack.assets.registry)
-                .map_err(|_| LevelReadError::Unavailable)?;
-            for y in start..start + total {
+        let origin = i64::from(base.unwrap_or(0));
+        if below != 0 || above != 0 {
+            let index = super::api_values::block_state::current()?;
+            let air = index.to_api(world.air)?;
+            for y in origin - i64::from(below)..origin + i64::from(above) {
                 let state = match (chunk, i32::try_from(y)) {
                     (Some(chunk), Ok(y)) if (chunk.min_y()..chunk.max_y()).contains(&y) => {
-                        chunk.block(x & 15, y, z & 15)
+                        index.to_api(chunk.block(x & 15, y, z & 15))?
                     }
-                    _ => world.air,
+                    _ => air,
                 };
-                let state = index
-                    .to_api(state)
-                    .map_err(|_| LevelReadError::Unavailable)?;
                 if visit(state).is_break() {
                     break;
                 }
             }
         }
-        Ok(ColumnRead::new(base, water_color))
+        Ok(mod_api::__private::built::ColumnRead { base, water_color }.into())
+    }
+    /// For a server mod: visit the level generator's undecorated surface for this server level
+    /// (active or parked), lending a borrowed [`mod_api::TerrainColumnView`] per column and
+    /// stopping on `ControlFlow::Break(())`.
+    pub(super) fn level_visit_terrain_surface(
+        &self,
+        level: LevelRef,
+        columns: &[(i32, i32)],
+        visit: &mut dyn for<'a> FnMut(
+            (i32, i32),
+            Option<mod_api::TerrainColumnView<'a>>,
+        ) -> ControlFlow<()>,
+    ) -> Result<(), LevelReadError> {
+        self.native_level_world_result(level)?;
+        let started = std::time::Instant::now();
+        match self.level_locator(level) {
+            None => {
+                for &(x, z) in columns {
+                    if visit((x, z), None).is_break() {
+                        break;
+                    }
+                }
+            }
+            Some(generator) => {
+                let index = super::native_worldgen::prepare(self.pack.assets.registry)
+                    .map_err(|_| LevelReadError::Unavailable)?;
+                let biomes = world_biomes!(self);
+                for &(x, z) in columns {
+                    let view = match generator.terrain_surface(x, z) {
+                        None => None,
+                        Some(surface) => {
+                            let state = index
+                                .to_api(surface.state)
+                                .map_err(|_| LevelReadError::Unavailable)?;
+                            Some(
+                                mod_api::__private::built::TerrainColumnView {
+                                    height: surface.height,
+                                    block: state.block(),
+                                    water: surface.water.map(|(height, _)| height),
+                                    biome: biomes.name(surface.biome),
+                                }
+                                .into(),
+                            )
+                        }
+                    };
+                    if visit((x, z), view).is_break() {
+                        break;
+                    }
+                }
+            }
+        }
+        self.native_read_logged(started, "terrain surface query", columns.len());
+        Ok(())
+    }
+    /// A read's time logged with `SUNRISE_SPIKES`, as an edit's is.
+    fn native_read_logged(&self, started: std::time::Instant, what: &str, columns: usize) {
+        let ms = started.elapsed().as_secs_f32() * 1000.0;
+        if self.options.spikes.is_some_and(|threshold| ms > threshold) {
+            log::info!("Sunrise: slow mod {what} {ms:.1} ms ({columns} columns)");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
+    use core::ops::ControlFlow;
+    use mod_api::{DimensionKey, Heightmap, LevelReadError};
     use std::sync::Arc;
     use sunrise_client::vanillagen::{TerrainResources, VanillaTerrain};
     use sunrise_world::worldgen::generator::FlatSettings;
@@ -106,7 +144,7 @@ mod tests {
     #[ignore = "daily"]
     fn terrain_surface_reads_flat_layers_without_chunks() {
         with_game(|game| {
-            game.options.dedicated = Some(Vec::new());
+            let level = game.level_ref(game.native_lifecycle.epoch().unwrap(), game.dim.key());
             let directory = game.options.resources.join("worldgen");
             let terrain = VanillaTerrain::for_flat(
                 TerrainResources {
@@ -133,47 +171,93 @@ mod tests {
             )
             .unwrap();
             game.end.set_locator(Some(Arc::new(terrain)));
-            let level = game.level(game.dim.id()).unwrap();
             let before = (game.world.chunks.len(), game.streaming.pending());
-            for position in [[100000, -100000], [0, 0], [-1, 31], [100000, -100000]] {
-                let column = level.terrain_surface(game, position).unwrap().unwrap();
-                // Four layers from the overworld minimum -64, independent of the sampler.
-                assert_eq!(column.height, -60);
-                assert_eq!(
-                    column.block,
-                    mod_api::__private::block_key("minecraft:grass_block").unwrap()
-                );
-                assert_eq!(column.water, None);
-                assert_eq!(column.biome, "minecraft:plains");
+            let columns = [(100000, -100000), (0, 0), (-1, 31), (100000, -100000)];
+            let mut answer = Vec::new();
+            game.level_visit_terrain_surface(level, &columns, &mut |pos, col| {
+                answer.push((
+                    pos,
+                    col.map(|c| (c.height, c.block, c.water, c.biome.to_owned())),
+                ));
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(answer.len(), columns.len());
+            let grass = mod_api::__private::block_key("minecraft:grass_block").unwrap();
+            // Four layers from the overworld minimum -64, independent of the sampler.
+            for (index, (pos, column)) in answer.iter().enumerate() {
+                assert_eq!(*pos, columns[index]);
+                let (height, block, water, biome) = column.as_ref().unwrap();
+                assert_eq!(*height, -60);
+                assert_eq!(*block, grass);
+                assert_eq!(*water, None);
+                assert_eq!(biome, "minecraft:plains");
             }
-            assert_eq!(before, (game.world.chunks.len(), game.streaming.pending()));
-            game.enter_level(super::super::Dim::Nether).unwrap();
-            let before = (game.world.chunks.len(), game.streaming.pending());
-            let parked = level
-                .terrain_surface(game, [100000, -100000])
-                .unwrap()
-                .unwrap();
-            assert_eq!(parked.height, -60);
-            assert_eq!(parked.biome, "minecraft:plains");
+            let mut again = Vec::new();
+            game.level_visit_terrain_surface(level, &columns, &mut |pos, col| {
+                again.push((
+                    pos,
+                    col.map(|c| (c.height, c.block, c.water, c.biome.to_owned())),
+                ));
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(again, answer);
+            // Early break stops after the first column.
+            let mut count = 0;
+            game.level_visit_terrain_surface(level, &columns, &mut |_, _| {
+                count += 1;
+                ControlFlow::Break(())
+            })
+            .unwrap();
+            assert_eq!(count, 1);
             assert_eq!(before, (game.world.chunks.len(), game.streaming.pending()));
         });
     }
 
     #[test]
     #[ignore = "daily"]
-    fn terrain_surface_distinguishes_missing_generator_from_stale_level() {
+    fn terrain_surface_refuses_before_sampling() {
         with_game(|game| {
-            let level = game.level(game.dim.id()).unwrap();
+            let level = game.level_ref(game.native_lifecycle.epoch().unwrap(), game.dim.key());
+            let stale = game.level_ref(level.epoch(), DimensionKey::NETHER);
             game.end.set_locator(None);
-            assert_eq!(level.terrain_surface(game, [0, 0]), Ok(None));
-            let stale = super::LevelRef::new(
-                mod_api::WorldEpoch::new(level.epoch().get() + 1),
-                level.dimension(),
-            );
+            let mut visited = 0;
             assert_eq!(
-                stale.terrain_surface(game, [0, 0]),
-                Err(super::LevelReadError::Stale),
+                game.level_visit_terrain_surface(stale, &[(0, 0)], &mut |_, _| {
+                    visited += 1;
+                    ControlFlow::Continue(())
+                }),
+                Err(LevelReadError::Stale)
             );
+            assert_eq!(visited, 0);
+            // No invented column cap: more than 4096 columns visit cleanly.
+            let columns = vec![(0, 0); 5000];
+            let mut seen = 0;
+            game.level_visit_terrain_surface(level, &columns, &mut |_, col| {
+                assert!(col.is_none());
+                seen += 1;
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(seen, 5000);
+            let mut empty_seen = 0;
+            game.level_visit_terrain_surface(level, &[], &mut |_, _| {
+                empty_seen += 1;
+                ControlFlow::Continue(())
+            })
+            .unwrap();
+            assert_eq!(empty_seen, 0);
+            // Client refuses before sampling.
+            game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+            assert_eq!(
+                game.level_visit_terrain_surface(level, &[(0, 0)], &mut |_, _| {
+                    visited += 1;
+                    ControlFlow::Continue(())
+                }),
+                Err(LevelReadError::Unavailable)
+            );
+            assert_eq!(visited, 0);
         });
     }
 
@@ -299,7 +383,19 @@ mod tests {
                     ([4, 0], Some(65), 0x61_7B64, [stone, air]),
                     ([32, 0], None, 0, [air, air]),
                 ] {
-                    assert_eq!(level.surface_height(game, pos, heightmap), Ok(base));
+                    let mut actual = None;
+                    level
+                        .visit_surface_heights(
+                            game,
+                            &[(pos[0], pos[1])],
+                            heightmap,
+                            &mut |_, height| {
+                                actual = height;
+                                ControlFlow::Continue(())
+                            },
+                        )
+                        .unwrap();
+                    assert_eq!(actual, base);
                     let mut states = Vec::new();
                     let result = level
                         .visit_column_blocks(game, pos, heightmap, (1, 1), &mut |state| {

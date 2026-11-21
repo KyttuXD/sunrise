@@ -6,6 +6,8 @@ pub(super) mod compute;
 pub(in crate::game) mod data;
 mod difficulty;
 mod display_names;
+#[cfg(test)]
+pub(super) use data::summon_position_ok;
 pub(super) use data::{place_summoned, strip_finalize_tree};
 mod effects;
 pub(super) mod execute;
@@ -2190,11 +2192,35 @@ impl Game<'_> {
         self.feedback(Text::translate(key, &[]));
         Ok(duration.unwrap_or(-1))
     }
-    pub(super) fn kill_target(&mut self, t: Target) {
+    pub(super) fn kill_target(&mut self, t: Target) -> bool {
         // An entity in another level is killed in the level that holds it.
-        let _ = self.in_target_level(t, |g| g.kill_target_in_level(t));
+        self.in_target_level(t, |g| g.kill_target_in_level(t))
+            .unwrap_or(false)
     }
-    pub(super) fn kill_target_in_level(&mut self, t: Target) {
+
+    pub(super) fn can_kill_target_in_level(&self, t: Target) -> bool {
+        if self.target_removed(&t) || self.persist.preparing_vehicle_removals.contains(&t) {
+            return false;
+        }
+        match t {
+            Target::DragonPart(_) => false,
+            Target::Player => self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.health.health() > 0.0),
+            Target::Guest(conn) => self.command_guest(conn).is_some_and(|g| !g.dead),
+            Target::Mob(id) => self
+                .mobs
+                .iter()
+                .any(|m| m.id == id && !m.removed && m.alive()),
+            _ => self.target_position(t).is_some(),
+        }
+    }
+
+    pub(super) fn kill_target_in_level(&mut self, t: Target) -> bool {
+        if !self.can_kill_target_in_level(t) {
+            return false;
+        }
         // Entity.kill (BlockAttachedEntity.kill; ArmorStand's generic_kill hit,
         // which bypasses its invulnerability; a vehicle is no LivingEntity):
         // removed, then ENTITY_DIE by the entity itself. Mobs post theirs as
@@ -2227,16 +2253,22 @@ impl Game<'_> {
         match t {
             Target::General(id) => {
                 let Some(entity) = self.entity(id) else {
-                    return;
+                    return false;
                 };
                 self.remove_target_now(entity, t);
             }
             Target::Guest(_) => {
-                self.for_player(t, |g| g.kill_target(Target::Player));
+                return self
+                    .for_player(t, |g| g.kill_target_in_level(Target::Player))
+                    .unwrap_or(false);
             }
             Target::Player => {
-                if let Some(p) = self.player.as_mut() {
-                    let _ = p.set_health(0.0, false);
+                if self
+                    .player
+                    .as_mut()
+                    .is_none_or(|p| p.set_health(0.0, false).is_err())
+                {
+                    return false;
                 }
                 self.ui.death_cause = Some("death.attack.genericKill".into());
             }
@@ -2259,11 +2291,16 @@ impl Game<'_> {
                 // The hit runs LivingEntity.die before the command returns:
                 // its ENTITY_DIE, loot and experience come now, not in the
                 // next tick's deaths, which skip it (as a frog's bite does).
-                if let Some(m) = killed
-                    && !m.removed
-                    && self.died.insert(id)
+                let Some(m) = killed.filter(|m| !m.removed && self.died.insert(id)) else {
+                    return false;
+                };
+                self.mob_died(&m);
+                if self
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == id && !m.removed && (m.alive() || m.death_canceled))
                 {
-                    self.mob_died(&m);
+                    return false;
                 }
             }
             Target::Item(id) => {
@@ -2276,7 +2313,7 @@ impl Game<'_> {
             Target::Projectile(id) => self.remove_projectile(id),
             Target::Stand(id) => {
                 if !self.remove_armor_stand_after(id, |_| {}) {
-                    return;
+                    return false;
                 }
             }
             Target::Frame(id) => {
@@ -2289,7 +2326,7 @@ impl Game<'_> {
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
             Target::Boat(_) | Target::Cart(_) => {
                 if !self.kill_vehicle_object(t) {
-                    return;
+                    return false;
                 }
             }
             Target::Other(id) => {
@@ -2300,7 +2337,7 @@ impl Game<'_> {
                     })
                     .is_none()
                 {
-                    return;
+                    return false;
                 }
             }
             Target::Fangs(id) => self.fangs.list.retain(|f| f.id != id),
@@ -2308,12 +2345,12 @@ impl Game<'_> {
             Target::Dragon(id) => self.kill_dragon(id),
             Target::Tnt(id) => {
                 if self.take_removed_tnt(id).is_none() {
-                    return;
+                    return false;
                 }
             }
             Target::Cushion(id) => {
                 if self.take_removed_cushion(id).is_none() {
-                    return;
+                    return false;
                 }
             }
             Target::Falling(id) => self.falling.retain(|f| f.id != id),
@@ -2322,14 +2359,19 @@ impl Game<'_> {
             Target::Spawner(id) => self.remove_ominous_spawner(id),
             Target::Cloud(id) => self.remove_breath_cloud(id),
             Target::Hook(id) => self.remove_fishing_hook(id),
-            Target::Knot(_) => {}
+            Target::Knot(id) => {
+                if !self.kill_natural_knot(id) {
+                    return false;
+                }
+            }
             // No command names a part, and `kill` on one would not stop its dragon.
-            Target::DragonPart(_) => {}
+            Target::DragonPart(_) => return false,
         }
         if let Some(at) = died {
             self.post_game_event("minecraft:entity_die", at, context);
         }
         self.native_leaves_flush();
+        true
     }
     fn cmd_kill(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {
@@ -2373,18 +2415,6 @@ impl Game<'_> {
         let pos = self
             .position_arg(ctx, "pos")
             .unwrap_or(self.source_position());
-        let block_y = pos[1].floor() as i32;
-        if !(-30_000_000.0..30_000_000.0).contains(&pos[0])
-            || !(-20_000_000..20_000_000).contains(&block_y)
-            || !(-30_000_000.0..30_000_000.0).contains(&pos[2])
-        {
-            return Err(err("commands.summon.invalidPosition", &[]));
-        }
-        let mob_type = self.res.mob_types().get(&kind);
-        if self.difficulty_id() == 0 && mob_type.is_some_and(|t| !t.allowed_in_peaceful()) {
-            return Err(err("commands.summon.failed.peaceful", &[]));
-        }
-        let short = kind.trim_start_matches("minecraft:").to_owned();
         if let Some(Arg::Str(nbt)) = ctx.get("nbt").cloned() {
             // With an NBT argument the entity is built from it, unfinalized.
             let before = self.spawned_mark();
@@ -2398,6 +2428,14 @@ impl Game<'_> {
             self.feedback(Text::translate("commands.summon.success", &[name]));
             return Ok(1);
         }
+        if !data::summon_position_ok(pos) {
+            return Err(err("commands.summon.invalidPosition", &[]));
+        }
+        let mob_type = self.res.mob_types().get(&kind);
+        if self.difficulty_id() == 0 && mob_type.is_some_and(|t| !t.allowed_in_peaceful()) {
+            return Err(err("commands.summon.failed.peaceful", &[]));
+        }
+        let short = kind.trim_start_matches("minecraft:").to_owned();
         let name;
         if kind == "minecraft:ender_dragon" || mob_type.is_some() {
             let id = self

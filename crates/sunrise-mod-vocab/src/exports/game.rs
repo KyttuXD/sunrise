@@ -2,13 +2,12 @@
 #[doc(hidden)]
 pub mod game;
 pub use crate::game::{
-    BlockEdit, BlockRun, Clock, ColumnRead, Config, ConfigFile, ConfigKind, CubeFace, DataMapType,
-    ExperienceOrb, Falling, Heightmap, Hit, MapDecoration, MapInfo, MobRender, ModMismatch,
-    ModMismatchResolution, PhantomSpawnResult, PlayerRender, Shake, SleepProblem,
+    BlockEdit, BlockRun, Clock, Config, ConfigFile, ConfigKind, CubeFace, DataMapType, Falling,
+    Heightmap, Hit, MapDecoration, MapInfo, MobRender, ModMismatch, ModMismatchResolution,
+    NbtUpgradeError, PhantomSpawnResult, PlayerRender, Shake, SleepProblem,
 };
-pub use crate::game::{NbtUpgradeError, TerrainColumn};
 mod __private {
     mod built {
-        pub use crate::game::built::{ConfigFile, TerrainColumn};
+        pub use crate::game::built::ConfigFile;
     }
 }

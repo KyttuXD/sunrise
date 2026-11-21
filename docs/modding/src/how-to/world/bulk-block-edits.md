@@ -1,7 +1,8 @@
 # Typed bulk block edits
 
-Use complete `BlockState` values in `BlockEdit.palette`. Construct them with
-`BlockState::of(&host.block_states(), block, constraints)` (or change an existing state
+Call `level.edit_blocks(host, &edit)` on a [`LevelRef`] (active or parked server level) to
+apply a `BlockEdit`. Use complete `BlockState` values in `BlockEdit.palette`. Construct them
+with `BlockState::of(&host.block_states(), block, constraints)` (or change an existing state
 with `with`). `filters` contains owned `StatePredicate` values. `StatePredicate::block`
 validates property names and values strictly; `StatePredicate::tag` retains arbitrary
 property requirements, including for an empty tag, and rejects duplicate properties.
@@ -14,39 +15,50 @@ are supported: a partial predicate does not need to form a complete state with d
 All palette entries, predicates and run indices are prepared before any mutation.
 NBT is not representable. At most 65,536 filters are allowed. Unloaded chunks and
 out-of-height portions of runs are skipped. Edits preserve strict block-entity behavior,
-notify no neighbors and send whole changed chunks.
+notify no neighbors and send whole changed chunks. Refusals return a typed `BlockEditError`
+with nothing changed (`Stale`, `Unavailable`, `InTransaction` for a parked level inside an
+open Host transaction, `InvalidState`, `InvalidPredicate`, `PaletteOutOfRange`,
+`FilterOutOfRange`, or `TooManyFilters`).
 
 ## Read loaded columns
 
-`level.surface_height(host, [x, z], heightmap)` reads one column in an active or parked
-server level or the client's displayed level. `Ok(None)` means the chunk is not resident;
-`Err` means the level cannot be read. Iterate coordinates in the mod to read an area.
-
-On the server, `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)`
-streams from `below` blocks under the base to `above - 1` blocks over it, bottom first.
-The visitor gets a complete `BlockState` per block and can return `ControlFlow::Break(())`
-to stop. States retain their properties; blocks outside the chunk or in a nonresident
-chunk read as air. The game does not load chunks or collect a result list.
-
-The returned `ColumnRead` contains `base` (absent for a nonresident chunk) and `water_color`
-(`0xRRGGBB` server-side `BiomeSpecialEffects.waterColor` at `base - 1`, zero if not resident).
-For colormap-derived grass and foliage tints, see
-[Read blended biome tints on the client](read-biome-data.md#read-blended-biome-tints-on-the-client).
+- `level.visit_surface_heights(host, columns, heightmap, &mut |pos, height| ...)` visits
+  each `(x, z)` column in order, with `None` where a chunk is not loaded. Reads an active
+  or parked server level, or the client's displayed level. Return `ControlFlow::Break(())`
+  to stop. A stale or unavailable level is refused before the visit (`LevelReadError`).
+- On the server, call `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)`
+  for each column. The visitor gets one complete `BlockState` at a time, bottom first, from
+  `below` under its base through `above - 1` over it. Nonresident chunks have no base and
+  give air around Y=0; positions outside a resident chunk's height also give air. An empty
+  range visits nothing. `ControlFlow::Break(())` stops that column. No chunk is loaded, and
+  no palette or block list is built.
+- `ColumnRead.base` is the optional heightmap base. `ColumnRead.water_color` is the
+  server-side `BiomeSpecialEffects.waterColor` (`0xRRGGBB`, at `base - 1`, zero if the
+  chunk is not loaded). For client grass and foliage tints, see
+  [Read blended biome tints on the client](read-biome-data.md#read-blended-biome-tints-on-the-client).
 
 ## Query terrain before loading chunks
 
-`level.terrain_surface(host, [x, z])` samples one column in an active or parked server
-level's generator, not its resident chunks. Iterate coordinates to sample an area.
+`level.visit_terrain_surface(host, columns, &mut |pos, col| ...)` reads the level's generator
+for an active or parked server level, not resident chunks, lending `(pos, Option<TerrainColumnView<'_>>)`
+in input order and stopping early on `ControlFlow::Break(())`. The call is available in the World phase.
 
 - `height` is one above the highest solid block, skipping fluids, like OceanFloor. The scan
   starts at the level top, so the Nether returns its roof, not a floor.
 - `block` is that surface's `BlockKey`; `water` is one above the highest fluid over it,
-  or absent on dry land. `biome` names the biome in the world's table, including data pack biomes.
-- Void columns and worlds without their own generator or noise surface return `Ok(None)`.
-  A stale handle, a client or a call outside world access returns `Err`.
-- No chunk is created, loaded or held. Features and slope rules are not included: even an
-  undecorated chunk may have a different top block. Sample candidate columns, then verify the
-  decorated blocks if they matter.
+  or absent on dry land. `biome` borrows the biome identifier from the world's table,
+  including data pack biomes.
+- Void columns and worlds without their own generator lend `None`. Custom generators that
+  do not provide a noise surface also have no answer.
+- No chunk is created, loaded or held. Features (trees, ores, lakes and decorations) and slope
+  rules are not included: even an undecorated chunk may have a different top block. A teleport
+  mod can sample candidate columns, then hold only its chosen chunk and verify the decorated blocks.
+- A client or stale handle refuses before sampling with `LevelReadError` (`Unavailable` or
+  `Stale`). Results depend on generator inputs, not loaded chunks or query order. The game makes
+  one noise sample per column visited on the server tick, and logs the column count for calls
+  exceeding the configured slow-call threshold.
+
+Mods only receive `TerrainColumnView<'_>`; it is non-exhaustive and lent for one callback.
 
 #### Upgrading saved block entities and entities
 

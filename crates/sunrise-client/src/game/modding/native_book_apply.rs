@@ -297,7 +297,9 @@ impl Game<'_> {
         if changes.is_empty() {
             return Ok(());
         }
-        let menu = self.menu(before.uuid, before.window).ok_or(R::Changed)?;
+        let menu = self
+            .native_menu_ref(before.uuid, before.window)
+            .ok_or(R::Changed)?;
         if changes.iter().any(|change| {
             self.native_menu_place(before.conn, before.window, change.slot) != Some(change.place)
         }) {

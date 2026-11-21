@@ -14,10 +14,13 @@ ids = [
     "type:ColumnBlocks.bases",
     "type:ColumnBlocks.blocks",
     "type:ColumnBlocks.water_colors",
-    "handle:LevelRef::surface_height",
-    "handle:LevelRef::terrain_surface",
+    "type:TerrainColumn",
+    "type:TerrainColumnView",
+    "handle:LevelRef::visit_surface_heights",
+    "handle:LevelRef::visit_terrain_surface",
     "handle:LevelRef::visit_column_blocks",
     "type:ColumnRead",
+    "type:ColumnReadError",
 ]
 why = "Native mods no longer need guest result quotas. Column queries follow LevelReader.getHeight and ChunkGenerator.getBaseColumn at the active or parked level without loading chunks; NeoForge's ILevelReaderExtension keeps the same underlying height and chunk reads. BlockGetter.clip and VoxelShape.clip now use the original view ray while visiting only the resident extent. Both biome searches use the actual build height (ServerLevel.findClosestBiome3d and LocateCommand.locateBiome) and BlockPos.spiralAround's signed leg count. Structure search has no separate origin gate and ranks locate positions in all three dimensions, as ChunkGenerator.findNearestMapStructure and Vec3i.distSqr do."
 migrate = '''
@@ -30,7 +33,7 @@ migrate = '''
 - Keep `host.view_hit()` to use the loaded extent as the end of the view ray. Far terrain is still not hit.
 
 ### Column queries
-- Replace `host.surface_heights(dimension, columns, heightmap)` with `let level = host.level(dimension)` (handle the absent level), then iterate the old `(x, z)` pairs and call `level.surface_height(host, [x, z], heightmap)?` for each. The result of each call is that column's optional height: `None` means its chunk is not resident. Replace `client_host.client_surface_heights(columns, heightmap)` with the same calls on the displayed level's handle.
-- Replace `host.terrain_surface(dimension, columns)` with calls to `level.terrain_surface(host, [x, z])?` on the selected server level. The per-column `Option<TerrainColumn>` still means no undecorated surface when it is `None`. Delete `MAX_TERRAIN_COLUMNS`; your loop can consume any number of results as they arrive, including from parked levels.
+- Replace `host.surface_heights(dimension, columns, heightmap)` with `level.visit_surface_heights(host, columns, heightmap, &mut |pos, height| { /* use (pos, height) */ ControlFlow::Continue(()) })?` on `host.level(dimension)` after checking for `None`. Replace `client_host.client_surface_heights(columns, heightmap)` with the same visit on the displayed level's handle (for example, via `host.local_player()?.entity().level(host)?` in an `Option`-returning function). A visited `None` height means the chunk is not resident; a failed query returns `LevelReadError`.
+- Replace `host.terrain_surface(dimension, columns)` with `level.visit_terrain_surface(host, columns, &mut |pos, column| { /* use (pos, column) */ ControlFlow::Continue(()) })?` on that server level. Replace owned `TerrainColumn` with the callback's `TerrainColumnView<'_>`; copy `biome` into a string only if retaining it. The per-column `None` still means no undecorated surface. Delete `MAX_TERRAIN_COLUMNS`. Both visitors accept active or parked server levels and stop early on `ControlFlow::Break(())`.
 - Replace `host.read_columns(dimension, columns, heightmap, (below, above))` with one `level.visit_column_blocks(host, [x, z], heightmap, (below, above), &mut visit)?` per input pair, in the same order. Instead of indexing `ColumnBlocks.palette` with `ColumnBlocks.blocks`, use each complete `BlockState` passed to the visitor, bottom first. Return `ControlFlow::Continue(())` to keep reading or `ControlFlow::Break(())` to stop that column. Read `ColumnRead.base` instead of that column's entry in `ColumnBlocks.bases`, and `ColumnRead.water_color` instead of its entry in `ColumnBlocks.water_colors`. Air padding and the zero water colour for nonresident chunks are unchanged. If a palette is required for your own output format, build it from the visited states in your mod.
 '''

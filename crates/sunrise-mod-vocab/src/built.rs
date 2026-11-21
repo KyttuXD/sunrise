@@ -657,3 +657,54 @@ impl<'a> From<ContainerLootFilled<'a>> for super::ContainerLootFilled<'a> {
         }
     }
 }
+
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: borrowed game-to-hook adapter; call-scoped observation view.
+pub struct TerrainColumnView<'a> {
+    pub height: i32,
+    pub block: BlockKey,
+    pub water: Option<i32>,
+    pub biome: &'a str,
+}
+impl<'a> From<TerrainColumnView<'a>> for super::TerrainColumnView<'a> {
+    fn from(v: TerrainColumnView<'a>) -> Self {
+        let TerrainColumnView {
+            height,
+            block,
+            water,
+            biome,
+        } = v;
+        Self {
+            height,
+            block,
+            water,
+            biome,
+        }
+    }
+}
+
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: returned by an in-process column visit.
+pub struct ColumnRead {
+    pub base: Option<i32>,
+    pub water_color: u32,
+}
+impl From<ColumnRead> for super::ColumnRead {
+    fn from(ColumnRead { base, water_color }: ColumnRead) -> Self {
+        Self { base, water_color }
+    }
+}
+
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: borrowed game-to-hook adapter; call-scoped observation view.
+pub struct StructureTemplateBlockView<'a> {
+    pub pos: [i32; 3],
+    pub state: BlockState,
+    pub nbt: Option<&'a Compound>,
+}
+impl<'a> From<StructureTemplateBlockView<'a>> for super::StructureTemplateBlockView<'a> {
+    fn from(v: StructureTemplateBlockView<'a>) -> Self {
+        let StructureTemplateBlockView { pos, state, nbt } = v;
+        Self { pos, state, nbt }
+    }
+}

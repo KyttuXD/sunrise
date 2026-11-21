@@ -44,8 +44,8 @@ pub trait LevelLightBackendMut {
     /// Side: server.
     /// Queues the loaded chunks `chunks` (chunk coordinates) of the level in place, and the loaded
     /// chunks around them, to be lit again whole from their blocks, for a mod that wrote blocks by
-    /// other means (`edit_blocks` queues the same relight for its own chunks). Accepted at once and
-    /// never lit during the call: the light jobs run at the level's next light update, as those of `edit_blocks` and
+    /// other means (`LevelRef::edit_blocks` queues the same relight for its own chunks). Accepted at once and
+    /// never lit during the call: the light jobs run at the level's next light update, as those of `LevelRef::edit_blocks` and
     /// `level_check_light` do, and a column whose eight
     /// neighbours are not all loaded waits until they are. The light that changed goes to the
     /// players who see that chunk's border, as any relight's does. There is no completion event

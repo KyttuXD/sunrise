@@ -15,7 +15,7 @@ pub trait Hooks {
     /// native menu's UUID and window to reach its slots and cursor. Host writes are kept if
     /// the action succeeds. An unhandled click applies the default in the same transaction;
     /// a stale, refused or failed action rolls back the transaction. The action refuses opens.
-    /// [`ServerHost::close_menu`] and [`MenuRef::close_container`] close only after commit.
+    /// [`MenuRef::close_container`] closes only after commit.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_clicked",
         dispatch = "api_carrier",

@@ -156,11 +156,12 @@ impl mod_api::MenuPart for Part {
             return Flow::Continue;
         };
         assert_eq!(event.menu, DEPOT_MENU);
-        assert!(
-            host.menu(event.uuid, event.window).is_none(),
+        let player = host.player(event.uuid).unwrap();
+        assert_eq!(
+            player.menu(host, event.window),
+            Ok(None),
             "not a native window"
         );
-        let player = host.player(event.uuid).unwrap();
         assert!(player.container_menu(host).is_some());
         let tx = host.transaction_current().unwrap();
         if s.write_other_block || s.write_clicked_block {
@@ -213,15 +214,17 @@ impl mod_api::MenuPart for Part {
             );
         }
         if script.replace_menu {
-            host.open_menu(
-                event.context.player,
-                1,
-                mod_api::Text::literal("opened by menu_button"),
-                Vec::new(),
-                mod_api::MenuReplace::InPlace,
-            )
-            .unwrap()
-            .expect("the menu button's player is online");
+            let player = host.player(event.context.player).unwrap();
+            player
+                .open_chest_menu(
+                    host,
+                    1,
+                    mod_api::Text::literal("opened by menu_button"),
+                    Vec::new(),
+                    mod_api::MenuReplace::InPlace,
+                )
+                .unwrap()
+                .expect("the menu button's player is online");
         }
     }
 }
@@ -265,8 +268,9 @@ impl mod_api::MenuPart for ClickPart {
             let item =
                 mod_api::ItemStack::new(mod_api::__private::item_key("minecraft:dirt").unwrap(), 1)
                     .unwrap();
-            host.menu_set_items(event.uuid, event.window, vec![Some(item)])
-                .unwrap();
+            let player = host.player(event.uuid).unwrap();
+            let menu = player.menu(host, event.window).unwrap().unwrap();
+            menu.set_items(host, vec![Some(item)]).unwrap();
         }
         if s.panic {
             panic!("a listener failed");

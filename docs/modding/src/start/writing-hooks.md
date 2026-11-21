@@ -53,10 +53,10 @@ Read the hook's signature. The host parameter tells you which game operations yo
 | `&mut dyn ServerHost` | Shared reads and server writes. |
 | `&dyn ClientHost` | Shared reads and client-only methods that take `&self`, such as `host.local_player()`. Some hooks instead give `&mut dyn ClientHost` for methods that need a mutable client host. |
 | `HostSide<'_>` | Match on `HostSide::Server(host)` and `HostSide::Client(host)`; each branch gets that side's mutable host. Do server-only work in the server branch. |
-| `LevelSide<'_>` | Match on `LevelSide::Server(level)` and `LevelSide::Client(level)`. These are level-only hosts, with no `open_menu` or commands. |
+| `LevelSide<'_>` | Match on `LevelSide::Server(level)` and `LevelSide::Client(level)`. These are level-only hosts, with no `PlayerRef::open_chest_menu` or commands. |
 
-In the World phase, a mutable `ServerHost` can open a chest-style menu
-through `MenusServerHost::open_menu` (`host.open_menu(…)`).
+In the World phase, a mutable `ServerHost` can open a chest-style menu on a
+player handle through `PlayerRef::open_chest_menu` (`player.open_chest_menu(host, …)`).
 `ServicesServerHost::commands` gives you the `Commands` service: call
 `host.commands().run_command(line)` to execute a server command, or
 `host.commands().run_command_with_output(line)` to keep the feedback.

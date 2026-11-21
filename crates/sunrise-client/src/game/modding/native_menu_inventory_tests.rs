@@ -231,7 +231,8 @@ mod owner {
             host: &mut dyn ServerHost,
             event: &mut mod_api::MenuClickedEvent<'_>,
         ) -> mod_api::Flow {
-            let menu = host.menu(event.uuid, event.window).unwrap();
+            let player = host.player(event.uuid).unwrap();
+            let menu = player.menu(host, event.window).unwrap().unwrap();
             let diamond = mod_api::ItemResource::of(
                 &ItemStack::new("minecraft:diamond", 1)
                     .try_into_api()

@@ -1,6 +1,6 @@
 //! Cold, all-or-nothing preparation of typed bulk edit values.
 use super::{TryIntoEngine, block_metadata_table};
-use mod_api::BlockMetadata;
+use mod_api::{BlockEditError, BlockMetadata, BlockStateError};
 use sunrise_command::args::BlockInput;
 use sunrise_world::registry::BlockStateId;
 
@@ -10,49 +10,56 @@ pub(in crate::game) struct PreparedBlockEdit {
 }
 
 /// Resolve every palette state and compile every filter before a world mutation is possible.
-pub(in crate::game) fn prepare(edit: &mod_api::BlockEdit) -> Result<PreparedBlockEdit, String> {
+pub(in crate::game) fn prepare(
+    edit: &mod_api::BlockEdit,
+) -> Result<PreparedBlockEdit, BlockEditError> {
     if edit.filters.len() > 65_536 {
-        return Err("more than 65536 filters".into());
+        return Err(BlockEditError::TooManyFilters);
     }
     let palette = edit
         .palette
         .iter()
-        .enumerate()
-        .map(|(index, state)| {
-            let state: BlockStateId = state
-                .try_into_engine(&())
-                .map_err(|error| format!("palette entry {index}: {error:?}"))?;
+        .map(|state| {
+            let state: BlockStateId = state.try_into_engine(&())?;
             Ok(state.0)
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, BlockEditError>>()?;
     let filters = edit
         .filters
         .iter()
-        .enumerate()
-        .map(|(index, predicate)| {
-            compile_filter(predicate).map_err(|error| format!("filter {index}: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(compile_filter)
+        .collect::<Result<Vec<_>, BlockEditError>>()?;
     Ok(PreparedBlockEdit { palette, filters })
 }
 
 /// Compile into the existing command matcher; do not create a second predicate algorithm.
-fn compile_filter(predicate: &mod_api::StatePredicate) -> Result<BlockInput, String> {
-    let metadata = block_metadata_table().map_err(|error| format!("block metadata: {error:?}"))?;
-    mod_api::__private::validate_state_predicate(metadata, predicate)
-        .map_err(|error| format!("predicate: {error:?}"))?;
+fn compile_filter(predicate: &mod_api::StatePredicate) -> Result<BlockInput, BlockEditError> {
+    let metadata = block_metadata_table()?;
+    mod_api::__private::validate_state_predicate(metadata, predicate).map_err(|error| {
+        if matches!(error, BlockStateError::Unavailable) {
+            BlockEditError::Unavailable
+        } else {
+            BlockEditError::InvalidPredicate
+        }
+    })?;
     let record = mod_api::StatePredicateRecord::from(predicate);
     let (id, tag) = match record.target {
         mod_api::StatePredicateTarget::Block(key) => (
             metadata
                 .name(key)
-                .map_err(|error| format!("block: {error:?}"))?
+                .map_err(|error| {
+                    if matches!(error, BlockStateError::Unavailable) {
+                        BlockEditError::Unavailable
+                    } else {
+                        BlockEditError::InvalidPredicate
+                    }
+                })?
                 .to_owned(),
             false,
         ),
         mod_api::StatePredicateTarget::Tag(key) => (
             mod_api::__private::with_tag_name(key, |name| name.map(str::to_owned))
-                .ok_or("block tag is unavailable")?,
+                .ok_or(BlockEditError::InvalidPredicate)?,
             true,
         ),
     };
@@ -70,8 +77,8 @@ fn compile_filter(predicate: &mod_api::StatePredicate) -> Result<BlockInput, Str
 
 #[cfg(test)]
 mod tests {
-    use super::super::TryIntoApi;
     use super::*;
+    use crate::game::api_values::TryIntoApi;
     use mod_api::{StateConstraint, StatePredicate, StatePredicateRecord, StatePredicateTarget};
     use std::collections::{HashMap, HashSet};
     use sunrise_world::registry::BlockRegistry;
@@ -161,8 +168,9 @@ mod tests {
             filters: vec![good, bad],
             runs: vec![],
         };
-        assert!(
-            prepare(&edit).is_err(),
+        assert_eq!(
+            prepare(&edit).err(),
+            Some(BlockEditError::InvalidPredicate),
             "late bad filter must refuse the whole prepared edit"
         );
         edit.filters.pop();
@@ -175,7 +183,7 @@ mod tests {
                 u16::MAX,
             ));
         assert!(
-            prepare(&edit).is_err(),
+            matches!(prepare(&edit), Err(BlockEditError::InvalidState(_))),
             "late bad palette state must refuse the whole prepared edit"
         );
     }

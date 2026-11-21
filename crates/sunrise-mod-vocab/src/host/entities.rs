@@ -51,45 +51,13 @@ pub trait EntitiesServerHost {
     #[access(WorldOnly)]
     fn entity_by_uuid(&self, uuid: EntityUuid) -> Option<EntityRef>;
     /// Side: server.
-    /// Spawns an entity of `kind` (`minecraft:item_display`) at `pos` in the
-    /// level in place, `dimension`, from `nbt` (its compound, as `/summon
-    /// <kind> <pos> <nbt>` takes it; passengers included): its id. None on a
-    /// client's copy of the world, for another dimension, a position outside
-    /// `/summon`'s bounds, a chunk that isn't loaded, a kind Sunrise can't
-    /// load, or one a mod kept out (`entity_join_level`). Inside a transaction its join waits for
-    /// the root commit, so a mod keeping it out is not known at the call: the id is returned and
-    /// names nothing from the commit on.
+    /// Narrows `entity` to an [`ExperienceOrbRef`] across the active and parked
+    /// server levels. Returns `Ok(None)` when the handle is stale, removed, held
+    /// out, or names a non-orb entity; returns `Err(LevelReadError::Unavailable)`
+    /// on a client or outside the world phase.
     #[access(WorldOnly)]
-    fn summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32>;
-    /// Side: server.
-    /// Writes the experience orb `id`'s `value` (the points a pickup gives), `count`
-    /// (orbs merged into it, each worth `value`) and `age` (ticks lived; an orb
-    /// despawns at 6000); a `None` is left as it is. Signed values are preserved,
-    /// including zero and negative values.
-    /// False, and nothing written, for an orb not in the server level `dimension`,
-    /// a `count` of 0 or above `i32::MAX`, an `age` above `i32::MAX` (`ExperienceOrb.age`
-    /// is an int), a `value` outside -32768..=32767 (a save
-    /// keeps `Value` as a short and `Count` as an int, so a write it accepts reloads
-    /// unchanged), and on a client of a server. In `experience_orb_merge`, a write to
-    /// `into` is the merged orb.
-    #[access(WorldOnly)]
-    fn set_experience_orb(
-        &mut self,
-        dimension: &str,
-        id: u32,
-        value: Option<i32>,
-        count: Option<u32>,
-        age: Option<u32>,
-    ) -> bool;
-    /// Side: server.
-    /// The experience orbs of the server level `dimension` whose box meets
-    /// the box `min`..`max`, in the level's order: what a mod reads before it
-    /// cancels an orb in `entity_join_level`, to give its points with
-    /// `PlayerRef::give_experience_points`. Empty for a level not in place, on a
-    /// client of a server and for a bound that is not finite (NaN or infinite); a
-    /// minimum above its maximum is the same box with the two swapped (`AABB`).
-    #[access(WorldOnly)]
-    fn experience_orbs(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<ExperienceOrb>;
+    fn experience_orb(&self, entity: EntityRef)
+    -> Result<Option<ExperienceOrbRef>, LevelReadError>;
     /// Side: server.
     /// Throws a falling block of `state` from `pos` (its bottom centre) at
     /// `velocity` (blocks a tick) in the level in place, `dimension`: it
@@ -109,6 +77,73 @@ pub trait EntitiesServerHost {
         velocity: [f64; 3],
         falling: Falling,
     ) -> bool;
+}
+/// The handles' reads of the `entities` area, implemented by the game and reached through [`Backend`].
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntitiesBackend {
+    /// Side: server.
+    /// The orb's signed points value (`ExperienceOrb.getValue()`, `DATA_VALUE` int).
+    /// Works across active and parked server levels. Returns
+    /// `Err(LevelReadError::Stale)` for a stale, removed, or held-out orb, and
+    /// `Err(LevelReadError::Unavailable)` on a client or outside the world phase.
+    #[access(WorldOnly)]
+    fn experience_orb_value(&self, orb: ExperienceOrbRef) -> Result<i32, LevelReadError>;
+    /// Side: server.
+    /// How many orbs are merged into this one (`ExperienceOrb.count`), each worth
+    /// its value. Works across active and parked server levels. Returns
+    /// `Err(LevelReadError::Stale)` for a stale, removed, or held-out orb, and
+    /// `Err(LevelReadError::Unavailable)` on a client or outside the world phase.
+    #[access(WorldOnly)]
+    fn experience_orb_count(&self, orb: ExperienceOrbRef) -> Result<u32, LevelReadError>;
+    /// Side: server.
+    /// Ticks this orb has lived (`ExperienceOrb.age`, signed int; despawns at 6000).
+    /// Works across active and parked server levels. Returns
+    /// `Err(LevelReadError::Stale)` for a stale, removed, or held-out orb, and
+    /// `Err(LevelReadError::Unavailable)` on a client or outside the world phase.
+    #[access(WorldOnly)]
+    fn experience_orb_age(&self, orb: ExperienceOrbRef) -> Result<i32, LevelReadError>;
+}
+/// The handles' writes of the `entities` area, implemented by the game and reached through [`BackendMut`].
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntitiesBackendMut {
+    /// Side: server.
+    /// Writes the orb's signed points value (`ExperienceOrb.DATA_VALUE`, full `i32`).
+    /// Saving truncates `Value` to `(short)` as vanilla `ExperienceOrb.addAdditionalSaveData`
+    /// does. In `experience_orb_merge`, writing `into`'s value makes that write the
+    /// merged orb. Works across active and parked server levels.
+    #[access(WorldOnly)]
+    fn experience_orb_set_value(
+        &mut self,
+        orb: ExperienceOrbRef,
+        value: i32,
+    ) -> Result<(), ExperienceOrbWriteError>;
+    /// Side: server.
+    /// Writes how many orbs are merged into this one (`ExperienceOrb.count`).
+    /// Rejects `0` or values above `i32::MAX` (`ExtraCodecs.POSITIVE_INT`) with
+    /// `Err(ExperienceOrbWriteError::InvalidCount)` without mutating the orb. In
+    /// `experience_orb_merge`, writing `into`'s count makes that write the merged orb.
+    /// Works across active and parked server levels.
+    #[access(WorldOnly)]
+    fn experience_orb_set_count(
+        &mut self,
+        orb: ExperienceOrbRef,
+        count: u32,
+    ) -> Result<(), ExperienceOrbWriteError>;
+    /// Side: server.
+    /// Writes the ticks this orb has lived (`ExperienceOrb.age`, full signed `i32`;
+    /// despawns at 6000). Saving truncates `Age` to `(short)` as vanilla
+    /// `ExperienceOrb.addAdditionalSaveData` does. Works across active and parked
+    /// server levels.
+    #[access(WorldOnly)]
+    fn experience_orb_set_age(
+        &mut self,
+        orb: ExperienceOrbRef,
+        age: i32,
+    ) -> Result<(), ExperienceOrbWriteError>;
 }
 /// The handles' client writes of the `entities` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

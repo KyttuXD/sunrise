@@ -2706,10 +2706,11 @@ pub(super) mod tests {
                         vec![Some((ItemResource::of(&map), 1))],
                     )
                     .unwrap();
+                let player = game.player(12).unwrap();
                 let host: &mut dyn ServerHost = game;
-                let window = host
-                    .open_menu(
-                        12,
+                let window = player
+                    .open_chest_menu(
+                        host,
                         3,
                         mod_api::Text::literal("map fixture"),
                         Vec::new(),
@@ -2717,7 +2718,7 @@ pub(super) mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                let menu = host.menu(12, window).unwrap();
+                let menu = player.menu(host, window).unwrap().unwrap();
                 game.player_back_mod_menu_slots(
                     menu.fields().player,
                     window,

@@ -17,6 +17,20 @@ pub trait PlayerMenusBackend {
     /// contents. On a client, refuses stale players and unsupported menu layouts.
     #[access(WorldOnly)]
     fn player_container_menu(&self, player: PlayerRef) -> Option<MenuRef>;
+    /// Side: server.
+    /// The native menu `player` has open as window `window` (the window id
+    /// [`PlayerRef::open_chest_menu`], [`PlayerRef::open_mod_menu`], `menu_clicked` and
+    /// `menu_closed` give). Its slots are written as `ItemPlace::MenuSlot` in a transaction,
+    /// and the client is sent each changed slot with the next tick's container sync
+    /// (`AbstractContainerMenu.broadcastChanges`), as for any open menu. `Ok(None)` for
+    /// another window, a menu the game opened, or a stale/unplaced player.
+    /// `Err(LevelReadError::Unavailable)` on a client or outside the world phase.
+    #[access(WorldOnly)]
+    fn player_menu(
+        &self,
+        player: PlayerRef,
+        window: i32,
+    ) -> Result<Option<MenuRef>, LevelReadError>;
 }
 /// The handles' writes of the `player_menus` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -51,7 +65,7 @@ pub trait PlayerMenusBackendMut {
     /// not declare results or crafting. The old menu closes on the server as a close does (its
     /// `removed`, `player_container_close`, the cursor stack and crafting grids back to the
     /// inventory) before the new one is built; `replace` says whether the client is first sent
-    /// a close for it, as for `open_menu`. `MenuReplace::InPlace` sends none: the client keeps
+    /// a close for it, as for [`PlayerRef::open_chest_menu`]. `MenuReplace::InPlace` sends none: the client keeps
     /// its screen and mouse until the new screen replaces it. The window id, or Ok(None) when
     /// a mod cancelled the open or a registered exclusion is out of range. Errors: `NotModMenu`,
     /// `OwnedSlotsWithResults`, `ClickInProgress` (a speculative click cannot open a new screen),
@@ -113,4 +127,28 @@ pub trait PlayerMenusBackendMut {
         player: PlayerRef,
         title: Text,
     ) -> Result<bool, OpenMenuError>;
+    /// Side: server.
+    /// Opens a chest menu of `rows` rows (1 to 6) titled `title` for the connected player,
+    /// showing `items` (by slot, padded with empty ones), in place of the menu they had open:
+    /// its window id, a new one each time (`ServerPlayer.openMenu`). The old menu closes as a
+    /// close does, its cursor stack going back to the player's inventory; `replace` says
+    /// whether the client is first sent a close for it
+    /// (`MenuProvider.shouldTriggerClientSideContainerClosingOnOpen`). `MenuReplace::InPlace`
+    /// changes the title and rows without the client centring the mouse again. Packets for the
+    /// old window are ignored. The items of an open menu change through its slots
+    /// ([`PlayerRef::menu`], [`MenuRef::set_items`]), not by opening it again.
+    /// Returns `Ok(None)` if `rows` is outside `1..=6`. Returns
+    /// `Err(OpenMenuError::PlayerUnavailable)` for a stale, client, or unconnected player,
+    /// `Err(OpenMenuError::ClickInProgress)` during an active speculative menu click,
+    /// `Err(OpenMenuError::Title(_))` or `Err(OpenMenuError::TitleNotEncodable)` for an invalid
+    /// title, or `Err(OpenMenuError::Stack(_))` for an invalid stack.
+    #[access(WorldOnly)]
+    fn player_open_chest_menu(
+        &mut self,
+        player: PlayerRef,
+        rows: u8,
+        title: Text,
+        items: Vec<Option<ItemStack>>,
+        replace: MenuReplace,
+    ) -> Result<Option<i32>, OpenMenuError>;
 }

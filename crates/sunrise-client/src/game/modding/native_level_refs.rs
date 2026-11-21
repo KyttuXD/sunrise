@@ -3,10 +3,12 @@
 //! reach any loaded level; both-side reads also reach the client's current level.
 //! A handle of an earlier open or an unloaded block reads `None` (or `false`).
 use super::Game;
+use core::ops::ControlFlow;
 use mod_api::world::mod_chunk_tickets::ModTicket;
 use mod_api::{
     BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, GlobalPos, Hand,
-    Identifier, LevelRef, LightLayer, MapState, PlayerRef, RespawnData, TicketController, Vec3,
+    Identifier, LevelReadError, LevelRef, LightLayer, MapState, PlayerRef, RespawnData,
+    TicketController, Vec3,
 };
 use sunrise_client::{streaming::Streaming, world::World};
 use sunrise_core::{
@@ -283,6 +285,28 @@ impl Game<'_> {
         Some(sunrise_core::geometry::block_floor_height(&here, || &below))
     }
 
+    pub(super) fn level_visit_block_collision(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        visit: &mut dyn FnMut([f64; 6]) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
+        let world = if self.is_logical_server() {
+            self.native_level_world_result(level)?
+        } else {
+            self.client_view_world_result(level)?
+        };
+        let shape = self.block_collision_shape_in(world, pos);
+        for bounds in shape.boxes() {
+            let min = bounds.min_position();
+            let max = bounds.max_position();
+            if visit([min.x, min.y, min.z, max.x, max.y, max.z]).is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+        Ok(ControlFlow::Continue(()))
+    }
+
     /// The border of a resident server level, through the handle's lifetime check.
     pub(super) fn level_world_border(&self, level: LevelRef) -> Option<[f64; 4]> {
         self.native_level_world(level)?;
@@ -322,6 +346,40 @@ impl Game<'_> {
             && level.dimension() == self.native_level_key())
         .then_some(&self.world)
     }
+    /// Run a game-level operation in the server level the handle names. The journal
+    /// tracks the world in place, so an open transaction can't switch dimensions.
+    pub(super) fn with_server_level_mut<R, E>(
+        &mut self,
+        level: LevelRef,
+        unavailable: E,
+        stale: E,
+        in_transaction: E,
+        f: impl FnOnce(&mut Self) -> Result<R, E>,
+    ) -> Result<R, E> {
+        if !self.is_logical_server() {
+            return Err(unavailable);
+        }
+        if !self.level_handle_current(level) {
+            return Err(stale);
+        }
+        if level.dimension() == self.dim.key() {
+            return f(self);
+        }
+        let dim = self
+            .levels
+            .parked_dims()
+            .into_iter()
+            .find(|dim| dim.key() == level.dimension())
+            .ok_or(stale)?;
+        if !self.transactions.is_empty() {
+            return Err(in_transaction);
+        }
+        let back = self.enter_command_level(dim).ok_or(unavailable)?;
+        let result = f(self);
+        self.enter_command_level(back);
+        result
+    }
+
     /// Find a loaded chunk in an open server level.
     pub(super) fn chunk(&self, level: LevelRef, pos: [i32; 2]) -> Option<ChunkRef> {
         self.native_level_world(level)?
@@ -3178,7 +3236,6 @@ mod environment_read_tests {
             );
             assert_eq!(level.get_sky_darken(game), Some(game.sky_darken()));
             let heightmap = mod_api::Heightmap::WorldSurface;
-            assert_eq!(level.surface_height(game, [48, 48], heightmap), Ok(None));
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
@@ -3189,9 +3246,27 @@ mod environment_read_tests {
                 .default_state("minecraft:stone")
                 .unwrap();
             game.world.set(0, 64, 0, stone).unwrap();
-            assert_eq!(level.surface_height(game, [0, 0], heightmap), Ok(Some(65)));
+            let mut samples = Vec::new();
+            level
+                .visit_surface_heights(
+                    game,
+                    &[(48, 48), (0, 0), (48, 48)],
+                    heightmap,
+                    &mut |pos, y| {
+                        samples.push((pos, y));
+                        if y.is_some() {
+                            std::ops::ControlFlow::Break(())
+                        } else {
+                            std::ops::ControlFlow::Continue(())
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(samples, [((48, 48), None), ((0, 0), Some(65))]);
             assert_eq!(
-                nether.surface_height(game, [0, 0], heightmap),
+                nether.visit_surface_heights(game, &[(0, 0)], heightmap, &mut |_, _| {
+                    panic!("a foreign level must not invoke the visitor")
+                }),
                 Err(mod_api::LevelReadError::Unavailable),
             );
             assert_eq!(

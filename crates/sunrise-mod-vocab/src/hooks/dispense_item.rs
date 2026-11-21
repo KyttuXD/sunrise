@@ -12,7 +12,8 @@ pub trait Hooks {
     /// level event the dispenser plays with its smoke: 1000 the click, 1001 the
     /// fail sound (`OptionalDispenseItemBehavior` without success), or 0 for
     /// nothing at all (`DispenseItemBehavior.NOOP`). To drop one normally,
-    /// answer `(native_dispense_default(..), 1000)`.
+    /// resolve `host.level(dimension)`, call `level.dispense_default(host, pos, facing, stack)`,
+    /// and answer `(remainder, 1000)` on `Ok(remainder)`.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_dispense_item",
         dispatch = "flat",

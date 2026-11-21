@@ -1,14 +1,6 @@
 //! Host method declarations; access defaults and game forwarders are generated.
 #![allow(unused_variables)]
 use crate::*;
-/// The host's methods both sides share of the `client_view` area, implemented by the game and reached through [`Host`].
-#[sunrise_mod_api_macros::host_area]
-pub trait ClientViewHost {
-    /// Side: both.
-    /// Collision boxes in block-local coordinates with an empty collision context.
-    #[access(WorldOnly)]
-    fn block_collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]>;
-}
 /// The client host's methods of the `client_view` area, implemented by the game and reached through [`crate::ClientHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait ClientViewClientHost {

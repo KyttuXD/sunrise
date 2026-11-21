@@ -12,9 +12,9 @@ the entity only; the camera angle stays the entity's, and `camera_pose` is the w
 
 ## Client heights
 
-`level.surface_height(host, [x, z], heightmap)` is `LevelReader.getHeight(type, x, z)` on
-this client's displayed level. It sees the chunks the server has sent this window and
-returns `Ok(None)` for a nonresident column. Iterate coordinates in the mod to read an area
-without first building a result list."#]
+`level.visit_surface_heights(host, columns, heightmap, &mut visit)` reads `LevelReader.getHeight`
+on this client's displayed level. It passes each `(x, z)` and its optional height to `visit` in
+input order, with `None` for a chunk the server hasn't sent this window. Return
+`ControlFlow::Break(())` to stop early. The host does not build a result list."#]
     fn camera_read_note0();
 }

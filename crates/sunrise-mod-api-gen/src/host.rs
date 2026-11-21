@@ -143,6 +143,7 @@ const GOAL_VIEW_ENTITY_ARGS: &[&str] = &[
     "MobRef",
     "PlayerRef",
     "ItemEntityRef",
+    "ExperienceOrbRef",
     "MerchantRef",
 ];
 
@@ -620,7 +621,7 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                             call
                         }
                     } else if checked_write {
-                        if crosses_output
+                        if converted_output.is_some_and(|ty| contains_value(ty, &["BlockState"]))
                             && result_error(&entry.sig.output)
                                 .is_some_and(|error| outer_type(error, "LevelWriteError"))
                         {
@@ -1289,9 +1290,8 @@ fn goal_view(
                 let name = pat.ident.to_string();
                 match ty.as_str() {
                     "EntityRef" => Some(name),
-                    "LivingRef" | "PlayerRef" | "MobRef" | "ItemEntityRef" | "MerchantRef" => {
-                        Some(format!("{name}.entity()"))
-                    }
+                    "LivingRef" | "PlayerRef" | "MobRef" | "ItemEntityRef" | "ExperienceOrbRef"
+                    | "MerchantRef" => Some(format!("{name}.entity()")),
                     _ => None,
                 }
             })

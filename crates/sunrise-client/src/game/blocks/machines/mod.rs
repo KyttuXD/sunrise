@@ -2006,6 +2006,14 @@ impl Game<'_> {
         if !dropper && &*name != "minecraft:dispenser" {
             return Ok(());
         }
+        let generation = if dropper {
+            None
+        } else if let Some(generation) = self.dispenser_source(key) {
+            Some(generation)
+        } else {
+            log::warn!("ignoring dispense from {key:?}: no matching dispenser holder");
+            return Ok(());
+        };
         let Some(view) = self.containers().view(key, false) else {
             return Ok(());
         };
@@ -2076,7 +2084,16 @@ impl Game<'_> {
                 None => self.dispense_default_in_level(key, facing, stack),
             }
         } else {
-            self.dispense_item(key, facing, stack)?
+            let (left, applied) = self.dispense_item_from(
+                key,
+                facing,
+                stack,
+                generation.map(|generation| (slot, generation)),
+            )?;
+            if applied {
+                return Ok(());
+            }
+            left
         };
         if let Some(entry) = self.slot_mut_at(&view, slot) {
             *entry = remaining;

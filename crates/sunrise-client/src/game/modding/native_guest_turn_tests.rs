@@ -1691,15 +1691,10 @@ fn summon_stand(game: &mut super::Game<'_>) -> mod_api::EntityRef {
     else {
         unreachable!()
     };
-    let id = game
-        .summon(
-            game.dim.id(),
-            "minecraft:armor_stand",
-            [1.5, 70.0, 1.5],
-            tag,
-        )
-        .unwrap();
-    game.entity(id).unwrap()
+    let level = game.level(game.dim.id()).unwrap();
+    game.level_summon(level, "minecraft:armor_stand", [1.5, 70.0, 1.5], tag)
+        .unwrap()
+        .unwrap()
 }
 
 /// Whether anything the server sent the acting player since `before` is a chat line.

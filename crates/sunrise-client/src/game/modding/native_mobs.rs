@@ -1,11 +1,6 @@
-//! Mobs for native server mods (docs/modding/src/how-to/native-mods.md, "Mobs"): spawn one,
-//! read the mobs of the level in place, and move, hurt or remove one by its id.
-//! They act where the world is simulated, never on a client's copy, and only on
-//! the level in place, which each names by its `dimension` (`minecraft:overworld`)
-//! as `native_set_block` does: another one is refused. While the game ticks its
-//! mobs they are out of the level: a mob a hook spawns then joins it after the
-//! tick, and the others read as gone.
-use super::{Game, commands::Target};
+//! Mobs for native server mods (docs/modding/src/how-to/native-mods.md, "Mobs"): equipment
+//! change notices and mob spawn helpers.
+use super::Game;
 
 /// The `EquipmentSlot` names of `Mob::equipment_stacks`, in its order.
 const MOB_SLOTS: [&str; 8] = [
@@ -108,21 +103,6 @@ impl Game<'_> {
 /// The `EquipmentSlot` names of a player's equipment, in the order of `native_players_equipment`.
 const PLAYER_SLOTS: [&str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
 
-/// A mob as a native mod reads it.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeMob {
-    pub(crate) id: u32,
-    /// The level it is in (`minecraft:overworld`).
-    pub(crate) dimension: String,
-    /// `minecraft:zombie`.
-    pub(crate) kind: String,
-    pub(crate) pos: [f64; 3],
-    /// Degrees; 0 faces south.
-    pub(crate) yaw: f32,
-    pub(crate) health: f32,
-    pub(crate) max_health: f32,
-}
-
 /// What a mob starts with (`native_spawn_mob`); the default is a plain mob.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct NativeSpawn {
@@ -217,46 +197,5 @@ impl Game<'_> {
     fn native_chunk_loaded(&self, pos: [f64; 3]) -> bool {
         let (x, z) = (pos[0].floor() as i32, pos[2].floor() as i32);
         self.world.chunks.contains_key(&(x >> 4, z >> 4))
-    }
-    /// The living mob `id` in the level in place, `dimension`; none on a
-    /// client's copy.
-    pub(super) fn native_mob(&self, dimension: &str, id: u32) -> Option<NativeMob> {
-        if !self.native_mob_level(dimension) {
-            return None;
-        }
-        let mob = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
-        mob.alive().then(|| self.native_mob_of(mob))
-    }
-    /// The living mobs in the level in place, `dimension`; none on a client's
-    /// copy.
-    pub(super) fn native_mobs(&self, dimension: &str) -> Vec<NativeMob> {
-        if !self.native_mob_level(dimension) {
-            return Vec::new();
-        }
-        self.mobs
-            .iter()
-            .filter(|m| !m.removed && m.alive())
-            .map(|m| self.native_mob_of(m))
-            .collect()
-    }
-    /// Kills mob `id` as `/kill` does: it falls and drops its loot. False for
-    /// no such living mob or another dimension.
-    pub(super) fn kill_mob(&mut self, dimension: &str, id: u32) -> bool {
-        if self.native_mob(dimension, id).is_none() {
-            return false;
-        }
-        self.kill_target(Target::Mob(id));
-        true
-    }
-    fn native_mob_of(&self, m: &sunrise_client::mobs::Mob) -> NativeMob {
-        NativeMob {
-            id: m.id,
-            dimension: self.dim.id().to_owned(),
-            kind: sunrise_client::command::args::normalize(&m.kind.id),
-            pos: [m.position.x, m.position.y, m.position.z],
-            yaw: m.yaw,
-            health: m.health,
-            max_health: m.attrs.max_health,
-        }
     }
 }
