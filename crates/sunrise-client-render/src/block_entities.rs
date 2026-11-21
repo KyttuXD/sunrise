@@ -27,7 +27,6 @@ use crate::chunk::block_entity::{
     BlockEntity, ModBlockEntity, ModContainer, ModEnergyBuffer, ModFluidTanks,
 };
 use crate::fast_hash::{FxHashMap, FxHashSet};
-use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -1198,6 +1197,7 @@ mod lease_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn hopper() -> BlockEntity {
         BlockEntity::Chest(vec![None; 5])
