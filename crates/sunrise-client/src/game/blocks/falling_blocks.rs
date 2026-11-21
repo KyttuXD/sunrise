@@ -2,7 +2,56 @@
 //! (`fall_step`) and the item entity it leaves as a drop (`drop_falling_block`, `Entity.spawnAtLocation`).
 use super::*;
 
+/// A falling block is in `Visibility.TRACKED` or `TICKING` when its full column
+/// is resident. Its section membership does not depend on accessibility.
+pub(super) fn falling_section_accessible(world: &sunrise_client::world::World, at: Vec3) -> bool {
+    let pos = BlockPos::containing(at);
+    world.loaded(pos.x, pos.z)
+}
+
 impl Game<'_> {
+    /// The fresh `FallingBlockEntity` constructor and `ServerLevel.addFreshEntity`
+    /// path, shared by natural falls and `LevelRef::spawn_falling_block`. The
+    /// position supplies `start_pos`; `Entity.setDeltaMovement` keeps live velocity exact.
+    pub(super) fn spawn_falling_block_entity(
+        &mut self,
+        state: BlockStateId,
+        position: Vec3,
+        velocity: Vec3,
+        drop_item: bool,
+        damage: sunrise_client::falling_block::Damage,
+    ) -> Option<u32> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
+        let id = self.take_entity_id();
+        let slot = super::entity::EntityHandle::Falling(self.falling.len());
+        self.falling.push(FallingBlock {
+            attachment_lifetime: Default::default(),
+            rotation: [0.0, 0.0],
+            join: Default::default(),
+            id,
+            state,
+            start_pos: BlockPos::containing(position),
+            position,
+            previous: position,
+            velocity,
+            age: 0,
+            no_gravity: false,
+            on_ground: false,
+            fire_ticks: 0,
+            sync_velocity: false,
+            drop_item,
+            fall_distance: 0.0,
+            stuck: Vec3::ZERO,
+            damage,
+            saved: None,
+            portal: Default::default(),
+        });
+        self.uuid_for(id);
+        self.announce_fresh_join(slot, id).then_some(id)
+    }
+
     /// Cache only model-dependent work, never an entity's seed, light or pose.
     pub(super) fn falling_model_vertices(
         &self,

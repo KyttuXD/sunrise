@@ -488,7 +488,8 @@ fn section_order(tag: &Tag) -> u32 {
 }
 
 fn chunk_of(p: Vec3) -> (i32, i32) {
-    ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
+    let pos = BlockPos::containing(p);
+    (pos.x >> 4, pos.z >> 4)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2212,6 +2213,7 @@ impl Game<'_> {
     /// without `saveAll`'s flush.
     pub(super) fn save_entities(&mut self, wait: bool) -> Result<()> {
         self.spawn_loaded_entities();
+        self.save_hidden_falling_sections(wait)?;
         let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         let chunks = self.entity_chunks(&keys, false);
         self.prune_entity_memory();
@@ -2348,24 +2350,73 @@ impl Game<'_> {
                 _ => None,
             };
     }
+    /// `PersistentEntitySectionManager.getAllChunksToSave` also covers occupied
+    /// entity sections without a resident terrain column. A fresh falling block
+    /// can be admitted to one. Read its existing entity data before unloading it
+    /// (`storeChunkSections` requires loading before storing a nonempty section).
+    pub(super) fn save_hidden_falling_sections(&mut self, wait: bool) -> Result<()> {
+        let hidden: HashSet<_> = self
+            .falling
+            .iter()
+            .map(|f| chunk_of(f.position))
+            .filter(|key| !self.world.chunks.contains_key(key))
+            .collect();
+        let mut loaded = HashSet::new();
+        for (x, z) in hidden {
+            // EntityStorage reports a refused read and keeps the original on disk.
+            // Leave only that column's resident rows alone, as for a pending load.
+            if let Ok(records) = self.save.load_entities(x, z) {
+                loaded.insert((x, z));
+                if !records.is_empty() {
+                    self.world.queue_entity_nbt((x, z), records);
+                }
+            }
+        }
+        if loaded.is_empty() {
+            return Ok(());
+        }
+        self.spawn_loaded_entities();
+        // A load listener can make a column accessible. Save it in the ordinary pass.
+        loaded.retain(|key| !self.world.chunks.contains_key(key));
+        self.store_unloaded_entity_sections(&loaded, wait)
+    }
+
     /// Save and remove the entities of chunks that unloaded.
     pub(super) fn unload_entities(&mut self, unloaded: &[Arc<Chunk>]) {
         if unloaded.is_empty() {
             return;
         }
         self.spawn_loaded_entities();
-        let keys: HashSet<(i32, i32)> = unloaded.iter().map(|c| (c.x, c.z)).collect();
-        let chunks = self.entity_chunks(&keys, true);
+        let keys = unloaded.iter().map(|c| (c.x, c.z)).collect();
+        if let Err(e) = self.store_unloaded_entity_sections(&keys, false) {
+            log::warn!("Sunrise: failed to save entities: {e}");
+        }
+    }
+
+    fn store_unloaded_entity_sections(
+        &mut self,
+        keys: &HashSet<ChunkKey>,
+        wait: bool,
+    ) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let chunks = self.entity_chunks(keys, false);
         let counts: Vec<_> = chunks
             .iter()
             .map(|(key, entities)| (*key, entities.len()))
             .collect();
-        if let Err(e) = self.save.save_entities_later(chunks) {
-            log::warn!("Sunrise: failed to save entities: {e}");
+        if wait {
+            self.save.save_entities(chunks)?;
+        } else {
+            self.save.save_entities_later(chunks)?;
         }
+        self.persist.unknown.retain(|key, _| !keys.contains(key));
+        self.unload_removed_entities(keys);
         for (chunk, count) in counts {
             self.native_entities_unload(self.dim.id(), [chunk.0, chunk.1], count);
         }
+        Ok(())
     }
 }
 impl Game<'_> {
@@ -2482,13 +2533,17 @@ impl Game<'_> {
         keys: &HashSet<ChunkKey>,
     ) -> Option<(ChunkKey, Tag)> {
         let f = &self.falling[i];
-        if !keys.contains(&chunk_of(f.position)) {
+        if !keys.contains(&chunk_of(f.position))
+            || self
+                .persist
+                .removals
+                .contains(&super::commands::Target::Falling(f.id))
+        {
             return None;
         }
-        let raw = match &f.saved {
-            Some(saved) => Some(saved.1.clone()),
-            None => anon_raw(&self.persist, "minecraft:falling_block", f.position),
-        };
+        // A fresh block can occupy the same position as one read from disk.
+        // Its state belongs to its own row, not a block found by position.
+        let raw = f.saved.as_ref().map(|saved| &saved.1);
         let uuid = saved_uuid(&self.persist, f.id);
         let tag = entity_nbt::falling_block_to_nbt(
             self.state_to_nbt(f.state),
@@ -2502,7 +2557,7 @@ impl Game<'_> {
             f.rotation,
             uuid,
         );
-        let mut tag = with_raw(tag, raw.as_ref());
+        let mut tag = with_raw(tag, raw);
         if let Tag::Compound(fields) = &mut tag {
             fields.insert("PortalCooldown".into(), Tag::Int(f.portal.cooldown));
             // Its simulated fire, not a saved copy's (`with_raw` keeps those).

@@ -209,8 +209,8 @@ impl Game<'_> {
     fn joins_pending(&self) -> bool {
         sunrise_client::join_seq::JoinSeq::latest() > self.persist.joined_seq
     }
-    /// Tells `native_entity_join_level` once for every entity added since the
-    /// last call, of any kind, in insertion order. A mod that cancels takes
+    /// Tells `native_entity_join_level` for every still-unannounced entity,
+    /// of any kind, in insertion order. A mod that cancels takes
     /// the entity back out here,
     /// before it ticks again, and `/summon` of it fails (`joins_canceled`).
     /// `loaded_from_disk` is for the entities that came with a chunk. Returns
@@ -227,6 +227,40 @@ impl Game<'_> {
     pub(super) fn native_joins_flush(&mut self, loaded_from_disk: bool, watch: u32) -> bool {
         self.flush_joins(loaded_from_disk, watch, &[], None)
     }
+    /// `addFreshEntity` at a call site that has a specific new row. It does not wait
+    /// for an unrelated item still being decided by `item_toss`. The level's journal
+    /// can hold the join, but construction still happens at the call.
+    pub(super) fn announce_fresh_join(
+        &mut self,
+        handle: super::entity::EntityHandle,
+        id: u32,
+    ) -> bool {
+        if self.remote.is_some() || mod_api::__private::mods().is_empty() {
+            return true;
+        }
+        if self.hold_announcement(super::transactions::Announcement::FreshJoin { handle, id }) {
+            let kind = self.slot_kind_and_position(Slot::Walk(handle)).0;
+            self.construct_joining(id, &kind);
+            return true;
+        }
+        self.admit_fresh_join(handle, id)
+    }
+
+    /// Admit one fresh row now, either synchronously or when its journal is told.
+    pub(in crate::game) fn admit_fresh_join(
+        &mut self,
+        handle: super::entity::EntityHandle,
+        id: u32,
+    ) -> bool {
+        if self.join_was_announced(id) {
+            return true;
+        }
+        let Some(handle) = self.refresh_entity_handle(id, handle) else {
+            return false;
+        };
+        self.admit_join(Slot::Walk(handle), id, false)
+    }
+
     /// [`Self::native_joins_flush`], never announcing the entities `removed` names and, with a
     /// `through`, none that joined after it: a root commit's, for the entities its transaction
     /// added and removed, each held flush keeping its own `loaded_from_disk`.
@@ -269,38 +303,8 @@ impl Game<'_> {
             self.next_unannounced(self.persist.joined_seq, removed, through)
         {
             self.persist.joined_seq = seq;
-            let (kind, at) = self.slot_kind_and_position(slot);
-            let mut canceled = false;
-            let dimension = self.dim.id();
-            self.construct_joining(id, &kind);
-            self.native_entity_join_level(
-                dimension,
-                id,
-                &kind,
-                [at.x, at.y, at.z],
-                loaded_from_disk,
-                &mut canceled,
-            );
-            let spawn = self
-                .native_lifecycle
-                .pending_item_spawns
-                .iter()
-                .position(|entry| entry.0 == id)
-                .map(|index| self.native_lifecycle.pending_item_spawns.remove(index));
-            if canceled {
-                self.persist.joins_canceled += 1;
-                self.forget_entity(id);
-                // Handles are indexes: the entity is taken out before any
-                // other change to its list.
-                self.discard_slot(slot);
-                kept &= id != watch;
-            } else {
-                self.remember_join(id, kind.into_owned());
-                // `addEntity` files it under its section, untold.
-                self.entity_section_joined(id, [at.x, at.y, at.z]);
-                if let Some((id, item, count, position)) = spawn {
-                    self.native_item_spawn(id, &item, count, position);
-                }
+            if !self.admit_join(slot, id, loaded_from_disk) && id == watch {
+                kept = false;
             }
         }
         // A held toss is not past yet: the mark stays before it.
@@ -308,6 +312,43 @@ impl Game<'_> {
             self.persist.joined_seq = self.persist.joined_seq.max(observed);
         }
         kept
+    }
+
+    /// The shared `PersistentEntitySectionManager.addEntity` boundary, for a fresh
+    /// row or for a row waiting in a batch. NeoForge asks `EntityJoinLevelEvent`
+    /// before filing the entity in its section.
+    fn admit_join(&mut self, slot: Slot, id: u32, loaded_from_disk: bool) -> bool {
+        let (kind, at) = self.slot_kind_and_position(slot);
+        let mut canceled = false;
+        self.native_lifecycle.admitting_joins.push(id);
+        self.construct_joining(id, &kind);
+        self.native_entity_join_level(
+            self.dim.id(),
+            id,
+            &kind,
+            [at.x, at.y, at.z],
+            loaded_from_disk,
+            &mut canceled,
+        );
+        self.native_lifecycle.admitting_joins.pop();
+        let spawn = self
+            .native_lifecycle
+            .pending_item_spawns
+            .iter()
+            .position(|entry| entry.0 == id)
+            .map(|index| self.native_lifecycle.pending_item_spawns.remove(index));
+        if canceled {
+            self.persist.joins_canceled += 1;
+            self.forget_entity(id);
+            self.discard_slot(slot, id);
+            return false;
+        }
+        self.remember_join(id, kind.into_owned());
+        self.entity_section_joined(id, [at.x, at.y, at.z]);
+        if let Some((id, item, count, position)) = spawn {
+            self.native_item_spawn(id, &item, count, position);
+        }
+        true
     }
 
     /// `Entity.<init>` comes before `addFreshEntity`: an entity that started on a path that
@@ -357,14 +398,17 @@ impl Game<'_> {
         use sunrise_client::join_seq::{JoinSeq, Joined};
         let mut best: Option<(Slot, u32, JoinSeq)> = None;
         let mut offer = |slot: Slot, id: u32, seq: JoinSeq| {
-            if skipped.contains(&id) || self.persist.removals.iter().chain(self.persist.destroying_vehicles.iter()).any(|target| {
-                matches!(*target, super::commands::Target::Boat(n) | super::commands::Target::Cart(n) if n == id)
-            }) {
-                return;
-            }
             if seq > mark
                 && through.is_none_or(|through| seq <= through)
                 && best.is_none_or(|(_, _, previous)| seq < previous)
+                && !skipped.contains(&id)
+                && !self.native_lifecycle.admitting_joins.contains(&id)
+                && !self.join_was_announced(id)
+                // A synchronous join can leave before the insertion-order walk catches up.
+                // Its physical row waits for the removal sweep but must never rejoin.
+                && !self.persist.removals.iter()
+                    .chain(self.persist.destroying_vehicles.iter())
+                    .any(|target| target_id(*target) == Some(id))
             {
                 best = Some((slot, id, seq));
             }
@@ -398,6 +442,10 @@ impl Game<'_> {
         }
         // A toss still being asked (`item_toss`) ends the flush: it and what joined after wait.
         best.filter(|&(_, id, _)| !self.native_lifecycle.held_joins.contains(&id))
+    }
+
+    fn join_was_announced(&self, id: u32) -> bool {
+        self.persist.live.binary_search_by_key(&id, |l| l.0).is_ok()
     }
 
     fn remember_join(&mut self, id: u32, kind: String) {
@@ -450,9 +498,15 @@ impl Game<'_> {
         }
     }
     /// Takes the entity out of the level, before it ever ticked.
-    fn discard_slot(&mut self, slot: Slot) {
+    fn discard_slot(&mut self, slot: Slot, id: u32) {
         match slot {
-            Slot::Walk(h) => self.discard_entity(h),
+            // A listener can cause another join or a removal; resolve by id
+            // rather than discarding whatever now occupies the old index.
+            Slot::Walk(hint) => {
+                if let Some(handle) = self.refresh_entity_handle(id, hint) {
+                    self.discard_entity(handle);
+                }
+            }
             Slot::Apart(Apart::Crystal(i)) => drop(self.crystals.remove(i)),
             Slot::Apart(Apart::Cushion(i)) => drop(self.cushions.remove(i)),
             Slot::Apart(Apart::Painting(i)) => drop(self.paintings.remove(i)),

@@ -21,6 +21,7 @@ use super::{
     Game,
     commands::Target,
     entity::{Entity as _, entity_lists_of, for_each_entity},
+    falling_blocks::falling_section_accessible,
     remote::Remote,
     transactions::After,
 };
@@ -29,6 +30,7 @@ use mod_api::{
     BlockFace, BlockShapeKind, BlockUpdateFlags, ClipBlock, ClipFluid, ClipHit, DimensionKey,
     EntityRayHit, EntityRef, LevelReadError, LevelRef, NeighbourUpdate,
 };
+use sunrise_client::join_seq::residency::{Kind, table::Location};
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_items::items::ItemStack;
 use sunrise_world::registry::BlockStateId;
@@ -90,6 +92,11 @@ impl Game<'_> {
 
     /// What a handle names now, or None for a stale or foreign one.
     pub(super) fn native_entity_target(&self, entity: EntityRef) -> Option<Target> {
+        self.native_entity_location(entity)
+            .map(|(_, target)| target)
+    }
+
+    fn native_entity_location(&self, entity: EntityRef) -> Option<(Location, Target)> {
         if self.held_out.contains(&entity.id())
             || !self.is_logical_server()
             || self.native_lifecycle.epoch() != Some(entity.epoch())
@@ -105,8 +112,18 @@ impl Game<'_> {
         // their existing current-level domain; source membership is global.
         (matches!(value, Target::Player | Target::Guest(_))
             || location.owner.dimension == self.dim.key())
-        .then_some(value)
+        .then_some((location, value))
     }
+
+    /// Unlike a retained handle, level lookup membership needs an accessible section.
+    /// A temporarily extracted row still counts as a candidate for the visitor's preflight.
+    fn level_lookup_accessible(&self, location: Location) -> bool {
+        location.owner.kind != Kind::Falling
+            || self.falling.locate(location.join).is_none_or(|index| {
+                falling_section_accessible(&self.world, self.falling[index].position)
+            })
+    }
+
     /// What a handle names on a client: the local player, or an entity the
     /// server told this client of (`ClientLevel.getEntity`, whose entities are
     /// the ones the server tracks to it). None for a stale handle, with no
@@ -142,9 +159,17 @@ impl Game<'_> {
     /// this window's own player included. API 373.
     pub(super) fn entity(&self, id: u32) -> Option<EntityRef> {
         let entity = EntityRef::new(self.native_lifecycle.epoch()?, id);
-        (self.native_entity_read_target(entity).is_some()
-            || self.native_client_tracked(entity).is_some())
-        .then_some(entity)
+        let visible = if self.is_logical_server() {
+            self.native_entity_location(entity)
+                .is_some_and(|(location, _)| {
+                    self.level_lookup_accessible(location)
+                        || self.native_lifecycle.admitting_joins.contains(&id)
+                })
+        } else {
+            self.native_client_entity_target(entity).is_some()
+                || self.native_client_tracked(entity).is_some()
+        };
+        visible.then_some(entity)
     }
     pub(super) fn entity_by_uuid(&self, uuid: mod_api::EntityUuid) -> Option<EntityRef> {
         if !self.is_logical_server() {
@@ -162,8 +187,11 @@ impl Game<'_> {
                 .level_uuid_candidate(dimension, uuid, after)?;
             let entity = EntityRef::new(epoch, id.get());
             if self
-                .native_entity_target(entity)
-                .is_some_and(|target| self.resident_source_target_visible(dimension, target))
+                .native_entity_location(entity)
+                .is_some_and(|(location, target)| {
+                    self.level_lookup_accessible(location)
+                        && self.resident_source_target_visible(dimension, target)
+                })
             {
                 return Some(entity);
             }
@@ -236,15 +264,18 @@ impl Game<'_> {
         let mut after = None;
         std::iter::from_fn(move || {
             // Copy the key and release the residency borrow before resolution or a visitor.
-            let key = self
+            let (key, location) = self
                 .resident_entities
                 .table
                 .borrow_mut()
                 .level_entity_candidate_after(level.dimension(), after)?;
             after = Some(key);
-            Some(key.1.get())
+            Some((key.1.get(), location))
         })
-        .filter(move |id| {
+        .filter(move |(id, location)| {
+            if !self.level_lookup_accessible(*location) {
+                return false;
+            }
             !self
                 .persist
                 .removals
@@ -252,7 +283,7 @@ impl Game<'_> {
                 .chain(self.persist.destroying_vehicles.iter())
                 .any(|target| matches!(*target, Target::Boat(n) | Target::Cart(n) if n == *id))
         })
-        .map(move |id| EntityRef::new(level.epoch(), id))
+        .map(move |(id, _)| EntityRef::new(level.epoch(), id))
     }
 
     /// Visit lookup members of the active server level, without spatial filtering.
@@ -350,6 +381,9 @@ impl Game<'_> {
             if id != 0
                 && !entity.is_removed()
                 && bounds.intersects(entity.bounds())
+                && (client.is_some()
+                    || !matches!(entity.selector_target(), Some(Target::Falling(_)))
+                    || falling_section_accessible(&self.world, entity.position()))
                 && visit_id(id).is_break()
             {
                 return stopped;

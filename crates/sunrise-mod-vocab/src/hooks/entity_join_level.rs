@@ -45,12 +45,13 @@ pub trait Hooks {
     /// armor stands, primed TNT, falling blocks, projectiles, rockets,
     /// tridents, end crystals, the dragon, cushions, paintings, item frames,
     /// block/item/text displays, markers and interactions),
-    /// once each, in the order they were created; check `kind`. A drop, an
-    /// orb, a mob, a `/summon` and a chunk's entities are told at once, any
-    /// other spawn between the tick's phases (it is checked after the blocks,
-    /// the vehicles, the projectiles, the items and the mobs, and at the
-    /// tick's end). A mod that cancels one of the others sees it removed
-    /// before it ticks again. Inside a transaction (`Host::transaction`) opened
+    /// once each; check `kind`. A drop, an orb, a mob, a `/summon` and a chunk's
+    /// entities are told at once. A fresh falling block is told at its spawn call,
+    /// before the next scheduled block tick for a natural fall, or before
+    /// `LevelRef::spawn_falling_block` returns. A natural fall's source block
+    /// replacement is not undone by a veto. Other spawns are batched in insertion
+    /// order between tick phases and a veto removes them before they tick again.
+    /// Inside a transaction (`Host::transaction`) opened
     /// in the entity's own level the join is told at that transaction's root
     /// commit, not at the spawn call (an entity spawned in another level, as by
     /// a command run `in` it, is told at once): before the
@@ -73,7 +74,7 @@ pub trait Hooks {
         contract = "cancel",
         out = "canceled",
         neoforge = "EntityJoinLevelEvent",
-        version = 3
+        version = 4
     )]
     fn entity_join_level(
         dimension: &str,

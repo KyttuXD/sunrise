@@ -222,6 +222,7 @@ impl Game<'_> {
                     }
                     if keys.is_empty() {
                         self.spawn_loaded_entities();
+                        self.save_hidden_falling_sections(false)?;
                         save.stage = Stage::Entities(self.world.chunks.keys().copied().collect());
                     }
                     Ok(false)

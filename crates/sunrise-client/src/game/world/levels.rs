@@ -1244,6 +1244,22 @@ impl Game<'_> {
         }
     }
 
+    /// Run an action with `dim` in place, then restore the caller's level.
+    /// Transactions and entity admission consult the level in place during the action.
+    pub(super) fn with_level_in_place<R>(
+        &mut self,
+        dim: Dim,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if dim == self.dim {
+            return Some(f(self));
+        }
+        let back = self.enter_command_level(dim)?;
+        let result = f(self);
+        self.enter_command_level(back);
+        Some(result)
+    }
+
     /// One server tick (`MinecraftServer.tickServer`): each level with
     /// players or forced chunks in turn (`tickChildren`), its chunks streamed
     /// and loaded and its world ticked. The first pass reads the network and runs the

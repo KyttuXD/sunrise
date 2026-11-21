@@ -9,7 +9,7 @@ pub trait LevelEntitiesBackend {
     /// Side: server.
     /// Visit members of the server level's entity lookup (`ServerLevel.getAllEntities`),
     /// including spectators and entities outside any spatial query. Dragon parts are not
-    /// lookup members. Vehicles being removed are skipped.
+    /// lookup members. Vehicles being removed and falling blocks in hidden sections are skipped.
     ///
     /// The visitor can make shared reads on the same host, including another visit.
     /// No residency guard is held while it runs. Return `ControlFlow::Break(())` to stop;
@@ -49,7 +49,7 @@ pub trait LevelEntitiesBackend {
     /// Side: both.
     /// Visit readable entities whose bounding boxes intersect this box (`Level.getEntities`).
     /// Face-only contact does not intersect. Inverted bounds are swapped on each axis,
-    /// as in vanilla's `AABB`.
+    /// as in vanilla's `AABB`. On the server, a falling block in a hidden section is not visited.
     ///
     /// The visitor can make shared reads on the same host, including another visit.
     /// No residency guard is held while it runs. Return `ControlFlow::Continue(())`

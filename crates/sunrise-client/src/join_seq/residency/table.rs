@@ -305,14 +305,14 @@ impl EntityTable {
         &mut self,
         dimension: DimensionKey,
         after: Option<(JoinSeq, NonZeroU32)>,
-    ) -> Option<(JoinSeq, NonZeroU32)> {
+    ) -> Option<((JoinSeq, NonZeroU32), Location)> {
         self.drain();
         let admissions = self.level_admissions.get(&dimension)?;
-        match after {
+        let &key = match after {
             Some(key) => admissions.range((Excluded(key), Unbounded)).next(),
             None => admissions.first(),
-        }
-        .copied()
+        }?;
+        Some((key, self.rows[&key.1].location))
     }
 
     /// Each admitted id's lookup admission, for callers that answer in lookup
@@ -391,7 +391,7 @@ fn forget(map: &mut FxHashMap<NonZeroU32, Location>, id: NonZeroU32, location: L
 fn collect_level_entities(table: &mut EntityTable, dimension: DimensionKey) -> Vec<u32> {
     let mut after = None;
     std::iter::from_fn(|| {
-        let key = table.level_entity_candidate_after(dimension, after)?;
+        let (key, _) = table.level_entity_candidate_after(dimension, after)?;
         after = Some(key);
         Some(key.1.get())
     })

@@ -42,13 +42,15 @@ pub trait Hooks {
         hit_at: [f64; 3],
     );
     /// Entities from `chunk` finished loading into the server world. `count`
-    /// is the number of saved entity records read.
+    /// is the number of saved entity records read. Saving an occupied hidden
+    /// section can read its existing entity records without loading its terrain.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entities_load",
         dispatch = "flat",
         side = "server",
         contract = "listen",
-        neoforge = "none (NeoForge has no such event)"
+        neoforge = "none (NeoForge has no such event)",
+        version = 2
     )]
     fn entities_load(dimension: &str, chunk: [i32; 2], count: usize);
 }

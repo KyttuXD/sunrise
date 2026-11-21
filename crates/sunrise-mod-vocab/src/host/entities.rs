@@ -7,7 +7,8 @@ pub trait EntitiesHost {
     /// Side: both.
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
     /// methods: None with no world open, or for no such entity in the level
-    /// in place or among the server's players. On a client (API
+    /// in place or among the server's players. A falling block in a hidden
+    /// section isn't discoverable by ID, except from its join callback. On a client (API
     /// @API:client_entity_refs@), any entity the server shows this window,
     /// this window's own player included. API 373.
     #[access(WorldOnly)]
@@ -44,7 +45,7 @@ pub trait EntitiesServerHost {
     /// Side: server.
     /// Finds a loaded entity by UUID in the server level in place for this
     /// hook. Returns `None` for unloaded entities, entities in another level,
-    /// and dragon parts. It also returns `None` for entities held out of
+    /// dragon parts, and falling blocks in hidden sections. It also returns `None` for entities held out of
     /// lookup, taken from their resident storage, unavailable under a scoped
     /// item loan, queued for removal, or vehicles undergoing destruction.
     /// The lookup leaves entity and level state alone.
@@ -90,25 +91,6 @@ pub trait EntitiesServerHost {
     /// minimum above its maximum is the same box with the two swapped (`AABB`).
     #[access(WorldOnly)]
     fn experience_orbs(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<ExperienceOrb>;
-    /// Side: server.
-    /// Throws a falling block of `state` from `pos` (its bottom centre) at
-    /// `velocity` (blocks a tick) in the level in place, `dimension`: it
-    /// falls, lands and places itself as sand does, or drops as an item
-    /// where it can't. The block at `pos` is left as it is: take it away first
-    /// with `native_set_block` to make a block fall out of the world. False,
-    /// with nothing thrown, on a client's copy of the world, for another
-    /// dimension, an air or unknown state, a chunk that isn't loaded, a value
-    /// that isn't finite, or with 1024 falling blocks in the level already.
-    /// Each axis of `velocity` is cut to 3.9.
-    #[access(WorldOnly)]
-    fn spawn_falling_block(
-        &mut self,
-        dimension: &str,
-        state: BlockState,
-        pos: [f64; 3],
-        velocity: [f64; 3],
-        falling: Falling,
-    ) -> bool;
 }
 /// The handles' client writes of the `entities` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

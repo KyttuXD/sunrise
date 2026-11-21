@@ -780,8 +780,12 @@ impl Game<'_> {
         use super::entity::{Entity as _, entity_lists_of, for_each_entity};
         let mut candidates = Vec::new();
         for_each_entity!(entity_lists_of!(self), entity => {
-            if !alive_only || entity.is_alive() {
-                candidates.extend(entity.selector_target());
+            if (!alive_only || entity.is_alive())
+                && let Some(target) = entity.selector_target()
+                && (!matches!(target, Target::Falling(_))
+                    || super::falling_blocks::falling_section_accessible(&self.world, entity.position()))
+            {
+                candidates.push(target);
             }
         });
         candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
@@ -877,14 +881,7 @@ impl Game<'_> {
         t: Target,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
-        let dim = self.resident_target_dimension(t)?;
-        if dim == self.dim {
-            return Some(f(self));
-        }
-        let back = self.enter_command_level(dim)?;
-        let result = f(self);
-        self.enter_command_level(back);
-        Some(result)
+        self.with_level_in_place(self.resident_target_dimension(t)?, f)
     }
     pub(in crate::game) fn entity_tag_matches(&self, tag: &str, ty: &str) -> bool {
         let path = self.options.resources.join(format!(

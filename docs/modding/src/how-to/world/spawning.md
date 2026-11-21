@@ -84,7 +84,7 @@ have Wire encodings.
 
 ## Saved display and utility entities
 
-`entity_join_level` (hook version 3) additionally notifies for live fallback-store
+`entity_join_level` also notifies for live fallback-store
 entities: block, item and text displays, markers, interactions, and summoned or
 chunk-restored eyes of ender and explicit leash knots. Gameplay-thrown eyes and
 naturally tied leash knots live in separate lists and do not notify yet. Saved data
@@ -393,6 +393,27 @@ and the row declines damage. This does not make the box solid or give it a
 middle-click item. The next argument declares how the row reacts to pistons:
 pass `None` for `PushReaction::PushPull`, or `Some(PushReaction::IgnoreEntity)`
 to leave the row in place. The declared reaction is readable on either side.
+
+`LevelRef::spawn_falling_block(host, state, pos, velocity, falling)` spawns a falling block
+(`FallingBlockEntity`) of `state` at `pos` (its bottom centre) in the named open server level, even
+when that level is parked. It leaves the block at `pos` alone. `Falling` sets `drop_item` (default
+`true`) and `hurts` (default `false`, which keeps the carried block's default damage). Enabling
+`hurts` sets the damage from `AnvilBlock.falling`: 2 per block fallen up to 40. Live velocity stays
+exact in blocks per tick (`Entity.setDeltaMovement`); packets quantize only on send (`LpVec3`).
+Any valid block state is accepted, including air, which vanilla discards on its first tick.
+Admission follows `ServerLevel.addFreshEntity`: no per-level count cap or `/summon` position
+check, and the call neither requires nor loads the destination chunk. A hidden section keeps the
+falling block out of entity lookups, spatial queries, tracking and ticking. Keep the returned
+handle for direct operations in its level until the entity unloads. Saving occupied hidden
+entity sections preserves their contents without loading terrain.
+
+The spawn runs `entity_constructing` then `entity_join_level`, just like a natural fall. A natural
+fall asks for admission before the next scheduled block tick; if vetoed, the source block's
+replacement still stands. `spawn_falling_block` returns `Ok(Some(EntityRef))` when admitted,
+`Ok(None)` for non-finite coordinates or velocity, exhausted entity ids or a join veto, and
+`Err(LevelWriteError)` for a stale or closed level, a client, an unknown block state or a wrong
+phase. A transaction open or committing in the destination level delays the join until its
+place in the root commit; the returned handle is provisional and becomes stale on abort or veto.
 
 `EntityRef::owner(host)` reads the owner back (`TraceableEntity.getOwner`) for a projectile or a general row (`ProjectileRef::owner` answers the same for a projectile): a general type's own tick uses it to skip its shooter and to name the attacker of the damage it deals. A spawn is refused for a kind of another family than its body, a position, velocity or rotation that isn't finite, a position outside `Level.isInSpawnableBounds` or in an unloaded chunk, an owner that is stale, in another level, or without a collision identity for a thrown spawn, a level not in place, a client, or a mod that cancelled the spawn or kept the entity out.
 Inside a transaction the join waits for the root commit, so a spawn a mod then keeps out still returns a handle, which reads stale from the commit on. The level's spawn limits, flags and spawn rules don't apply, as they don't to `/summon`; nor does a general type's `summonable`, which is `/summon`'s alone. Items, experience and block drops have their own calls (`spawn_item`, `award_experience`, `pop_resource`), and any other entity `summon`.

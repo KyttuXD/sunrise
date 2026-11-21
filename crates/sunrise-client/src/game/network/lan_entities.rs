@@ -874,7 +874,10 @@ impl Game<'_> {
             }
             e.precise = t.on_ground;
         }
-        for f in self.falling.iter().filter(|f| f.id > after) {
+        for f in self.falling.iter().filter(|f| {
+            f.id > after
+                && super::falling_blocks::falling_section_accessible(&self.world, f.position)
+        }) {
             let e = add_state(
                 out,
                 f.id,

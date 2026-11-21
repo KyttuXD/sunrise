@@ -116,6 +116,40 @@ pub trait LevelSpawningBackendMut {
         spawn: &EntitySpawn,
     ) -> Option<EntityRef>;
     /// Side: server.
+    /// Spawns a falling block (`FallingBlockEntity`) of `state` at `pos` (its bottom centre)
+    /// with initial `velocity` (blocks a tick, `Entity.setDeltaMovement`) in the level,
+    /// without altering the block at `pos`: it falls, lands and places itself as sand does, or
+    /// drops as an item where it cannot. `falling` controls item dropping (`drop_item`) and
+    /// anvil-style landing damage (`hurts`, 2 a block fallen up to 40, `AnvilBlock.falling`).
+    /// The live entity keeps
+    /// the exact `velocity` (network packets quantize through `LpVec3` on send), accepts any
+    /// valid block state including air (which vanilla discards on its first tick in
+    /// `FallingBlockEntity.tick`), and imposes no per-level count cap.
+    ///
+    /// Uses the named open server level, including one that is parked. A chunk need not
+    /// be loaded, and the call does not load it (`ServerLevel.addFreshEntity`). A hidden
+    /// entity isn't discoverable by lookup or tracked to clients. Use the returned handle
+    /// for direct operations in its level until it unloads. Saving also stores occupied
+    /// hidden entity sections before unloading them, without loading terrain.
+    ///
+    /// Returns `Err(LevelWriteError::Stale)` for a stale handle or closed level,
+    /// `Err(LevelWriteError::Unavailable)` on a client or outside the world phase,
+    /// and `Err(LevelWriteError::InvalidState(_))` for an unknown block state.
+    /// Returns `Ok(None)` for a non-finite position or velocity, exhausted entity ids,
+    /// or a join veto in `entity_join_level`. Outside a transaction in the destination
+    /// level, the join decision is made before this call returns. While that level's
+    /// transaction is open or committing, the returned handle is provisional: the join
+    /// waits for its place in the root commit, and aborting or vetoing it makes it stale.
+    #[access(WorldOnly)]
+    fn level_spawn_falling_block(
+        &mut self,
+        level: LevelRef,
+        state: BlockState,
+        pos: [f64; 3],
+        velocity: [f64; 3],
+        falling: Falling,
+    ) -> Result<Option<EntityRef>, LevelWriteError>;
+    /// Side: server.
     /// Sets the level's natural spawning limits ([`SpawnLimits`]), from the next
     /// spawn pass on. They hold until the world closes, while the level is
     /// parked and across its closing and opening again, and are not saved: the
