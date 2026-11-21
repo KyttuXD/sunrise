@@ -30,7 +30,7 @@ use sunrise_world::{
 /// Read filesystem-bound package declarations concurrently, retaining dependency order and
 /// keeping an individual package's refusal attached to that package.
 fn read_contents(
-    requests: &[(&Path, &sunrise_mod_package::Manifest, Vec<String>)],
+    requests: &[(&Path, &sunrise_mod_package::Manifest)],
 ) -> Vec<Result<sunrise_mod_package::Content, String>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let next = AtomicUsize::new(0);
@@ -42,14 +42,11 @@ fn read_contents(
                     let mut done = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((path, manifest, declared)) = requests.get(index) else {
+                        let Some((path, manifest)) = requests.get(index) else {
                             return done;
                         };
-                        let content =
-                            sunrise_mod_package::Content::read_declaring(path, manifest, declared);
-                        if declared.is_empty()
-                            && let Ok(content) = &content
-                        {
+                        let content = sunrise_mod_package::Content::read(path, manifest);
+                        if let Ok(content) = &content {
                             remember_verdict(path, content);
                         }
                         done.push((index, content));
@@ -865,9 +862,7 @@ pub(super) fn content_overlay(
         .iter()
         .map(|&index| {
             let source = &packages[index];
-            let item_ids =
-                super::native_content_items::owned_item_ids(source.manifest, &declared.batches);
-            (source.path, source.manifest, item_ids)
+            (source.path, source.manifest)
         })
         .collect();
     let read = read_contents(&requests);
@@ -3614,7 +3609,7 @@ mod concurrent_content_tests {
             .collect();
         let requests: Vec<_> = packages
             .iter()
-            .map(|(path, package)| (path.as_path(), &package.manifest, Vec::new()))
+            .map(|(path, package)| (path.as_path(), &package.manifest))
             .collect();
         let read = read_contents(&requests);
         assert_eq!(read.len(), 12);
