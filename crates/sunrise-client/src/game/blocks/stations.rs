@@ -2488,7 +2488,7 @@ impl Game<'_> {
     /// a bundle's contents do (`ClientBundleTooltip`).
     pub(super) fn tooltip_with_carried(&self, stack: &ItemStack) -> bool {
         self.carried.is_none()
-            || sunrise_client::bundle::Contents::of(self.items(), stack).is_some()
+            || sunrise_client::bundle::contents_of(stack, self.items().get(&stack.item)).is_some()
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {

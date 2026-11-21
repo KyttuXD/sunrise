@@ -64,6 +64,13 @@ impl Weight {
         let d = (self.d / den_common).checked_mul(item.n / num_common)?;
         Some(u32::try_from(n / d).unwrap_or(u32::MAX))
     }
+
+    fn room_for(self, item: Self) -> Option<u32> {
+        // BundleContents.tryTransfer asks before taking anything from the slot.
+        // The sum must also be representable for any amount the slot supplies.
+        self.d.checked_mul(item.d / gcd(self.d, item.d))?;
+        Self::ONE.sub(self)?.how_many(item)
+    }
 }
 
 /// The sounds of `BundleItem` (`Entity.playSound` at the player): insert
@@ -154,8 +161,10 @@ fn contents_weight(
         contents: inside,
         parent,
     };
-    inside.iter().try_fold(Weight::ZERO, |w, s| {
-        w.add(item_weight(items, s, Some(&path))?.times(s.count)?)
+    sunrise_core::nbt::with_tree_stack(|| {
+        inside.iter().try_fold(Weight::ZERO, |w, s| {
+            w.add(item_weight(items, s, Some(&path))?.times(s.count)?)
+        })
     })
 }
 
@@ -167,14 +176,15 @@ pub(crate) fn stack_bar(items: &Items, stack: &ItemStack, info: &ItemInfo) -> Op
     if n == 0 {
         return None;
     }
-    let full = n >= d;
-    Some(ItemBar {
-        width: if full {
-            13
-        } else {
-            1 + (n.checked_mul(12)? / d) as i32
+    Some(match n.checked_mul(12) {
+        Some(scaled) if n < d => ItemBar {
+            width: 1 + (scaled / d) as i32,
+            color: 0x7087FF,
         },
-        color: if full { 0xFF5454 } else { 0x7087FF },
+        _ => ItemBar {
+            width: 13,
+            color: 0xFF5454,
+        },
     })
 }
 
@@ -230,22 +240,15 @@ impl Contents {
     /// Remaining capacity for `offered` in a stack's bundle component, without cloning contents.
     pub fn room_in_stack(items: &Items, bundle: &ItemStack, offered: &ItemStack) -> Option<u32> {
         let inside = contents_of(bundle, items.get(&bundle.item))?;
-        let room = contents_weight(items, inside, None).and_then(|weight| {
-            Weight::ONE
-                .sub(weight)?
-                .how_many(item_weight(items, offered, None)?)
-        });
+        let room = contents_weight(items, inside, None)
+            .and_then(|weight| weight.room_for(item_weight(items, offered, None)?));
         Some(room.unwrap_or(0))
     }
 
     /// `getMaxAmountToAdd` for `stack`'s kind of item.
     pub fn room_for(&self, items: &Items, stack: &ItemStack) -> u32 {
         self.weight
-            .and_then(|weight| {
-                Weight::ONE
-                    .sub(weight)?
-                    .how_many(item_weight(items, stack, None)?)
-            })
+            .and_then(|weight| weight.room_for(item_weight(items, stack, None)?))
             .unwrap_or(0)
     }
 
@@ -258,7 +261,7 @@ impl Contents {
         }
         let Some((amount, new_weight)) = self.weight.and_then(|current| {
             let weight = item_weight(items, stack, None)?;
-            let amount = stack.count.min(Weight::ONE.sub(current)?.how_many(weight)?);
+            let amount = stack.count.min(current.room_for(weight)?);
             Some((amount, current.add(weight.times(amount)?)?))
         }) else {
             return 0;
