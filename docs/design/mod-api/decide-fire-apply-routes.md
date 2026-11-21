@@ -104,10 +104,9 @@ Two structural notes for stage 2:
   inventory menu (`lan_crafting.rs:341`–`:345`) is rebuilt empty with `unwrap_or_else`, so a
   recursive inventory click continues on a fresh menu. Neither answers an admission **Busy**.
 
-The Game-only mod-menu click hooks are not additional client-lib targets: `menu_clicked` (`native_hooks/base.rs:3368`, fired at
-`game/modding/native_menus.rs:306`) and `menu_quick_move`
-(`native_hooks/base.rs:1615`, fired at `game/modding/api_values.rs:2020`) are `Game` hooks, not
-client-lib targets, and are migrated with the rest of the server menu path.
+The mod-menu hooks are `Game` hooks, not additional client-lib targets. `menu_clicked` runs on the
+receiving menu in `game/network/lan_actions/packets.rs`, without a decided action. `menu_quick_move`
+still runs as a decided action in `game/modding/native_quick_move.rs`.
 
 ## Baseline caller fixtures
 

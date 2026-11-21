@@ -268,9 +268,8 @@ pub(super) struct Level {
     stations: HashMap<(u32, decision::MenuId), super::lan_stations::GuestStation>,
     /// Each guest's inventory crafting grid before the first write, by connection.
     menus: HashMap<u32, KeptMenus>,
-    /// Drag, machine and preview state before a scoped default click.
-    menu_clicks: HashMap<u64, KeptClick>,
-    pub(super) menu_click_active: Option<u32>,
+    /// The first slot backing of each window whose binding this transaction changes.
+    menu_slot_places: HashMap<u64, (u32, Option<super::native_menu_places::MenuSlotPlaces>)>,
     /// Each native window's slots before the first write, by menu generation.
     native_menu_slots: HashMap<u64, Vec<Option<ItemStack>>>,
     menu_data: MenuDataJournal,
@@ -422,15 +421,6 @@ enum KeptEquipment {
         gear: Option<Box<Gear>>,
     },
     Stand(Box<Equipment>),
-}
-
-struct KeptClick {
-    conn: u32,
-    drag: Option<(u8, Vec<usize>)>,
-    craft: Option<sunrise_client::lan::menu::ModCraft>,
-    owned: Option<(u64, Box<sunrise_client::menu::Menu>)>,
-    machine: Option<(i32, Box<sunrise_client::menu::Menu>)>,
-    places: Option<super::native_menu_places::MenuSlotPlaces>,
 }
 
 #[derive(Clone)]
@@ -878,8 +868,8 @@ impl Game<'_> {
                 for (conn, kept) in level.menus {
                     outer.menus.entry(conn).or_insert(kept);
                 }
-                for (generation, kept) in level.menu_clicks {
-                    outer.menu_clicks.entry(generation).or_insert(kept);
+                for (generation, kept) in level.menu_slot_places {
+                    outer.menu_slot_places.entry(generation).or_insert(kept);
                 }
                 for (generation, kept) in level.native_menu_slots {
                     outer.native_menu_slots.entry(generation).or_insert(kept);
@@ -1381,33 +1371,13 @@ impl Game<'_> {
             }
         }
     }
-    pub(super) fn journal_menu_click(&mut self, conn: u32) {
-        let Some(level) = self.transactions.last_mut() else {
-            return;
-        };
-        let Some(host) = self.lan.as_ref() else {
-            return;
-        };
-        let Some(guest) = host.hub.guest(conn) else {
-            return;
-        };
-        let Some(menu) = guest.menu.as_ref() else {
-            return;
-        };
-        level
-            .menu_clicks
-            .entry(guest.menu_generation)
-            .or_insert_with(|| {
-                let owner = host.menus.get(&conn);
-                KeptClick {
-                    conn,
-                    drag: menu.drag.clone(),
-                    craft: menu.craft.clone(),
-                    owned: owner.and_then(|owner| owner.owned_menu.clone()),
-                    machine: owner.and_then(|owner| owner.crafting.machine.as_ref().cloned()),
-                    places: owner.and_then(|owner| owner.slot_places.clone()),
-                }
+    pub(super) fn journal_menu_slot_places(&mut self, conn: u32, generation: u64) {
+        if let Some(level) = self.transactions.last_mut() {
+            level.menu_slot_places.entry(generation).or_insert_with(|| {
+                let owner = self.lan.as_ref().and_then(|host| host.menus.get(&conn));
+                (conn, owner.and_then(|owner| owner.slot_places.clone()))
             });
+        }
     }
 
     /// Keeps entity `id`'s inventory as it is, if a transaction is open and hasn't yet.
@@ -2036,20 +2006,11 @@ impl Game<'_> {
                     menus.station.restore(Some(kept));
                 }
             }
-            for (generation, kept) in level.menu_clicks {
-                if let Some(i) = host.hub.guests.connection_index(kept.conn)
-                    && host.hub.guests[i].menu_generation == generation
-                    && host.hub.guests[i].menu.is_some()
-                {
-                    host.hub.guests.update(i, |g| {
-                        let menu = g.menu.as_mut().unwrap();
-                        menu.drag = kept.drag;
-                        menu.craft = kept.craft;
-                    });
-                    let owner = host.menus.entry(kept.conn).or_default();
-                    owner.owned_menu = kept.owned;
-                    owner.crafting.machine.restore(kept.machine);
-                    owner.slot_places = kept.places;
+            for (generation, (conn, places)) in level.menu_slot_places {
+                if host.hub.guest(conn).is_some_and(|guest| {
+                    guest.menu_generation == generation && guest.menu.is_some()
+                }) {
+                    host.menus.entry(conn).or_default().slot_places = places;
                 }
             }
             // A removed window's snapshot is now held by its pending close notice, not

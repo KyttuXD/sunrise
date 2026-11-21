@@ -165,12 +165,15 @@ pub fn take_callback_panic_notices() -> Vec<CallbackPanicNotice> {
     queue.drain(..).collect()
 }
 
-fn record_callback_panic(
+pub(crate) fn record_callback_panic(
     owner: &'static str,
     kind: &'static str,
     operation: &'static str,
     message: String,
 ) {
+    log::error!(
+        "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {message}"
+    );
     PANIC_NOTICES
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -447,9 +450,6 @@ fn call_opt<T>(
             if !first && invocation != Invocation::Dispose {
                 return Err(format!("{kind} callback panicked; it is disabled"));
             }
-            log::error!(
-                "mod {owner}: {kind} callback ({operation}) panicked and is disabled for this session: {msg}"
-            );
             record_callback_panic(owner, kind, operation, msg.clone());
             Err(format!("{kind} callback panicked; it is disabled: {msg}"))
         }

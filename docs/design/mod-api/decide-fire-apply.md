@@ -4,7 +4,7 @@
 > This does not mark the proposed hook migrations as complete.
 > See [transactions](../../modding/src/concepts/transactions.md) for the current native API.
 
-**Status: accepted with changes** by the [maintainer decision](https://github.com/arismoko/horizon/issues/784#issuecomment-6729846827), combining both review views. Implementation status: stage 3b is built for three hooks. `item_stacked_on_other` takes a `HostSide` and a typed answer, and `menu_quick_move` and `menu_clicked` run as decided actions. The other hooks and routes named below are not migrated, and the route evidence and the freshness read set of a decided menu action are still incomplete (the backing holder's generation and every admission input). The requirements below stay the contract for the rest.
+**Status: accepted with changes** by the [maintainer decision](https://github.com/arismoko/horizon/issues/784#issuecomment-6729846827), combining both review views. `item_stacked_on_other` takes a `HostSide` and a typed answer; `menu_quick_move` runs as a decided action. `menu_clicked` is not a decided action: it runs before the slot action on the [receiving menu](../../modding/src/concepts/capabilities/menu-slots.md). The requirements below describe the paths that still use decide/fire/apply.
 
 Contract for [#784](https://github.com/arismoko/horizon/issues/784), for Ari's review and decision on the issue. This is a documentation proposal, not implemented behavior. The named question is the decision token and stale-apply semantics across client-lib and menus.
 

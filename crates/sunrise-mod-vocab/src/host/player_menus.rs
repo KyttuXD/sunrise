@@ -26,7 +26,7 @@ pub trait PlayerMenusBackendMut {
     /// Side: server.
     /// Opens a block entity's menu for a connected player (`ServerPlayer.openMenu`).
     /// Returns Stale for an invalidated entity; Ok(false) for a wrong-level player,
-    /// non-provider, cancelled open, active menu click, an out-of-range slot exclusion, or an
+    /// non-provider, cancelled open, a pending merchant take, an out-of-range slot exclusion, or an
     /// unconnected player such as a fake player.
     #[access(WorldOnly)]
     fn player_open_menu(
@@ -54,7 +54,7 @@ pub trait PlayerMenusBackendMut {
     /// a close for it, as for `open_menu`. `MenuReplace::InPlace` sends none: the client keeps
     /// its screen and mouse until the new screen replaces it. The window id, or Ok(None) when
     /// a mod cancelled the open or a registered exclusion is out of range. Errors: `NotModMenu`,
-    /// `OwnedSlotsWithResults`, `ClickInProgress` (a speculative click cannot open a new screen),
+    /// `OwnedSlotsWithResults`, `ClickInProgress` (a pending merchant take on this player),
     /// `PlayerUnavailable` (including a client that does not support the blockless layout, a
     /// disconnect in progress or a turn unavailable for the veto), `TooLarge`,
     /// `DataCountMismatch`, `Title` or `TitleNotEncodable`. A cancelled or refused open
@@ -104,7 +104,7 @@ pub trait PlayerMenusBackendMut {
     /// `right_click_block`, their command), the menu opens when that action ends, as a block's
     /// menu the same action opens does. Ok(true) inside an action means queued: the menu is
     /// still subject to cancellation when the queue runs; outside one it opened. Ok(false) is an
-    /// immediate cancellation by a mod. Errors:
+    /// immediate cancellation by a mod or a refusal while a merchant take is pending. Errors:
     /// `PlayerUnavailable` (stale, dead, fake, or on a client), or `Title` for a title that
     /// could not cross; nothing opens then.
     #[access(WorldOnly)]

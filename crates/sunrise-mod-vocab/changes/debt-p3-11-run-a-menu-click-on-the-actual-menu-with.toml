@@ -1,0 +1,15 @@
+ids = [
+    "hook:menu_clicked",
+    "method:MenuPart::menu_clicked",
+    "type:MenuClickedEvent",
+    "method:MenusServerHost::open_menu",
+    "method:MenusServerHost::close_menu",
+    "method:MenusServerHost::menu_set_items",
+    "handle:PlayerRef::open_menu",
+    "handle:PlayerRef::open_mod_menu",
+    "handle:PlayerRef::open_ender_chest",
+    "handle:MenuRef::close_container",
+    "type:OpenMenuError.ClickInProgress",
+]
+why = "Vanilla ServerGamePacketListenerImpl.handleContainerClick calls AbstractContainerMenu.clicked on the active menu; doClick reads its live cursor and uses Slot.mayPickup, safeInsert and safeTake. Container.stillValidBlockEntity checks the original backing instance. NeoForge patches tryItemClickBehaviourOverride to allow a pickup override without restoring inventory; it has no general clicked event. Sunrise's menu part likewise skips the default action without undoing unrelated writes. A panic disables only that mod's callback and is logged and surfaced as an error toast. The old speculative transaction and its screen-replacement gate are gone from menu_clicked."
+migrate = "Keep the MenuPart::menu_clicked signature and return Flow::Cancel to skip only the default click or Flow::Continue to use the current slots and cursor. Replace writes that used host.transaction_current() in this callback with host.transaction(|host, tx| { /* write with tx */ Ok(()) }); return Err inside your transaction if you want those writes undone. menu_set_items outside an explicit transaction publishes its own update; a downstream refusal does not undo it. Call the same open_menu, open_mod_menu, open_ender_chest, close_menu or close_container from the listener when you want to change windows; do not wait for the old click to commit or expect ClickInProgress for menu_clicked. A replacement or close prevents the original default from running. ClickInProgress still describes a pending merchant take on that player."

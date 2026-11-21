@@ -98,12 +98,19 @@ impl Game<'_> {
             .native_conn(uuid)
             .ok_or(MenuSlotBackRefusal::NoPlayerOrWindow)?;
         let acting = self.lan_acting == Some(conn);
-        let (size, slots, owned) = self
+        let (size, slots, owned, generation) = self
             .lan
             .as_ref()
-            .and_then(|lan| lan.hub.guest(conn)?.menu.as_ref())
-            .filter(|open| open.window == window)
-            .map(|open| (open.size, open.slots, open.owned_slots().is_some()))
+            .and_then(|lan| {
+                let guest = lan.hub.guest(conn)?;
+                let open = guest.menu.as_ref().filter(|open| open.window == window)?;
+                Some((
+                    open.size,
+                    open.slots,
+                    open.owned_slots().is_some(),
+                    guest.menu_generation,
+                ))
+            })
             .ok_or(MenuSlotBackRefusal::NoPlayerOrWindow)?;
         // Only a blockless mod menu's slots are the game's to show (`Slots::Native`); a block's
         // or an entity's menu reads its own storage, which a backing would not replace.
@@ -138,7 +145,7 @@ impl Game<'_> {
         let transactional = !self.transactions.is_empty();
         if transactional {
             self.journal_menus(player);
-            self.journal_menu_click(conn);
+            self.journal_menu_slot_places(conn, generation);
         }
         let Some(lan) = self.lan.as_mut() else {
             return Err(MenuSlotBackRefusal::NoPlayerOrWindow);

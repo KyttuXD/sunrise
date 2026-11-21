@@ -2,20 +2,19 @@
 // catalog-order: 0034
 
 pub trait Hooks {
-    /// A click in `menu`, before its default action (`AbstractContainerMenu.clicked`).
-    /// Only parts registered for that menu type are asked. `slot` is in menu order
-    /// (container slots, then any player inventory; -999 outside),
-    /// `button` and `mode` are the click input, and `uuid` identifies the clicking player.
-    /// Menu-button clicks, recipe placement and the creative set-slot packet do not call it.
-    /// Return [`Flow::Cancel`] after applying the click yourself to skip the default: for
-    /// example, copy an item into a filter slot without consuming the cursor.
-    /// A display-only menu has no default moves. Other menus keep their ordinary slot rules
-    /// when unhandled. The client predicts the ordinary click and the server corrects it.
-    /// No player's state is swapped in. Use their current `PlayerRef::container_menu` or the
-    /// native menu's UUID and window to reach its slots and cursor. Host writes are kept if
-    /// the action succeeds. An unhandled click applies the default in the same transaction;
-    /// a stale, refused or failed action rolls back the transaction. The action refuses opens.
-    /// [`ServerHost::close_menu`] and [`MenuRef::close_container`] close only after commit.
+    /// A click on an open mod menu, before its default slot action (`AbstractContainerMenu.clicked`).
+    /// Only parts registered for `menu`, the receiving menu type, are asked. `slot` is in menu order
+    /// (container slots, then any player inventory; -999 outside), `button` and `mode` are the
+    /// click input, and `uuid` identifies the clicking player. Menu-button clicks, recipe placement
+    /// and creative set-slot do not call it. The receiving menu is live on the Host; use
+    /// [`PlayerRef::container_menu`] or the native menu's `uuid` and `window` to reach it.
+    /// Return [`Flow::Cancel`] to skip only the default click. `Flow::Continue` runs the normal
+    /// slot action against current slots and cursor if the same menu is still valid. Opening a
+    /// replacement or closing the menu leaves no default action for the old click to run.
+    /// A display-only menu has no default moves. The server reconciles the client's prediction.
+    /// There is no implicit transaction: use `host.transaction` to group your own writes.
+    /// Committed writes are not undone if the default is cancelled or refused. A panic disables
+    /// this mod's `menu_clicked` for the session, is reported, and supplies no answer.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_clicked",
         dispatch = "api_carrier",
@@ -25,8 +24,9 @@ pub trait Hooks {
         key = "menu",
         out = "handled",
         cancellable = true,
+        isolate = true,
         neoforge = "none (a Java menu overrides AbstractContainerMenu.clicked; no event)",
-        version = 3
+        version = 4
     )]
     fn menu_clicked(
         menu: &str,

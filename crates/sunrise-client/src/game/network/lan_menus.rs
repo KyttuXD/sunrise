@@ -21,8 +21,6 @@ pub(in crate::game) struct GuestMenus {
     pub(super) owned_menu: Option<(u64, Box<sunrise_client::menu::Menu>)>,
     /// Identity and mutation stamp for this connection's merchant window, even while loaned.
     pub(super) merchant: MenuOwner<()>,
-    /// The outer `menu_clicked` decision. Nested default routing can decide a pickup on `hub`.
-    pub(super) click: MenuOwner<()>,
     /// Names the hub's container clicks of this guest, which have no menu value of their own: a
     /// click while another of the guest's is being decided is refused as busy.
     pub(in crate::game) hub: MenuOwner<()>,
@@ -78,7 +76,7 @@ impl super::Game<'_> {
     }
 
     /// Close the admitted window through the same generation-checked path whether it
-    /// can close immediately or a click transaction must publish it at commit.
+    /// can close immediately or a merchant take must publish it at commit.
     pub(super) fn request_menu_close(&mut self, conn: u32, window: i32, generation: u64) {
         let reply = MenuClickReply {
             conn,
