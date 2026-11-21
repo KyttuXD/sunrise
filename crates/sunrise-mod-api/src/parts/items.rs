@@ -864,14 +864,19 @@ pub mod tests {
                 .unwrap_or(0)
         }
         fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
-            Some(ItemResource::of(
-                &backend_of(&*host)?.container_stack(on(SHELF, None), index)?,
-            ))
+            let mut resource = None;
+            backend_of(&*host)?.lend_container_stack(on(SHELF, None), index, &mut |view| {
+                resource = view.project().as_ref().map(ItemResource::of);
+            })?;
+            resource
         }
         fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
-            backend_of(&*host)
-                .and_then(|backend| backend.container_stack(on(SHELF, None), index))
-                .map_or(0, |held| held.count())
+            let mut count = 0;
+            let _ = backend_of(&*host).and_then(|backend| {
+                backend
+                    .lend_container_stack(on(SHELF, None), index, &mut |view| count = view.count())
+            });
+            count
         }
         fn capacity(
             &self,

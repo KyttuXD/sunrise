@@ -498,7 +498,10 @@ fn staged_copper_chest_weathering_keeps_its_inventory() {
                 pos: AT,
                 side: None,
             };
-            assert_eq!(host.container_stack(side, 0).unwrap().count(), 3);
+            assert_eq!(
+                (&host as &dyn LevelHost).with_container_stack(side, 0, |stack| stack.count()),
+                Some(3),
+            );
             game.transaction_close(&outer, commit);
             assert_eq!(block(game), if commit { exposed } else { copper });
             assert_eq!(

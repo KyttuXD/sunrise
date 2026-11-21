@@ -443,7 +443,7 @@ impl mod_api::LevelHost for FireOddsLevel<'_> {
     base_level_reads! {
         fn block_states() -> mod_api::BlockStates<'_>;
         fn container_size(at: mod_api::BlockSide) -> Option<usize>;
-        fn container_stack(at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack>;
+        fn lend_container_stack(at: mod_api::BlockSide, slot: usize, read: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>)) -> Option<()>;
         fn block_state_id(name: &str) -> Option<mod_api::BlockState>;
         fn block_state_default(block: mod_api::BlockKey) -> Option<mod_api::BlockState>;
         fn state_block(state: mod_api::BlockState) -> Option<&str>;
@@ -590,25 +590,21 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
         super::native_block_entity_refs::world_block_entity(self.world, self.api_level?, pos)
     }
     fn container_size(&self, at: mod_api::BlockSide) -> Option<usize> {
-        if !self.native_authoritative
-            || self.api_level != Some(at.level)
-            || !self.world.is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
+        if !self.native_authoritative || self.api_level != Some(at.level) {
             return None;
         }
         self.containers().capability_size(at)
     }
-    fn container_stack(&self, at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack> {
-        if !self.native_authoritative
-            || self.api_level != Some(at.level)
-            || !self.world.is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
+    fn lend_container_stack(
+        &self,
+        at: mod_api::BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>),
+    ) -> Option<()> {
+        if !self.native_authoritative || self.api_level != Some(at.level) {
             return None;
         }
-        self.containers()
-            .capability_stack(at, slot)?
-            .try_into_api()
-            .ok()
+        self.containers().lend_capability_stack(at, slot, read)
     }
     fn attachment_read_scope(&self) -> mod_api::AttachmentReadScope<'_> {
         mod_api::__private::game::attachment_read_scope(self.attachment_query_scopes)
@@ -1044,14 +1040,19 @@ impl<
         }
         mod_api::LevelHost::container_size(&*self.level, at)
     }
-    fn container_stack(&self, at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack> {
+    fn lend_container_stack(
+        &self,
+        at: mod_api::BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>),
+    ) -> Option<()> {
         if self
             .previewed(BlockPos::new(at.pos[0], at.pos[1], at.pos[2]))
             .is_some()
         {
             return None;
         }
-        mod_api::LevelHost::container_stack(&*self.level, at, slot)
+        mod_api::LevelHost::lend_container_stack(&*self.level, at, slot, read)
     }
     fn attachment_read_scope(&self) -> mod_api::AttachmentReadScope<'_> {
         mod_api::LevelHost::attachment_read_scope(&*self.level)

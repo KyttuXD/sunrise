@@ -208,26 +208,17 @@ impl LevelHost for ReadLevel<'_, '_> {
         self.game.block_entity(self.level, pos)
     }
     fn container_size(&self, at: mod_api::BlockSide) -> Option<usize> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
-            return None;
-        }
+        (at.level == self.level).then_some(())?;
         self.game.container_size(at)
     }
-    fn container_stack(&self, at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
-            return None;
-        }
-        self.game.container_stack(at, slot)?.try_into_api().ok()
+    fn lend_container_stack(
+        &self,
+        at: mod_api::BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>),
+    ) -> Option<()> {
+        (at.level == self.level).then_some(())?;
+        self.game.lend_container_stack(at, slot, read)
     }
     fn attachment_read_scope(&self) -> mod_api::AttachmentReadScope<'_> {
         self.game.attachment_frame_borrow()

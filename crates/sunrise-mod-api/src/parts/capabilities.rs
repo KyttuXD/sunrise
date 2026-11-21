@@ -326,18 +326,20 @@ pub mod tests {
         let aborted: Result<(), u32> =
             host.transaction(|host, tx| Err(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(aborted, Err(1));
-        assert!(
-            backend_of(&*host)
-                .and_then(|backend| backend.container_stack(on(CHEST, None), 0))
-                .is_none()
+        let backend = backend_of(&*host).unwrap();
+        assert_eq!(
+            backend.lend_container_stack(on(CHEST, None), 0, &mut |_| {}),
+            None
         );
         let went =
             host.transaction(|host, tx| Ok::<_, ()>(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(went, Ok(1));
-        assert_eq!(
-            backend_of(&*host).and_then(|backend| backend.container_stack(on(CHEST, None), 0)),
-            Some(stick())
-        );
+        let mut stack = None;
+        backend_of(&*host)
+            .unwrap()
+            .lend_container_stack(on(CHEST, None), 0, &mut |view| stack = view.project())
+            .unwrap();
+        assert_eq!(stack, Some(stick()));
         let went =
             host.transaction(|host, tx| Ok::<_, ()>(pipe.insert_at(host, tx, 0, &stick_, 1)));
         assert_eq!(went, Ok(0));

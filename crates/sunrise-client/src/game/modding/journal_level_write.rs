@@ -8,7 +8,7 @@ use super::native_level_signals::ReadLevel;
 use super::transactions::After;
 use mod_api::{
     AttachmentBatch, AttachmentStore, BlockEntityRef, BlockKey, BlockPos, BlockSide, BlockState,
-    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStack, LevelHost,
+    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStackView, LevelHost,
     LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer, PartStateError,
     ParticleOptions, RandomDraw, SoundSource, Tags,
 };
@@ -85,7 +85,7 @@ impl LevelHost for JournalLevelWrite<'_, '_> {
     read_level! {
         fn block_entity(&self, pos: [i32; 3]) -> Option<BlockEntityRef>;
         fn container_size(&self, at: BlockSide) -> Option<usize>;
-        fn container_stack(&self, at: BlockSide, slot: usize) -> Option<ItemStack>;
+        fn lend_container_stack(&self, at: BlockSide, slot: usize, read: &mut dyn for<'a> FnMut(ItemStackView<'a>)) -> Option<()>;
         fn block_entity_part_snapshot(&self, entity: BlockEntityRef, namespace: &str, name: &str) -> Result<AttachmentBatch, PartStateError>;
         fn block_state(&self, pos: [i32; 3]) -> Option<BlockState>;
         fn block_state_id(&self, name: &str) -> Option<BlockState>;
