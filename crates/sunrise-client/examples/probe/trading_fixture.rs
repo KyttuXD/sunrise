@@ -321,7 +321,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 let mut session = Session::new(vec![offer], true);
                 session.level = 5;
                 session.xp = number("start");
-                session.notify_trade(0, None, &items);
+                session.notify_trade(Some(0), None, &items);
                 let o = &mut session.offers[0];
                 let used = o.uses;
                 o.reset_uses();
@@ -421,6 +421,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     trades: &trades,
                     enchantments: &enchantments,
                     maps: None,
+                    world_sequences: None,
                 };
                 let env = Env {
                     crafting_remainder: None,

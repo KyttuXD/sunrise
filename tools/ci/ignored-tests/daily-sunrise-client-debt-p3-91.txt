@@ -1,0 +1,2 @@
+sunrise-client game::lan_trade_decisions_tests::villager_data_changes_during_a_take_before_the_next_payment_lookup lib daily resources
+sunrise-client game::lan_trading::tests::a_profession_change_keeps_the_active_offer_but_close_cannot_restore_the_old_list lib daily resources

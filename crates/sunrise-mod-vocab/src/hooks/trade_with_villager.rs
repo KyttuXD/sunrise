@@ -13,7 +13,9 @@ pub trait Hooks {
     /// writes commit together. A listener unwind, an invalid offer answer, changed take
     /// preconditions, or an enclosing abort leaves no partial trade. A write through the `Host`
     /// to any player's inventory, cursor or menu storage makes the take stale.
-    #[notes = "NeoForge's TradeWithVillagerEvent at MerchantResultSlot.onTake. This non-cancellable collect receives the post-take offer for each trade, with the acting player swapped in. Accepted offer edits affect the next iteration and reach the client's menu snapshot on commit; observing alone keeps the usual offer-refresh timing. MerchantRef edits and menu replacements that conflict with the active click are refused. `player_trade` is the completed-click notice, once the click commits."]
+    /// Villager profession and type setters update the villager without changing
+    /// the completed take. The next result update sees the new villager data.
+    #[notes = "NeoForge's TradeWithVillagerEvent at MerchantResultSlot.onTake. This non-cancellable collect receives the post-take offer for each trade, with the acting player swapped in. Accepted offer edits affect the next iteration and reach the client's menu snapshot on commit; observing alone keeps the usual offer-refresh timing. Offer-list edits and menu replacements that conflict with the active click are refused. `player_trade` is the completed-click notice, once the click commits."]
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_trade_with_villager",
         dispatch = "direct",

@@ -39,6 +39,7 @@ struct Script {
     /// An answer whose result stack is not a valid one for the game.
     invalid_stack: bool,
     edit_other_merchant_and_board: bool,
+    change_villager_data: bool,
     effect_write: Option<EffectWrite>,
     player_write: Option<PlayerWrite>,
     raise_second_price: bool,
@@ -152,6 +153,11 @@ fn trade(host: &mut dyn ServerHost, event: &mut TradeWithVillagerEvent<'_>) {
         }
         if s.raise_second_price && call == 2 {
             event.offer.special_price_diff = 1;
+        }
+        if s.change_villager_data {
+            let villager = host.merchant(host.entity(event.merchant).unwrap()).unwrap();
+            assert!(villager.set_villager_type(host, "minecraft:swamp"));
+            assert!(villager.set_profession(host, "minecraft:cleric"));
         }
         if s.answer {
             event.offer.uses = 6;
@@ -292,6 +298,63 @@ fn open(game: &mut Game<'_>, payment: u32) -> ContainerClick {
         carried: None,
     }
 }
+#[test]
+#[ignore = "daily"]
+fn villager_data_changes_during_a_take_before_the_next_payment_lookup() {
+    with_mod(|| {
+        with_guests(|game| {
+            let mut click = open(game, 2);
+            click.input = 1; // Quick move tries again only while there is a matching result.
+            script(Script {
+                change_villager_data: true,
+                ..Script::default()
+            });
+            assert!(game.lan_merchant_click(12, &click));
+            assert_eq!(CALLS.get(), 1);
+            let villager = game.merchant(game.entity(40).unwrap()).unwrap();
+            assert_eq!(
+                villager.villager_type(game).as_deref(),
+                Some("minecraft:swamp")
+            );
+            assert_eq!(
+                villager.profession(game).as_deref(),
+                Some("minecraft:cleric")
+            );
+
+            let host = game.lan.as_ref().unwrap();
+            let gm = host.play[&12].merchant.as_ref().unwrap();
+            assert_eq!(gm.slots[0].as_ref().unwrap().count, 1);
+            assert!(gm.slots[2].is_none());
+            let emeralds: u32 = host
+                .hub
+                .guest(12)
+                .unwrap()
+                .inventory
+                .iter()
+                .flatten()
+                .filter(|s| &*s.item == "minecraft:emerald")
+                .map(|s| s.count)
+                .sum();
+            assert_eq!(emeralds, 1, "the farmer offer already taken stays valid");
+            let session = game.lan_trade_session(12).unwrap();
+            assert_eq!(session.xp, 7);
+            assert_eq!(session.offers.len(), 2);
+            assert!(
+                session
+                    .offers
+                    .iter()
+                    .any(|o| &*o.result.item == "minecraft:experience_bottle")
+            );
+            assert!(
+                session
+                    .offers
+                    .iter()
+                    .any(|o| &*o.base_cost_a.stack.item == "minecraft:nether_wart")
+            );
+        });
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn refusal_restores_crafted_score_and_another_merchants_offers() {

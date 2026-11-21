@@ -7,15 +7,6 @@ use sunrise_client::{
 };
 use sunrise_core::identifier::Identifier;
 
-/// The index of a `minecraft:` registry id in a table of bare names.
-fn registry_index(id: &str, names: &[&str]) -> Option<u8> {
-    let id = Identifier::parse(id).ok()?;
-    if id.namespace() != "minecraft" {
-        return None;
-    }
-    names.iter().position(|n| *n == id.path()).map(|i| i as u8)
-}
-
 impl Game<'_> {
     fn native_merchant_index(&self, merchant: MerchantRef) -> Option<usize> {
         let Target::Mob(id) = self.native_entity_target(merchant.entity())? else {
@@ -67,7 +58,13 @@ impl Game<'_> {
             .lan_trade_conn(mob.id)
             .and_then(|conn| self.lan_trade_session(conn))
         {
-            return read(&session.offers, session.xp, session.level);
+            let trader = mob.extra.trade.as_deref();
+            let offers = session.current_offers(trader).unwrap_or_else(|| {
+                trader
+                    .filter(|t| !t.unset)
+                    .map_or(&[], |t| t.offers.as_slice())
+            });
+            return read(offers, session.xp, session.level);
         }
         let level = mob.extra.villager_level.max(1);
         match mob.extra.trade.as_deref() {
@@ -84,6 +81,7 @@ impl Game<'_> {
     fn merchant_write(
         &mut self,
         index: usize,
+        roll_offers: bool,
         edit: impl FnOnce(&mut Vec<MerchantOffer>, &mut i32, &mut i32) -> bool,
     ) -> bool {
         let mob = &self.mobs[index];
@@ -99,13 +97,14 @@ impl Game<'_> {
         let id = mob.id;
         if let Some(conn) = self.lan_trade_conn(id) {
             let mut done = false;
-            let sent = self.lan_trade_edit(conn, |session| {
+            let sent = self.lan_trade_edit(conn, roll_offers, |session| {
                 done = edit(&mut session.offers, &mut session.xp, &mut session.level);
                 if done {
                     session
                         .events
                         .push(sunrise_client::merchant::Event::OffersRefreshed);
                 }
+                done
             });
             return sent && done;
         }
@@ -155,7 +154,7 @@ impl Game<'_> {
         let Some(mob) = self.native_merchant_index(merchant) else {
             return false;
         };
-        self.merchant_write(mob, |offers, _, _| {
+        self.merchant_write(mob, false, |offers, _, _| {
             let Some(slot) = offers.get_mut(index as usize) else {
                 return false;
             };
@@ -179,7 +178,7 @@ impl Game<'_> {
         if self.lan_trade_conn(self.mobs[mob].id).is_none() && !self.mobs[mob].extra.flag2 {
             self.ensure_offers(mob);
         }
-        self.merchant_write(mob, |offers, _, _| {
+        self.merchant_write(mob, true, |offers, _, _| {
             offers.push(offer);
             true
         })
@@ -191,7 +190,7 @@ impl Game<'_> {
         let Some(mob) = self.native_merchant_index(merchant) else {
             return false;
         };
-        self.merchant_write(mob, |offers, _, _| {
+        self.merchant_write(mob, false, |offers, _, _| {
             if index as usize >= offers.len() {
                 return false;
             }
@@ -215,10 +214,9 @@ impl Game<'_> {
         Some(mob.extra.profession.id())
     }
 
-    /// `Villager.setVillagerData` with a new profession: a different one
-    /// forgets the offers, which roll again on the next trade. Clients see the
-    /// new profession through entity data. False for an unknown id, a wandering
-    /// trader, or a villager with a trading screen open.
+    /// `Villager.setVillagerData`: a different profession invalidates the
+    /// villager's offer list, including during a trade. The menu keeps its
+    /// active offer until it next updates the result; the setter sends no offers.
     pub(super) fn merchant_set_profession(
         &mut self,
         merchant: MerchantRef,
@@ -239,15 +237,12 @@ impl Game<'_> {
             .professions
             .state_index(&self.mobs[index].extra.profession)
             .is_none()
-            || self.mobs[index].extra.flag2
-            || self.lan_trade_conn(id).is_some()
         {
             return false;
         }
         self.journal_merchant_mob(id);
         let table = self.stations().professions.clone();
-        villager::set_profession(&mut self.mobs[index], &table, profession);
-        true
+        villager::set_profession(&mut self.mobs[index], &table, profession)
     }
 
     /// `VillagerData.level`, at least 1.
@@ -265,7 +260,7 @@ impl Game<'_> {
             return false;
         };
         let level = level.max(1);
-        self.merchant_write(index, |_, _, current| {
+        self.merchant_write(index, false, |_, _, current| {
             *current = level;
             true
         })
@@ -278,27 +273,21 @@ impl Game<'_> {
         Some(format!("minecraft:{name}"))
     }
 
-    /// `VillagerData.withType`: also the type a trading guest's session
-    /// rolls its next level-up offers with. False for an unknown id, a
-    /// wandering trader, or a trade open where this can't reach.
+    /// `Villager.setVillagerData` with a new type. Existing offers are
+    /// unchanged and future offers use the new type, even during a trade.
     pub(super) fn merchant_set_villager_type(&mut self, merchant: MerchantRef, kind: &str) -> bool {
         let Some(index) = self.native_villager_index(merchant) else {
             return false;
         };
-        let Some(kind) = registry_index(kind, &VILLAGER_TYPES) else {
+        let Some(kind) = Identifier::parse(kind)
+            .ok()
+            .filter(|id| id.namespace() == "minecraft")
+            .and_then(|id| VILLAGER_TYPES.iter().position(|name| *name == id.path()))
+        else {
             return false;
         };
-        let id = self.mobs[index].id;
-        if let Some(conn) = self.lan_trade_conn(id) {
-            let variant = format!("minecraft:{}", VILLAGER_TYPES[kind as usize]);
-            if !self.lan_trade_edit(conn, |session| session.variant = variant) {
-                return false;
-            }
-        } else if self.mobs[index].extra.flag2 {
-            return false;
-        }
-        self.journal_merchant_mob(id);
-        self.mobs[index].extra.variant = kind;
+        self.journal_merchant_mob(self.mobs[index].id);
+        villager::set_type(&mut self.mobs[index], kind as u8);
         true
     }
 

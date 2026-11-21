@@ -46,6 +46,9 @@ pub struct Trader {
     /// The offers are not made yet (vanilla's `offers` is null): they are
     /// generated when first asked for, keeping the experience.
     pub unset: bool,
+    /// Identifies this offer list across detached merchant-menu operations. A
+    /// profession change invalidates it even if a mod changes the profession back.
+    pub offer_revision: u64,
 }
 impl Trader {
     fn update_demand(&mut self) {
@@ -170,9 +173,11 @@ pub enum Event {
     TradeUpdated(bool, f32),
     /// `MerchantMenu.playTradeSound` (a shift-clicked trade).
     TradeSound,
-    /// A trade of this offer was made (`notifyTrade`), with the offer as
-    /// it was right after that trade's use (before a level-up's prices).
-    Traded(usize, Box<MerchantOffer>),
+    /// A trade was made (`notifyTrade`). The index is absent if the menu was
+    /// holding an active offer no longer in the villager's list.
+    Traded(Option<usize>, Box<MerchantOffer>),
+    /// A draw from a world trade set not already lent to the menu.
+    TradeSequence(String, XoroshiroRandom),
 }
 /// What the world lends a trading session for offers made while it is open.
 #[derive(Clone, Copy)]
@@ -180,6 +185,7 @@ pub struct TradeEnv<'a> {
     pub trades: &'a Trades,
     pub enchantments: &'a Enchantments,
     pub maps: Option<&'a dyn MapMaker>,
+    pub world_sequences: Option<(&'a sunrise_items::random_sequences::RandomSequences, i64)>,
 }
 /// The merchant side of an open trading screen: `AbstractVillager` /
 /// `Villager` / `WanderingTrader` as `MerchantMenu` sees it (offers,
@@ -206,6 +212,11 @@ pub struct Session {
     pub sequences: std::collections::BTreeMap<String, XoroshiroRandom>,
     pub selection_hint: usize,
     pub active: Option<usize>,
+    /// `MerchantContainer.activeOffer` still owns the old offer after
+    /// `Villager.setVillagerData` discards the villager's offer list.
+    pub detached_offer: Option<MerchantOffer>,
+    pub offer_revision: u64,
+    pub offers_unset: bool,
     pub future_xp: i32,
     /// `Mob.ambientSoundTime`.
     pub ambient_sound_time: i32,
@@ -232,6 +243,9 @@ impl Session {
             sequences: Default::default(),
             selection_hint: 0,
             active: None,
+            detached_offer: None,
+            offer_revision: 0,
+            offers_unset: false,
             future_xp: 0,
             ambient_sound_time: 0,
             last_traded: false,
@@ -250,6 +264,25 @@ impl Session {
             .filter_map(|l| trades.sequence(&trades.set_for(profession, l)))
             .collect()
     }
+    /// The live offers, not the old list held by a detached menu operation.
+    pub fn current_offers(&self, trader: Option<&Trader>) -> Option<&[MerchantOffer]> {
+        (!self.offers_unset && trader.is_none_or(|t| t.offer_revision == self.offer_revision))
+            .then_some(self.offers.as_slice())
+    }
+    /// The menu's active offer is independent of the villager's offer list.
+    pub fn active_offer(&self) -> Option<&MerchantOffer> {
+        self.detached_offer
+            .as_ref()
+            .or_else(|| self.offers.get(self.active?))
+    }
+    /// `AbstractVillager.getOffers` for the open menu. Load the new
+    /// profession's list only when a vanilla path next asks for it.
+    pub fn ensure_offers(&mut self, env: &TradeEnv<'_>, items: &Items) {
+        if !std::mem::take(&mut self.offers_unset) {
+            return;
+        }
+        self.update_trades(env, items);
+    }
     /// `Villager.updateSpecialPrices` for the trading player.
     pub fn update_special_prices(&mut self) {
         if self.villager {
@@ -261,13 +294,15 @@ impl Session {
     /// recomputed (the menu then updates its result).
     pub fn notify_trade(
         &mut self,
-        index: usize,
+        index: Option<usize>,
         env: Option<&TradeEnv<'_>>,
         items: &Items,
     ) -> bool {
-        let Some(offer) = self.offers.get_mut(index) else {
-            return false;
+        let offer = match index {
+            Some(index) => self.offers.get_mut(index),
+            None => self.detached_offer.as_mut(),
         };
+        let Some(offer) = offer else { return false };
         offer.uses = offer.uses.wrapping_add(1);
         // ClientSideMerchant.notifyTrade: increaseUses alone.
         if self.client_side {
@@ -287,11 +322,10 @@ impl Session {
                 if let Some(env) = env {
                     let set = env.trades.set_for(&self.profession, self.level);
                     if env.trades.sets.contains_key(&set) {
-                        let more = self.offers_from_set(env, items, &set);
-                        self.offers.extend(more);
-                        self.update_special_prices();
-                        self.events.push(Event::OffersRefreshed);
-                        prices = true;
+                        // updateTrades asks getOffers for the destination list. If
+                        // invalidated, getOffers initializes it at this new level first.
+                        self.ensure_offers(env, items);
+                        prices = self.update_trades(env, items);
                     }
                 }
                 self.events.push(Event::LevelUp(self.level));
@@ -306,28 +340,45 @@ impl Session {
         }
         prices
     }
-    fn offers_from_set(
-        &mut self,
-        env: &TradeEnv<'_>,
-        items: &Items,
-        set: &str,
-    ) -> Vec<MerchantOffer> {
-        let Some(sequence) = env.trades.sequence(set) else {
-            return Vec::new();
-        };
-        let Some(mut random) = self.sequences.remove(&sequence) else {
-            return Vec::new();
-        };
-        let ctx = TradeContext {
-            items,
-            enchantments: env.enchantments,
-            variant: &self.variant,
-            origin: self.origin,
-            maps: env.maps,
-        };
-        let out = env.trades.offers_from_set(&ctx, set, &mut random);
-        self.sequences.insert(sequence, random);
-        out
+    fn update_trades(&mut self, env: &TradeEnv<'_>, items: &Items) -> bool {
+        let set = env.trades.set_for(&self.profession, self.level);
+        if !env.trades.sets.contains_key(&set) {
+            return false;
+        }
+        if let Some(sequence) = env.trades.sequence(&set) {
+            let ctx = TradeContext {
+                items,
+                enchantments: env.enchantments,
+                variant: &self.variant,
+                origin: self.origin,
+                maps: env.maps,
+            };
+            if let Some(random) = self.sequences.get_mut(&sequence) {
+                self.offers
+                    .extend(env.trades.offers_from_set(&ctx, &set, random));
+            } else if let Some((sequences, seed)) = env.world_sequences {
+                // New professions can reach sequences not lent when the menu opened.
+                // Keep the detached draw with the menu until the action is applied.
+                let mut random = self
+                    .events
+                    .iter()
+                    .rev()
+                    .find_map(|event| match event {
+                        Event::TradeSequence(id, random) if id == &sequence => Some(random.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| sequences.preview(&sequence, seed));
+                self.offers
+                    .extend(env.trades.offers_from_set(&ctx, &set, &mut random));
+                self.events.push(Event::TradeSequence(sequence, random));
+            }
+        }
+        self.update_special_prices();
+        if self.offers.is_empty() {
+            return false;
+        }
+        self.events.push(Event::OffersRefreshed);
+        true
     }
     /// `AbstractVillager.notifyTradeUpdated`.
     pub fn notify_trade_updated(&mut self, has_result: bool) {
@@ -946,9 +997,9 @@ mod tests {
     fn each_trade_event_keeps_its_own_offer() {
         let items = items();
         let mut s = Session::new(vec![offer(4, None), offer(2, None)], false);
-        s.notify_trade(1, None, &items);
-        s.notify_trade(1, None, &items);
-        s.notify_trade(0, None, &items);
+        s.notify_trade(Some(1), None, &items);
+        s.notify_trade(Some(1), None, &items);
+        s.notify_trade(Some(0), None, &items);
         let seen: Vec<_> = s
             .events
             .iter()
@@ -957,7 +1008,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(seen, [(1, 1, 2), (1, 2, 2), (0, 1, 4)]);
+        assert_eq!(seen, [(Some(1), 1, 2), (Some(1), 2, 2), (Some(0), 1, 4)]);
         assert_eq!((s.offers[0].uses, s.offers[1].uses), (1, 2));
     }
 
@@ -1042,7 +1093,7 @@ mod tests {
             let mut session = Session::new(vec![o], true);
             session.level = 5;
             session.xp = start;
-            session.notify_trade(0, None, &items);
+            session.notify_trade(Some(0), None, &items);
             let o = &mut session.offers[0];
             let used = o.uses;
             o.reset_uses();

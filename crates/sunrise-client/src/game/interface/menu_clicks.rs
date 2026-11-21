@@ -504,6 +504,7 @@ impl Game<'_> {
             trades: &self.stations().trades,
             enchantments: &self.stations().enchantments,
             maps: Some(&maps),
+            world_sequences: Some((&self.rand_sequences, self.level.seed)),
         };
         let menu_can_equip = self.menu_can_equip();
         let env = Env {

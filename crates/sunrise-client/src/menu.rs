@@ -369,6 +369,9 @@ pub struct Menu {
     state: storage::State,
     stamp: storage::MutationStamp,
     planning: asked::Planning,
+    /// While planning a borrowed trade callback, finish payment-slot updates
+    /// after it returns, at the order used by `MerchantResultSlot.onTake`.
+    defer_trade_payment_update: bool,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -787,6 +790,7 @@ impl Menu {
         Self {
             stamp: storage::MutationStamp::fresh(),
             planning: Default::default(),
+            defer_trade_payment_update: false,
             state: storage::State {
                 kind,
                 registry_id: match kind {
@@ -1749,7 +1753,7 @@ impl Menu {
             Role::MerchantResult => self
                 .merchant
                 .as_ref()
-                .and_then(|m| m.offers.get(m.active?))
+                .and_then(|m| m.active_offer())
                 .is_some_and(|o| {
                     let (a, b) = (
                         self.state.containers[MAIN][0].as_ref(),
@@ -2884,11 +2888,23 @@ impl Menu {
 impl Menu {
     /// `MerchantContainer.updateSellItem`.
     pub fn merchant_update(&mut self, env: &Env) {
-        self.merchant_update_result(env.items);
+        self.merchant_update_sell_item(env.trade, env.items);
     }
 
-    /// Update a detached menu after an accepted edit of its live offer.
-    pub fn merchant_update_result(&mut self, items: &Items) {
+    /// `Merchant.getOffers` where the menu needs the villager's current list.
+    pub fn merchant_get_offers(&mut self, env: &Env) {
+        self.touch();
+        if let (Some(session), Some(trade)) = (self.state.merchant.as_mut(), env.trade) {
+            session.ensure_offers(trade, env.items);
+        }
+    }
+
+    /// Update the sell item, including when resuming after a trade callback.
+    pub fn merchant_update_sell_item(
+        &mut self,
+        trade: Option<&crate::merchant::TradeEnv<'_>>,
+        items: &Items,
+    ) {
         self.touch();
         let Some(m) = self.state.merchant.as_mut() else {
             return;
@@ -2899,10 +2915,14 @@ impl Menu {
         );
         let (a, b) = if a.is_none() { (b, None) } else { (a, b) };
         m.active = None;
+        m.detached_offer = None;
         if a.is_none() {
             self.state.containers[RESULT][0] = None;
             m.future_xp = 0;
             return;
+        }
+        if let Some(trade) = trade {
+            m.ensure_offers(trade, items);
         }
         if !m.offers.is_empty() {
             let (active, result) =
@@ -2932,8 +2952,8 @@ impl Menu {
         let Some(m) = self.state.merchant.as_mut() else {
             return;
         };
-        let Some(i) = m.active else { return };
-        let Some(offer) = m.offers.get(i).cloned() else {
+        let index = m.active;
+        let Some(offer) = m.active_offer().cloned() else {
             return;
         };
         let (mut a, mut b) = (
@@ -2945,13 +2965,16 @@ impl Menu {
         self.state.containers[MAIN][0] = a;
         self.state.containers[MAIN][1] = b;
         if took {
-            let prices = m.notify_trade(i, env.trade, env.items);
+            let prices = m.notify_trade(index, env.trade, env.items);
             if prices {
                 self.merchant_update(env);
             }
-            // setItem(0, buyA), setItem(1, buyB).
-            self.merchant_update(env);
-            self.merchant_update(env);
+            // setItem(0, buyA), setItem(1, buyB) come after notifyTrade (and
+            // NeoForge's callback). Both payment stacks already shrank in place.
+            if !self.defer_trade_payment_update {
+                self.merchant_update(env);
+                self.merchant_update(env);
+            }
         }
     }
     /// `MerchantMenu.tryMoveItems` (the select trade packet, with the
@@ -2963,9 +2986,14 @@ impl Menu {
         };
         // MerchantContainer.setSelectionHint updates the result.
         m.selection_hint = index;
-        let count = m.offers.len();
         self.merchant_update(env);
-        if index >= count {
+        self.merchant_get_offers(env);
+        if self
+            .state
+            .merchant
+            .as_ref()
+            .is_none_or(|m| index >= m.offers.len())
+        {
             return;
         }
         for slot in [0usize, 1] {

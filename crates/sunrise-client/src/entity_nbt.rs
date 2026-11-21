@@ -4290,6 +4290,7 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
         last_restock: number(tag.get("LastRestock")).unwrap_or(0),
         restocks_today: number(tag.get("RestocksToday")).unwrap_or(0) as i32,
         check_day: 0,
+        offer_revision: 0,
     }));
 }
 

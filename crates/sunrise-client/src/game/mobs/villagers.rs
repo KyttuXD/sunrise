@@ -587,9 +587,14 @@ impl Game<'_> {
             self.menu_session(|menu, env, _| {
                 if let Some(session) = menu.merchant.as_mut() {
                     session.reputation = reputation;
-                    session.update_special_prices();
                 }
-                menu.merchant_update(env);
+                menu.merchant_get_offers(env);
+                if let Some(session) = menu.merchant.as_mut() {
+                    session.update_special_prices();
+                    if !session.offers.is_empty() {
+                        menu.merchant_update(env);
+                    }
+                }
                 Some(true)
             });
         }

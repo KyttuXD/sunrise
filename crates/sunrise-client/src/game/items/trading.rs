@@ -94,6 +94,9 @@ pub(super) fn inventory_slot(i: usize) -> (f32, f32) {
 /// target decoration.
 pub(super) type MadeMaps = Vec<(i32, [i32; 3], u8, String)>;
 
+/// The traded offer and its index if it still belongs to the live offer list.
+pub(super) type CompletedTrade = (Option<usize>, Box<MerchantOffer>);
+
 #[derive(Clone)]
 pub(super) struct GameMaps<'a> {
     pub(super) terrain: Option<std::sync::Arc<sunrise_client::vanillagen::VanillaTerrain>>,
@@ -365,6 +368,7 @@ impl Game<'_> {
         };
         let mut session = merchant::Session::new(trade.offers, villager);
         session.xp = trade.xp;
+        session.offer_revision = trade.offer_revision;
         session.level = level;
         session.profession = profession;
         session.variant = format!(
@@ -400,6 +404,15 @@ impl Game<'_> {
         // villager's brain follows and looks at the player
         // (LookAndFollowTradingPlayerSink).
         self.mobs[index].extra.flag2 = true;
+        let name = if self.lan_acting.is_none() {
+            Some(merchant_display_name(
+                villager,
+                session.profession.trim_start_matches("minecraft:"),
+                name,
+            ))
+        } else {
+            name
+        };
         self.open_merchant_state(MerchantState {
             session: Box::new(session),
             scroll: 0,
@@ -429,12 +442,14 @@ impl Game<'_> {
         if session.villager {
             m.extra.villager_level = session.level.max(1);
         }
-        m.extra.flag2 = false;
         m.random = session.random.clone();
         m.ambient_timer = session.ambient_sound_time;
         let trade = m.extra.trade.get_or_insert_default();
         trade.xp = session.xp;
-        trade.offers = session.offers.clone();
+        if let Some(offers) = session.current_offers(Some(trade)) {
+            trade.offers = offers.to_vec();
+            trade.unset = false;
+        }
     }
     /// Opens a merchant menu without a mob (sunrise-ctl `trade`).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {
@@ -488,12 +503,44 @@ impl Game<'_> {
         self.capture(false);
         self.right = false;
     }
-    /// The trading mob's random before a menu click (it ticks meanwhile).
+    /// Give a menu operation the data it uses from the actual merchant.
     pub(super) fn merchant_sync_in(&self, session: &mut merchant::Session, mob: Option<u32>) {
-        if let Some(m) = mob.and_then(|id| self.mobs.iter().find(|m| m.id == id)) {
-            session.random.clone_from(&m.random);
-            session.ambient_sound_time = m.ambient_timer;
-            session.origin = [m.position.x, m.position.y, m.position.z];
+        let Some(m) = mob.and_then(|id| self.mobs.iter().find(|m| m.id == id)) else {
+            return;
+        };
+        session.random.clone_from(&m.random);
+        session.ambient_sound_time = m.ambient_timer;
+        session.origin = [m.position.x, m.position.y, m.position.z];
+        Self::merchant_sync_data(session, m);
+    }
+
+    /// Apply current villager data without replacing the detached click's
+    /// random, experience or position changes.
+    pub(super) fn merchant_sync_data(
+        session: &mut merchant::Session,
+        m: &sunrise_client::mobs::Mob,
+    ) {
+        if !session.villager {
+            return;
+        }
+        let kind = VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()];
+        if session.variant.strip_prefix("minecraft:") != Some(kind) {
+            session.variant.clear();
+            session.variant.push_str("minecraft:");
+            session.variant.push_str(kind);
+        }
+        if let Some(trade) = &m.extra.trade
+            && session.offer_revision != trade.offer_revision
+        {
+            session.offer_revision = trade.offer_revision;
+            session.profession = m.extra.profession.id();
+            // An old active offer remains valid until the menu does its next
+            // updateSellItem, but must not be indexed in the new list.
+            if let Some(active) = session.active.take() {
+                session.detached_offer = session.offers.get(active).cloned();
+            }
+            session.offers.clone_from(&trade.offers);
+            session.offers_unset = trade.unset;
         }
     }
     /// After a menu click: the session back to the station, its random to
@@ -521,18 +568,18 @@ impl Game<'_> {
             return;
         }
         let (mut session, traded) = self.merchant_apply(session, mob);
-        self.merchant_traded(mob, &mut session.offers, &traded);
+        self.merchant_traded(mob, &mut session.offers, traded);
         if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
             m.session = session;
         }
     }
     /// What a menu click's session did, applied to the world and its mob;
-    /// with the index of the offer of each trade made, for `merchant_traded`.
+    /// with each completed offer for `merchant_traded`.
     pub(super) fn merchant_apply(
         &mut self,
         session: Box<merchant::Session>,
         mob: Option<u32>,
-    ) -> (Box<merchant::Session>, Vec<usize>) {
+    ) -> (Box<merchant::Session>, Vec<CompletedTrade>) {
         let mut session = session;
         let events = std::mem::take(&mut session.events);
         let mut traded = Vec::new();
@@ -570,8 +617,10 @@ impl Game<'_> {
                     };
                     self.merchant_sound(sound, origin, pitch);
                 }
-                merchant::Event::Traded(index, _offer) => {
-                    traded.push(index);
+                merchant::Event::Traded(index, offer) => traded.push((index, offer)),
+                merchant::Event::TradeSequence(id, random) => {
+                    self.journal_trade_sequences();
+                    *self.rand_sequences.get(&id, self.level.seed) = random;
                 }
                 merchant::Event::TradeSound => {
                     let sound = if villager {
@@ -585,8 +634,8 @@ impl Game<'_> {
         }
         (session, traded)
     }
-    /// `MerchantResultSlot.onTake` for each trade made (`traded` indices into
-    /// the session's live `offers`): the statistic, `AbstractVillager.notifyTrade`'s
+    /// `MerchantResultSlot.onTake` for each trade made: the statistic,
+    /// `AbstractVillager.notifyTrade`'s
     /// `villager_trade` trigger, then the mods' `native_trade_with_villager`
     /// for a server's player (when the trader is still in the level), which
     /// may change the live offer (Bukkit's `PlayerTradeEvent#getTrade`).
@@ -594,12 +643,12 @@ impl Game<'_> {
         &mut self,
         mob: Option<u32>,
         offers: &mut [MerchantOffer],
-        traded: &[usize],
+        traded: Vec<CompletedTrade>,
     ) {
-        for index in traded {
-            let Some(offer) = offers.get_mut(*index) else {
-                continue;
-            };
+        for (index, mut previous) in traded {
+            let offer = index
+                .and_then(|i| offers.get_mut(i))
+                .unwrap_or(&mut previous);
             self.record_merchant_trade(mob, &offer.result);
             // TradeWithVillagerEvent: on the server, in the player's turn.
             if let (Some(id), Some(_)) = (mob, self.lan_acting)

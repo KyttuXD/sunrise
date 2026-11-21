@@ -47,6 +47,16 @@ Custom workstation POI identities must also stay outside `minecraft:`. Missing
 workstation blocks and selectors matching no valid states refuse preparation.
 A failed candidate publishes nothing; a failed reload keeps the active tables.
 
+## Changing a villager while trading
+
+On the server, `MerchantRef::set_profession` and `MerchantRef::set_villager_type`
+work even when a player has the villager's trade screen open. Neither setter
+sends a new offer list. Changing the type leaves existing offers unchanged and
+uses the new type for future rolls. Changing to a different profession discards
+the villager's offer list, without canceling a completed take or forcibly clearing
+the menu's active offer. When the menu next needs the list, new offers are rolled
+for the new profession. Setting the same profession keeps the existing offers.
+
 ## Identity, ordering and multiplayer
 
 Profession and custom POI table order depends only on registered qualified IDs,

@@ -177,10 +177,14 @@ impl Game<'_> {
                             .map(|m| &*m.session)
                     });
                 if let (Some(session), Tag::Compound(data)) = (session, &mut tag) {
-                    data.insert(
-                        "Offers".into(),
-                        entity_nbt::offers_to_nbt(&session.offers, self.res.items()),
-                    );
+                    if let Some(offers) =
+                        session.current_offers(self.mobs[i].extra.trade.as_deref())
+                    {
+                        data.insert(
+                            "Offers".into(),
+                            entity_nbt::offers_to_nbt(offers, self.res.items()),
+                        );
+                    }
                     data.insert("Xp".into(), Tag::Int(session.xp));
                 }
                 tag

@@ -78,10 +78,12 @@ pub trait MerchantsBackendMut {
     #[access(WorldOnly)]
     fn merchant_remove_offer(&mut self, merchant: MerchantRef, index: u32) -> bool;
     /// Side: server.
-    /// `Villager.setVillagerData` with a new profession: a different one
-    /// forgets the offers, which roll again on the next trade. Clients see the
-    /// new profession through entity data. False for an unknown id, a wandering
-    /// trader, or a villager with a trading screen open.
+    /// `Villager.setVillagerData`: a different profession invalidates the
+    /// villager's offers, which roll again when the game next needs them.
+    /// Works during trading. It does not replace the menu's active offer or
+    /// send its offer list; clients see the profession through entity data.
+    /// False for an unknown id, an unresolved current profession, a wandering
+    /// trader, or a stale handle.
     #[access(WorldOnly)]
     fn merchant_set_profession(&mut self, merchant: MerchantRef, profession: &str) -> bool;
     /// Side: server.
@@ -92,9 +94,9 @@ pub trait MerchantsBackendMut {
     #[access(WorldOnly)]
     fn merchant_set_level(&mut self, merchant: MerchantRef, level: i32) -> bool;
     /// Side: server.
-    /// `VillagerData.withType`: also the type a trading guest's session
-    /// rolls its next level-up offers with. False for an unknown id, a
-    /// wandering trader, or a trade open where this can't reach.
+    /// `Villager.setVillagerData` with a new type, including during a trade.
+    /// The current offers and menu are unchanged; future offers use the new
+    /// type. False for an unknown id, a wandering trader, or a stale handle.
     #[access(WorldOnly)]
     fn merchant_set_villager_type(&mut self, merchant: MerchantRef, kind: &str) -> bool;
     /// Side: server.

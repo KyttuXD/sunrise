@@ -201,7 +201,9 @@ impl Game<'_> {
     /// `ServerPlayer.sendMerchantOffers`, when the offers changed.
     pub(super) fn lan_send_offers(&mut self, conn: u32, gm: &mut GuestMerchant, force: bool) {
         let s = &gm.merchant.session;
-        if !force && s.offers == gm.sent && s.level == gm.sent_level && s.xp == gm.sent_xp {
+        if s.offers_unset
+            || (!force && s.offers == gm.sent && s.level == gm.sent_level && s.xp == gm.sent_xp)
+        {
             return;
         }
         if let Some(host) = self.lan.as_mut() {
@@ -359,12 +361,12 @@ impl Game<'_> {
             }
             let mob = gm.merchant.mob;
             self.as_guest(conn, |g| {
-                g.merchant_traded(mob, &mut session.offers, &traded)
+                g.merchant_traded(mob, &mut session.offers, traded)
             });
         }
         gm.merchant.session = session;
         self.merchant_drops(conn, dropped);
-        if refresh_offers || offers_refreshed {
+        if offers_refreshed || refresh_offers && !gm.merchant.session.offers.is_empty() {
             self.lan_send_offers(conn, &mut gm, true);
         }
         self.lan_send_merchant_content(conn, &mut gm);
@@ -394,6 +396,7 @@ impl Game<'_> {
         let trade_env = merchant::TradeEnv {
             trades: &self.stations().trades,
             enchantments: &self.stations().enchantments,
+            world_sequences: Some((&self.rand_sequences, self.level.seed)),
             // A level-up offer can locate and record a structure even on a detached menu.
             maps: if matches!(run, MerchantRun::Probe) {
                 None
@@ -698,9 +701,14 @@ impl Game<'_> {
             self.lan_merchant_op(conn, None, true, |menu, env| {
                 if let Some(s) = menu.merchant.as_mut() {
                     s.reputation = reputation;
-                    s.update_special_prices();
                 }
-                menu.merchant_update(env);
+                menu.merchant_get_offers(env);
+                if let Some(s) = menu.merchant.as_mut() {
+                    s.update_special_prices();
+                    if !s.offers.is_empty() {
+                        menu.merchant_update(env);
+                    }
+                }
             });
         }
     }
@@ -747,16 +755,22 @@ impl Game<'_> {
     pub(super) fn lan_trade_edit(
         &mut self,
         conn: u32,
-        edit: impl FnOnce(&mut merchant::Session),
+        roll_offers: bool,
+        edit: impl FnOnce(&mut merchant::Session) -> bool,
     ) -> bool {
         if self.menu_click_in_progress(conn) {
             return false;
         }
         let done = self.lan_merchant_op(conn, None, false, |menu, env| {
+            if roll_offers {
+                menu.merchant_get_offers(env);
+            }
             let Some(session) = menu.merchant.as_mut() else {
                 return;
             };
-            edit(session);
+            if !edit(session) {
+                return;
+            }
             session.selection_hint = session
                 .selection_hint
                 .min(session.offers.len().saturating_sub(1));
@@ -1176,8 +1190,6 @@ mod tests {
             );
             assert!(villager.set_xp(game, 40));
             assert!(villager.set_level(game, 3));
-            // The profession cannot change under an open screen.
-            assert!(!villager.set_profession(game, "minecraft:cleric"));
             assert!(
                 !villager
                     .set_offer(game, 7, changed.try_into_api().unwrap())
@@ -1255,10 +1267,11 @@ mod tests {
                 trades: &game.stations().trades,
                 enchantments: &game.stations().enchantments,
                 maps: None,
+                world_sequences: None,
             };
             let session = &mut gm.merchant.session;
             session.origin = [0.0; 3];
-            assert!(session.notify_trade(0, Some(&trade_env), items));
+            assert!(session.notify_trade(Some(0), Some(&trade_env), items));
             assert_eq!(session.level, 2);
             assert!(session.offers.len() > 1, "level 2 offers were added");
             assert_eq!(session.offers[0].uses, first.uses + 1);
@@ -1283,16 +1296,106 @@ mod tests {
     #[ignore = "daily"]
     fn a_type_change_reaches_the_open_session_before_a_level_up() {
         with_game(|game| {
-            let (villager, _rx, _) = open_trade(game, 4);
+            let (villager, rx, first) = open_trade(game, 4);
+            game.mobs[0].extra.profession =
+                sunrise_client::mobs::villager::ProfessionState::from_id("minecraft:fisherman");
+            let host = game.lan.as_mut().unwrap();
+            host.play
+                .get_mut(&12)
+                .unwrap()
+                .merchant
+                .as_mut()
+                .unwrap()
+                .merchant
+                .session
+                .profession = "minecraft:fisherman".into();
+            host.hub.guests.update(0, |g| {
+                g.inventory[9] = Some(ItemStack::new("minecraft:wheat", 64));
+            });
+            assert!(villager.set_xp(game, 249));
+            game.lan_select_trade(12, 0);
+            rx.try_iter().for_each(drop);
             assert!(villager.set_villager_type(game, "minecraft:swamp"));
-            assert_eq!(
-                game.lan_trade_session(12).unwrap().variant,
-                "minecraft:swamp"
-            );
-            assert_eq!(game.mobs[0].extra.variant, 5);
             assert_eq!(
                 villager.villager_type(game).as_deref(),
                 Some("minecraft:swamp")
+            );
+            assert!(rx.try_recv().is_err(), "the setter does not sync the menu");
+            let gm = game.lan.as_ref().unwrap().play[&12]
+                .merchant
+                .as_ref()
+                .unwrap();
+            assert_eq!(gm.sent, [first]);
+            assert!(game.lan_merchant_click(
+                12,
+                &play::ContainerClick {
+                    container: 3,
+                    state: 0,
+                    slot: 2,
+                    button: 0,
+                    input: 0,
+                    changed: Vec::new(),
+                    carried: None,
+                }
+            ));
+            let session = game.lan_trade_session(12).unwrap();
+            assert_eq!(session.level, 5);
+            assert!(
+                session
+                    .offers
+                    .iter()
+                    .any(|offer| { &*offer.base_cost_a.stack.item == "minecraft:dark_oak_boat" }),
+                "a master swamp fisherman buys a dark oak boat"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_profession_change_keeps_the_active_offer_but_close_cannot_restore_the_old_list() {
+        with_game(|game| {
+            let (villager, rx, first) = open_trade(game, 1);
+            game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                g.inventory[9] = Some(ItemStack::new("minecraft:wheat", 64));
+            });
+            game.lan_select_trade(12, 0);
+            rx.try_iter().for_each(drop);
+
+            assert!(villager.set_profession(game, "minecraft:farmer"));
+            assert_eq!(
+                villager.offers(game),
+                Some(vec![first.clone().try_into_api().unwrap()])
+            );
+            assert!(villager.set_profession(game, "minecraft:cleric"));
+            assert_eq!(
+                villager.profession(game).as_deref(),
+                Some("minecraft:cleric")
+            );
+            assert_eq!(villager.offers(game), Some(Vec::new()));
+            assert!(rx.try_recv().is_err(), "the setter does not sync the menu");
+
+            let gm = game.lan.as_ref().unwrap().play[&12]
+                .merchant
+                .as_ref()
+                .unwrap();
+            let (menu, _) = game
+                .read_merchant_menu(12, gm, MerchantRun::Plain, |_, _| {})
+                .unwrap();
+            assert_eq!(menu.merchant.as_ref().unwrap().active_offer(), Some(&first));
+            assert!(game.lan_merchant_closed(12, Some(3)));
+            assert!(villager.offers(game).unwrap().is_empty());
+            game.ensure_offers(0);
+            let offers = &game.mobs[0].extra.trade.as_ref().unwrap().offers;
+            assert_eq!(offers.len(), 2);
+            assert!(
+                offers
+                    .iter()
+                    .any(|o| &*o.result.item == "minecraft:redstone")
+            );
+            assert!(
+                offers
+                    .iter()
+                    .any(|o| &*o.base_cost_a.stack.item == "minecraft:rotten_flesh")
             );
         });
     }

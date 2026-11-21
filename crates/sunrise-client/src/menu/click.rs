@@ -602,7 +602,8 @@ impl Menu {
             self.reset_quick_craft();
             return None;
         }
-        match input {
+        self.defer_trade_payment_update = true;
+        let moved = match input {
             Input::QuickMove if (0..=1).contains(&button) => {
                 self.planned(Asked::default(), |menu| {
                     menu.quick_move_step(env, 2, previous)
@@ -621,7 +622,9 @@ impl Menu {
                 let _ = self.click(env, 2, button, input);
                 None
             }
-        }
+        };
+        self.defer_trade_payment_update = false;
+        moved
     }
 
     /// The PICKUP_ALL branch (double click).

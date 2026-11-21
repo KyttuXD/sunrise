@@ -311,10 +311,6 @@ impl Game<'_> {
                 reads.map_id = Some(map_id);
             }
             let session = menu.merchant.as_ref().expect("planned merchant");
-            refresh |= session
-                .events
-                .iter()
-                .any(|event| matches!(event, Event::OffersRefreshed));
             let trade = session.events.iter().find_map(|event| match event {
                 Event::Traded(index, offer) => Some((*index, offer.clone())),
                 _ => None,
@@ -336,7 +332,7 @@ impl Game<'_> {
             }
             let Some((index, offer)) = trade else {
                 // Untaken/handled cases can still have a cursor change, but no trade hook.
-                self.apply_merchant_take(&reads, plan);
+                refresh |= self.apply_merchant_take(&reads, plan, false);
                 break;
             };
             let plan = RefCell::new(Some(plan));
@@ -375,22 +371,30 @@ impl Game<'_> {
                     match outcome {
                         Ok(true) => {
                             let session = plan.menu.merchant.as_mut().expect("planned session");
-                            // A level-up may recalculate all prices after the Traded snapshot.
-                            // Preserve it when the listener did not edit this special price.
-                            if answer.special_price_diff == offer.special_price_diff {
-                                answer.special_price_diff =
-                                    session.offers[index].special_price_diff;
+                            // A detached active offer has already been paid for but no
+                            // longer belongs to the villager's list. Do not replace a
+                            // current offer with the listener's edit to that old offer.
+                            if let Some(slot) = index.and_then(|i| session.offers.get_mut(i)) {
+                                // Keep a level-up's pricing unless the mod edited it.
+                                if answer.special_price_diff == offer.special_price_diff {
+                                    answer.special_price_diff = slot.special_price_diff;
+                                }
+                                *slot = answer;
+                                changed = true;
                             }
-                            session.offers[index] = answer;
-                            changed = true;
-                            plan.menu.merchant_update_result(game.items());
                             Reply::Allow
                         }
                         Ok(false) => Reply::Allow,
                         Err(reason) => Reply::Invalid(reason),
                     }
                 },
-                |game| game.apply_merchant_take(&reads, plan.take().expect("one frozen take")),
+                |game| {
+                    refresh |= game.apply_merchant_take(
+                        &reads,
+                        plan.take().expect("one frozen take"),
+                        true,
+                    );
+                },
             );
             if !accepted || Scope::refused() {
                 return false;
@@ -413,8 +417,9 @@ impl Game<'_> {
         true
     }
 
-    /// Install only the writes calculated by the plan.
-    fn apply_merchant_take(&mut self, reads: &TakeReads, mut plan: TakePlan) {
+    /// Install the writes calculated by the plan and finish the payment slots
+    /// after a successful `MerchantResultSlot.onTake` callback.
+    fn apply_merchant_take(&mut self, reads: &TakeReads, mut plan: TakePlan, traded: bool) -> bool {
         let conn = reads.conn;
         let mob = reads.identity.target.id();
         self.journal_guest_merchant(conn);
@@ -428,10 +433,40 @@ impl Game<'_> {
             });
         }
         self.register_exploration_maps(plan.made);
-        let (session, _) = self.merchant_apply(
-            plan.menu.merchant.take().expect("planned merchant"),
-            Some(mob),
-        );
+        if traded {
+            let session = plan.menu.merchant.as_mut().expect("planned merchant");
+            let m = self
+                .mobs
+                .iter()
+                .find(|m| m.id == mob)
+                .expect("validated merchant");
+            Self::merchant_sync_data(session, m);
+            // MerchantOffer.take has already shrunk both stacks. The next
+            // updateSellItem sees any profession/type written by the callback.
+            let tag = |id: &str| self.structure_tag(id);
+            let maps = super::trading::GameMaps {
+                terrain: self.end.locator(),
+                structure_tag: &tag,
+                made: Default::default(),
+                next_id: std::cell::Cell::new(self.peek_map_id()),
+            };
+            let trade = sunrise_client::merchant::TradeEnv {
+                trades: &self.stations().trades,
+                enchantments: &self.stations().enchantments,
+                maps: Some(&maps),
+                world_sequences: Some((&self.rand_sequences, self.level.seed)),
+            };
+            plan.menu
+                .merchant_update_sell_item(Some(&trade), self.items());
+            let made = maps.made.into_inner();
+            self.register_exploration_maps(made);
+        }
+        let session = plan.menu.merchant.take().expect("planned merchant");
+        let refresh = session
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::OffersRefreshed));
+        let (session, _) = self.merchant_apply(session, Some(mob));
         let host = self.lan.as_mut().expect("validated merchant host");
         let gi = host
             .hub
@@ -456,6 +491,7 @@ impl Game<'_> {
         gm.slots = std::array::from_fn(|slot| plan.menu.slot(slot).cloned());
         gm.merchant.session = session;
         self.merchant_drops(conn, std::mem::take(&mut plan.menu.dropped));
+        refresh
     }
 
     /// Any write to an open merchant menu, including a MerchantRef edit to another guest,

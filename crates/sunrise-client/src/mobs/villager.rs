@@ -421,9 +421,16 @@ pub fn set_profession(m: &mut Mob, table: &ResolvedProfessions, index: usize) ->
         if let Some(trade) = m.extra.trade.as_mut() {
             trade.offers.clear();
             trade.unset = true;
+            trade.offer_revision = trade.offer_revision.wrapping_add(1);
         }
     }
     true
+}
+
+/// `Villager.setVillagerData(withType)`: update the synchronized type without
+/// changing the profession or its offers.
+pub fn set_type(m: &mut Mob, kind: u8) {
+    m.extra.variant = kind;
 }
 
 /// `VillagerProfession.workSound`.

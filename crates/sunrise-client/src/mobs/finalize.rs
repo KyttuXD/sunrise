@@ -2101,7 +2101,10 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn villager_type(&mut self, m: &mut Mob) {
         let at = block(m);
-        m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
+        super::villager::set_type(
+            m,
+            self.level.mob_maps().villager_type(&self.level.biome(at)),
+        );
     }
     /// `VariantUtils.selectVariantToSpawn` into `variant`, by registry name.
     fn variant(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {

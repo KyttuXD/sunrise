@@ -58,6 +58,19 @@ impl RandomSequences {
         self.watched = Some((id.to_owned(), random.clone()));
         random
     }
+    /// Start a detached draw at the state that `get` would use. The caller
+    /// installs the resulting state through `get` only if its action applies.
+    pub fn preview(&self, id: &str, world_seed: i64) -> XoroshiroRandom {
+        self.sequences.get(id).cloned().unwrap_or_else(|| {
+            create(
+                id,
+                world_seed,
+                self.salt,
+                self.include_world_seed,
+                self.include_sequence_id,
+            )
+        })
+    }
     /// Whether the sequence `get` handed out last was drawn from.
     fn drew(&self) -> bool {
         self.watched

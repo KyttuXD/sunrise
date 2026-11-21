@@ -39,6 +39,7 @@ impl Clone for Menu {
             state: self.state.clone(),
             stamp: MutationStamp::fresh(),
             planning: Default::default(),
+            defer_trade_payment_update: self.defer_trade_payment_update,
         }
     }
 }
