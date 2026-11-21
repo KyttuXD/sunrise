@@ -2599,9 +2599,9 @@ impl Game<'_> {
     ) {
         self.fire_trade_select(player, name, villager, index);
     }
-    /// The server changed its weather parameters. `raining` and `thundering`
-    /// are the requested final states. Set `cancel` to keep the previous
-    /// weather parameters. Server-side.
+    /// Before the server writes weather parameters, `raining` and `thundering`
+    /// are the requested final states. Cancel to skip the entire write: the
+    /// clear, rain and thunder timers and both flags. Server-side.
     pub(in crate::game) fn native_weather_change(
         &mut self,
         dimension: &str,
@@ -2611,18 +2611,6 @@ impl Game<'_> {
     ) {
         crate::game::level_control_hooks::LevelControl::Weather
             .hear(|| self.fire_weather_change(dimension, raining, thundering, cancel));
-    }
-
-    /// The server changed its thunder state through `/weather`. Set `cancel`
-    /// to keep the previous thunder state and timer. Server-side.
-    pub(in crate::game) fn native_thunder_change(
-        &mut self,
-        dimension: &str,
-        thundering: bool,
-        cancel: &mut bool,
-    ) {
-        crate::game::level_control_hooks::LevelControl::Weather
-            .hear(|| self.fire_thunder_change(dimension, thundering, cancel));
     }
 
     /// A server lightning bolt is about to be created. `cause` is `weather`,

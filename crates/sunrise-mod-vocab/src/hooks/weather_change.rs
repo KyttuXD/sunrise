@@ -2,9 +2,9 @@
 // catalog-order: 0341
 
 pub trait Hooks {
-    /// The server changed its weather parameters. `raining` and `thundering`
-    /// are the requested final states. Set `cancel` to keep the previous
-    /// weather parameters. Server-side.
+    /// Before the server writes weather parameters, `raining` and `thundering`
+    /// are the requested final states. Cancel to skip the entire write: the
+    /// clear, rain and thunder timers and both flags. Server-side.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_weather_change",
         dispatch = "flat",
@@ -12,7 +12,8 @@ pub trait Hooks {
         contract = "cancel",
         out = "cancel",
         neoforge = "none (NeoForge has no such event)",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
     fn weather_change(dimension: &str, raining: bool, thundering: bool, cancel: &mut bool);
 }

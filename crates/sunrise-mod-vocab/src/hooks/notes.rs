@@ -323,11 +323,9 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`prepare_item_craft(player, name, pos, result)`**: a crafting-grid result was prepared; `pos` is the crafting table, or None for the player's inventory grid. Change it before it is sent to the menu. Guest state is not swapped in.
 - **`trade_select(player, name, villager, index)`**: a player selected offer `index` in a villager's trading menu; `villager` is its entity id when known. The menu has updated and the player's state is not swapped in.
 - **`hopper_pickup_item(dimension, pos, item, count, cancel)`**: a hopper at `pos` is about to pick up a dropped stack; set `cancel` to leave it in the world.
-- **`weather_change(dimension, raining, thundering, cancel)`**: the server's `/weather` command is about to set
-  its final rain and thunder states in `dimension`. Set `cancel` to keep the previous weather parameters, including
-  their timers.
-- **`thunder_change(dimension, thundering, cancel)`**: the server's `/weather` command is about to change
-  thunder. Set `cancel` to keep the previous thunder state and timer.
+- **`weather_change(dimension, raining, thundering, cancel)`**: `/weather` or a mod is about to write
+  weather parameters in `dimension`. Cancel to skip the entire request, including the clear, rain and
+  thunder timers and the two requested flags.
 - **`lightning_strike(player, pos, cause, cancel)`**: a weather, Channeling-trident, or `/summon` lightning bolt
   is about to be created. Set `cancel` to prevent the bolt and its effects; `cause` names the creation path.
 - **`entity_struck_by_lightning(entity, bolt, cancel)`**: a lightning bolt is about to hit `entity`
@@ -2633,15 +2631,13 @@ registration path.
 
 - `target_hit(dimension, pos, strength)` is called after a projectile hits the target block at `pos` and it takes the reported redstone output strength.
 
-- The server's `/weather` command is about to change thunder: `thunder_change(dimension, thundering, cancel)`. Set `cancel` and the previous thunder state and timer remain.
-
 - The overworld clock is about to jump after sleep or a `/time` command: `time_skip(dimension, from, to, cause, cancel)`. Set `cancel` to keep the old time.
 
 - A player selected a trade: `trade_select(player, name, villager, index)` is heard after the trading menu updates; `villager` is the entity id when known. The player's state is not swapped in.
 
 - `vault_change_state(dimension, pos, state)` is called after a vault at `pos` changes to `state` (`inactive`, `active`, `unlocking`, or `ejecting`).
 
-- The server's `/weather` command is about to change its rain and thunder parameters: `weather_change(dimension, raining, thundering, cancel)`. Set `cancel` and the prior weather and timers remain.
+- `/weather` or a mod is about to write weather parameters: `weather_change(dimension, raining, thundering, cancel)`. Cancel to skip all five fields of the request.
 
 - The dedicated server's whitelist changed state: `whitelist_state_update(enabled)` reports its final on/off state, after `/whitelist on` or `/whitelist off` from a player or console.
 

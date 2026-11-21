@@ -1,0 +1,11 @@
+ids = [
+    "hook:thunder_change",
+    "method:Hooks::thunder_change",
+    "type:ThunderChangeEvent",
+    "hook:weather_change",
+    "method:Hooks::weather_change",
+    "type:WeatherChangeEvent",
+    "handle:LevelRef::set_weather",
+]
+why = "Vanilla 26.3's MinecraftServer.setWeatherParameters sets all five fields together, using the same duration for rain and thunder. NeoForge adds no weather/thunder event pair at that setter. Sunrise now asks only the weather hook and skips the requested write on a veto instead of restoring fields or letting a second veto split the update."
+migrate = "Replace Hooks::thunder_change(&self, host: &mut dyn ServerHost, event: &mut ThunderChangeEvent<'_>) with Hooks::weather_change(&self, host: &mut dyn ServerHost, event: &mut WeatherChangeEvent<'_>); if you already implement weather_change, fold the thunder policy into that listener. Use event.dimension and event.thundering as before, and event.raining for the requested rain state. Return Flow::Cancel only to veto the whole request: there is no thunder-only veto. Replace any thunder_change hook requirement with weather_change; if you pin a version, use hook_version = 2. Keep calling LevelRef::set_weather(host, clear_ticks, weather_ticks, raining, thundering); an accepted request sets both timers from weather_ticks."

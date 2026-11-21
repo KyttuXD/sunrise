@@ -35,13 +35,14 @@ pub trait LevelWeatherBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelWeatherBackendMut {
     /// Side: server.
-    /// Sets the weather as `/weather` does (`ServerLevel.setWeatherParameters`): clear for
-    /// `clear_ticks`, or raining (and thundering) for `weather_ticks`, after which the
-    /// weather cycle goes on as usual. Rain and thunder then fade in or out as vanilla's do;
-    /// `set_weather_levels` sets their strength at once. The `weather_change` hook may cancel
-    /// all of it and `thunder_change` the thunder. The players see it after the next sync.
-    /// False for a negative time, a call from inside `weather_change` or `thunder_change`, a
-    /// parked level, a stale handle or a client.
+    /// Sets the weather as `/weather` does (`MinecraftServer.setWeatherParameters`):
+    /// `clear_ticks` sets the clear timer and `weather_ticks` sets both rain and thunder
+    /// timers. Rain and thunder fade in or out as vanilla's do; `set_weather_levels` sets
+    /// their strength at once. The `weather_change` hook may cancel the entire request
+    /// before any of its timers or flags are written. Players see an accepted change
+    /// after the next sync.
+    /// False for a negative time, a call from inside `weather_change`, a parked level,
+    /// a stale handle or a client.
     #[access(WorldOnly)]
     fn level_set_weather(
         &mut self,

@@ -1,6 +1,6 @@
 //! Which level-control hooks this thread is hearing, so a mod's setter called from inside its
-//! own hook is refused instead of firing that hook again without end: `weather_change` and
-//! `thunder_change` for `set_weather`, `world_border_center_changed` and
+//! own hook is refused instead of firing that hook again without end: `weather_change`
+//! for `set_weather`, `world_border_center_changed` and
 //! `world_border_bounds_changed` for the border's centre and size, `server_tick_rate_changed`
 //! for `set_tick_rate`. Each setter firing a hook marks its own control, and a nested setter
 //! of another control can't come back to it, so a chain of listeners ends after at most one

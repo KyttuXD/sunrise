@@ -1,5 +1,5 @@
 //! Weather writes for native server mods through a `LevelRef`, on the same path as
-//! `/weather`: `ServerLevel.setWeatherParameters` with the weather and thunder hooks, and
+//! `/weather`: `MinecraftServer.setWeatherParameters` with the weather hook, and
 //! `Level.setRainLevel` / `setThunderLevel` for how strong the rain and thunder are now. Like
 //! the command, they act on the level in place; a parked level, a stale handle or a client
 //! returns false. The players see the change on the next host sync.
@@ -8,9 +8,8 @@ use crate::game::level_control_hooks::LevelControl;
 use mod_api::LevelRef;
 
 impl Game<'_> {
-    /// `ServerLevel.setWeatherParameters(clear, time, raining, thundering)` in the level in
-    /// place, as `/weather` and mods set it: `weather_change` may cancel all of it and
-    /// `thunder_change` the thunder half.
+    /// Writes the whole request as in `MinecraftServer.setWeatherParameters`, unless
+    /// `weather_change` vetoes it. Both rain and thunder use the same duration.
     pub(in crate::game) fn set_weather_parameters(
         &mut self,
         clear: i32,
@@ -18,45 +17,20 @@ impl Game<'_> {
         raining: bool,
         thundering: bool,
     ) {
-        let previous = (
-            self.world.weather.clear_time,
-            self.world.weather.rain_time,
-            self.world.weather.thunder_time,
-            self.world.weather.raining,
-            self.world.weather.thundering,
-        );
         let mut cancel = false;
         self.native_weather_change(self.dim.id(), raining, thundering, &mut cancel);
-        let old_thundering = self.world.weather.thundering;
-        let old_thunder_time = self.world.weather.thunder_time;
-        let mut cancel_thunder = false;
-        self.native_thunder_change(self.dim.id(), thundering, &mut cancel_thunder);
         if cancel {
-            let w = &mut self.world.weather;
-            (
-                w.clear_time,
-                w.rain_time,
-                w.thunder_time,
-                w.raining,
-                w.thundering,
-            ) = previous;
-        } else {
-            // ServerLevel.setWeatherParameters.
-            let w = &mut self.world.weather;
-            w.clear_time = clear;
-            w.rain_time = time;
-            w.thunder_time = time;
-            w.raining = raining;
-            w.thundering = thundering;
-            if cancel_thunder {
-                w.thunder_time = old_thunder_time;
-                w.thundering = old_thundering;
-            }
+            return;
         }
+        let w = &mut self.world.weather;
+        w.clear_time = clear;
+        w.rain_time = time;
+        w.thunder_time = time;
+        w.raining = raining;
+        w.thundering = thundering;
     }
     /// `set_weather_parameters` through a handle of the level in place. False for a negative
-    /// time, inside the `weather_change` or `thunder_change` hook, a parked level, a stale
-    /// handle or a client.
+    /// time, inside the `weather_change` hook, a parked level, a stale handle or a client.
     pub(super) fn level_set_weather(
         &mut self,
         level: LevelRef,
