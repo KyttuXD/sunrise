@@ -1,0 +1,1 @@
+sunrise-client game::gui_layer_tests::a_refused_gui_layer_keeps_its_paint_and_the_next_layer_draws lib daily child-process

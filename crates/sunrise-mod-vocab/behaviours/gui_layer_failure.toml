@@ -1,0 +1,6 @@
+version = 1
+doc = "If a retained GUI layer painter or wrapper is refused or panics, primitives it already submitted stay in order, including paint from delegated layer bodies. The client does not replay the layer, and later layers still draw."
+tests = [
+    "crates/sunrise-client/src/game/modding/gui_layer_tests.rs::a_refused_gui_layer_keeps_its_paint_and_the_next_layer_draws",
+    "crates/sunrise-client/src/game/modding/gui_layer_tests.rs::a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal",
+]
