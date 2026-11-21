@@ -235,7 +235,7 @@ impl Game<'_> {
         &self,
         l: &super::natural_spawning::GameLevel,
         r: &SpawnerSpawn,
-        source: Option<mod_api::SpawnSource>,
+        source: Option<mod_api::Spawner>,
         planned: &mut Vec<Planned>,
         random: &mut sunrise_core::random::LegacyRandom,
     ) -> Option<SpawnerAdded> {

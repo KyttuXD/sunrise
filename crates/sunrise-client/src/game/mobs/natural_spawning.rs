@@ -2670,7 +2670,7 @@ mod tests {
             host: &dyn mod_api::Host,
             mob: mod_api::UnspawnedMobRef,
             reason: mod_api::SpawnReason,
-            _: Option<mod_api::SpawnSource>,
+            _: Option<mod_api::Spawner>,
             vanilla: u32,
         ) -> Option<u32> {
             assert_eq!(mob.kind(host).unwrap().to_string(), "minecraft:zombie");
@@ -2690,7 +2690,7 @@ mod tests {
             _: &dyn mod_api::Host,
             _: mod_api::UnspawnedMobRef,
             _: mod_api::SpawnReason,
-            _: Option<mod_api::SpawnSource>,
+            _: Option<mod_api::Spawner>,
             _: u32,
         ) -> Option<u32> {
             Some(9)

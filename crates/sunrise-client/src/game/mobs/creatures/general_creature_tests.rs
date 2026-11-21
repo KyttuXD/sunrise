@@ -348,7 +348,7 @@ impl mod_api::EntityPart for GatedCluster {
         host: &dyn mod_api::Host,
         _: mod_api::UnspawnedMobRef,
         _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
+        _: Option<mod_api::Spawner>,
         _: u32,
     ) -> Option<u32> {
         let _ = host.level("minecraft:overworld");

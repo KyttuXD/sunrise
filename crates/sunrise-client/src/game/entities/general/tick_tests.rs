@@ -124,7 +124,7 @@ impl Hooks for Declare {
         r.register_attachment_type("mymod:counter", false).unwrap();
         for (path, save) in [("robot", true), ("ghost", false)] {
             r.declare_general_entity(
-                path,
+                mod_api::Identifier::from_parts("mymod", path).unwrap(),
                 GeneralEntityCategory::Misc,
                 0.8,
                 1.9,

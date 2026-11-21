@@ -1525,7 +1525,7 @@ mod tests {
     fn declaration(mod_id: &str, id: &str) -> mod_api::__private::GeneralEntityTypeDeclaration {
         mod_api::__private::GeneralEntityTypeDeclaration {
             mod_id: mod_id.to_owned(),
-            id: id.to_owned(),
+            id: mod_api::Identifier::parse_namespaced(id).unwrap(),
             category: mod_api::GeneralEntityCategory::Misc,
             width: 0.8,
             height: 1.9,

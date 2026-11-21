@@ -335,7 +335,7 @@ mod tests {
             ];
             for (name, height, passenger_attachment, pickable) in types {
                 r.declare_general_entity(
-                    name,
+                    mod_api::Identifier::from_parts("mymod", name).unwrap(),
                     mod_api::GeneralEntityCategory::Misc,
                     0.5,
                     height,

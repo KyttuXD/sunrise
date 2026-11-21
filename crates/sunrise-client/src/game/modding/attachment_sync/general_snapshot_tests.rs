@@ -16,7 +16,7 @@ impl mod_api::Hooks for Declare {
         r.register_attachment_type("sync_route:value", true)
             .unwrap();
         r.declare_general_entity(
-            "robot",
+            mod_api::Identifier::from_parts("mymod", "robot").unwrap(),
             GeneralEntityCategory::Misc,
             0.8,
             1.9,
