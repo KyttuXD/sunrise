@@ -833,7 +833,10 @@ impl Game<'_> {
         args: Option<&Tag>,
     ) -> R<Vec<Option<i32>>> {
         let functions = self.functions_named(name)?;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let mut out = Vec::new();
         for f in functions {
             out.push(match self.run_function(&f, args, source)? {
@@ -850,7 +853,10 @@ impl Game<'_> {
     /// `FunctionCommand.decorateOutputIfNeeded`: consume only this invocation's
     /// prepared call before its body can invoke another function.
     pub(super) fn cmd_function(&mut self, ctx: &Context) -> R<i32> {
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let call = if self
             .exec
             .prepared_function
@@ -934,7 +940,10 @@ impl Game<'_> {
     /// `FunctionCommand.decorateOutputIfNeeded`: retain body, result and callback delivery.
     fn execute_function_call(&mut self, call: FunctionCall) -> R<i32> {
         let FunctionCall { functions, args } = call;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let mut sum: i32 = 0;
         let mut any = false;
         let mut failed = false;
@@ -1523,7 +1532,10 @@ impl Game<'_> {
                 )
             })?
         };
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| self.entity_view_scored(t, &json));
         Ok(self.command_conditions_hold(&json, view.as_ref(), source.pos))
     }
@@ -3692,7 +3704,7 @@ mod required_tag_tests {
                     }
                 }
             }
-            let previous = game.command_source;
+            let previous = game.command_source.take();
             let server = game.server_source();
             assert!(server.entity.is_none());
             game.command_source = Some(server);

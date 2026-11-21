@@ -52,7 +52,7 @@ impl Game<'_> {
     /// command typed by the player in place runs as them, the server
     /// console's as nobody.
     pub(in crate::game) fn source_entity(&self) -> Option<Target> {
-        match self.command_source {
+        match self.command_source.as_ref() {
             Some(s) => s.entity,
             None => self.player.is_some().then_some(Target::Player),
         }
@@ -77,7 +77,7 @@ impl Game<'_> {
     /// command block's or minecart's own name when the source has no entity,
     /// or the server's.
     pub(in crate::game) fn source_display_name(&self) -> Text {
-        match self.command_source {
+        match self.command_source.as_ref() {
             Some(source) => match source.entity {
                 Some(target) => self.target_name(target),
                 None => source

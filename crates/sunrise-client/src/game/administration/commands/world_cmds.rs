@@ -569,7 +569,7 @@ impl Game<'_> {
             };
             // LookAt.perform: Entity.lookAt from the source's anchor (the
             // feet, unless `anchored eyes`).
-            let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+            let anchored_eyes = self.command_source.as_ref().is_some_and(|s| s.eyes);
             let eye = if anchored_eyes {
                 self.target_eye_height(t)
             } else {
@@ -597,6 +597,7 @@ impl Game<'_> {
         } else {
             vec![
                 self.command_source
+                    .as_ref()
                     .and_then(|s| s.entity)
                     .unwrap_or(Target::Player),
             ]

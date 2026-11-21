@@ -190,7 +190,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
         Vec3::new(1.5, 200.0, 1.5)
     );
     assert_eq!(
-        format!("{:?}", game.command_source.unwrap()),
+        format!("{:?}", game.command_source.as_ref().unwrap()),
         format!("{outer:?}")
     );
     assert_eq!(before, (game.exec.commands, game.exec.callback));
@@ -214,7 +214,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
     assert_eq!(game.dim, Dim::Nether);
     assert_eq!(game.lan_acting, None);
     assert_eq!(
-        format!("{:?}", game.command_source.unwrap()),
+        format!("{:?}", game.command_source.as_ref().unwrap()),
         format!("{outer:?}")
     );
     assert_eq!(before, (game.exec.commands, game.exec.callback));
