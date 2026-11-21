@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     containers::{BlockEntity, ModContainerInsertRule},
-    items::ItemStack,
+    items::{ItemStack, Items},
     world::World,
 };
 use std::collections::HashMap;
@@ -1072,7 +1072,14 @@ impl Hub {
     /// `AbstractContainerMenu.setSelectedBundleItemIndex` on the guest's open
     /// menu: a container's own slots, or the inventory's. A bundle's selection
     /// lives on the server's stack until the click that takes from it.
-    pub fn select_bundle_item(&mut self, conn: u32, slot: usize, index: i32, world: &mut World) {
+    pub fn select_bundle_item(
+        &mut self,
+        conn: u32,
+        slot: usize,
+        index: i32,
+        world: &mut World,
+        registry: &Items,
+    ) {
         let _ = self.update_guest(conn, |g| {
             let open = g.menu.as_ref().map(|m| (m.size, m.slot_count(), m.slots));
             let mut items = match open {
@@ -1098,7 +1105,7 @@ impl Hub {
                 },
             };
             if let Some(stack) = stack {
-                crate::bundle::toggle_selected(stack, index);
+                crate::bundle::toggle_selected(registry, stack, index);
             }
             if let (Some((_, _, source)), Some(items)) = (open, items) {
                 source.write(world, g, items);

@@ -1365,7 +1365,7 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
                 }
             }
         }
-        contents.store(&mut carried);
+        contents.store(items, &mut carried);
         view.guest.carried = Some(carried);
         return true;
     }
@@ -1394,12 +1394,12 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
         (carried, _) => {
             // toggleSelectedItem(-1), then the click goes on.
             view.guest.carried = carried;
-            toggle_selected(&mut bundle, -1);
+            toggle_selected(items, &mut bundle, -1);
             view.set(i, Some(bundle));
             return false;
         }
     }
-    contents.store(&mut bundle);
+    contents.store(items, &mut bundle);
     view.set(i, Some(bundle));
     true
 }

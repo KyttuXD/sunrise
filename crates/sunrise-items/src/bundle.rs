@@ -30,22 +30,39 @@ impl Weight {
         Self { n: n / g, d: d / g }
     }
 
-    fn add(self, o: Self) -> Self {
-        Self::new(self.n * o.d + o.n * self.d, self.d * o.d)
+    fn add(self, o: Self) -> Option<Self> {
+        let common = gcd(self.d, o.d);
+        let a = self.n.checked_mul(o.d / common)?;
+        let b = o.n.checked_mul(self.d / common)?;
+        Some(Self::new(
+            a.checked_add(b)?,
+            self.d.checked_mul(o.d / common)?,
+        ))
     }
 
-    fn sub(self, o: Self) -> Self {
+    fn sub(self, o: Self) -> Option<Self> {
         self.add(Self { n: -o.n, d: o.d })
     }
 
-    fn times(self, count: u32) -> Self {
-        Self::new(self.n * i128::from(count), self.d)
+    fn times(self, count: u32) -> Option<Self> {
+        let count = i128::from(count);
+        let common = gcd(count, self.d);
+        Some(Self::new(
+            self.n.checked_mul(count / common)?,
+            self.d / common,
+        ))
     }
 
     /// `this.divideBy(item).intValue()` (truncated), at least 0.
-    fn how_many(self, item: Self) -> u32 {
-        let q = (self.n * item.d) / (self.d * item.n);
-        u32::try_from(q.max(0)).unwrap_or(u32::MAX)
+    fn how_many(self, item: Self) -> Option<u32> {
+        if self.n <= 0 {
+            return Some(0);
+        }
+        let num_common = gcd(self.n, item.n);
+        let den_common = gcd(self.d, item.d);
+        let n = (self.n / num_common).checked_mul(item.d / den_common)?;
+        let d = (self.d / den_common).checked_mul(item.n / num_common)?;
+        Some(u32::try_from(n / d).unwrap_or(u32::MAX))
     }
 }
 
@@ -71,52 +88,93 @@ pub(crate) fn max_stack(items: &Items, stack: &ItemStack) -> u32 {
         .max(1) as u32
 }
 
-/// The stack's `bundle_contents`, when it has the component.
-fn contents_of<'a>(items: &Items, stack: &'a ItemStack) -> Option<&'a [ItemStack]> {
-    let inside = stack.data().map_or(&[][..], |d| &d.bundle_contents[..]);
-    stack
-        .carries_component(items.get(&stack.item), "minecraft:bundle_contents")
-        .then_some(inside)
+/// `ItemInstance.get(BUNDLE_CONTENTS)`: borrow the explicit value (even if empty),
+/// or inherit the prototype's value unless the stack removed the component.
+pub fn contents_of<'a>(
+    stack: &'a ItemStack,
+    info: Option<&'a ItemInfo>,
+) -> Option<&'a [ItemStack]> {
+    if let Some(data) = stack.data() {
+        if data.sets_component("minecraft:bundle_contents") {
+            return Some(&data.bundle_contents);
+        }
+        if data.other("!minecraft:bundle_contents").is_some() {
+            return None;
+        }
+    }
+    let data = info?.component_prototype.data()?;
+    data.sets_component("minecraft:bundle_contents")
+        .then_some(data.bundle_contents.as_slice())
 }
 
 /// `BundleContents.getWeight`: a nested bundle weighs its contents plus
 /// 1/16, a beehive with bees 1, the rest 1 / max stack size.
-fn item_weight(items: &Items, stack: &ItemStack) -> Weight {
-    if let Some(inside) = contents_of(items, stack) {
-        return contents_weight(items, inside).add(Weight::new(1, 16));
+fn item_weight(
+    items: &Items,
+    stack: &ItemStack,
+    parent: Option<&WeightPath<'_>>,
+) -> Option<Weight> {
+    if let Some(inside) = contents_of(stack, items.get(&stack.item)) {
+        return contents_weight(items, inside, parent)?.add(Weight::new(1, 16));
     }
     let bees = stack
         .data()
         .and_then(|d| d.other("minecraft:bees"))
         .is_some_and(|b| matches!(b, Tag::List(l) if !l.is_empty()));
-    if bees {
+    Some(if bees {
         Weight::ONE
     } else {
         Weight::new(1, i128::from(max_stack(items, stack)))
-    }
+    })
 }
 
-fn contents_weight(items: &Items, inside: &[ItemStack]) -> Weight {
-    inside.iter().fold(Weight::ZERO, |w, s| {
-        w.add(item_weight(items, s).times(s.count))
+struct WeightPath<'a> {
+    contents: &'a [ItemStack],
+    parent: Option<&'a WeightPath<'a>>,
+}
+
+fn contents_weight(
+    items: &Items,
+    inside: &[ItemStack],
+    parent: Option<&WeightPath<'_>>,
+) -> Option<Weight> {
+    if inside.is_empty() {
+        return Some(Weight::ZERO);
+    }
+    // An edited prototype may refer to itself through a nested item. An
+    // uncomputable weight is an error, as in BundleContents.computeContentWeight.
+    let mut ancestor = parent;
+    while let Some(path) = ancestor {
+        if std::ptr::eq(inside, path.contents) {
+            return None;
+        }
+        ancestor = path.parent;
+    }
+    let path = WeightPath {
+        contents: inside,
+        parent,
+    };
+    inside.iter().try_fold(Weight::ZERO, |w, s| {
+        w.add(item_weight(items, s, Some(&path))?.times(s.count)?)
     })
 }
 
 /// `BundleItem.isBarVisible`, `getBarWidth` and `getBarColor`, over the
 /// effective component. A removed component has no bar.
 pub(crate) fn stack_bar(items: &Items, stack: &ItemStack, info: &ItemInfo) -> Option<ItemBar> {
-    let inside = match stack.data() {
-        Some(data) if data.sets_component("minecraft:bundle_contents") => &data.bundle_contents,
-        Some(data) if data.other("!minecraft:bundle_contents").is_some() => return None,
-        _ => &info.component_prototype.data()?.bundle_contents,
-    };
-    let Weight { n, d } = contents_weight(items, inside);
-    if n <= 0 {
+    let inside = contents_of(stack, Some(info))?;
+    let Weight { n, d } = contents_weight(items, inside, None).unwrap_or(Weight::ONE);
+    if n == 0 {
         return None;
     }
+    let full = n >= d;
     Some(ItemBar {
-        width: (1 + n * 12 / d).min(13) as i32,
-        color: if n >= d { 0xFF5454 } else { 0x7087FF },
+        width: if full {
+            13
+        } else {
+            1 + (n.checked_mul(12)? / d) as i32
+        },
+        color: if full { 0xFF5454 } else { 0x7087FF },
     })
 }
 
@@ -141,7 +199,7 @@ pub fn destroyed(stack: &mut ItemStack) -> Vec<ItemStack> {
 /// `BundleContents.Mutable`.
 pub struct Contents {
     items: Vec<ItemStack>,
-    weight: Weight,
+    weight: Option<Weight>,
     /// `selectedItem`: an index into `items`, -1 for none.
     selected: i32,
 }
@@ -150,20 +208,20 @@ impl Contents {
     /// A component collection may belong to any item, including an item with
     /// no previous bundle_contents component. Reuse the same weight model.
     pub fn from_items(items: &Items, inside: Vec<ItemStack>) -> Self {
-        let weight = contents_weight(items, &inside);
+        let weight = contents_weight(items, &inside, None);
         Self {
             items: inside,
             weight,
             selected: -1,
         }
     }
-    /// The bundle's contents; None when the stack is no bundle.
+    /// The effective contents; None when the stack lacks a bundle contents component.
     pub fn of(items: &Items, stack: &ItemStack) -> Option<Self> {
-        let inside = contents_of(items, stack)?.to_vec();
-        let weight = contents_weight(items, &inside);
+        let inside = contents_of(stack, items.get(&stack.item))?;
+        let weight = contents_weight(items, inside, None);
         let selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
         Some(Self {
-            items: inside,
+            items: inside.to_vec(),
             weight,
             selected,
         })
@@ -171,19 +229,24 @@ impl Contents {
 
     /// Remaining capacity for `offered` in a stack's bundle component, without cloning contents.
     pub fn room_in_stack(items: &Items, bundle: &ItemStack, offered: &ItemStack) -> Option<u32> {
-        let inside = contents_of(items, bundle)?;
-        Some(
+        let inside = contents_of(bundle, items.get(&bundle.item))?;
+        let room = contents_weight(items, inside, None).and_then(|weight| {
             Weight::ONE
-                .sub(contents_weight(items, inside))
-                .how_many(item_weight(items, offered)),
-        )
+                .sub(weight)?
+                .how_many(item_weight(items, offered, None)?)
+        });
+        Some(room.unwrap_or(0))
     }
 
     /// `getMaxAmountToAdd` for `stack`'s kind of item.
     pub fn room_for(&self, items: &Items, stack: &ItemStack) -> u32 {
-        Weight::ONE
-            .sub(self.weight)
-            .how_many(item_weight(items, stack))
+        self.weight
+            .and_then(|weight| {
+                Weight::ONE
+                    .sub(weight)?
+                    .how_many(item_weight(items, stack, None)?)
+            })
+            .unwrap_or(0)
     }
 
     /// `tryInsert`: what fits moves to the front, merged with its kind. `fits` is the stack's
@@ -193,14 +256,17 @@ impl Contents {
         if stack.count == 0 || !fits {
             return 0;
         }
-        let weight = item_weight(items, stack);
-        let amount = stack
-            .count
-            .min(Weight::ONE.sub(self.weight).how_many(weight));
+        let Some((amount, new_weight)) = self.weight.and_then(|current| {
+            let weight = item_weight(items, stack, None)?;
+            let amount = stack.count.min(Weight::ONE.sub(current)?.how_many(weight)?);
+            Some((amount, current.add(weight.times(amount)?)?))
+        }) else {
+            return 0;
+        };
         if amount == 0 {
             return 0;
         }
-        self.weight = self.weight.add(weight.times(amount));
+        self.weight = Some(new_weight);
         // ItemStack.isStackable: a damaged stack is damageable.
         let stackable = max_stack(items, stack) > 1 && stack.damage == 0;
         let same = self
@@ -232,10 +298,12 @@ impl Contents {
         }
         let at =
             usize::try_from(self.selected).map_or(0, |i| if i < self.items.len() { i } else { 0 });
+        let stack = &self.items[at];
+        self.weight = Some(
+            self.weight?
+                .sub(item_weight(items, stack, None)?.times(stack.count)?)?,
+        );
         let stack = self.items.remove(at);
-        self.weight = self
-            .weight
-            .sub(item_weight(items, &stack).times(stack.count));
         self.selected = -1;
         Some(stack)
     }
@@ -269,17 +337,31 @@ impl Contents {
 
     /// The `Fraction` weight as the float the progress bar reads.
     pub fn weight_fraction(&self) -> f32 {
-        self.weight.n as f32 / self.weight.d as f32
+        let Weight { n, d } = self.weight.unwrap_or(Weight::ONE);
+        n as f32 / d as f32
     }
 
     /// `Fraction.ONE`: a full bundle draws the full bar and says so.
     pub fn is_full(&self) -> bool {
-        self.weight.n >= self.weight.d
+        self.weight.is_none_or(|weight| weight.n >= weight.d)
     }
 
-    /// `toImmutable`, written back into the bundle's component.
-    pub fn store(self, bundle: &mut ItemStack) {
+    /// `toImmutable`, written back into the bundle's component. Empty contents
+    /// still set the component if they differ from the item's prototype.
+    pub fn store(self, items: &Items, bundle: &mut ItemStack) {
+        if self.weight.is_none() {
+            return;
+        }
+        let prototype = items
+            .get(&bundle.item)
+            .and_then(|info| contents_of(&info.component_prototype, None));
+        let empty_patch = self.items.is_empty() && prototype.is_none_or(|items| !items.is_empty());
         let data = bundle.data_mut();
+        data.set_other("!minecraft:bundle_contents", None);
+        data.set_other(
+            "minecraft:bundle_contents",
+            empty_patch.then(|| Tag::List(Vec::new())),
+        );
         data.bundle_contents = self.items;
         data.bundle_selected = BundleSelected(self.selected);
         bundle.tidy();
@@ -287,18 +369,25 @@ impl Contents {
 }
 
 /// `BundleItem.toggleSelectedItem`: select `index`, or nothing when it is the
-/// selected one already or outside the contents.
-pub fn toggle_selected(bundle: &mut ItemStack, index: i32) {
-    let Some(data) = bundle.extra.as_deref_mut() else {
+/// selected one already or outside the effective contents.
+pub fn toggle_selected(items: &Items, bundle: &mut ItemStack, index: i32) {
+    let Some(inside) = contents_of(bundle, items.get(&bundle.item)) else {
         return;
     };
-    let inside = (0..data.bundle_contents.len() as i32).contains(&index);
-    let selected = if data.bundle_selected.0 != index && inside {
+    let previous = bundle.data().map_or(-1, |d| d.bundle_selected.0);
+    let selected = if index != previous && (0..inside.len() as i32).contains(&index) {
         index
     } else {
         -1
     };
-    data.bundle_selected = BundleSelected(selected);
+    if selected != previous {
+        bundle.data_mut().bundle_selected = BundleSelected(selected);
+        // Selection is ignored by StackData equality, so tidying a selection-only
+        // patch would drop it while the contents are inherited.
+        if selected == -1 {
+            bundle.tidy();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,13 +398,21 @@ mod tests {
     fn weights_add_up_exactly() {
         let w = Weight::new(1, 64)
             .times(32)
-            .add(Weight::new(1, 16).times(4));
+            .unwrap()
+            .add(Weight::new(1, 16).times(4).unwrap())
+            .unwrap();
         assert_eq!(w, Weight::new(3, 4));
-        assert_eq!(Weight::ONE.sub(w).how_many(Weight::new(1, 64)), 16);
-        assert_eq!(Weight::ONE.sub(Weight::ONE).how_many(Weight::ONE), 0);
+        assert_eq!(
+            Weight::ONE.sub(w).unwrap().how_many(Weight::new(1, 64)),
+            Some(16)
+        );
+        assert_eq!(
+            Weight::ONE.sub(Weight::ONE).unwrap().how_many(Weight::ONE),
+            Some(0)
+        );
         // An over-full bundle (made by a command) has no room.
-        let over = Weight::ONE.sub(Weight::new(5, 4));
-        assert_eq!(over.how_many(Weight::new(1, 64)), 0);
+        let over = Weight::ONE.sub(Weight::new(5, 4)).unwrap();
+        assert_eq!(over.how_many(Weight::new(1, 64)), Some(0));
     }
 }
 
@@ -357,6 +454,7 @@ pub fn tooltip_layout(
     description_lines: usize,
 ) -> Option<TooltipLayout> {
     let contents = Contents::of(items, stack)?;
+    contents.weight?;
     let offset = ((box_width - 96.0) / 2.0).floor();
     if contents.items().is_empty() {
         // The description takes the top; the bar follows it. Its lines are

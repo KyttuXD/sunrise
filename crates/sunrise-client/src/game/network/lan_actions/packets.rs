@@ -776,8 +776,13 @@ impl Game<'_> {
                     let Some(host) = self.lan.as_mut() else {
                         return;
                     };
-                    host.hub
-                        .select_bundle_item(conn, slot, p.index, &mut self.world);
+                    host.hub.select_bundle_item(
+                        conn,
+                        slot,
+                        p.index,
+                        &mut self.world,
+                        world_items!(self),
+                    );
                     if mod_api::__private::listened(mod_api::HookId::PlayerBundleItemSelect) {
                         let Some(host) = self.lan.as_ref() else {
                             return;
