@@ -32,6 +32,10 @@ impl Hooks for Mod {
   impl is in a submodule.
 - Hook methods are written out in the block; a method a macro would generate inside the impl is not seen.
 
+Implement `entity_tick_pre`, `entity_tick_post`, `living_equipment_change` or `projectile_impact`
+to subscribe directly. Pre and Post are independent and receive a `HostSide`; match its variant
+if your mod only acts on one side. Equipment changes and projectile impacts are server events.
+
 ## Events and hosts
 
 A hook method takes the side's host and the moment's event:

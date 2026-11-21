@@ -13,20 +13,20 @@ const MOB_SLOTS: [&str; 8] = [
 ];
 
 impl Game<'_> {
+    /// Only the authoritative side sends this notice. Skip snapshots made solely for it
+    /// when there is no listener; vanilla equipment tracking is independent.
+    pub(super) fn living_equipment_change_subscribed(&self) -> bool {
+        self.is_logical_server()
+            && mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+    }
+
     /// `LivingEntity.collectEquipmentChanges` for the mobs that tick: each
     /// slot that holds another stack than the mods last heard is told
     /// (`native_living_equipment_change`). A mob new to the level counts from
-    /// empty, as vanilla's `lastEquipmentItems` does. Only while a mod
-    /// listens (`native_living_equipment_listened`): a mob's first tick after
-    /// that counts from empty too.
+    /// empty, as vanilla's `lastEquipmentItems` does. The snapshots here are
+    /// only for subscribed mods.
     pub(super) fn native_mobs_equipment(&mut self) {
-        if self.remote.is_some() || self.options.execution_role.is_client() {
-            return;
-        }
-        // Reading every mob's equipment each tick costs: only when a mod listens.
-        let mut listened = false;
-        self.native_living_equipment_listened(&mut listened);
-        if !listened {
+        if !self.living_equipment_change_subscribed() {
             return;
         }
         let ticking = self.entity_ticking_area();
@@ -60,9 +60,7 @@ impl Game<'_> {
     /// stack with it, so a hotbar selection that moves the main hand counts. A player new to the
     /// level counts from empty, as for mobs, and only while a mod listens.
     pub(super) fn native_players_equipment(&mut self) {
-        let mut listened = false;
-        self.native_living_equipment_listened(&mut listened);
-        if !listened {
+        if !self.living_equipment_change_subscribed() {
             return;
         }
         let Some(host) = self.lan.as_mut() else {

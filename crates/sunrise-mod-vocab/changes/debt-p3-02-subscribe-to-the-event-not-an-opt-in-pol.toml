@@ -1,0 +1,23 @@
+ids = [
+    "hook:entity_tick_listened",
+    "hook:entity_tick_listened.listened",
+    "method:Hooks::entity_tick_listened",
+    "type:EntityTickListenedEvent",
+    "type:EntityTickListenedEvent.listened",
+    "hook:living_equipment_listened",
+    "hook:living_equipment_listened.listened",
+    "method:Hooks::living_equipment_listened",
+    "type:LivingEquipmentListenedEvent",
+    "type:LivingEquipmentListenedEvent.listened",
+    "hook:hears_projectile_impacts",
+    "hook:hears_projectile_impacts.hears",
+    "method:Hooks::hears_projectile_impacts",
+    "type:HearsProjectileImpactsEvent",
+    "type:HearsProjectileImpactsEvent.hears",
+    "hook:entity_tick_pre",
+    "hook:entity_tick_post",
+    "hook:living_equipment_change",
+    "hook:projectile_impact",
+]
+why = "Mods subscribe to the event itself instead of answering a second hook. This follows NeoForge's EntityTickEvent.Pre/Post around ServerLevel.tickNonPassenger and ClientLevel.tickNonPassenger, LivingEquipmentChangeEvent in LivingEntity.collectEquipmentChanges, and ProjectileImpactEvent at EventHooks.onProjectileImpact before the projectile applies its hit. Existing equipment bookkeeping, entity tick batching, and projectile capture and resolution order are unchanged."
+migrate = "Delete Hooks::entity_tick_listened and its EntityTickListenedEvent import; implement only Hooks::entity_tick_pre, Hooks::entity_tick_post, or both (version 4). Match HostSide in the real listener for side-specific behavior; EntitiesRegistrar::entity_tick_each and entity_tick_each_entity still select individual timing, not subscriptions. Delete Hooks::living_equipment_listened and its LivingEquipmentListenedEvent import; implement Hooks::living_equipment_change (version 2) to receive equipment changes. Delete Hooks::hears_projectile_impacts and its HearsProjectileImpactsEvent import; implement Hooks::projectile_impact (version 3) to receive impacts. Remove the retired names from any explicit hook list. If a poll depended on a setting, check the setting in the real callback and return without acting when it is off. The remaining callbacks' signatures and event fields are unchanged."

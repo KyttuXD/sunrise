@@ -43,20 +43,11 @@ pub(in crate::game) struct Observed {
 
 struct Probe {
     action: Action,
-    hears: bool,
     observed: Arc<Observed>,
 }
 
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
-    fn hears_projectile_impacts(
-        &self,
-        _: &dyn mod_api::Host,
-        event: &mut mod_api::HearsProjectileImpactsEvent,
-    ) {
-        event.hears = self.hears;
-    }
-
     fn projectile_impact(
         &self,
         host: &mut dyn ServerHost,
@@ -90,30 +81,39 @@ impl Hooks for Probe {
             }
         }
     }
+}
 
+struct CatchProbe(Arc<Observed>);
+
+#[mod_api::__subscriptions]
+impl Hooks for CatchProbe {
     fn item_fished(&self, _: &mut dyn ServerHost, _: &mut mod_api::ItemFishedEvent<'_>) -> Flow {
-        self.observed.catches.fetch_add(1, Ordering::Relaxed);
+        self.0.catches.fetch_add(1, Ordering::Relaxed);
         Flow::Continue
     }
 }
 
-/// Run a real server tick fixture with a live player and listener installed.
+/// Run a real server tick fixture with a live player and optional impact subscriber.
 pub(in crate::game) fn with_probe(
     action: Action,
-    hears: bool,
+    subscribe_impact: bool,
     test: impl FnOnce(&mut Game<'_>, &Observed),
 ) {
     let observed = Arc::new(Observed::default());
-    let mods = vec![mod_api::ModEntry::new(
-        "impact-probe",
-        Box::new(Probe {
-            action,
-            hears,
-            observed: observed.clone(),
-        }),
-    )]
-    .into();
-    mod_platform::testing::with_mods(mods, || {
+    let mut mods = vec![mod_api::ModEntry::new(
+        "catch-probe",
+        Box::new(CatchProbe(observed.clone())),
+    )];
+    if subscribe_impact {
+        mods.push(mod_api::ModEntry::new(
+            "impact-probe",
+            Box::new(Probe {
+                action,
+                observed: observed.clone(),
+            }),
+        ));
+    }
+    mod_platform::testing::with_mods(mods.into(), || {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             game.world

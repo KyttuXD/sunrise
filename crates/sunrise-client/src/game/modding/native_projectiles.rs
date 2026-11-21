@@ -134,17 +134,11 @@ impl Game<'_> {
         *pass = guard.pass.take().unwrap();
     }
 
-    /// Whether this game is a server that flies projectiles for the mods (the
-    /// server thread or a dedicated server, never a client) and a mod asked to hear their impacts
-    /// (`native_hears_projectile_impacts`). Without one, the tick keeps no copy
-    /// of its projectiles: it costs nothing.
-    pub(super) fn native_hears_impacts(&self) -> bool {
-        if self.serving.is_none() && self.options.dedicated.is_none() {
-            return false;
-        }
-        let mut hears = false;
-        self.native_hears_projectile_impacts(&mut hears);
-        hears
+    /// Whether to capture an impact for the server-side callback. The flight and hit
+    /// resolution do not need this capture when no mod subscribes.
+    pub(super) fn projectile_impact_subscribed(&self) -> bool {
+        self.is_logical_server()
+            && mod_api::__private::enabled_listened(mod_api::HookId::ProjectileImpact)
     }
 
     /// The entity id of the one who shot `p`: a mob's, a player's, else 0.
@@ -182,7 +176,7 @@ impl Game<'_> {
         face: [i32; 3],
         at: Vec3,
     ) -> bool {
-        if !self.native_hears_impacts() {
+        if !self.projectile_impact_subscribed() {
             return false;
         }
         let owner = self.native_thrower(guest);

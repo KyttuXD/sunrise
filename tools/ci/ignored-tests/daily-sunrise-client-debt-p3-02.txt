@@ -1,0 +1,1 @@
+sunrise-client game::player_equipment_change_tests::player_equipment_is_not_captured_without_a_subscriber lib daily resources

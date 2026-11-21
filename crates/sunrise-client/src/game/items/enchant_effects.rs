@@ -1276,6 +1276,7 @@ impl Game<'_> {
     /// for an armor stand: run location effects before travel (including a
     /// piston push), on landing, and for newly equipped items.
     pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+        let subscribed = self.living_equipment_change_subscribed();
         let stand = &mut self.armor_stands[index];
         let block = BlockPos::containing(stand.position);
         let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
@@ -1287,19 +1288,21 @@ impl Game<'_> {
             return;
         }
         let id = stand.id;
-        let told: Vec<_> = (0..changed.len())
-            .filter(|&i| changed[i])
-            .map(|i| {
-                let slot = sunrise_items::equipment::SLOT_NAMES[i];
-                (
-                    slot,
-                    stand.enchantment_equipment[i].clone(),
-                    stand.equipment[i].clone(),
-                )
-            })
-            .collect();
+        let told = subscribed.then(|| {
+            (0..changed.len())
+                .filter(|&i| changed[i])
+                .map(|i| {
+                    let slot = sunrise_items::equipment::SLOT_NAMES[i];
+                    (
+                        slot,
+                        stand.enchantment_equipment[i].clone(),
+                        stand.equipment[i].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         stand.enchantment_equipment.clone_from(&stand.equipment);
-        if self.remote.is_none() && !self.options.execution_role.is_client() {
+        if let Some(told) = told {
             for (slot, from, to) in told {
                 self.native_living_equipment_change(
                     id,

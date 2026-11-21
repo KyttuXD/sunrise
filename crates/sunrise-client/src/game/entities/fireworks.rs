@@ -634,7 +634,7 @@ impl Game<'_> {
             self.rocket_targets()
         };
         let ticking = self.entity_ticking_area();
-        let hears_impacts = !self.rockets.is_empty() && self.native_hears_impacts();
+        let hears_impacts = !self.rockets.is_empty() && self.projectile_impact_subscribed();
         let mut i = 0;
         while i < self.rockets.len() {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.

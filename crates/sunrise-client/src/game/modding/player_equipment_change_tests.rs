@@ -1,9 +1,9 @@
 //! `living_equipment_change` for a server's players (#3417): a hotbar selection, a pickup into
 //! the selected slot and a helmet put on are each one change on the next tick, and nothing is
-//! told while no mod sets `living_equipment_listened`.
+//! captured without a subscription to the event.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent, ServerHost};
+use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::items::ItemStack;
 
 use super::api_values::TryIntoApi;
@@ -20,17 +20,9 @@ type Heard = Vec<(
 
 struct Counter {
     heard: Arc<Mutex<Heard>>,
-    listens: bool,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Counter {
-    fn living_equipment_listened(
-        &self,
-        _: &mut dyn ServerHost,
-        event: &mut LivingEquipmentListenedEvent,
-    ) {
-        event.listened |= self.listens;
-    }
     fn living_equipment_change(
         &self,
         _: &mut dyn ServerHost,
@@ -48,12 +40,17 @@ impl Hooks for Counter {
 
 fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>)) {
     let heard = Arc::new(Mutex::new(Heard::new()));
-    let counter = Counter {
-        heard: heard.clone(),
-        listens,
+    let mods = if listens {
+        vec![mod_api::ModEntry::new(
+            "counter",
+            Box::new(Counter {
+                heard: heard.clone(),
+            }),
+        )]
+    } else {
+        Vec::new()
     };
-    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("counter", Box::new(counter))].into();
-    mod_platform::testing::with_mods(mods, || {
+    mod_platform::testing::with_mods(mods.into(), || {
         with_guests(|game| {
             // A joined guest has its play state from the login on.
             let host = game.lan.as_mut().unwrap();
@@ -121,8 +118,8 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
 
 #[test]
 #[ignore = "daily"]
-fn players_are_not_told_without_the_listened_opt_in() {
-    with_counter(false, |game, heard| {
+fn player_equipment_is_not_captured_without_a_subscriber() {
+    with_counter(false, |game, _| {
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
             g.inventory[1] = Some(ItemStack::new("minecraft:iron_sword", 1));
@@ -130,6 +127,7 @@ fn players_are_not_told_without_the_listened_opt_in() {
             g.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
         });
         game.native_players_equipment();
-        assert_eq!(take(heard), Heard::new());
+        let play = &game.lan.as_ref().unwrap().play;
+        assert!(play[&12].equipment_heard.is_none());
     });
 }

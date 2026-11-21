@@ -6,7 +6,7 @@ impl Game<'_> {
     /// Expose the actual cast hook to the listener, then resume only that same
     /// cast. Cancellation skips hooking and redirection, never Entity.move.
     pub(super) fn fishing_impact(&mut self, h: Hook, hit: Hit) -> Option<(Hook, bool)> {
-        if matches!(hit, Hit::None) || !self.native_hears_impacts() {
+        if matches!(hit, Hit::None) || !self.projectile_impact_subscribed() {
             return Some((h, false));
         }
         let (id, join, position, velocity) = (h.id, h.join, h.position, h.velocity);

@@ -4676,7 +4676,7 @@ impl Game<'_> {
         let mut keep_flags = vec![true; projectiles.len()];
         let mut winds = std::mem::take(&mut self.creatures.pickable_projectile_targets);
         // The impacts the mods may cancel (`native_projectile_impact`), on a server.
-        let hear = self.native_hears_impacts();
+        let hear = self.projectile_impact_subscribed();
         let mut impacts: Vec<Impact> = Vec::new();
         let mut vehicle_winds = self.vehicle_winds();
         // What the ticks read of the other entities (the mobs, the guests, the breezes), built
