@@ -9,8 +9,9 @@ Store the issued `HoldId` locally; it has no `Wire` encoding. Only the issuing m
 Using another mod's live ID returns `HoldError::WrongOwner` and changes nothing.
 Without an owning native mod, the call returns `NoOwner`.
 
-A hold covers uncancelled engine play sends and mod packets whose root transactions commit
-while it is active. Holds may overlap. There is one queue in original send order:
+A hold covers uncancelled engine play sends and packets submitted through `send_packet` whose
+root transactions commit while it is active. Holds may overlap. There is one queue in original
+send order:
 
 - `host.release_held(id)` ends your hold and publishes only the newly unblocked prefix.
   Its return value is the number queued to the writer, not the number delivered to the server.
@@ -32,8 +33,10 @@ acknowledgement, without waiting for the game thread or sending any held packet.
 If publication fails while releasing a prefix, `HoldError::Send { sent, error }` reports the number
 already queued and the transport error; the rest of that prefix is discarded.
 
-Disconnect, a protocol incarnation change, or an aborted dimension crossing discards the holds;
-their IDs are then `Unknown`. Starting without a joined physical play connection returns `NoWorld`.
+Disconnect, a protocol incarnation change, or the server's refusal of an already predicted
+passage crossing discards the holds; their IDs are then `Unknown`. A local
+`client_packet_send` veto stops only that send and leaves holds active. Starting without a joined
+physical play connection returns `NoWorld`.
 Network-thread keep-alives, chunk batch acknowledgements, configuration packets, cookies and
 resource-pack answers bypass holds. The network thread answers each chunk batch as it arrives, as
 vanilla's `ClientPacketListener` does, so `client_packet` hears neither the batch's start nor its

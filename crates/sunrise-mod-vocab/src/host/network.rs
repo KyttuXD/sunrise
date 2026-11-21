@@ -55,11 +55,12 @@ pub trait NetworkClientHost {
     fn send_packet(&mut self, packet: ServerboundPlayPacket) -> Result<(), SendPacketError>;
     /// Side: client. Starts a hold owned by the calling mod on the current joined
     /// physical play connection. It covers subsequent uncancelled engine play sends
-    /// and mod packets committed while it is active. Holds can overlap. A pending
-    /// packet retains its ordinary writer credit; pressure never releases a hold.
+    /// and `send_packet` calls whose transactions commit while it is active. Holds can
+    /// overlap. A held packet retains its writer credit; pressure never flushes the queue.
     /// Protocol replies (including keep-alives, chunk acknowledgements, cookies and
     /// resource-pack answers) bypass holds and are not blocked by unpublished hold
-    /// credit alone. Disconnect, protocol changes and aborted travel invalidate the ID.
+    /// credit alone. Disconnect, protocol changes or a server refusal of an already
+    /// predicted passage crossing invalidate the ID; a local send veto does not.
     #[access(WorldOnly)]
     fn hold_packets(&mut self) -> Result<HoldId, HoldError>;
     /// Side: client. Ends only this mod's hold. Publishes the newly unblocked prefix

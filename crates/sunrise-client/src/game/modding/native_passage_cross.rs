@@ -73,7 +73,7 @@ impl Game<'_> {
     /// `ClientHost::cross_passage`: the window's player comes out of `passage` with its
     /// feet, its last tick's place, its velocity and its look carried through, and the
     /// server is told the passage and where the feet were. Nothing moves if the
-    /// request is cancelled or cannot be queued. The next crossing waits for the server.
+    /// request is cancelled or cannot be queued. Only an admitted crossing waits for the server.
     pub(super) fn cross_passage(&mut self, passage: PassageId) -> Result<(), Error> {
         if self.remote.is_none() {
             return Err(Error::Unavailable);
@@ -110,10 +110,7 @@ impl Game<'_> {
         });
         match self.send_play(payload) {
             PlaySend::Admitted => {}
-            PlaySend::Cancelled => {
-                self.native_net.holds.borrow_mut().clear();
-                return Err(Error::Cancelled);
-            }
+            PlaySend::Cancelled => return Err(Error::Cancelled),
             PlaySend::Refused => return Err(Error::SendFailed),
         }
         // The send hook's listeners only read the host: the player is still there.
@@ -147,6 +144,8 @@ impl Game<'_> {
             return;
         };
         if self.passages.crossing == Some(PassageId::from_raw(id)) {
+            // An admitted crossing predicted a move. Don't send packets left over from
+            // that prediction after the server corrects the player's position.
             self.native_net.holds.borrow_mut().clear();
         }
         self.passages.refused = Some((PassageId::from_raw(id), why));

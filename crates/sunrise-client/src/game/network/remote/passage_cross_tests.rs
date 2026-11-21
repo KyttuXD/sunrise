@@ -305,15 +305,26 @@ impl mod_api::Hooks for Silence {
     }
 }
 
-/// A mod cancels the crossing's payload: `Cancelled`, the player stays as it was, nothing
-/// waits, so the next crossing is tried afresh (and cancelled again, still not `Pending`).
+/// A mod vetoes the crossing before any prediction. The player stays put, no crossing is
+/// pending, and the veto cannot dispose of another mod's held packets.
 #[test]
 #[ignore = "daily"]
 fn a_crossing_a_mod_cancels_on_the_wire_moves_nothing() {
+    use mod_platform::content::crash::{ModCall, enter_native_mod};
+    use sunrise_protocol::packets::configuration::Ping;
+
     let mods = vec![mod_api::ModEntry::new("silence", Box::new(Silence))];
     mod_platform::testing::with_mods(mods.into(), || {
         with_client_game(|game| {
             let (mut reader, _server) = scene(game, [0.5, 65.0, 8.25]);
+            game.remote.as_mut().unwrap().joined = true;
+            let _holder = enter_native_mod(ModCall {
+                id: "holder",
+                hook: "client_tick",
+                part: None,
+            });
+            let hold = game.hold_packets().unwrap();
+            game.send(S::Pong(Ping { id: 42 }));
             let player = game.player.as_mut().unwrap();
             player.velocity = Vec3::new(0.0, -0.0784, 0.25);
             game.previous_position = Vec3::new(0.5, 65.0, 8.0);
@@ -329,11 +340,8 @@ fn a_crossing_a_mod_cancels_on_the_wire_moves_nothing() {
                 assert_eq!(game.yaw, 0.0);
                 assert_eq!(game.passages.crossing, None);
             }
-            assert!(
-                !sent(&mut reader).iter().any(
-                    |p| matches!(p, S::CustomPayload(p) if p.channel == "sunrise:passage_cross")
-                )
-            );
+            assert_eq!(game.release_held(hold), Ok(1));
+            assert_eq!(sent(&mut reader), [S::Pong(Ping { id: 42 })]);
         });
     });
 }

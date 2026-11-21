@@ -33,8 +33,9 @@ messages) do not fire it. The chunks between a batch's start and finish still fi
 ordered queue; releasing one cannot send past another. Dropping one discards only packets it
 covered, including overlaps, without ending any other hold. Held packets keep their ordinary
 writer credit and are never flushed to make room. Disconnect, protocol incarnation changes and
-aborted travel invalidate holds. Network-thread keep-alives, chunk batch acknowledgements,
-configuration, cookies and pack answers bypass holds. A hold exposes no packet bodies.
+server refusal of a predicted passage crossing invalidate holds. A local send veto does not.
+Network-thread keep-alives, chunk batch acknowledgements, configuration, cookies and pack answers
+bypass holds. A hold exposes no packet bodies.
 
 `Hooks::client_packet_send` is the other direction: a `ClientPacketSendEvent` with the same
 `ClientPacket` view for each play packet the window's game is about to send (`Connection.send`),
