@@ -195,7 +195,9 @@ impl RemoteTextDisplay {
         if let Some((yaw, pitch)) = rotation {
             self.target_rotation = [yaw, pitch];
         }
-        self.steps = self.data.teleport_duration.clamp(0, 59);
+        // `Display.onSyncedDataUpdated` sets `LinearInterpolationHandler`'s length
+        // directly. Only `Display.readAdditionalSaveData` clamps the loaded value.
+        self.steps = self.data.teleport_duration;
         if self.steps == 0 {
             self.position = self.target;
             self.previous = self.target;
@@ -597,15 +599,15 @@ mod tests {
         d.metadata(&[
             (8, 1, Value::Int(0)),
             (9, 1, Value::Int(4)),
-            (10, 1, Value::Int(2)),
+            (10, 1, Value::Int(64)),
             (11, 0, Value::Floats(vec![4.0, 0.0, 0.0])),
         ]);
         d.tick();
         assert_eq!(d.shown.blend(&d.from, d.progress(0.5)).translation[0], 0.5);
-        d.move_to([2.0, 0.0, 0.0], Some((90.0, 0.0)));
+        d.move_to([64.0, 0.0, 0.0], Some((128.0, 0.0)));
         d.tick();
         assert_eq!(d.position.x, 1.0);
-        assert_eq!(d.rotation[0], 45.0);
+        assert_eq!(d.rotation[0], 2.0);
         d.tick();
         assert_eq!(d.position.x, 2.0);
         assert_eq!(d.shown.blend(&d.from, d.progress(0.0)).translation[0], 2.0);

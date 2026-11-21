@@ -401,7 +401,7 @@ mod tests {
         use std::sync::Arc;
         use sunrise_client::{chunk::Chunk, save::SaveDir};
         use sunrise_core::geometry::Vec3;
-        use sunrise_core::nbt::{Compound, Tag};
+        use sunrise_core::nbt::Tag;
 
         with_game(|game| {
             let root = std::path::PathBuf::from(format!(
@@ -414,22 +414,26 @@ mod tests {
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let kind = "minecraft:text_display";
+            let display = game
+                .read_display_nbt(kind, &Tag::compound([("teleport_duration", Tag::Int(4))]))
+                .map(Arc::new);
             game.others.push(OtherEntity {
                 attachment_lifetime: Default::default(),
                 knot_check: None,
                 eye: None,
                 join: Default::default(),
-                display: None,
+                display,
                 interaction: None,
                 id: 12,
-                kind: "minecraft:text_display".into(),
+                kind: kind.into(),
                 position: Vec3::new(1.0, 70.0, 1.0),
                 yaw: 0.0,
                 pitch: 0.0,
             });
-            let mut tag = Compound::new();
-            tag.insert("teleport_duration".into(), Tag::Int(4));
-            game.persist.raw.insert(12, Tag::Compound(tag));
+            game.persist
+                .raw
+                .insert(12, Tag::compound([("keep", Tag::Int(7))]));
             game.save_entities(true).unwrap();
             assert_eq!(
                 SaveDir::new(root.clone(), shape, None)

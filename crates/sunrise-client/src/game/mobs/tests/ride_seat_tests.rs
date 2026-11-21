@@ -119,13 +119,16 @@ fn a_marker_takes_no_rider() {
         return;
     };
     for (id, kind) in [(9, "minecraft:marker"), (10, "minecraft:item_display")] {
+        let display = game
+            .read_display_nbt(kind, &sunrise_core::nbt::Tag::Compound(Default::default()))
+            .map(std::sync::Arc::new);
         game.others.push(OtherEntity {
             id,
             kind: kind.into(),
             position: Vec3::new(0.5, 64.0, 0.5),
             yaw: 0.0,
             pitch: 0.0,
-            display: None,
+            display,
             interaction: None,
             knot_check: None,
             eye: None,

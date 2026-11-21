@@ -121,6 +121,8 @@ stack or need to inspect its components. `set_item(host, None)` still empties th
 exactly as provided. It does not normalize rotations or use their length to reject a
 write. Provide unit quaternions for ordinary rotations. Vanilla's saved transformation
 codec is separate and normalizes quaternion component lists on load.
+`set_teleport_duration` also stores the live tick count as provided; only loading
+saved display data clamps the duration to 0–59 ticks, as in vanilla.
 
 ## Visiting entities in a box
 

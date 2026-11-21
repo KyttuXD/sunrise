@@ -65,7 +65,7 @@ pub trait DisplaysBackend {
     #[access(WorldOnly)]
     fn display_start_interpolation(&self, display: DisplayRef) -> Option<i32>;
     /// Side: server.
-    /// `Display.getPosRotInterpolationDuration`: ticks a move eases over, 0 to 59.
+    /// `Display.getPosRotInterpolationDuration`: the current position and rotation interpolation length in ticks.
     #[access(WorldOnly)]
     fn display_teleport_duration(&self, display: DisplayRef) -> Option<i32>;
     /// Side: server.
@@ -182,8 +182,8 @@ pub trait DisplaysBackendMut {
     #[access(WorldOnly)]
     fn display_set_start_interpolation(&mut self, display: DisplayRef, ticks: i32) -> bool;
     /// Side: server.
-    /// `Display.setPosRotInterpolationDuration`, kept from 0 to 59 as
-    /// vanilla's load keeps it.
+    /// `Display.setPosRotInterpolationDuration`: stores the live tick count as given.
+    /// `Display.readAdditionalSaveData` clamps it to 0–59 ticks when loading NBT.
     #[access(WorldOnly)]
     fn display_set_teleport_duration(&mut self, display: DisplayRef, ticks: i32) -> bool;
     /// Side: server.

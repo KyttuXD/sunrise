@@ -1,5 +1,8 @@
 use super::{C, Game, HubConfig, LanSettings, NetConfig, Value, serializer};
-use crate::game::{commands::Target, native_entity_refs::tests::with_game};
+use crate::game::{
+    commands::Target,
+    native_entity_refs::tests::{run_fresh_cases, with_game},
+};
 use std::sync::{Arc, mpsc};
 use sunrise_client::{
     chunk::Chunk,
@@ -67,29 +70,13 @@ fn guest_at_display(game: &mut Game<'_>) -> mpsc::Receiver<Out> {
 #[test]
 #[ignore = "daily"]
 fn late_displays_pair_their_item_and_keybind_components() {
-    const CHILD: &str = "SUNRISE_DISPLAY_PAIRING_MARKER";
-    let Some(marker) = std::env::var_os(CHILD) else {
-        let root = tempfile::tempdir().unwrap();
-        let marker = root.path().join("ran");
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "game::lan::display_pairing_tests::late_displays_pair_their_item_and_keybind_components",
-                "--include-ignored",
-            ])
-            .env(CHILD, &marker)
-            .env("SUNRISE_HOME", root.path().join("home"))
-            .env("SUNRISE_LAUNCHER_HOME", root.path().join("launcher"))
-            .env("XDG_DATA_HOME", root.path().join("data"))
-            .env("XDG_CONFIG_HOME", root.path().join("config"))
-            .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
-            .env("SUNRISE_NO_AUDIO", "1")
-            .status()
-            .unwrap();
-        assert!(status.success() && marker.exists());
+    if run_fresh_cases(
+        "game::lan::display_pairing_tests::late_displays_pair_their_item_and_keybind_components",
+        "SUNRISE_DISPLAY_PAIRING_CASE",
+        &["pairing"],
+    ) {
         return;
-    };
-    std::fs::write(marker, "ran").unwrap();
+    }
     with_game(|game| {
         game.build_registries();
         game.world

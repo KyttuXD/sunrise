@@ -929,12 +929,18 @@ mod tests {
                     if vehicle_kind == "minecraft:armor_stand" {
                         game.armor_stands.push(ArmorStand::new(id, Vec3::ZERO, 0.0));
                     } else {
+                        let display = game
+                            .read_display_nbt(
+                                vehicle_kind,
+                                &sunrise_core::nbt::Tag::Compound(Default::default()),
+                            )
+                            .map(std::sync::Arc::new);
                         game.others.push(super::super::commands::OtherEntity {
                             attachment_lifetime: Default::default(),
                             knot_check: None,
                             eye: None,
                             join: Default::default(),
-                            display: None,
+                            display,
                             interaction: None,
                             id,
                             kind: vehicle_kind.into(),

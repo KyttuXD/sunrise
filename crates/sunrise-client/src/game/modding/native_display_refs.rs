@@ -238,9 +238,8 @@ impl Game<'_> {
         display: DisplayRef,
         value: i32,
     ) -> bool {
-        // Same range as in `Display.readAdditionalSaveData`.
         self.display_edit(display, |state| {
-            state.teleport_duration = value.clamp(0, 59);
+            state.teleport_duration = value;
             true
         })
     }
@@ -396,7 +395,10 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::api_values::TryIntoApi;
-    use super::super::{commands::OtherEntity, native_entity_refs::tests::with_game};
+    use super::super::{
+        commands::OtherEntity,
+        native_entity_refs::tests::{run_fresh_cases, with_game},
+    };
     use super::*;
     use mod_api::WorldEpoch;
     use sunrise_core::{geometry::Vec3, nbt::Tag};
@@ -498,7 +500,7 @@ mod tests {
                     item.start_interpolation(game),
                     item.teleport_duration(game)
                 ),
-                (Some(8), Some(-1), Some(59))
+                (Some(8), Some(-1), Some(99))
             );
         });
     }
@@ -624,6 +626,13 @@ mod tests {
     fn display_reads_use_live_values_and_write_a_fresh_save() {
         use sunrise_client::scoreboard::{comp_text, tag_to_json};
 
+        if run_fresh_cases(
+            "game::native_display_refs::tests::display_reads_use_live_values_and_write_a_fresh_save",
+            "SUNRISE_DISPLAY_SAVE_CASE",
+            &["save"],
+        ) {
+            return;
+        }
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");
             // No display fields in the raw record. An unrelated key still survives a save.
@@ -637,6 +646,7 @@ mod tests {
             assert!(text.set_billboard(game, Billboard::Vertical));
             assert!(text.set_view_range(game, 2.5));
             assert!(text.set_start_interpolation(game, 3));
+            assert!(text.set_teleport_duration(game, 99));
             assert_eq!(
                 text.text(game).unwrap(),
                 Some(mod_api::Text::literal("saved"))
@@ -652,6 +662,9 @@ mod tests {
             );
             assert_eq!(saved.get("view_range"), Some(&Tag::Float(2.5f32.to_bits())));
             assert!(saved.get("start_interpolation").is_none());
+            assert_eq!(saved.get("teleport_duration"), Some(&Tag::Int(99)));
+            let loaded = game.read_display_nbt(&o.kind, &saved).unwrap();
+            assert_eq!(loaded.teleport_duration, 59);
             assert_eq!(
                 comp_text(&tag_to_json(saved.get("text").unwrap())).plain(),
                 "saved"

@@ -593,9 +593,7 @@ impl Game<'_> {
         }
         self.lan_projectile_states(out, after);
         self.lan_general_states(out, after);
-        let Some(host) = self.lan.as_ref() else {
-            return;
-        };
+        let hub = self.lan.as_ref().map(|host| &host.hub);
         for o in self.others.iter().filter(|o| o.id > after) {
             let p = o.position;
             let e = add_state(out, o.id, &o.kind, [p.x, p.y, p.z], o.yaw, false);
@@ -604,7 +602,8 @@ impl Game<'_> {
             e.display = o
                 .display
                 .as_ref()
-                .map(|display| DisplayTracking::new(display, &host.hub));
+                .zip(hub)
+                .map(|(display, hub)| DisplayTracking::new(display, hub));
         }
     }
 
