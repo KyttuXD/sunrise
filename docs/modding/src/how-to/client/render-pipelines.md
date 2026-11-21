@@ -39,7 +39,9 @@ indexings (`a + b + c + ...`), is refused by name: split a long sum over several
 ## 2. Register the pipeline
 
 Call `event.register(pipeline)` in `register_render_pipelines` at client startup.
-The event adds declarations in order and does not expose earlier registrations.
+Each call attributes the declaration to the submitting mod immediately without exposing
+prior registrations. A phase refusal or panic discards only that listener's declarations;
+a panic also disables that listener for the session and names the mod in the log and error toast.
 Resource reloads rebuild the registered pipelines from the current shader files;
 they do not call the registration hook again.
 

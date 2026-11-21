@@ -464,6 +464,31 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// Run one attributed collector. A refusal is reported for this call only; an unwind
+/// disables this hook for the panicking mod and queues the normal callback error toast.
+pub(crate) fn run_attributed_collect(
+    hook: generated::HookId,
+    mod_id: &'static str,
+    name: &'static str,
+    call: impl FnOnce() -> Result<(), crate::world::phase_refusal::PhaseRefusal>,
+) -> bool {
+    match crate::callback_owner::contain_unwind(call) {
+        Ok(Ok(())) => true,
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            false
+        }
+        Err(message) => {
+            poison(hook, mod_id);
+            log::error!(
+                "mod {mod_id}: hook {name} panicked and is disabled for this session: {message}"
+            );
+            crate::callback_owner::record_callback_panic(mod_id, "hook", name, message);
+            false
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,
@@ -669,6 +694,33 @@ fn bump_listener_serial() {
 
 pub(crate) fn listener_serial() -> u64 {
     LISTENER_SERIAL.get().0
+}
+
+#[cfg(test)]
+#[test]
+fn attributed_collect_phase_refusal_does_not_poison_the_listener() {
+    use crate::world::phase::ModPhase;
+    use crate::world::phase_refusal::{contain_refusal, refuse};
+
+    let hook = generated::HookId::RecipePropertySets;
+    let id = "recipe-contributor";
+    crate::testing::with_dispatch(Vec::<ModEntry>::new().into(), || {
+        for _ in 0..2 {
+            assert!(!run_attributed_collect(
+                hook,
+                id,
+                "recipe_property_sets",
+                || { contain_refusal(id, || refuse("test_phase_gate", ModPhase::Reloading)) }
+            ));
+            assert!(!poisoned(hook, id));
+        }
+        assert!(run_attributed_collect(
+            hook,
+            id,
+            "recipe_property_sets",
+            || Ok(())
+        ));
+    });
 }
 
 #[cfg(test)]

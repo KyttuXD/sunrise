@@ -6,7 +6,6 @@ use serde_json::Value;
 use std::collections::HashSet;
 #[path = "recipe_property_validation.rs"]
 mod recipe_property_validation;
-pub(crate) use recipe_property_validation::validate_recipe_properties;
 /// Items a mod adds to one of the recipe property sets: the items a furnace,
 /// blast furnace, smoker, campfire, smithing table slot or brewing stand slot
 /// accepts (`RecipeManager.RECIPE_PROPERTY_SETS`), or a mod-created menu input

@@ -1,58 +1,28 @@
-//! Validation at the listener boundary, before the next mod sees its edits.
+//! Scoped, attributed declarations for [`crate::RecipePropertySetsEvent`].
 use super::RecipePropertyAddition;
+use crate::Answered;
 
-pub(crate) fn validate_recipe_properties(
-    owner: &str,
-    _previous: &[RecipePropertyAddition],
-    additions: &mut Vec<RecipePropertyAddition>,
-) {
-    additions.retain(|addition| {
-        if !addition.set.contains(':') {
-            // Bare keys name vanilla sets; the engine checks that they exist.
-            return true;
-        }
-        let valid = crate::Identifier::parse_namespaced(&addition.set).is_some();
-        if !valid {
+impl crate::RecipePropertySetsEvent<'_> {
+    /// Add items to a recipe property set. Later additions extend the set without changing
+    /// its first contributor; no listener can change earlier additions.
+    ///
+    /// A bare key names a vanilla set. A qualified key names a vanilla set only if it
+    /// matches a built-in set exactly; any other valid qualified key creates a custom set.
+    /// Malformed keys are reported with the mod ID and skipped.
+    pub fn register(&mut self, addition: RecipePropertyAddition) {
+        let mod_id = self.mod_id;
+        if addition.set.contains(':')
+            && crate::Identifier::parse_namespaced(&addition.set).is_none()
+        {
             log::warn!(
-                "recipe_property_sets: {owner} supplied invalid set key {}",
+                "recipe_property_sets: mod {mod_id}: invalid set key {}",
                 addition.set
             );
+            return;
         }
-        valid
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn any_valid_namespaced_or_bare_set_key_passes_and_malformed_keys_are_dropped() {
-        let mut additions: Vec<_> = [
-            "farmersdelight:cooking_pot_input",
-            "ported_farmersdelight:input",
-            "another:new",
-            "minecraft:furnace_input",
-            "minecraft:custom_set",
-            "furnace_input",
-            "BAD:input",
-            "bad:",
-            ":bad",
-        ]
-        .into_iter()
-        .map(|key| RecipePropertyAddition::new(key, vec![]))
-        .collect();
-        validate_recipe_properties("ported_farmersdelight", &[], &mut additions);
-        assert_eq!(
-            additions.iter().map(|a| a.set.as_str()).collect::<Vec<_>>(),
-            [
-                "farmersdelight:cooking_pot_input",
-                "ported_farmersdelight:input",
-                "another:new",
-                "minecraft:furnace_input",
-                "minecraft:custom_set",
-                "furnace_input",
-            ]
-        );
+        self.additions.push(Answered {
+            answer: addition,
+            mod_id,
+        });
     }
 }

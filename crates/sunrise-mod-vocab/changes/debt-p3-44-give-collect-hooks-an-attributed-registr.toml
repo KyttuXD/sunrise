@@ -1,0 +1,28 @@
+ids = [
+    "hook:mod_mismatch",
+    "hook:mod_mismatch.resolved",
+    "type:ModMismatchEvent.resolved",
+    "handle:ModMismatchEvent::mark_resolved",
+    "handle:ModMismatchEvent::was_resolved",
+    "handle:ModMismatchEvent::resolver",
+    "type:ModMismatchResolution",
+    "hook:recipe_property_sets",
+    "hook:recipe_property_sets.additions",
+    "type:RecipePropertySetsEvent.additions",
+    "handle:RecipePropertySetsEvent::register",
+    "hook:register_render_pipelines",
+]
+why = """
+NeoForge's ModMismatchEvent.markResolved records the calling mod only if the id is not yet resolved; wasResolved and getResolver read that answer. Sunrise now assigns that attribution at insertion instead of trusting or copying earlier listeners' replies. The open timing and owner decisions for missing mods are unchanged.
+
+NeoForge's RegisterRecipePropertiesEvent.register and RegisterRenderPipelinesEvent.registerPipeline provide scoped registration instead of mutable reply history. Vanilla RecipeManager.finalizeRecipeLoading collects ingredients for the property sets. Sunrise continues to union additions per recipe load, preserving vanilla membership and the first contributor, and to keep the first pipeline for each id in registration order. Further contributions and duplicate refusals name the actual submitting mod.
+
+A failed callback cannot discard earlier declarations. A phase refusal is reported on each invocation; a panic discards the failing callback's entries, logs and shows an error toast naming the mod, and disables only that callback for the session.
+"""
+migrate = """
+In Hooks::mod_mismatch, replace event.resolved.push(mod_id.to_owned().into()) with event.mark_resolved(mod_id), where mod_id is an &str. Replace reads of event.resolved with event.was_resolved(mod_id) or event.resolver(mod_id). Use event.mismatches to enumerate the reported differences. To import the standalone record, use mod_api::ModMismatchResolution instead of mod_api::game::mismatch_resolution::ModMismatchResolution; constructing a standalone record now requires both String fields (mod_id and resolver) rather than From<String>. A record is not an input to the hook.
+
+In Hooks::recipe_property_sets, replace event.additions.push(RecipePropertyAddition::new(set, items)) with event.register(RecipePropertyAddition::new(set, items)). A later call to register still adds items to an existing set. Do not read, replace or remove earlier additions.
+
+Hooks::register_render_pipelines still calls event.register(pipeline) unchanged. If your manifest pins these hooks, use hook_version = 3 for mod_mismatch and recipe_property_sets, and hook_version = 4 for register_render_pipelines.
+"""

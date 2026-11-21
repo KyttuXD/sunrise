@@ -5,12 +5,14 @@ pub trait Hooks {
     /// when a nonempty list exists, changed or unchanged, never when the lists are absent
     /// or empty (an empty saved list counts as absent), once per open.
     /// Versions use the loader's comparison; minecraft is excluded. Newly added mods
-    /// are not differences. Push a mod id converted with `.into()` into `resolved`.
-    /// Dispatch assigns the first resolving listener and preserves earlier markers.
+    /// are not differences. Call [`ModMismatchEvent::mark_resolved`] with a mod id to
+    /// mark a migration; the first resolving listener is recorded and earlier markers
+    /// cannot be removed or overwritten.
     /// When a saved mod is no longer loaded, it fires before the world opens, on the
     /// side that asks (the client in singleplayer, the dedicated server), and a
     /// resolved id is taken off the question; otherwise it fires on the opening
-    /// server before world-state restoration, after preparation.
+    /// server before world-state restoration, after preparation. A refused callback or
+    /// one that panics contributes no markers; a panic disables that callback for the session.
     #[notes = r##"## Mod mismatch
 
 A world records the code mods it was saved with at the root of `level.dat`, beside `Data`, under
@@ -37,9 +39,10 @@ server (the integrated one in singleplayer) before world-state restoration; prep
 has already upgraded the world at this boundary.
 Versions compare using the loader's semantic version parser (omitted minor and patch
 are zero); empty or invalid versions compare by exact text. `minecraft` is excluded.
-Push `"your_mod".to_owned().into()` into `event.resolved` to mark a migration.
-Dispatch records the first resolving mod in each marker's `resolver` and preserves
-prior resolutions against deletion or replacement. Entries are logged sorted by id:
+Call `event.mark_resolved("your_mod")` to mark a migration, and inspect prior resolutions
+by id with `event.was_resolved(id)` or `event.resolver(id)`.
+The first resolving listener is recorded in each marker's `resolver`, and earlier
+resolutions are preserved against deletion or replacement. Entries are logged sorted by id:
 resolved at debug (self or other resolver), unresolved at warn. Only a missing mod
 holds the open back; a changed version never does.
 "##]
@@ -48,8 +51,8 @@ holds the open back; a changed version never does.
         side = "both",
         contract = "collect",
         out = "resolved",
-        collect_validator = "crate::game::mismatch_resolution::attribute",
-        version = 2,
+        registration_append = "attributed",
+        version = 3,
         neoforge = "ModMismatchEvent"
     )]
     fn mod_mismatch(

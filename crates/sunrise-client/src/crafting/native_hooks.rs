@@ -18,22 +18,12 @@ pub fn native_ingredient(
         definition,
     );
 }
-/// Items a mod's own recipe type takes in a station slot, added to the
-/// recipe property sets (`RecipeManager.RECIPE_PROPERTY_SETS`): what a
-/// furnace, blast furnace, smoker, campfire, smithing table slot or brewing
-/// stand slot accepts, and what a client predicts it accepts. Push one
-/// `RecipePropertyAddition` per set to add to; the vanilla recipes' own
-/// items stay in. Called once per load, after the recipes are resolved, with
-/// the `DataLoadContext` of the load that owns them (`origin()`
-/// `ServerDataLoad` on a server, `ClientPreload` on a client's own load),
-/// and again after `/reload`. New keys in manifest-owned namespaces create
-/// custom input sets. Unknown vanilla keys, invalid or foreign new keys and
-/// air are logged and skipped; unregistered items are ignored. The answer
-/// must be the same every time.
+/// Collect attributed contributions to recipe property sets once in the owning recipe load,
+/// after recipe resolution and before station acceptance and recipe sync project the sets.
 #[inline(never)]
 pub fn native_recipe_property_sets(
     context: &LoadContext,
-    additions: &mut Vec<RecipePropertyAddition>,
+    additions: &mut Vec<mod_api::Answered<RecipePropertyAddition>>,
 ) {
     mod_api::dispatch_recipe_property_sets(
         &sunrise_client_render::api_context::LoadReader(context).context(),

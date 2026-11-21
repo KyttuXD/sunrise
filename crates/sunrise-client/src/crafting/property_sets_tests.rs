@@ -69,6 +69,11 @@ fn valid_namespaced_custom_sets_survive_dispatch_and_sync_while_invalid_keys_do_
         .into(),
         || {
             let resolved = ResolvedSources::resolve(vec![], &context).unwrap();
+            assert_eq!(resolved.property_additions.0["pot:input"].first_mod, "pot");
+            assert_eq!(
+                resolved.property_additions.0["pot:foreign_new"].first_mod,
+                "extension"
+            );
             assert!(
                 resolved
                     .property_additions

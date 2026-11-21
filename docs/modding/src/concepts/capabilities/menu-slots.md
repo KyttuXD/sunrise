@@ -17,11 +17,13 @@ quick-move items into a locally hidden slot, and the slot's acceptance rules sti
 ## Mod-created recipe input sets
 
 `Hooks::recipe_property_sets` runs once after recipes resolve for each load and again after
-`/reload`. Add `RecipePropertyAddition::new("mymod:cooking_pot_input", items)` to its
-`event.additions`: any valid namespaced key (including non-vanilla `minecraft:` keys) creates
-or extends a custom set, and bare keys name vanilla sets. Invalid keys, unknown bare vanilla
-keys and air are skipped with a warning; unregistered items do not participate in acceptance
-or network sync.
+`/reload`. Call `event.register(RecipePropertyAddition::new("mymod:cooking_pot_input", items))`
+to add items. Any valid namespaced key (including non-vanilla `minecraft:` keys) creates
+or extends a custom set, and bare keys name vanilla sets. Extending a set does not change
+who first contributed it. Invalid keys, unknown bare vanilla keys and air are skipped with
+a warning naming the submitting mod; unregistered items do not participate in acceptance
+or network sync. A phase refusal or panic discards only that listener's contributions.
+A panic also disables that listener for the session, with a log and error toast naming the mod.
 
 Attach a `MenuPart` to the registered menu type and filter its input slot with the same set:
 

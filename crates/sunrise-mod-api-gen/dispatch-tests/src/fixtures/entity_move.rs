@@ -134,6 +134,22 @@ mod root {
             Ok(call())
         }
 
+        pub(super) fn run_attributed_collect(
+            hook: super::HookId,
+            mod_id: &'static str,
+            _: &'static str,
+            call: impl FnOnce() -> Result<(), Refusal>,
+        ) -> bool {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+                Ok(Ok(())) => true,
+                Ok(Err(_)) => false,
+                Err(_) => {
+                    poison(hook, mod_id);
+                    false
+                }
+            }
+        }
+
         pub(super) fn listening_kind_owner(
             hook: super::HookId,
             kind: &str,

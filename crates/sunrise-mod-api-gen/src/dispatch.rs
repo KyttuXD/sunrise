@@ -344,21 +344,42 @@ pub(super) fn emit<'a>(
                 }
                 _ => None,
             };
+            let context_ok = mode == RegistrationAppend::Attributed
+                || hook.context == Some(PhaseContext::Registration);
             let Some(entry) = entry.filter(|_| {
-                hook.context == Some(PhaseContext::Registration)
+                context_ok
                     && contract == Contract::Collect
                     && !collect_cancel
                     && declaration.is_none()
                     && !is_render
             }) else {
                 return Err(format!(
-                    "{name}: registration_append requires a non-cancelling RegistrationContext collect with a mutable Vec output"
+                    "{name}: registration_append requires a non-cancelling collect with a mutable Vec output (and RegistrationContext unless attributed)"
                 ));
             };
             Some((mode, entry))
         } else {
             None
         };
+        let attributed_append = matches!(
+            registration_append,
+            Some((RegistrationAppend::Attributed, _))
+        );
+        let event_per_listener = hook.event_per_listener || attributed_append;
+        if attributed_append {
+            if out == Some("mod_id") {
+                return Err(format!(
+                    "{name}: an attributed append output cannot be named `mod_id`"
+                ));
+            }
+            for (arg, ty) in &args {
+                if arg == "mod_id" || matches!(ty, Type::Reference(r) if r.mutability.is_some()) {
+                    return Err(format!(
+                        "{name}: an attributed append hook cannot have a `mod_id` or mutable input ({arg})"
+                    ));
+                }
+            }
+        }
         if !is_render {
             hook_ids.push_str(&format!("{hook_id},\n"));
             hook_constants.push_str(&format!(
@@ -429,6 +450,10 @@ pub(super) fn emit<'a>(
         let collected = output
             .as_ref()
             .filter(|_| contract == Contract::Collect && !isolated_collect);
+        if attributed_append {
+            fields.push_str("pub(super) mod_id: &'static str,\n");
+            inits.push("mod_id".to_owned());
+        }
         for (name, ty) in args.iter().chain(collected) {
             let mut owned_ty = (*ty).clone();
             struct OwnedLootContext;
@@ -521,7 +546,9 @@ pub(super) fn emit<'a>(
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
                 Some((RegistrationAppend::Register, _)) => "",
-                Some((RegistrationAppend::Custom, _)) => "pub(super)",
+                Some((RegistrationAppend::Custom | RegistrationAppend::Attributed, _)) => {
+                    "pub(super)"
+                }
                 None if task_registration
                     || matches!(
                         (event_type.as_str(), name.as_str()),
@@ -546,7 +573,7 @@ pub(super) fn emit<'a>(
                 inits.push(format!("{name}: {name}.map(ModBlockEntityView::new)"));
             } else if batch_entry.is_some() {
                 inits.push(format!("{name}: &mut {batch}"));
-            } else if hook.event_per_listener
+            } else if event_per_listener
                 && matches!(field_ty, Type::Reference(ref reference) if reference.mutability.is_some())
             {
                 // Keep write-through access, but not changes to the reference itself.
@@ -596,7 +623,7 @@ pub(super) fn emit<'a>(
             (false, false) => ("", ""),
         };
         let wire_comment = if registration_append.is_some() {
-            "// no wire: this event borrows the registration staging vector.\n"
+            "// no wire: this event borrows the append-only staging vector.\n"
         } else {
             ""
         };
@@ -885,6 +912,9 @@ pub(super) fn emit<'a>(
             Some((RegistrationAppend::Custom, _)) => {
                 "Use its registration methods to add entries without changing earlier registrations."
             }
+            Some((RegistrationAppend::Attributed, _)) => {
+                "Use its scoped methods to record attributed entries without changing earlier ones."
+            }
             None => {
                 "Each field is that hook's argument of the same name, described in the hook's doc."
             }
@@ -946,7 +976,7 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if event_per_listener || isolated_collect {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -982,9 +1012,7 @@ pub(super) fn emit<'a>(
                     "super::runtime::entered_matching(HookId::{hook_id}, \"{name}\", {allow_subscriber})"
                 )
             }
-            None if answered || hook.collect_validator.is_some() => {
-                format!("super::entered_with_id(HookId::{hook_id}, \"{name}\")")
-            }
+            None if answered => format!("super::entered_with_id(HookId::{hook_id}, \"{name}\")"),
             None => format!("super::entered(HookId::{hook_id}, \"{name}\")"),
         };
         // A listener refused by the phase gate restores event fields from a
@@ -1105,20 +1133,13 @@ pub(super) fn emit<'a>(
                     "{plain_call}; {o}.extend({event}.{o}.drain(..).map(|answer| Answered {{ answer, mod_id }}));",
                     o = out.unwrap()
                 ),
-                Contract::Collect if hook.collect_validator.is_some() => {
-                    let validator = hook.collect_validator.as_ref().unwrap();
-                    let output = out.unwrap();
-                    format!(
-                        "let previous = {event}.{output}.clone(); {plain_call}; {validator}(mod_id, &previous, {event}.{output});"
-                    )
-                }
                 _ => format!("{plain_call};"),
             };
             format!(
                 "{local_event} {snapshot_statement}{invocation} {local_write_back} {stack_after}"
             )
         };
-        let binding = if answered || hook.collect_validator.is_some() {
+        let binding = if answered {
             format!("(mod_id, {mod_item})")
         } else {
             mod_item.clone()
@@ -1253,6 +1274,25 @@ pub(super) fn emit<'a>(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.{owner} {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
                     owner = hook.owner.as_deref().unwrap(),
+                ),
+            ),
+            None if attributed_append => (
+                String::new(),
+                // Like the ordinary scoped-registration path, failures discard only this
+                // listener's suffix. No successful listener copies earlier declarations.
+                format!(
+                    "let mut {entered} = super::runtime::ListenerScope::new();\n\
+                     for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{\n\
+                         let mod_id = {mod_entry}.id;\n\
+                         if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }}\n\
+                         let {mod_item} = {entered}.enter({mod_entry}, \"{name}\");\n\
+                         {local_event}\n\
+                         let {saved} = {event}.{output}.len();\n\
+                         if !super::runtime::run_attributed_collect(HookId::{hook_id}, mod_id, \"{name}\", || super::runtime::refusable(contained, || {mod_item}.{name}({invoke}))) {{\n\
+                             {event}.{output}.truncate({saved});\n\
+                         }}\n\
+                     }}",
+                    output = out.unwrap(),
                 ),
             ),
             None if isolated_collect => (

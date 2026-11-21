@@ -37,9 +37,12 @@ restoration, after world preparation.
 
 Versions use the loader's semantic version comparison, padding omitted minor and
 patch components with zero; invalid or empty versions compare as exact text.
-Mark a migration with `event.resolved.push("my_mod".to_owned().into())`.
-The first listener to mark an id owns its `resolver` attribution; later listeners
-cannot erase or replace that marker. Markers for other ids are allowed.
+Mark a migration with `event.mark_resolved("my_mod")`. Check a specific id with
+`event.was_resolved(id)` or read the resolving mod's id with `event.resolver(id)`.
+The first listener to mark an id is recorded as its resolver; later listeners
+cannot erase or replace that marker. Markers for other ids are allowed. A phase refusal
+or panic discards only the failing listener's markers. A panic also disables that listener
+for the session, with a log and error toast naming the mod.
 Differences are logged sorted by mod id, resolved at debug with the resolver and
 self/other distinction, unresolved at warn. The event itself cannot be cancelled; only a
 missing mod holds the open back, a changed version never does.

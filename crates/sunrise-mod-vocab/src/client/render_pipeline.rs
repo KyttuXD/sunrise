@@ -220,24 +220,20 @@ pub enum PipelineDrawError {
     CapacityExceeded,
 }
 
-/// What `owner` added to `pipelines` in `register_render_pipelines`, checked as it returns: a
-/// pipeline whose id an earlier registration took is logged with the mod and dropped.
-pub(crate) fn validate_render_pipelines(
-    owner: &str,
-    previous: &[RenderPipeline],
-    pipelines: &mut Vec<RenderPipeline>,
-) {
-    let added = pipelines.split_off(previous.len().min(pipelines.len()));
-    for mut pipeline in added {
-        if pipelines.iter().any(|kept| kept.id == pipeline.id) {
+impl crate::RegisterRenderPipelinesEvent<'_> {
+    /// Register a pipeline under an unused ID and attribute it to this listener.
+    /// A duplicate ID is reported with this mod's ID and leaves the first entry intact.
+    pub fn register(&mut self, mut pipeline: RenderPipeline) {
+        let mod_id = self.mod_id;
+        if self.pipelines.iter().any(|kept| kept.id == pipeline.id) {
             log::warn!(
-                "register_render_pipelines: mod {owner}: pipeline {} refused: an earlier registration has that id",
+                "register_render_pipelines: mod {mod_id}: pipeline {} refused: an earlier registration has that id",
                 pipeline.id
             );
-        } else {
-            pipeline.owner = owner.to_owned();
-            pipelines.push(pipeline);
+            return;
         }
+        pipeline.owner = mod_id.to_owned();
+        self.pipelines.push(pipeline);
     }
 }
 
@@ -260,16 +256,20 @@ mod tests {
 
     #[test]
     fn a_mod_keeps_new_pipelines_across_namespaces_and_records_its_owner() {
-        let previous = vec![pipeline("other:glow")];
-        let mut pipelines = previous.clone();
-        pipelines.extend([
-            pipeline("mine:glow"),
-            pipeline("other:beam"),
-            pipeline("minecraft:custom_beam"),
-            pipeline("mine:glow"),
-            pipeline("mine:beam"),
-        ]);
-        validate_render_pipelines("owning_mod", &previous, &mut pipelines);
+        let mut pipelines = vec![pipeline("other:glow")];
+        let mut event = crate::RegisterRenderPipelinesEvent {
+            mod_id: "owning_mod",
+            pipelines: &mut pipelines,
+        };
+        for id in [
+            "mine:glow",
+            "other:beam",
+            "minecraft:custom_beam",
+            "mine:glow",
+            "mine:beam",
+        ] {
+            event.register(pipeline(id));
+        }
         assert_eq!(
             ids(&pipelines),
             [
@@ -287,23 +287,32 @@ mod tests {
 
     #[test]
     fn a_mod_cannot_take_an_id_registered_before_it() {
-        let previous = vec![pipeline("shared:glow")];
-        let mut pipelines = previous.clone();
-        pipelines.push(pipeline("shared:glow"));
-        validate_render_pipelines("late", &previous, &mut pipelines);
-        assert_eq!(pipelines, previous);
+        let mut pipelines = Vec::new();
+        let mut event = crate::RegisterRenderPipelinesEvent {
+            mod_id: "first",
+            pipelines: &mut pipelines,
+        };
+        event.register(pipeline("shared:glow"));
+        event.mod_id = "late";
+        event.register(pipeline("shared:glow"));
+        assert_eq!(ids(&pipelines), ["shared:glow"]);
+        assert_eq!(pipelines[0].owner(), "first");
     }
 
     #[test]
     fn a_mod_can_register_more_than_vanillas_pipeline_count() {
-        let mut pipelines: Vec<_> = (0..131).map(|i| pipeline(&format!("mine:p{i}"))).collect();
-        validate_render_pipelines("mine", &[], &mut pipelines);
-        assert_eq!(pipelines.len(), 131);
-        assert_eq!(pipelines.last().unwrap().id.to_string(), "mine:p130");
-
-        let previous = pipelines.clone();
-        pipelines.push(pipeline("next:glow"));
-        validate_render_pipelines("next", &previous, &mut pipelines);
+        let mut pipelines = Vec::new();
+        let mut event = crate::RegisterRenderPipelinesEvent {
+            mod_id: "mine",
+            pipelines: &mut pipelines,
+        };
+        for i in 0..131 {
+            event.register(pipeline(&format!("mine:p{i}")));
+        }
+        event.mod_id = "next";
+        event.register(pipeline("next:glow"));
         assert_eq!(pipelines.len(), 132);
+        assert_eq!(pipelines[130].id.to_string(), "mine:p130");
+        assert_eq!(pipelines[131].owner(), "next");
     }
 }
