@@ -7,7 +7,7 @@ mod tests;
 
 use crate::{
     FileToIdConverter, Identifier, ReloadResourceError,
-    world::reload::{Boundary, ReloadFiles},
+    world::reload::{Boundary, ReloadCore, ReloadFiles},
     world::reload_order::ReloadOrderError,
 };
 use std::sync::{Arc, LazyLock};
@@ -99,9 +99,9 @@ impl ClientReloadListener for Boundary {
     }
 }
 
-/// The client reload's listener registry, as `add_client_reload_listeners` hands it out: its
-/// registration methods and a read-only view of names and edges, rebuilt on each client reload.
-/// Listener names need not belong to the registering mod.
+/// The listener registry for the current `add_client_reload_listeners` registration.
+/// Its read-only views borrow this reload's registry and cannot be used across a
+/// mutable registration call. Listener names need not belong to the registering mod.
 pub trait ClientReloadListeners {
     /// Register a unique listener and converter, e.g. `FileToIdConverter::json("machines")`.
     /// Keep the `Arc` to read the listener's published state outside reloads.
@@ -117,19 +117,51 @@ pub trait ClientReloadListeners {
         first: Identifier,
         second: Identifier,
     ) -> Result<(), ReloadOrderError>;
-    /// The registered names in registration order, boundaries included.
-    fn get_registry(&self) -> Vec<Identifier>;
-    /// The dependency edges as `(first, second)` names.
-    fn get_graph(&self) -> Vec<(Identifier, Identifier)>;
-    /// The name of the vanilla anchor preceding mod listeners by default.
-    fn get_last_vanilla_listener(&self) -> Identifier;
+    /// Borrow the registered names in registration order, boundaries included.
+    fn get_registry(&self) -> ClientReloadRegistryView<'_>;
+    /// Borrow the dependency graph as `(first, second)` names.
+    fn get_graph(&self) -> ClientReloadGraphView<'_>;
+    /// Borrow the vanilla anchor preceding mod listeners by default
+    /// ([`VanillaClientListeners::model_manager`]).
+    fn get_last_vanilla_listener(&self) -> &Identifier;
+}
+
+// no wire: borrows the live client reload registry during registration.
+/// The names registered so far in one client reload, borrowed from the registry.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct ClientReloadRegistryView<'a> {
+    core: &'a ReloadCore<dyn ClientReloadListener>,
+}
+
+impl<'a> ClientReloadRegistryView<'a> {
+    /// Iterate over registered names in registration order, boundaries included.
+    pub fn iter(&self) -> impl Iterator<Item = &'a Identifier> + use<'a> {
+        self.core.registry().map(|(id, _)| id)
+    }
+}
+
+// no wire: borrows the live client reload dependency graph during registration.
+/// The current client reload dependencies, borrowed from the registry.
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct ClientReloadGraphView<'a> {
+    core: &'a ReloadCore<dyn ClientReloadListener>,
+}
+
+impl<'a> ClientReloadGraphView<'a> {
+    /// Iterate over dependency edges in insertion order. Each `(first, second)`
+    /// edge requires `first` to run before `second`; the edges include the
+    /// built-in ordering boundaries and are not a sorted list of listeners.
+    pub fn iter(&self) -> impl Iterator<Item = (&'a Identifier, &'a Identifier)> + use<'a> {
+        self.core.graph()
+    }
 }
 
 // no wire: process-local listener or callback storage; trait objects are invoked through host dispatch, not serialized.
 /// The game's [`ClientReloadListeners`].
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ClientListenerRegistry {
-    core: crate::world::reload::ReloadCore<dyn ClientReloadListener>,
+    core: ReloadCore<dyn ClientReloadListener>,
+    default_anchor: Identifier,
 }
 impl ClientReloadListeners for ClientListenerRegistry {
     fn add_listener(
@@ -147,28 +179,27 @@ impl ClientReloadListeners for ClientListenerRegistry {
     ) -> Result<(), ReloadOrderError> {
         self.core.add_dependency(first, second)
     }
-    fn get_registry(&self) -> Vec<Identifier> {
-        self.core.registry().map(|(id, _)| id.clone()).collect()
+    fn get_registry(&self) -> ClientReloadRegistryView<'_> {
+        ClientReloadRegistryView { core: &self.core }
     }
-    fn get_graph(&self) -> Vec<(Identifier, Identifier)> {
-        self.core
-            .graph()
-            .map(|(first, second)| (first.clone(), second.clone()))
-            .collect()
+    fn get_graph(&self) -> ClientReloadGraphView<'_> {
+        ClientReloadGraphView { core: &self.core }
     }
-    fn get_last_vanilla_listener(&self) -> Identifier {
-        VanillaClientListeners::model_manager()
+    fn get_last_vanilla_listener(&self) -> &Identifier {
+        &self.default_anchor
     }
 }
 impl ClientListenerRegistry {
     pub(crate) fn new() -> Self {
+        let default_anchor = VanillaClientListeners::model_manager();
         Self {
-            core: crate::world::reload::ReloadCore::new(
+            core: ReloadCore::new(
                 VanillaClientListeners::first(),
-                VanillaClientListeners::model_manager(),
+                default_anchor.clone(),
                 VanillaClientListeners::last(),
                 || -> Arc<dyn ClientReloadListener> { Arc::new(Boundary) },
             ),
+            default_anchor,
         }
     }
     pub(crate) fn finish(
@@ -177,6 +208,6 @@ impl ClientListenerRegistry {
         Vec<crate::world::reload::RegisteredListener<dyn ClientReloadListener>>,
         ReloadOrderError,
     > {
-        self.core.finish(&VanillaClientListeners::model_manager())
+        self.core.finish(&self.default_anchor)
     }
 }

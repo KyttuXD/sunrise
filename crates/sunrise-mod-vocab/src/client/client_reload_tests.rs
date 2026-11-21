@@ -9,48 +9,48 @@ fn files() -> FileToIdConverter {
 #[test]
 fn registry_views_and_explicit_order_before_vanilla() {
     let mut listeners = ClientListenerRegistry::new();
-    let first = Arc::new(Boundary);
-    let second = Arc::new(Boundary);
+    let [first, model_manager, last, mod_first, mod_second] = [
+        "minecraft:first",
+        "minecraft:model_manager",
+        "minecraft:last",
+        "test_mod:first",
+        "test_mod:second",
+    ]
+    .map(id);
     listeners
-        .add_listener(id("test_mod:first"), files(), first.clone())
+        .add_listener(mod_first.clone(), files(), Arc::new(Boundary))
         .unwrap();
     listeners
-        .add_listener(id("test_mod:second"), files(), second.clone())
+        .add_listener(mod_second.clone(), files(), Arc::new(Boundary))
         .unwrap();
-    assert_eq!(
-        listeners.get_last_vanilla_listener(),
-        VanillaClientListeners::model_manager()
+    let view: &dyn crate::ClientReloadListeners = &listeners;
+    let anchor: &Identifier = view.get_last_vanilla_listener();
+    assert_eq!(anchor, &model_manager);
+    let registry: crate::ClientReloadRegistryView<'_> = view.get_registry();
+    assert!(
+        registry
+            .iter()
+            .eq([&first, &model_manager, &last, &mod_first, &mod_second])
     );
-    assert_eq!(
-        listeners.get_registry(),
-        [
-            VanillaClientListeners::first(),
-            VanillaClientListeners::model_manager(),
-            VanillaClientListeners::last(),
-            id("test_mod:first"),
-            id("test_mod:second"),
-        ]
-    );
+    let anchor = anchor.clone();
     listeners
-        .add_dependency(
-            id("test_mod:second"),
-            VanillaClientListeners::model_manager(),
-        )
+        .add_dependency(mod_second.clone(), anchor)
         .unwrap();
-    assert!(listeners.get_graph().contains(&(
-        id("test_mod:second"),
-        VanillaClientListeners::model_manager()
-    )));
+    let view: &dyn crate::ClientReloadListeners = &listeners;
+    let graph: crate::ClientReloadGraphView<'_> = view.get_graph();
+    assert!(graph.iter().eq([
+        (&first, &model_manager),
+        (&model_manager, &last),
+        (&first, &mod_first),
+        (&mod_first, &last),
+        (&first, &mod_second),
+        (&mod_second, &last),
+        (&mod_second, &model_manager),
+    ]));
     let sorted = listeners.finish().unwrap();
     assert_eq!(
         sorted.into_iter().map(|entry| entry.id).collect::<Vec<_>>(),
-        [
-            VanillaClientListeners::first(),
-            id("test_mod:second"),
-            VanillaClientListeners::model_manager(),
-            id("test_mod:first"),
-            VanillaClientListeners::last(),
-        ]
+        [first, mod_second, model_manager, mod_first, last]
     );
 }
 

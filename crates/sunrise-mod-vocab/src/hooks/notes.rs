@@ -2124,8 +2124,12 @@ directories, or filesystem paths. Files resolve like vanilla resource packs: eve
 except `lang/*.json` is delivered as the exact bytes of the winning pack's file, while
 language files arrive key-wise merged across the packs, as vanilla loads them.
 
-Prepare and apply semantics, error handling, crash attribution and dependency ordering match
-those of [server listeners](#server-data-reload-listeners). Client registry reads return owned IDs.
+Prepare and apply semantics, error handling, crash attribution, dependency ordering and the
+borrowed registry views match those of [server listeners](#server-data-reload-listeners):
+`event.listeners.get_registry().iter()` borrows registered names in registration order
+(boundaries included), `event.listeners.get_graph().iter()` borrows `(first, second)` edges in
+insertion order, and `event.listeners.get_last_vanilla_listener()` borrows the vanilla anchor
+(`VanillaClientListeners::model_manager()`). Clone only the IDs you need after the borrow ends.
 `ClientReloadListener::prepare` parses without changing live state and returns a boxed
 `FnOnce() + Send + 'static` action. All prepares finish before any apply; a prepare,
 registration or ordering error aborts the reload and drops pending actions without running them.
