@@ -1512,10 +1512,16 @@ impl Game<'_> {
                 if c.spawner.as_ref().is_some_and(|s| s.spawn_delay <= 0)
                     && (mod_api::__private::listened(mod_api::HookId::MobSpawnPositionCheck)
                         || mod_api::__private::listened(mod_api::HookId::FinalizeSpawn))
+                    && let Some(i) = cart_at(&self.carts, c.id, slot)
                 {
-                    // Publish this tick's cart state to the spawner's shared hooks only.
-                    // It remains held out of any mutable hooks as the spawn is added.
-                    self.store_cart_back(slot, c.clone());
+                    // push_from_ticked_cart stored the moved cart. Bring its stored
+                    // fluid state up to date for the shared spawner hooks; mutable
+                    // hooks cannot touch it until the tick finishes.
+                    self.carts.update(i, |stored| {
+                        stored.velocity = c.velocity;
+                        stored.in_water = c.in_water;
+                        stored.fall_distance = c.fall_distance;
+                    });
                 }
                 if let Some(mut spawner) = c.spawner.take() {
                     let key = (
