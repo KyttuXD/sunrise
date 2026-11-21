@@ -583,7 +583,6 @@ fn dispatch_contracts() {
             assert!(event.attacker_main.is_none() && event.attacker_off.is_none());
             assert_eq!(event.kill_credit, 19);
             assert!(event.kill_credit_main.is_none());
-            assert_eq!(event.entry, KnockbackEntry::Full);
             assert_eq!(event.strength, 0.4);
             event.strength *= 2.0;
             event.x = -event.x;
@@ -609,7 +608,6 @@ fn dispatch_contracts() {
             attacker_off: None,
             kill_credit: 19,
             kill_credit_main: None,
-            entry: KnockbackEntry::Full,
             strength: &mut strength,
             x: &mut x,
             z: &mut z,

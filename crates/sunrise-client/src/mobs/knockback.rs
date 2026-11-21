@@ -16,9 +16,7 @@ impl Mob {
         source: &Damage,
         damage: f32,
     ) {
-        level.through_short_knockback(|level| {
-            self.knockback_full(level, power, xd, zd, source, damage, false);
-        });
+        self.knockback_full(level, power, xd, zd, source, damage, false);
     }
     /// `getAttributeValue(KNOCKBACK_RESISTANCE)`: the mob's own, and what its gear adds.
     pub fn knockback_resistance(&self) -> f64 {

@@ -1,0 +1,1 @@
+sunrise-client game::native_knockback_tests::one_event_per_living_knockback_operation lib daily resources

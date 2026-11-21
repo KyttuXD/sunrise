@@ -53,7 +53,6 @@ pub trait Hooks {
         attacker_off: Option<&ItemStack>,
         kill_credit: i32,
         kill_credit_main: Option<&ItemStack>,
-        entry: KnockbackEntry,
         strength: &mut f64,
         x: &mut f64,
         z: &mut f64,
