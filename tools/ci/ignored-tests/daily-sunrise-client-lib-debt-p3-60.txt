@@ -1,0 +1,2 @@
+# P3-60: a finite mob velocity survives overflow at the block-speed write.
+sunrise-client-lib mobs::living::tests::an_overflowing_block_speed_product_preserves_the_mobs_finite_velocity lib daily resources

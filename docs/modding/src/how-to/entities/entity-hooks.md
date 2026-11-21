@@ -129,12 +129,13 @@ cancellation stand, and other eligible listeners still run.
 For a player, a veto holds the position accepted at the server's travel boundary;
 it does not rewind reports already accepted before that tick. While the veto
 stands, the server corrects new reports that would move the player away. If
-travel runs, an edit that changes its input or velocity sends one correction,
-even if collision absorbs it, if the player remains eligible and no correction awaits
-acknowledgement. A separate teleport in the same tick takes priority. The
-correction carries the live server position and velocity. The server compares
-the vectors bit for bit, except that inputs within vanilla's movement dead zone
-are equivalent. The client never calls this hook.
+travel runs, a change to the body's velocity or to the acceleration applied by
+vanilla's `Entity.moveRelative` sends one correction, even if collision absorbs
+it, if the player remains eligible and no correction awaits acknowledgement.
+Inputs that have the same effect, or that the selected branch doesn't use, do
+not require a correction. A separate teleport in the same tick takes priority.
+The correction carries the live server position and velocity. The client never
+calls this hook.
 
 ## Teleport hooks
 

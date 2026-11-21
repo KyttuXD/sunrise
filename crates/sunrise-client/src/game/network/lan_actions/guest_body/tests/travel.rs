@@ -21,6 +21,7 @@ enum Reply {
     Veto,
     Velocity,
     TinyInput,
+    OverflowingInputLength,
     Input,
 }
 
@@ -37,8 +38,11 @@ impl Hooks for Reply {
             Self::TinyInput => {
                 let _ = event.motion.set_input([0.000001, 0.0, 0.0]);
             }
+            Self::OverflowingInputLength => {
+                assert!(event.motion.set_input([f64::MAX, 0.0, 0.0]));
+            }
             Self::Input => {
-                let _ = event.motion.set_input([2.0, 0.0, 0.0]);
+                assert!(event.motion.set_input([2.0, 0.0, 0.0]));
             }
         }
         Flow::Continue
@@ -306,61 +310,74 @@ fn another_travel_replacement_waits_for_the_first_correction_acknowledgement() {
 #[test]
 #[ignore = "daily"]
 fn an_edit_absorbed_by_collision_still_sends_one_correction() {
-    struct IntoWall(Arc<AtomicUsize>);
+    struct IntoWall {
+        calls: Arc<AtomicUsize>,
+        edit_input: bool,
+    }
 
     #[mod_api::__subscriptions]
     impl Hooks for IntoWall {
         fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            let _ = event.motion.set_velocity([-0.5, 0.0, 0.0]);
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.edit_input {
+                assert!(event.motion.set_input([-1.0, 0.0, 0.0]));
+            } else {
+                assert!(event.motion.set_velocity([-0.5, 0.0, 0.0]));
+            }
             Flow::Continue
         }
     }
 
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mods = vec![mod_api::ModEntry::new(
-        "wall-travel-test",
-        Box::new(IntoWall(calls.clone())),
-    )];
-    mod_platform::testing::with_mods(mods.into(), || {
-        with_player(false, |game, rx| {
-            let stone = game
-                .pack
-                .assets
-                .registry
-                .default_state("minecraft:stone")
-                .unwrap();
-            game.world.set(2, 64, 5, stone).unwrap();
-            let mut at = START;
-            let half_width = f64::from(guest(game).motion.as_ref().unwrap().dimensions.width) / 2.0;
-            at[0] += half_width; // The player's west face is flush with the block at x=2.
-            game.lan.as_mut().unwrap().hub.update_guest(1, |g| {
-                g.position = at;
-                g.first_good = at;
-                g.last_reported.0 = at;
-                g.motion.as_mut().unwrap().position = Vec3::new(at[0], at[1], at[2]);
-            });
+    for edit_input in [false, true] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mods = vec![mod_api::ModEntry::new(
+            "wall-travel-test",
+            Box::new(IntoWall {
+                calls: calls.clone(),
+                edit_input,
+            }),
+        )];
+        mod_platform::testing::with_mods(mods.into(), || {
+            with_player(false, |game, rx| {
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.set(2, 64, 5, stone).unwrap();
+                let mut at = START;
+                let half_width =
+                    f64::from(guest(game).motion.as_ref().unwrap().dimensions.width) / 2.0;
+                at[0] += half_width; // The player's west face is flush with the block at x=2.
+                game.lan.as_mut().unwrap().hub.update_guest(1, |g| {
+                    g.position = at;
+                    g.first_good = at;
+                    g.last_reported.0 = at;
+                    g.motion.as_mut().unwrap().position = Vec3::new(at[0], at[1], at[2]);
+                });
 
-            game.guest_server_tick(1, true);
-            let guest = guest(game);
-            let packet = correction(&rx);
-            let expected_velocity = [0.0, -0.08 * f64::from(0.98_f32), 0.0].map(f64::to_bits);
-            assert_eq!(packet.position.map(f64::to_bits), at.map(f64::to_bits));
-            assert_eq!(packet.delta.map(f64::to_bits), expected_velocity);
-            assert_eq!(guest.position.map(f64::to_bits), at.map(f64::to_bits));
-            assert_eq!(
-                guest
-                    .motion
-                    .as_ref()
-                    .unwrap()
-                    .velocity
-                    .components()
-                    .map(f64::to_bits),
-                expected_velocity
-            );
-            assert_eq!(calls.load(Ordering::Relaxed), 1);
+                game.guest_server_tick(1, true);
+                let guest = guest(game);
+                let packet = correction(&rx);
+                let expected_velocity = [0.0, -0.08 * f64::from(0.98_f32), 0.0].map(f64::to_bits);
+                assert_eq!(packet.position.map(f64::to_bits), at.map(f64::to_bits));
+                assert_eq!(packet.delta.map(f64::to_bits), expected_velocity);
+                assert_eq!(guest.position.map(f64::to_bits), at.map(f64::to_bits));
+                assert_eq!(
+                    guest
+                        .motion
+                        .as_ref()
+                        .unwrap()
+                        .velocity
+                        .components()
+                        .map(f64::to_bits),
+                    expected_velocity
+                );
+                assert_eq!(calls.load(Ordering::Relaxed), 1);
+            });
         });
-    });
+    }
 }
 
 #[test]
@@ -368,7 +385,13 @@ fn an_edit_absorbed_by_collision_still_sends_one_correction() {
 fn an_unchanged_player_travel_outcome_keeps_vanilla_reports_and_packets() {
     for integrated in [true, false] {
         let mut baseline = None;
-        for reply in [None, Some(Reply::Continue), Some(Reply::TinyInput)] {
+        for reply in [
+            None,
+            Some(Reply::Continue),
+            Some(Reply::TinyInput),
+            // Vanilla normalization divides this finite vector by its infinite length.
+            Some(Reply::OverflowingInputLength),
+        ] {
             with_reply(reply, || {
                 with_player(integrated, |game, rx| {
                     report(game, ACCEPTED);

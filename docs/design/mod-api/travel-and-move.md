@@ -104,14 +104,13 @@ mods, resolved once.
 The first native travel hook runs only on the server. For players, its single
 `ServerPlayer.doTick` travel boundary governs new position reports, not reports
 already accepted. The ordinary move validator corrects divergent reports while
-a veto stands. An edit that changes the input or velocity sends one correction,
-even if collision absorbs it, if the player remains eligible and no correction
-awaits acknowledgement. A separate teleport in the same tick takes priority.
-The packet carries the position and velocity from the one live move. The server
-compares the vectors bit for bit, except that inputs within vanilla's movement
-dead zone are equivalent. No-op edits leave the ordinary move validator and
-packets unchanged. There is no new packet or replayed hook. Integrated and
-network players use the same path.
+a veto stands. An edit that changes the body's velocity or the acceleration
+applied by the live `Entity.moveRelative` sends one correction, even if collision
+absorbs it, if the player remains eligible and no correction awaits acknowledgement.
+A separate teleport in the same tick takes priority. The packet carries the
+position and velocity from the one live move. No-op edits leave the ordinary
+move validator and packets unchanged. There is no new packet or replayed hook.
+Integrated and network players use the same path.
 
 For future shared prediction, integrate with the [client action pipeline](client-action-pipeline.md), preserving
 its input/action ordering and server validation. Negotiate movement-rule identity

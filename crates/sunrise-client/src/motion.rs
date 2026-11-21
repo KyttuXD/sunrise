@@ -576,6 +576,12 @@ pub struct PlayerMotion {
     pub collision_exclusions: sunrise_world::collision_exclusions::CollisionExclusions,
 }
 impl PlayerMotion {
+    /// `Entity.setDeltaMovement`: keep only finite values.
+    pub(crate) fn set_velocity(&mut self, velocity: Vec3) {
+        if velocity.is_finite() {
+            self.velocity = velocity;
+        }
+    }
     /// `ServerGamePacketListenerImpl.handleMovePlayer`: the movement the client
     /// sent is the server copy's own delta movement. A glide's wall hit reads it
     /// as the speed the glide had (`LivingEntity.handleFallFlyingCollisions`'s
@@ -2152,7 +2158,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         Ok(self.player.velocity)
     }
     fn set_velocity(&mut self, value: Vec3) -> Result<()> {
-        self.player.velocity = value;
+        self.player.set_velocity(value);
         Ok(())
     }
     fn back_off_edge(&mut self, movement: Vec3, mover: MoverType) -> Result<Vec3> {
@@ -2617,7 +2623,7 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
         self.player.sync_position = true;
     }
     fn set_velocity(&mut self, value: Vec3) -> Result<()> {
-        self.player.velocity = value;
+        self.player.set_velocity(value);
         Ok(())
     }
 }
@@ -2627,7 +2633,7 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
         self.player.velocity
     }
     fn set_velocity(&mut self, v: Vec3) -> Result<()> {
-        self.player.velocity = v;
+        self.player.set_velocity(v);
         Ok(())
     }
     fn adjust_jump_power(&mut self, mut power: f32) -> f32 {
