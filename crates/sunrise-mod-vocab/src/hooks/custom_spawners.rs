@@ -1,24 +1,16 @@
-//! The custom spawner hooks: declarations the mod API generator reads (see `hooks/mod.rs`).
+//! The custom spawner registration hook (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// NeoForge's `ModifyCustomSpawnersEvent`: the level `dimension` is about to tick its custom
-    /// spawners for the first time. `spawners` is the list `ServerLevel` ticks, in order, and it
-    /// starts with vanilla's (`WanderingTrader`, `Patrol`, `Cat`, `VillageSiege` and `Phantom`,
-    /// in the order Sunrise ticks them). Take a vanilla spawner out with `remove` and it never
-    /// ticks, so its random draws are gone with it; add a spawner of the mod's own with `add` and
-    /// a `SpawnerKey` the mod owns, and `custom_spawner_tick` runs for it every tick, after the
-    /// ones before it in the list. With no listener, or one that leaves the list alone,
-    /// the level ticks exactly vanilla's spawners. The phantom spawner runs after the
-    /// level's mobs have ticked, as the game runs
-    /// it, wherever it is in the list. It fires once per level, on the server, and listeners run on replayed ticks,
-    /// so they must be pure functions of their inputs. Not cancellable.
+    /// NeoForge's `ModifyCustomSpawnersEvent`: a logical server level has been constructed.
+    /// The Overworld starts with its built-in spawners; other levels start empty. Remove a built-in
+    /// with `spawners.remove(kind)` or append an owned `CustomSpawner` with
+    /// `spawners.add_custom_spawner(Box::new(spawner))`. The level retains each object until it
+    /// closes. This event is not cancellable and fires before `level_load`, not during ticking.
     #[notes = r#"## Custom spawners
 
-`modify_custom_spawners` (NeoForge's `ModifyCustomSpawnersEvent`) fires once per level, the first time the level ticks its custom spawners, with the level's `CustomSpawners` list: vanilla's five (`WanderingTrader`, `Patrol`, `Cat`, `VillageSiege`, `Phantom`) in the order Sunrise ticks them. `remove` takes an entry out so it never ticks (its random draws go with it); `add` appends a mod's own spawner by a `SpawnerKey`. With no listener, or one that leaves the list alone, nothing changes: the same spawners tick in the same order.
+`modify_custom_spawners` fires once per server level lifetime, before `level_load`, even if mob spawning is off. The Overworld starts with its built-in spawners; other levels start empty. `spawners.remove(kind)` takes a built-in out without changing the relative order or tick phase of the others. `spawners.add_custom_spawner(Box::new(spawner))` appends an owned `CustomSpawner`.
 
-A mod's spawner is a key it owns, and the `custom_spawner_tick(dimension, key, spawn_enemies)` hook stands for `CustomSpawner.tick`: it runs once per tick for each key in the list, in list order, while the `spawn_mobs` rule is on, and the mod that owns the key spawns through its `host`. Every mod gets the call and the others ignore it. A level with no mod spawner pays one list walk per tick and no hook call. Beyond NeoForge: a key plus a tick hook in place of an object.
-
-Sunrise ticks vanilla's spawners where it always has: the trader, patrol, cat and siege spawners in the custom spawner block (vanilla's own order differs, and moving it is a separate parity change) and the phantom spawner with the stats, after the mobs. A mod's spawners tick after them in list order, so the position of the `Phantom` entry in the list does not move it. Listeners run on replayed ticks, so they are pure functions of their inputs."#]
+A level calls each appended object's `tick` only while `spawn_mobs` is enabled, in registration order. The object retains its own state between ticks. Its `ServerHost` is for the level named by `dimension`, and `spawn_enemies` reports the `spawn_monsters` rule and non-Peaceful difficulty; a spawner that only produces enemies can skip its work when false. An object's panic disables that callback without stopping the other objects. Closing the level drops its spawner objects; a later open registers fresh ones."#]
     #[hook(
         receiver = "read",
         dispatch = "flat",
@@ -26,24 +18,13 @@ Sunrise ticks vanilla's spawners where it always has: the trader, patrol, cat an
         contract = "listen",
         host = "read",
         neoforge = "ModifyCustomSpawnersEvent",
-        cancellable = false
+        cancellable = false,
+        event_per_listener = true,
+        isolate = true,
+        version = 2
     )]
-    fn modify_custom_spawners(dimension: &str, spawners: &mut mod_api::CustomSpawners);
-
-    /// `CustomSpawner.tick` for a spawner a mod added with `modify_custom_spawners`: the level
-    /// `dimension` ticks the spawner `key`, once per tick in the list's order, with
-    /// `spawn_enemies` as `ServerLevel.isSpawningMonsters` (the `spawn_monsters` rule, and not
-    /// peaceful). Every mod gets the call, and the mod that owns `key` spawns through `host`
-    /// (its spawns go through `finalize_spawn` and the spawn checks like any other); the rest
-    /// ignore it. It is called only while the `spawn_mobs` rule is on, as vanilla's custom
-    /// spawners are, and only for a key in the list, so a level with no mod spawner pays one
-    /// check per tick. Beyond NeoForge: a key and this hook stand in for the `CustomSpawner`
-    /// object. Server-side.
-    #[hook(
-        dispatch = "flat",
-        side = "server",
-        contract = "listen",
-        neoforge = "ModifyCustomSpawnersEvent"
-    )]
-    fn custom_spawner_tick(dimension: &str, key: mod_api::SpawnerKey, spawn_enemies: bool);
+    fn modify_custom_spawners(
+        dimension: mod_api::DimensionKey,
+        spawners: &mut dyn mod_api::CustomSpawners,
+    );
 }

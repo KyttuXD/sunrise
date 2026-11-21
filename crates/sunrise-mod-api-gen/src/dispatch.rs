@@ -121,6 +121,7 @@ pub(super) fn emit<'a>(
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
         let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_listen = hook.isolate && contract == Contract::Listen;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -199,7 +200,7 @@ pub(super) fn emit<'a>(
                     param,
                 )
             });
-        if isolated_collect
+        if (isolated_collect || isolated_listen)
             && (hook.context.is_some()
                 || host.as_ref().is_some_and(|(_, host)| {
                     host.ty.starts_with("&mut ")
@@ -207,7 +208,7 @@ pub(super) fn emit<'a>(
                 }))
         {
             return Err(format!(
-                "{name}: an isolated collector needs a read-only world Host"
+                "{name}: isolated listeners and collectors need a read-only world Host"
             ));
         }
         // A block notice may identify a watching block entity. Its Parts receive
@@ -505,7 +506,17 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if isolated_listen && !surfaces.contains(name) {
+                    return Err(format!(
+                        "{}: an isolated listener may write only through a scoped trait, not {name}",
+                        hook.name
+                    ));
+                }
+                if hook.isolate
+                    && !isolated_listen
+                    && batch_entry.is_none()
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -1253,6 +1264,12 @@ pub(super) fn emit<'a>(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.{owner} {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
                     owner = hook.owner.as_deref().unwrap(),
+                ),
+            ),
+            None if isolated_listen => (
+                String::new(),
+                format!(
+                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, {mod_entry}) in super::listening(HookId::{hook_id}) {{ let mod_id = {mod_entry}.id; if super::runtime::poisoned(HookId::{hook_id}, mod_id) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} super::runtime::isolate_listener(HookId::{hook_id}, mod_id, \"{name}\", || {mod_item}.{name}({invoke})); }} }}",
                 ),
             ),
             None if isolated_collect => (

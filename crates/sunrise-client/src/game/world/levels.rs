@@ -197,6 +197,7 @@ pub(super) struct Parked {
     creaking: CreakingState,
     /// Natural spawning's candidate cache: each level keeps its own players' squares.
     spawn_scratch: super::natural_spawning::SpawnScratch,
+    custom_spawners: super::custom_spawners::LevelCustomSpawners,
     /// Server ticks since a player was last in the level.
     idle: u32,
     /// The level's own world border (`ServerLevel.getWorldBorder`), and what its players were
@@ -811,6 +812,7 @@ impl Game<'_> {
             sculk: Default::default(),
             creaking: Default::default(),
             spawn_scratch: Default::default(),
+            custom_spawners: Default::default(),
             idle: 0,
             border: self.load_border(dim),
             border_sent: None,
@@ -1022,6 +1024,7 @@ impl Game<'_> {
         self.sculk.swap_level(&mut p.sculk);
         self.creaking.swap_level(&mut p.creaking);
         swap(&mut self.spawn_scratch, &mut p.spawn_scratch);
+        swap(&mut self.creatures.custom_spawners, &mut p.custom_spawners);
         swap(&mut self.border, &mut p.border);
         // What only the client draws starts over.
         self.clear_client_particles();
@@ -1687,6 +1690,12 @@ impl Game<'_> {
         }
         self.bind_dimension_attachments(dim);
         self.levels.heard_open.push(dim);
+        let spawners = self.build_custom_spawners(dim);
+        if dim == self.dim {
+            self.creatures.custom_spawners = spawners;
+        } else if let Some(parked) = self.levels.parked.get_mut(&dim) {
+            parked.custom_spawners = spawners;
+        }
         self.native_level_load(dim.id());
     }
 
@@ -1700,8 +1709,10 @@ impl Game<'_> {
         }
         if dim == self.dim {
             self.world.water_tickets.clear();
-        } else if let Some(world) = self.levels.parked_world_mut_of(dim.id()) {
-            world.water_tickets.clear();
+            self.creatures.custom_spawners = Default::default();
+        } else if let Some(parked) = self.levels.parked.get_mut(&dim) {
+            parked.world.water_tickets.clear();
+            parked.custom_spawners = Default::default();
         }
         self.attachment_indexes.remove(&dim);
         self.passages.retire_level(dim.key());

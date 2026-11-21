@@ -101,7 +101,7 @@ when another implementation requires a specific byte format.
 
 Use owned `String` fields, not static strings or interned level keys: the network codec never
 interns incoming text. The registrar also refuses Wire forms that allocate outside the shared
-budget, such as `Identifier`, `SpawnerKey`, `CustomSpawners`, `ModelPart`, JSON values and `Text`,
+budget, such as `Identifier`, `ModelPart`, JSON values and `Text`,
 even in nested fields. Send bounded owned fields and convert explicitly where you need those types.
 
 Derive `Wire` for the value, register it in `Hooks::register`, and keep the token the

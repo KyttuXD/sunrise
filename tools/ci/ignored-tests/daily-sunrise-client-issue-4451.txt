@@ -481,7 +481,6 @@ sunrise-client game::crossbow::tests::bow_and_crossbow_shots_sound_at_the_feet_n
 sunrise-client game::cushions::cushion_drop_tests::a_creative_blast_leaves_no_cushion_item lib daily resources
 sunrise-client game::cushions::cushion_drop_tests::a_cushion_that_loses_its_support_is_discarded_silently lib daily resources
 sunrise-client game::cushions::cushion_drop_tests::a_placed_cushion_keeps_its_stacks_custom_name lib daily resources
-sunrise-client game::custom_spawners::tests::custom_spawners_tick_in_list_order_and_a_removed_one_never_ticks lib daily resources
 sunrise-client game::damage_item_tests::a_mob_armour_wear_names_the_mob lib daily resources
 sunrise-client game::damage_item_tests::a_part_breaks_a_mobs_glider_now lib daily resources
 sunrise-client game::damage_item_tests::a_part_breaks_its_tool_now lib daily resources

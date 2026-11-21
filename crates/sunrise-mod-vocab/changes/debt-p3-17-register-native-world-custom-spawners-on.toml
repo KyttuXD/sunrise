@@ -1,0 +1,51 @@
+ids = [
+    "hook:modify_custom_spawners",
+    "hook:modify_custom_spawners.dimension",
+    "hook:modify_custom_spawners.spawners",
+    "type:ModifyCustomSpawnersEvent.dimension",
+    "type:ModifyCustomSpawnersEvent.spawners",
+    "hook:custom_spawner_tick",
+    "hook:custom_spawner_tick.dimension",
+    "hook:custom_spawner_tick.key",
+    "hook:custom_spawner_tick.spawn_enemies",
+    "method:Hooks::custom_spawner_tick",
+    "type:CustomSpawnerTickEvent",
+    "type:CustomSpawnerTickEvent.dimension",
+    "type:CustomSpawnerTickEvent.key",
+    "type:CustomSpawnerTickEvent.spawn_enemies",
+    "type:CustomSpawners",
+    "handle:CustomSpawners::add",
+    "handle:CustomSpawners::remove",
+    "handle:CustomSpawners::contains",
+    "handle:CustomSpawners::entries",
+    "type:SpawnerKey",
+    "handle:SpawnerKey::new",
+    "handle:SpawnerKey::as_str",
+    "type:SpawnerEntry",
+    "type:SpawnerEntry.Builtin",
+    "type:SpawnerEntry.Mod",
+    "type:SpawnerError",
+    "type:SpawnerError.InvalidKey",
+    "type:SpawnerError.Duplicate",
+]
+why = "NeoForge's ModifyCustomSpawnersEvent fires at the end of ServerLevel construction, and vanilla's ServerLevel.tickCustomSpawners calls CustomSpawner.tick on each object in that level's list. Own the spawners on the level instead of broadcasting a name every tick. MinecraftServer.createLevels supplies the built-in spawners only to the Overworld. The built-in tick order and timing in Sunrise stay unchanged; the existing ServerChunkCache.tickChunks spawn_mobs gate still applies."
+migrate = """
+Keep Hooks::modify_custom_spawners. It now fires at level construction, before level_load,
+even when mob spawning is off. Compare event.dimension to a DimensionKey such as
+DimensionKey::OVERWORLD; use event.dimension.id(host) if you need the dimension name.
+Replace event.spawners.add(SpawnerKey::new(id).unwrap()) with
+`event.spawners.add_custom_spawner(Box::new(MySpawner { /* initial state */ }))`.
+Implement `CustomSpawner for MySpawner` with `fn tick(&mut self, host: &mut dyn ServerHost,
+dimension: DimensionKey, spawn_enemies: bool)`. Move the body of Hooks::custom_spawner_tick
+there, drop the event.key check, and move state for that spawner into MySpawner. The object
+belongs to this open level alone and is dropped on close; register a fresh object on reopen.
+
+For a built-in, replace `event.spawners.remove(&SpawnerEntry::Builtin(kind))` and
+`event.spawners.contains(&SpawnerEntry::Builtin(kind))` with `event.spawners.remove(kind)` and
+`event.spawners.contains(kind)`. Only the Overworld initially contains built-ins. Instead of
+iterating `entries()`, ask `contains(kind)` for the built-in you need. There is no key-based
+inspection, removal or duplicate-key error for another registration. If you used the old key
+or list with Wire, encode your own data (for example an owned String for an ID your mod uses)
+and construct the spawner in modify_custom_spawners; neither the owning object nor the editor
+can be serialized. Remove conversions through SpawnerEntry, SpawnerError, or SpawnerKey.
+"""
