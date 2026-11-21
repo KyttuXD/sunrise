@@ -1,0 +1,1 @@
+sunrise-client game::native_level_weather::tests::one_weather_veto_skips_all_five_fields lib daily resources

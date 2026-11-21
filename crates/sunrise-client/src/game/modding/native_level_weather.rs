@@ -72,6 +72,69 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use mod_api::{LevelRef, WorldEpoch};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    #[ignore = "daily"]
+    fn one_weather_veto_skips_all_five_fields() {
+        struct WeatherPolicy(Arc<AtomicUsize>);
+
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for WeatherPolicy {
+            fn weather_change(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                _: &mut mod_api::WeatherChangeEvent<'_>,
+            ) -> mod_api::Flow {
+                if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+                    mod_api::Flow::Cancel
+                } else {
+                    mod_api::Flow::Continue
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mods = vec![mod_api::ModEntry::new(
+            "weather_policy",
+            Box::new(WeatherPolicy(calls.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_game(|game| {
+                let level = game.level(game.dim.id()).unwrap();
+                let w = &mut game.world.weather;
+                (
+                    w.clear_time,
+                    w.rain_time,
+                    w.thunder_time,
+                    w.raining,
+                    w.thundering,
+                ) = (17, 29, 41, false, false);
+                let weather = |game: &super::Game<'_>| {
+                    let w = &game.world.weather;
+                    (
+                        w.clear_time,
+                        w.rain_time,
+                        w.thunder_time,
+                        w.raining,
+                        w.thundering,
+                    )
+                };
+
+                let _ = level.set_weather(game, 19, 83, true, true);
+                assert_eq!(calls.load(Ordering::Relaxed), 1);
+                assert_eq!(weather(game), (17, 29, 41, false, false));
+
+                assert!(level.set_weather(game, 19, 83, true, true));
+                assert_eq!(calls.load(Ordering::Relaxed), 2);
+                assert_eq!(weather(game), (19, 83, 83, true, true));
+            });
+        });
+    }
 
     #[test]
     #[ignore = "daily"]
