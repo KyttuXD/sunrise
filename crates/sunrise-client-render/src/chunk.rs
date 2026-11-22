@@ -712,8 +712,11 @@ pub struct Chunk {
     pub saved: Option<Arc<ChunkExtras>>,
     /// Validated container limits, rebuilt on chunk admission and extras writes.
     pub container_stack_limits: std::collections::HashMap<(i32, i32, i32), u32>,
-    /// Entities read from a save (vanilla entity NBT), spawned on arrival.
-    pub entities: Vec<sunrise_core::nbt::Tag>,
+    /// Generated or legacy terrain-embedded entities, spawned on arrival.
+    pub entities: Vec<Tag>,
+    /// Independent entity-region snapshot read by the worker. The level may
+    /// already own this section (for a save before terrain arrived).
+    pub disk_entities: Vec<Tag>,
     /// Structure starts reaching into this chunk (`structures.References`):
     /// structure id and the start's chunk.
     pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
@@ -772,6 +775,7 @@ impl Chunk {
             saved: None,
             container_stack_limits: Default::default(),
             entities: Vec::new(),
+            disk_entities: Vec::new(),
             dynamic_emission: Default::default(),
             dynamic_pending: false,
             connection_groups: Default::default(),

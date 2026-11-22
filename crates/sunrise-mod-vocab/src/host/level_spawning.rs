@@ -123,6 +123,8 @@ pub trait LevelSpawningBackendMut {
     /// Uses the named open server level, including one that is parked. A chunk need not
     /// be loaded, and the call does not load it: section visibility and ticking decide
     /// when the entity becomes active, not whether it can join (`ServerLevel.addFreshEntity`).
+    /// In the destination level, the returned handle works before the entity is
+    /// discoverable in level lookups.
     ///
     /// Returns `Err(LevelWriteError::Stale)` for a stale handle or closed level,
     /// `Err(LevelWriteError::Unavailable)` on a client,

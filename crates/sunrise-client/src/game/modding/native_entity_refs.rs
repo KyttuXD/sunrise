@@ -48,6 +48,20 @@ pub(super) fn block_face_direction(face: BlockFace) -> sunrise_core::geometry::D
     }
 }
 
+/// `Visibility.isAccessible`: a column is tracked once it is resident. A level
+/// with no resident columns has no tracked entity sections.
+pub(super) fn entity_section_accessible(
+    chunks: &sunrise_client::chunk_map::ChunkMap,
+    [x, _, z]: [f64; 3],
+) -> bool {
+    x.is_finite()
+        && z.is_finite()
+        && chunks.contains_key(&(
+            sunrise_core::mth::floor(x) >> 4,
+            sunrise_core::mth::floor(z) >> 4,
+        ))
+}
+
 /// `ProjectileUtil.getEntityHitResult`'s test on a candidate: grow its box and clip it
 /// against the segment. A segment starting inside the grown box finds no entry (`AABB.clip`).
 fn clip_entity_ray(
@@ -157,27 +171,9 @@ impl Game<'_> {
             self.native_client_entity_target(entity)
         }
     }
-    /// Whether chunk `(cx, cz)` has an accessible entity section
-    /// (`PersistentEntitySectionManager` / `Visibility.isAccessible`).
-    /// Resident chunks are accessible; unloaded columns stay hidden until their
-    /// chunk loads. Headless fixtures with no loaded chunks fall back to the
-    /// ticket map (accessible everywhere when no tickets are configured).
-    pub(in crate::game) fn entity_chunk_accessible(&self, cx: i32, cz: i32) -> bool {
-        if self.world.chunks.is_empty() {
-            self.tickets.loaded(cx, cz)
-        } else {
-            self.world.chunks.contains_key(&(cx, cz))
-        }
-    }
-
     /// Whether a world position sits in an accessible entity section.
     pub(in crate::game) fn entity_position_accessible(&self, pos: [f64; 3]) -> bool {
-        pos[0].is_finite()
-            && pos[2].is_finite()
-            && self.entity_chunk_accessible(
-                sunrise_core::mth::floor(pos[0]) >> 4,
-                sunrise_core::mth::floor(pos[2]) >> 4,
-            )
+        entity_section_accessible(&self.world.chunks, pos)
     }
 
     /// Whether `target` is discoverable through `LevelEntityGetter`
@@ -198,8 +194,8 @@ impl Game<'_> {
     }
 
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
-    /// methods: None with no world open, or for no such entity in the level
-    /// in place or among the server's players. On a client (API
+    /// methods: None with no world open, or for no such entity in the accessible
+    /// sections of the level in place or among the server's players. On a client (API
     /// @API:client_entity_refs@), any entity the server shows this window,
     /// this window's own player included. API 373.
     pub(super) fn entity(&self, id: u32) -> Option<EntityRef> {
@@ -1223,6 +1219,10 @@ mod general_handle_tests {
     #[ignore = "daily"]
     fn removed_general_row_refuses_its_handle_and_the_next_row_takes_a_new_id() {
         with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+            );
             let uuid = [21, 22, 23, 24];
             game.resident_entities.general.rows.push(row(42, uuid, 7.0));
             let handle = game.entity(42).expect("the row became a handle");
@@ -1268,6 +1268,10 @@ mod general_handle_tests {
     #[ignore = "daily"]
     fn general_handle_of_an_earlier_epoch_refuses_by_the_epoch_check() {
         with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+            );
             game.resident_entities
                 .general
                 .rows
@@ -1855,6 +1859,10 @@ pub(super) mod tests {
             )));
             let original = game.dim;
             game.enter_command_level(super::super::Dim::Nether).unwrap();
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+            );
             let id = *game
                 .persist
                 .uuids
@@ -3355,6 +3363,10 @@ pub(super) mod tests {
             assert_eq!(joined(game, false), (1, true, true, true));
             assert_eq!(joined(game, true), (0, false, false, true));
             // A remote guest can mount through the same handle path as the acting player.
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+            );
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             game.mobs.push(sunrise_client::mobs::Mob::new(
                 21,
@@ -4512,6 +4524,10 @@ pub(super) mod tests {
         use sunrise_client::{entities::ArmorStand, mobs::Mob};
         use sunrise_core::geometry::Vec3;
         with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+            );
             let zombie = game
                 .res
                 .mob_types()

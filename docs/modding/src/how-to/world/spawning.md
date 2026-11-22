@@ -451,7 +451,9 @@ exact in blocks per tick (`Entity.setDeltaMovement`); packets quantize only on s
 Any valid block state is accepted, including air, which vanilla discards on its first tick.
 Admission follows `ServerLevel.addFreshEntity`: no per-level count cap or `/summon` position
 check, and the call neither requires nor loads the destination chunk. Section status governs
-entity visibility and ticking.
+entity visibility and ticking. Keep the returned `EntityRef` to work with the entity
+in its destination level while its column is hidden; ID and UUID lookup, entity visits,
+and ray traces do not discover it until the section is accessible.
 
 The spawn runs `entity_constructing` then `entity_join_level`, just like a natural fall. A natural
 fall asks for admission before the next scheduled block tick; if vetoed, the source block's

@@ -176,7 +176,7 @@ impl Game<'_> {
                 match step {
                     sunrise_client::streaming::PlanStep::Ready(plan) => break plan,
                     sunrise_client::streaming::PlanStep::Save { chunk, resume } => {
-                        self.streaming.save_finished(chunk);
+                        self.save_late_full_chunk(chunk);
                         step = self.streaming.resume_plan_update(&mut self.world, resume);
                     }
                 }

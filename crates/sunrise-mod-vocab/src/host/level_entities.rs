@@ -9,7 +9,7 @@ pub trait LevelEntitiesBackend {
     /// Side: server.
     /// Visit members of the server level's entity lookup (`ServerLevel.getAllEntities`),
     /// including spectators and entities outside any spatial query. Dragon parts are not
-    /// lookup members. Vehicles being removed are skipped.
+    /// lookup members. Entities in hidden sections and vehicles being removed are skipped.
     ///
     /// The visitor can make shared reads on the same host, including another visit.
     /// No residency guard is held while it runs. Return `ControlFlow::Break(())` to stop;
@@ -73,8 +73,8 @@ pub trait LevelEntitiesBackend {
     /// players, then its own player if not spectating. The dragon's intersecting parts
     /// come last on either side, in vanilla part-table order.
     ///
-    /// Unresolved handles are skipped, including held-out server entities. Tridents
-    /// that do not resolve, eyes of ender and leash knots are not visited. The projectile
+    /// Unresolved handles, including held-out server entities, and entities in hidden
+    /// server sections are skipped. Eyes of ender and leash knots are not visited. The projectile
     /// list is temporarily absent during `hears_projectile_impacts`; it is visible again
     /// during `projectile_impact`, including the live owners of hits that would consume them.
     fn level_visit_entities_in(

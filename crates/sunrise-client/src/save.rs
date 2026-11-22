@@ -5332,9 +5332,7 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         for s in &mut chunk.sections {
             Arc::make_mut(s).compact();
         }
-        if let Ok(entities) = self.save.load_entities(x, z) {
-            chunk.entities.extend(entities);
-        }
+        chunk.disk_entities = self.save.load_entities(x, z).unwrap_or_default();
         Some(chunk)
     }
     fn lod_surface(
@@ -5404,10 +5402,21 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
             .get_or_init(|| Arc::new(SaveTables::new(&self.registry)));
         let key = (chunk.x, chunk.z);
         let entities = std::mem::take(&mut chunk.entities);
+        chunk.disk_entities.clear();
+        // This chunk did not enter the level. Add only the new generation
+        // records; its separate entity region may predate the terrain.
         let saved = self
             .save
             .save_later(&[Arc::new(chunk)], self.registry.registry, &self.biomes)
-            .and_then(|_| self.save.save_entities_later(vec![(key, entities)]));
+            .and_then(|_| {
+                if !entities.is_empty()
+                    && let Ok(mut stored) = self.save.load_entities(key.0, key.1)
+                {
+                    stored.extend(entities);
+                    self.save.save_entities_later(vec![(key, stored)])?;
+                }
+                Ok(())
+            });
         if let Err(e) = saved {
             log::warn!("Sunrise: failed to save chunk {} {}: {e}", key.0, key.1);
         }
@@ -5450,7 +5459,14 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         self.inner.decorate_with_outer(worker, region, outer);
     }
     fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
-        self.inner.finish(proto)
+        let mut chunk = self.inner.finish(proto);
+        // EntityStorage is independent of terrain: a newly generated column
+        // can already have a saved entity section.
+        chunk.disk_entities = self
+            .save
+            .load_entities(chunk.x, chunk.z)
+            .unwrap_or_default();
+        chunk
     }
 }
 

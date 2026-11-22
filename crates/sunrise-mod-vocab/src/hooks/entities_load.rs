@@ -42,7 +42,8 @@ pub trait Hooks {
         hit_at: [f64; 3],
     );
     /// Entities from `chunk` finished loading into the server world. `count`
-    /// is the number of saved entity records read.
+    /// is the number of saved entity records read. This is an entity-storage
+    /// notice; the terrain need not be loaded for the same column.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entities_load",
         dispatch = "flat",

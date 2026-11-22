@@ -706,21 +706,6 @@ impl Game<'_> {
         };
         let hub = &mut host.hub;
         let chunks = &self.world.chunks;
-        let tickets = &self.tickets;
-        let accessible = |p: sunrise_core::geometry::Vec3| {
-            if !p.x.is_finite() || !p.z.is_finite() {
-                return false;
-            }
-            let (cx, cz) = (
-                sunrise_core::mth::floor(p.x) >> 4,
-                sunrise_core::mth::floor(p.z) >> 4,
-            );
-            if chunks.is_empty() {
-                tickets.loaded(cx, cz)
-            } else {
-                chunks.contains_key(&(cx, cz))
-            }
-        };
         let owner = |who: Option<sunrise_client::mobs::Who>| match who {
             Some(sunrise_client::mobs::Who::Mob(id)) => id as i32,
             Some(sunrise_client::mobs::Who::Player) | None => 0,
@@ -861,7 +846,7 @@ impl Game<'_> {
             // to the next tick's send_changes so impact updates (e.g. point-blank wall
             // collision) arrive after the client's first tick has completed.
             if !hub.tracks(p.id as i32)
-                && accessible(p.position)
+                && super::native_entity_refs::entity_section_accessible(chunks, at(p.position))
                 && let Some(a) = p.arrow.as_deref()
                 && let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
                     (a.spawn_pos, a.spawn_velocity, a.spawn_rot)

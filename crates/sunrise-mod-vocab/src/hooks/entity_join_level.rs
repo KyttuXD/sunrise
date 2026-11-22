@@ -37,11 +37,11 @@ pub trait Hooks {
     fn player_tick_post(player: PlayerRef);
     /// An entity joins the server level `dimension` (NeoForge's
     /// `EntityJoinLevelEvent`): vanilla's `PersistentEntitySectionManager.addEntity`.
-    /// `loaded_from_disk` is true for an entity coming back with its chunk,
+    /// `loaded_from_disk` is true for an entity coming back from saved entity storage,
     /// false for one added fresh (`addFreshEntity`: a drop, an orb, `/summon`,
     /// an arrival through a portal). `entity` is its ID and `kind` its type
-    /// (`minecraft:item`). It is already in the level's lists, so helpers that
-    /// take an entity ID find it. Set `canceled` to keep it out: it is taken
+    /// (`minecraft:item`). It is already in the level's lists, but `Host::entity`
+    /// finds it only in an accessible section. Set `canceled` to keep it out: it is taken
     /// back out as if never added, and a `/summon` of it fails. Tells every
     /// kind in the game's entity lists (items, orbs, mobs, boats, minecarts,
     /// armor stands, primed TNT, falling blocks, projectiles, rockets,
@@ -66,8 +66,7 @@ pub trait Hooks {
     /// Live fallback-store entities also notify: displays, markers, interactions,
     /// and summoned or chunk-restored eyes of ender and explicit leash knots.
     /// Gameplay-thrown eyes and naturally tied leash knots live in separate lists
-    /// and do not notify yet. `loaded_from_disk` is set when a chunk restores an
-    /// entity. Saved data kept for a missing mod is not an entity in the level
+    /// and do not notify yet. Saved data kept for a missing mod is not an entity in the level
     /// and does not notify. Server-side.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_join_level",
