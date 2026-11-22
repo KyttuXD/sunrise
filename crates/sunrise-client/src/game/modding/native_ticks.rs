@@ -127,23 +127,45 @@ enum Alone {
 }
 
 /// Whether the tick hooks are heard on this side in this tick, and which entities are told alone:
-/// asked once a tick (`native_tick_told`).
+/// checked once a tick (`native_tick_told`).
 #[derive(Clone, Copy, Debug, Default)]
 pub(in crate::game) struct Told {
-    /// Whether the tick hooks are listened to on this side: otherwise no Pre or Post is told.
-    listening: bool,
+    /// Whether an enabled mod subscribes to `entity_tick_pre`.
+    pre: bool,
+    /// Whether an enabled mod subscribes to `entity_tick_post`.
+    post: bool,
     /// Which entities are told alone instead of with their family.
     alone: Alone,
 }
 
 impl Told {
-    /// Whether the tick hooks are listened to on this side.
+    /// Reads the current enabled hook subscriptions for `entity_tick_pre` and `entity_tick_post`.
+    pub(super) fn from_subscriptions() -> Self {
+        let pre = mod_api::__private::enabled_listened(mod_api::HookId::EntityTickPre);
+        let post = mod_api::__private::enabled_listened(mod_api::HookId::EntityTickPost);
+        let listening = pre || post;
+        let alone = match mod_api::__private::entity_tick_each() {
+            Some(each) if listening && each.all() => Alone::All,
+            Some(each) if listening && each.any() => Alone::Named,
+            _ => Alone::None,
+        };
+        Self { pre, post, alone }
+    }
+    /// Whether an enabled mod subscribes to `entity_tick_pre`.
+    pub(super) fn pre(&self) -> bool {
+        self.pre
+    }
+    /// Whether an enabled mod subscribes to `entity_tick_post`.
+    pub(super) fn post(&self) -> bool {
+        self.post
+    }
+    /// Whether either tick hook is listened to on this side.
     pub(super) fn listening(&self) -> bool {
-        self.listening
+        self.pre || self.post
     }
     /// Whether a mob of type `kind` is told alone, around its own tick, not with its family.
     pub(super) fn alone_mob(&self, kind: &MobType) -> bool {
-        self.listening
+        self.listening()
             && match self.alone {
                 Alone::None => false,
                 Alone::Named => kind.flags.tick_alone,
@@ -153,7 +175,7 @@ impl Told {
     /// Whether the entities of type `kind` are told alone. For a family of one type
     /// (`minecraft:item`) it is asked once for the family, not for each entity.
     pub(super) fn alone_kind(&self, kind: &str) -> bool {
-        self.listening
+        self.listening()
             && match self.alone {
                 Alone::None => false,
                 Alone::Named => {
@@ -201,17 +223,45 @@ impl TickRound {
     pub(super) fn sections(&self) -> bool {
         self.sections
     }
+    /// Whether `entity_tick_pre` is subscribed on this side.
+    pub(super) fn pre(&self) -> bool {
+        self.told.pre()
+    }
+    /// Whether `entity_tick_post` is subscribed on this side.
+    pub(super) fn post(&self) -> bool {
+        self.told.post()
+    }
+    /// Whether either entity tick hook (`entity_tick_pre` or `entity_tick_post`) is subscribed.
+    pub(super) fn told_listening(&self) -> bool {
+        self.told.listening()
+    }
     /// Whether the round keeps the entities that tick: a mod hears their ticks or their moves.
     pub(super) fn listening(&self) -> bool {
-        self.told.listening || self.sections
+        self.told.listening() || self.sections
     }
     /// Whether a mob of type `kind` is told alone, around its own tick, not with its family.
     pub(super) fn alone_mob(&self, kind: &MobType) -> bool {
         self.told.alone_mob(kind)
     }
+    /// Whether a mob of type `kind` is told its Pre alone, right before its own tick.
+    pub(super) fn alone_mob_pre(&self, kind: &MobType) -> bool {
+        self.told.pre() && self.told.alone_mob(kind)
+    }
+    /// Whether a mob of type `kind` is told its Post alone, right after its own tick.
+    pub(super) fn alone_mob_post(&self, kind: &MobType) -> bool {
+        self.told.post() && self.told.alone_mob(kind)
+    }
     /// Whether the entities of type `kind` are told alone ([`Told::alone_kind`]).
     pub(super) fn alone_kind(&self, kind: &str) -> bool {
         self.told.alone_kind(kind)
+    }
+    /// Whether the entities of type `kind` are told their Pre alone.
+    pub(super) fn alone_kind_pre(&self, kind: &str) -> bool {
+        self.told.pre() && self.told.alone_kind(kind)
+    }
+    /// Whether the entities of type `kind` are told their Post alone.
+    pub(super) fn alone_kind_post(&self, kind: &str) -> bool {
+        self.told.post() && self.told.alone_kind(kind)
     }
     /// The entity `id` of `kind` is about to tick with its family, which hears its Pre and its
     /// Posts together (`native_tick_pre_batch`).
@@ -253,14 +303,15 @@ impl TickRound {
 
 impl Game<'_> {
     /// A round for a family about to tick, on the server or on a client, only while a mod
-    /// listens (`native_entity_tick_listened`). Its list is kept between ticks.
+    /// subscribes to `entity_tick_pre`, `entity_tick_post` or `entity_entering_section`.
+    /// Its list is kept between ticks.
     pub(super) fn native_tick_round(&mut self) -> TickRound {
         let told = self.native_tick_told();
         let sections = self.is_logical_server() && self.entity_section_scope().is_some();
         TickRound {
             told,
             sections,
-            ticking: if told.listening || sections {
+            ticking: if told.listening() || sections {
                 std::mem::take(&mut self.creatures.tick_buffer)
             } else {
                 Vec::new()
@@ -271,23 +322,15 @@ impl Game<'_> {
         }
     }
 
-    /// Whether the tick hooks are heard on this side (`native_entity_tick_listened`), and which
-    /// entities are told alone.
-    pub(super) fn native_tick_told(&mut self) -> Told {
-        let mut listening = false;
-        self.native_entity_tick_listened(&mut listening);
-        let alone = match mod_api::__private::entity_tick_each() {
-            Some(each) if listening && each.all() => Alone::All,
-            Some(each) if listening && each.any() => Alone::Named,
-            _ => Alone::None,
-        };
-        Told { listening, alone }
+    /// Whether the tick hooks are heard on this side, and which entities are told alone.
+    pub(super) fn native_tick_told(&self) -> Told {
+        Told::from_subscriptions()
     }
 
     /// `native_entity_tick_pre`, once for the family's entities the round holds (`add`): those
     /// a mod cancels leave it and do not tick.
     pub(super) fn native_tick_pre_batch(&mut self, round: &mut TickRound) {
-        if !round.told.listening || round.ticking.is_empty() {
+        if !round.told.pre || round.ticking.is_empty() {
             return;
         }
         let buffers = std::mem::take(&mut self.creatures.tick_hooks);
@@ -302,7 +345,7 @@ impl Game<'_> {
     /// `native_entity_tick_post`, once for the family's entities the round let through, after
     /// their position writes have already filed and told their crossings.
     pub(super) fn native_tick_post_batch(&mut self, mut round: TickRound) {
-        if round.told.listening && !round.ticking.is_empty() {
+        if round.told.post && !round.ticking.is_empty() {
             let buffers = std::mem::take(&mut self.creatures.tick_hooks);
             let (mut ids, mut kinds): (_, Vec<&str>) = (buffers.ids, buffers.kinds);
             ids.extend(round.ticking.iter().map(|(id, _)| *id));
@@ -323,7 +366,7 @@ impl Game<'_> {
         id: u32,
         kind: &str,
     ) -> bool {
-        if !round.told.listening {
+        if !round.told.pre {
             return true;
         }
         self.native_entity_tick_pre(
@@ -343,7 +386,7 @@ impl Game<'_> {
     /// `native_entity_tick_post` for one entity told alone, right after its tick, its move filed
     /// and told.
     pub(super) fn native_tick_post_one(&mut self, round: &TickRound, id: u32, kind: &str) {
-        if round.told.listening {
+        if round.told.post {
             self.native_entity_tick_post(
                 self.dim.id(),
                 std::slice::from_ref(&id),
@@ -358,6 +401,9 @@ impl Game<'_> {
     /// named, at its own place in the join order: its Pre, then its Post, as nothing of it moves
     /// in between. One the Pre canceled or took out of the level hears no Post.
     pub(in crate::game) fn native_other_tick_alone(&mut self, told: Told, i: usize) {
+        if !told.listening() {
+            return;
+        }
         let mut buffers = std::mem::take(&mut self.creatures.tick_hooks);
         let (id, join) = (self.others[i].id, self.others[i].join);
         buffers.names.push(&self.others[i].kind);
@@ -379,7 +425,7 @@ impl Game<'_> {
     /// `born` and in entity-ticking chunks: once for the family, the Pre and then the Post of
     /// those it let through.
     pub(in crate::game) fn native_others_tick_family(&mut self, told: Told, born: JoinSeq) {
-        if !told.listening {
+        if !told.listening() {
             return;
         }
         let ticking = self.entity_ticking_area();
@@ -398,21 +444,23 @@ impl Game<'_> {
         let mut kinds: Vec<&str> = buffers.kinds;
         if !ids.is_empty() {
             kinds.extend(names.names());
-            let mut canceled = Vec::new();
-            self.native_entity_tick_pre(self.dim.id(), &ids, &kinds, &mut canceled);
-            if !canceled.is_empty() {
-                let mut kept = 0;
-                for at in 0..ids.len() {
-                    if !canceled.contains(&ids[at]) {
-                        ids.swap(kept, at);
-                        kinds.swap(kept, at);
-                        kept += 1;
+            if told.pre {
+                let mut canceled = Vec::new();
+                self.native_entity_tick_pre(self.dim.id(), &ids, &kinds, &mut canceled);
+                if !canceled.is_empty() {
+                    let mut kept = 0;
+                    for at in 0..ids.len() {
+                        if !canceled.contains(&ids[at]) {
+                            ids.swap(kept, at);
+                            kinds.swap(kept, at);
+                            kept += 1;
+                        }
                     }
+                    ids.truncate(kept);
+                    kinds.truncate(kept);
                 }
-                ids.truncate(kept);
-                kinds.truncate(kept);
             }
-            if !ids.is_empty() {
+            if told.post && !ids.is_empty() {
                 self.native_entity_tick_post(self.dim.id(), &ids, &kinds);
             }
         }
@@ -432,23 +480,25 @@ impl Game<'_> {
     pub(in crate::game) fn native_players_tick_pre(&mut self) -> TickRound {
         self.creatures.canceled_players.clear();
         let mut round = self.native_tick_round();
-        if !round.told.listening {
+        if !round.told.listening() {
             return round;
         }
         let Some(host) = self.lan.as_ref() else {
             return round;
         };
         if round.alone_kind(PLAYER) {
-            // Taken one by one by index: a Pre's listener may change the guests.
-            for gi in 0..host.hub.guests.len() {
-                let Some((conn, id)) = self.lan.as_ref().and_then(|host| {
-                    let g = host.hub.guests.get(gi).filter(|g| host.hub.here(g))?;
-                    Some((g.conn, g.entity_id as u32))
-                }) else {
-                    continue;
-                };
-                if !self.native_tick_pre_one(&mut round, id, PLAYER) {
-                    self.creatures.canceled_players.push(conn);
+            if round.pre() {
+                // Taken one by one by index: a Pre's listener may change the guests.
+                for gi in 0..host.hub.guests.len() {
+                    let Some((conn, id)) = self.lan.as_ref().and_then(|host| {
+                        let g = host.hub.guests.get(gi).filter(|g| host.hub.here(g))?;
+                        Some((g.conn, g.entity_id as u32))
+                    }) else {
+                        continue;
+                    };
+                    if !self.native_tick_pre_one(&mut round, id, PLAYER) {
+                        self.creatures.canceled_players.push(conn);
+                    }
                 }
             }
         } else {
@@ -507,11 +557,13 @@ impl TickBuffers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::{EntityTickPostEvent, EntityTickPreEvent, HostSide, ModEntry, Mods};
 
     fn round() -> TickRound {
         TickRound {
             told: Told {
-                listening: true,
+                pre: true,
+                post: true,
                 alone: Alone::None,
             },
             ..TickRound::default()
@@ -569,8 +621,66 @@ mod tests {
         assert!(!r.alone_kind("minecraft:item"));
         r.told.alone = Alone::All;
         assert!(r.alone_kind("minecraft:item"));
-        r.told.listening = false;
+        assert!(r.alone_kind_pre("minecraft:item") && r.alone_kind_post("minecraft:item"));
+        r.told.pre = false;
+        assert!(!r.alone_kind_pre("minecraft:item") && r.alone_kind_post("minecraft:item"));
+        r.told.pre = true;
+        r.told.post = false;
+        assert!(r.alone_kind_pre("minecraft:item") && !r.alone_kind_post("minecraft:item"));
+        r.told.pre = false;
         assert!(!r.alone_kind("minecraft:item"));
+    }
+
+    /// Subscriptions to `entity_tick_pre` and `entity_tick_post` drive `Told` directly without
+    /// a separate opt-in poll hook, and disabling the subscribing mod drops preparation back to
+    /// zero.
+    #[test]
+    #[ignore = "daily"]
+    fn told_follows_enabled_pre_and_post_subscriptions() {
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::native_ticks::tests::told_follows_enabled_pre_and_post_subscriptions",
+            "SUNRISE_ENTITY_TICK_SUBSCRIPTION_CASE",
+            &["disable"],
+        ) {
+            return;
+        }
+
+        struct Quiet;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Quiet {}
+
+        struct PreOnly;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for PreOnly {
+            fn entity_tick_pre(&self, _: HostSide<'_>, _: &mut EntityTickPreEvent<'_>) {}
+        }
+
+        struct PostOnly;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for PostOnly {
+            fn entity_tick_post(&self, _: HostSide<'_>, _: &mut EntityTickPostEvent<'_>) {}
+        }
+
+        let quiet: Mods = vec![ModEntry::new("quiet", Box::new(Quiet))].into();
+        mod_platform::testing::with_mods(quiet, || {
+            let told = Told::from_subscriptions();
+            assert!(!told.pre && !told.post && !told.listening());
+        });
+
+        let pre: Mods = vec![ModEntry::new("pre_only", Box::new(PreOnly))].into();
+        mod_platform::testing::with_mods(pre, || {
+            let told = Told::from_subscriptions();
+            assert!(told.pre && !told.post && told.listening());
+            assert!(mod_api::__private::set_mod_enabled("pre_only", false));
+            let disabled = Told::from_subscriptions();
+            assert!(!disabled.pre && !disabled.post && !disabled.listening());
+        });
+
+        let post: Mods = vec![ModEntry::new("post_only", Box::new(PostOnly))].into();
+        mod_platform::testing::with_mods(post, || {
+            let told = Told::from_subscriptions();
+            assert!(!told.pre && told.post && told.listening());
+        });
     }
 
     /// An entity is found where it is now, from a hint on, and before the hint when an

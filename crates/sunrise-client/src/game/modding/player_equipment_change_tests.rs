@@ -2,15 +2,9 @@
 //! borrow-based comparison without blanket equipment cloning, all eight
 //! `EquipmentSlot`s matching vanilla `LivingEntity.collectEquipmentChanges` and
 //! `PlayerEquipment`, lazy `ItemStackView` delivery, and minimal history retention.
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 
-use mod_api::{
-    self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent,
-    ServerHost,
-};
+use mod_api::{self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::{
     chunk::Chunk,
     items::ItemStack,
@@ -34,17 +28,9 @@ type Heard = Vec<(
 
 struct Counter {
     heard: Arc<Mutex<Heard>>,
-    listens: Arc<AtomicBool>,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Counter {
-    fn living_equipment_listened(
-        &self,
-        _: &mut dyn ServerHost,
-        event: &mut LivingEquipmentListenedEvent,
-    ) {
-        event.listened |= self.listens.load(Ordering::Relaxed);
-    }
     fn living_equipment_change(
         &self,
         host: &mut dyn ServerHost,
@@ -65,17 +51,23 @@ impl Hooks for Counter {
     }
 }
 
-fn with_counter(
-    listens: bool,
-    test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>, &AtomicBool),
-) {
+struct Quiet;
+#[mod_api::__subscriptions]
+impl Hooks for Quiet {}
+
+fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>)) {
     let heard = Arc::new(Mutex::new(Heard::new()));
-    let listens = Arc::new(AtomicBool::new(listens));
-    let counter = Counter {
-        heard: heard.clone(),
-        listens: listens.clone(),
+    let entry = if listens {
+        mod_api::ModEntry::new(
+            "counter",
+            Box::new(Counter {
+                heard: heard.clone(),
+            }),
+        )
+    } else {
+        mod_api::ModEntry::new("quiet", Box::new(Quiet))
     };
-    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("counter", Box::new(counter))].into();
+    let mods: mod_api::Mods = vec![entry].into();
     mod_platform::testing::with_mods(mods, || {
         with_guests(|game| {
             game.world
@@ -86,7 +78,7 @@ fn with_counter(
             for conn in [12, 13] {
                 host.play.entry(conn).or_default();
             }
-            test(game, &heard, &listens)
+            test(game, &heard)
         })
     });
 }
@@ -110,7 +102,7 @@ fn player(
 #[test]
 #[ignore = "daily"]
 fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
-    with_counter(true, |game, heard, _| {
+    with_counter(true, |game, heard| {
         let sword = ItemStack::new("minecraft:iron_sword", 1);
         let stone = ItemStack::new("minecraft:stone", 1);
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
@@ -202,7 +194,7 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
 #[test]
 #[ignore = "daily"]
 fn item_use_completion_reports_equipment_change_in_same_server_tick() {
-    with_counter(true, |game, heard, _| {
+    with_counter(true, |game, heard| {
         let apple = ItemStack::new("minecraft:golden_apple", 1);
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
@@ -252,7 +244,7 @@ fn item_use_completion_reports_equipment_change_in_same_server_tick() {
 #[test]
 #[ignore = "daily"]
 fn spectator_touching_unloaded_chunk_skips_equipment_change_hook() {
-    with_counter(true, |game, heard, _| {
+    with_counter(true, |game, heard| {
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
         game.world.chunks.clear();
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
@@ -288,8 +280,8 @@ fn spectator_touching_unloaded_chunk_skips_equipment_change_hook() {
 
 #[test]
 #[ignore = "daily"]
-fn players_are_not_told_without_the_listened_opt_in() {
-    with_counter(false, |game, heard, _| {
+fn players_advance_equipment_history_without_a_subscriber() {
+    with_counter(false, |game, heard| {
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
             g.inventory[1] = Some(ItemStack::new("minecraft:iron_sword", 1));
@@ -298,13 +290,30 @@ fn players_are_not_told_without_the_listened_opt_in() {
         });
         game.tick_guests();
         assert_eq!(take(heard), Heard::new());
+        assert!(
+            game.lan
+                .as_ref()
+                .unwrap()
+                .play
+                .get(&12)
+                .unwrap()
+                .last_equipment
+                .is_some()
+        );
     });
 }
 
 #[test]
 #[ignore = "daily"]
 fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
-    with_counter(true, |game, heard, listens| {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::player_equipment_change_tests::mobs_compare_equipment_by_borrow_and_retain_only_changed_slots",
+        "SUNRISE_MOB_EQUIPMENT_HISTORY_CASE",
+        &["toggle"],
+    ) {
+        return;
+    }
+    with_counter(true, |game, heard| {
         use sunrise_client::mobs::armor;
 
         let zombie = game
@@ -352,14 +361,14 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         assert_eq!(take(heard), Heard::new());
 
         // The same comparison still refreshes armor and advances history
-        // when the listener opts out. Opting in does not replay that change.
+        // when the subscriber is disabled. Enabling it does not replay that change.
         let diamond = ItemStack::new("minecraft:diamond_chestplate", 1);
-        listens.store(false, Ordering::Relaxed);
+        assert!(mod_api::__private::set_mod_enabled("counter", false));
         game.mobs[1].set_equipment_stack(CHEST, Some(diamond.clone()));
         game.tick_equipment_attributes();
         assert_eq!(take(heard), Heard::new());
         assert!(armor::values(&game.mobs[1]).0 > wearing_iron.0);
-        listens.store(true, Ordering::Relaxed);
+        assert!(mod_api::__private::set_mod_enabled("counter", true));
         game.tick_equipment_attributes();
         assert_eq!(take(heard), Heard::new());
 

@@ -709,7 +709,6 @@ impl Game<'_> {
             self.rocket_targets()
         };
         let ticking = self.entity_ticking_area();
-        let hears_impacts = !self.rockets.is_empty() && self.native_hears_impacts();
         let mut i = 0;
         while i < self.rockets.len() {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
@@ -815,7 +814,7 @@ impl Game<'_> {
             if deflected {
                 r.velocity = r.velocity.scale(-0.5);
             } else {
-                let Some((rocket, canceled)) = self.rocket_impact(i, r, hit, hears_impacts) else {
+                let Some((rocket, canceled)) = self.rocket_impact(i, r, hit) else {
                     continue;
                 };
                 r = rocket;

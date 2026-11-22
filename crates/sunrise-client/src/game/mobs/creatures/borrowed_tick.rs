@@ -3,6 +3,10 @@ use super::*;
 use crate::mobs::living::section_writes::{self, PositionWrite};
 use std::collections::hash_map::Entry;
 
+#[cfg(test)]
+thread_local! {
+    static BORROWED_MOB_YIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 /// Route each player event to the player selected when it was emitted.
 /// Untagged events retain the previous per-tick guest binding.
 fn route_player_events(
@@ -279,7 +283,7 @@ impl Game<'_> {
                     };
                     let m = &mut mobs[i];
                     let retried = retried_rider.take() == Some(m.id);
-                    // Its checks ran before its Pre was told: they don't run again.
+                    // Its checks ran before its Pre or a pause in its tick: don't run them again.
                     let resuming = resume.is_some();
                     let checked = resuming || told_at == Some(slot);
                     if blocked.contains(&m.id) || resuming && resume_entity != Some((m.id, m.join))
@@ -452,7 +456,7 @@ impl Game<'_> {
                         })
                         .flatten();
                     // A mob of a type a mod named: its own Pre, right before its tick.
-                    if !checked && round.alone_mob(&m.kind) {
+                    if !checked && round.alone_mob_pre(&m.kind) {
                         tell_pre = Some((m.id, std::sync::Arc::clone(&m.kind), i));
                         break;
                     }
@@ -817,7 +821,7 @@ impl Game<'_> {
                     keep[slot] = kept;
                     gone_rows |= !kept;
                     // Its own Post, right after its tick, also when it died or went in it.
-                    if round.alone_mob(&m.kind) {
+                    if round.alone_mob_post(&m.kind) {
                         tell_post = Some((m.id, std::sync::Arc::clone(&m.kind)));
                     }
                     // ServerLevel ticks entities one after another: the ones
@@ -867,6 +871,8 @@ impl Game<'_> {
             {
                 break;
             }
+            #[cfg(test)]
+            BORROWED_MOB_YIELDS.with(|count| count.set(count.get() + 1));
             // No MobWorld, DamageLevel or navigation loan crosses this boundary.
             // The callback sees the real owning rows and level RNG/attachments,
             // and its writes are the state the continuation will resume from.

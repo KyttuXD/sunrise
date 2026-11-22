@@ -3,7 +3,7 @@ use crate::game::{
     native_entity_refs::tests::run_fresh_cases,
     native_projectiles::impact_probe::{Action, with_probe},
 };
-use mod_api::{Flow, HearsProjectileImpactsEvent, Hooks, ProjectileImpactEvent, ServerHost};
+use mod_api::{Flow, Hooks, ProjectileImpactEvent, ServerHost};
 use std::sync::{Arc, Mutex, atomic::Ordering};
 use sunrise_client::{chunk::Chunk, join_seq::JoinSeq};
 use sunrise_mod_runtime::attachments::{
@@ -78,14 +78,6 @@ impl Hooks for CancelImpacts {
             }
         }
         Flow::Continue
-    }
-
-    fn hears_projectile_impacts(
-        &self,
-        _: &dyn mod_api::Host,
-        event: &mut HearsProjectileImpactsEvent,
-    ) {
-        event.hears = true;
     }
 
     fn projectile_impact(

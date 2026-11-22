@@ -1,7 +1,5 @@
 use super::*;
-use mod_api::{
-    Flow, HearsProjectileImpactsEvent, Hooks, HostTransaction, ProjectileImpactEvent, ServerHost,
-};
+use mod_api::{Flow, Hooks, HostTransaction, ProjectileImpactEvent, ServerHost};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -20,13 +18,6 @@ struct PanicAfterAdmission {
 }
 #[mod_api::__subscriptions]
 impl Hooks for PanicAfterAdmission {
-    fn hears_projectile_impacts(
-        &self,
-        _: &dyn mod_api::Host,
-        event: &mut HearsProjectileImpactsEvent,
-    ) {
-        event.hears = true;
-    }
     fn projectile_impact(
         &self,
         host: &mut dyn ServerHost,

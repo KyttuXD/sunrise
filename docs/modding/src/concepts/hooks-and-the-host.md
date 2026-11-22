@@ -56,11 +56,12 @@ does not change that decision for the current tick.
 
 ## Entity tick hooks
 
-`entity_tick_pre` and `entity_tick_post` version 3 observe additional entity families, including
-server players, named projectiles, displays and other entities the server keeps without simulation.
-Whether a call represents one entity or a family depends on the tick route and the types named in
-registration. Keep cancellations within the current Pre call. The player connection body remains
-separate from the server-side entity tick, and the local client avatar is not observed by these hooks.
+`entity_tick_pre` and `entity_tick_post` version 4 observe the covered entity families on both logical sides
+whenever an enabled mod subscribes directly (with zero preparation when neither is subscribed); the separate
+`entity_tick_listened` opt-in poll hook is removed. Whether a call represents one entity or a family depends
+on the tick route and the types named in registration. Keep cancellations within the current Pre call. The
+player connection body remains separate from the server-side entity tick, and the local client avatar is not
+observed by these hooks.
 
 Removing a general entity during its own Pre skips its tick and Post. A passenger dismounted by that
 removal can still tick as a root if it is eligible, has not ticked, and its join-order slot is still ahead.

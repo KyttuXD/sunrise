@@ -1319,12 +1319,7 @@ impl Game<'_> {
         let id = stand.id;
         let mut changed = [false; 8];
         if any_initial_change {
-            let notify_epoch = (self.remote.is_none()
-                && !self.options.execution_role.is_client()
-                && mod_api::__private::listened(mod_api::HookId::LivingEquipmentChange))
-            .then(|| self.native_lifecycle.epoch())
-            .flatten();
-            if let Some(epoch) = notify_epoch {
+            if let Some(epoch) = self.living_equipment_notify_epoch() {
                 let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
                 for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
                     let i = slot as usize;
@@ -1339,6 +1334,11 @@ impl Game<'_> {
                     }
                     changed[i] = true;
                     let to = stand.equipment[i].clone();
+                    if !mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+                    {
+                        stand.enchantment_equipment[i] = to;
+                        continue;
+                    }
                     let from = stand.enchantment_equipment[i].take();
                     self.dispatch_living_equipment_change(living, slot, from.as_ref(), to.as_ref());
                     if let Some(stand) = stand_by_hint_mut(&mut self.armor_stands, index, id) {

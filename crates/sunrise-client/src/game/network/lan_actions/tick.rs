@@ -81,7 +81,7 @@ impl Game<'_> {
             else {
                 continue;
             };
-            if !canceled && round.alone_kind(crate::game::native_ticks::PLAYER) {
+            if !canceled && round.alone_kind_post(crate::game::native_ticks::PLAYER) {
                 told = Some(host.hub.guests[gi].entity_id as u32);
             }
             // A player waiting for a teleport destination cannot dig there yet.
@@ -216,9 +216,6 @@ impl Game<'_> {
             })
             .map(|g| g.conn)
             .collect();
-        let notify_equipment = (!conns.is_empty())
-            .then(|| self.living_equipment_notify_epoch())
-            .flatten();
         let mut active_level = None;
         let mut collision = None;
         for conn in conns {
@@ -258,7 +255,7 @@ impl Game<'_> {
             if let Some((colliders, _parts)) = &collision {
                 sunrise_client_render::moving_colliders::in_level(colliders.clone(), || {
                     sunrise_client::block_contact::in_level(self.tick, Some(dim.id()), || {
-                        self.tick_guest_connection(conn, notify_equipment);
+                        self.tick_guest_connection(conn);
                     });
                 });
                 self.drain_entity_inside();
@@ -266,7 +263,7 @@ impl Game<'_> {
                     host.hub.sync_guest_after_tick(conn);
                 }
             } else {
-                self.tick_guest_connection(conn, notify_equipment);
+                self.tick_guest_connection(conn);
             }
         }
         if across_levels && active_level.is_some() {
@@ -281,8 +278,8 @@ impl Game<'_> {
         self.flush_native_sounds();
     }
 
-    fn tick_guest_connection(&mut self, conn: u32, notify_equipment: Option<mod_api::WorldEpoch>) {
-        self.tick_guest_connection_body(conn, notify_equipment);
+    fn tick_guest_connection(&mut self, conn: u32) {
+        self.tick_guest_connection_body(conn);
         if !self.on_server_trip(conn) {
             // Like the rest of doTick outside Player.tick, LOCATION also runs
             // for unloaded spectators and canceled entity ticks.
@@ -321,11 +318,7 @@ impl Game<'_> {
         }
     }
 
-    fn tick_guest_connection_body(
-        &mut self,
-        conn: u32,
-        notify_equipment: Option<mod_api::WorldEpoch>,
-    ) {
+    fn tick_guest_connection_body(&mut self, conn: u32) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -471,7 +464,7 @@ impl Game<'_> {
         // item use above and before aiStep's travel and updatePlayerPose, so a new
         // scale modifier rebuilds the box this tick.
         if body {
-            self.detect_guest_equipment_updates(gi, conn, notify_equipment);
+            self.detect_guest_equipment_updates(gi, conn);
         }
         self.guest_server_tick(conn, body);
         let Some(host) = self.lan.as_mut() else {
@@ -532,12 +525,7 @@ impl Game<'_> {
     /// changed slot before updating attributes (matching NeoForge), updates
     /// `last_equipment` once per changed slot, and refreshes equipment
     /// attribute modifiers when any slot changed.
-    fn detect_guest_equipment_updates(
-        &mut self,
-        gi: usize,
-        conn: u32,
-        notify_epoch: Option<mod_api::WorldEpoch>,
-    ) {
+    fn detect_guest_equipment_updates(&mut self, gi: usize, conn: u32) {
         use crate::game::native_mobs::{
             equipment_stack_matches, guest_equipment_changed, guest_equipment_slot,
             store_equipment_history,
@@ -557,9 +545,10 @@ impl Game<'_> {
             return;
         }
         let mut any_changed = false;
-        let living = notify_epoch
-            .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, entity_id)));
         for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
+            let living = self
+                .living_equipment_notify_epoch()
+                .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, entity_id)));
             let index = slot as usize;
             let (from, to) = {
                 let Some(host) = self.lan.as_mut() else {

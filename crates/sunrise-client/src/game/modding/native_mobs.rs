@@ -88,20 +88,15 @@ fn equipment_view_metadata(stack: Option<&ItemStack>) -> Option<StackReadMetadat
 }
 
 impl Game<'_> {
-    /// Whether mobs and connected players should post `living_equipment_change`
-    /// this pass, returning the active world epoch when a mod subscribes and
-    /// sets `living_equipment_listened`.
-    pub(super) fn living_equipment_notify_epoch(&mut self) -> Option<WorldEpoch> {
+    /// The active server epoch when an enabled mod subscribes to equipment changes.
+    pub(super) fn living_equipment_notify_epoch(&self) -> Option<WorldEpoch> {
         if self.remote.is_some()
             || self.options.execution_role.is_client()
-            || !mod_api::__private::listened(HookId::LivingEquipmentChange)
+            || !mod_api::__private::enabled_listened(HookId::LivingEquipmentChange)
         {
             return None;
         }
-        let epoch = self.native_lifecycle.epoch()?;
-        let mut listened = false;
-        self.native_living_equipment_listened(&mut listened);
-        listened.then_some(epoch)
+        self.native_lifecycle.epoch()
     }
 
     /// Lend `from` and `to` lazily to `living_equipment_change` without eagerly

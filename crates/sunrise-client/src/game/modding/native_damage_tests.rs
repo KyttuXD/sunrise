@@ -1060,14 +1060,6 @@ impl Hooks for PufferfishProbe {
         }
     }
 
-    fn entity_tick_listened(
-        &self,
-        _: mod_api::HostSide<'_>,
-        event: &mut mod_api::EntityTickListenedEvent,
-    ) {
-        event.listened = true;
-    }
-
     fn entity_tick_post(
         &self,
         host: mod_api::HostSide<'_>,
@@ -1642,14 +1634,6 @@ impl Hooks for MobLandingProbe {
         if event.entity as u32 == self.id && event.source.damage_type == "minecraft:fall" {
             self.trace.lock().unwrap().push(MobLandingMoment::Post);
         }
-    }
-
-    fn entity_tick_listened(
-        &self,
-        _: mod_api::HostSide<'_>,
-        event: &mut mod_api::EntityTickListenedEvent,
-    ) {
-        event.listened = true;
     }
 
     fn entity_tick_post(

@@ -6,9 +6,9 @@
 use super::*;
 use crate::game::native_entity_refs::tests::with_game;
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, EntityPart, EntityTickListenedEvent,
-    EntityTickPreEvent, Flow, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy,
-    Holder, Hooks, HostSide, Registrar, ServerHost,
+    AttachmentCodec, AttachmentError, AttachmentType, EntityPart, EntityTickPreEvent, Flow,
+    GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Hooks, HostSide,
+    Registrar, ServerHost,
 };
 use std::sync::{Arc, Mutex};
 use sunrise_core::nbt::{Compound, Tag};
@@ -160,9 +160,6 @@ impl Hooks for Declare {
                 fired: std::sync::atomic::AtomicBool::new(false),
             },
         );
-    }
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
     }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {

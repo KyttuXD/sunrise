@@ -24,9 +24,9 @@ pub trait Hooks {
     /// counts from empty, a spectator touching an unloaded chunk skips its body
     /// tick (and therefore this check), and `MainHand` is the selected hotbar
     /// slot, so a hotbar selection, a pickup into the selected slot or a
-    /// finished item use is a `MainHand` change. Mobs and players are told only
-    /// while a mod sets `living_equipment_listened`; opting in does not replay
-    /// changes already detected. The world host's own
+    /// finished item use is a `MainHand` change. Version 3 subscribes to this
+    /// event directly; enabling a subscriber does not replay changes already
+    /// detected. The world host's own
     /// player, in single player or hosting a LAN world, isn't told here:
     /// `on_equip` hears it. Server-side.
     #[hook(
@@ -36,7 +36,7 @@ pub trait Hooks {
         contract = "listen",
         neoforge = "LivingEquipmentChangeEvent",
         cancellable = false,
-        version = 2
+        version = 3
     )]
     fn living_equipment_change(
         entity: LivingRef,
