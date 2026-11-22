@@ -84,19 +84,20 @@ To draw a sprite from synchronized menu data, see
 ## What a screen draws beside its panel
 
 `ScreenView::rect` is a container screen's panel (vanilla's `leftPos`, `topPos`, `imageWidth`, `imageHeight`).
-`ScreenView::regions` lists what the same screen draws outside it this frame. Each region is a `ScreenRegionKind`
+`ScreenView::regions` lists what the same screen drew outside it. Each region is a `ScreenRegionKind`
 and a `rect`, `[x, y, width, height]` in GUI pixels from the window's top left, taken from the layout that draws it:
 
 | Kind | Present while | Rectangle (vanilla 26.3) |
 |---|---|---|
 | `RecipeBook` | the recipe book is open beside the window (a window too narrow draws it over the container instead, and it isn't listed then) | its panel, 147 x 166, left of the container's |
 | `RecipeBookTabs` | the recipe book drew tabs | the box of the tabs it drew at `xPosTab` (30 pixels left of the book), 35 x 27 a tab, 27 apart, the selected one 2 further left, an animating one as squeezed; a registered book's tab arrows too |
-| `CreativeTab` | the creative inventory is open | one per tab of the page shown, 26 x 32, from `getTabX` / `getTabY` above and below the panel |
+| `CreativeTab` | the creative inventory is open | one per tab of the page shown, 26 x 32, as drawn by `CreativeModeInventoryScreen.extractTabButton` above and below the panel |
 | `Effects` | effects show beside the inventory | the effects' box, compact or full, after `render_inventory_mob_effects` moved or resized it |
 
 A region that's hidden, folded or too narrow to show isn't in the list, and a screen with none has an empty list.
 The list is what was drawn: `screen_render_post` sees this frame's drawing (none when `screen_render_pre` cancelled
-it), and the input hooks see the last frame's. The hooks that come before a screen's layout (`screen_opening`,
+it). Render Pre, Background and Foreground, like input hooks, see the last published draw for that screen.
+The hooks that come before a screen's layout (`screen_opening`,
 `screen_closing`, `screen_init_post`, `screen_room`, `render_inventory_mob_effects`) see an empty list.
 A mod that lays out its own panel beside a screen (a recipe viewer's item list, an overlay) keeps clear of
 `rect` and of every region:
@@ -107,12 +108,12 @@ fn screen_render_post(&self, _host: &dyn ClientHost, event: &mut ScreenRenderPos
     let overlaps = |a: [f32; 4], b: [f32; 4]| {
         a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
     };
-    let taken = |cell: [f32; 4]| screen.regions.iter().any(|r| overlaps(r.rect, cell));
+    let taken = |cell: [f32; 4]| overlaps(screen.rect, cell) || screen.regions.iter().any(|r| overlaps(r.rect, cell));
     // ... lay out the panel's cells, skipping each cell for which `taken(cell)` holds.
 }
 ```
 
-The list is made once a frame, and only while a mod listens to a hook that is given the screen's `ScreenView`, and
+The list is collected after the screen draws, and only while a mod listens to a hook that is given the screen's `ScreenView`, and
 it is borrowed, so reading it costs nothing. It holds the game's own regions only. What another mod's screen draws beside its window (an upgrade
 column, a row of tabs) is that mod's to report: on NeoForge that's JEI's `IGuiContainerHandler.getGuiExtraAreas`, and
 here the viewer mod's own library API.
