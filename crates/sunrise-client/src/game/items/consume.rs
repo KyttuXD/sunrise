@@ -349,8 +349,7 @@ impl Game<'_> {
         }
     }
 
-    /// A witch or trader applied its ordinary drink behavior during AI. The
-    /// owning game now runs the list with the living host, before clearing the hand.
+    /// Complete the paused trader use or witch potion with the live holder.
     pub(super) fn finish_mob_drink(&mut self, id: u32, stack: &ItemStack) {
         let usage = MobConsumption::Drink(stack);
         if !self
@@ -366,6 +365,13 @@ impl Game<'_> {
         let consumable = self.consumable(stack);
         let failures = mod_api::runtime::isolated_failures();
         let result: Result<(), ()> = mod_api::run_transaction(self, |game, _| {
+            if stack.potion().unwrap_or(&stack.item) == "minecraft:healing" {
+                if let Some(mob) = game.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+                    mob.heal(&game.loop_context, 4.0);
+                }
+            } else if let Some(effect) = sunrise_client::mobs::ai::drink_potion_effect(stack) {
+                game.add_mob_effect(id, effect, None);
+            }
             if let Some(consumable) = &consumable
                 && !game.apply_consumable_effects(
                     stack,

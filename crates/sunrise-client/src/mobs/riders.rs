@@ -629,6 +629,25 @@ pub fn resume_after_consumption(
     })
 }
 
+/// Resume the tick after the owning level runs the drink's item effects.
+pub fn resume_after_drink(
+    mobs: &mut JoinList<Mob>,
+    index: usize,
+    w: &MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    resume: super::ai::DrinkResume,
+    events: &mut Vec<super::MobEvent>,
+    movement: &mut Option<super::ai::MobMovement>,
+) -> super::ai::TickProgress {
+    tick_with(mobs, index, w, level, events, |m, w, level, events| {
+        let progress = super::ai::resume_after_drink(m, w, level, events, resume, Some(movement));
+        if matches!(progress, super::ai::TickProgress::Complete(_)) {
+            super::neutral_anger::after_tick(m, w.game_time);
+        }
+        progress
+    })
+}
+
 /// Resume the paused tick after `living_breathe` with the current vehicle/navigation owner.
 pub fn resume_after_breathing(
     mobs: &mut JoinList<Mob>,

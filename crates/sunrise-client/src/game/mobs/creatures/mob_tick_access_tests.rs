@@ -595,6 +595,105 @@ fn pig_ticks(named: bool, replace_cancels: bool) -> TickCalls {
     std::mem::take(&mut *heard.lock().unwrap())
 }
 
+#[test]
+#[ignore = "daily"]
+fn lethal_burning_applies_totem_effects_before_the_effect_pass() {
+    with_two_pigs(|game| {
+        game.build_registries();
+        game.mobs.update(0, |mob| {
+            mob.health = 1.0;
+            mob.fire_ticks = 20;
+            mob.add_effect("minecraft:poison", 25, 0);
+            mob.extra
+                .set_main_hand_stack(Some(sunrise_client::items::ItemStack::new(
+                    "minecraft:totem_of_undying",
+                    1,
+                )));
+        });
+        game.tick_creature_entities().unwrap();
+        let mob = game.mobs.iter().find(|mob| mob.id == 71).unwrap();
+        assert!(mob.alive());
+        assert!(mob.extra.main_hand_stack().is_none());
+        assert!(!mob.has_effect("minecraft:poison"));
+        assert_eq!(
+            mob.extra
+                .effects
+                .iter()
+                .find(|e| e.id == "minecraft:regeneration")
+                .map(|e| e.duration),
+            Some(899),
+            "the new regeneration, not the pre-hit effects, gets this tick"
+        );
+    });
+}
+
+struct TraderDrinkPost(Arc<Mutex<Vec<(bool, bool)>>>);
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for TraderDrinkPost {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.entity_tick_each("minecraft:wandering_trader");
+    }
+
+    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
+        event.listened = true;
+    }
+
+    fn entity_tick_post(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
+        let HostSide::Server(host) = host else {
+            panic!("server fixture");
+        };
+        if event.entities == [71] {
+            let living = host.living(host.entity(71).unwrap()).unwrap();
+            let invisibility = host.effect_key("minecraft:invisibility").unwrap();
+            let invisible = living.effect(host, invisibility).is_some();
+            let holding_drink = living
+                .with_hand_item(host, mod_api::Hand::Main, |_| ())
+                .is_some();
+            self.0.lock().unwrap().push((invisible, holding_drink));
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn trader_milk_finishes_before_its_own_entity_tick_post() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "trader-drink-post",
+        Box::new(TraderDrinkPost(seen.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.build_registries();
+            game.world.day_time = 6000;
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:wandering_trader")
+                .unwrap()
+                .clone();
+            let mut trader = Mob::new(71, kind, game.mobs[0].position, 0.0);
+            trader.no_gravity = true;
+            trader.ground.on_ground = true;
+            trader.add_effect("minecraft:invisibility", 3600, 0);
+            game.mobs.remove(0);
+            game.mobs.push(trader);
+            // Start the actual daylight drink goal, whose first tick still precedes completion.
+            game.tick_creature_entities().unwrap();
+            let i = game.mobs.iter().position(|mob| mob.id == 71).unwrap();
+            assert_eq!(
+                game.mobs[i].extra.main_hand_id(),
+                Some("minecraft:milk_bucket")
+            );
+            game.mobs.update(i, |mob| mob.extra.using_item = 32);
+            game.tick_creature_entities().unwrap();
+        });
+    });
+    assert_eq!(*seen.lock().unwrap(), [(true, true), (false, false)]);
+}
+
 /// A type a mod names is told at NeoForge's moment: each pig alone, its Post right after its
 /// own tick and before the next pig's Pre, and a Post handle reads where its tick took it.
 #[test]

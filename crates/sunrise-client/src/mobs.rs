@@ -1704,6 +1704,7 @@ pub struct Mob {
     pub accepted_hit: Option<std::sync::Arc<crate::health::AcceptedHit>>,
     /// The in-flight killing hit; its caller settles death before continuing.
     pub damage_completion: Option<crate::health::DamageCompletion>,
+    protected_hurt: Option<Box<ProtectedHurt>>,
     pub death_canceled: bool,
     /// `DamageSource.getDirectEntity` of `last_damage` when [`Damage`] cannot name it (a
     /// thrown potion, an area effect cloud): its entity type.
@@ -1801,19 +1802,6 @@ pub enum MobEvent {
     ForPlayer {
         conn: Option<u32>,
         event: Box<MobEvent>,
-    },
-    /// A finished drink whose item effects still need the world's living Host.
-    DrinkFinished {
-        mob: u32,
-        stack: crate::items::ItemStack,
-    },
-    /// `DeathProtection.applyEffects` for a mob saved by a `death_protection`
-    /// item: delivered on the owning `Game` so `MobEffectEvent.Remove`,
-    /// `Applicable`, `Added` and `MobEffectPart::on_effect_added` all fire.
-    DeathProtectionEffects {
-        mob: u32,
-        stack: crate::items::ItemStack,
-        effects: Vec<crate::items::ConsumeEffect>,
     },
     /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
     SquidCycle {
@@ -2745,7 +2733,9 @@ include!("mobs/seen.rs");
 
 impl Mob {
     pub(crate) fn hurt_needs_owner(&self) -> bool {
-        self.damage_completion.is_some() || creaking::has_pending_hurt(self)
+        self.protected_hurt.is_some()
+            || self.damage_completion.is_some()
+            || creaking::has_pending_hurt(self)
     }
 
     /// The name used by command replies: CustomName takes precedence over the type.
@@ -3133,6 +3123,35 @@ pub fn apply_brain_events(
     apply_brain_events_until_hurt(mobs, level, events, from, teams, false);
 }
 
+/// The accepted hit suspended inside `checkTotemDeathProtection`, after
+/// consuming the hand item and setting health, before any protection effects.
+#[derive(Clone, Debug)]
+pub struct ProtectedHurt {
+    pub stack: crate::items::ItemStack,
+    pub effects: Vec<crate::items::ConsumeEffect>,
+    pub post: Option<std::sync::Arc<crate::health::DamagePost>>,
+    tail: HurtTail,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HurtTail {
+    knock: bool,
+    absorbed: bool,
+    crackiness: Option<Option<&'static str>>,
+    kind: DamageKind,
+    success: bool,
+}
+
+impl ProtectedHurt {
+    pub fn before_post(&self, mob: &mut Mob) {
+        mob.finish_hurt_before_post(self.tail);
+    }
+
+    pub fn after_post(&self, mob: &mut Mob) {
+        mob.finish_species_hurt(self.tail.success);
+    }
+}
+
 /// The part of `Pufferfish.touch` after `hurtServer` returns successfully.
 /// The borrowed pass gives the owning game the victim before applying this.
 pub struct PufferfishReaction {
@@ -3289,7 +3308,10 @@ pub fn apply_brain_events_until_hurt(
                         fish_join,
                         poison_ticks: landed.then_some(60 * size),
                     };
-                    if can_pause && (t.hurt_needs_owner() || (landed && hit_level.defers_death_protection_effects())) {
+                    if can_pause
+                        && (t.hurt_needs_owner()
+                            || (landed && hit_level.defers_death_protection_effects()))
+                    {
                         let mut position = 0;
                         // The rest of this candidate list belongs to the same objects
                         // even if the host removes one or inserts a new occupant of its id.
@@ -3875,6 +3897,7 @@ impl Mob {
             last_damage: None,
             accepted_hit: None,
             damage_completion: None,
+            protected_hurt: None,
             death_canceled: false,
             last_direct: None,
             combat: combat::Tracker::default(),
@@ -4439,13 +4462,58 @@ impl Mob {
             self.knockback(level, f64::from(0.4f32), dx, dz, &source, incoming);
         }
         ai::after_hurt(self, &source);
-        if self.health <= 0.0 {
+        let protection = if self.health <= 0.0 {
             self.health = 0.0;
-            // `LivingEntity.hurtServer`: a killing blow is taken by a
-            // `death_protection` item in either hand instead of dying.
-            self.use_death_protection(level, &source);
-        }
+            self.use_death_protection(level, &source)
+        } else {
+            None
+        };
         self.remember_accepted_hit(level, &source, success);
+        let tail = HurtTail {
+            knock,
+            absorbed,
+            crackiness,
+            kind: source.kind,
+            success,
+        };
+        if let Some((stack, effects)) = protection {
+            let post = level
+                .finish_damage(crate::health::Hurting::Mob(self, &source), container, true)
+                .and_then(|completion| completion.post);
+            self.protected_hurt = Some(Box::new(ProtectedHurt {
+                stack,
+                effects,
+                tail,
+                post,
+            }));
+        } else {
+            self.finish_hurt_before_post(tail);
+            // The last of `LivingEntity.hurtServer`: Post also runs for a hit taking no health.
+            // A killing hit's owner runs it after die, including when death is vetoed.
+            self.damage_completion = level.finish_damage(
+                crate::health::Hurting::Mob(self, &source),
+                container,
+                self.health <= 0.0,
+            );
+            self.finish_species_hurt(success);
+        }
+        // Squid.hurtServer (also GlowSquid's result): parent health damage has
+        // happened, but without a last living attacker the subclass returns false.
+        // Ghast.hurtServer returns true for a reflected large fireball whatever
+        // super.hurtServer did.
+        (success || reflected)
+            && (!matches!(self.species(), Species::Squid | Species::GlowSquid)
+                || self.ai.last_hurt_by.is_some())
+    }
+
+    fn finish_hurt_before_post(&mut self, tail: HurtTail) {
+        let HurtTail {
+            knock,
+            absorbed,
+            crackiness,
+            kind,
+            success,
+        } = tail;
         if knock {
             // playHurtSound (Mob: also resets the ambient sound clock) or the
             // death sound: makeSound draws the voice pitch whenever there is a sound.
@@ -4469,7 +4537,7 @@ impl Mob {
             }
             // playSecondaryHurtSound: a thorns hit sounds where the mob
             // stands, silent or not.
-            if source.kind == DamageKind::Thorns {
+            if kind == DamageKind::Thorns {
                 let at = [self.position.x, self.position.y, self.position.z];
                 self.outbox
                     .push(MobEvent::Sound("enchant.thorns.hit", at, 1.0, 1.0));
@@ -4500,13 +4568,9 @@ impl Mob {
                 self.outbox.push(MobEvent::Infested { at, velocities });
             }
         }
-        // The last of `LivingEntity.hurtServer`: Post also runs for a hit taking no health.
-        // A killing hit's owner runs it after die, including when death is vetoed.
-        self.damage_completion = level.finish_damage(
-            crate::health::Hurting::Mob(self, &source),
-            container,
-            self.health <= 0.0,
-        );
+    }
+
+    fn finish_species_hurt(&mut self, success: bool) {
         // Shulker.hurtServer: the low-health teleport roll after `super.hurtServer`.
         if success && self.species() == Species::Shulker {
             shulker::after_hurt(self);
@@ -4527,14 +4591,16 @@ impl Mob {
         if self.species() == Species::GlowSquid && self.ai.last_hurt_by.is_some() {
             aquatic::hurt_server(self);
         }
-        // Squid.hurtServer (also GlowSquid's result): parent health damage has
-        // happened, but without a last living attacker the subclass returns false.
-        // Ghast.hurtServer returns true for a reflected large fireball whatever
-        // super.hurtServer did.
-        (success || reflected)
-            && (!matches!(self.species(), Species::Squid | Species::GlowSquid)
-                || self.ai.last_hurt_by.is_some())
     }
+
+    pub fn take_protected_hurt(&mut self) -> Option<Box<ProtectedHurt>> {
+        self.protected_hurt.take()
+    }
+
+    pub fn has_protected_hurt(&self) -> bool {
+        self.protected_hurt.is_some()
+    }
+
     /// `damage` by a source whose direct entity is `direct` (an entity type id), which `source`
     /// cannot carry: `DamageSources.indirectMagic(potion or cloud, owner)`.
     pub fn damage_by(
@@ -4893,10 +4959,14 @@ impl Mob {
     /// `death_protection` stack uses one item up, the mob survives at 1 health
     /// with that component's `death_effects`, and entity event 35 tells the
     /// clients.
-    fn use_death_protection(&mut self, level: &mut DamageLevel<'_>, source: &Damage) -> bool {
+    fn use_death_protection(
+        &mut self,
+        level: &mut DamageLevel<'_>,
+        source: &Damage,
+    ) -> Option<(crate::items::ItemStack, Vec<crate::items::ConsumeEffect>)> {
         // `DamageTypeTags.BYPASSES_INVULNERABILITY`: the void and /kill take it.
         if source.kind.bypasses_invulnerability() {
-            return false;
+            return None;
         }
         // `getItemInHand`: the main hand first. The game reads the components
         // (`hand_protection`); before it has, the totem is the only item in the
@@ -4921,13 +4991,13 @@ impl Mob {
         } else if let Some(effects) = off {
             (sunrise_items::equipment::OFFHAND, effects)
         } else {
-            return false;
+            return None;
         };
         if level.totem_canceled(
             crate::health::Hurting::Mob(self, source),
             slot == sunrise_items::equipment::OFFHAND,
         ) {
-            return false;
+            return None;
         }
         let protector = self
             .extra
@@ -4942,15 +5012,10 @@ impl Mob {
         self.extra.hand_protection = None;
         self.health = 1.0;
         if level.defers_death_protection_effects() {
-            self.outbox.push(MobEvent::DeathProtectionEffects {
-                mob: self.id,
-                stack: protector,
-                effects,
-            });
-        } else {
-            for effect in &effects {
-                self.apply_consume_effect(effect);
-            }
+            return Some((protector, effects));
+        }
+        for effect in &effects {
+            self.apply_consume_effect(effect);
         }
         let at = [self.position.x, self.position.y, self.position.z];
         self.outbox.push(MobEvent::EntityEvent {
@@ -4958,7 +5023,7 @@ impl Mob {
             event: 35,
             at,
         });
-        true
+        None
     }
     /// One built-in effect of death protection or a consumed item. Adding a status
     /// effect does not run its tick: that tick owns its own hurt, if any.

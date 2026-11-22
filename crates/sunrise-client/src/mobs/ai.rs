@@ -1099,6 +1099,10 @@ pub enum Pause {
         /// The base-tick snapshot, before contact ignition or listener writes.
         was_on_fire: bool,
     },
+    Drink {
+        stack: crate::items::ItemStack,
+        resume: DrinkResume,
+    },
     Breathing {
         air: AirPause,
         /// `Entity.computeSpeed`, read before the tick moved the mob.
@@ -1110,6 +1114,13 @@ pub enum Pause {
     Trample(sunrise_world::block_landing::FarmlandTrample),
     /// A vehicle must propagate the selected fall before this move continues.
     FallToPassengers(super::living::PassengerFall),
+}
+
+/// The remainder of the mob tick after a drink finishes on its owning level.
+#[derive(Debug)]
+pub enum DrinkResume {
+    Trader { was_on_fire: bool },
+    Witch { was_on_fire: bool },
 }
 
 #[derive(Debug)]
@@ -1282,6 +1293,20 @@ pub fn tick(
                 let breath = Some(air.step.vanilla);
                 resume_after_breathing(m, w, level, events, air, known_speed, breath, None)
             }
+            TickProgress::Paused(Pause::Drink { stack, resume }) => {
+                // The hostless probe runs the same drink's built-in behaviour.
+                if stack.potion().unwrap_or(&stack.item) == "minecraft:healing" {
+                    m.heal(w.loop_context, 4.0);
+                }
+                if let Some(effect) = drink_potion_effect(&stack) {
+                    m.add_effect_instance(crate::brewing::namespaced(effect.id), effect);
+                }
+                if &*stack.item == "minecraft:milk_bucket" {
+                    m.apply_consume_effect(&crate::items::ConsumeEffect::ClearAllEffects);
+                }
+                m.extra.set_main_hand_stack(None);
+                resume_after_drink(m, w, level, events, resume, None)
+            }
             TickProgress::Paused(Pause::AfterDamage(resume)) => {
                 resume_after_damage(m, w, level, events, resume, None)
             }
@@ -1426,6 +1451,7 @@ pub(super) fn resume_after_damage(
     if m.join != resume.join {
         return TickProgress::Complete(true);
     }
+    hurt_teleports(m, w, events);
     match resume.tail {
         DamageTail::Base {
             contact,
@@ -1495,6 +1521,26 @@ fn after_base_tick(
     if m.alive() {
         super::spear_use::update_using_item(m, w, known_speed, events);
     }
+    if m.alive()
+        && m.species() == Species::WanderingTrader
+        && let Some(stack) = super::trader::tick_drink(m, events)
+    {
+        return TickProgress::Paused(Pause::Drink {
+            stack,
+            resume: DrinkResume::Trader { was_on_fire },
+        });
+    }
+    after_using_item(m, w, level, events, was_on_fire, movement)
+}
+
+fn after_using_item(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    was_on_fire: bool,
+    movement: Option<&mut Option<MobMovement>>,
+) -> TickProgress {
     super::sulfur_cube::adopt_body(m);
     let sleep_answer = m
         .extra
@@ -1541,6 +1587,44 @@ pub fn resume_after_consumption(
     ai_and_finish_tick(m, w, level, was_on_fire, events, movement)
 }
 
+/// Resume the exact tick site after `finishUsingItem` or a witch's potion.
+pub(super) fn resume_after_drink(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    resume: DrinkResume,
+    movement: Option<&mut Option<MobMovement>>,
+) -> TickProgress {
+    if m.removed {
+        return TickProgress::Complete(false);
+    }
+    match resume {
+        DrinkResume::Trader { was_on_fire } => {
+            after_using_item(m, w, level, events, was_on_fire, movement)
+        }
+        DrinkResume::Witch { was_on_fire } => {
+            super::witch::after_drink(m, events);
+            let progress = ai_step(m, w, level, events, movement.is_some());
+            finish_ai_progress(m, w, level, events, was_on_fire, movement, progress)
+        }
+    }
+}
+
+/// The built-in status effect on either specialty drink's potion contents.
+pub fn drink_potion_effect(
+    stack: &crate::items::ItemStack,
+) -> Option<crate::effects::EffectInstance> {
+    let effect = match stack.potion().unwrap_or(&stack.item) {
+        "minecraft:water_breathing" => "water_breathing",
+        "minecraft:fire_resistance" => "fire_resistance",
+        "minecraft:swiftness" => "speed",
+        "minecraft:invisibility" => "invisibility",
+        _ => return None,
+    };
+    Some(crate::effects::EffectInstance::new(effect, 3600, 0))
+}
+
 fn ai_and_finish_tick(
     m: &mut Mob,
     w: &MobWorld,
@@ -1581,6 +1665,18 @@ fn ai_and_finish_tick(
         // push).
         drop_tiny_motion(m);
         return start_ai_tail(m, w, level, events, was_on_fire, movement.is_some());
+    }
+    // Witch.aiStep drinks before super.aiStep; resume at the following magic roll.
+    if m.species() == Species::Witch {
+        let far = m
+            .target_info(w)
+            .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
+        if let Some(stack) = super::witch::ai_step_until_drink(m, events, far) {
+            return TickProgress::Paused(Pause::Drink {
+                stack,
+                resume: DrinkResume::Witch { was_on_fire },
+            });
+        }
     }
     let progress = ai_step(m, w, level, events, movement.is_some());
     finish_ai_progress(m, w, level, events, was_on_fire, movement, progress)
@@ -3239,13 +3335,6 @@ fn ai_step(
     if m.species() == Species::Parrot {
         super::parrot::ai_step(m, w, level.random(), events);
     }
-    // Witch.aiStep runs before super.aiStep().
-    if m.species() == Species::Witch {
-        let far = m
-            .target_info(w)
-            .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
-        super::witch::ai_step(m, w.loop_context, events, far);
-    }
     if m.species() == Species::Fox {
         super::fox::pre_ai_step(m);
     }
@@ -3349,6 +3438,9 @@ fn hurt(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>, amount: f32, sour
 /// The teleport `Enderman.hurtServer` or `Shulker.hurtServer` makes inside a
 /// hurt, after the hurt's sound; with or without AI.
 fn hurt_teleports(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.has_protected_hurt() {
+        return;
+    }
     if m.species() == Species::Enderman && m.extra.counter2 > 0 {
         events.append(&mut m.outbox);
         super::enderman::run_pending_teleports(m, w, events);

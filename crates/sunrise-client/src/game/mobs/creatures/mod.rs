@@ -1739,18 +1739,17 @@ impl Game<'_> {
             return;
         };
         let id = mob.id;
-        let hit = mob.damage_completion.take();
-        let kind = hit
-            .as_ref()
-            .and_then(|hit| hit.post.as_ref())
-            .map(|_| mob.kind.clone());
-        let death = hit.is_some().then(|| mob.clone());
-        self.flush_mob_death_protection(id);
-        let Some((hit, death)) = hit.zip(death) else {
+        if mob.has_protected_hurt() {
+            self.flush_mob_death_protection(id);
+            return;
+        }
+        let Some(hit) = mob.damage_completion.take() else {
             return;
         };
+        let kind = hit.post.as_ref().map(|_| mob.kind.clone());
         // Keep the hit apart from the body: the death hooks may remove or revive it.
         if self.died.insert(id) {
+            let death = mob.clone();
             self.mob_die(&death);
         }
         if let Some((post, kind)) = hit.post.zip(kind) {
@@ -2249,37 +2248,35 @@ impl Game<'_> {
             self.creaking_hurt(home, id, by_player);
         }
     }
-    /// Apply any queued death-protection consume effects for `mob` right after
-    /// a `Mob::damage*` call returns so `MobEffectEvent.Remove`, `Applicable`,
-    /// `Added` and `MobEffectPart::on_effect_added` run immediately instead of
-    /// waiting for the end-of-tick outbox drain.
-    pub(in crate::game) fn flush_mob_death_protection(&mut self, mob: u32) {
-        let Some(index) = self.mob_index.find(&self.mobs, mob) else {
+    /// Finish `LivingEntity.checkTotemDeathProtection` before the hurt's
+    /// remaining reads, effects and Post listener, with the holder back in its level.
+    pub(in crate::game) fn flush_mob_death_protection(&mut self, id: u32) {
+        let Some(index) = self.mob_index.find(&self.mobs, id) else {
             return;
         };
-        let m = &mut self.mobs[index];
-        if !m
-            .outbox
-            .iter()
-            .any(|e| matches!(e, MobEvent::DeathProtectionEffects { .. }))
-        {
+        let mob = &mut self.mobs[index];
+        let Some(mut hit) = mob.take_protected_hurt() else {
             return;
+        };
+        let join = mob.join;
+        let same_mob = |game: &Self| {
+            game.mob_index
+                .find(&game.mobs, id)
+                .filter(|&i| game.mobs[i].join == join && !game.mobs[i].removed)
+        };
+        self.apply_mob_death_protection_effects(id, &hit.stack, &hit.effects);
+        let Some(i) = same_mob(self) else {
+            return;
+        };
+        let at = self.mobs[i].position.components();
+        self.lan_entity_event(id as i32, 35, at);
+        hit.before_post(&mut self.mobs[i]);
+        if let Some(post) = hit.post.take() {
+            let kind = self.mobs[i].kind.clone();
+            self.finish_damage_post(id as i32, &kind.id, post);
         }
-        let mut pending = Vec::new();
-        let mut kept = Vec::with_capacity(m.outbox.len());
-        for event in std::mem::take(&mut m.outbox) {
-            match event {
-                MobEvent::DeathProtectionEffects {
-                    mob,
-                    stack,
-                    effects,
-                } => pending.push((mob, stack, effects)),
-                other => kept.push(other),
-            }
-        }
-        m.outbox = kept;
-        for (mob, stack, effects) in pending {
-            self.apply_mob_death_protection_effects(mob, &stack, &effects);
+        if let Some(i) = same_mob(self) {
+            hit.after_post(&mut self.mobs[i]);
         }
     }
     /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a mob, through the
@@ -2534,12 +2531,6 @@ impl Game<'_> {
                     count,
                     speed,
                 } => self.landing_dust(state, Vec3::new(at[0], at[1], at[2]), count, speed),
-                MobEvent::DrinkFinished { mob, stack } => self.finish_mob_drink(mob, &stack),
-                MobEvent::DeathProtectionEffects {
-                    mob,
-                    stack,
-                    effects,
-                } => self.apply_mob_death_protection_effects(mob, &stack, &effects),
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Drown { mob, at, bubbles } => self.mob_drown(mob, at, bubbles),
