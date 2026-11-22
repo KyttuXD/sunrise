@@ -890,7 +890,7 @@ impl Creative {
                 );
                 if let Some(first) = lines.first_mut() {
                     let name = match self.search_names.get(i).and_then(Option::as_ref) {
-                        Some(name) => name.clone(),
+                        Some(name) => crate::scoreboard::comp_text(name.component_view().as_ref()),
                         None => crate::stations::hover_name_text(names, stack),
                     };
                     *first = name.strip_legacy().plain();
@@ -2380,6 +2380,24 @@ mod tests {
         assert_eq!(q("наков", false), [0]);
         assert!(q("anvil", false).is_empty());
         assert_eq!(q("anvil", true), [0]);
+    }
+
+    #[test]
+    fn creative_search_rerenders_retained_names_when_language_changes() {
+        let mut creative = creative(0);
+        let names = Names::default();
+        let key = "item.test.anvil_name";
+        let english = lang::Language::of("en_us", [(key.into(), "Metalworking".into())]);
+        lang::scoped(english, || {
+            creative.set_search_names(vec![Some(crate::text::Text::translate(key, &[]))]);
+            assert_eq!(creative.search_results("metalworking", &names), [0]);
+        });
+
+        let german = lang::Language::of("de_de", [(key.into(), "Schmieden".into())]);
+        lang::scoped(german, || {
+            assert_eq!(creative.search_results("schmieden", &names), [0]);
+            assert!(creative.search_results("metalworking", &names).is_empty());
+        });
     }
 
     #[test]
