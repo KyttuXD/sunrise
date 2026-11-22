@@ -21,6 +21,27 @@ pub fn saved_item_slot(entry: &Tag) -> Option<usize> {
         .map(|slot| usize::from(slot as u8))
 }
 
+/// The slot addressed by a mod block entity's saved `Items` row, if it names one.
+/// Compact rows keep [`saved_item_slot`]'s unsigned-byte interpretation (`0..=255`);
+/// NBT `Int` slots accept nonnegative `i32` indices so extended slots never alias.
+pub fn saved_mod_item_slot(entry: &Tag) -> Option<usize> {
+    match entry.get("Slot") {
+        Some(Tag::Int(slot)) => usize::try_from(*slot).ok(),
+        _ => saved_item_slot(entry),
+    }
+}
+
+/// Encode a mod block entity's `Items` slot index: compact unsigned byte for
+/// `0..=255` (matching vanilla's `ItemStackWithSlot`), and nonnegative NBT `Int`
+/// for larger `i32`-representable indices.
+pub fn mod_item_slot_tag(slot: usize) -> Option<Tag> {
+    if let Ok(byte) = u8::try_from(slot) {
+        Some(Tag::Byte(byte as i8))
+    } else {
+        i32::try_from(slot).ok().map(Tag::Int)
+    }
+}
+
 fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
@@ -1150,6 +1171,31 @@ mod tests {
             "slot 0 keeps its lore"
         );
         assert_eq!(items[1].get("count"), Some(&Tag::Int(5)));
+    }
+
+    #[test]
+    fn mod_item_slot_round_trips_compact_and_extended_indices() {
+        for (slot, expected) in [
+            (0usize, Tag::Byte(0)),
+            (127, Tag::Byte(127)),
+            (128, Tag::Byte(-128)),
+            (255, Tag::Byte(-1)),
+            (256, Tag::Int(256)),
+            (i32::MAX as usize, Tag::Int(i32::MAX)),
+        ] {
+            let encoded = mod_item_slot_tag(slot).expect("representable slot");
+            assert_eq!(encoded, expected, "slot {slot}");
+            let row = Tag::compound([("Slot", encoded)]);
+            assert_eq!(saved_mod_item_slot(&row), Some(slot), "slot {slot}");
+        }
+        assert_eq!(mod_item_slot_tag((i32::MAX as usize) + 1), None);
+        assert_eq!(saved_mod_item_slot(&snbt("{Slot:-1}")), None);
+        assert_eq!(saved_mod_item_slot(&snbt("{Slot:-128}")), None);
+        assert_eq!(saved_mod_item_slot(&snbt("{Slot:256L}")), None);
+        assert_eq!(saved_mod_item_slot(&snbt("{raw:1}")), None);
+        // Compact unsigned-byte rows keep existing behavior and vanilla stays byte-bounded.
+        assert_eq!(saved_mod_item_slot(&snbt("{Slot:-1b}")), Some(255));
+        assert_eq!(saved_item_slot(&snbt("{Slot:256}")), None);
     }
 }
 

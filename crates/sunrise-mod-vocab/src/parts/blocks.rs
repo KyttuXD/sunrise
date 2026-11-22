@@ -297,7 +297,9 @@ impl dyn Registrar + '_ {
     /// if any, and a read-only level. Call `offer.offer(|| Box::new(Voids))` to answer, or
     /// leave the offer untouched to decline. Asked
     /// in one list with the providers of the block entity type there, as
-    /// [`LevelRef::capability`](crate::LevelRef::capability) orders them.
+    /// [`LevelRef::capability`](crate::LevelRef::capability) orders them. For a given fully qualified
+    /// name, both kinds must use the same handler type. Invalid names, keys and conflicting types
+    /// refuse registration.
     pub fn block_capability<T: ?Sized + 'static>(
         &mut self,
         key: &CapabilityKey<T>,
@@ -312,11 +314,12 @@ impl dyn Registrar + '_ {
         + Sync
         + 'static,
     ) {
+        let provider: Arc<BlockProvider<T>> = Arc::new(provider);
         self.provide_block_capability(
             key.name,
             block,
             false,
-            BlockProviderOf::of(Arc::new(provider)),
+            NativeCapabilityProvider::of::<T, _>(provider),
         );
     }
     /// `block_capability`, asked ahead of the game's own provider.
@@ -334,11 +337,12 @@ impl dyn Registrar + '_ {
         + Sync
         + 'static,
     ) {
+        let provider: Arc<BlockProvider<T>> = Arc::new(provider);
         self.provide_block_capability(
             key.name,
             block,
             true,
-            BlockProviderOf::of(Arc::new(provider)),
+            NativeCapabilityProvider::of::<T, _>(provider),
         );
     }
 }
@@ -366,7 +370,7 @@ pub trait BlocksRegistrar {
         name: &'static str,
         block: &crate::BlockKey,
         before_game: bool,
-        provider: BlockProviderOf,
+        provider: NativeCapabilityProvider,
     );
 }
 

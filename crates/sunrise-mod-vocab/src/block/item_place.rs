@@ -1066,19 +1066,24 @@ impl ItemPlace {
                 Some((stack.item(), projected))
             })
             .flatten()?;
+        let providers = crate::parts::installed()
+            .and_then(|installed| installed.keys.item_capabilities.get(key.name))
+            .and_then(|by_item| {
+                let id = crate::content::registry_keys::item_id(item)?;
+                by_item.get(id).map(Vec::as_slice)
+            })
+            .unwrap_or(&[]);
         let mut game = None;
-        let table = host.capability_providers();
-        let provided = table.provided(crate::ProvidedBy::Item, key.name);
-        let mut index = 0;
         crate::answered(
             crate::ask_providers(
                 host,
-                || {
-                    provided
-                        .then(|| table.item_provider(key.name, item, &mut index))
-                        .flatten()
+                providers.iter(),
+                ("capability provider", "capability_provider"),
+                |provider, host| {
+                    provider
+                        .get::<std::sync::Arc<crate::ItemProvider<T>>>()?
+                        .provide(host, self)
                 },
-                |provider, host| provider.get::<T>()?.provide(host, self),
                 |host| {
                     game = match &key.default {
                         Some(ItemCapabilityDefault::Item(default)) => default(host, self, item),

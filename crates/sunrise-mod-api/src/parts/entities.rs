@@ -216,20 +216,9 @@ impl EntitiesRegistrar for PartRegistrar {
         name: &'static str,
         kind: &str,
         before_game: bool,
-        provider: EntityProviderOf,
+        provider: NativeCapabilityProvider,
     ) {
-        self.capability(
-            |p| &mut p.entity_capabilities,
-            None,
-            name,
-            ProviderTarget::Id(kind),
-            before_game,
-            {
-                let handler =
-                    mod_vocab::__private::parts_installation::entity_provider_handler(&provider);
-                (provider, handler)
-            },
-        );
+        self.capability(name, ProviderTarget::Entity(kind), before_game, provider);
     }
 
     fn entity_tick_each(&mut self, entity: &str) {

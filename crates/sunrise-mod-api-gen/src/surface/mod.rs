@@ -111,7 +111,7 @@ impl Boundary {
                 boundary.roles.push((name.to_owned(), role));
             }
         }
-        for shape in crate::capability_providers::key_shapes(index)? {
+        for shape in crate::capability_keys::key_shapes(index)? {
             for owner in [shape.handler.clone(), shape.provider()] {
                 if !boundary.roles.iter().any(|(name, _)| name == &owner) {
                     boundary.roles.push((owner, Role::Implement));
@@ -317,10 +317,10 @@ fn export_here(root: &Path, options: ExportOptions) -> Result<Export, String> {
         ("mod_api_generated.rs", generated.hooks.as_str()),
         ("mod_api_generated_host.rs", generated.host.as_str()),
     ];
-    let providers = crate::capability_providers::generate(root, &included)?.0;
-    let mut with_providers = included.to_vec();
-    with_providers.push(("capability_providers_generated.rs", providers.as_str()));
-    let mut index = crate::index::game(root, &with_providers);
+    let (keys, _) = crate::capability_keys::generate(root, &included)?;
+    let mut with_keys = included.to_vec();
+    with_keys.push((crate::capability_keys::OUTPUT, keys.as_str()));
+    let mut index = crate::index::game(root, &with_keys);
     let boundary = Boundary::read(root, &mut index)?;
     let engine = if options.with_loops || options.with_internals {
         Some(engine_catalogs(root, options.with_internals)?)

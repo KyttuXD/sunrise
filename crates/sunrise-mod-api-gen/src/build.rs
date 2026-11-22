@@ -75,7 +75,7 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
                 ("mod_api_generated.rs", generated.hooks.as_str()),
                 ("mod_api_generated_host.rs", generated.host.as_str()),
             ];
-            let (providers, paths) = super::capability_providers::generate(root, &included)?;
+            let (keys, paths) = super::capability_keys::generate(root, &included)?;
             for path in paths {
                 crate::rerun_if_changed(&path.display());
             }
@@ -83,7 +83,7 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
                 (host::AREAS_OUTPUT, generated.areas),
                 ("mod_api_generated.rs", generated.hooks),
                 ("mod_api_generated_host.rs", generated.host),
-                ("capability_providers_generated.rs", providers),
+                (super::capability_keys::OUTPUT, keys),
             ]
         }
     };

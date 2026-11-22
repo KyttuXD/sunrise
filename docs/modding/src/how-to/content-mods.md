@@ -1118,6 +1118,15 @@ A code mod declares a block entity's `ModContainer` with `Registrar::block_conta
 container's `faces` say which slots each side reaches; `inputs` lists the slots insertion may use.
 Per-slot `insert_rules` provide static admission, with missing entries treated as `Any`.
 
+Registration validates the declared shape: `slots` must fit in a nonnegative `i32`, every index in
+`faces`, `inputs` and `outputs` must be strictly below `slots`, and `insert_rules.len()` must be at
+most `slots`. Malformed declarations are refused at registration rather than clamped or filtered.
+An optional `menu` opens only when the menu type is supported and its slot count matches `slots`;
+an unsupported or mismatched menu is ignored without changing `slots`. Mod block-entity `Items`
+entries save slot indices `0..=255` as unsigned bytes and extended indices (`>= 256`) as NBT `Int`
+`Slot` values. Structure templates and chunk saves both load these entries against the placed
+block's declared container shape.
+
 For state-dependent admission, implement `BlockEntityPart::can_place_item`
 (vanilla's `Container.canPlaceItem`). Its `CanPlaceItemEvent` gives the server part the block
 entity's own `pos` and current block `state`, its saved data and slots, the queried slot index,

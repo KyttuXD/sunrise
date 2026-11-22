@@ -79,25 +79,26 @@ pub struct Parts {
     pub(crate) entities: HashMap<Box<str>, Vec<Attached<dyn EntityPart>>>,
     /// Capability providers by capability name, then by block entity type, in registration
     /// order.
-    pub(crate) capabilities: Capabilities<BlockProviderOf>,
+    pub(crate) capabilities: Capabilities<NativeCapabilityProvider>,
     /// Block capability providers by capability name, then by block, in registration order:
     /// those asked of a block whatever block entity it has, or none.
-    pub(crate) block_capabilities: Capabilities<BlockProviderOf>,
-    /// Canonical block capability metadata, retained independently of provider availability.
-    pub(crate) block_capability_metadata: HashMap<&'static str, (Arc<str>, Option<bool>)>,
+    pub(crate) block_capabilities: Capabilities<NativeCapabilityProvider>,
+    /// Canonical bindings by domain, retained independently of provider availability.
+    pub(crate) block_capability_metadata: HashMap<&'static str, CapabilityMetadata>,
+    pub(crate) item_capability_metadata: HashMap<&'static str, CapabilityMetadata>,
+    pub(crate) entity_capability_metadata: HashMap<&'static str, CapabilityMetadata>,
     /// Built-in declaration order followed by the order mods first mention a capability.
     pub(crate) block_capability_order: Vec<&'static str>,
     /// Explicit domains and declarations of the game's default providers.
     pub(crate) default_block_containers: HashMap<Box<str>, Vec<(usize, crate::ModContainer)>>,
     pub(crate) default_block_fluids: HashMap<Box<str>, Vec<(usize, crate::ModFluidTanks)>>,
     pub(crate) default_block_energy: HashMap<Box<str>, Vec<(usize, crate::ModEnergyBuffer)>>,
-    pub(crate) default_item_containers:
-        HashMap<Box<str>, Vec<(usize, Arc<dyn crate::ItemContainerProvider>)>>,
+    pub(crate) default_item_containers: HashMap<Box<str>, Vec<DefaultItemContainer>>,
     /// Item capability providers by capability name, then by item, in registration order.
-    pub(crate) item_capabilities: Capabilities<ItemProviderOf>,
+    pub(crate) item_capabilities: Capabilities<NativeCapabilityProvider>,
     /// Entity capability providers by capability name, then by entity type, in registration
     /// order.
-    pub(crate) entity_capabilities: Capabilities<EntityProviderOf>,
+    pub(crate) entity_capabilities: Capabilities<NativeCapabilityProvider>,
     /// The mods' own item places (`ItemPlace::Mod`), by provider name.
     pub(crate) place_providers: HashMap<&'static str, PlaceProviderPart>,
     /// The tooltip appenders, in registration order.
@@ -600,21 +601,6 @@ impl Parts {
             }
         }
     }
-}
-
-/// Walk only this capability and type's registrations, once each even if a provider switches
-/// a mod off during the lookup. The table and the game's direct lookups share this path.
-pub(crate) fn next_provider<P: Clone>(
-    parts: &[CapabilityPart<P>],
-    index: &mut u32,
-) -> Option<(P, &'static str, bool)> {
-    while let Some(part) = parts.get(*index as usize) {
-        *index += 1;
-        if crate::mod_index_on(part.mod_index) {
-            return Some((part.provider.clone(), part.mod_id, part.before_game));
-        }
-    }
-    None
 }
 
 pub(crate) fn attached<'a, 'k, P: ?Sized>(

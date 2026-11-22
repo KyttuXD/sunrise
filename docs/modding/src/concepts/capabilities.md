@@ -16,7 +16,8 @@ contains the level, position and requested side. A provider checks the supplied 
 read-only level, and leaves `offer` untouched to decline. The closure passed to `offer.offer` runs
 only when the caller needs the handler. Select before offering; do transfers and writes later,
 through the handler's `ServerHost` and transaction. This registration corresponds to NeoForge's
-`RegisterCapabilitiesEvent`.
+`RegisterCapabilitiesEvent`. The typed methods on `dyn Registrar` take native callbacks for both
+built-in and [mod-defined capabilities](capabilities/own-capability.md).
 
 ## Register and look up providers
 
@@ -24,7 +25,9 @@ through the handler's `ServerHost` and transaction. This registration correspond
 |---|---|
 | `r.block_entity_capability(&ITEMS, &kind, provider)` | The provider receives `&dyn LevelHost`, `BlockSide`, `BlockState`, the matching `BlockEntityRef`, and the offer. |
 | `r.block_capability(&ITEMS, &block, provider)` | The same inputs, but the `BlockEntityRef` is optional. Obtain `block` with `r.block_key("mymod:void_bin")`. |
-| `r.block_entity_capability_before_game(...)` / `r.block_capability_before_game(...)` | Register a provider ahead of the game's provider. |
+| `r.item_capability(&ITEM_ITEMS, "mymod:backpack", provider)` | The provider receives `&mut dyn ServerHost` and `&ItemPlace`. |
+| `r.entity_capability(&ENTITY_AUTOMATION, "mymod:robot", provider)` | The provider receives `&mut dyn ServerHost`, `EntityRef` and the key's context (`Option<Direction>` for `ENTITY_AUTOMATION`). |
+| Each registration's `*_before_game` form | Register a provider ahead of the game's provider. |
 | `level.capability(host, &ITEMS, pos, side)` | Look up a handler on a `LevelRef`; `side` is `Option<Direction>`, with `None` meaning no particular side. The result is `Option<Capability<dyn ResourceHandler<ItemResource>>>`. |
 | `view.has_item_capability(pos, side)` | Test whether a handler would be offered on a read-only `LevelHost`, without making one. |
 | `r.is_block_capability_registered(&KEY, &block)` | Whether any game or mod provider registered so far covers this block type. |
@@ -32,7 +35,11 @@ through the handler's `ServerHost` and transaction. This registration correspond
 | `r.is_item_capability_registered(&KEY, &item)` | The same query for an `ItemKey`, obtained with `r.item_key("minecraft:stick")`. |
 
 A block provider can expose a trash can that voids items or forward a multiblock port to its controller.
-A block with a block entity can have both kinds of provider.
+A block with a block entity can have both kinds of provider. Providers can target vanilla types and
+other mods' types. Pass fully qualified resource identifiers to the item and entity registration methods,
+for example `minecraft:stick` and `minecraft:pig`. Providers can target items and entity types declared
+later in registration. An unknown target refuses load and names the mod and the missing identifier.
+See [A mod's own capability](capabilities/own-capability.md) for the naming and type rules.
 
 Lookup uses this order:
 
@@ -45,14 +52,16 @@ Lookup uses this order:
 Within each mod-provider group, block and block entity type providers form one list in registration
 order. The first offer wins; handlers are not merged. Use `_before_game` when you need priority over
 the game's handler, but do not assume precedence over another mod at the same priority.
-Disabled mods' providers are skipped. A stale level handle or a level that is not in place returns
-`None` without asking providers.
+Disabled mods' providers are skipped, and a provider callback that panics is disabled for the
+rest of the session without stopping later providers from answering. A stale level handle or a
+level that is not in place returns `None` without asking providers.
 
 Registration queries see the game's coverage, earlier mods in registration order, and providers already
 added by the current mod; they do not see later registrations. For example, `ITEMS` covers
 `minecraft:chest` without a mod provider. Use these queries to add a fallback only when no provider
 covers the type. This is type coverage, not a promise that a lookup at a particular position, side,
-entity or item place will return a handler.
+entity or item place will return a handler. An invalid target key or capability name, or a binding that
+does not match the canonical key's handler and context types, refuses registration.
 Declarations made in a later phase, such as `register_cauldron_fluid_content` after registry resolution,
 are not visible yet; these queries never run future registration callbacks.
 The same registrar owns default storage declarations: `block_container(&block, ModContainer)`,
@@ -67,7 +76,11 @@ when it returns `Some`. The default `ITEMS` handler's `capacity` remains a limit
 admission; `insert_at` applies the rule. See [Block entity containers](../how-to/content-mods.md#block-entity-containers)
 for the distinction from menu slots.
 The three block-storage declarations accept mod blocks only, not `minecraft` blocks; use
-`block_capability` to expose storage on a vanilla block. The first enabled declaration for a block
+`block_capability` to expose storage on a vanilla block. Container `faces`, `inputs` and `outputs`
+indices must be strictly below `slots` and `insert_rules.len()` at most `slots`; fluid `faces`,
+`inputs` and `outputs` indices must be strictly below `tanks.len()`; and energy `capacity`,
+`max_insert` and `max_extract` must be nonnegative. Malformed declarations are refused at
+registration rather than clamped or filtered. The first enabled declaration for a block
 type supplies its default storage. Item-container declarations may target vanilla items too, and
 their callbacks run in registration order until one returns `Some`.
 
@@ -93,9 +106,9 @@ letting the last writer win. Merely reading the default `false` does not explici
 During registration, `r.block_capability_names()` and `r.block_capability_proxyable(name)` expose
 the capabilities discovered so far. After publication, use `block_capability_names(host)`,
 `block_capability_proxyable(host, name)` and `block_capability_proxyable_names(host)`; the last
-returns precisely the known names whose proxyability reads `true`. These owned snapshots use the
-published metadata. Proxyability is metadata for forwarding mods, not a
-change to provider lookup order or a guarantee that a provider will answer.
+returns precisely the known names whose proxyability reads `true`. When you have a typed key,
+`KEY.is_proxyable(host)` checks both the name and the handler type against that metadata.
+Proxyability does not change provider lookup order or guarantee that a provider will answer.
 
 These rules follow NeoForge 26.3's
 [`BlockCapability`](https://aldak0.ru/javadoc/26.3.x/net/neoforged/neoforge/capabilities/BlockCapability.html)

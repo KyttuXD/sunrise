@@ -1889,13 +1889,16 @@ pub mod tests {
             &invalid,
             |_, at, _, _, offer| offer.offer(|| Box::new(Pipe(at))),
         );
-        assert_eq!(r.refused.len(), 3, "{:?}", r.refused);
+        assert_eq!(r.refused.len(), 4, "{:?}", r.refused);
         assert!(
             r.refused[0]
                 .contains("item places test:charms are provided twice, by first and second")
         );
         assert!(r.refused[1].contains("not a namespaced name"));
         assert!(r.refused[2].contains("invalid registry key \"minecraft:\""));
+        assert!(r.refused[3].starts_with(
+            "mod second used capability \"sunrise:items\" for an invalid block entity type key slot "
+        ));
     }
 
     #[test]
@@ -2070,20 +2073,9 @@ impl ItemsRegistrar for PartRegistrar {
         name: &'static str,
         item: &str,
         before_game: bool,
-        provider: ItemProviderOf,
+        provider: NativeCapabilityProvider,
     ) {
-        self.capability(
-            |p| &mut p.item_capabilities,
-            None,
-            name,
-            ProviderTarget::Id(item),
-            before_game,
-            {
-                let handler =
-                    mod_vocab::__private::parts_installation::item_provider_handler(&provider);
-                (provider, handler)
-            },
-        );
+        self.capability(name, ProviderTarget::Item(item), before_game, provider);
     }
 
     /// Read and write the item places `ItemPlace::Mod { provider: name, .. }` with `provider`,

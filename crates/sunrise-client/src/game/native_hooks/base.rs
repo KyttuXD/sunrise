@@ -925,8 +925,8 @@ impl Game<'_> {
     }
     /// Block `block`'s registered item slots (`WorldlyContainer`), read from
     /// its per-block declaration when the ticking table is built.
-    /// At most 256 slots, with slot numbers past the count left out.
-    /// Its menu must be one of the supported menus:
+    /// Slot counts, face/input/output indices and `insert_rules` are validated
+    /// at registration. Its menu must be one of the supported menus:
     /// `containers::MOD_MENUS` or a content mod's menu type
     /// (`data/<id>/sunrise/menu/`) with as many
     /// slots, opens when the block is used (its template must open a menu, as
@@ -942,8 +942,8 @@ impl Game<'_> {
     /// Block `block`'s registered fluid tanks: each tank's capacity in
     /// millibuckets, the tanks each face reaches, and the tanks a fill may
     /// reach and a drain may take. Read from its per-block declaration when the
-    /// ticking table is built; at most 16 tanks, capacities clamped to
-    /// 1..=1 000 000, and tank numbers past the count are left out. The tanks'
+    /// ticking table is built; face/input/output indices are validated at
+    /// registration and declared capacities are kept as supplied. The tanks'
     /// contents are kept in the entity's saved compound, under `fluids`, and
     /// the fluid helpers below read and write them.
     pub(in crate::game) fn native_block_entity_fluids(
@@ -957,10 +957,10 @@ impl Game<'_> {
     /// its capacity, the most one insert and one extract moves, and the faces
     /// a fill may come through and a drain may leave by.
     /// Read from its per-block declaration when the ticking
-    /// table is built; a capacity under 1 leaves the buffer out, and the
-    /// limits are clamped to 0..=capacity. The amount is kept in the entity's
-    /// saved compound, as the int `energy`, and the energy helpers below read
-    /// and write it.
+    /// table is built; nonnegative parameters are validated at registration and
+    /// zero capacity or rates above capacity are kept as supplied. The amount
+    /// is kept in the entity's saved compound, as the int `energy`, and the
+    /// energy helpers below read and write it.
     pub(in crate::game) fn native_block_entity_energy(
         &self,
         block: &str,

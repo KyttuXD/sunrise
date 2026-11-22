@@ -70,14 +70,19 @@ impl HookParts {
     }
 }
 
-/// Whether any mod registered a provider of entity capability `key`, for any entity type: one
-/// table lookup, no allocation, so the game's own lookups skip all their work where none did.
+/// Whether any mod registered a provider for this typed capability, for any entity type.
+/// The game's own lookups skip work when no mod registered one.
 pub fn has_entity_providers<T: ?Sized + 'static, C: 'static>(
     key: &EntityCapabilityKey<T, C>,
 ) -> bool {
-    installed()
-        .and_then(|installed| installed.keys.entity_capabilities.get(key.name))
-        .is_some_and(|by_kind| !by_kind.is_empty())
+    installed().is_some_and(|installed| {
+        let keys = &installed.keys;
+        keys.entity_capabilities.contains_key(key.name)
+            && keys
+                .entity_capability_metadata
+                .get(key.name)
+                .is_some_and(|known| known.binding.0 == key.binding().0)
+    })
 }
 
 /// The providers mods registered for `key` and the type of `entity`, for the game's own
@@ -91,8 +96,13 @@ pub fn entity_providers<T: ?Sized + 'static, C: Copy + 'static>(
     context: C,
 ) -> Option<EntityProviders<T, C>> {
     let by_kind = installed()?.keys.entity_capabilities.get(key.name)?;
-    let name = entity.kind(host)?.id(host)?;
-    let parts = by_kind.get(name.as_str())?;
+    let kind = entity
+        .kind(host)
+        .and_then(crate::content::registry_keys::entity_type_name)?;
+    let parts = by_kind
+        .get(kind)
+        .map(Vec::as_slice)
+        .filter(|parts| !parts.is_empty())?;
     Some(EntityProviders {
         parts,
         entity,
@@ -105,30 +115,36 @@ pub fn entity_providers<T: ?Sized + 'static, C: Copy + 'static>(
 /// An entity's providers of one capability ([`entity_providers`]).
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct EntityProviders<T: ?Sized + 'static, C: 'static> {
-    pub(crate) parts: &'static [CapabilityPart<EntityProviderOf>],
+    pub(crate) parts: &'static [CapabilityPart<NativeCapabilityProvider>],
     pub(crate) entity: EntityRef,
     pub(crate) context: C,
     pub(crate) handler: PhantomData<fn() -> Box<T>>,
 }
 
 impl<T: ?Sized + 'static, C: Copy + 'static> EntityProviders<T, C> {
+    pub(crate) fn answer<'host>(
+        self,
+        host: &mut (dyn ServerHost + 'host),
+        game: impl FnOnce(&mut (dyn ServerHost + 'host)) -> bool,
+    ) -> Answer<Box<T>> {
+        let (entity, context) = (self.entity, self.context);
+        ask_providers(
+            host,
+            self.parts.iter(),
+            ("capability provider", "capability_provider"),
+            |provider, host| {
+                provider
+                    .get::<Arc<EntityProvider<T, C>>>()?
+                    .provide(host, entity, context)
+            },
+            game,
+        )
+    }
+
     /// A mod's handler where the game would answer with its own unless a mod comes first: one
     /// registered `before_game`, else, where the game has no answer (`game`), the first mod's.
     pub fn ask(self, host: &mut dyn ServerHost, game: bool) -> Option<Capability<T>> {
-        let (entity, context) = (self.entity, self.context);
-        let mut index = 0;
-        match ask_providers(
-            host,
-            || next_provider(self.parts, &mut index),
-            |provider, host| provider.get::<T, C>()?.provide(host, entity, context),
-            |_| game,
-        ) {
-            Answer::Mod(handler, owner) => Some(Capability {
-                handler,
-                owner: Some(owner),
-            }),
-            Answer::Game | Answer::Nobody => None,
-        }
+        answered(self.answer(host, |_| game), None)
     }
 }
 
@@ -165,18 +181,22 @@ impl dyn Registrar + '_ {
     /// Answer entity capability `key` for entity type `kind` (`mymod:robot`,
     /// `minecraft:player`) with `provider`, which gives a handler for one entity, or none:
     /// `r.entity_capability(&ENTITY_ITEMS, "mymod:robot", |_, robot, ()| Some(Box::new(Cargo(robot))))`.
-    /// Asked as `block_entity_capability`'s are.
+    /// Asked as `block_entity_capability`'s are. The capability name and entity type id must be
+    /// fully qualified resource identifiers. The entity type can be declared later in
+    /// registration; an unknown type refuses load. A key with a different handler type `T` or
+    /// context type `C` from the canonical binding refuses registration.
     pub fn entity_capability<T: ?Sized + 'static, C: 'static>(
         &mut self,
         key: &EntityCapabilityKey<T, C>,
         kind: &str,
         provider: impl Fn(&mut dyn ServerHost, EntityRef, C) -> Option<Box<T>> + Send + Sync + 'static,
     ) {
+        let provider: Arc<EntityProvider<T, C>> = Arc::new(provider);
         self.provide_entity_capability(
             key.name,
             kind,
             false,
-            EntityProviderOf::of(Arc::new(provider)),
+            NativeCapabilityProvider::of::<T, _>(provider),
         );
     }
     /// `entity_capability`, asked ahead of the game's own provider,
@@ -187,11 +207,12 @@ impl dyn Registrar + '_ {
         kind: &str,
         provider: impl Fn(&mut dyn ServerHost, EntityRef, C) -> Option<Box<T>> + Send + Sync + 'static,
     ) {
+        let provider: Arc<EntityProvider<T, C>> = Arc::new(provider);
         self.provide_entity_capability(
             key.name,
             kind,
             true,
-            EntityProviderOf::of(Arc::new(provider)),
+            NativeCapabilityProvider::of::<T, _>(provider),
         );
     }
 }
@@ -222,7 +243,7 @@ pub trait EntitiesRegistrar {
         name: &'static str,
         kind: &str,
         before_game: bool,
-        provider: EntityProviderOf,
+        provider: NativeCapabilityProvider,
     );
 
     /// Tell `entity_tick_pre` and `entity_tick_post` for each entity of type `entity`
@@ -289,28 +310,4 @@ impl EntityTickEach {
 #[doc(hidden)]
 pub fn entity_tick_each() -> Option<&'static EntityTickEach> {
     installed().map(|parts| &parts.entity_tick_each)
-}
-
-/// CapabilityProviders operations for entities.
-// hidden: per-kind lookup implementation, exposed for generated provider bindings
-#[doc(hidden)]
-pub trait EntitiesCapabilityProviders {
-    /// The next enabled provider of entity capability `name` for entity type `kind`, advancing `index`.
-    fn entity_provider(
-        &self,
-        name: &str,
-        kind: &str,
-        index: &mut u32,
-    ) -> Option<(EntityProviderOf, &'static str, bool)>;
-}
-
-impl EntitiesCapabilityProviders for InstalledProviders {
-    fn entity_provider(
-        &self,
-        name: &str,
-        kind: &str,
-        index: &mut u32,
-    ) -> Option<(EntityProviderOf, &'static str, bool)> {
-        next(&installed()?.keys.entity_capabilities, name, kind, index)
-    }
 }

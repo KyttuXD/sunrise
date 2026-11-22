@@ -521,7 +521,7 @@ fn sources(root: &Path) -> Result<Sources, String> {
 }
 
 mod build;
-mod capability_providers;
+mod capability_keys;
 pub mod counterparts;
 pub mod crossing;
 mod dispatch;

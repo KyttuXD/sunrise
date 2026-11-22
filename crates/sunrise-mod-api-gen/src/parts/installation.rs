@@ -74,11 +74,7 @@ impl Schema {
                             if !matches!(item.vis, Visibility::Public(_))
                                 || matches!(
                                     name.as_str(),
-                                    "Attached"
-                                        | "Parts"
-                                        | "OwnProvider"
-                                        | "TooltipAppenderPart"
-                                        | "Payloads"
+                                    "Attached" | "Parts" | "TooltipAppenderPart" | "Payloads"
                                 )
                             {
                                 let target_name = if name == "Installed" {

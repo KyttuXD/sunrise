@@ -700,16 +700,18 @@ pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
     }
 }
 /// A mod's block entity: its compound without `id` and the position, and
-/// (when `decode_items` is true, i.e. container-backed or unknown-block loads)
-/// the `Items` rows that can be represented losslessly as modeled slots.
-/// Slotless holders loaded at a known block keep `Items` verbatim in `nbt`.
+/// (when `mod_item_slots > 0`) the `Items` rows within `0..mod_item_slots`
+/// that can be represented losslessly as modeled slots.
+/// Slotless holders (`mod_item_slots == 0`) keep `Items` verbatim in `nbt`,
+/// and rows outside `0..mod_item_slots`, duplicates, invalid or noncanonical
+/// rows, and slotless entries stay verbatim in `nbt`.
 /// The game sizes the modeled vector to its container when it uses it.
 fn decode_mod_block_entity(
     id: String,
     tag: &Tag,
-    decode_items: bool,
+    mod_item_slots: usize,
 ) -> Option<crate::containers::ModBlockEntity> {
-    use crate::block_entity_nbt::saved_item_slot;
+    use crate::block_entity_nbt::{mod_item_slot_tag, saved_mod_item_slot};
     let Tag::Compound(map) = tag else {
         return None;
     };
@@ -722,22 +724,25 @@ fn decode_mod_block_entity(
         .remove(&crate::containers::SHAPES_KEY.into())
         .and_then(|tag| crate::containers::PublishedShapes::from_tag(&tag));
     let mut items = Vec::new();
-    if decode_items {
+    if mod_item_slots > 0 {
         let key = "Items".into();
         if let Some(Tag::List(entries)) = nbt.get_mut(&key) {
-            let mut occurrences = [0u8; 256];
-            for slot in entries.iter().filter_map(saved_item_slot) {
-                occurrences[slot] = occurrences[slot].saturating_add(1);
+            let mut occurrences: HashMap<usize, u8> = HashMap::new();
+            for slot in entries.iter().filter_map(saved_mod_item_slot) {
+                let count = occurrences.entry(slot).or_insert(0);
+                *count = count.saturating_add(1);
             }
             entries.retain(|raw| {
-                let Some(slot) = saved_item_slot(raw) else {
+                let Some(slot) = saved_mod_item_slot(raw) else {
                     return true;
                 };
-                if occurrences[slot] == 1
+                if slot < mod_item_slots
+                    && occurrences.get(&slot) == Some(&1)
+                    && let Some(slot_tag) = mod_item_slot_tag(slot)
                     && let Some(stack) = item_from_nbt(raw)
                     && let Tag::Compound(mut canonical) = Tag::from(&stack)
                 {
-                    canonical.insert("Slot".into(), Tag::Byte(slot as i8));
+                    canonical.insert("Slot".into(), slot_tag);
                     if raw == &Tag::Compound(canonical) {
                         if items.len() <= slot {
                             items.resize(slot + 1, None);
@@ -764,9 +769,13 @@ fn decode_mod_block_entity(
     entity.set_shapes(shapes.map(std::sync::Arc::new));
     Some(entity)
 }
-/// Whether a mod block owns the saved `Items` field as engine-managed inventory.
-fn block_has_mod_item_slots(block: &str) -> bool {
-    mod_api::__private::parts_installation::block_container(block).is_some_and(|c| c.slots > 0)
+/// Compact unsigned-byte slot count (`0..=255`) decoded when a mod block's
+/// declared container shape is unknown (`decode_block_entity`).
+const COMPACT_MOD_ITEM_SLOTS: usize = 256;
+
+/// The declared item slot count owned by a mod block's stock container.
+fn block_mod_item_slots(block: &str) -> usize {
+    mod_api::__private::parts_installation::block_container(block).map_or(0, |c| c.slots)
 }
 
 /// Decode an entity at a known block, refusing undeclared IDs and invalid native membership.
@@ -785,7 +794,7 @@ pub fn decode_block_entity_replacing(
     block: &str,
     previous: Option<&crate::containers::BlockEntity>,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    let decoded = decode_block_entity_with_history(tag, previous, block_has_mod_item_slots(block))?;
+    let decoded = decode_block_entity_with_history(tag, previous, block_mod_item_slots(block))?;
     // Several vanilla types share a decoded representation (for example barrel
     // and chest). Membership belongs to the saved type, not that representation.
     let saved_id = text(tag.get("id"))?;
@@ -800,13 +809,13 @@ pub fn decode_block_entity_replacing(
 }
 
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    decode_block_entity_with_history(tag, None, true)
+    decode_block_entity_with_history(tag, None, COMPACT_MOD_ITEM_SLOTS)
 }
 
 fn decode_block_entity_with_history(
     tag: &Tag,
     previous: Option<&crate::containers::BlockEntity>,
-    decode_mod_items: bool,
+    mod_item_slots: usize,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| tag.get(k).and_then(crate::nbt_path::int_value); // getIntOr
@@ -815,11 +824,7 @@ fn decode_block_entity_with_history(
     if id.contains(':') && !id.starts_with("minecraft:") {
         return Some((
             pos,
-            BlockEntity::Mod(Box::new(decode_mod_block_entity(
-                id,
-                tag,
-                decode_mod_items,
-            )?)),
+            BlockEntity::Mod(Box::new(decode_mod_block_entity(id, tag, mod_item_slots)?)),
         ));
     }
     if id == "minecraft:end_gateway" {
@@ -1467,42 +1472,41 @@ fn encode_full(
             );
             let mut saved = match source {
                 Some(original) => {
-                    let items_are_payload = matches!(e, crate::containers::BlockEntity::Mod(_))
-                        && !block_has_mod_item_slots(&block);
-                    let loaded =
-                        decode_block_entity_with_history(original, None, !items_are_payload)
-                            .map_or_else(
-                                || current.clone(),
-                                |(q, e)| {
-                                    // External name removal must win over the source overlay.
-                                    let custom_name = (!matches!(
-                                        e,
-                                        crate::containers::BlockEntity::Banner(_)
-                                            | crate::containers::BlockEntity::Sign(_)
-                                            | crate::containers::BlockEntity::Mod(_)
-                                    ))
-                                    .then(|| {
-                                        original
-                                            .get("CustomName")
-                                            .and_then(crate::block_entity_nbt::component)
-                                    })
-                                    .flatten();
-                                    block_entity_encode::encode_with(
-                                        q,
-                                        &e,
-                                        &block,
-                                        block_entity_encode::DataFields {
-                                            lock,
-                                            custom_name: custom_name.as_ref(),
-                                            pending: PendingContainerLoot::from_tag(original)
-                                                .as_ref(),
-                                            hopper_cooldown,
-                                        },
-                                        items,
-                                        |_| None,
-                                    )
-                                },
-                            );
+                    let mod_item_slots = block_mod_item_slots(&block);
+                    let items_are_payload =
+                        matches!(e, crate::containers::BlockEntity::Mod(_)) && mod_item_slots == 0;
+                    let loaded = decode_block_entity_with_history(original, None, mod_item_slots)
+                        .map_or_else(
+                            || current.clone(),
+                            |(q, e)| {
+                                // External name removal must win over the source overlay.
+                                let custom_name = (!matches!(
+                                    e,
+                                    crate::containers::BlockEntity::Banner(_)
+                                        | crate::containers::BlockEntity::Sign(_)
+                                        | crate::containers::BlockEntity::Mod(_)
+                                ))
+                                .then(|| {
+                                    original
+                                        .get("CustomName")
+                                        .and_then(crate::block_entity_nbt::component)
+                                })
+                                .flatten();
+                                block_entity_encode::encode_with(
+                                    q,
+                                    &e,
+                                    &block,
+                                    block_entity_encode::DataFields {
+                                        lock,
+                                        custom_name: custom_name.as_ref(),
+                                        pending: PendingContainerLoot::from_tag(original).as_ref(),
+                                        hopper_cooldown,
+                                    },
+                                    items,
+                                    |_| None,
+                                )
+                            },
+                        );
                     merge_block_entity(original, &loaded, &current, items_are_payload)
                 }
                 None => current,
@@ -8125,6 +8129,185 @@ mod tests {
             decode_block_entity(&ender),
             Some((_, crate::containers::BlockEntity::Mod(_)))
         ));
+    }
+
+    #[test]
+    fn mod_block_entity_extended_slots_round_trip_without_aliasing() {
+        use crate::{
+            containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
+            items::ItemStack,
+        };
+        let parse = |s| sunrise_core::nbt::parse_snbt(s).unwrap().0;
+        let pos = (4, 64, -2);
+        let stone = ItemStack::new("minecraft:stone", 3);
+        let iron = ItemStack::new("minecraft:iron_ingot", 4);
+        let dirt = ItemStack::new("minecraft:dirt", 7);
+
+        let mut items = vec![None; 257];
+        items[0] = Some(stone.clone());
+        items[255] = Some(iron.clone());
+        items[256] = Some(dirt.clone());
+        let entity = ModBlockEntity::new(
+            "test:vault".into(),
+            ModBlockEntityFields {
+                items,
+                ..Default::default()
+            },
+        );
+        let encoded = block_entity_encode::encode(
+            pos,
+            &BlockEntity::Mod(Box::new(entity)),
+            "test:vault",
+            &Default::default(),
+        );
+        assert_eq!(
+            encoded.get("Items"),
+            Some(&parse(
+                r#"[{Slot:0b,id:"minecraft:stone",count:3},{Slot:-1b,id:"minecraft:iron_ingot",count:4},{Slot:256,id:"minecraft:dirt",count:7}]"#
+            ))
+        );
+
+        // Reloading with the declared shape restores slots 0, 255 and 256 with no aliasing.
+        let (loaded_pos, BlockEntity::Mod(reloaded)) =
+            decode_block_entity_with_history(&encoded, None, 257).expect("declared mod vault")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert_eq!(loaded_pos, pos);
+        assert_eq!(reloaded.items.len(), 257);
+        assert_eq!(reloaded.items[0].as_ref(), Some(&stone));
+        assert_eq!(reloaded.items[255].as_ref(), Some(&iron));
+        assert_eq!(reloaded.items[256].as_ref(), Some(&dirt));
+        assert!(reloaded.nbt.get(&"Items".into()).is_none());
+        assert_eq!(
+            block_entity_encode::encode(
+                pos,
+                &BlockEntity::Mod(reloaded),
+                "test:vault",
+                &Default::default(),
+            ),
+            encoded
+        );
+
+        // Generic decode without a declared shape preserves low slots and leaves extended
+        // rows opaque without growing the modeled vector.
+        let (_, BlockEntity::Mod(unknown)) =
+            decode_block_entity(&encoded).expect("unknown-block decode")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert_eq!(unknown.items.len(), 256);
+        assert_eq!(unknown.items[0].as_ref(), Some(&stone));
+        assert_eq!(unknown.items[255].as_ref(), Some(&iron));
+        assert_eq!(
+            unknown.nbt.get(&"Items".into()),
+            Some(&parse(r#"[{Slot:256,id:"minecraft:dirt",count:7}]"#))
+        );
+        assert_eq!(
+            block_entity_encode::encode(
+                pos,
+                &BlockEntity::Mod(unknown),
+                "test:vault",
+                &Default::default(),
+            ),
+            encoded
+        );
+
+        // Rows outside the declared shape, invalid negative Ints, noncanonical compact Ints,
+        // duplicates, and slotless entries all remain opaque verbatim.
+        let mixed = parse(
+            r#"{id:"test:vault",x:4,y:64,z:-2,Items:[{Slot:0b,id:"minecraft:stone",count:3},{Slot:256,id:"minecraft:dirt",count:7},{Slot:257,id:"minecraft:gold_ingot",count:1},{Slot:1000000,id:"minecraft:diamond",count:1},{Slot:-1,id:"minecraft:coal",count:1},{Slot:1,id:"minecraft:sand",count:1},{raw:"no slot"}]}"#,
+        );
+        let (_, BlockEntity::Mod(bounded)) =
+            decode_block_entity_with_history(&mixed, None, 257).expect("bounded vault")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert_eq!(bounded.items.len(), 257);
+        assert_eq!(bounded.items[0].as_ref(), Some(&stone));
+        assert_eq!(bounded.items[256].as_ref(), Some(&dirt));
+        assert_eq!(
+            bounded.nbt.get(&"Items".into()),
+            Some(&parse(
+                r#"[{Slot:257,id:"minecraft:gold_ingot",count:1},{Slot:1000000,id:"minecraft:diamond",count:1},{Slot:-1,id:"minecraft:coal",count:1},{Slot:1,id:"minecraft:sand",count:1},{raw:"no slot"}]"#
+            ))
+        );
+
+        // Duplicate extended slots stay opaque rather than modeling one over the other.
+        let dup_extended = parse(
+            r#"{id:"test:vault",x:4,y:64,z:-2,Items:[{Slot:256,id:"minecraft:stone",count:1},{Slot:256,id:"minecraft:dirt",count:1}]}"#,
+        );
+        let (_, BlockEntity::Mod(dup)) =
+            decode_block_entity_with_history(&dup_extended, None, 257).expect("dup extended")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert!(dup.items.is_empty());
+        assert_eq!(
+            block_entity_encode::encode(
+                pos,
+                &BlockEntity::Mod(dup),
+                "test:vault",
+                &Default::default(),
+            ),
+            dup_extended
+        );
+
+        // Slotless declared shape keeps Items verbatim in nbt.
+        let (_, BlockEntity::Mod(slotless)) =
+            decode_block_entity_with_history(&encoded, None, 0).expect("slotless")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert!(slotless.items.is_empty());
+        assert_eq!(slotless.nbt.get(&"Items".into()), encoded.get("Items"));
+
+        // Opaque slot queries, claims and clears distinguish slot 0 from slot 256.
+        let opaque_pair = parse(
+            r#"{id:"test:vault",x:4,y:64,z:-2,Items:[{Slot:0b,raw:"low"},{Slot:256,raw:"high"}]}"#,
+        );
+        let (_, BlockEntity::Mod(mut claimed)) =
+            decode_block_entity_with_history(&opaque_pair, None, 257).expect("opaque pair")
+        else {
+            panic!("expected mod block entity");
+        };
+        assert!(claimed.has_opaque_item_slot(0));
+        assert!(claimed.has_opaque_item_slot(256));
+        claimed.items.resize(257, None);
+        *claimed.item_slot_mut(0).unwrap() = Some(stone.clone());
+        assert!(!claimed.has_opaque_item_slot(0));
+        assert!(claimed.has_opaque_item_slot(256));
+        *claimed.item_slot_mut(256).unwrap() = Some(dirt.clone());
+        assert!(!claimed.has_opaque_item_slot(256));
+        assert_eq!(
+            block_entity_encode::encode(
+                pos,
+                &BlockEntity::Mod(claimed),
+                "test:vault",
+                &Default::default(),
+            )
+            .get("Items"),
+            Some(&parse(
+                r#"[{Slot:0b,id:"minecraft:stone",count:3},{Slot:256,id:"minecraft:dirt",count:7}]"#
+            ))
+        );
+
+        // Vanilla containers stay byte-exact.
+        let mut chest_slots = vec![None; 27];
+        chest_slots[0] = Some(stone);
+        chest_slots[1] = Some(dirt);
+        let chest = block_entity_encode::encode(
+            pos,
+            &BlockEntity::Chest(chest_slots),
+            "minecraft:chest",
+            &Default::default(),
+        );
+        assert_eq!(
+            chest.get("Items"),
+            Some(&parse(
+                r#"[{Slot:0b,id:"minecraft:stone",count:3},{Slot:1b,id:"minecraft:dirt",count:7}]"#
+            ))
+        );
     }
     /// `CopperGolemStatueBlockEntity.createStatue`: the golem's styled custom
     /// name lives in the statue's components, through every weathering stage,

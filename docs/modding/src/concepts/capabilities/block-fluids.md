@@ -14,7 +14,7 @@ when empty or when its contents match both the fluid and components.
 
 | Game provider | Rules |
 | --- | --- |
-| Mod block tanks (`r.block_fluids(&block, tanks)` with `ModFluidTanks`) | Access depends on side. Saved tanks reject fluids with components. |
+| Mod block tanks (`r.block_fluids(&block, tanks)` with `ModFluidTanks`) | Access depends on side; face/input/output indices must be within `0..tanks.len()`. Capacities are kept as declared (zero-capacity tanks accept no fluid). Saved tanks reject fluids with components. |
 | Water cauldron | One bucket in three levels; insertion and extraction use whole levels. |
 | Lava cauldron | One bucket, inserted or extracted whole. |
 | Registered cauldron content | Uses the whole levels specified through `register_cauldron_fluid_content`. |

@@ -1023,19 +1023,13 @@ impl BlockEntitiesRegistrar for PartRegistrar {
         name: &'static str,
         kind: &crate::BlockEntityTypeKey,
         before_game: bool,
-        provider: BlockProviderOf,
+        provider: NativeCapabilityProvider,
     ) {
         self.capability(
-            |p| &mut p.capabilities,
-            Some(|p| &p.block_capabilities),
             name,
-            ProviderTarget::BlockEntity(kind),
+            ProviderTarget::BlockEntity(*kind),
             before_game,
-            {
-                let handler =
-                    mod_vocab::__private::parts_installation::block_provider_handler(&provider);
-                (provider, handler)
-            },
+            provider,
         );
     }
 }

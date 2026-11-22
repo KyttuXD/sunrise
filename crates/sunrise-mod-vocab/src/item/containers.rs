@@ -178,6 +178,12 @@ impl ModContainerInsertRule {
 /// and the slots hoppers may put into (`canPlaceItemThroughFace`) and take
 /// from (`canTakeItemThroughFace`); and the vanilla menu that shows its
 /// slots when the block is used, if any (`MOD_MENUS`).
+///
+/// Validated at registration (`Registrar::block_container`): `slots` must fit in a nonnegative
+/// `i32`, every index in `faces`, `inputs` and `outputs` must be `< slots`, and
+/// `insert_rules.len()` must be `<= slots`. An unsupported or slot-count-mismatched `menu` is
+/// ignored without changing `slots`. Extended slot indices (`>= 256`) persist in mod block-entity
+/// `Items` entries as NBT `Int` `Slot` values.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -195,6 +201,10 @@ pub struct ModContainer {
 /// the tanks a fill may reach and a drain may take. The tanks' contents are
 /// not here: they live in the entity's saved compound, under `fluids`, so
 /// they survive restarts and the block's own tick reads them.
+///
+/// Validated at registration (`Registrar::block_fluids`): every index in `faces`, `inputs` and
+/// `outputs` must be `< tanks.len()`. Capacities are kept as declared; a zero-capacity tank
+/// accepts no fluid.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -212,6 +222,10 @@ pub struct ModFluidTanks {
 /// moves, and the faces a fill may come through and a drain may leave by.
 /// The amount is not here: it lives in the entity's saved compound, under
 /// `energy`, so it survives restarts and the block's own tick reads it.
+///
+/// Validated at registration (`Registrar::block_energy`): `capacity`, `max_insert` and
+/// `max_extract` must be nonnegative (`>= 0`). Zero capacity and transfer rates larger than
+/// `capacity` are kept as declared.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]

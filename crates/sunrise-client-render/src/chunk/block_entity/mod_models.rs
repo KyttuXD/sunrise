@@ -2,7 +2,7 @@
 use super::published_shapes::{PublishedShapes, SHAPES_KEY};
 use std::sync::{Arc, LazyLock};
 use sunrise_client_core::{
-    block_entity_nbt::saved_item_slot,
+    block_entity_nbt::saved_mod_item_slot,
     block_entity_types::{self, RegisteredBlockEntityType},
 };
 use sunrise_core::nbt::{Compound, JavaString, Tag};
@@ -52,7 +52,7 @@ impl ModBlockEntityFields {
     fn claim_modeled_item_rows(&mut self) {
         if let Some(Tag::List(rows)) = self.nbt.get_mut(&ITEMS) {
             rows.retain(|row| {
-                saved_item_slot(row)
+                saved_mod_item_slot(row)
                     .is_none_or(|slot| self.items.get(slot).is_none_or(Option::is_none))
             });
         }
@@ -89,7 +89,7 @@ impl ModBlockEntity {
 
     pub fn has_opaque_item_slot(&self, slot: usize) -> bool {
         matches!(self.nbt.get(&ITEMS), Some(Tag::List(rows)) if
-            rows.iter().any(|row| saved_item_slot(row) == Some(slot)))
+            rows.iter().any(|row| saved_mod_item_slot(row) == Some(slot)))
     }
 
     /// A write (including an explicit clear) supersedes raw rows for this index.
@@ -98,7 +98,7 @@ impl ModBlockEntity {
             return None;
         }
         if let Some(Tag::List(rows)) = self.fields.nbt.get_mut(&ITEMS) {
-            rows.retain(|row| saved_item_slot(row) != Some(slot));
+            rows.retain(|row| saved_mod_item_slot(row) != Some(slot));
         }
         self.items.get_mut(slot)
     }

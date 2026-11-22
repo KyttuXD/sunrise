@@ -2855,7 +2855,7 @@ impl Game<'_> {
         self.with_level(|_, level, _| level.new_block_entity_for_state(state))
     }
     /// The containers of the mod blocks' block entities, by block state
-    /// (`native_block_entity_container`), checked.
+    /// (`native_block_entity_container`).
     pub(super) fn native_containers(&self) -> FxHashMap<u32, Arc<ModContainer>> {
         let registry = self.pack.assets.registry;
         let mut by_block: FxHashMap<String, Option<Arc<ModContainer>>> = FxHashMap::default();
@@ -2871,14 +2871,7 @@ impl Game<'_> {
                 let mut container = None;
                 self.native_block_entity_container(&state.name, &mut container);
                 container.map(|mut c| {
-                    c.slots = c
-                        .slots
-                        .min(usize::from(sunrise_mod_package::content::MAX_MENU_SLOTS));
                     let n = c.slots;
-                    for list in c.faces.iter_mut().chain([&mut c.inputs, &mut c.outputs]) {
-                        list.retain(|&s| s < n);
-                    }
-                    c.insert_rules.truncate(n);
                     c.menu = c
                         .menu
                         .filter(|m| mod_menu(m).is_some_and(|(_, size)| size == n));
@@ -2892,7 +2885,7 @@ impl Game<'_> {
         out
     }
     /// The fluid tanks of the mod blocks' block entities, by block state
-    /// (`native_block_entity_fluids`), checked as the containers are.
+    /// (`native_block_entity_fluids`).
     pub(super) fn native_fluid_tables(&self) -> FxHashMap<u32, Arc<ModFluidTanks>> {
         let registry = self.pack.assets.registry;
         let mut by_block: FxHashMap<String, Option<Arc<ModFluidTanks>>> = FxHashMap::default();
@@ -2907,19 +2900,7 @@ impl Game<'_> {
             let tanks = by_block.entry(state.name.clone()).or_insert_with(|| {
                 let mut fluids = None;
                 self.native_block_entity_fluids(&state.name, &mut fluids);
-                fluids.map(|mut f| {
-                    f.tanks.truncate(16);
-                    // Clamped, not dropped: the face and fill lists name
-                    // tanks by number, which must not shift.
-                    for c in &mut f.tanks {
-                        *c = (*c).clamp(1, 1_000_000);
-                    }
-                    let n = f.tanks.len();
-                    for list in f.faces.iter_mut().chain([&mut f.inputs, &mut f.outputs]) {
-                        list.retain(|&t| t < n);
-                    }
-                    Arc::new(f)
-                })
+                fluids.map(Arc::new)
             });
             if let Some(t) = tanks {
                 out.insert(i, Arc::clone(t));
@@ -2928,7 +2909,7 @@ impl Game<'_> {
         out
     }
     /// The energy buffers of the mod blocks' block entities, by block state
-    /// (`native_block_entity_energy`), checked as the containers are.
+    /// (`native_block_entity_energy`).
     pub(super) fn native_energy_tables(&self) -> FxHashMap<u32, Arc<ModEnergyBuffer>> {
         let registry = self.pack.assets.registry;
         let mut by_block: FxHashMap<String, Option<Arc<ModEnergyBuffer>>> = FxHashMap::default();
@@ -2943,11 +2924,7 @@ impl Game<'_> {
             let buffer = by_block.entry(state.name.clone()).or_insert_with(|| {
                 let mut energy = None;
                 self.native_block_entity_energy(&state.name, &mut energy);
-                energy.filter(|e| e.capacity >= 1).map(|mut e| {
-                    e.max_insert = e.max_insert.clamp(0, e.capacity);
-                    e.max_extract = e.max_extract.clamp(0, e.capacity);
-                    Arc::new(e)
-                })
+                energy.map(Arc::new)
             });
             if let Some(b) = buffer {
                 out.insert(i, Arc::clone(b));
@@ -4253,5 +4230,228 @@ mod tests {
         )
         .unwrap();
         assert_eq!(game.screen_hovered_item(), None);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn declared_stock_storage_honors_shapes_and_rates() {
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
+        use mod_api::{self, *};
+        use std::sync::Arc;
+        use sunrise_client::{chunk::Chunk, containers::BlockEntity, save};
+
+        const CHILD: &str = "SUNRISE_STOCK_STORAGE_CHILD";
+        if run_fresh_cases(
+            "game::native_hooks::tests::declared_stock_storage_honors_shapes_and_rates",
+            CHILD,
+            &["run"],
+        ) {
+            return;
+        }
+
+        const VAULT: &str = "stock_test:vault";
+        // A stock container is not bounded by the menu protocol's signed-short slot index.
+        const VAULT_SLOT: usize = sunrise_mod_package::content::MAX_MENU_SLOTS as usize;
+        const TANK: &str = "stock_test:tank";
+        const BATTERY: &str = "stock_test:battery";
+
+        struct StockMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for StockMod {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                r.block_entity_type("vault").blocks(&[VAULT]).build();
+                r.block_entity_type("tank").blocks(&[TANK]).build();
+                r.block_entity_type("battery").blocks(&[BATTERY]).build();
+
+                let vault = r.block_key(VAULT);
+                let mut container_faces: [Vec<usize>; 6] = Default::default();
+                container_faces[Direction::Up as usize] = vec![VAULT_SLOT];
+                r.block_container(
+                    &vault,
+                    ModContainer {
+                        slots: VAULT_SLOT + 1,
+                        faces: container_faces,
+                        inputs: vec![VAULT_SLOT],
+                        outputs: vec![VAULT_SLOT],
+                        insert_rules: Vec::new(),
+                        menu: None,
+                    },
+                );
+
+                let tank = r.block_key(TANK);
+                let mut fluids = ModFluidTanks::default();
+                fluids.tanks = vec![1000; 17];
+                fluids.tanks[0] = 0;
+                fluids.tanks[16] = 1_000_001;
+                fluids.faces[Direction::Up as usize] = vec![0, 16];
+                fluids.inputs = vec![0, 16];
+                fluids.outputs = vec![0, 16];
+                r.block_fluids(&tank, fluids);
+
+                let battery = r.block_key(BATTERY);
+                let mut extract_faces = [false; 6];
+                extract_faces[Direction::East as usize] = true;
+                r.block_energy(
+                    &battery,
+                    ModEnergyBuffer {
+                        capacity: 0,
+                        max_insert: 500,
+                        max_extract: 500,
+                        insert_faces: [false; 6],
+                        extract_faces,
+                    },
+                );
+            }
+
+            fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
+                for id in [VAULT, TANK, BATTERY] {
+                    event
+                        .register(mod_api::Block::new(id, "minecraft:stone"))
+                        .unwrap();
+                }
+            }
+        }
+
+        let mods: Mods = Arc::from([ModEntry::new("stock_test", Box::new(StockMod))]);
+        mod_platform::__private::install(mods.clone());
+        crate::game::api_values::install_parts(&mods).unwrap();
+        let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let root = super::super::mods::content_root(&base, &Default::default())
+            .unwrap()
+            .prepared()
+            .to_path_buf();
+        with_game_at(root, |game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            // Populate stock tables through the game's real declarations -> table path.
+            game.tick_block_entities_with(&mut ()).unwrap();
+
+            let level = game.level(game.dim.id()).unwrap();
+            let vault_pos = [1, 64, 0];
+            let tank_pos = [2, 64, 0];
+            let battery_pos = [3, 64, 0];
+            for (pos, id) in [(vault_pos, VAULT), (tank_pos, TANK), (battery_pos, BATTERY)] {
+                let state = game.pack.assets.registry.default_state(id).unwrap();
+                assert_eq!(
+                    game.level_set_block(level, pos, state, BlockUpdateFlags::NONE),
+                    Ok(true)
+                );
+            }
+
+            // 1. Storage beyond the menu slot range still exposes and persists its declared slot.
+            let items = level
+                .capability(game, &ITEMS, vault_pos, Some(Direction::Up))
+                .unwrap();
+            assert_eq!(items.owner(), "the game");
+            assert_eq!(items.size(game), 1);
+            let dirt = ItemResource::of(
+                &mod_api::ItemStack::new(
+                    mod_api::__private::item_key("minecraft:dirt").unwrap(),
+                    1,
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                game.transaction(|host, tx| Ok::<_, ()>(items.insert_at(host, tx, 0, &dirt, 7))),
+                Ok(7)
+            );
+            assert_eq!(items.amount(game, 0), 7);
+            assert_eq!(items.resource(game, 0), Some(dirt.clone()));
+            let vault_key = (vault_pos[0], vault_pos[1], vault_pos[2]);
+            let saved = save::block_entity_encode::encode(
+                vault_key,
+                game.world.block_entities.get(&vault_key).unwrap(),
+                VAULT,
+                &Default::default(),
+            );
+            let (saved_pos, restored) = save::decode_block_entity_for_block(&saved, VAULT).unwrap();
+            assert_eq!(saved_pos, vault_key);
+            let BlockEntity::Mod(reloaded) = &restored else {
+                panic!("expected mod block entity for vault");
+            };
+            assert_eq!(reloaded.items.len(), VAULT_SLOT + 1);
+            assert_eq!(
+                reloaded.items[VAULT_SLOT].as_ref(),
+                Some(&sunrise_client::items::ItemStack::new("minecraft:dirt", 7))
+            );
+            game.world.block_entities.insert(vault_key, restored);
+            assert_eq!(items.amount(game, 0), 7);
+            assert_eq!(items.resource(game, 0), Some(dirt));
+
+            // 2. 17-tank declaration exposes tank 16 (capacity 1,000,001), zero-capacity tank 0
+            // refuses fill, and a malformed negative saved amount decodes as empty without overflow.
+            let fluids = level
+                .capability(game, &FLUIDS, tank_pos, Some(Direction::Up))
+                .unwrap();
+            assert_eq!(fluids.owner(), "the game");
+            assert_eq!(fluids.size(game), 2);
+            let water = FluidResource::of(&FluidStack::new(
+                mod_api::__private::fluid_key("minecraft:water").unwrap(),
+                1,
+            ));
+            assert_eq!(fluids.capacity(game, 0, Some(&water)), 0);
+            assert_eq!(fluids.capacity(game, 1, Some(&water)), 1_000_001);
+            let tank_key = (tank_pos[0], tank_pos[1], tank_pos[2]);
+            if let Some(BlockEntity::Mod(entity)) = game.world.block_entities.get_mut(&tank_key) {
+                let mut list = vec![Tag::Compound(Compound::new()); 17];
+                list[16] = Tag::compound([
+                    ("Fluid", Tag::String("minecraft:water".into())),
+                    ("Amount", Tag::Int(i32::MIN)),
+                ]);
+                entity.nbt.insert("fluids".into(), Tag::List(list));
+            } else {
+                panic!("expected mod block entity for tank");
+            }
+            assert_eq!(fluids.amount(game, 1), 0);
+            assert_eq!(fluids.resource(game, 1), None);
+            assert_eq!(
+                game.transaction(|host, tx| Ok::<_, ()>((
+                    fluids.insert_at(host, tx, 0, &water, 1000),
+                    fluids.insert_at(host, tx, 1, &water, 1_000_001),
+                ))),
+                Ok((0, 1_000_001))
+            );
+            assert_eq!(fluids.amount(game, 0), 0);
+            assert_eq!(fluids.resource(game, 0), None);
+            assert_eq!(fluids.amount(game, 1), 1_000_001);
+            assert_eq!(fluids.resource(game, 1), Some(water));
+
+            // 3. Zero-capacity energy buffer with saved energy and max_extract > capacity exposes
+            // the sided handler and extracts inside the normal transaction.
+            let battery_key = (battery_pos[0], battery_pos[1], battery_pos[2]);
+            if let Some(BlockEntity::Mod(entity)) = game.world.block_entities.get_mut(&battery_key)
+            {
+                entity.nbt.insert("energy".into(), Tag::Int(800));
+            } else {
+                panic!("expected mod block entity for battery");
+            }
+            assert!(
+                level
+                    .capability(game, &ENERGY, battery_pos, Some(Direction::West))
+                    .is_none()
+            );
+            let battery = level
+                .capability(game, &ENERGY, battery_pos, Some(Direction::East))
+                .unwrap();
+            assert_eq!(battery.owner(), "the game");
+            assert_eq!(battery.capacity(game), 0);
+            assert_eq!(battery.amount(game), 800);
+            assert_eq!(
+                game.transaction(|host, tx| Ok::<_, ()>((
+                    battery.insert(host, tx, 100),
+                    battery.extract(host, tx, 600),
+                ))),
+                Ok((0, 500))
+            );
+            assert_eq!(battery.amount(game), 300);
+            let abort: Result<(), ()> = game.transaction(|host, tx| {
+                assert_eq!(battery.extract(host, tx, 200), 200);
+                Err(())
+            });
+            assert!(abort.is_err());
+            assert_eq!(battery.amount(game), 300);
+        });
     }
 }

@@ -296,9 +296,10 @@ impl<T: ?Sized + 'static> CapabilityKey<T> {
         }
     }
     /// Whether this key's published metadata marks unilateral forwarding to another block safe.
-    /// Unmarked and unknown capabilities are not proxyable.
+    /// Unmarked, unknown and differently typed capabilities are not proxyable.
     pub fn is_proxyable(&self, host: &dyn crate::Host) -> bool {
-        crate::block_capability_proxyable(host, self.name)
+        host.capability_providers()
+            .block_capability_proxyable(self.name, Some(self.binding().0))
     }
 }
 

@@ -11,7 +11,7 @@ This is a proposed contract for [#2339](https://github.com/arismoko/horizon/issu
 These already work, read from the code at `54bee0f608`:
 
 - **Plain calls.** A dependent names the library under `[dependencies]` and gets its crate as a Cargo dependency. On native, every code mod is linked into one game binary (the launcher's native mod build). On wasm, a library and everything that depends on it form one **dependency group**: one shared memory, one shared table and one copy of each member (`sunrise-mod-wasm/src/link.rs`). Two mods that share a library share its group (`groups()` in `sunrise-mod-wasm/src/lib.rs`). Calls, statics, generics, trait objects and `Drop` inside a group are ordinary Rust (`tests/real_library.rs`).
-- **Mod capability keys.** `CapabilityKey::<dyn ResourceHandler<Chemical>>::new("chemlib:chemical")`, providers through `Registrar`, lookups through `level.capability`. A provider whose handler type belongs to a mod is stored erased (`OwnProvider`, `parts/capabilities.rs`). On wasm, an erased `Arc<dyn Any + Send + Sync>` crosses as a group-scoped resource id. The group that made it gets it back, and any other group gets `wire::Unsupported::CROSS_GROUP` (`wire_resources.rs`, generator `wire/mod.rs` `ERASED`).
+- **Mod capability keys.** `CapabilityKey::<dyn ResourceHandler<Chemical>>::new("chemlib:chemical")`, providers through `Registrar`, lookups through `level.capability`. Built-in and mod-defined capability providers both bind typed in-process callbacks (`NativeCapabilityProvider`, `parts/capabilities.rs`) without `Wire`, replacing the former guest-erased provider handle.
 - **Hook machinery.** `sunrise_mod_runtime::subscribers::Subscribers` builds per-hook lists once at install. Order is priority descending, then dependency order. It also tracks `receive_cancelled` and keeps a bitset for the "anyone listening?" test. `set_mod_enabled` and `mark_mod` handle the player's switch and crash attribution.
 - **Typed slot keys.** `BlockKey(u32)` and the other slot keys are backed by `sunrise_mod_runtime::registry_keys::Names`: requested at load, then resolved to slots.
 - **Attachments.** `AttachmentType<T>` on entity, player, block entity, chunk and level holders, with an optional codec, sync and copy-on-death (`sunrise-mod-runtime/src/attachments.rs`). The Part instance state design ([#2328](https://github.com/arismoko/horizon/pull/2328)) makes this the only store for per-instance data.
@@ -153,7 +153,7 @@ Many hand-written impls exist only because the type is built through a checked c
 | generated: other value types | 528 | **`#[derive(Wire)]`** on the type | the rules above |
 | `wire_types.rs`: `Transaction`, `TransactionSeal` | 2 | **stay hand-written** | game-issued tokens: a transaction's write token (`u64`), and a seal's write and close tokens; the game checks them on every use (#2424) |
 | `wire_types.rs`: `LoadedMods`, `RegistrationContext` | 2 | **stay hand-written** | zero-byte lent tokens: the receiver rebuilds its own token. Boundary policy, not a layout |
-| `wire_types.rs`: `OwnProvider`; `wire_slots.rs`: `Id` | 2 | **stay hand-written** | resource handles (group-scoped ids, the `Unsupported` marker) |
+| `wire_slots.rs`: `Id` | 1 | **stay hand-written** | resource handles (the former guest capability provider handle was removed when providers became in-process `NativeCapabilityProvider`) |
 | `wire_types.rs`: slot keys (9 `u32`, `UnresolvedFluid` `u64`) | 1 macro | **stay hand-written** | the host checks each slot with `from_slot`; the guest carries it unchecked, which differs by target |
 | `wire_types.rs`: field-by-field handles and values with plain constructors (`WorldEpoch`, `TickId`, `EntityRef` and the 9 entity handles, `LevelRef`, `ChunkRef`, `GlobalPos`, `Corners`, `PackageKind`, `Side`, `PackageInfo`, …) | ~35 | **derive**, after checking the field order matches the hand impl's `put` order | same bytes. `PackageKind`/`Side` return `WireError::Tag` in place of `Invalid` for an unknown case, a different error with the same refusal |
 | `wire_types.rs`: impls whose `take` validates or converts (`Identifier`, `LevelKey`, `ConfigPath`, `JavaString`, `BlockState`, `BlockStateRange`, `Components`, `ItemStack`, `StatePredicate`, …) | ~25 | **`#[wire(via = …)]`** where one simple form exists (`LevelKey`, `ConfigPath` via `String`); **hand-written** where `take` runs several steps (`ItemStack`, `Identifier` as two strings) | validation stays where it is |
@@ -262,7 +262,7 @@ A Part kind and a capability key share storage but answer different questions. A
 
 ### On wasm
 
-This works like `OwnProvider` today. The part is an erased resource in the attaching mod's group, which is also the library's group. The game keeps (kind, target, owner, order, handle). At world open and on `/reload`, it hands each group that declared kinds the resolved table in one load-phase call. `parts()` reads that table in the group without crossing. Nothing of the library's type crosses.
+This worked like the former guest-erased capability provider. The part is an erased resource in the attaching mod's group, which is also the library's group. The game keeps (kind, target, owner, order, handle). At world open and on `/reload`, it hands each group that declared kinds the resolved table in one load-phase call. `parts()` reads that table in the group without crossing. Nothing of the library's type crosses.
 
 ### NeoForge
 
@@ -382,7 +382,7 @@ Sizes are estimates.
 |---|---|---|---|
 | 0 | This note. | docs | — |
 | D1–D2 | `#[derive(Wire)]`, as section 0's plan. **First.** | see section 0 | #2242; D1 before or with the restructure |
-| 1 | (after D1) An erased table shared by owner, kind and name: the declare-once and namespace refusals, type-agreement checks, and the load-phase "resolved table" call into wasm groups. Ported onto it: `OwnProvider`, with the capability key plan's name/type refusals. | ~600 | the restructure (lands into `runtime`) |
+| 1 | (after D1) An erased table shared by owner, kind and name: the declare-once and namespace refusals, type-agreement checks, and the load-phase "resolved table" call into wasm groups. Ported onto it: mod capability providers (now in-process `NativeCapabilityProvider`), with the capability key plan's name/type refusals. | ~600 | the restructure (lands into `runtime`) |
 | 2 | Mod hooks: `ModHook`, `declare_hook`, `listen`, the four contracts, `Subscribers` reused, the switch, crash attribution, the depth limit. Tests: a real wasm library and addon (`real_library` style) and the same source natively, covering order, cancel, `receive_cancelled`, a switched-off mod, an undeclared hook, type mismatch, and no listeners meaning no work. Sample: chem-api plus an addon listener in sunrise-machine-sample. | ~900 | 1 |
 | 3 | Mod registries: `ModRegistry`, slots through `Names`, sync during configuration, tags, saves by name. | ~900 | 1; coordinate the key space with #2332 |
 | 4 | Part kinds on the shared table, including registry scope. | ~600 | 1, 3 (for registry scope) |

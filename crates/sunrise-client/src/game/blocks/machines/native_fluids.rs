@@ -78,12 +78,9 @@ impl CauldronFluids {
 /// The tanks of a mod block its side `side` reaches (none: every tank), in the order the side
 /// numbers them for the fluid capability.
 fn side_tanks(tanks: &ModFluidTanks, side: Option<Direction>) -> impl Iterator<Item = usize> + '_ {
-    let n = tanks.tanks.len();
-    let face = side.map(|face| &tanks.faces[face as usize]);
-    (0..face.map_or(n, Vec::len)).filter_map(move |i| {
-        let tank = face.map_or(i, |face| face[i]);
-        (tank < n).then_some(tank)
-    })
+    let face = side.map(|face| tanks.faces[face as usize].as_slice());
+    let len = face.map_or(tanks.tanks.len(), <[usize]>::len);
+    (0..len).map(move |i| face.map_or(i, |face| face[i]))
 }
 
 /// Whether the tanks at `at` take `fluid`. A mod block's saved tanks keep an id and an amount,
@@ -136,18 +133,23 @@ fn read_tanks(nbt: &Compound, n: usize) -> Vec<Tank> {
         .iter()
         .take(n)
         .map(|tag| match tag {
-            Tag::Compound(map) => (
-                match map.get(&JavaString::from("Fluid")) {
-                    Some(Tag::String(fluid)) if fluid.to_string_lossy() != "minecraft:empty" => {
-                        Some(fluid.to_string_lossy())
-                    }
-                    _ => None,
-                },
-                match map.get(&JavaString::from("Amount")) {
-                    Some(Tag::Int(amount)) => *amount,
+            Tag::Compound(map) => {
+                let amount = match map.get(&JavaString::from("Amount")) {
+                    Some(Tag::Int(amount)) if *amount > 0 => *amount,
                     _ => 0,
-                },
-            ),
+                };
+                let fluid = (amount > 0)
+                    .then(|| match map.get(&JavaString::from("Fluid")) {
+                        Some(Tag::String(fluid))
+                            if fluid.to_string_lossy() != "minecraft:empty" =>
+                        {
+                            Some(fluid.to_string_lossy())
+                        }
+                        _ => None,
+                    })
+                    .flatten();
+                (fluid, amount)
+            }
             _ => (None, 0),
         })
         .collect();
@@ -251,16 +253,20 @@ impl Game<'_> {
         let Some(entry) = list.get(index) else {
             return Some((None, 0));
         };
-        let id = match entry.get("Fluid") {
-            Some(Tag::String(id)) if !id.0.iter().copied().eq("minecraft:empty".encode_utf16()) => {
-                Some(id)
-            }
-            _ => None,
-        };
         let amount = match entry.get("Amount") {
-            Some(Tag::Int(amount)) => *amount,
+            Some(Tag::Int(amount)) if *amount > 0 => *amount,
             _ => 0,
         };
+        let id = (amount > 0)
+            .then(|| match entry.get("Fluid") {
+                Some(Tag::String(id))
+                    if !id.0.iter().copied().eq("minecraft:empty".encode_utf16()) =>
+                {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .flatten();
         Some((id, amount))
     }
 
@@ -379,7 +385,8 @@ impl Game<'_> {
                 {
                     return Some(fluid);
                 }
-                let add = (tanks.tanks[real] - current).clamp(0, amount);
+                let room = i64::from(tanks.tanks[real].max(0)) - i64::from(current);
+                let add = room.clamp(0, i64::from(amount)) as i32;
                 if add > 0 {
                     let Some(mut state) = self.tank_state(at.pos, tanks.tanks.len()) else {
                         return Some(fluid);
@@ -1364,6 +1371,16 @@ mod tests {
         // A tank the save never heard of reads as empty, not as gone.
         let longer = read_tanks(&nbt, 3);
         assert_eq!(longer[2], (None, 0));
+        // Malformed negative saved amounts decode as empty at the decoding boundary.
+        let mut bad = Compound::new();
+        bad.insert(
+            JavaString::from("fluids"),
+            Tag::List(vec![Tag::compound([
+                ("Fluid", Tag::String(JavaString::from("minecraft:water"))),
+                ("Amount", Tag::Int(i32::MIN)),
+            ])]),
+        );
+        assert_eq!(read_tanks(&bad, 1), vec![(None, 0)]);
         // Anything else under `fluids` is the mod's own, not a tank list.
         nbt.insert(JavaString::from("fluids"), Tag::Int(0));
         assert_eq!(read_tanks(&nbt, 2), vec![(None, 0), (None, 0)]);
