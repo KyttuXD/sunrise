@@ -86,13 +86,18 @@ impl Game<'_> {
             .join(mod_list::DIR)
             .join(".sunrise-mod-data")
     }
-    /// The game's `config/` folder beside `options.txt`, shared by every mod
-    /// as on Fabric and NeoForge. The same folder on the window, its server
-    /// thread and a LAN host; a dedicated server's is in its own folder,
-    /// beside `server.properties`. Made when missing. Mods reach their own
-    /// files in it through `Host::config_files`.
-    pub(in crate::game) fn native_config_dir() -> std::io::Result<PathBuf> {
-        config_dir(&Self::game_dir())
+    /// The game's `config/` folder beside `options.txt` (beside
+    /// `server.properties` on a dedicated server), shared by every mod as on
+    /// Fabric and NeoForge (`FMLPaths.CONFIGDIR`). Startup creates the folder;
+    /// lending it performs no I/O.
+    pub(in crate::game) fn config_dir(&self) -> &Path {
+        &self.config_root
+    }
+    /// Whether a mod with the `sunrise-mod.toml` id `id` is installed: a
+    /// native or content package (Fabric's `FabricLoader.isModLoaded`,
+    /// NeoForge's `ModList.isLoaded`). The list is fixed at startup.
+    pub(in crate::game) fn is_loaded(id: &str) -> bool {
+        mod_api::__private::loaded_mods().get(id).is_some()
     }
     /// Shows these recipes in the panel instead of its items, as many as
     /// fit a page, under `title` and a back button, with a row of `tabs`

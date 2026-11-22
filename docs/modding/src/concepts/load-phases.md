@@ -18,8 +18,8 @@ game into a different access mode.
 | --- | --- |
 | Registration (`register`, `blocks`, `items`, and others) | `&RegistrationContext` for the mod list, built-in registry and captured settings. Write declarations through the hook's registrar or event. |
 | `client_setup` | `&mut dyn ClientSetupContext` for client setup operations and published assets and data. No world handles or transactions. |
-| Config registration and initial loading | `&dyn ConfigContext` for settings reads and mod-scoped `ConfigFiles`. |
-| `config_reloading`, `config_unloading` | `HostSide<'_>` for the polling game and `&mut dyn ServerHost` for the stopping server, respectively. |
+| Registered config's `ConfigEvent::Loading` | Owner-bound `&dyn ConfigContext` for settings reads and the native config directory. |
+| Registered config's `ConfigEvent::Reloading`, `ConfigEvent::Unloading` | `HostSide<'_>` for the polling game and `&mut dyn ServerHost` for the stopping server, respectively. |
 | Data and asset reload callbacks | The callback's `ReloadContext`, `ClientReloadListenerContext`, `ClientReloadHost` or `DataLoadContext`, as described below. |
 | Ordinary game callbacks | `ServerHost` or `ClientHost` (or a `HostSide` selecting between them). World and session queries return `None` when no corresponding world or session is open. |
 
@@ -27,7 +27,8 @@ game into a different access mode.
 registration begins, as `Option<&InstanceDirectory>`: `Unix(Vec<u8>)` preserves raw Unix
 path bytes, and `Windows(Vec<u16>)` preserves Windows UTF-16 code units, including
 unpaired surrogates. Never convert Unix bytes with a lossy UTF-8 conversion when
-constructing a filesystem path. A context with no engine snapshot returns `None`.
+constructing a filesystem path. A context with no engine snapshot returns `None`. To find `config/`
+from registration, use `cx.instance_dir()?.to_path_buf()?.join("config")` in an `Option`-returning helper.
 
 A mod that does slow work while the game starts shows it on the startup loading screen
 (NeoForge's `StartupNotificationManager` and `ProgressMeter`). `RegistrationContext::progress(label,
@@ -90,10 +91,11 @@ an unset key, or a context with no engine snapshot returns `None`.
 `&mut ClientSetupEvent`. Afterward the window loads its Client and Common configs, before title,
 connection, input, render or ordinary tick callbacks. If pack selection fails during initialization,
 the recovery options screen opens only after config loading. A title-screen listener may receive a
-`ClientHost`; world-handle queries then return `None` because no world is open. A dedicated server
-loads Common configs once before its first world. Server configs load before `server_about_to_start`
-and unload after `server_stopping` for each world. A second world does not repeat startup registration
-or client setup.
+`ClientHost`; world-handle queries then return `None` because no world is open. Configs declared through `Registrar::register_config` freeze in dependency and declaration order,
+before any config file I/O. The loader notifies only the registered owner. A dedicated server loads Common
+configs once before its first world. Server configs load before `server_about_to_start` and unload after
+`server_stopping` for each started world. A second world does not repeat startup registration or client setup.
+See [Config files and settings](../how-to/mod-settings.md) for path resolution and listener examples.
 
 Attribute bounds are registration data too. `Registrar::widen_attribute_bounds` asks, from a both-side package's
 `register`, join the attribute catalog once when it grows: after the attributes mods declare with

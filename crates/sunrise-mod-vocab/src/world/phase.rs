@@ -1,50 +1,16 @@
 //! Restricted views for registration, data loading, configuration, reload, and client setup.
 use std::{collections::BTreeMap, sync::Arc};
 
-/// Fallback empty [`crate::ConfigFiles`] service returned by default context implementations.
-struct EmptyConfigFiles;
-
-impl crate::ConfigFiles for EmptyConfigFiles {
-    fn read(&self, _: &crate::ConfigPath) -> Result<Vec<u8>, crate::ConfigFileError> {
-        Err(crate::ConfigFileError::NoCallingMod)
-    }
-    fn write(&self, _: &crate::ConfigPath, _: &[u8]) -> Result<(), crate::ConfigFileError> {
-        Err(crate::ConfigFileError::NoCallingMod)
-    }
-    fn list(
-        &self,
-        _: &crate::ConfigPath,
-        _: Option<&str>,
-        _: u32,
-    ) -> Result<Vec<crate::ConfigEntry>, crate::ConfigFileError> {
-        Err(crate::ConfigFileError::NoCallingMod)
-    }
-    fn stat(
-        &self,
-        _: &crate::ConfigPath,
-    ) -> Result<Option<crate::ConfigStat>, crate::ConfigFileError> {
-        Err(crate::ConfigFileError::NoCallingMod)
-    }
-    fn remove(&self, _: &crate::ConfigPath) -> Result<bool, crate::ConfigFileError> {
-        Err(crate::ConfigFileError::NoCallingMod)
-    }
-}
-
-const EMPTY_CONFIG_FILES: EmptyConfigFiles = EmptyConfigFiles;
-
-/// Context for config registration and initial loading (`register_configs`, `config_loading`).
-/// Exposes mod settings and the calling mod's `config/` files, not a game host.
-/// Config reloading and unloading instead lend the polling or stopping game's host.
+/// Owner-bound view for a registered config's initial loading.
+/// Reloading and unloading instead lend the live polling or stopping host.
 pub trait ConfigContext {
     /// A mod's registered setting `key`. Returns `None` for another mod's id or an
     /// unregistered key.
     fn setting(&self, _mod_id: &str, _key: &str) -> Option<String> {
         None
     }
-    /// The calling mod's own files in the game's `config/` folder.
-    fn config_files(&self) -> &'static dyn crate::ConfigFiles {
-        &EMPTY_CONFIG_FILES
-    }
+    /// The game's shared `config/` directory. Lending the path performs no I/O.
+    fn config_dir(&self) -> &std::path::Path;
 }
 
 /// Phase-scoped read-only context for data-reload hooks (`add_server_reload_listeners`,
@@ -396,14 +362,8 @@ pub trait ClientSetupContext:
     + crate::prelude::PayloadsClientHost
     + crate::prelude::ScoreboardClientHost
 {
-    /// The calling mod's own files in the game's `config/` folder.
-    fn config_files(&self) -> &'static dyn crate::ConfigFiles {
-        &EMPTY_CONFIG_FILES
-    }
-    /// The calling mod's bulk files in `sunrise-mod-data/<mod id>/`.
-    fn data_files(&self) -> &'static dyn crate::ConfigFiles {
-        &EMPTY_CONFIG_FILES
-    }
+    /// The game's shared `config/` directory, as in `ConfigContext::config_dir`.
+    fn config_dir(&self) -> &std::path::Path;
     /// Translate a language key in the client's current language.
     fn translate(&self, _key: &str) -> Option<String> {
         None
@@ -772,7 +732,8 @@ impl PackageInfo {
 #[derive(Clone)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct RegistrationData {
-    instance_dir: crate::InstanceDirectory,
+    instance_dir: Arc<crate::InstanceDirectory>,
+    config_dir: Option<Arc<std::path::Path>>,
     runtime: crate::RuntimeEnvironment,
     /// Built-in registry names in ID order, by registry name.
     pub(crate) registries: Arc<[(String, Arc<[String]>)]>,
@@ -794,8 +755,12 @@ impl RegistrationData {
         instance_dir: crate::InstanceDirectory,
         runtime: crate::RuntimeEnvironment,
     ) -> Self {
+        let config_dir = instance_dir
+            .to_path_buf()
+            .map(|path| Arc::from(path.join("config")));
         Self {
-            instance_dir,
+            instance_dir: Arc::new(instance_dir),
+            config_dir,
             runtime,
             capability_coverage: None,
             block_entity_coverage: None,
@@ -815,6 +780,21 @@ impl RegistrationData {
     /// Without a registration publication, the load owns a fresh capture.
     pub fn initial_settings_snapshot() -> Option<Arc<[(String, Arc<[(String, String)]>)]>> {
         registration_data().map(|data| data.settings)
+    }
+    /// The startup `config/` path derived from the published registration
+    /// instance directory (`FMLPaths.CONFIGDIR`), when installed.
+    pub fn initial_config_dir() -> Option<Arc<std::path::Path>> {
+        registration_data()?.config_dir
+    }
+    /// The startup `config/` directory from the published registration snapshot,
+    /// falling back to `<current_dir>/config` in isolated tests with no snapshot.
+    pub fn resolved_config_dir() -> Arc<std::path::Path> {
+        Self::initial_config_dir().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("config")
+                .into()
+        })
     }
     /// Bind each package's checked runtime files, by mod ID: what
     /// [`RegistrationContext::runtime_files`] serves.

@@ -176,21 +176,6 @@ impl Wire for crate::LevelKey {
         Self::parse(input.take_str()?).map_err(|_| WireError::Invalid("invalid level key"))
     }
 }
-impl Wire for crate::ConfigPath {
-    layout_fields!("text" => String);
-    const MIN: usize = 4;
-    fn put(&self, out: &mut Writer) {
-        out.put_str(self.as_str());
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        let text = input.take::<String>()?;
-        if text.is_empty() {
-            Ok(Self::root())
-        } else {
-            Self::try_from(text).map_err(|_| WireError::Invalid("invalid config path"))
-        }
-    }
-}
 impl Wire for crate::SpawnerKey {
     layout_fields!(ordinary_only "validated-spawner-key:v1"; "text" => String);
     const MIN: usize = 4;
@@ -370,15 +355,10 @@ mod tests {
 
     #[test]
     fn wire_checked_values_and_garbage() {
-        round(crate::ConfigPath::new("example/options.toml").unwrap());
-        round(crate::ConfigPath::root());
         round(crate::SpawnerKey::new("example:spawner").unwrap());
         round(crate::CustomSpawners::vanilla());
         round(crate::Identifier::parse("example:thing").unwrap());
         let mut out = Writer::new();
-        out.put_str("../escape");
-        assert!(Reader::decode::<crate::ConfigPath>(out.bytes()).is_err());
-        out.clear();
         out.put_str("not namespaced");
         assert!(Reader::decode::<crate::SpawnerKey>(out.bytes()).is_err());
         out.clear();

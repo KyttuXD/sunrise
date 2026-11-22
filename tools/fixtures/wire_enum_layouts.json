@@ -147,12 +147,6 @@
       "canonical_path": "crate::command::command_argument::CommandArgumentKind"
     },
     {
-      "name": "ConfigEntryKind",
-      "path": "crate::content::config_files::ConfigEntryKind",
-      "hash": "f41f6f46c3f24fc5",
-      "canonical_path": "crate::content::config_files::ConfigEntryKind"
-    },
-    {
       "name": "ConfigKind",
       "path": "crate::game::ConfigKind",
       "hash": "b9dbdb5c73adc78d",

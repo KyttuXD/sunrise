@@ -4,7 +4,8 @@ use crate::game::{
 };
 use mod_api::{
     __private::{HookPanicReport, take_hook_panics},
-    Hooks, ModEntry, ServerHost,
+    ConfigEvent, ConfigKind, ConfigSnapshot, ConfigSpec, Hooks, ModEntry, Registrar,
+    RegistrationContext, ServerHost,
 };
 use mod_platform::testing::with_mods;
 use std::sync::{Arc, Mutex};
@@ -182,23 +183,23 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
     );
     #[mod_api::__subscriptions]
     impl Hooks for Log {
-        fn register_configs(
-            &self,
-            _: &dyn mod_api::ConfigContext,
-            e: &mut mod_api::RegisterConfigsEvent<'_>,
-        ) {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
             if self.1.config_unloading {
-                e.configs
-                    .push(mod_api::Config::new("log", mod_api::ConfigKind::Server, ""));
+                let log = self.0.clone();
+                r.register_config(
+                    ConfigSpec::new(ConfigKind::Server, ""),
+                    Some(Arc::new(
+                        move |event: ConfigEvent<'_>, _: &ConfigSnapshot| {
+                            if let ConfigEvent::Unloading(_) = event {
+                                log.lock().unwrap().push("config-unloading");
+                                panic!("config unloading listener");
+                            }
+                            Ok(())
+                        },
+                    )),
+                )
+                .unwrap();
             }
-        }
-        fn config_unloading(
-            &self,
-            _: &mut dyn ServerHost,
-            _: &mut mod_api::ConfigUnloadingEvent<'_>,
-        ) {
-            self.0.lock().unwrap().push("config-unloading");
-            panic!("config unloading listener");
         }
         fn server_starting(&self, _: &mut dyn ServerHost, _: &mut mod_api::ServerStartingEvent) {
             self.0.lock().unwrap().push("starting");
@@ -343,6 +344,10 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                 root: root.clone(),
                                 save: game.save.clone(),
                             });
+                            let config = root.join("serverconfig");
+                            std::fs::create_dir_all(&config).unwrap();
+                            std::fs::write(config.join("log-server.toml"), "fixture = true\n")
+                                .unwrap();
                             game.native_configs_server_start(&root, dedicated);
                         }
                         let result = game.run_server_lifecycle(dedicated, |game, began| {

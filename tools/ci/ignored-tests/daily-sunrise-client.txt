@@ -61,7 +61,7 @@ sunrise-client game::mounts::tests::saddling_and_armouring_play_at_pitch_one_fro
 sunrise-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
 sunrise-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_receiver_reaches_the_others lib daily resources
 sunrise-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
-sunrise-client game::native_config_files::tests::world_bulk_files_survive_save_reload_backup_and_world_deletion lib daily game-boot
+sunrise-client game::native_configs::storage_tests::world_bulk_files_survive_save_reload_backup_and_world_deletion lib daily game-boot
 sunrise-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name lib daily game-boot
 sunrise-client game::native_disconnect_tests::a_client_mod_leaves_at_the_end_of_the_frame_with_its_reason lib daily resources
 sunrise-client game::native_disconnect_tests::a_leave_request_does_not_follow_a_world_switch lib daily resources

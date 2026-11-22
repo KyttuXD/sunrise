@@ -1110,8 +1110,6 @@ mod native_command_completion_tests;
 mod native_command_reads;
 #[path = "game/modding/native_components.rs"]
 mod native_components;
-#[path = "game/modding/native_config_files.rs"]
-mod native_config_files;
 #[path = "game/modding/native_configs.rs"]
 mod native_configs;
 #[path = "game/modding/native_connection_groups.rs"]
@@ -2359,7 +2357,6 @@ use self::api_values::TryIntoApi;
 pub(crate) use api_values::{block_jump_factor, block_speed_factor, is_ladder};
 pub(crate) use launch_options::Options;
 pub use native_block_entity_draw::BlockEntityDraw;
-pub use native_configs::ConfigFile;
 pub use native_data_maps::DataMapType;
 pub use native_hooks::{PhantomSpawnResult, Shake, SleepProblem};
 pub use native_mob_draw::{MobRender, PlayerRender};
@@ -3997,6 +3994,9 @@ struct Game<'a> {
     lent_mobs: RefCell<native_unspawned_mob::LentMobs>,
     /// Entities whose copies are held out of storage; their handles refuse until stored back.
     held_out: Vec<u32>,
+    /// The game's `config/` folder beside `options.txt` (or `server.properties`
+    /// on a dedicated server), lent by `Host::config_dir`.
+    config_root: std::sync::Arc<std::path::Path>,
     /// Native mods' config files this game loaded (game/modding/native_configs.rs).
     native_configs: native_configs::NativeConfigs,
     /// Private custom-book connection and placement state.
@@ -13984,6 +13984,7 @@ impl<'a> Game<'a> {
             resident_entities: Default::default(),
             lent_mobs: Default::default(),
             held_out: Vec::with_capacity(4),
+            config_root: mod_api::__private::RegistrationData::resolved_config_dir(),
             native_configs: Default::default(),
             native_net: Default::default(),
             native_mod_screen: None,
@@ -14265,7 +14266,15 @@ pub(crate) fn run_with(
         .select(&std::env::current_dir()?, &early_settings.mods.enabled);
     mods::validate_startup_packages(&options.mods)?;
     api_values::install_packages(options.mods.native.packages(), &options.mods.selected)?;
-    mods::install_registration_data(&vanilla_root, mods::runtime_files::sources(&options.mods))?;
+    let instance_dir = Game::game_dir();
+    if let Err(error) = native_hooks::config_dir(&instance_dir) {
+        log::warn!("Sunrise: config folder: {error}");
+    }
+    mods::install_registration_data(
+        &vanilla_root,
+        instance_dir,
+        mods::runtime_files::sources(&options.mods),
+    )?;
     {
         crate::game::part_admission::admit_parts(mod_api::__private::mods())?;
         // The structure types those mods registered, handed to the engine before

@@ -46,7 +46,6 @@ pub(crate) struct Boundary {
 }
 
 const HOST_AREAS: &[(&str, &str, &str)] = &[
-    ("ConfigFiles", "", ""),
     ("Commands", "server_host_mut", "Ok(h.commands())"),
     ("Levels", "server_host", "Ok(h.levels())"),
     ("Messages", "server_host", "Ok(h.messages())"),

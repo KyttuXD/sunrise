@@ -23,7 +23,6 @@ use super::{
     execution_role::{self, ExecutionRole},
     mod_api_host,
     native_block_entity_draw::BlockEntityDraw,
-    native_configs::ConfigFile,
     native_mob_draw::{MobRender, PlayerRender},
     native_panel_recipes::RecipePage,
 };
@@ -367,7 +366,6 @@ mod mob_effect_events;
 mod mob_spawn_checks;
 mod mob_split;
 mod mod_block_entity_payload_tests;
-mod mod_configs;
 mod mod_mismatch;
 mod mod_settings;
 mod model_baking_completed;

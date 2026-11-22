@@ -98,12 +98,17 @@ pub trait ChunkDiskHost: Host {
 pub struct OwningChunkDisk<'a> {
     job: &'a ChunkDiskContext,
     resources: &'a dyn WorldgenHost,
+    config_root: std::sync::Arc<std::path::Path>,
 }
 
 impl<'a> OwningChunkDisk<'a> {
     /// Bind the captured identity to immutable resource-generation reads.
     pub fn new(job: &'a ChunkDiskContext, resources: &'a dyn WorldgenHost) -> Self {
-        Self { job, resources }
+        Self {
+            job,
+            resources,
+            config_root: crate::world::phase::RegistrationData::resolved_config_dir(),
+        }
     }
 }
 
@@ -120,6 +125,9 @@ impl prelude::LevelsHost for OwningChunkDisk<'_> {
 impl prelude::ConfigHost for OwningChunkDisk<'_> {
     fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
         self.resources.setting(mod_id, key).map(str::to_owned)
+    }
+    fn config_dir(&self) -> &std::path::Path {
+        &self.config_root
     }
 }
 impl ChunkDiskHost for OwningChunkDisk<'_> {

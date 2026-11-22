@@ -182,13 +182,20 @@ pub trait Notes {
   Registered events are sent by ID and other valid keys by name, regardless of namespace. A malformed key
   is refused. A queued sound does not guarantee playback; the client must have the event's resources.
 
-- `Host::config_files()` retains the calling mod's `config/<mod id>/`, `<mod id>.<ext>` and `<mod id>-<rest>` ownership spelling and 4 MiB `CONFIG_FILE_MAX`; a world's `serverconfig/` copy is read through `config_loading`.
-  `Host::data_files()` on both sides instead owns `<game directory>/sunrise-mod-data/<mod id>/`; server-only `ServerHost::world_data_files()` owns `<world>/sunrise-mod-data/<mod id>/`, copied, deleted and backed up with the save (`NoWorld` without a world).
-  All three share `ConfigFiles`, `ConfigPath`, `ConfigEntry` and typed `ConfigFileError`; bulk paths omit the mod id, relative to the implicit mod root. Settings remain separate, one file per key, with unchanged scanning; bulk files are never scanned.
-  Sunrise's bulk cap is `DATA_FILE_MAX` (64 MiB), not the config cap. Reads, writes and stats enforce their root; writes replace bytes atomically, never leaving a partial file.
-  Checked `/`-separated paths refuse traversal, backslashes and symbolic links; another mod's files, missing calling-mod context, oversize files and unavailable operations receive typed refusals.
-  `list(&folder, after, limit)` returns lexicographically ordered names strictly after the cursor, at most `limit` entries; start with `None`, continue with the last name, and stop on an empty page.
-  `ConfigPath::root()` lists the mod's own root; `limit` must be 1 through `CONFIG_LIST_MAX` (1024), otherwise `InvalidPage` ([config and bulk storage](../how-to/mod-settings.md)).
+- `Registrar::register_config(ConfigSpec, Option<Arc<ConfigListener>>)` registers config files in startup
+  declaration order (`ModContainer.registerConfig`) and delivers `ConfigEvent::{Loading, Reloading, Unloading}`
+  (`ModConfigEvent`) with `&ConfigSnapshot` (`mod_id`, `kind`, registered `file`, actual on-disk `path`, `text`)
+  only to the registered owner. `Host::config_dir()` lends `&std::path::Path` for the game's `config/` folder
+  beside `options.txt` (beside `server.properties` on a dedicated server), matching NeoForge's
+  `FMLPaths.CONFIGDIR`. Initial loading lends `ConfigContext` for owner-bound settings and `config_dir()`;
+  reloading and unloading lend the polling game's `HostSide` and stopping game's `ServerHost`, respectively.
+  Client setup also lends `config_dir()`. Registration can derive it from the captured `InstanceDirectory`.
+  Native mods read and write their own config and bulk files directly with `std::fs` under `Host::config_dir()`,
+  `Host::instance_dir()` (for instance-wide data such as `<instance>/sunrise-mod-data/<mod id>/`), or
+  `ServerHost::world_dir()` (for world-scoped data backed up and deleted with the save).
+  Settings (`sunrise-mods/.sunrise-mod-data/<mod id>/`, one file per key) and shipped verified package `[runtime]`
+  assets (`RegistrationContext::runtime_files()`) remain separate
+  ([config files and settings](../how-to/mod-settings.md)).
 
 - To draw custom status rows, replace or wrap `minecraft:player_health` (hearts), `minecraft:armor_level`,
   `minecraft:food_level` or `minecraft:air_level` in `register_gui_layers`. Use the installed body's
@@ -335,8 +342,9 @@ pub trait Notes {
   On every exit after startup began, including a failed open, failed tick, or caught panic,
   `server_stopping(dedicated)` (`ServerStoppingEvent`) runs before player cleanup and the final world save attempt.
   `server_stopped(dedicated)` (`ServerStoppedEvent`) runs last, after network teardown, flushing saves and releasing
-  storage, even when the save failed or a shutdown listener panicked. An early callback panic (including
-  `config_unloading`) still reaches the final adopted-world save attempt and full server/network teardown,
+  storage, even when the save failed or a shutdown listener panicked. A panic in a registered server config's
+  `ConfigEvent::Unloading` listener is contained by its callback owner and does not abort shutdown, and an early
+  shutdown hook panic still reaches the final adopted-world save attempt and full server/network teardown,
   not just unpublishing or flushing queued writes. The first failure is retained if cleanup also fails.
   These are server-side, mutable `ServerHost` notifications, not cancellable.
   A failed open never overwrites a world the server did not successfully adopt: the session lock is taken before the prepared level is installed, and only that installation allows the final save. `WorldOpenFailed` or `WorldCloseFailed`

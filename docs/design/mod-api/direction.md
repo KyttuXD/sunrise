@@ -46,20 +46,14 @@ A hook fires with the right host for its moment. A client-side decision that van
 library is split into decide, fire and apply: the library decides, the game fires the hook with a `ClientHost`,
 and the apply re-checks the decision's preconditions and refuses, never recomputes, if they changed.
 
-## Load access belongs to the owning thread
+## Load access belongs to the callback
 
-Registration has only a `RegistrationContext`. Each side then enters Setup, Config and World;
-config loading can read settings and use its existing scoped `ConfigFiles` service, but cannot
-acquire world handles, open transactions or call other game operations. Client setup and initial
-Client/Common configs finish before title, connection or ordinary runtime callbacks begin, so the
-first client pre-tick is already in World even without an open world. Data and asset reloads
-temporarily enter Reloading and restore Setup or World when they finish or fail. The catalog marks
-published asset/data queries as `resource_read`: completion hooks can refresh sprite/recipe caches
-from the newly published generation without acquiring a world handle or transaction. Server reload
-Host reads are restricted to those published facts, registry facts, settings and the mod list;
-existing data-context callbacks keep `DataLoadContext`. A forbidden operation panics naming
-the phase. The game alone advances the thread-local boundary, so the window and integrated server
-cannot change one another's permissions. [Load phases and access](../../modding/src/concepts/load-phases.md)
+Registration has only a `RegistrationContext`. A registered config's `Loading` listener borrows an
+owner-bound `ConfigContext` for settings and the native config path, not a world host. `Reloading`
+and `Unloading` instead lend live hosts on the owning game. Client setup and initial Client/Common
+config loads finish before title, connection or ordinary runtime callbacks begin. Data and asset
+reloads borrow their scoped contexts for registry and published resource reads; existing data-context
+callbacks keep `DataLoadContext`. [Load phases and access](../../modding/src/concepts/load-phases.md)
 lists the once-per-process, per-world and per-reload moments. No additional FML or intermod bus is added.
 
 ## Registering behaviour
@@ -102,7 +96,7 @@ and [Parts](../../modding/src/concepts/parts.md).
 | Special item model renderers | `register_special_model_renderer` registers a `SpecialModelFactory` per type; the last registration wins | The hook runs once, at client startup. Each resource load decodes and bakes each node. | Each draw extracts a typed argument from the selected stack and submits via a scoped collector. Only a successful special layer commits ([special item renderers](../../modding/src/how-to/client/special-item-renderers.md)). |
 | Data map types | `data_map_types` | Server, at world data load and each reload | After the server publishes the loaded data maps. |
 | Recipe property additions | `recipe_property_sets` | Server data load and client preload, after recipes resolve, and again on reload | When station slot checks use the published sets. |
-| Mod configs | `register_configs` | Config phase on the owning side, once at startup for Client/Common and per world for Server | After the file is read and the mod receives its config loading callback. |
+| Mod configs | `Registrar::register_config` | Startup registration; Client/Common load once on the owning side and Server per world | After the file is read and the config's owner-bound `ConfigListener` receives `ConfigEvent::Loading` (`Reloading` on edits, `Unloading` on server stop). |
 
 [Content mods](../../modding/src/how-to/content-mods.md) declare identities and data such as blocks, items, entity types
 and menus in `data/<id>/sunrise/`. These declarations supply the game's registry entries, models or

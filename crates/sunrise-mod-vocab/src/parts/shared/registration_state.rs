@@ -9,6 +9,7 @@ pub(crate) struct Installed {
     pub(crate) dependencies: Arc<crate::__private::EffectiveDependencies>,
     pub(crate) namespace_authority: Arc<crate::parts::NamespaceAuthority>,
     pub(crate) effect_ticks: crate::parts::effects::ResolvedEffectTicks,
+    pub(crate) configs: Vec<crate::configs::RegisteredConfig>,
     pub(crate) menu_screen_factories: HashMap<String, crate::parts::menus::MenuScreenRegistration>,
     pub(crate) menu_recipe_books: HashMap<String, crate::parts::menus::MenuBookDeclaration>,
     pub(crate) recipe_book_types: HashMap<String, String>,

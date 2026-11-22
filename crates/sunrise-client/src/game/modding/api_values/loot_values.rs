@@ -193,9 +193,23 @@ impl TryIntoApi for engine::LootContext<'_> {
     }
 }
 
-struct LootAbilityHost;
+struct LootAbilityHost {
+    config_root: std::sync::Arc<std::path::Path>,
+}
+impl LootAbilityHost {
+    fn new() -> Self {
+        Self {
+            config_root: mod_api::__private::RegistrationData::resolved_config_dir(),
+        }
+    }
+}
 impl mod_api::Host for LootAbilityHost {}
-mod_api::impl_host_areas!(LootAbilityHost);
+mod_api::impl_host_areas!(LootAbilityHost, except(config));
+impl mod_api::prelude::ConfigHost for LootAbilityHost {
+    fn config_dir(&self) -> &std::path::Path {
+        &self.config_root
+    }
+}
 
 pub(crate) fn dispatch_loot_ability(tool: &engine::LootStack, ability: &str, holds: &mut bool) {
     if !mod_api::__private::item_listens(mod_api::HookId::CanPerformAction, &tool.item) {
@@ -204,7 +218,8 @@ pub(crate) fn dispatch_loot_ability(tool: &engine::LootStack, ability: &str, hol
     let Ok(stack) = queried_stack(tool) else {
         return;
     };
-    mod_api::dispatch_can_perform_action(&LootAbilityHost, &stack, ability, holds);
+    let host = LootAbilityHost::new();
+    mod_api::dispatch_can_perform_action(&host, &stack, ability, holds);
 }
 
 fn queried_stack(stack: &engine::LootStack) -> Result<mod_api::ItemStack, LootValueError> {

@@ -280,13 +280,24 @@ mod tests {
         }
         #[crate::__subscriptions]
         impl Hooks for Trace {
-            fn register(&self, _: &mut dyn Registrar, _: &RegistrationContext) {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
                 assert!(crate::registration_open());
                 self.calls.lock().unwrap().push(("register", self.id));
-            }
-            fn config_loading(&self, _: &dyn ConfigContext, _: &mut ConfigLoadingEvent<'_>) {
-                assert!(!crate::registration_open());
-                self.calls.lock().unwrap().push(("config", self.id));
+                let calls = self.calls.clone();
+                let owner = self.id;
+                r.register_config(
+                    ConfigSpec::new(ConfigKind::Server, ""),
+                    Some(Arc::new(
+                        move |event: ConfigEvent<'_>, _: &ConfigSnapshot| {
+                            assert!(matches!(event, ConfigEvent::Loading(_)));
+                            assert!(!crate::registration_open());
+                            assert_eq!(crate::content::crash::current_native_mod(), Some(owner));
+                            calls.lock().unwrap().push(("config", owner));
+                            Ok(())
+                        },
+                    )),
+                )
+                .unwrap();
             }
             fn add_server_reload_listeners(
                 &self,
@@ -300,7 +311,11 @@ mod tests {
         struct Server;
         impl Host for Server {}
         mod_api::impl_host_areas!(Server);
-        impl ConfigContext for Server {}
+        impl ConfigContext for Server {
+            fn config_dir(&self) -> &std::path::Path {
+                std::path::Path::new("config")
+            }
+        }
         impl ReloadContext for Server {}
         // The loader supplies a dependency-resolved slice; dispatch must retain it.
         let order = [1, 0, 2];
@@ -319,34 +334,25 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .into();
-        crate::__private::install(mods.clone());
-        assert!(!crate::registration_open());
-        crate::__private::install_parts(
-            &mods,
-            &crate::__private::part_tests::rule_schema(),
-            |_| false,
-        )
-        .unwrap();
-        assert!(!crate::registration_open());
-        let host = Server;
-        for _world in 0..2 {
-            dispatch_config_loading(
-                &host,
-                &crate::__private::built::ConfigFile {
-                    mod_id: "lib".into(),
-                    kind: ConfigKind::Server,
-                    file: "lib-server.toml".into(),
-                    text: String::new(),
+        // Use the dispatch-only scope so setup does not probe registration a second time.
+        mod_vocab::testing::with_dispatch(mods.clone(), || {
+            assert!(!crate::registration_open());
+            crate::__private::part_tests::install_parts_fixture(&mods).unwrap();
+            assert!(!crate::registration_open());
+            let host = Server;
+            for _world in 0..2 {
+                for config in crate::__private::parts_installation::registered_configs() {
+                    let snapshot = config.snapshot(config.file.clone(), String::new());
+                    config.notify_snapshot(ConfigEvent::Loading(&host), &snapshot);
                 }
-                .into(),
-            );
-            for _reload in 0..2 {
-                let mut listeners = ServerListenerRegistry::new();
-                dispatch_add_server_reload_listeners(&host, |listen| {
-                    listeners.register_listener(listen)
-                });
+                for _reload in 0..2 {
+                    let mut listeners = ServerListenerRegistry::new();
+                    dispatch_add_server_reload_listeners(&host, |listen| {
+                        listeners.register_listener(listen)
+                    });
+                }
             }
-        }
+        });
         let expected = [
             "register", "config", "reload", "reload", "config", "reload", "reload",
         ]

@@ -6,7 +6,7 @@
 `Host` exposes the documented `Game` helpers declared by area in
 `crates/sunrise-mod-vocab/src/host/<area>.rs`, one trait per area; `Host`, `ServerHost` and `ClientHost` are the
 unions of those traits, so a mod calls through them and never names an area trait. Each helper keeps its
-receiver and documentation; a helper without `self` (`config_files`) takes
+receiver and documentation; a helper without `self` (`config_dir`) takes
 `&self` in `Host`. Level services stay on the level hosts above.
 For the per-method comparison with NeoForge's block, item, entity, block-entity and fluid extension interfaces,
 including which gaps are tracked, see [NeoForge extension coverage](neoforge-extensions.md).

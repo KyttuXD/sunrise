@@ -1,5 +1,5 @@
-/// What a mod's [`Hooks::register`](crate::Hooks::register) attaches its parts with, and
-/// declares its block entity types and ticket controllers on. A thing takes one part of each
+/// What a mod uses in [`Hooks::register`](crate::Hooks::register) to attach Parts and declare
+/// block entity types, ticket controllers and config files. A thing takes one Part of each
 /// kind: the same kind twice on one thing refuses the mods at startup, naming both.
 ///
 /// Mods call the generic methods on `dyn Registrar` after requesting registry keys.

@@ -8,8 +8,8 @@ impl ConfigContext for Game<'_> {
         <Self as prelude::ConfigHost>::setting(self, mod_id, key)
     }
 
-    fn config_files(&self) -> &'static dyn ConfigFiles {
-        <Self as prelude::ConfigHost>::config_files(self)
+    fn config_dir(&self) -> &std::path::Path {
+        <Self as prelude::ConfigHost>::config_dir(self)
     }
 }
 
@@ -188,11 +188,8 @@ impl ClientReloadListenerContext for Game<'_> {
 }
 
 impl ClientSetupContext for Game<'_> {
-    fn config_files(&self) -> &'static dyn ConfigFiles {
-        <Self as prelude::ConfigHost>::config_files(self)
-    }
-    fn data_files(&self) -> &'static dyn ConfigFiles {
-        <Self as prelude::ConfigHost>::data_files(self)
+    fn config_dir(&self) -> &std::path::Path {
+        <Self as prelude::ConfigHost>::config_dir(self)
     }
     fn translate(&self, key: &str) -> Option<String> {
         <Self as prelude::ConfigClientHost>::translate(self, key)

@@ -176,53 +176,13 @@ pub enum ConfigKind {
 }
 impl ConfigKind {
     /// The default file name's suffix, as NeoForge's.
-    fn suffix(self) -> &'static str {
+    pub(crate) fn suffix(self) -> &'static str {
         match self {
             Self::Client => "client",
             Self::Common => "common",
             Self::Server => "server",
         }
     }
-}
-/// A config a mod registers: its kind, its file in `config/` and the text
-/// written there when the file is missing.
-// no wire: a registration record consumed by the in-process config loader.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Config {
-    pub mod_id: String,
-    pub kind: ConfigKind,
-    /// A path relative to `config/`: `<mod id>-<kind>.toml` unless named.
-    pub file: String,
-    pub default: String,
-}
-impl Config {
-    /// `config/<mod_id>-<kind>.toml`, `default` when missing.
-    pub fn new(mod_id: &str, kind: ConfigKind, default: &str) -> Self {
-        Self {
-            mod_id: mod_id.to_owned(),
-            kind,
-            file: format!("{mod_id}-{}.toml", kind.suffix()),
-            default: default.to_owned(),
-        }
-    }
-    /// The same in another file of `config/`, such as `mymod/machines.toml`.
-    pub fn file(mut self, file: &str) -> Self {
-        file.clone_into(&mut self.file);
-        self
-    }
-}
-/// A config's file as the game read it.
-// no wire: the config loader hands this record to callbacks in-process.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ConfigFile {
-    pub mod_id: String,
-    pub kind: ConfigKind,
-    /// The registered name, relative to `config/` (or to a world's
-    /// `serverconfig/`, where that copy was read).
-    pub file: String,
-    pub text: String,
 }
 /// A data map type a mod registers (`RegisterDataMapTypesEvent`).
 // no wire: local registration metadata, not the data map's file contents.
@@ -429,30 +389,6 @@ pub(crate) mod built {
                 block: v.block,
                 water: v.water,
                 biome: v.biome,
-            }
-        }
-    }
-    // no wire: the in-process config loader builds this projection for callbacks.
-    // exhaustive: the game builds it with a literal; mods only read it
-    pub struct ConfigFile {
-        pub mod_id: String,
-        pub kind: ConfigKind,
-        pub file: String,
-        pub text: String,
-    }
-    impl From<ConfigFile> for super::ConfigFile {
-        fn from(v: ConfigFile) -> Self {
-            let ConfigFile {
-                mod_id,
-                kind,
-                file,
-                text,
-            } = v;
-            Self {
-                mod_id,
-                kind,
-                file,
-                text,
             }
         }
     }

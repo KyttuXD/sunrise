@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn section_read_backend_refuses_reads_outside_its_snapshot() {
-    let host = LiveSectionHost(None);
+    let host = LiveSectionHost::new(None);
     let entity = EntityRef::new(mod_api::WorldEpoch::new(1), 1);
     assert_eq!(
         entity.piston_push_reaction(&host),

@@ -30,22 +30,11 @@ pub trait ConfigHost {
     /// a failed write leaves it unchanged. This raw write does not fire `setting_changed`.
     fn set_setting(&self, mod_id: &str, key: &str, value: &str);
     /// Side: both.
-    /// The calling mod's own files in the game's `config/` folder, beside
-    /// `options.txt` (beside `server.properties` on a dedicated server):
-    /// its folder `config/<mod id>/` and the files beside it named
-    /// `<mod id>.<ext>` or `<mod id>-<rest>`, as Fabric and NeoForge mods
-    /// keep theirs. The service is bound to the mod whose hook or part is
-    /// running, so a mod never names its id and can't reach another mod's
-    /// files; a world's `serverconfig/` is read only through
-    /// `config_loading`.
-    #[static_call]
-    fn config_files(&self) -> &'static dyn ConfigFiles;
-    /// Side: both. The calling mod's bulk files in
-    /// `sunrise-mod-data/<mod id>/` in the game folder, never scanned as
-    /// settings or config. Paths omit the mod id; `ConfigPath::root()` names
-    /// its root. Sunrise allows at most `DATA_FILE_MAX` bytes per file.
-    #[static_call]
-    fn data_files(&self) -> &'static dyn ConfigFiles;
+    /// The game's `config/` folder beside `options.txt` (beside
+    /// `server.properties` on a dedicated server), as on NeoForge
+    /// (`FMLPaths.CONFIGDIR`). Shared by every mod; mods read and write their
+    /// own config files with ordinary `std::fs` calls. Nothing is created here.
+    fn config_dir(&self) -> &std::path::Path;
     /// Side: both.
     /// The level in place (`minecraft:overworld`), for a hook that isn't told
     /// which it runs in.
@@ -125,11 +114,6 @@ pub trait ConfigServerHost {
     /// mod keeps its data in a folder of its own there, so the world's
     /// backups carry it. None when no world is open.
     fn world_dir(&self) -> Option<PathBuf>;
-    /// Side: server. The calling mod's bulk files in the current save's
-    /// `sunrise-mod-data/<mod id>/`, copied, backed up and deleted with that
-    /// save. Paths omit the mod id. Calls refuse with `NoWorld` before a
-    /// save is open; this service never outlives its borrowed world host.
-    fn world_data_files(&self) -> &dyn ConfigFiles;
     /// Side: server.
     /// Every current rule in the one server-wide store, by namespaced id.
     /// Readable from `server_about_to_start`, before any level exists.

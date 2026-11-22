@@ -1,0 +1,2 @@
+# Owner-bound native config lifecycle (debt P3-25) over a real game fixture.
+sunrise-client game::native_configs::tests::owner_bound_config_lifecycle_isolates_owners_refusals_and_panics lib daily resources
