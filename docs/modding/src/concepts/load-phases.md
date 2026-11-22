@@ -115,7 +115,7 @@ client resource and server data repositories. `context.text_string(&text)` resol
 using fallbacks before assets are loaded. `context.client_text()` lends font measurements only
 when the client is ready. `context.live_host()` returns `None` before the game exists, and lends
 a `HostSide<'_>` during live rediscovery. For example, match `Some(HostSide::Client(host))` to read
-a registered client setting via `host.setting(mod_id, key)` while rediscovering resource packs.
+a registered client setting via `host.setting(key)` with its `SettingKey` while rediscovering resource packs.
 If a callback panics, none of its offered packs are kept, and other finders still run.
 
 ## Reloading
@@ -168,8 +168,10 @@ current side's live registry and merged tags, not pending reload data. Unknown o
 unavailable registries and entries return `None`; an absent tag or a tag that does
 not contain the entry returns `Some(false)`. Enumeration yields each identity once.
 
-`ConfigHost::setting` still returns `Option<String>` on an ordinary `Host`; it is not the
-captured `Option<&str>` read on a load, loop or worldgen context.
+Live mod settings are read and written on `ClientHost` and `ServerHost` using the owner-bound
+`SettingKey` returned by `SettingsRegistrar::register_setting` (`Result<_, SettingAccessError>`).
+Config and reload contexts expose the typed read only. Frozen load, loop, worldgen and chunk-disk
+snapshots still expose `setting(mod_id, key) -> Option<&str>` and never write back.
 
 Server world-generation reads use the published decoded owners, including the
 live feature data in worlds without a terrain locator. Invalid source files do

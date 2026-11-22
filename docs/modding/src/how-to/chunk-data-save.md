@@ -25,9 +25,10 @@ runs. The coordinates, full/proto kind and phase describe the record being
 written. The host grants no live chunk lookup, scheduling, packets or world
 writes.
 `registry(name)` lends `Option<&[String]>` in registry ID order from the frozen generation
-retained by the worker. `None` means that generation has no such registry. Use the slice within
-the callback, or copy it if it must outlive the callback. Neither metadata getter reads files;
-`ConfigHost::setting` still returns an owned `Option<String>` from the same snapshot.
+retained by the worker, and `setting(mod_id, key)` lends `Option<&str>` from that same
+snapshot. `None` means that generation has no such registry or captured setting. Use the borrow
+within the callback, or copy it if it must outlive the callback. Neither metadata getter reads
+files.
 
 A captured record caches its callback result. Disk encoding and pending reads
 reuse it; they cannot invoke the callback twice. If the writer stops before

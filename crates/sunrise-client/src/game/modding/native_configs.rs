@@ -231,11 +231,12 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn panicking_config_hooks_keep_live_writes_and_do_not_stop_later_listeners() {
-        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use crate::game::native_entity_refs::tests::{record_key, run_fresh_cases, with_game};
         use mod_api::{
-            Hooks, HostSide, ModEntry, Registrar, RegistrationContext, ServerHost, SettingSpec,
+            Hooks, HostSide, ModEntry, Registrar, RegistrationContext, ServerHost, SettingKey,
+            SettingSpec, SettingValue,
         };
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, Mutex, OnceLock};
 
         if run_fresh_cases(
             "game::native_configs::tests::panicking_config_hooks_keep_live_writes_and_do_not_stop_later_listeners",
@@ -245,14 +246,25 @@ mod tests {
             return;
         }
 
-        struct Broken;
+        #[derive(Default)]
+        struct Broken {
+            reload: OnceLock<SettingKey>,
+            unload: OnceLock<SettingKey>,
+            seen: Arc<Mutex<Vec<(String, SettingValue)>>>,
+        }
         #[mod_api::__subscriptions]
         impl Hooks for Broken {
             fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
-                for (key, title) in [("reload", "fault.reload"), ("unload", "fault.unload")] {
-                    registrar
-                        .register_setting(SettingSpec::toggle(key, title, false))
-                        .unwrap();
+                for (slot, key, title) in [
+                    (&self.reload, "reload", "fault.reload"),
+                    (&self.unload, "unload", "fault.unload"),
+                ] {
+                    record_key(
+                        slot,
+                        registrar
+                            .register_setting(SettingSpec::toggle(key, title, false))
+                            .unwrap(),
+                    );
                 }
             }
 
@@ -264,7 +276,10 @@ mod tests {
                 let HostSide::Server(host) = host else {
                     panic!("expected server polling")
                 };
-                host.set_setting("fault", "reload", "true");
+                assert_eq!(
+                    host.set_setting(*self.reload.get().unwrap(), SettingValue::Toggle(true)),
+                    Ok(true)
+                );
                 panic!("broken reload listener");
             }
 
@@ -273,8 +288,30 @@ mod tests {
                 host: &mut dyn ServerHost,
                 _: &mut mod_api::ConfigUnloadingEvent<'_>,
             ) {
-                host.set_setting("fault", "unload", "true");
+                assert_eq!(
+                    host.set_setting(*self.unload.get().unwrap(), SettingValue::Toggle(true)),
+                    Ok(true)
+                );
                 panic!("broken unload listener");
+            }
+
+            fn setting_changed(
+                &self,
+                host: HostSide<'_>,
+                event: &mut mod_api::SettingChangedEvent<'_>,
+            ) {
+                let HostSide::Server(host) = host else {
+                    panic!("expected a server setting change")
+                };
+                let key = match event.key {
+                    "reload" => *self.reload.get().unwrap(),
+                    "unload" => *self.unload.get().unwrap(),
+                    unexpected => panic!("unexpected setting: {unexpected}"),
+                };
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((event.key.to_owned(), host.setting(key).unwrap()));
             }
         }
 
@@ -295,8 +332,10 @@ mod tests {
         }
 
         let observed = Arc::new(Mutex::new(Vec::new()));
+        let broken = Broken::default();
+        let seen = broken.seen.clone();
         let mods = vec![
-            ModEntry::new("fault", Box::new(Broken)),
+            ModEntry::new("fault", Box::new(broken)),
             ModEntry::new("later", Box::new(Later(observed.clone()))),
         ]
         .into();
@@ -308,18 +347,39 @@ mod tests {
                     file: "fault-server.toml".into(),
                     text: String::new(),
                 });
+                let reload = mod_api::__private::setting_key_by_name("fault", "reload").unwrap();
+                let unload = mod_api::__private::setting_key_by_name("fault", "unload").unwrap();
                 game.native_config_reloading(&config);
                 game.native_config_unloading(&config);
-                assert_eq!(game.setting("fault", "reload").as_deref(), Some("true"));
-                assert_eq!(game.setting("fault", "unload").as_deref(), Some("true"));
-                // These writes lack a journal. Reset them outside dispatch to make another
-                // invocation of either disabled callback observable.
-                game.set_setting("fault", "reload", "false");
-                game.set_setting("fault", "unload", "false");
+                for (name, key) in [("reload", reload), ("unload", unload)] {
+                    assert_eq!(game.setting(key), Ok(SettingValue::Toggle(true)));
+                    assert_eq!(
+                        fs::read_to_string(game.native_settings_root().join("fault").join(name))
+                            .unwrap(),
+                        "true"
+                    );
+                }
+                assert_eq!(
+                    seen.lock().unwrap().as_slice(),
+                    [
+                        ("reload".to_owned(), SettingValue::Toggle(true)),
+                        ("unload".to_owned(), SettingValue::Toggle(true)),
+                    ]
+                );
+                // Reset outside dispatch to make any repeat of a disabled callback observable.
+                assert_eq!(
+                    game.set_setting(reload, SettingValue::Toggle(false)),
+                    Ok(true)
+                );
+                assert_eq!(
+                    game.set_setting(unload, SettingValue::Toggle(false)),
+                    Ok(true)
+                );
                 game.native_config_reloading(&config);
                 game.native_config_unloading(&config);
-                assert_eq!(game.setting("fault", "reload").as_deref(), Some("false"));
-                assert_eq!(game.setting("fault", "unload").as_deref(), Some("false"));
+                assert_eq!(game.setting(reload), Ok(SettingValue::Toggle(false)));
+                assert_eq!(game.setting(unload), Ok(SettingValue::Toggle(false)));
+                assert_eq!(seen.lock().unwrap().len(), 4);
                 assert_eq!(
                     observed.lock().unwrap().as_slice(),
                     ["reload", "unload", "reload", "unload"]
@@ -345,12 +405,13 @@ mod tests {
     #[ignore = "daily"]
     fn config_permissions_and_once_per_side_survive_two_worlds() {
         use crate::game::native_entity_refs::tests::{
-            run_fresh_cases, with_client_game, with_game,
+            record_key, run_fresh_cases, with_client_game, with_game,
         };
         use mod_api::{
-            ConfigContext, Hooks, ModEntry, Registrar, RegistrationContext, SettingSpec,
+            ConfigContext, Hooks, ModEntry, Registrar, RegistrationContext, SettingKey,
+            SettingSpec, SettingValue,
         };
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, Mutex, OnceLock};
 
         if run_fresh_cases(
             "game::native_configs::tests::config_permissions_and_once_per_side_survive_two_worlds",
@@ -360,17 +421,23 @@ mod tests {
             return;
         }
 
-        struct Probe(Arc<Mutex<Vec<(bool, mod_api::ConfigKind)>>>);
+        struct Probe(
+            Arc<Mutex<Vec<(bool, mod_api::ConfigKind)>>>,
+            OnceLock<SettingKey>,
+        );
         #[mod_api::__subscriptions]
         impl Hooks for Probe {
             fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
-                registrar
-                    .register_setting(SettingSpec::toggle(
-                        "unloaded",
-                        "phase_probe.unloaded",
-                        false,
-                    ))
-                    .unwrap();
+                record_key(
+                    &self.1,
+                    registrar
+                        .register_setting(SettingSpec::toggle(
+                            "unloaded",
+                            "phase_probe.unloaded",
+                            false,
+                        ))
+                        .unwrap(),
+                );
             }
 
             fn register_configs(
@@ -378,7 +445,10 @@ mod tests {
                 context: &dyn ConfigContext,
                 event: &mut mod_api::RegisterConfigsEvent<'_>,
             ) {
-                let _ = context.setting("phase_probe", "unused");
+                assert!(matches!(
+                    context.setting(*self.1.get().unwrap()),
+                    Ok(SettingValue::Toggle(_))
+                ));
                 for kind in [Client, Common, Server] {
                     event
                         .configs
@@ -390,7 +460,10 @@ mod tests {
                 context: &dyn ConfigContext,
                 event: &mut mod_api::ConfigLoadingEvent<'_>,
             ) {
-                let _ = context.setting("phase_probe", "unused");
+                assert!(matches!(
+                    context.setting(*self.1.get().unwrap()),
+                    Ok(SettingValue::Toggle(_))
+                ));
                 let _ = context.config_files();
                 self.0.lock().unwrap().push((true, event.config.kind));
             }
@@ -399,30 +472,35 @@ mod tests {
                 context: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::ConfigUnloadingEvent<'_>,
             ) {
-                let next = match context.setting("phase_probe", "unloaded").as_deref() {
-                    Some("true") => "false",
-                    _ => "true",
+                let key = *self.1.get().unwrap();
+                let SettingValue::Toggle(current) = context.setting(key).unwrap() else {
+                    panic!("expected a toggle")
                 };
-                context.set_setting("phase_probe", "unloaded", next);
+                assert_eq!(
+                    context.set_setting(key, SettingValue::Toggle(!current)),
+                    Ok(true)
+                );
                 self.0.lock().unwrap().push((false, event.config.kind));
             }
         }
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mods = vec![ModEntry::new("phase_probe", Box::new(Probe(calls.clone())))].into();
+        let mods = vec![ModEntry::new(
+            "phase_probe",
+            Box::new(Probe(calls.clone(), OnceLock::new())),
+        )]
+        .into();
         mod_platform::testing::with_mods(mods, || {
             with_client_game(|game| {
                 game.native_configs_client_start();
                 game.native_configs_client_start();
             });
             with_game(|game| {
-                for (world, expected) in [("phase-world-one", "true"), ("phase-world-two", "false")]
-                {
+                let key =
+                    mod_api::__private::setting_key_by_name("phase_probe", "unloaded").unwrap();
+                for (world, expected) in [("phase-world-one", true), ("phase-world-two", false)] {
                     game.native_configs_server_start(Path::new(world), false);
                     game.native_configs_server_stop();
-                    assert_eq!(
-                        game.setting("phase_probe", "unloaded").as_deref(),
-                        Some(expected)
-                    );
+                    assert_eq!(game.setting(key), Ok(SettingValue::Toggle(expected)));
                 }
             });
         });

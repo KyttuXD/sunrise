@@ -10,9 +10,10 @@ For example, reading disk value 8 and setting 9 publishes 9 on success.
 The worker host supplies only the job identity and immutable resource reads.
 Borrow the identity with `let job = host.job();` (`&ChunkDiskContext`).
 `registry(name)` lends `Option<&[String]>` in registry ID order from the frozen generation
-retained by the worker. `None` means that generation has no such registry. Use the slice within
-the callback, or copy it if it must outlive the callback. Neither metadata getter reads files;
-`ConfigHost::setting` still returns an owned `Option<String>` from the same snapshot.
+retained by the worker, and `setting(mod_id, key)` lends `Option<&str>` from that same
+snapshot. `None` means that generation has no such registry or captured setting. Use the borrow
+within the callback, or copy it if it must outlive the callback. Neither metadata getter reads
+files.
 The host has no live backend and is not a `ServerHost`. Typed values need a
 persistence codec, not `Wire`. Unknown bounded attachment entries are preserved opaquely.
 

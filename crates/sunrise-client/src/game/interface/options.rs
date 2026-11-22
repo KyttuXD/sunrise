@@ -160,6 +160,9 @@ impl Game<'_> {
         ui.minecart_improvements = minecart_improvements;
         ui.languages = lang::available(&[&self.pack.source]);
         self.refresh_pack_lists();
+        if let Page::NativeMod(index) = page {
+            self.native_settings_refresh(index);
+        }
     }
     /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
     /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s

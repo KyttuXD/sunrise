@@ -36,10 +36,12 @@ const EMPTY_CONFIG_FILES: EmptyConfigFiles = EmptyConfigFiles;
 /// Exposes mod settings and the calling mod's `config/` files, not a game host.
 /// Config reloading and unloading instead lend the polling or stopping game's host.
 pub trait ConfigContext {
-    /// A mod's registered setting `key`. Returns `None` for another mod's id or an
-    /// unregistered key.
-    fn setting(&self, _mod_id: &str, _key: &str) -> Option<String> {
-        None
+    /// Read a registered setting through its owner-bound [`crate::SettingKey`].
+    fn setting(
+        &self,
+        _key: crate::SettingKey,
+    ) -> Result<crate::SettingValue, crate::SettingAccessError> {
+        Err(crate::SettingAccessError::Unavailable)
     }
     /// The calling mod's own files in the game's `config/` folder.
     fn config_files(&self) -> &'static dyn crate::ConfigFiles {
@@ -89,9 +91,12 @@ pub trait ReloadContext:
     fn on(&self, _mod_id: &str) -> bool {
         false
     }
-    /// A mod's registered setting `key`.
-    fn setting(&self, _mod_id: &str, _key: &str) -> Option<String> {
-        None
+    /// Read a registered setting through its owner-bound [`crate::SettingKey`].
+    fn setting(
+        &self,
+        _key: crate::SettingKey,
+    ) -> Result<crate::SettingValue, crate::SettingAccessError> {
+        Err(crate::SettingAccessError::Unavailable)
     }
     /// Startup opt-in for test-only content.
     fn game_tests_enabled(&self) -> bool {
@@ -388,10 +393,12 @@ pub trait ClientReloadListenerContext {
     fn is_loaded(&self, _id: &str) -> bool {
         false
     }
-    /// A mod's registered setting `key`. Returns `None` for another mod's id or an
-    /// unregistered key.
-    fn setting(&self, _mod_id: &str, _key: &str) -> Option<String> {
-        None
+    /// Read a registered setting through its owner-bound [`crate::SettingKey`].
+    fn setting(
+        &self,
+        _key: crate::SettingKey,
+    ) -> Result<crate::SettingValue, crate::SettingAccessError> {
+        Err(crate::SettingAccessError::Unavailable)
     }
     /// Math backend profile active in this process.
     fn math_profile(&self) -> crate::MathProfile;

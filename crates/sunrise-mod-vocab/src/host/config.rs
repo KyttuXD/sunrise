@@ -21,15 +21,6 @@ pub trait ConfigHost {
     /// launcher's next build leaves it out.
     fn on(&self, mod_id: &str) -> bool;
     /// Side: both.
-    /// A mod's setting `key` (one file per key in `native_data_dir`). A mod reads only its own:
-    /// another mod's id or a key not registered by that owner gives None.
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String>;
-    /// Side: both.
-    /// Keeps a mod's registered setting `key`. Another mod's id or an unregistered key keeps
-    /// nothing. A successful write invalidates the typed read cache for this data folder and key;
-    /// a failed write leaves it unchanged. This raw write does not fire `setting_changed`.
-    fn set_setting(&self, mod_id: &str, key: &str, value: &str);
-    /// Side: both.
     /// The calling mod's own files in the game's `config/` folder, beside
     /// `options.txt` (beside `server.properties` on a dedicated server):
     /// its folder `config/<mod id>/` and the files beside it named
@@ -69,6 +60,17 @@ pub trait ConfigHost {
 /// The server host's methods of the `config` area, implemented by the game and reached through [`ServerHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait ConfigServerHost {
+    /// Read the live value of an owner-bound setting registered through
+    /// [`SettingsRegistrar::register_setting`](crate::SettingsRegistrar::register_setting).
+    fn setting(&self, key: SettingKey) -> Result<SettingValue, SettingAccessError>;
+    /// Persist and publish a setting on this server and synchronously notify its owner.
+    /// Returns `Ok(true)` if the value changed (`Range` values compare by bits),
+    /// or `Ok(false)` if it was already equal.
+    fn set_setting(
+        &mut self,
+        key: SettingKey,
+        value: SettingValue,
+    ) -> Result<bool, SettingAccessError>;
     /// Startup opt-in for test-only content. Test registration runs regardless.
     fn game_tests_enabled(&self) -> bool;
     /// Side: server.
@@ -146,24 +148,31 @@ pub trait ConfigServerHost {
 /// The client host's methods of the `config` area, implemented by the game and reached through [`crate::ClientHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait ConfigClientHost {
+    /// Read the live value of an owner-bound setting registered through
+    /// [`SettingsRegistrar::register_setting`](crate::SettingsRegistrar::register_setting).
+    fn setting(&self, key: SettingKey) -> Result<SettingValue, SettingAccessError>;
+    /// Persist and publish a setting, update Options > Mods, and synchronously notify its owner.
+    /// Returns `Ok(true)` if the value changed (`Range` values compare by bits),
+    /// or `Ok(false)` if it was already equal.
+    fn set_setting(
+        &mut self,
+        key: SettingKey,
+        value: SettingValue,
+    ) -> Result<bool, SettingAccessError>;
     /// Side: client.
     /// The selected language's text for a translation key (`Component.translatable`'s lookup), `None`
     /// when no language layer defines it.
     fn translate(&self, key: &str) -> Option<String>;
     /// Side: client.
-    /// The calling mod's toggle `key` (`Registrar::register_setting`): the player's choice, else
-    /// its default. None when the mod registered no toggle by that key.
-    fn setting_bool(&self, key: &str) -> Option<bool>;
+    /// Read a toggle setting through its owner-bound [`SettingKey`].
+    fn setting_bool(&self, key: SettingKey) -> Result<bool, SettingAccessError>;
     /// Side: client.
-    /// The index of the option the player picked for the calling mod's choice `key`, else its
-    /// default. None when the mod registered no choice by that key.
-    fn setting_choice(&self, key: &str) -> Option<u32>;
+    /// Read a choice setting's selected index through its owner-bound [`SettingKey`].
+    fn setting_choice(&self, key: SettingKey) -> Result<u32, SettingAccessError>;
     /// Side: client.
-    /// The calling mod's range `key`: the player's value, else its default; a kept value outside
-    /// the range reads as the default. None when the mod registered no range by that key.
-    fn setting_f64(&self, key: &str) -> Option<f64>;
+    /// Read a range setting's number through its owner-bound [`SettingKey`].
+    fn setting_f64(&self, key: SettingKey) -> Result<f64, SettingAccessError>;
     /// Side: client.
-    /// The calling mod's colour `key`, `0xRRGGBB`: the player's choice, else its default. None
-    /// when the mod registered no colour by that key.
-    fn setting_color(&self, key: &str) -> Option<u32>;
+    /// Read a colour setting (`0xRRGGBB`) through its owner-bound [`SettingKey`].
+    fn setting_color(&self, key: SettingKey) -> Result<u32, SettingAccessError>;
 }

@@ -3532,7 +3532,9 @@ struct Game<'a> {
     /// This thread's authority over the game's tick-owned state (`parallel::TickThread`): a
     /// `Game` never leaves the thread that built it.
     tick: sunrise_client::parallel::TickThread,
-    setting_overrides: std::cell::RefCell<std::collections::BTreeMap<(String, String), String>>,
+    /// Authoritative store for this game side's native mod settings registered with
+    /// `SettingsRegistrar::register_setting`.
+    native_settings: native_hooks::mod_settings::NativeSettings,
     /// The native damage hooks every level of this game lends to its hits.
     damage_hooks: sunrise_client::health::DamageHooks,
     music: sunrise_client::music::MusicManager,
@@ -13450,7 +13452,25 @@ impl<'a> Game<'a> {
         Self::initialize_mod_runtime_for_tests();
         // A scoped hook on this thread asks this game's parts.
         mod_api::__private::mark_game_thread();
-        let loop_side = options.execution_role.loop_side();
+        let role = options.execution_role;
+        let loop_side = role.loop_side();
+        let item_data = res.core.item_data.context();
+        let mut native_settings = native_hooks::mod_settings::NativeSettings::default();
+        if role.is_logical_server() {
+            // Config loading and server startup hooks can read settings before the world
+            // publishes its loop context. An integrated server takes its own capture.
+            let settings = if item_data.origin() == role.data_load_origin() {
+                item_data.captured_loop_context(loop_side)
+            } else {
+                let inventory =
+                    sunrise_mod_package::enabled::EnabledMods::read(&options.resources)?;
+                let ids: std::collections::BTreeSet<_> = inventory.server_ids().collect();
+                let registered = native_hooks::mod_settings::registered_setting_keys()
+                    .filter(|(owner, _)| ids.contains(owner));
+                item_data.loop_context_with_registered(loop_side, [], registered)
+            };
+            let _ = native_settings.sync_from_loop_context(&settings);
+        }
         let root = options.resources.clone();
         let mod_sources = options.mods.clone();
         let registry = pack.assets.registry;
@@ -13705,9 +13725,9 @@ impl<'a> Game<'a> {
             world_adopted: false,
             startup_ticket_restore_pending: false,
             audio,
-            loop_context: Arc::new(res.core.item_data.context().loop_context(loop_side, [])),
+            loop_context: Arc::new(item_data.loop_context(loop_side, [])),
             tick: sunrise_client::parallel::TickThread::mint(),
-            setting_overrides: Default::default(),
+            native_settings,
             damage_hooks: native_hooks::DAMAGE_HOOKS,
             music: {
                 // The manager starts with the saved option (MusicManager's constructor).

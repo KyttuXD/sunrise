@@ -4,8 +4,8 @@ use mod_api::*;
 use std::sync::Arc;
 
 impl ConfigContext for Game<'_> {
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        <Self as prelude::ConfigHost>::setting(self, mod_id, key)
+    fn setting(&self, key: SettingKey) -> Result<SettingValue, SettingAccessError> {
+        Game::setting(self, key)
     }
 
     fn config_files(&self) -> &'static dyn ConfigFiles {
@@ -29,8 +29,8 @@ impl ReloadContext for Game<'_> {
     fn on(&self, mod_id: &str) -> bool {
         <Self as prelude::ConfigHost>::on(self, mod_id)
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        <Self as prelude::ConfigHost>::setting(self, mod_id, key)
+    fn setting(&self, key: SettingKey) -> Result<SettingValue, SettingAccessError> {
+        Game::setting(self, key)
     }
     fn game_tests_enabled(&self) -> bool {
         <Self as prelude::ConfigServerHost>::game_tests_enabled(self)
@@ -198,8 +198,8 @@ impl ClientReloadListenerContext for Game<'_> {
     fn is_loaded(&self, id: &str) -> bool {
         <Self as prelude::LevelsHost>::is_loaded(self, id)
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        <Self as prelude::ConfigHost>::setting(self, mod_id, key)
+    fn setting(&self, key: SettingKey) -> Result<SettingValue, SettingAccessError> {
+        Game::setting(self, key)
     }
     fn math_profile(&self) -> MathProfile {
         <Self as prelude::MathHost>::math_profile(self)

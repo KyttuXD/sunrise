@@ -1928,13 +1928,17 @@ impl Game<'_> {
     ) -> sunrise_client::Result<PreparedLoopContext> {
         let side = self.options.execution_role.loop_side();
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(resources)?;
+        // EnabledMods yields ids in sorted order.
         let ids: Vec<_> = if self.is_logical_server() {
             inventory.server_ids().collect()
         } else {
             inventory.client_ids().collect()
         };
         let item_data = self.res.core.item_data.context();
-        Ok(self.loop_context_readers(item_data.loop_context(side, ids.iter().copied())))
+        let registered = super::native_hooks::mod_settings::registered_setting_keys()
+            .filter(|(owner, _)| ids.binary_search(owner).is_ok());
+        let context = item_data.loop_context_with_registered(side, ids.iter().copied(), registered);
+        Ok(self.loop_context_readers(context))
     }
 
     fn loop_context_readers(
@@ -1959,13 +1963,15 @@ impl Game<'_> {
         self.protect_condition_root();
         self.loop_context = context.game;
         self.refresh_recipe_property_context();
-        self.setting_overrides.borrow_mut().clear();
         if let Some(audio) = context.audio {
             self.audio.set_loop_context(audio);
         }
         if let Some(worldgen) = context.worldgen {
             sunrise_world::native_worldgen_hooks::publish_context(Arc::new(worldgen));
         }
+        // Populate or reload the live settings store directly from
+        // this generation's captured LoopContext snapshot (never a second disk scan).
+        self.sync_native_settings_from_loop_context();
     }
 
     /// Stage a fresh root when admission changes or registered conditions need reevaluation.

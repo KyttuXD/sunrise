@@ -2,17 +2,17 @@
 // catalog-order: 0020
 
 pub trait Hooks {
-    /// The player changed setting `key` of mod `mod_id` on its page in Options > Mods
-    /// (`Registrar::register_setting`); the new value is kept already, so read it with
-    /// `setting_bool` and its siblings. Only mod `mod_id` hears it: a mod is told of its own
-    /// settings, never another's.
+    /// A registered setting changed through a typed write, Options > Mods, or a settings reload.
+    /// Runs on the side that changed the value, after publishing it. Only the setting's owner
+    /// hears it and can read the new value using its [`SettingKey`](crate::SettingKey).
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_setting_changed",
         dispatch = "flat",
-        side = "client",
+        side = "both",
         contract = "listen",
         owner = "mod_id",
-        neoforge = "ModConfigEvent.Reloading (a ModConfigSpec value set on the config screen)"
+        neoforge = "ModConfigEvent.Reloading",
+        version = 2
     )]
     fn setting_changed(mod_id: &str, key: &str);
 }

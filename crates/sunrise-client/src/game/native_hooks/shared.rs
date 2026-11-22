@@ -3342,34 +3342,15 @@ impl Game<'_> {
             self.settings.mods.installed.push(row);
         }
     }
-    /// The settings mod `mod_id` registered, with their kept values, as its page shows them.
+    /// The settings mod `mod_id` registered, with their live values from the
+    /// authoritative client settings store, as its page shows them.
     fn native_page_settings(&self, mod_id: &str) -> Vec<NativeSetting> {
         mod_api::__private::settings()
             .iter()
             .filter(|(owner, _)| *owner == mod_id)
-            .map(|(_, spec)| {
-                let kept = self.stored_setting(mod_id, &spec.key);
-                let value = match (&spec.kind, spec.read(kept.as_deref())) {
-                    (_, mod_api::SettingValue::Toggle(on)) => NativeSettingValue::Toggle(on),
-                    (
-                        mod_api::SettingKind::Choice { options, .. },
-                        mod_api::SettingValue::Choice(index),
-                    ) => NativeSettingValue::Choice {
-                        options: options.clone(),
-                        index,
-                    },
-                    (
-                        mod_api::SettingKind::Range { min, max, step, .. },
-                        mod_api::SettingValue::Range(value),
-                    ) => NativeSettingValue::Range {
-                        min: *min,
-                        max: *max,
-                        step: *step,
-                        value,
-                    },
-                    (_, mod_api::SettingValue::Color(rgb)) => NativeSettingValue::Color(rgb),
-                    _ => NativeSettingValue::Toggle(false),
-                };
+            .map(|(owner, spec)| {
+                let value =
+                    mod_settings::ui_setting_value(spec, self.native_settings.value(owner, spec));
                 NativeSetting {
                     key: spec.key.clone(),
                     label: spec.label.clone(),
@@ -3380,7 +3361,8 @@ impl Game<'_> {
             .collect()
     }
     /// Setting `j` of native mod `i`'s page (its index in Options > Mods) changed on the page:
-    /// kept as the mod registered it, then the mod is told (`setting_changed`).
+    /// committed through the single authoritative client settings path, which persists,
+    /// updates live state, and notifies the owning mod (`setting_changed`).
     pub(super) fn native_setting_event(&mut self, i: usize, j: usize) {
         let Some(row) = self.settings.mods.installed.get(i) else {
             return;
@@ -3395,19 +3377,42 @@ impl Game<'_> {
             NativeSettingValue::Range { value, .. } => mod_api::SettingValue::Range(*value),
             NativeSettingValue::Color(rgb) => mod_api::SettingValue::Color(*rgb),
         };
-        let kept = mod_api::__private::setting(&id, &key).and_then(|spec| spec.store(value));
-        let Some(kept) = kept else {
+        let Some(handle) = mod_api::__private::setting_key_by_name(&id, &key) else {
             return;
         };
-        if self.store_setting(&id, &key, &kept) {
-            self.native_setting_changed(&id, &key);
+        let Some((owner, spec)) =
+            mod_api::__private::setting_entry(handle).map(|(owner, spec)| (*owner, spec))
+        else {
+            return;
+        };
+        let root = self.native_settings_root();
+        if self
+            .apply_native_setting_write(&root, owner, spec, value)
+            .is_err()
+        {
+            // Keep the Options > Mods widget aligned with the live store if persistence fails.
+            let live = self.native_settings.value(owner, spec);
+            if let Some(setting) = self
+                .settings
+                .mods
+                .installed
+                .get_mut(i)
+                .and_then(|row| row.native.as_mut())
+                .and_then(|page| page.settings.get_mut(j))
+            {
+                setting.value = mod_settings::ui_setting_value(spec, live);
+            }
         }
     }
-    /// Native mod `i`'s page opened: its settings' kept values read again.
+    /// Native mod `i`'s page opened: refresh its live values from disk through
+    /// the single authoritative settings store (notifying on external changes)
+    /// and rebuild its page rows from the store.
     pub(super) fn native_settings_refresh(&mut self, i: usize) {
         let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
             return;
         };
+        let root = self.native_settings_root();
+        self.refresh_native_settings_owner(&root, &id);
         let settings = self.native_page_settings(&id);
         let row = self.settings.mods.installed.get_mut(i);
         if let Some(page) = row.and_then(|m| m.native.as_mut()) {

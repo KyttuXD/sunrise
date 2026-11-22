@@ -54,8 +54,20 @@ impl ClientReloadListenerContext for StartupReloadContext<'_> {
     fn is_loaded(&self, id: &str) -> bool {
         mod_api::__private::loaded_mods().get(id).is_some()
     }
-    fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        Game::startup_setting(mod_id, key)
+    fn setting(
+        &self,
+        key: mod_api::SettingKey,
+    ) -> Result<mod_api::SettingValue, mod_api::SettingAccessError> {
+        let (owner, spec) = mod_api::__private::setting_entry(key)
+            .ok_or(mod_api::SettingAccessError::UnknownKey)?;
+        let mut captured = sunrise_world::native_load_context::capture_registered_settings(
+            &Game::mod_data_root(),
+            [(*owner, spec.key.as_str())],
+        );
+        let raw = captured
+            .get_mut(*owner)
+            .and_then(|values| values.remove(&spec.key));
+        Ok(spec.read(raw.as_deref()))
     }
     fn math_profile(&self) -> mod_api::MathProfile {
         Game::startup_math_profile()
