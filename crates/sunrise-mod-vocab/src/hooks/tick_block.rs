@@ -1,5 +1,4 @@
 //! The `tick_block` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0015
 
 pub trait Hooks {
     /// An authoritative server's `ServerLevel.tickBlock` is about to run a

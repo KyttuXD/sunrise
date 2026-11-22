@@ -1,5 +1,4 @@
 //! The `player_recipe_book_settings_change` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0305
 
 pub trait Hooks {
     /// A server player's authoritative recipe book pair changed. `book` is a

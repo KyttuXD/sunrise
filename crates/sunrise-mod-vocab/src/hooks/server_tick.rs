@@ -1,5 +1,4 @@
 //! The `server_tick` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0009
 
 pub trait Hooks {
     /// The authoritative server tick's phases: `ServerTickStart` before any

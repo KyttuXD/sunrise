@@ -1,5 +1,4 @@
 //! The `tab_complete` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0333
 
 pub trait Hooks {
     /// A guest asked to complete `command`; owned API `Suggestion` records may be

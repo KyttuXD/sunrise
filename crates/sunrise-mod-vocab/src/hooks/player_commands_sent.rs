@@ -1,5 +1,4 @@
 //! The `player_commands_sent` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0249
 
 pub trait Hooks {
     /// The command tree a server sends a player (NeoForge's and Paper's

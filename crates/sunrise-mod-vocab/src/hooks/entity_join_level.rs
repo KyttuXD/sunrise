@@ -1,5 +1,4 @@
 //! The `entity_join_level` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0059
 
 pub trait Hooks {
     /// Before a player's tick on both logical sides (NeoForge 26.3

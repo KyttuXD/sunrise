@@ -1,5 +1,4 @@
 //! The `player_container_close` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0164
 
 pub trait Hooks {
     /// `player` (`name`) closed the `menu_type` that `player_container_open` told

@@ -1,5 +1,4 @@
 //! The `standalone_models` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0162
 
 pub trait Hooks {
     /// A player finished editing a sign: `ServerGamePacketListenerImpl.updateSignText`

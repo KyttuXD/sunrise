@@ -1,5 +1,4 @@
 //! The `compute_fov` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0112
 
 pub trait Hooks {
     /// World field of view, after normal calculation and zoom and before projection/Nausea.

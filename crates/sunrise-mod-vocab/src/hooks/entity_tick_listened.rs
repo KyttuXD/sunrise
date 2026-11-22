@@ -1,5 +1,4 @@
 //! The `entity_tick_listened` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0156
 
 pub trait Hooks {
     /// Whether a mod listens to `entity_tick_pre` and `entity_tick_post`: a mod

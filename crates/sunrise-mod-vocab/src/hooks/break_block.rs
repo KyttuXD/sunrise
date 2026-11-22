@@ -1,5 +1,4 @@
 //! The `break_block` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0038
 
 pub trait Hooks {
     /// A player breaks the block `state` at `pos`, once the game allowed it

@@ -1,5 +1,4 @@
 //! The `server_starting` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0005
 
 pub trait Hooks {
     /// Fired once before the server accepts play. On a dedicated server this

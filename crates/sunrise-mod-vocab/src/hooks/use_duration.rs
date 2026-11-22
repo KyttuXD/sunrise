@@ -1,5 +1,4 @@
 //! The `use_duration` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0101
 
 pub trait Hooks {
     /// `Item.getUseDuration` of `stack`, in ticks: `duration` arrives with

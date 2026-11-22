@@ -1,5 +1,4 @@
 //! The `player_login` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0259
 
 pub trait Hooks {
     /// A player whose login the server has accepted (NeoForge's

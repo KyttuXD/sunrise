@@ -107,7 +107,6 @@ pub struct ServerPlayer {
     pub pitch: f32,
     /// The network entity id the player has this session, the one hooks that only know entity ids
     /// (`living_incoming_damage`, `living_knockback`) give for the player; 0 when not known.
-    /// API @API:server_player_entity_id@.
     pub entity_id: i32,
     /// The IP address the player connects from, without the port (empty
     /// when not known).

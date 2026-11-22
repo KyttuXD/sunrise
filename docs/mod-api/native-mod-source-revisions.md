@@ -20,8 +20,7 @@ same name; the generator writes the full-path call into Cargo's build output. Do
 `#[sunrise_mod_api_macros::host_area]` provides defaults for test doubles. A read marked `#[published(name)]`
 instead uses the same published table for the host default and the game's generated forwarder, through
 `__private::name(args)`, so it has no `Game` method. The read never unwinds; typed load contexts expose it only where it belongs.
-The generator discovers area files without a shared module list. `native-hooks.json` and
-`tools/native-hook-fragments/` are retired, and a file there fails the build. Collection updates
+The generator discovers area files without a shared module list. Collection updates
 the catalog, not a global API number, source comments or documentation histories.
 
 Hand-written API types have a selected public surface in `crates/sunrise-mod-vocab/src/exports/<area>.rs`:

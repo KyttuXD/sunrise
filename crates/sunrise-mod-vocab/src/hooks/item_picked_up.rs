@@ -1,5 +1,4 @@
 //! The `item_picked_up` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0050
 
 pub trait Hooks {
     /// `player` touches the ground item entity `item`

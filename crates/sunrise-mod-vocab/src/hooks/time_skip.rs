@@ -1,5 +1,4 @@
 //! The `time_skip` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0336
 
 pub trait Hooks {
     /// The overworld clock is about to jump, from sleep or `/time`. Set

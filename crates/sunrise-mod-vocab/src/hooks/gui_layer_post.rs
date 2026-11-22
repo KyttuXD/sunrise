@@ -1,5 +1,4 @@
 //! The `gui_layer_post` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0145
 
 pub trait Hooks {
     /// After the complete body of a vanilla or mod HUD layer (`RenderGuiLayerEvent.Post`).

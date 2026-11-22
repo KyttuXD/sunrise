@@ -1,5 +1,4 @@
 //! The `block_entity_update_tag` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0025
 
 pub trait Hooks {
     /// What clients get of the block entity at `pos` when its `id` is

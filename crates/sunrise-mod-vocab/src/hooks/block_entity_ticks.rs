@@ -1,5 +1,4 @@
 //! The `block_entity_ticks` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0023
 
 pub trait Hooks {
     /// Whether block `block`'s block entity ticks (`EntityBlock.getTicker`):

@@ -1,5 +1,4 @@
 //! The `tooltip_component_draw` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0077
 
 pub trait Hooks {
     /// Render the measured component at origin, inside the tooltip background.

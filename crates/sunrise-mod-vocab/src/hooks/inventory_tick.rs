@@ -1,5 +1,4 @@
 //! The `inventory_tick` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0052
 
 pub trait Hooks {
     /// A server tick of `stack`, the stack a player carries in `slot`: where

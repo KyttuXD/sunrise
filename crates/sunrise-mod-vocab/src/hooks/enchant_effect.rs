@@ -1,5 +1,4 @@
 //! The `enchant_effect` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0090
 
 pub trait Hooks {
     /// A `minecraft:post_attack` effect of a mod's own kind, on a mob a

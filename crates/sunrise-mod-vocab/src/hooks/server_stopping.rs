@@ -1,5 +1,4 @@
 //! The `server_stopping` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0007
 
 pub trait Hooks {
     /// The server begins teardown (NeoForge's `ServerStoppingEvent`), including

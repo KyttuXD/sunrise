@@ -1,5 +1,4 @@
 //! The `experience_orb_can_merge` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0129
 
 pub trait Hooks {
     /// Whether the experience orb `into` takes the orb `from` in (vanilla's

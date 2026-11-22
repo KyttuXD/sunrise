@@ -1,5 +1,4 @@
 //! The `broadcast_message` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0185
 
 pub trait Hooks {
     /// A server broadcast line is about to be logged and sent. Change `line`

@@ -1,5 +1,4 @@
 //! The `on_equip` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0053
 
 pub trait Hooks {
     /// A player's equipment slot `slot` (`head`, `chest`, `legs`, `feet`,

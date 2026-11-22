@@ -1,5 +1,4 @@
 //! The `sleep_finished_time` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0331
 
 pub trait Hooks {
     /// Enough players have slept through the night in level `dimension`

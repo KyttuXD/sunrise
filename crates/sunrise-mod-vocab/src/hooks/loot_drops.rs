@@ -1,5 +1,4 @@
 //! The `loot_drops` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0088
 
 pub trait Hooks {
     /// A block broke or a mob died, and `drops` are the items about to drop, in

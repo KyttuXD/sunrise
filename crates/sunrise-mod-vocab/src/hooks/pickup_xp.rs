@@ -1,5 +1,4 @@
 //! The `pickup_xp` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0212
 
 pub trait Hooks {
     /// Before `player` picks up orb `orb` in `dimension`. Mutations to `value`

@@ -1,5 +1,4 @@
 //! The `player_level_change` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0296
 
 pub trait Hooks {
     /// A server player's experience level changed, after the new level was applied.

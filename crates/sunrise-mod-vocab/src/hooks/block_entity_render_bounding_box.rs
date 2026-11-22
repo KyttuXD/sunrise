@@ -1,5 +1,4 @@
 //! The `block_entity_render_bounding_box` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0081
 
 pub trait Hooks {
     /// Where the mod block entity at `pos` draws, for culling

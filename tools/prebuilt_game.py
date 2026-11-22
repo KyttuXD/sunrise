@@ -404,6 +404,38 @@ def copy_artifacts(messages: list[dict], deps: Path, host: Path, target_dir: Pat
     return copied
 
 
+def lower_crate_cfgs(metadata: dict, messages: list[dict], staged: Path, target_dir: Path,
+                     target_cfg: set[str]) -> dict[str, list[str]]:
+    """The source-indexed target libraries' own cfgs, from this Cargo build, not a resolution
+    of the workspace's manifests (which includes other feature activations)."""
+    packages = {package["id"]: Path(package["manifest_path"]).parent.name.replace("-", "_")
+                for package in metadata["packages"]
+                if Path(package["manifest_path"]).is_relative_to(staged / "crates")
+                and package["name"] != GAME}
+    script_cfg = {message["package_id"]: message["cfgs"] for message in messages
+                  if message["reason"] == "build-script-executed"
+                  and Path(message["out_dir"]).is_relative_to(target_dir)}
+    target_cfg = target_cfg - {"debug_assertions"}
+    result = {}
+    for message in messages:
+        if message["reason"] != "compiler-artifact" or message["package_id"] not in packages:
+            continue
+        if not {"lib", "rlib", "dylib"}.intersection(message["target"]["kind"]):
+            continue
+        if not any(Path(name).is_relative_to(target_dir) for name in message["filenames"]):
+            continue
+        package_id = message["package_id"]
+        cfg = target_cfg.union(script_cfg.get(package_id, ()),
+                               (f"feature={json.dumps(name, ensure_ascii=False)}" for name in message["features"]))
+        if message["profile"]["debug_assertions"]:
+            cfg.add("debug_assertions")
+        name = packages[package_id]
+        cfg = sorted(cfg)
+        if result.setdefault(name, cfg) != cfg:
+            raise ValueError(f"target library {name} was built under conflicting cfgs")
+    return result
+
+
 def api_closure(metadata: dict) -> set[str]:
     """The package IDs an API-only mod's build reads: sunrise-mod-api and its normal dependencies.
     A proc macro is a leaf, since its own dependencies are inside its library."""
@@ -681,6 +713,10 @@ def _build_locked(out: Path, server: bool, target_dir: Path) -> None:
             and message["package_id"].split("#")[0].endswith("/sunrise-client")
             and "lib" in message["target"]["kind"]
         )),
+        # The common function index covers all legs; each leg's identity says which of its
+        # declarations actually exist in the lower libraries this patch can link against.
+        "lower_crate_cfg": lower_crate_cfgs(metadata, artifacts, staged, target_dir / host,
+                                           set(run(["rustc", "--print", "cfg", "--target", host]).splitlines())),
         "registry_patches": patches,
         "patch_files": {name: digest for name, digest in files.items() if name.startswith("patches/")},
         "registry_lock": (staged / "Cargo.lock").read_text(),

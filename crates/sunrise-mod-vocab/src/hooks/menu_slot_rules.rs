@@ -1,5 +1,4 @@
 //! The `menu_slot_rules` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0131
 
 pub trait Hooks {
     /// Slot placement, pickup and stack limits for registered vanilla and mod

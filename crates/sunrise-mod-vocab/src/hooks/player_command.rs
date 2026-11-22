@@ -1,5 +1,4 @@
 //! The `player_command` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0107
 
 pub trait Hooks {
     /// A command a player typed (NeoForge's `CommandEvent`, before

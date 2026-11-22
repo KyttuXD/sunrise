@@ -1,5 +1,4 @@
 //! The `register_client_commands` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0017
 
 pub trait Hooks {
     /// The client's own commands (NeoForge's `RegisterClientCommandsEvent`), which

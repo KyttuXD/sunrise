@@ -1,5 +1,4 @@
 //! The `mob_killed` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0049
 
 pub trait Hooks {
     /// `player`'s melee blow killed the mob `entity` of `kind` (other deaths

@@ -342,11 +342,11 @@ fn table_backends(camel: &str, file: &syn::File) -> Result<BTreeMap<Tier, String
     Ok(tables)
 }
 
-/// The area files, `base` first and then by name, as the catalog's are.
+/// The area files, sorted by name, as the catalog's are.
 fn load(root: &Path) -> Result<Vec<Area>, String> {
     let dir = root.join(DIRECTORY);
     let mut areas = Vec::new();
-    for stem in catalog::Catalog::modules(&dir)? {
+    for stem in sunrise_game_discovery::module_files(&dir)? {
         let path = dir.join(format!("{stem}.rs"));
         crate::rerun_if_changed(&path.display());
         let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;

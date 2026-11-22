@@ -1,5 +1,4 @@
 //! The `block_entity_submit` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0080
 
 pub trait Hooks {
     /// Draw the mod block entity at `pos`, of block `block`

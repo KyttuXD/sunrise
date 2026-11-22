@@ -1,5 +1,4 @@
 //! The `zoom` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0018
 
 pub trait Hooks {
     /// The zoom a native mod asks for, applied while playing (the spyglass's

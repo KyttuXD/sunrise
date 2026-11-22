@@ -1,5 +1,4 @@
 //! The `player_ready_arrow` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0303
 
 pub trait Hooks {
     /// A server player released a drawn bow with `arrow` selected, by the use-item

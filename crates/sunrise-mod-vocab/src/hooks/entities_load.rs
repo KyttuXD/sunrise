@@ -1,5 +1,4 @@
 //! The `entities_load` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0196
 
 pub trait Hooks {
     /// A server player's or mob's ender pearl is about to teleport its `owner`

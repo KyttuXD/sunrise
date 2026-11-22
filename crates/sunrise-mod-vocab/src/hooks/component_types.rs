@@ -1,5 +1,4 @@
 //! The `component_types` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0074
 
 pub trait Hooks {
     /// Register namespaced NBT component types before content loads. Call

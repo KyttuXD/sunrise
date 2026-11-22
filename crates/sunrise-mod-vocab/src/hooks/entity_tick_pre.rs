@@ -1,5 +1,4 @@
 //! The `entity_tick_pre` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0154
 
 pub trait Hooks {
     /// The entities `entities` are about to tick in the level `dimension`, and `kinds` holds

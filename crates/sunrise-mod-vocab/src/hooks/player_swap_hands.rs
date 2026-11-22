@@ -1,5 +1,4 @@
 //! The `player_swap_hands` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0262
 
 pub trait Hooks {
     /// Heard before a non-spectator player's swap-hands action.

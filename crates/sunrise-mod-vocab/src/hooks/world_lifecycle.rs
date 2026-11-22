@@ -1,5 +1,4 @@
 //! The `world_lifecycle` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0003
 
 pub trait Hooks {
     /// The world's phases, read-only; `error_text` carries the engine's

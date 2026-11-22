@@ -1,5 +1,4 @@
 //! The `menu_button` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0031
 
 pub trait Hooks {
     /// A player pressed a mod menu's button (`clickMenuButton`), on the

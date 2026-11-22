@@ -1,5 +1,4 @@
 //! The `living_equipment_change` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0157
 
 pub trait Hooks {
     /// A mob's, an armor stand's or a player's equipment slot took a different
