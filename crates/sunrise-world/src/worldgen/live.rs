@@ -8,7 +8,7 @@ use super::{
     biome_predicate::BiomePredicateBindings,
     block_feature::FeatureBlockBindings,
     feature::{FeatureBlocks, FeatureWorld},
-    feature_catalog::FeatureCatalog,
+    feature_catalog::{BiomePlacedFeature, FeatureCatalog},
     feature_graph::{FeatureDefinition, PlacedFeatureDefinition},
     generator::{GeneratorData, GeneratorError},
     placement::PlacementContext,
@@ -40,10 +40,6 @@ pub struct LiveFeatures {
     bone_meal: Vec<Vec<String>>,
     /// Temperature settings per biome (`Biome.getTemperature`).
     temperatures: Vec<super::biome_temperature::BiomeTemperatureSettings>,
-}
-
-fn resource(message: impl Into<String>) -> GeneratorError {
-    GeneratorError::Resource(message.into())
 }
 
 /// `ConfiguredFeature.getFeatures`: nested configured-feature references of a
@@ -96,12 +92,11 @@ impl LiveFeatures {
             return Ok(None);
         };
         let registry = data.registry();
-        let mut feature_tags = TagDefinitions::default();
-        for (name, json) in &resources.feature_tags {
-            feature_tags.apply_json(name, "vanilla", json)?;
-        }
-        let catalog =
-            FeatureCatalog::from_resources(&resources.features, &resources.placed, &feature_tags)?;
+        let catalog = FeatureCatalog::from_resources(
+            &resources.features,
+            &resources.placed,
+            &resources.placed_tags,
+        )?;
         let biomes = Arc::new(BiomePredicateBindings::new(
             &data
                 .biome_names()
@@ -152,54 +147,38 @@ impl LiveFeatures {
                 }
             }
         }
-        let placed_tags = feature_tags
-            .build(|name, _| resources.placed.contains_key(name).then(|| name.to_owned()))
-            .map_err(|e| resource(format!("feature tags: {e:?}")))?
-            .tags;
         let mut bone_meal = Vec::with_capacity(data.biome_names().len());
         for i in 0..data.biome_names().len() {
             let biome: Value = serde_json::from_str(data.biome_json(BiomeId(i as u32)))?;
             let mut list = Vec::new();
-            for step in biome["features"].as_array().into_iter().flatten() {
-                let entries: Vec<String> = match step {
-                    Value::String(tag) if tag.starts_with('#') => placed_tags
-                        .get(&super::tags::identifier(&tag[1..])?)
-                        .cloned()
-                        .unwrap_or_default(),
-                    Value::String(name) => vec![name.clone()],
-                    Value::Array(values) => values
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                for entry in entries {
-                    let name = super::tags::identifier(&entry)?;
-                    let Some(placed) = resources
-                        .placed
-                        .get(&name)
-                        .and_then(|text| serde_json::from_str::<Value>(text).ok())
-                    else {
-                        continue;
-                    };
-                    // PlacedFeature.getFeatures: its feature, then that feature's children.
-                    let mut found = Vec::new();
-                    match &placed["feature"] {
-                        Value::String(feature) => {
-                            let feature = super::tags::identifier(feature)?;
-                            found.push(feature.clone());
-                            if let Some(child) = resources
-                                .features
-                                .get(&feature)
-                                .and_then(|text| serde_json::from_str::<Value>(text).ok())
-                            {
-                                nested_features(&child, &resources.features, 0, &mut found);
-                            }
-                        }
-                        inline => nested_features(inline, &resources.features, 0, &mut found),
+            for holder in catalog
+                .biome_steps(&biome["features"])?
+                .into_iter()
+                .flatten()
+            {
+                let placed: Value = match holder {
+                    BiomePlacedFeature::Named(name) => {
+                        serde_json::from_str(catalog.placed_source(&name)?)?
                     }
-                    list.extend(found.into_iter().filter(|f| bone_meal_tag.contains(f)));
+                    BiomePlacedFeature::Direct(json) => serde_json::from_str(&json)?,
+                };
+                // PlacedFeature.getFeatures: its feature, then that feature's children.
+                let mut found = Vec::new();
+                match &placed["feature"] {
+                    Value::String(feature) => {
+                        let feature = super::tags::identifier(feature)?;
+                        found.push(feature.clone());
+                        if let Some(child) = resources
+                            .features
+                            .get(&feature)
+                            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                        {
+                            nested_features(&child, &resources.features, 0, &mut found);
+                        }
+                    }
+                    inline => nested_features(inline, &resources.features, 0, &mut found),
                 }
+                list.extend(found.into_iter().filter(|f| bone_meal_tag.contains(f)));
             }
             bone_meal.push(list);
         }

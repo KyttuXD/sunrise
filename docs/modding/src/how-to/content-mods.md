@@ -1008,7 +1008,7 @@ the mod is there; once it is gone, the load clamps the base into the bounds and 
 world load.
 
 A code mod can declare a datapack registry of its own with `Registrar::declare_datapack_registry(path, sync,
-fields)` (NeoForge's `DataPackRegistryEvent.NewRegistry`).
+fields)` (NeoForge's `NewDatapackRegistryEvent`).
 `path` lands in a namespace the mod owns (`spell` of `example` is `example:spell`; explicit IDs may use extra manifest namespaces or a content package served via `served_by`), and `fields` is the
 entry's record schema. Its scalar kinds are `Bool`, `Int { min, max }`, `Float { min, max }`, `Text { max_len }`,
 `Identifier` and `Reference { registry }`, and they nest, as vanilla's codecs do:
@@ -1025,9 +1025,8 @@ no default (`DatapackField::optional`, `optionalFieldOf`), which reads as `None`
 stands only for a whole field, never inside a list, a map or another optional. Defaults are checked against their
 kinds at every depth, and an id or reference default is normalised wherever it sits (`stone` is `minecraft:stone`,
 map keys included).
-A list has no per-list count limit unless its `max_len` sets one. The entry file and candidate input size limits
-and the JSON parser's nesting limit still apply, as do the snapshot size and Wire depth limits for registries that
-sync. Read nested values with `as_list`, `as_map`, `get` and the scalar accessors (`as_int`, `as_text`...):
+A list has no per-list count limit unless its `max_len` sets one. Local loading does not impose network byte or
+collection limits; the declared schema and the JSON parser's nesting limit still apply. Read nested values with `as_list`, `as_map`, `get` and the scalar accessors (`as_int`, `as_text`...):
 
 ```rust,ignore
 let int = |min, max| DatapackFieldKind::Int { min, max };
@@ -1061,7 +1060,32 @@ of the wrong length fails the entry, at any depth, and a default never stands in
 the value's path (`drops[3].item`, `tiers.basic.data_per_kill`); a key with a character other than letters, digits,
 `_`, `:`, `/` and `-` is quoted as the file spells it (`tiers["basic.data_per_kill"]`). A reference resolves against
 the whole candidate set wherever it sits. A feature type's config (`register_feature_type`) uses the same scalar kinds
-but stays a flat record: a nested or `Reference` config field is refused at registration. Only both-side packages (and both-side served namespace suppliers) may declare registries. The game loads entries from mod content and enabled data packs.
+but stays a flat record: a nested or `Reference` config field is refused at registration.
+
+The game selects the winning resource from mod content and enabled data packs before it reads the file or
+evaluates [its conditions](items/conditional-data.md#registry-conditions). If two registry directories contain
+that path, each interprets it relative to its own directory. A false condition omits the winner, without a
+lower-pack fallback. An unreadable winner refuses the load and names its pack and file. After conditions pass,
+the game decodes the entry against `fields`. When a resource has `neoforge:conditions`, write its schema object
+inside `neoforge:value` or write its fields beside the conditions array. In the second form the outer
+`neoforge:conditions` key is not a schema field. Tags resolve against admitted entries.
+
+Client-only packages cannot declare datapack registries. A `side = "server"` package can declare
+`DatapackRegistrySync::ServerOnly` (entries and tags are never sent) or `DatapackRegistrySync::Optional`
+(entries and tags go only to clients that offer the same registry and schema). Neither declaration by itself
+requires the client to install the mod; the package must still meet the join-content rule for everything else
+it declares. Use `DatapackRegistrySync::Required` with `side = "both"` when joining clients must have the
+registry. A server-only package declaring a `Required` registry is refused at load, naming the registry. A both-side
+declarer using a server-only `served_by` namespace for a required registry gets `WrongSide` at registration.
+
+A client's offer lists only synchronized registries and their schemas. It must fit one vanilla
+serverbound custom payload (32,767 bytes); an oversized offer stops the join rather than acting as an empty
+offer. The server encodes only the registries negotiated for that client. Each fragment, including its header,
+fits vanilla's clientbound custom payload limit (1 MiB); the combined encoded snapshot can be up to 128 MiB
+(NeoForge's default split-packet limit). There is no separate registry, entry, tag or tag-member count limit.
+After a successful local reload commits, a connection that negotiated a snapshot receives it before the reload's
+mod messages. If the snapshot cannot be sent or validated, only that connection ends. The client never activates
+a partial snapshot, and the server keeps the new local generation.
 
 Use `level.datapack_entries(host, registry)` to list owned entry IDs in sorted order and
 `level.datapack_read(host, registry, entry_id, &mut visit)` to borrow the published entry
@@ -1084,10 +1108,11 @@ The visitor runs once on success, never on error. On the logical server, both th
 dimension and any loaded parked server dimension are accepted (matching vanilla
 `Level.registryAccess()`); stale epochs and unloaded dimensions are refused. Unknown or
 unavailable registries, stale or unloaded levels, and a missing published set give
-`UnknownRegistry`; a registry without the entry gives `MissingEntry`. A host without a backend
+`UnknownRegistry`; a known registry without the entry gives `MissingEntry`. A host without a backend
 returns `Unavailable`. Listing returns `None` for an unavailable level or registry, not for a
-known empty registry. Once a client receives a valid snapshot at join or reload, it reads those
-entries; any of its declared registries omitted from the snapshot have no entries there.
+known empty registry. A failed local reload leaves the published generation in place; each successful
+reload replaces it once. A client reads only the registries in its most recent complete, validated snapshot;
+a server-only or unnegotiated registry is unavailable to that client.
 
 A code mod can also use `Registrar::declare_entity_attributes(path, template, attributes)` during registration.
 That declaration starts from the vanilla template's attribute row, replacing the content row's overrides.

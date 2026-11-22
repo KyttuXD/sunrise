@@ -9,7 +9,7 @@
 //! the server thread in the same pass, so a reopen is applied only after the files are gone.
 use super::{
     Dim, Game,
-    world_loading::{ModStem, worldgen_overrides_of},
+    world_loading::{ModStem, world_worldgen_overrides},
 };
 use mod_api::{LevelRef, RuntimeBiomeSource, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -719,13 +719,12 @@ impl Game<'_> {
                 )?;
                 let resources = &self.options.resources;
                 let dir = resources.join("worldgen");
-                let (overrides, _) = worldgen_overrides_of(
-                    &self.world_root,
-                    resources,
-                    biomes,
-                    &self.level.enabled_features,
-                    &self.pack.additional_data,
-                );
+                let overrides = self
+                    .world_tables
+                    .as_ref()
+                    .map_or_else(Default::default, |tables| {
+                        world_worldgen_overrides(self.fns.enabled_packs(), &tables.biomes)
+                    });
                 let biome_data = shared_biome_source_data(&dir, &overrides).map_err(|e| {
                     log::warn!("runtime level biome registries are unavailable: {e}");
                     RuntimeLevelError::Unavailable

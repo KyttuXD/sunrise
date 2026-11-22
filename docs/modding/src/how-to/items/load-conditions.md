@@ -42,20 +42,29 @@ The handler receives a borrowed raw JSON value: the condition's object without
 `type`. It reads and validates its own arguments, retaining JSON booleans,
 numbers, strings, lists and objects. Invalid mod input must return
 `ConditionError`; handlers must not panic while reading it.
-Startup data loaders and the server's candidate data reload both use registered
-handlers before entries become visible. Results are retained for each entry and
-condition payload in that load, so repeated readers do not call the handler
-again. A new load reevaluates the entry. Handlers must not mutate live data.
-A handler panic becomes a named load error ("handler panicked").
+Startup and reload both test the selected file before making its entry visible. In a load, the same
+file and condition payload can reuse its result; typed built-in reads of feature flags, registries or tags
+also distinguish the context views. A string in a custom handler's arguments is not a registry or tag
+read and cannot order registry candidates. Use `neoforge:registered` or `neoforge:tag_empty` in the
+condition array for a [registry dependency](conditional-data.md#registry-conditions). A new load tests
+the entry with its own context. Handlers must not mutate live data.
+
+A handler panic becomes a load error naming the condition and its registering mod. It is logged and
+queues an error toast. Only that handler is disabled for the rest of the session, including after a
+reload. An evaluation that reaches the disabled handler reports an error without calling it. A returned
+`ConditionError` or an ordinary phase refusal is also reported when encountered, but neither disables
+the handler.
 
 `true` loads the entry; `false` omits it, without exposing a lower pack's
 version. The loader handles callback errors and unknown condition types as
 [described in Conditional data](conditional-data.md#errors-by-loader).
 
-Registering an ID works the same in every namespace. The evaluator resolves
-all condition types before it tests any of them, including children of
-`not`, `and` and `or`. Neither `neoforge:mod_loaded` nor an already true or
-false branch can guard an unknown condition ID.
+Registering an ID works the same in every namespace. The evaluator decodes the
+whole conditions array before testing it, including children of `not`, `and`
+and `or`. Neither `neoforge:mod_loaded` nor an already true or false branch
+can guard an unknown condition ID. Testing goes left to right and skips
+handlers after a false condition in an array or `and`, or after a true
+condition in `or`.
 
 The public [NeoForge data load condition documentation](https://docs.neoforged.net/docs/resources/server/conditions/)
 describes `ICondition` and the top-level `neoforge:conditions` array.

@@ -401,7 +401,7 @@ enum Publish {
 
 /// What the server thread hands the window once the world is open: its end
 /// of the connection and the world's name, or why it failed.
-type Ready = std::result::Result<(Pipe, String), String>;
+type Ready = std::result::Result<(Pipe, String, Arc<sunrise_client::biome::Biomes>), String>;
 
 /// An integrated server loading its world: the window keeps drawing its
 /// loading screen and joins once the server is ready, as vanilla's client
@@ -535,21 +535,6 @@ impl Game<'_> {
         options.server = None;
         options.world = None;
         self.join_world_rest()?;
-        // The window plays against the world's own biome table (its chunks
-        // carry the packs' ids past the built-in list, `set_registries`
-        // names them through it), as the server thread's copy does.
-        let world = std::env::current_dir()?.join("saves").join(folder);
-        let enabled_features = sunrise_client::save::Level::read(&world)
-            .map(|l| l.enabled_features)
-            .unwrap_or_default();
-        self.world_biomes = Some(super::world_loading::packed_biomes(
-            &world,
-            &self.options.resources,
-            self.res.biomes(),
-            &enabled_features,
-            &self.pack.additional_data,
-        )?);
-        self.world_biomes_base = self.world_biomes.clone();
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         sunrise_client::parallel::set_setting(settings.sunrise.parallel_tick);
         let flags = Arc::new(Flags {
@@ -638,7 +623,7 @@ impl Game<'_> {
         let Some(starting) = &self.integrated_starting else {
             return Ok(());
         };
-        let (pipe, world_name) = match starting.ready.try_recv() {
+        let (pipe, world_name, biomes) = match starting.ready.try_recv() {
             Ok(Ok(ready)) => ready,
             Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
             // FileFixerProgressScreen's Cancel: the upgrade stopped, back to the title.
@@ -668,6 +653,9 @@ impl Game<'_> {
         };
         handle.world_name = world_name;
         self.server_packs_world_pack(&folder);
+        // Use the logical server's admitted table, including its saved-name IDs.
+        self.world_biomes_base = Some(biomes.clone());
+        self.world_biomes = Some(biomes);
         self.connect_local(pipe, &player)?;
         if let Some(r) = self.remote.as_mut() {
             // `new LevelLoadTracker(newWorld ? 500L : 0L)`.
@@ -1045,7 +1033,14 @@ impl Game<'_> {
         view.start(Stage::LoadInitialChunks, 0);
         startup::time("server.prepare_levels", || self.prepare_levels())?;
         view.finish(Stage::LoadInitialChunks);
-        let _ = ready.send(Ok((pipe, self.level.name.clone())));
+        let _ = ready.send(Ok((
+            pipe,
+            self.level.name.clone(),
+            self.world_biomes_base
+                .as_ref()
+                .expect("world is open")
+                .clone(),
+        )));
         startup::time("server.settle_spawn", || self.settle_spawn())
     }
 
@@ -1420,7 +1415,6 @@ fn serve(
             res.clone(),
             pack.clone(),
             options.clone(),
-            settings.clone(),
             flags.upgrade.clone(),
         )
     });

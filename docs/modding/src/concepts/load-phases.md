@@ -148,6 +148,15 @@ listener registration discards only that callback’s pending listeners, depende
 entries. Registration errors are returned and reported without failing the whole reload; a cycle
 in the completed graph still fails it.
 
+Built-in [data load conditions](../how-to/items/conditional-data.md#registry-conditions) are part of
+candidate preparation, not ordinary `Host` reads. They run only after pack precedence selects a winner.
+Registry codecs see this load's static holders and pending static tags, then the frozen world registries
+and already bound dependencies available at their stage. Entries and tags in the current dependency batch
+are not visible to that batch's conditions. Downstream server readers see the completed candidate and the
+world's enabled flags, not the previous publication. A custom `LoadCondition` receives only its JSON
+arguments. A panic is logged, queues an error toast naming the mod, and disables only that handler for the
+session. Returned errors and ordinary phase refusals are reported without disabling it.
+
 ## Load contexts
 
 `DataLoadContext`, `LoopContext` and `WorldgenHost` lend frozen metadata for their resource
@@ -199,12 +208,15 @@ A different registry or unknown entry returns `None`. Typed keys remain
 process-local; narrowing never treats a protocol numeric ID as a key slot.
 
 Mod-declared datapack registries resolve tags against the accepted candidate
-before publication; tags with missing required members are omitted. Synchronized
-snapshots carry those exact tag names and members (including empty tags);
-server-only and unnegotiated registries send neither entries nor tags. Clients
-validate membership before activating a snapshot.
-On clients, generic reads never fall back to prepared server-only datapack files:
-built-ins and the connection's currently synchronized registries are the entire view.
+before publication; tags with missing required members are omitted. Failed local preparation
+leaves the current generation live. A successful reload publishes once, then encodes each peer's
+negotiated snapshot as needed. Local admission does not depend on the snapshot fitting: an encoding,
+transport or validation error ends the affected connection without rolling back the server generation.
+A valid snapshot carries the exact tag names and members (including empty tags); server-only and
+unnegotiated registries send neither entries nor tags. Clients validate membership before activating
+a complete snapshot, and generic reads never fall back to prepared server-only datapack files.
+Stale or unloaded level handles are still refused. An in-flight datapack entry visitor borrows the
+set that was current when it began; a new read checks the current publication.
 
 There is no separate common-setup, load-complete or intermod event. Registration and the first server
 reload cover common setup, `client_setup` covers client setup, and `server_about_to_start` covers

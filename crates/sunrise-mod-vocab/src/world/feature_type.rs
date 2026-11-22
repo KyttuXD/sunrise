@@ -169,8 +169,8 @@ pub fn feature_type_declarations() -> Vec<(
         .collect()
 }
 
-/// A configured feature's JSON decoded against its type's schema, `type` aside; the error names
-/// the offending key.
+/// A configured feature's JSON decoded against its type's schema. The dispatch `type` key is
+/// allowed even if the schema does not declare it; errors name the offending key.
 // hidden: the game decodes configs at load; mods read the decoded entry from their context.
 #[doc(hidden)]
 pub fn decode_feature_config(
@@ -180,7 +180,8 @@ pub fn decode_feature_config(
     let serde_json::Value::Object(object) = json else {
         return Err("a configured feature is a JSON object".into());
     };
-    crate::world::datapack_registry::decode_record(schema, object, &["type"])
+    use crate::world::datapack_registry::{RecordMetadata, decode_record};
+    decode_record(schema, object, RecordMetadata::FeatureType)
         .map_err(|error| format!("config: {error:?}"))
 }
 

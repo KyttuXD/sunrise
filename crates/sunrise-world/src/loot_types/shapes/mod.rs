@@ -321,6 +321,17 @@ pub(super) fn validate<'v>(
     validate_shape(value, shape, kind, path, Purpose::Validate)
 }
 
+/// The same persistent value codec used by the environment-check predicate and
+/// by environment attribute maps. Complex values are kept in their decoded JSON form.
+pub(crate) fn validate_environment_value(
+    attribute: &crate::environment_attributes::Attribute,
+    value: &Value,
+) -> io::Result<()> {
+    let shape = environment::value(attribute)
+        .ok_or_else(|| io::Error::other(format!("missing value codec for {}", attribute.id)))?;
+    validate_shape(value, shape, attribute.id, "value", Purpose::Validate).map(|_| ())
+}
+
 pub(super) fn children<'v>(value: &'v Value, function: bool, kind: &str) -> Vec<Child<'v>> {
     let Some(shape) = builtin(kind, function) else {
         return Vec::new();
@@ -644,6 +655,7 @@ fn validate_shape<'v>(
                 let shape = value
                     .get("attribute")
                     .and_then(Value::as_str)
+                    .and_then(crate::environment_attributes::attribute)
                     .and_then(environment::value);
                 match (shape, value.get("value").filter(|value| !value.is_null())) {
                     (Some(shape), Some(value)) => push(shape, value, path.field("value")),

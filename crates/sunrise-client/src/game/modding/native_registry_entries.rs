@@ -402,33 +402,9 @@ fn network_entries(
     )
 }
 
-/// TagLoader binds mod-registry tags against the already decoded candidate, before publication.
-/// No file's name can create an entry: required missing members invalidate that tag only.
-pub(super) fn bind_datapack_tags(
-    root: &std::path::Path,
-    overlay: &sunrise_world::loot::PackOverlay<'_>,
-    candidate: &mut mod_api::DatapackCandidate,
-) -> Result<(), String> {
-    for declaration in mod_api::__private::datapack_registry_declarations() {
-        let (namespace, path) = declaration
-            .key
-            .split_once(':')
-            .ok_or("invalid mod registry key")?;
-        let folder = format!("{namespace}/{path}");
-        let known: std::collections::BTreeSet<_> = candidate
-            .entries(&declaration.key)
-            .map_err(|error| format!("mod registry tags: {error:?}"))?
-            .into_iter()
-            .collect();
-        let tags = load_registry_tags(root, overlay, &folder, |id| known.contains(id))?;
-        candidate
-            .bind_tags(&declaration.key, tags)
-            .map_err(|error| format!("mod registry tags: {error:?}"))?;
-    }
-    Ok(())
-}
-
-fn load_registry_tags(
+/// Bind a mod registry's tags against the entries it just admitted. A missing
+/// required member prevents that tag from binding, not the other tags.
+pub(super) fn load_registry_tags(
     root: &std::path::Path,
     overlay: &sunrise_world::loot::PackOverlay<'_>,
     folder: &str,
@@ -461,10 +437,9 @@ fn load_registry_tags(
             }
         }
     }
-    definitions
-        .build(|id, _| known(id).then(|| id.to_owned()))
-        .map(|built| built.tags)
-        .map_err(|error| error.to_string())
+    Ok(definitions
+        .bind(|id, _| known(id).then(|| id.to_owned()))
+        .tags)
 }
 
 #[cfg(test)]

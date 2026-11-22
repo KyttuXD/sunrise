@@ -1213,19 +1213,15 @@ impl Game<'_> {
             &self.pack_files(),
         )?;
         let features = self.enabled_feature_ids().to_vec();
-        // A world whose packs change biomes sends its own biome registry.
-        let packed = self.world_biomes.clone().filter(|b| b.has_packs());
-        if packed.is_some()
-            || sync.features.iter().any(|f| !features.contains(f))
+        if sync.features.iter().any(|f| !features.contains(f))
             || features.iter().any(|f| !sync.features.contains(f))
         {
-            // The shared resource preload has vanilla flags and vanilla biomes.
-            // Feature flags and biomes belong to this world, not to the cached
-            // resources or the next world opened.
+            // The registries are already frozen. Publish this world's flags
+            // rather than the flags of the resource preload.
             let mut world_sync = SyncData::load_over(
                 &self.options.resources,
                 &self.pack_files(),
-                packed.as_deref(),
+                None,
                 &sync,
                 self.res.item_defaults(),
                 sync::server_sources(
@@ -4159,15 +4155,15 @@ mod tests {
             vec![br#"{"type":"minecraft:notice","title":"Before"}"#.to_vec()],
         )];
         let initial = PackOverlay::new(&initial);
-        let packed = sunrise_client::lan::data::SyncData::stage_registry_definitions(
+        let (packed, admitted) = sunrise_client::lan::data::SyncData::stage_registry_definitions(
             &root,
             item_data.defaults(),
             &initial,
             &Default::default(),
             &Default::default(),
             |_| true,
-        )
-        .unwrap();
+        );
+        admitted.unwrap();
         let mut cache = SyncCache {
             packed_registries: Some(std::sync::Arc::new(packed)),
             ..SyncCache::default()

@@ -448,6 +448,35 @@ impl Biomes {
         out.registered_keys = keys.into();
         Ok(out)
     }
+    /// Build a world's table after RegistryDataLoader has admitted the winners.
+    /// A false winning file leaves no holder, even when it replaced a built-in biome.
+    pub fn with_admitted_packs<'a>(
+        &self,
+        files: impl IntoIterator<Item = (&'a str, &'a Value)>,
+        omitted: &std::collections::BTreeSet<String>,
+    ) -> Result<Self> {
+        if omitted.is_empty() {
+            return self.with_packs(files);
+        }
+        let mut base = self.builtin_only();
+        base.registered_keys = base
+            .registered_keys
+            .iter()
+            .zip(&base.list)
+            .filter(|(_, biome)| !omitted.contains(&biome.name))
+            .map(|(key, _)| key.clone())
+            .collect();
+        base.list.retain(|biome| !omitted.contains(&biome.name));
+        base.builtin = Arc::new(base.list.clone());
+        base.index = base
+            .list
+            .iter()
+            .enumerate()
+            .map(|(id, biome)| (biome.name.clone(), id as u16))
+            .collect();
+        base.with_packs(files)
+    }
+
     /// The built-in biomes alone: this table without what packs gave it.
     pub fn builtin_only(&self) -> Self {
         let mut out = self.clone();

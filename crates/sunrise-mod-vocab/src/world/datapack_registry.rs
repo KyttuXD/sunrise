@@ -2,8 +2,9 @@
 //! of the mod's own, whose entries are JSON files in data packs. The mod
 //! declares a record schema once at startup (scalars, and lists, maps and
 //! records of them, nested as deep as the schema says); the game decodes every
-//! entry against it without running mod code. See `docs/design/mod-api/mod-datapack-registries.md`.
+//! admitted entry against it without running mod code. See `docs/design/mod-api/mod-datapack-registries.md`.
 use serde_json::Value;
+use std::borrow::Cow;
 use sunrise_core::identifier::Identifier;
 
 /// How a registry's entries reach joining clients.
@@ -11,12 +12,14 @@ use sunrise_core::identifier::Identifier;
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DatapackRegistrySync {
-    /// Entries stay on the server; a client needs nothing of the mod for them.
+    /// Entries and tags stay on the server; they do not require clients to install the mod.
     #[default]
     ServerOnly,
-    /// Clients receive the entries, and a client without the mod is refused.
+    /// A joining client must offer the registry with the same schema to receive
+    /// it and join. The declaring package must be both-side.
     Required,
-    /// Clients with the mod receive the entries; others join without them.
+    /// Send entries and tags only to clients that offer the registry with the same schema.
+    /// This declaration does not require clients to install the mod.
     Optional,
 }
 
@@ -265,7 +268,8 @@ impl DatapackField {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DatapackRegistrationError {
-    /// Only both-side packages may declare datapack registries.
+    /// A client-only package cannot declare a datapack registry, and a both-side
+    /// package cannot declare a required registry for a server-only namespace it serves.
     WrongSide,
     /// The registry's key is malformed, empty or in a namespace the
     /// declaring mod does not own (a vanilla registry's included).
@@ -379,7 +383,7 @@ impl DatapackEntry {
 }
 
 /// Whether `text` is a lowercase `namespace:path` id the way registrations name theirs.
-pub(crate) fn valid_namespaced(text: &str) -> bool {
+pub fn valid_namespaced(text: &str) -> bool {
     let Some((namespace, path)) = text.split_once(':') else {
         return false;
     };
@@ -655,14 +659,27 @@ fn normalize_value(
     }
 }
 
+/// NeoForge's `Registries.registryDirPath` (`CommonHooks.prefixNamespace`),
+/// relative to the entry's namespace directory.
+pub fn datapack_registry_directory(registry: &str) -> Option<Cow<'_, str>> {
+    let (namespace, path) = registry.split_once(':')?;
+    Some(if namespace == "minecraft" {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(format!("{namespace}/{path}"))
+    })
+}
+
 impl DatapackRegistryDeclaration {
-    /// The file an entry `entry` (`addon:fire`) of this registry (`example:spell`)
-    /// sits in, inside a data pack: `data/addon/example/spell/fire.json`.
+    /// The file an entry (`addon:fire`) sits in, inside a data pack. For
+    /// `example:spell` it is `data/addon/example/spell/fire.json`; for
+    /// `minecraft:spell` it is `data/addon/spell/fire.json`. Tags use the same
+    /// registry directory under `tags/`, and nested paths keep their subfolders.
     pub fn entry_file(&self, entry: &str) -> Option<String> {
         let (entry_namespace, entry_path) = entry.split_once(':')?;
-        let (registry_namespace, registry_path) = self.key.split_once(':')?;
+        let directory = datapack_registry_directory(&self.key)?;
         Some(format!(
-            "data/{entry_namespace}/{registry_namespace}/{registry_path}/{entry_path}.json"
+            "data/{entry_namespace}/{directory}/{entry_path}.json"
         ))
     }
 
@@ -670,31 +687,14 @@ impl DatapackRegistryDeclaration {
     /// declare, a missing required key, a wrong type or an out-of-range value
     /// fails the whole entry, at any depth, and no default stands in for invalid
     /// data. The error names the value's full path.
-    /// Nothing here runs mod code. Nesting is bounded by the JSON parser's
-    /// recursion limit; the file's size is bounded before this, by
-    /// [`DatapackCandidate::build`](super::datapack_registry_set::DatapackCandidate::build).
+    /// Pass the bare schema object, without load condition metadata. This method neither
+    /// runs mod code nor applies a network snapshot limit. Map pairs keep their file order.
     pub fn decode_entry(&self, text: &str) -> Result<DatapackEntry, DatapackDecodeError> {
-        self.decode_entry_ignoring(text, &[])
-    }
-
-    /// [`Self::decode_entry`] with the top-level keys `ignored` belonging to the caller
-    /// (`neoforge:conditions`, the engine's), not to the schema. A map's pairs keep the order the
-    /// file wrote them in.
-    pub(super) fn decode_entry_ignoring(
-        &self,
-        text: &str,
-        ignored: &[&str],
-    ) -> Result<DatapackEntry, DatapackDecodeError> {
-        // serde_json's own recursion limit (128) bounds nesting before any value is built.
         let json: Json = serde_json::from_str(text)
             .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
-        let Json::Object(mut object) = json else {
-            return Err(DatapackDecodeError::NotAnObject);
-        };
-        if !ignored.is_empty() {
-            object.retain(|(key, _)| !ignored.contains(&key.as_str()));
-        }
-        decode_fields(&self.fields, &object, &[], "").map(|values| DatapackEntry { values })
+        let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
+        decode_fields(&self.fields, object, RecordMetadata::None, "")
+            .map(|values| DatapackEntry { values })
     }
 }
 
@@ -837,31 +837,67 @@ impl<'de> serde::Deserialize<'de> for Json {
     }
 }
 
-/// Decodes a JSON object against a flat record schema, the same way for every user of it (a
-/// datapack registry's entries, a mod feature type's configs): an undeclared key (other than
-/// the `ignored` ones the caller owns, a configured feature's `type`), a missing required key, a
-/// wrong type or an out-of-range value fails the whole record. Nothing here runs mod code.
+/// Decode a resource whose load conditions have already passed, following
+/// ConditionalDecoder: unwrap `neoforge:value` or hide the outer conditions key.
+pub fn decode_datapack_entry(
+    declaration: &DatapackRegistryDeclaration,
+    text: &str,
+) -> Result<DatapackEntry, DatapackDecodeError> {
+    let json: Json = serde_json::from_str(text)
+        .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
+    let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
+    let (object, metadata) = if !object.iter().any(|(key, _)| key == "neoforge:conditions") {
+        (object, RecordMetadata::None)
+    } else if let Some((_, inner)) = object.iter().find(|(key, _)| key == "neoforge:value") {
+        (
+            inner.as_object().ok_or(DatapackDecodeError::NotAnObject)?,
+            RecordMetadata::None,
+        )
+    } else {
+        (object, RecordMetadata::DatapackConditions)
+    };
+    decode_fields(&declaration.fields, object, metadata, "").map(|values| DatapackEntry { values })
+}
+
+pub(crate) enum RecordMetadata {
+    None,
+    /// The feature dispatch key is allowed, and a schema can also read it.
+    FeatureType,
+    /// The inlined condition wrapper's key is not part of the schema input.
+    DatapackConditions,
+}
+
+/// Decodes a JSON object against a flat record schema. An undeclared key (other than
+/// the caller's metadata), a missing required key, a wrong type or an out-of-range
+/// value fails the whole record. Nothing here runs mod code.
 pub(crate) fn decode_record(
     fields: &[DatapackField],
     object: &serde_json::Map<String, Value>,
-    ignored: &[&str],
+    metadata: RecordMetadata,
 ) -> Result<DatapackEntry, DatapackDecodeError> {
     let object: Vec<_> = object
         .iter()
         .map(|(k, v)| (k.clone(), Json::of(v)))
         .collect();
-    decode_fields(fields, &object, ignored, "").map(|values| DatapackEntry { values })
+    decode_fields(fields, &object, metadata, "").map(|values| DatapackEntry { values })
 }
 
 /// A record's fields at `path` (empty for an entry's own).
 fn decode_fields(
     fields: &[DatapackField],
     object: &[(String, Json)],
-    ignored: &[&str],
+    metadata: RecordMetadata,
     path: &str,
 ) -> Result<Vec<(String, DatapackValue)>, DatapackDecodeError> {
+    let (extra, hidden) = match metadata {
+        RecordMetadata::None => (None, None),
+        RecordMetadata::FeatureType => (Some("type"), None),
+        RecordMetadata::DatapackConditions => {
+            (Some("neoforge:conditions"), Some("neoforge:conditions"))
+        }
+    };
     if let Some((unknown, _)) = object.iter().find(|(key, _)| {
-        !ignored.contains(&key.as_str()) && !fields.iter().any(|field| field.name == *key)
+        Some(key.as_str()) != extra && !fields.iter().any(|field| field.name == *key)
     }) {
         return Err(DatapackDecodeError::UnknownField {
             field: joined(path, unknown),
@@ -870,9 +906,9 @@ fn decode_fields(
     let mut values = Vec::with_capacity(fields.len());
     for field in fields {
         let at = joined(path, &field.name);
-        let json = object
-            .iter()
-            .find_map(|(key, json)| (*key == field.name).then_some(json));
+        let json = object.iter().find_map(|(key, json)| {
+            (*key == field.name && Some(key.as_str()) != hidden).then_some(json)
+        });
         let value = match (json, &field.kind) {
             (Some(json), kind) => decode_value(kind, json, &at)?,
             (None, DatapackFieldKind::Optional { .. }) => DatapackValue::Absent,
@@ -979,7 +1015,7 @@ fn decode_value(
         }
         DatapackFieldKind::Record { fields } => {
             let object = json.as_object().ok_or_else(wrong)?;
-            decode_fields(fields, object, &[], path).map(DatapackValue::Record)
+            decode_fields(fields, object, RecordMetadata::None, path).map(DatapackValue::Record)
         }
         DatapackFieldKind::Optional { of } => decode_value(of, json, path),
     }
@@ -1018,15 +1054,19 @@ pub(crate) mod tests {
         }
     }
 
-    /// NeoForge's rule for a datapack registry outside `minecraft` (its Registries guide, "Datapack
-    /// Registries"): `data/<entry namespace>/<registry namespace>/<registry path>/<entry>.json`.
-    /// It is not vanilla's, which uses the registry's path only; registration refuses a
-    /// `minecraft` key, so no vanilla-path case exists.
     #[test]
     fn entry_files_follow_neoforges_namespaced_registry_folder() {
         assert_eq!(
             spell().entry_file("addon:fire").as_deref(),
             Some("data/addon/example/spell/fire.json")
+        );
+        let vanilla = DatapackRegistryDeclaration {
+            key: "minecraft:magic/spell".into(),
+            ..spell()
+        };
+        assert_eq!(
+            vanilla.entry_file("addon:nested/fire").as_deref(),
+            Some("data/addon/magic/spell/nested/fire.json")
         );
         assert_eq!(spell().entry_file("nocolon"), None);
     }
@@ -1124,8 +1164,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn wrapper_metadata_and_configured_feature_dispatch_have_distinct_visibility() {
+        use crate::world::feature_type::decode_feature_config;
+        use serde_json::json;
+
+        let declaration = DatapackRegistryDeclaration {
+            fields: vec![DatapackField::with_default(
+                "neoforge:conditions",
+                DatapackFieldKind::Bool,
+                DatapackValue::Bool(false),
+            )],
+            ..spell()
+        };
+        let wrapped = json!({"neoforge:conditions":[{"type":"neoforge:always"}]});
+        assert_eq!(
+            decode_datapack_entry(&declaration, &wrapped.to_string())
+                .unwrap()
+                .get("neoforge:conditions"),
+            Some(&DatapackValue::Bool(false))
+        );
+
+        let feature = json!({"type":"example:crystal"});
+        assert!(decode_feature_config(&[], &feature).is_ok());
+        let schema = [DatapackField::required(
+            "type",
+            DatapackFieldKind::Identifier,
+        )];
+        assert_eq!(
+            decode_feature_config(&schema, &feature)
+                .unwrap()
+                .get("type"),
+            Some(&DatapackValue::Text("example:crystal".into()))
+        );
+    }
+
+    #[test]
     fn nesting_is_bounded_by_the_json_parser() {
-        // Size is the candidate's limit (`datapack_registry_set` tests), not the decoder's.
         let decl = spell();
         let deep = format!("{}1{}", "[".repeat(65), "]".repeat(65));
         assert!(matches!(
@@ -1524,12 +1598,10 @@ pub(crate) mod tests {
                 field: r#"tiers[""].data_per_kill"#.into()
             }
         );
-        let entry = decl
-            .decode_entry_ignoring(
-                r#"{"neoforge:conditions": [], "tiers": {"z": {"data_per_kill": 1}, "a": {"data_per_kill": 2}}}"#,
-                &["neoforge:conditions"],
-            )
-            .unwrap();
+        let entry = decode_datapack_entry(
+            &decl,
+            r#"{"neoforge:conditions": [], "tiers": {"z": {"data_per_kill": 1}, "a": {"data_per_kill": 2}}}"#,
+        ).unwrap();
         let keys: Vec<_> = entry
             .get("tiers")
             .unwrap()
@@ -1553,12 +1625,9 @@ pub(crate) mod tests {
             DatapackFieldKind::Bool,
             DatapackValue::Bool(true),
         ));
-        let entry = overlapping
-            .decode_entry_ignoring(
-                r#"{"neoforge:conditions": [], "tiers": {}}"#,
-                &["neoforge:conditions"],
-            )
-            .unwrap();
+        let entry =
+            decode_datapack_entry(&overlapping, r#"{"neoforge:conditions": [], "tiers": {}}"#)
+                .unwrap();
         assert_eq!(
             entry.get("neoforge:conditions"),
             Some(&DatapackValue::Bool(true))

@@ -169,6 +169,15 @@ pub(super) fn overlay_files(
 }
 
 impl FnState {
+    pub(super) fn enabled_packs(&self) -> impl DoubleEndedIterator<Item = &DataPack> {
+        self.enabled.iter().filter_map(|id| {
+            self.packs
+                .iter()
+                .find(|pack| &pack.id == id)
+                .map(Arc::as_ref)
+        })
+    }
+
     /// The enabled world packs in resource priority order, highest first: a
     /// later selected pack overrides an earlier one (`PackRepository` order).
     pub(in crate::game) fn enabled_packs_highest_first(&self) -> impl Iterator<Item = &DataPack> {
@@ -225,11 +234,12 @@ impl Game<'_> {
     pub(super) fn open_world_datapacks(
         &mut self,
         enabled_features: &[String],
-    ) -> Result<PackStack, ReloadStageError> {
+        prepared: Option<&mut super::world_loading::PreparedWorld>,
+    ) -> Result<(PackStack, Option<super::world_loading::PreparedTerrain>), ReloadStageError> {
         // Function admission parses commands immediately, including block arguments.
         // Populate static registries on first open; admission synchronizes pack IDs.
         self.build_registries();
-        self.reload_datapacks(false, enabled_features)
+        self.load_datapacks(false, enabled_features, prepared)
     }
 
     pub(super) fn reload_datapacks(
@@ -237,6 +247,16 @@ impl Game<'_> {
         run_load: bool,
         enabled_features: &[String],
     ) -> Result<PackStack, ReloadStageError> {
+        self.load_datapacks(run_load, enabled_features, None)
+            .map(|(stack, _)| stack)
+    }
+
+    fn load_datapacks(
+        &mut self,
+        run_load: bool,
+        enabled_features: &[String],
+        opening: Option<&mut super::world_loading::PreparedWorld>,
+    ) -> Result<(PackStack, Option<super::world_loading::PreparedTerrain>), ReloadStageError> {
         let opening_world = !run_load;
         sunrise_client::mod_content::check_jars(
             &self.options.resources,
@@ -282,6 +302,7 @@ impl Game<'_> {
         } else {
             None
         };
+        let mut terrain = None;
         let initial = if opening_world {
             // This load warns again about saved attribute bases clamped to their bounds (#3728).
             sunrise_client::living_attributes::LOAD_CLAMPS.begin_load();
@@ -292,12 +313,33 @@ impl Game<'_> {
                 .tables
                 .as_ref()
                 .map_or_else(|| self.res.items(), |tables| &tables.items);
+            let biomes = tables.tables.as_ref().map(|tables| &tables.biomes);
+            if let Some(opening) = opening {
+                let mut options = self.options.clone();
+                options.resources.clone_from(&resources);
+                let mut pack = self.pack.clone();
+                pack.data_changes = changes.clone();
+                pack.additional_data = additional.clone().into();
+                terrain = Some(
+                    opening
+                        .prepare_terrain(
+                            &self.res,
+                            &pack,
+                            &options,
+                            &self.settings,
+                            &stack,
+                            biomes.expect("opening stages the biome registry"),
+                        )
+                        .map_err(|error| ReloadStageError::DataSource(error.to_string()))?,
+                );
+            }
             let wire = super::lan::sync::prepare_world_sync_data(
                 &resources,
                 &self.res.core.item_data,
                 wire_items,
                 &super::pack_files(&tables.tables),
                 &tables.health.damage,
+                biomes.map(|biomes| (biomes.table.clone(), biomes.differs_from_preload())),
                 tables
                     .tables
                     .as_ref()
@@ -336,6 +378,11 @@ impl Game<'_> {
         if let Some(world) = world {
             self.install_world_tables(world);
         } else if let Some((initial, wire)) = initial {
+            if let Some(terrain) = &terrain {
+                self.level_shapes = terrain.shapes;
+                self.end.set_locator(terrain.locator.clone());
+                self.share_spawn_conditions();
+            }
             self.open_world_tables(initial)
                 .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
             super::lan::sync::install_world_sync_data(wire);
@@ -351,7 +398,7 @@ impl Game<'_> {
             self.fns.schedule_loaded = true;
             self.load_schedule();
         }
-        Ok(stack)
+        Ok((stack, terrain))
     }
     /// `CommandFunction.parseCommand`: compile ordinary lines without running them.
     /// Macro lines are parsed
@@ -532,6 +579,23 @@ impl Game<'_> {
             }
         }
         entry.tags.sort();
+        if let Some(tables) = &self.world_tables {
+            entry.ids = tables
+                .biomes
+                .table
+                .registry_order()
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+            entry.ids.sort();
+            entry.tags = tables
+                .pack_tags
+                .get("worldgen/biome")
+                .into_iter()
+                .flat_map(|tags| tags.keys().cloned())
+                .collect();
+            entry.tags.sort();
+        }
         let entry = reg
             .by_registry
             .entry("minecraft:worldgen/structure".to_owned())
