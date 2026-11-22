@@ -65,10 +65,12 @@ pub mod tests {
         let active = registrar.register_ticket_controller("quarry", Some(Arc::new(noop_validator)));
         install_registrar(registrar, &crate::parts::tests::rule_schema()).unwrap();
         let controllers = mod_vocab::__private::parts_installation::testing_controllers();
-        assert_eq!(controllers.len(), 1);
-        assert_eq!(&*controllers[0].id, "first:quarry");
-        assert_ne!(controllers[0].token, 0);
-        assert!(controllers[0].validator.is_some());
+        let [(id, token, has_validator)] = controllers.as_slice() else {
+            panic!("expected one installed controller, got {controllers:?}");
+        };
+        assert_eq!(*id, "first:quarry");
+        assert_ne!(*token, 0);
+        assert!(*has_validator);
         assert_eq!(active.id(), "first:quarry");
         assert_eq!(
             mod_vocab::__private::game::ticket_controller_slot(active),

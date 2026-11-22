@@ -434,7 +434,16 @@ impl Game<'_> {
             return;
         };
         let loaded = streaming.take_loaded_tickets();
-        let ready = mod_api::__private::game::validate_saved_tickets(self, level, loaded);
+        if loaded.is_empty() {
+            return;
+        }
+        #[cfg(not(test))]
+        let ready = crate::entry::ticket_activation().validate(self, level, loaded);
+        #[cfg(test)]
+        let ready = match mod_api::__private::game::TicketActivation::for_test_scope() {
+            Some(activation) => activation.validate(self, level, loaded),
+            None => loaded,
+        };
         if let Some(streaming) = self.mod_ticket_streaming_mut(dim) {
             for ticket in ready {
                 streaming.set_mod_forced(ticket, true);

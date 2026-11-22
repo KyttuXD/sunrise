@@ -142,16 +142,63 @@ pub(crate) fn slot_for_id(id: &str) -> Option<u32> {
         .map(|slot| slot as u32)
 }
 
-/// Run each registered controller's bound saved-ticket validator on its staged rows in slot order
-/// and return the surviving tickets ready for activation.
-pub(crate) fn validate_saved_tickets(
+// no wire: a process-local authority owned by the engine's level-open path.
+// exhaustive: downstream callers cannot construct this authority.
+/// The engine's authority to activate a level's saved mod tickets.
+#[doc(hidden)]
+pub struct TicketActivation(ActivationTable);
+
+enum ActivationTable {
+    Installed,
+    #[cfg(any(test, feature = "testing"))]
+    Fixture(&'static [ControllerInfo]),
+}
+
+impl TicketActivation {
+    /// Hand the sole installed-table authority to engine startup, before loading any native code.
+    /// There is no way to recover it after that handoff.
+    pub fn take_for_startup() -> Option<Self> {
+        static CLAIMED: OnceLock<()> = OnceLock::new();
+        Self::claim(&CLAIMED)
+    }
+
+    fn claim(slot: &OnceLock<()>) -> Option<Self> {
+        slot.set(()).ok().map(|()| Self(ActivationTable::Installed))
+    }
+
+    /// Obtain authority over only the controller table installed by the current test fixture.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn for_test_scope() -> Option<Self> {
+        TEST_CONTROLLERS
+            .get()
+            .map(|rows| Self(ActivationTable::Fixture(rows)))
+    }
+
+    /// Validate the level's staged saved rows, returning only those ready to activate.
+    pub fn validate(
+        &self,
+        host: &mut dyn ServerHost,
+        level: LevelRef,
+        loaded: Vec<ModTicket>,
+    ) -> Vec<ModTicket> {
+        let table = match self.0 {
+            ActivationTable::Installed => crate::parts::installed_controllers(),
+            #[cfg(any(test, feature = "testing"))]
+            ActivationTable::Fixture(rows) => rows,
+        };
+        validate_saved_tickets(table, host, level, loaded)
+    }
+}
+
+/// Run each registered controller's bound saved-ticket validator in slot order.
+fn validate_saved_tickets(
+    table: &[ControllerInfo],
     host: &mut dyn ServerHost,
     level: LevelRef,
     loaded: Vec<ModTicket>,
 ) -> Vec<ModTicket> {
-    let table = controllers();
     let mut ready = Vec::new();
-    let mut groups = BTreeMap::<u32, (&'static RegisteredTicketValidator, Vec<ModTicket>)>::new();
+    let mut groups = BTreeMap::<u32, (&RegisteredTicketValidator, Vec<ModTicket>)>::new();
     for ticket in loaded {
         if let Some(validator) = table
             .get(ticket.controller as usize)
@@ -202,8 +249,18 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[test]
+    fn only_the_first_claim_receives_installed_ticket_activation_authority() {
+        let slot = OnceLock::new();
+        let engine = TicketActivation::claim(&slot).unwrap();
+        assert!(matches!(engine.0, ActivationTable::Installed));
+        assert!(TicketActivation::claim(&slot).is_none());
+        assert!(TicketActivation::for_test_scope().is_none());
+    }
+
+    #[test]
     fn a_panicking_ticket_validator_leaves_loaded_tickets_and_other_controllers_untouched() {
         struct Mod;
+        #[mod_api::__subscriptions]
         impl Hooks for Mod {}
 
         const POS: [i32; 3] = [1, 64, 1];
@@ -215,7 +272,7 @@ mod tests {
             0,
             Some(Arc::new({
                 let calls = calls.clone();
-                move |_, _, validation| {
+                move |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
                     if validation.remove_block_ticket(POS, [2, 3], false) {
                         calls.fetch_add(1, Ordering::Relaxed);
                     }
@@ -228,9 +285,11 @@ mod tests {
             "healthy:controller".into(),
             "healthy",
             1,
-            Some(Arc::new(|_, _, validation| {
-                validation.remove_block_ticket(POS, [2, 3], false);
-            })),
+            Some(Arc::new(
+                |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                    validation.remove_block_ticket(POS, [2, 3], false);
+                },
+            )),
         );
         let ticket = |controller| ModTicket {
             controller,
@@ -248,9 +307,10 @@ mod tests {
                 with_controller_tables(vec![failing, healthy], vec![], || {
                     let mut host = FakeHost::new();
                     let level = host.level.level();
+                    let activation = TicketActivation::for_test_scope().unwrap();
                     for _ in 0..2 {
                         assert_eq!(
-                            validate_saved_tickets(&mut host, level, vec![ticket(0), ticket(1)]),
+                            activation.validate(&mut host, level, vec![ticket(0), ticket(1)]),
                             [ticket(0)],
                         );
                     }

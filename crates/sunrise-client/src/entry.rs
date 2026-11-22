@@ -2,9 +2,20 @@
 #[path = "sunrise_look.rs"]
 mod sunrise_look;
 use crate::{crash, game, logging};
+use mod_api::__private::game::TicketActivation;
+use std::sync::OnceLock;
 use sunrise_mod_package::selection::{Argument, LaunchArguments};
 pub(crate) mod dedicated_arguments;
 pub(crate) mod runtime_environment;
+
+static TICKET_ACTIVATION: OnceLock<TicketActivation> = OnceLock::new();
+
+#[cfg(not(test))]
+pub(crate) fn ticket_activation() -> &'static TicketActivation {
+    TICKET_ACTIVATION
+        .get()
+        .expect("startup prepared ticket activation")
+}
 
 /// Validated startup state. No native hooks or workers may run before prepare returns.
 pub struct Startup {
@@ -40,6 +51,13 @@ pub fn prepare() -> Startup {
         std::process::exit(0);
     };
     let capture = sunrise_mod_package::holder::acquire(&launch);
+    // Native libraries (including their initializers and hook factories) have not run yet.
+    TICKET_ACTIVATION.get_or_init(|| {
+        TicketActivation::take_for_startup().unwrap_or_else(|| {
+            eprintln!("Sunrise: refusing startup because ticket activation is already owned");
+            std::process::exit(game::exit_code::ERROR);
+        })
+    });
     Startup {
         launch,
         options,

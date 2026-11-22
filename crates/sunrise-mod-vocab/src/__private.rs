@@ -373,15 +373,7 @@ pub mod game {
     pub fn ticket_controller_slot_by_id(id: &str) -> Option<u32> {
         crate::world::ticket_controller::slot_for_id(id)
     }
-    /// Run each registered controller's bound saved-ticket validator on its staged rows and
-    /// return the surviving tickets ready for activation.
-    pub fn validate_saved_tickets(
-        host: &mut dyn ServerHost,
-        level: LevelRef,
-        loaded: Vec<crate::world::mod_chunk_tickets::ModTicket>,
-    ) -> Vec<crate::world::mod_chunk_tickets::ModTicket> {
-        crate::world::ticket_controller::validate_saved_tickets(host, level, loaded)
-    }
+    pub use crate::world::ticket_controller::TicketActivation;
     /// An open menu's handle the game names.
     pub fn menu_ref(player: PlayerRef, window: i32, generation: u64) -> MenuRef {
         MenuRef {
