@@ -740,10 +740,14 @@ mod tests {
                 host: &mut dyn ServerHost,
                 event: &mut PlayerContainerCloseEvent<'_>,
             ) {
-                VALUE.set(host, Holder::Player(event.player), 55).unwrap();
-                SAVED.set(host, Holder::Player(event.player), 66).unwrap();
+                VALUE
+                    .set(host, Holder::Player(event.player.uuid()), 55)
+                    .unwrap();
+                SAVED
+                    .set(host, Holder::Player(event.player.uuid()), 66)
+                    .unwrap();
                 RETAINED
-                    .set(host, Holder::Player(event.player), 77)
+                    .set(host, Holder::Player(event.player.uuid()), 77)
                     .unwrap();
                 *self.closed.lock().unwrap() += 1;
             }

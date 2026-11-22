@@ -38,8 +38,8 @@ pub trait Notes {
 - A player's items for server mods: counting, taking and giving go through the player's
   [`ENTITY_ITEMS`](../concepts/capabilities/entity-items.md) handler.
 
-- Server menus: a vanilla chest menu a server mod opens and fills, whose clicks and closing reach the mod
-  (`menu_clicked`, `menu_closed`), and trades on them between the players'
+- Server menus: a vanilla chest menu a server mod opens and fills, whose clicks and teardown reach the mod
+  (`menu_clicked`, `menu_removed`, `player_container_close`), and trades on them between the players'
   [`ENTITY_ITEMS`](../concepts/capabilities/entity-items.md) handlers in one transaction ([Server menus](#server-menus)).
 
 - Item tooltips: unless the stack hides them, `ItemPart::tooltip` adds lines where `Item.appendHoverText` does,

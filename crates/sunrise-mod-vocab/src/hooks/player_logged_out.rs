@@ -6,15 +6,14 @@ pub trait Hooks {
     /// any path: a lost connection, a kick, the server stopping or failing.
     /// Once for each player `player_logged_in` told of, and also for a kicked
     /// fake player without a preceding login. Silent `remove_fake` sends no logout.
-    /// They've already
-    /// left `host.players().server_players()`, except when the server stops, which tells
-    /// before it saves, with them still listed and able to get a last message.
+    /// A real player is still available at `PlayerList.remove` entry, before their menu
+    /// closes. Server shutdown also tells before it saves; a kicked fake is already gone.
     /// Server-side.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_logged_out",
         dispatch = "flat",
         side = "server",
-        version = 2,
+        version = 3,
         contract = "listen",
         neoforge = "PlayerEvent.PlayerLoggedOutEvent"
     )]

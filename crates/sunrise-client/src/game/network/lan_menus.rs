@@ -26,9 +26,16 @@ pub(in crate::game) struct GuestMenus {
     pub(in crate::game) hub: MenuOwner<()>,
     /// The successful open already announced to mods, retained through a loan of `GuestPlay`.
     pub(in crate::game) menu_heard: Option<super::native_menus::HeardMenu>,
+    /// Installed from the start of `removed` until the general Close returns.
+    pub(super) closing: Option<ClosingMenu>,
     /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
     /// None for every menu no mod backed.
     pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
+}
+
+#[derive(Default)]
+pub(super) struct ClosingMenu {
+    pub(super) opens: Vec<Box<super::native_menus::PendingMenuOpen>>,
 }
 
 /// An authoritative click reply, published only once the click's transaction has committed.
@@ -40,7 +47,10 @@ pub(super) struct MenuClickReply {
 
 impl MenuClickReply {
     pub(super) fn closes_menu(&self) -> bool {
-        matches!(self.reply, ClickReply::Close(_))
+        matches!(
+            self.reply,
+            ClickReply::Close(_) | ClickReply::ClientClose(_)
+        )
     }
 }
 
@@ -48,6 +58,7 @@ pub(super) enum ClickReply {
     Predicted(sunrise_protocol::packets::play::ContainerClick, Vec<usize>),
     Resend(i32),
     Close(i32),
+    ClientClose(i32),
     Inventory,
     Offhand,
 }
@@ -90,30 +101,61 @@ impl super::Game<'_> {
         }
     }
 
+    pub(super) fn reply_menu_click_for(&mut self, conn: u32, generation: u64, reply: ClickReply) {
+        self.after_commit(super::transactions::After::MenuClick(Box::new(
+            MenuClickReply {
+                conn,
+                generation,
+                reply,
+            },
+        )));
+    }
+
     pub(super) fn reply_menu_click(&mut self, conn: u32, reply: ClickReply) {
         if let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) {
-            self.after_commit(super::transactions::After::MenuClick(Box::new(
-                MenuClickReply {
-                    conn,
-                    generation: guest.menu_generation,
-                    reply,
-                },
-            )));
+            self.reply_menu_click_for(conn, guest.menu_generation, reply);
         }
     }
 
-    /// Run `removed` only after the outermost commit. On abort the inventory journal
-    /// still names the same menu and cursor it recorded. Without a transaction this is immediate.
+    /// Run `removed` only after the outermost commit. An abort keeps the current menu.
     pub(super) fn request_menu_close(&mut self, conn: u32, window: i32, generation: u64) {
-        let reply = MenuClickReply {
-            conn,
-            generation,
-            reply: ClickReply::Close(window),
-        };
-        if self.transactions.is_empty() {
-            self.publish_menu_click(reply);
+        self.reply_menu_click_for(conn, generation, ClickReply::Close(window));
+    }
+
+    /// An open waits for an enclosing transaction or for the old menu to finish closing.
+    pub(super) fn menu_open_waits(&self, conn: u32) -> bool {
+        !self.transactions.is_empty()
+            || self
+                .lan
+                .as_ref()
+                .and_then(|host| host.menus.get(&conn))
+                .is_some_and(|menus| menus.closing.is_some())
+    }
+
+    pub(super) fn defer_menu_open(
+        &mut self,
+        conn: u32,
+        open: super::native_menus::PendingMenuOpen,
+    ) -> i32 {
+        let staged = self.transactions.next_staged_menu_open();
+        self.after_commit(super::transactions::After::MenuOpen(conn, Box::new(open)));
+        staged
+    }
+
+    pub(super) fn publish_menu_open(
+        &mut self,
+        conn: u32,
+        open: super::native_menus::PendingMenuOpen,
+    ) {
+        if let Some(closing) = self
+            .lan
+            .as_mut()
+            .and_then(|host| host.menus.get_mut(&conn))
+            .and_then(|menus| menus.closing.as_mut())
+        {
+            closing.opens.push(Box::new(open));
         } else {
-            self.after_commit(super::transactions::After::MenuClick(Box::new(reply)));
+            self.install_pending_menu_open(conn, open);
         }
     }
 
@@ -124,6 +166,15 @@ impl super::Game<'_> {
             generation,
             reply,
         } = reply;
+        if let ClickReply::Close(window) | ClickReply::ClientClose(window) = reply {
+            self.close_guest_window(
+                conn,
+                window,
+                generation,
+                matches!(reply, ClickReply::Close(_)),
+            );
+            return;
+        }
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -155,18 +206,7 @@ impl super::Game<'_> {
                     g.menu_sent[45] = offhand;
                 });
             }
-            ClickReply::Close(window) => {
-                if host.hub.guests[i]
-                    .menu
-                    .as_ref()
-                    .is_some_and(|m| m.window == window)
-                {
-                    self.in_menu_owner_level(conn, |game| {
-                        game.forget_menu_places(conn);
-                        game.guest_close_menus_and_tell(conn);
-                    });
-                }
-            }
+            ClickReply::Close(_) | ClickReply::ClientClose(_) => unreachable!(),
         }
     }
 }

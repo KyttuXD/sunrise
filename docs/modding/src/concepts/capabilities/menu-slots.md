@@ -395,11 +395,16 @@ refuse writes.
 ## A mod's chest menu
 
 `host.open_menu(uuid, rows, title, items, replace)` opens a chest menu (`generic_9x1` to `generic_9x6`) for a player
-in place of the menu they have open and returns its window id; `menu_clicked` and `menu_closed` name it too. Its items
+in place of the menu they have open and returns its window id; `menu_clicked` and `MenuPart::menu_removed` name it too. Its items
 change in place: `host.menu(uuid, window)` is its `MenuRef` while the player still has that window open (None for
 another window, a closed menu or a player who left), and a write to `ItemPlace::MenuSlot { menu, slot }` in a
 transaction is sent with the next tick's container sync, one `ContainerSetSlot` per changed slot, as vanilla's
 `broadcastChanges` sends a menu a mod changed. Nothing reopens and the cursor stays where it is.
+Opening a native menu in a transaction or from a close callback stages the request and returns a
+negative identity, not a usable window. The old menu stays live until teardown; the actual window id
+is allocated when the open publishes, at outermost commit or after the current Close. Initialize the
+new menu in `player_container_open`. An aborted transaction leaves the current window and counter
+untouched. Closing inside a transaction likewise waits until commit.
 
 ```rust,ignore
 // In menu_clicked: show the next page's item in slot 4 of the same menu.
@@ -449,12 +454,14 @@ Ordinary clicks move items up to the slot cap on both sides. To make a filter sl
 read the cursor, insert a copy without extracting from it, and return `Flow::Cancel`. The server sends the
 committed menu and cursor regardless of whether their item IDs and counts match the prediction.
 
-The storage is never saved. `menu_closed` v2 sees its final `owned_slots` in slot order and the supplied
-`opening_hand`, if any. The old window and its handles are already stale. Unlike vanilla's `clearContainer`,
-the game does not return or drop those values automatically. A part that wants real inputs returned must
-return them using the server Host. A listener can instead write a filter selection to the held item. Check
-that the player and item are still available before writing; do not give filter copies back as real items.
-The cursor's ordinary close behavior is unchanged.
+The storage is never saved. The owning `MenuPart::menu_removed` (`AbstractContainerMenu.removed`) sees
+its final `owned_slots` in slot order, the supplied `opening_hand` if any, `player: Option<PlayerRef>`
+(live when available, `None` if the player is already gone), and `uuid`. The menu's transient storage is
+already detached before `menu_removed` runs, and `player_container_close` follows once teardown finishes.
+Unlike vanilla's `clearContainer`, the game does not return or drop those values automatically. A part
+that wants real inputs returned must return them using the server Host. A part can instead write a filter
+selection to the held item. Check that the player and item are still available before writing; do not give
+filter copies back as real items. The cursor's ordinary close behavior is unchanged.
 
 ## Slots backed by a held item or an entity's handler
 

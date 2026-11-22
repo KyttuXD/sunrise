@@ -69,7 +69,10 @@ impl Game<'_> {
         let Some(guest) = self.native_menu_guest(menu) else {
             return false;
         };
-        if guest.disconnect_pending || self.lan_acting == Some(guest.conn) {
+        if guest.disconnect_pending
+            || self.lan_acting == Some(guest.conn)
+            || guest.menu.as_ref().is_some_and(|menu| menu.removed)
+        {
             return false;
         }
         self.request_menu_close(guest.conn, window, guest.menu_generation);
@@ -92,7 +95,7 @@ impl Game<'_> {
         let open = guest
             .menu
             .as_ref()
-            .filter(|m| m.slots == Slots::Native && m.mod_type.is_some())
+            .filter(|m| m.slots == Slots::Native && m.mod_type.is_some() && !m.removed)
             .ok_or(Unsupported)?;
         let &committed = open.blockless_data.get(index).ok_or(InvalidIndex)?;
         let conn = guest.conn;
@@ -230,7 +233,9 @@ impl Game<'_> {
             let play = host.play.get(&guest.conn);
             let menus = host.menus.get(&guest.conn);
             if menu.fields().window != 0
-                || menus.is_some_and(|m| m.crafting.table.is_some() || m.station.is_some())
+                || menus.is_some_and(|m| {
+                    m.closing.is_some() || m.crafting.table.is_some() || m.station.is_some()
+                })
                 || play.is_some_and(|p| {
                     p.merchant.is_some() || p.lectern.is_some() || p.mount_window.is_some()
                 })
@@ -573,6 +578,9 @@ impl Game<'_> {
             MenuSlotBacking::Ender(n) => guests.ender_items_mut(index)?.get_mut(n),
             MenuSlotBacking::CraftGrid(n) => guests.craft_grid_mut(index)?.get_mut(n),
             MenuSlotBacking::Native(n) | MenuSlotBacking::Owned(n) => {
+                if guests[index].menu.as_ref()?.removed {
+                    return None;
+                }
                 guests.native_menu_mut(index)?.get_mut(n)
             }
             _ => None,

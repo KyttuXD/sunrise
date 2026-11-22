@@ -4,7 +4,7 @@ use super::Game;
 use sunrise_client::{lan::guest::Guest, text::Text};
 
 impl Game<'_> {
-    /// Report a normal leave after the hub removed the guest and broadcast its leave line.
+    /// Report a normal leave after the hub broadcast its leave line.
     pub(in crate::game) fn native_guest_left(&mut self, guest: &Guest) {
         // A fake silently displaced by a real login was never announced as online.
         if guest.is_fake() && !guest.disconnect_pending {
@@ -47,13 +47,18 @@ impl Game<'_> {
                     .with_color(sunrise_client::text::YELLOW),
             );
         }
-        if guest.joined()
+    }
+
+    /// NeoForge's `PlayerLoggedOutEvent` at `PlayerList.remove` entry, before
+    /// the player's menu is removed and while the player can still be read.
+    pub(in crate::game) fn native_guest_logout(&mut self, uuid: u128, name: &str) {
+        if mod_api::__private::listened(mod_api::HookId::PlayerLoggedOut)
             && self
                 .lan
                 .as_ref()
                 .is_some_and(|host| !host.players_told_left)
         {
-            self.native_player_logged_out(guest.uuid, &guest.name);
+            self.native_player_logged_out(uuid, name);
         }
     }
 }

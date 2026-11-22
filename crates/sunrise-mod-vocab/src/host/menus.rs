@@ -23,6 +23,8 @@ pub trait MenusServerHost {
     /// `PlayerRef::container_menu`. An abort keeps the current menu without advancing
     /// the window counter. An active speculative quick move or trade action still refuses an open
     /// with `Ok(None)`.
+    /// An open requested during menu removal also returns a staged identity;
+    /// it waits until the current Close returns.
     #[serialize_text]
     fn open_menu(
         &mut self,
@@ -34,7 +36,7 @@ pub trait MenusServerHost {
     ) -> Result<Option<i32>, StackWriteError>;
     /// Side: server.
     /// The menu `open_menu` opened that the player has open as window
-    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_closed`
+    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_removed`
     /// give). Its slots are written as `ItemPlace::MenuSlot` in a
     /// transaction, and the client is sent each changed slot with the next
     /// tick's container sync (`AbstractContainerMenu.broadcastChanges`), as
@@ -42,9 +44,9 @@ pub trait MenusServerHost {
     /// a player who isn't here.
     fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef>;
     /// Side: server.
-    /// Closes the player's native menu (a `menu_closed` follows). Without a transaction it
-    /// closes immediately. Inside one, the same window closes only at outermost commit;
-    /// an abort leaves it open.
+    /// Closes the player's native menu (owner teardown followed by `player_container_close`).
+    /// Without a transaction it closes immediately; inside one, the same window closes at
+    /// outermost commit and an abort leaves it open.
     fn close_menu(&mut self, uuid: u128);
     /// Side: server.
     /// Replaces everything the player's open `open_menu` menu `window` shows with `items` (by

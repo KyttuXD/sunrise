@@ -6,9 +6,8 @@ use super::{
     commands::items::Slot,
     native_menus::PendingMenuOpen,
     native_server::PlayerRead,
-    transactions::After,
 };
-use mod_api::{InventoryView, MenuReplace, OpenMenuError, PlayerDataRefusal, PlayerRef};
+use mod_api::{InventoryView, OpenMenuError, PlayerDataRefusal, PlayerRef};
 use sunrise_client::{
     items::ItemStack,
     lan::{data::component_nbt, menu::Slots},
@@ -94,25 +93,39 @@ impl Game<'_> {
         }
         let conn = self
             .online_player_record(player)
-            .filter(|g| g.participates_online() && !g.dead)
+            .filter(|g| g.participates_online() && !g.dead && !g.disconnect_pending)
             .ok_or(OpenMenuError::PlayerUnavailable)?
             .conn;
         if self.menu_click_in_progress(conn) {
             return Ok(false);
         }
-        if !self.transactions.is_empty() {
-            self.after_commit(After::MenuOpen(
-                conn,
-                Box::new(PendingMenuOpen::Ender(player, title)),
-            ));
+        if self.menu_open_waits(conn) {
+            self.defer_menu_open(conn, PendingMenuOpen::Ender(player, title));
             return Ok(true);
         }
-        let title = component_nbt(&title.component());
+        Ok(self.request_ender_menu(conn, component_nbt(&title.component())))
+    }
+
+    pub(super) fn finish_open_ender_chest(
+        &mut self,
+        conn: u32,
+        player: PlayerRef,
+        title: Text,
+    ) -> Result<bool, OpenMenuError> {
+        self.online_player_record(player)
+            .filter(|g| {
+                g.conn == conn && g.participates_online() && !g.dead && !g.disconnect_pending
+            })
+            .ok_or(OpenMenuError::PlayerUnavailable)?;
+        Ok(self.request_ender_menu(conn, component_nbt(&title.component())))
+    }
+
+    fn request_ender_menu(&mut self, conn: u32, title: Tag) -> bool {
         if self.lan_guest_swaps.contains(&conn) {
             self.lan_ender_menus.push((conn, title));
-            return Ok(true);
+            return true;
         }
-        Ok(self.open_ender_menu(conn, title))
+        self.open_ender_menu(conn, title)
     }
 
     /// The ender chest menus `player_open_ender_chest` asked for in guest `conn`'s turn,
@@ -149,21 +162,22 @@ impl Game<'_> {
         {
             return false;
         }
-        self.close_for_open(conn, MenuReplace::CloseFirst);
-        let Some(host) = self.lan.as_mut() else {
-            return false;
-        };
-        let Some(mut items) = host.hub.guest(conn).map(|g| g.ender_items.clone()) else {
-            return false;
-        };
-        items.resize(SLOTS, None);
-        let opened = host
-            .hub
-            .open_menu_window(conn, MENU, title, None, Slots::Ender, items, None)
-            .is_some();
-        if opened {
-            self.player_menu_opening(conn);
-        }
-        opened
+        self.guest_replace_menu(conn, true, |game| {
+            let Some(host) = game.lan.as_mut() else {
+                return false;
+            };
+            let Some(mut items) = host.hub.guest(conn).map(|g| g.ender_items.clone()) else {
+                return false;
+            };
+            items.resize(SLOTS, None);
+            let opened = host
+                .hub
+                .open_menu_window(conn, MENU, title, None, Slots::Ender, items, None)
+                .is_some();
+            if opened {
+                game.player_menu_opening(conn);
+            }
+            opened
+        })
     }
 }

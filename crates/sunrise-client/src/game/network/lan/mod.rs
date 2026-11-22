@@ -2301,31 +2301,56 @@ impl Game<'_> {
                         self.cleanup_fake_player(&mut host, &guest);
                         self.lan = Some(host);
                         self.native_guest_left(&guest);
+                        if guest.joined() && guest.disconnect_pending {
+                            self.native_guest_logout(guest.uuid, &guest.name);
+                        }
                         continue;
                     }
-                    // The menu they had open closes, in the level they were in
-                    // (`ServerPlayer.disconnect` -> `doCloseContainer`).
+                    // `PlayerList.remove` posts logout at entry, then
+                    // `ServerLevel.removePlayerImmediately` -> `Player.remove` closes the menu.
                     if guest.placed {
                         let back = self.dim;
                         let theirs = super::Dim::from_id(&guest.dimension);
-                        if self.enter_level(theirs).is_ok() {
+                        if let Err(error) = self.enter_level(theirs) {
+                            log::error!(
+                                "Could not remove player {} in {}: {error}",
+                                guest.name,
+                                theirs.id()
+                            );
+                            if guest.joined() {
+                                self.native_guest_logout(guest.uuid, &guest.name);
+                            }
+                            if let Some(menu) = guest.menu.as_mut()
+                                && let Some(closed) = menu.native_removed(
+                                    guest.uuid,
+                                    guest.menu_generation,
+                                    &mut guest.native_menu,
+                                    false,
+                                )
+                            {
+                                self.deliver_menu_removed(closed);
+                            }
+                        } else {
                             let conn = guest.conn;
-                            let host = self.lan.as_mut()?;
-                            let at = host.hub.guests.len();
-                            let carrier = guest.entity_id as u32;
-                            host.hub.guests.push(*guest);
+                            let (uuid, name, carrier) =
+                                (guest.uuid, guest.name.clone(), guest.entity_id as u32);
+                            let joined = guest.joined();
+                            guest.disconnect_pending = true;
+                            self.lan.as_mut()?.hub.guests.push(*guest);
+                            if joined {
+                                self.native_guest_logout(uuid, &name);
+                            }
                             // A player logging out carries no mob a mod seated on it.
                             self.eject_player_riders(Some(carrier));
                             self.guest_disconnected(conn);
-                            let Some(host) = self.lan.as_mut() else {
-                                unreachable!("LanHost dropped inside a tick; closes are deferred")
-                            };
-                            assert_eq!(host.hub.guests[at].conn, conn);
-                            *guest = host.hub.guests.remove(at);
+                            let at = self.guest_index(conn)?;
+                            *guest = self.lan.as_mut()?.hub.guests.remove(at);
                         }
                         if let Err(e) = self.enter_level(back) {
                             log::error!("could not reopen {}: {e}", back.id());
                         }
+                    } else if guest.joined() {
+                        self.native_guest_logout(guest.uuid, &guest.name);
                     }
                     self.lan_crafting_left(&mut guest);
                     if guest.joined() {
@@ -2343,6 +2368,13 @@ impl Game<'_> {
                     for e in guest.tracker.take_events() {
                         self.tell_tracking(guest.uuid, &guest.name, &e);
                     }
+                }
+                HostEvent::CloseInvalidContainer {
+                    conn,
+                    window,
+                    generation,
+                } => {
+                    self.close_guest_window(conn, window, generation, true);
                 }
                 HostEvent::Flight { conn, flying } => {
                     self.lan_flight_toggled(conn, flying);
@@ -6131,7 +6163,11 @@ mod merchant_packet_tests {
                 1,
                 "price refresh sends even an unchanged offer"
             );
-            assert!(game.lan_merchant_closed(1, Some(window)));
+            game.lan_guest_packet(
+                1,
+                play::Serverbound::ContainerClose(play::ContainerClose { container: window }),
+            );
+            assert!(game.lan.as_ref().unwrap().play[&1].merchant.is_none());
             assert!(packets(&rx).0.is_empty(), "closing does not resend offers");
 
             // Crossing the real level-two boundary runs updateSpecialPrices while

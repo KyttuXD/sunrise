@@ -28,6 +28,7 @@ pub trait PlayerMenusBackendMut {
     /// non-provider, cancelled open, active speculative quick move or trade action, or an
     /// unconnected player such as a fake player. Inside a transaction, `Ok(true)` means queued;
     /// the provider runs at outermost commit and can still refuse. An abort does not open the menu.
+    /// A request during menu removal likewise waits until Close returns.
     fn player_open_menu(
         &mut self,
         player: PlayerRef,
@@ -64,6 +65,8 @@ pub trait PlayerMenusBackendMut {
     /// runs in the player's level outside the transaction. The next vanilla window id
     /// (`1..=100`) is allocated when the open installs and exposed in `player_container_open`
     /// and `PlayerRef::container_menu`. An abort drops the request and keeps the old menu.
+    /// An open requested during menu removal likewise returns a staged identity and waits
+    /// until Close returns.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,
@@ -115,6 +118,7 @@ pub trait PlayerMenusBackendMut {
     /// active speculative quick move or trade action. Errors:
     /// `PlayerUnavailable` (stale, dead, fake, or on a client), or `Title` for a title that
     /// could not cross; nothing opens then.
+    /// A request during menu removal also waits until Close returns.
     #[serialize_text]
     fn player_open_ender_chest(
         &mut self,

@@ -356,6 +356,7 @@ mod map_decoration_types;
 mod math;
 mod menu_extra_data;
 mod menu_links;
+mod menu_removed;
 mod menu_slot_rules;
 mod menu_slot_take;
 mod menu_transfer;

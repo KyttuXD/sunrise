@@ -107,6 +107,9 @@ pub fn event_kind(event: &HostEvent) -> EventKind {
     match event {
         HostEvent::Joined(c) => ("join", Some(*c), None),
         HostEvent::Left(g) => ("leave", None, Some(g.name.clone())),
+        HostEvent::CloseInvalidContainer { conn, .. } => {
+            ("close invalid container", Some(*conn), None)
+        }
         HostEvent::Packet(c, p) => (p.name(), Some(*c), None),
         HostEvent::InputCredits(_) => ("input credits", None, None),
         HostEvent::RawPayload(_) => ("raw payload", None, None),

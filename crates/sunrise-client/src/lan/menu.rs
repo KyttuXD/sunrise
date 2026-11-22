@@ -98,6 +98,10 @@ pub struct Menu {
     pub asks_still_valid: bool,
     /// The hand the opener supplied and its stack at open. Neither travels to the client.
     pub opening_item: Option<(Hand, Option<ItemStack>)>,
+    /// The opener block id when a block opened this menu, retained for owner-routed teardown.
+    pub opener_block: Option<Box<str>>,
+    /// Whether `AbstractContainerMenu.removed` has already run for this menu instance.
+    pub removed: bool,
 }
 
 /// What a mod menu type's crafting grid makes (`ResultContainer`), and the
@@ -153,27 +157,47 @@ impl Menu {
         self.mod_type?.owned_slots.as_deref()
     }
 
-    /// Detached transient values and provenance, for the existing close notice. The old
-    /// native storage is emptied even for a menu that did not declare owned slots.
-    pub(super) fn native_closed(
-        &self,
+    /// Detached transient values and provenance for `AbstractContainerMenu.removed`.
+    /// When `keep_empty_slots` is true, native storage is replaced with empty slots while the
+    /// menu remains temporarily attached for `PlayerContainerEvent.Close`.
+    pub fn native_removed(
+        &mut self,
         uuid: u128,
         generation: u64,
         native_menu: &mut Vec<Option<ItemStack>>,
+        keep_empty_slots: bool,
     ) -> Option<NativeMenuEvent> {
-        if self.slots != Slots::Native {
+        if self.removed {
             return None;
         }
-        let owned_slots = if self.owned_slots().is_some() {
-            std::mem::take(native_menu)
+        self.removed = true;
+        let owned_slots = if self.slots == Slots::Native {
+            if self.owned_slots().is_some() {
+                if keep_empty_slots {
+                    std::mem::replace(native_menu, vec![None; self.size])
+                } else {
+                    std::mem::take(native_menu)
+                }
+            } else {
+                if keep_empty_slots {
+                    native_menu.fill(None);
+                } else {
+                    native_menu.clear();
+                }
+                Vec::new()
+            }
         } else {
-            native_menu.clear();
             Vec::new()
         };
+        if self.slots != Slots::Native && self.mod_type.is_none() && self.opener_block.is_none() {
+            return None;
+        }
         Some(NativeMenuEvent::Closed {
             uuid,
             window: self.window,
             generation,
+            menu: self.registry_id.clone(),
+            block: self.opener_block.clone(),
             opening_hand: self.opening_item.as_ref().map(|(hand, _)| *hand),
             owned_slots,
         })
@@ -264,6 +288,10 @@ pub enum NativeMenuEvent {
         window: i32,
         /// The window instance, for rolling back writes made before this pending close.
         generation: u64,
+        /// The closed menu type registry id, for owner-routed `MenuPart::menu_removed`.
+        menu: Box<str>,
+        /// The opener block id when opened by a block, for owner-routed `MenuPart::menu_removed`.
+        block: Option<Box<str>>,
         opening_hand: Option<Hand>,
         owned_slots: Vec<Option<ItemStack>>,
     },
@@ -2172,6 +2200,8 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            opener_block: None,
+            removed: false,
         });
         // Nothing made yet: nothing shown.
         assert_eq!(slots.get(&world, &g, 0), None);
@@ -2319,6 +2349,8 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            opener_block: None,
+            removed: false,
         });
         // Nothing linked yet: the linked slots are empty and all left out.
         let read = slots.read(&world, &g).unwrap();
@@ -3427,6 +3459,8 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            opener_block: None,
+            removed: false,
         });
         g.inventory[9] = Some(ItemStack::new("minecraft:stone", 1));
         let mut chest = vec![Some(ItemStack::new("minecraft:stone", 1))];
@@ -3508,6 +3542,8 @@ pub(crate) mod tests {
             blockless_data: Vec::new(),
             reported_unsent_data_len: None,
             opening_item: None,
+            opener_block: None,
+            removed: false,
             mod_type: None,
             registry_id: "test:chest".into(),
             craft: None,
@@ -3593,6 +3629,8 @@ pub(crate) mod tests {
                 blockless_data: Vec::new(),
                 reported_unsent_data_len: None,
                 opening_item: None,
+                opener_block: None,
+                removed: false,
                 mod_type: None,
                 registry_id: "test:chest".into(),
                 craft: None,
@@ -3683,6 +3721,8 @@ pub(crate) mod tests {
                 blockless_data: Vec::new(),
                 reported_unsent_data_len: None,
                 opening_item: None,
+                opener_block: None,
+                removed: false,
                 mod_type: Some(menu_type),
                 registry_id: menu_type.id.into(),
                 craft: None,

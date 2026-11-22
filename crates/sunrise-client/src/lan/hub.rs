@@ -183,6 +183,12 @@ pub enum HostEvent {
     Joined(u32),
     /// A guest left (state to save, entities to drop).
     Left(Box<Guest>),
+    /// Slot synchronization found a container whose backing storage is gone.
+    CloseInvalidContainer {
+        conn: u32,
+        window: i32,
+        generation: u64,
+    },
     Packet(u32, Box<S>),
     /// A guest sent new client information: the values before and after, for the mods.
     ClientInformation(
@@ -2567,7 +2573,6 @@ impl Hub {
         >,
         publish_players: bool,
     ) -> Vec<HostEvent> {
-        let events = Vec::new();
         if !self.guests.simulation_iter().any(|g| self.watches(g)) {
             // ServerTickRateManager broadcasts a change to the players there
             // are; one who joins later is sent the state as it is then
@@ -2581,7 +2586,7 @@ impl Hub {
                 self.stepping = ctx.tick_steps.revision;
             }
             if self.viewed_pass(ctx) {
-                return events;
+                return Vec::new();
             }
             if !self
                 .guests
@@ -2594,7 +2599,7 @@ impl Hub {
                 ctx.world.bulk_log.clear();
                 ctx.world.chunk_resends.clear();
             }
-            return events;
+            return Vec::new();
         }
         if ctx.world.block_log.is_none() {
             ctx.world.block_log = Some(Vec::new());
@@ -2621,7 +2626,7 @@ impl Hub {
                 g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
             }
         }
-        crate::spans::time("lan_containers", || self.sync_containers(ctx.world));
+        let events = crate::spans::time("lan_containers", || self.sync_containers(ctx.world));
         self.sync_hidden();
         crate::spans::time("lan_track_entities", || {
             self.track_entities(ctx, entity_attachments)
@@ -2702,11 +2707,14 @@ impl Hub {
     pub(super) fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
         super::chunk_watch::unwatch_all(&mut self.chunk_watches, &mut g);
-        let closed = g
-            .menu
-            .as_ref()
-            .and_then(|menu| menu.native_closed(g.uuid, g.menu_generation, &mut g.native_menu));
-        self.native_menu_events.extend(closed);
+        if !g.placed {
+            let uuid = g.uuid;
+            let generation = g.menu_generation;
+            if let Some(menu) = g.menu.as_mut() {
+                let closed = menu.native_removed(uuid, generation, &mut g.native_menu, false);
+                self.native_menu_events.extend(closed);
+            }
+        }
         // A held player a proxy dropped keeps, in the log, how its connection really ended
         // (an unreadable packet, a reset): the drop says only that it was dropped.
         if g.held
@@ -6683,6 +6691,8 @@ mod tests {
                     links: Vec::new(),
                     asks_still_valid: true,
                     opening_item: None,
+                    opener_block: None,
+                    removed: false,
                 });
             });
         };
@@ -8491,6 +8501,8 @@ mod tests {
                 links: Vec::new(),
                 opening_item: None,
                 asks_still_valid: false,
+                opener_block: None,
+                removed: false,
             });
         });
         let drain_data =

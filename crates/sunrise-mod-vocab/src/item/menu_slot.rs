@@ -102,7 +102,7 @@ pub enum MenuSlotBacking {
     /// a held item's contents or an entity's item handler. Only such a slot has this backing.
     Place(MenuSlotPlace),
     /// Slot `.0` of this window's own transient container. It is never backed by another
-    /// inventory or saved independently; its final value appears in `menu_closed`.
+    /// inventory or saved independently; its final value appears in `MenuPart::menu_removed`.
     Owned(usize),
 }
 

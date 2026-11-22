@@ -795,11 +795,6 @@ impl Game<'_> {
             }
             S::SetBeacon(p) => self.lan_station_beacon(conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(conn, p.item),
-            S::ContainerClose(p)
-                if self.lan_merchant_closed(conn, Some(p.container))
-                    || self.lan_crafting_closed(conn, Some(p.container))
-                    || self.lan_station_closed(conn, Some(p.container))
-                    || self.lan_mount_closed(conn, Some(p.container)) => {}
             S::SelectBundleItem(p) => {
                 // ServerGamePacketListenerImpl.handleBundleItemSelectedPacket: the slot
                 // is the open menu's (#4436).
@@ -831,40 +826,10 @@ impl Game<'_> {
                 }
             }
             S::ContainerClose(p) => {
-                // A vehicle's menu closed: its slots go back to the vehicle
-                // (`ContainerEntity`), and a chest boat's `stopOpen` fires
-                // CONTAINER_CLOSE with the player as the source.
-                let Some(host) = self.lan.as_ref() else {
-                    return;
-                };
-                let vehicle = host.hub.guests[gi]
-                    .menu
-                    .as_ref()
-                    .filter(|m| m.window == p.container)
-                    .and_then(|m| match m.slots {
-                        Slots::Block(key) if key.1 == crate::game::minecarts::CART_KEY_Y => {
-                            Some(key)
-                        }
-                        _ => None,
-                    });
-                let closing = host.hub.guests[gi]
-                    .menu
-                    .as_ref()
-                    .is_some_and(|m| m.window == p.container);
-                if closing {
-                    self.guest_container_closed(conn);
-                }
-                if let Some(key) = vehicle {
-                    self.close_guest_vehicle_menu(conn, key);
-                }
-                if let Some(carried) =
-                    self.with_own_record(gi, |host, _| host.hub.container_closed(conn, p.container))
-                {
-                    self.lan_place_back(gi, vec![carried]);
-                }
-                if closing {
-                    self.player_menu_closing(conn);
-                }
+                self.reply_menu_click(
+                    conn,
+                    super::super::lan_menus::ClickReply::ClientClose(p.container),
+                );
             }
             S::ChatCommand(c) => self.guest_chat_command(conn, &c.command),
             S::CustomPayload(p) if p.channel == sunrise_protocol::quiet::CHANNEL => {

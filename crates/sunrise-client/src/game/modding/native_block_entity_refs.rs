@@ -1,6 +1,6 @@
 //! Block entity handles: storage writes join the journal; explicit world notifications happen
 //! immediately and survive abort. Raw mod storage writes and restores synthesize no notice.
-use super::{Game, native_menus::PendingMenuOpen, transactions::After};
+use super::{Game, native_menus::PendingMenuOpen};
 use mod_api::__private::game::*;
 use mod_api::{
     BlockEntityDataError, BlockEntityError, BlockEntityItemError, BlockEntityRef,
@@ -103,6 +103,7 @@ impl Game<'_> {
                 .find(|guest| {
                     guest.uuid == player.fields().uuid
                         && guest.placed
+                        && !guest.disconnect_pending
                         && guest.dimension == entity.fields().level.dimension_id()
                 })
                 .map(|guest| guest.conn)
@@ -112,13 +113,35 @@ impl Game<'_> {
         if self.menu_click_in_progress(conn) {
             return Ok(false);
         }
-        if !self.transactions.is_empty() {
-            self.after_commit(After::MenuOpen(
-                conn,
-                Box::new(PendingMenuOpen::Block(player, entity)),
-            ));
+        if self.menu_open_waits(conn) {
+            self.defer_menu_open(conn, PendingMenuOpen::Block(player, entity));
             return Ok(true);
         }
+        self.finish_player_open_menu(conn, player, entity)
+    }
+
+    pub(super) fn finish_player_open_menu(
+        &mut self,
+        conn: u32,
+        player: PlayerRef,
+        entity: BlockEntityRef,
+    ) -> Result<bool, BlockEntityError> {
+        if !self.level_in_place(entity.fields().level)
+            || self
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(conn))
+                .is_none_or(|guest| {
+                    guest.disconnect_pending
+                        || guest.uuid != player.uuid()
+                        || guest.dimension != entity.fields().level.dimension_id()
+                })
+            || self.player_handle_read(player).is_none()
+        {
+            return Ok(false);
+        }
+        self.native_block_entity_target(entity)
+            .ok_or(BlockEntityError::Stale)?;
         let [x, y, z] = entity.fields().position;
         match self.open_block_menu(conn, (x, y, z)) {
             super::lan_actions::MenuOpen::Stale => Err(BlockEntityError::Stale),

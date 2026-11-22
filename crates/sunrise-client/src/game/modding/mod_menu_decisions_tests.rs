@@ -744,6 +744,8 @@ fn open_native_menu(game: &mut crate::game::Game<'_>) -> i32 {
         links: Vec::new(),
         asks_still_valid: false,
         opening_item: None,
+        opener_block: None,
+        removed: false,
     };
     game.lan
         .as_mut()
