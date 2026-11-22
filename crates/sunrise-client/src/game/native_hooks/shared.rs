@@ -3086,10 +3086,8 @@ impl Game<'_> {
         else {
             return;
         };
-        if self
-            .apply_native_setting_write(&Self::mod_data_root(), owner, spec, value)
-            .is_err()
-        {
+        if let Err(error) = self.apply_native_setting_write(owner, spec, value) {
+            log::warn!("Cannot update mod setting {owner:?}/{key:?}: {error}");
             // Keep the Options > Mods widget aligned with the live store if persistence fails.
             let live = self.native_settings.value(owner, spec);
             if let Some(setting) = self
@@ -3111,7 +3109,7 @@ impl Game<'_> {
         let Some(id) = self.settings.mods.installed.get(i).map(|m| m.id.clone()) else {
             return;
         };
-        self.refresh_native_settings_owner(&Self::mod_data_root(), &id);
+        self.refresh_native_settings_owner(&id);
         let settings = self.native_page_settings(&id);
         let row = self.settings.mods.installed.get_mut(i);
         if let Some(page) = row.and_then(|m| m.native.as_mut()) {

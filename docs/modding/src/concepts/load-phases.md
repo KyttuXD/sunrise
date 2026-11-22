@@ -139,8 +139,9 @@ not contain the entry returns `Some(false)`. Enumeration yields each identity on
 
 Client mod settings are read and written through `ConfigClientHost` using the owner-bound
 `SettingKey` returned by `SettingsRegistrar::register_setting`, backed by the client's single
-authoritative settings store (`Result<_, SettingAccessError>`). Raw `ConfigHost::{setting, set_setting}`
-are removed; captured load/loop/worldgen/chunk-disk snapshots continue to expose `setting(mod_id, key) -> Option<&str>`.
+authoritative settings store (`Result<_, SettingAccessError>`). Server hooks do not have live client settings;
+use [`Host::config_files()`](../how-to/mod-settings.md#config-files) for server-owned settings. The generic captured
+load, loop, worldgen and chunk-disk snapshots still expose `setting(mod_id, key) -> Option<&str>`.
 
 Server world-generation reads use the published decoded owners, including the
 live feature data in worlds without a terrain locator. Invalid source files do

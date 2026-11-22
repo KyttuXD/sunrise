@@ -1653,15 +1653,18 @@ impl Game<'_> {
         &self,
         resources: &std::path::Path,
     ) -> sunrise_client::Result<PreparedLoopContext> {
-        let side = self.options.execution_role.loop_side();
+        let role = self.options.execution_role;
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(resources)?;
-        let ids: Vec<_> = if self.is_logical_server() {
-            inventory.server_ids().collect()
-        } else {
-            super::native_hooks::mod_settings::client_setting_owners(inventory.client_ids())
-        };
         let item_data = self.res.core.item_data.context();
-        Ok(self.loop_context_readers(item_data.loop_context(side, ids.iter().copied())))
+        let context = if role.is_client() {
+            item_data
+                .for_load(role.data_load_origin(), inventory.client_ids())
+                .with_registered_client_settings()
+                .captured_loop_context(role.loop_side())
+        } else {
+            item_data.loop_context(role.loop_side(), inventory.server_ids())
+        };
+        Ok(self.loop_context_readers(context))
     }
 
     fn loop_context_readers(
@@ -1692,8 +1695,7 @@ impl Game<'_> {
         if let Some(worldgen) = context.worldgen {
             sunrise_world::native_worldgen_hooks::publish_context(Arc::new(worldgen));
         }
-        // Populate or reload the single client settings store directly from
-        // this generation's captured LoopContext snapshot (never a second disk scan).
+        // Publish this generation's registered client settings without reopening the files.
         self.sync_native_settings_from_loop_context();
     }
 

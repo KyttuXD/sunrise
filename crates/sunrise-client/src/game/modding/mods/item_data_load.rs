@@ -74,7 +74,7 @@ pub(in super::super) fn load_item_data(
     let ids: Vec<_> = if role.is_logical_server() {
         inventory.server_ids().collect()
     } else {
-        crate::game::native_hooks::mod_settings::client_setting_owners(inventory.client_ids())
+        inventory.client_ids().collect()
     };
     let context = owning_load.context(
         role.data_load_origin(),
@@ -82,6 +82,11 @@ pub(in super::super) fn load_item_data(
         &ids,
         mod_api::__private::RegistrationData::initial_settings_snapshot(),
     );
+    let context = if role.is_client() {
+        context.with_registered_client_settings()
+    } else {
+        context
+    };
 
     Ok(ItemData::load(root, context)?)
 }

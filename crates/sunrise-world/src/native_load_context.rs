@@ -1,5 +1,5 @@
 //! Data-only inputs carried from an owning load boundary to native load hooks.
-use mod_api::__private::BoundItemTags;
+use mod_api::{__private::BoundItemTags, SettingSpec, SettingValue};
 use std::{
     collections::{BTreeMap, HashMap},
     ffi::{OsStr, OsString},
@@ -40,13 +40,18 @@ impl LoadInputs {
 struct Snapshot {
     inputs: Arc<LoadInputs>,
     settings: Arc<[(String, Arc<[(String, String)]>)]>,
+    registered_client_settings: Arc<[CapturedSetting]>,
 }
 
 impl Snapshot {
     /// Captures settings for `mod_ids`; the registry inputs are shared, not scanned again.
     fn capture<'a>(inputs: Arc<LoadInputs>, mod_ids: impl IntoIterator<Item = &'a str>) -> Self {
         let settings = shared_settings(capture_settings(&inputs.settings_root, mod_ids));
-        Self { inputs, settings }
+        Self {
+            inputs,
+            settings,
+            registered_client_settings: Arc::default(),
+        }
     }
 
     fn registry(&self, name: &str) -> Option<&[String]> {
@@ -121,9 +126,21 @@ impl LoadContext {
         };
         Self {
             origin,
-            snapshot: Snapshot { inputs, settings },
+            snapshot: Snapshot {
+                inputs,
+                settings,
+                registered_client_settings: Arc::default(),
+            },
             fluid_tags: None,
         }
+    }
+
+    /// Capture the registered client settings at the owning client load boundary.
+    /// Raw load readers still share the separately budgeted generic snapshot.
+    pub fn with_registered_client_settings(mut self) -> Self {
+        self.snapshot.registered_client_settings =
+            capture_registered_settings(&self.snapshot.inputs.settings_root, None).into();
+        self
     }
 
     /// A new owning load of `origin` over this load's registry inputs, with
@@ -265,6 +282,78 @@ impl LoopContext {
     pub fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.snapshot.setting(mod_id, key)
     }
+
+    /// Values for the client settings owner, captured with this resource generation.
+    pub fn registered_client_settings(&self) -> &[CapturedSetting] {
+        &self.snapshot.registered_client_settings
+    }
+
+    /// The settings source used by this generation, also used by the client owner
+    /// for live writes and page refreshes.
+    pub fn settings_root(&self) -> &Path {
+        &self.snapshot.inputs.settings_root
+    }
+}
+
+/// The effective value of one registered setting in a client settings capture.
+#[derive(Clone, Copy)]
+pub struct CapturedSetting {
+    pub owner: &'static str,
+    pub spec: &'static SettingSpec,
+    pub value: SettingValue,
+}
+
+/// Read exactly the registered keys, for either a resource load or a single
+/// mod's page refresh. No directory enumeration or generic snapshot budgets
+/// can hide a registered value that the settings owner successfully saved.
+pub fn capture_registered_settings(root: &Path, only_owner: Option<&str>) -> Vec<CapturedSetting> {
+    use std::io::{ErrorKind, Read};
+
+    let mut captured = Vec::new();
+    let mut raw = String::new();
+    // Open the owner's directory once for its run of registrations, preserving
+    // the registry's order without enumerating files.
+    let settings = mod_api::__private::settings();
+    for specs in settings.chunk_by(|(owner, _), (next_owner, _)| owner == next_owner) {
+        let owner = specs[0].0;
+        if only_owner.is_some_and(|only| only != owner) {
+            continue;
+        }
+        let directory = match open_settings_directory(root, owner) {
+            Ok(directory) => Some(directory),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => {
+                log::warn!("Cannot open settings directory for mod {owner:?} at {root:?}: {error}");
+                None
+            }
+        };
+        for (_, spec) in specs {
+            raw.clear();
+            let value = if let Some(directory) = &directory {
+                match open_setting_file(directory, OsStr::new(&spec.key), || {})
+                    .and_then(|mut file| file.read_to_string(&mut raw))
+                {
+                    Ok(_) => Some(raw.as_str()),
+                    Err(error) if error.kind() == ErrorKind::NotFound => None,
+                    Err(error) => {
+                        log::warn!(
+                            "Cannot read setting {owner:?}/{:?} at {root:?}: {error}",
+                            spec.key
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            captured.push(CapturedSetting {
+                owner,
+                spec,
+                value: spec.read(value),
+            });
+        }
+    }
+    captured
 }
 
 /// Capture regular UTF-8 files only, never following symlinks (even within the root).
@@ -314,17 +403,6 @@ fn capture_settings_with_report<'a>(
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>()
     {
-        // Package ids are normally validated at load time; do not let this public
-        // filesystem boundary interpret a path supplied by a caller.
-        if Path::new(mod_id).components().count() != 1
-            || !matches!(
-                Path::new(mod_id).components().next(),
-                Some(std::path::Component::Normal(_))
-            )
-        {
-            report(mod_id, None, &"unsafe package path");
-            continue;
-        }
         let files = match snapshot_files(settings_root, mod_id) {
             Ok(files) => files,
             // A mod need not declare or save any settings. Absence of its
@@ -517,6 +595,101 @@ fn sorted_names(
 }
 
 #[cfg(unix)]
+type SettingsDirectory = rustix::fd::OwnedFd;
+#[cfg(windows)]
+type SettingsDirectory = cap_std::fs::Dir;
+#[cfg(not(any(unix, windows)))]
+struct SettingsDirectory;
+
+fn open_settings_directory(root: &Path, owner: &str) -> std::io::Result<SettingsDirectory> {
+    let mut components = Path::new(owner).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsafe package path",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags, open, openat};
+        let flags = SETTING_FILE_FLAGS | OFlags::DIRECTORY;
+        let root = open(root, flags, Mode::empty())?;
+        openat(&root, owner, flags, Mode::empty()).map_err(Into::into)
+    }
+    #[cfg(windows)]
+    {
+        use cap_fs_ext::DirExt;
+        let parent = root
+            .parent()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let name = root
+            .file_name()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let parent = cap_std::fs::Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
+        let root = parent.open_dir_nofollow(name)?;
+        root.open_dir_nofollow(owner)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = root;
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(unix)]
+const SETTING_FILE_FLAGS: rustix::fs::OFlags = rustix::fs::OFlags::RDONLY
+    .union(rustix::fs::OFlags::NOFOLLOW)
+    .union(rustix::fs::OFlags::NONBLOCK)
+    .union(rustix::fs::OFlags::CLOEXEC);
+
+fn open_setting_file(
+    directory: &SettingsDirectory,
+    key: &OsStr,
+    after_open: impl FnOnce(),
+) -> std::io::Result<fs::File> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, openat};
+        let file = fs::File::from(openat(directory, key, SETTING_FILE_FLAGS, Mode::empty())?);
+        after_open();
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "entry is not a regular file",
+            ));
+        }
+        Ok(file)
+    }
+    #[cfg(windows)]
+    {
+        use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+        use cap_std::fs::{Metadata, MetadataExt, OpenOptions};
+        let check = |metadata: Metadata| {
+            if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "entry is not a regular file or is a reparse point",
+                ));
+            }
+            Ok(())
+        };
+        check(directory.symlink_metadata(key)?)?;
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let file = directory.open_with(key, &options)?;
+        after_open();
+        check(file.metadata()?)?;
+        Ok(file.into_std())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (directory, key, after_open);
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
 fn snapshot_files(
     root: &Path,
     mod_id: &str,
@@ -524,106 +697,41 @@ fn snapshot_files(
     snapshot_files_with_hook(root, mod_id, |_| {})
 }
 
-#[cfg(unix)]
 fn snapshot_files_with_hook(
     root: &Path,
     mod_id: &str,
     after_open: impl Fn(&str),
 ) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
-    use rustix::fs::{Dir, Mode, OFlags, open, openat};
-    use std::os::unix::ffi::OsStrExt;
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let root = settings_directory(
-        open(root, flags | OFlags::DIRECTORY, Mode::empty()).map_err(Into::into),
-    )?;
-    let directory = settings_directory(
-        openat(&root, mod_id, flags | OFlags::DIRECTORY, Mode::empty()).map_err(Into::into),
-    )?;
-    let entries = Dir::read_from(&directory).map_err(std::io::Error::from)?;
-    let names = sorted_names(entries.filter_map(|entry| {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => return Some(Err(error.into())),
-        };
-        let name = entry.file_name();
-        if name.to_bytes() == b"." || name.to_bytes() == b".." {
-            return None;
-        }
-        Some(Ok(OsStr::from_bytes(name.to_bytes()).to_owned()))
-    }))?;
+    let directory = settings_directory(open_settings_directory(root, mod_id))?;
+    #[cfg(unix)]
+    let names = {
+        use rustix::fs::Dir;
+        use std::os::unix::ffi::OsStrExt;
+        let entries = Dir::read_from(&directory).map_err(std::io::Error::from)?;
+        sorted_names(entries.filter_map(|entry| {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => return Some(Err(error.into())),
+            };
+            let name = entry.file_name();
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                return None;
+            }
+            Some(Ok(OsStr::from_bytes(name.to_bytes()).to_owned()))
+        }))?
+    };
+    #[cfg(windows)]
+    let names = sorted_names(directory.entries()?.map(|entry| Ok(entry?.file_name())))?;
+    #[cfg(not(any(unix, windows)))]
+    let names: Vec<OsString> = Vec::new();
     Ok(names.into_iter().map(move |key| {
-        let file = (|| {
-            let file = fs::File::from(openat(&directory, key.as_os_str(), flags, Mode::empty())?);
+        let file = open_setting_file(&directory, &key, || {
             if let Some(key) = key.to_str() {
                 after_open(key);
             }
-            if !file.metadata()?.is_file() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "entry is not a regular file",
-                ));
-            }
-            Ok(file)
-        })();
+        });
         (key, file)
     }))
-}
-
-#[cfg(windows)]
-fn snapshot_files(
-    root: &Path,
-    mod_id: &str,
-) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
-    use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-    use cap_std::fs::{Dir, OpenOptions};
-    // Open the parent as a capability, then refuse a reparse point at the root
-    // and package boundary as well as at each individual file boundary.
-    let parent = root
-        .parent()
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let name = root
-        .file_name()
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let parent = settings_directory(Dir::open_ambient_dir(parent, cap_std::ambient_authority()))?;
-    let root = settings_directory(parent.open_dir_nofollow(name))?;
-    let directory = settings_directory(root.open_dir_nofollow(mod_id))?;
-    let names = sorted_names(directory.entries()?.map(|entry| Ok(entry?.file_name())))?;
-    Ok(names.into_iter().map(move |key| {
-        let file = (|| {
-            let metadata = directory.symlink_metadata(&key)?;
-            use cap_std::fs::MetadataExt;
-            if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "entry is not a regular file or is a reparse point",
-                ));
-            }
-            let mut options = OpenOptions::new();
-            options.read(true).follow(FollowSymlinks::No);
-            let file = directory.open_with(&key, &options)?;
-            let metadata = file.metadata()?;
-            if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "entry is not a regular file or is a reparse point",
-                ));
-            }
-            Ok(file.into_std())
-        })();
-        (key, file)
-    }))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn snapshot_files(
-    root: &Path,
-    mod_id: &str,
-) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
-    // Fail closed on targets without descriptor-relative no-follow traversal.
-    let _ = (root, mod_id);
-    Err::<std::iter::Empty<(OsString, std::io::Result<fs::File>)>, _>(
-        std::io::Error::from(std::io::ErrorKind::Unsupported).into(),
-    )
 }
 
 /// Registries and settings for hooks fired while a feature generates, on a
@@ -644,14 +752,6 @@ impl WorldgenContext {
     pub fn setting(&self, mod_id: &str, key: &str) -> Option<&str> {
         self.snapshot.setting(mod_id, key)
     }
-}
-
-/// Read the same per-key storage as the runtime settings service. No folder is
-/// created, and unrelated mod data files are not scanned or loaded eagerly.
-pub fn read_setting(directory: &Path, key: &str) -> Option<String> {
-    fs::read_to_string(directory.join(key))
-        .ok()
-        .map(|value| value.trim().to_owned())
 }
 
 #[cfg(test)]
@@ -1100,7 +1200,6 @@ mod tests {
         assert_eq!(before.setting("active", "invalid"), None);
         assert_eq!(before.setting("active", "late"), None);
         assert_eq!(before.setting("inactive", "mode"), None);
-        assert_eq!(read_setting(&active, "mode").as_deref(), Some("after"));
 
         let after = LoadContext::new(DataLoadOrigin::ClientPreload, inputs.clone(), ["active"]);
         assert_eq!(after.setting("active", "mode"), Some("after"));

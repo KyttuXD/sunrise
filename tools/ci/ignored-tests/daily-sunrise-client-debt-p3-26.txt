@@ -1,2 +1,3 @@
 # Authoritative client native mod settings store (debt p3-26).
+sunrise-client game::native_hooks::mod_settings::tests::reload_and_page_refresh_skip_notices_superseded_by_listener_writes lib daily resources
 sunrise-client game::native_hooks::mod_settings::tests::single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics lib daily resources

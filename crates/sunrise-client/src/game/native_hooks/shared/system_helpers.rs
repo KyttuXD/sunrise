@@ -77,10 +77,7 @@ impl Game<'_> {
             .chat
             .add(atlas, line, None, ChatSource::Client, ticks, focused);
     }
-    /// A native mod's own folder: `sunrise-mods/.sunrise-mod-data/<id>/`. Not created here.
-    pub(in crate::game) fn native_data_dir(&self, mod_id: &str) -> PathBuf {
-        Self::mod_data_root().join(mod_id)
-    }
+    /// The settings files live under this root, in one directory per mod.
     pub(in crate::game) fn mod_data_root() -> PathBuf {
         Self::game_dir()
             .join(mod_list::DIR)

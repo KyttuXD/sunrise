@@ -4,14 +4,6 @@ pub fn settings() -> &'static [(&'static str, crate::SettingSpec)] {
     installed().map_or(&[], |installed| &installed.keys.settings)
 }
 
-/// The setting `key` mod `mod_id` registered, if any.
-pub fn setting(mod_id: &str, key: &str) -> Option<&'static crate::SettingSpec> {
-    settings()
-        .iter()
-        .find(|(owner, spec)| *owner == mod_id && spec.key == key)
-        .map(|(_, spec)| spec)
-}
-
 /// Mint an owner-bound [`SettingKey`](crate::SettingKey) during registration.
 pub fn setting_key(owner: &'static str, slot: u32) -> crate::SettingKey {
     crate::SettingKey { owner, slot }

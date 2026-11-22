@@ -7,6 +7,7 @@ ids = [
     "method:prelude::ConfigClientHost::setting_f64",
     "method:prelude::ConfigClientHost::setting_color",
     "method:ChunkDiskHost::setting",
+    "hook:setting_changed",
 ]
 why = """
 Replace thread-local caller guessing (`own_setting`), process-global static caching (`READ`), and
@@ -19,19 +20,35 @@ Matches vanilla 26.3 `net.minecraft.client.OptionInstance.set` (compares boxed `
 synchronously right after updating) and NeoForge `ModConfigSpec.save` / `LoadedConfig.save`
 (persists and fires `ModConfigEvent.Reloading` synchronously before returning).
 
-Client resource reloads derive live values from the reload's single captured `LoopContext` snapshot
-without a second disk scan; opening a mod's page in Options > Mods (from either Options > Mods or
-the recipe browser) refreshes that owner with the same no-follow regular-file admission policy.
-`setting_changed` callbacks run synchronously under per-owner `CallbackOwner` panic containment.
+Startup and client resource reloads publish the registered values captured with their resource
+generation. Opening a mod's page in Options > Mods (including from the recipe browser) uses the
+same no-follow regular-file reader for that owner. Only registered keys are read for live values;
+the generic snapshot size and key budgets still apply to raw load snapshots, not to live settings.
+`setting_changed` now also fires for programmatic writes and external changes picked up on reload
+or page open. Callbacks run synchronously under per-owner panic containment. A callback's write
+notifies immediately and replaces any unsent reload notice for the same key.
 `ChunkDiskHost` now borrows captured settings directly (`setting(mod_id, key) -> Option<&str>`)
 from its retained resource generation.
 """
 migrate = """
-Store the `SettingKey` returned by `SettingsRegistrar::register_setting(spec)` and pass it to
-`ConfigClientHost::setting(key)`, `ConfigClientHost::set_setting(key, value)`, or the typed getters
-`setting_bool`, `setting_choice`, `setting_f64`, and `setting_color` (all returning
-`Result<_, SettingAccessError>`). Replace any `ConfigHost::{setting, set_setting}` calls with
-`ConfigClientHost::{setting, set_setting}` using your registered `SettingKey` on the client, or
-read captured snapshots through `DataLoadContext::setting`, `LoopContext::setting`,
-`WorldgenHost::setting`, or `ChunkDiskHost::setting` (`Option<&str>`).
+Retain the `SettingKey` from `SettingsRegistrar::register_setting(spec)?` during registration.
+On a `ClientHost`, replace `setting(mod_id, name)` with `setting(key)` to read a `SettingValue`.
+Replace `set_setting(mod_id, name, text)` with `set_setting(key, value)` on a mutable `ClientHost`,
+passing a `SettingValue` of the registered kind. It returns `Ok(true)` on change and `Ok(false)`
+if unchanged. Replace `setting_bool(name)`, `setting_choice(name)`, `setting_f64(name)` and
+`setting_color(name)` with the same getter taking `key`, and handle `Result<_, SettingAccessError>`
+instead of `Option`.
+
+There is no live settings setter on `ServerHost`. For server-owned persistence, replace raw
+`set_setting(mod_id, name, text)` with `host.config_files().write(&path, text.as_bytes())` where
+`path` is a `ConfigPath::new("<mod id>/settings.toml")?`; read it with `config_files().read(&path)`
+and own the format. For per-world files use `host.world_data_files()` with a path relative to your
+mod's world data folder. Where a load, loop, worldgen or chunk-disk callback offers captured
+settings, read with `setting(mod_id, name) -> Option<&str>`. Chunk-disk readers now borrow the
+value; use `.map(str::to_owned)` only if you need it to outlive the borrow.
+
+Keep the `setting_changed` signature, but handle notifications from programmatic writes and
+external edits discovered on resource reload or page open, not just Options > Mods edits. Look
+up `event.key` among your own registrations and read the effective value with your retained
+`SettingKey` (`host.setting(key)` or a typed getter). Do not assume a settings screen is open.
 """
