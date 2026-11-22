@@ -20,7 +20,6 @@ pub fn unjudged(manifest: &Manifest) -> Option<&'static str> {
     [
         (native.module.is_empty(), "[[native.module]]"),
         (native.bridge.is_empty(), "[[native.bridge]]"),
-        (native.state.is_empty(), "[[native.state]]"),
     ]
     .into_iter()
     .find_map(|(empty, table)| (!empty).then_some(table))

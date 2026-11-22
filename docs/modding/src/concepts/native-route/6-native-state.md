@@ -1,7 +1,8 @@
 # Native state: `[[native.state]]` is refused
 
-Sunrise refuses `[[native.state]]` at native build time: adding a field changes a game type's layout,
-which must match the prebuilt game. If you declare this table, the build reports:
+Sunrise refuses `[[native.state]]` when it reads the package manifest: adding a field changes a game type's
+layout, which must match the prebuilt game. If you declare this table, package readers, including the
+native builder, report:
 
 ```text
 E_MIXIN_STATE_LAYOUT: <mod>:<row>: native state changes the prebuilt game's layout; use an attachment instead

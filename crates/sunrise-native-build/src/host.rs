@@ -45,6 +45,14 @@ pub fn tr(en: &str) -> &str {
 
 /// `en` in the host's language with its `{name}` holes filled.
 pub fn trf(en: &str, args: &[(&str, &str)]) -> String {
+    trf_with(host().tr, en, args)
+}
+
+pub(crate) fn trf_with(
+    tr: for<'a> fn(&'a str) -> &'a str,
+    en: &str,
+    args: &[(&str, &str)],
+) -> String {
     let mut out = tr(en).to_string();
     for (name, value) in args {
         out = out.replace(&format!("{{{name}}}"), value);
