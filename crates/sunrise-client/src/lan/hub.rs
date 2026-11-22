@@ -5565,9 +5565,9 @@ mod tests {
     #[test]
     fn unencodable_block_entity_nbt_is_skipped_without_forging_end_tag() {
         use crate::{
+            block_entity_types::BlockEntityTypes,
             containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
             lan::chunks::ChunkEncoder,
-            mod_content::BlockEntityTypes,
         };
         use sunrise_core::nbt::{Compound, JavaString, Tag};
 

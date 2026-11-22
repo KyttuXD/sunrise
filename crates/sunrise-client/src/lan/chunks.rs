@@ -18,7 +18,7 @@ use std::{
 use sunrise_core::nbt::{Compound, Tag};
 use sunrise_core::vanilla_bytes::Writer;
 use sunrise_protocol::{
-    buf::{BitSet, Codec, List, check_network_nbt, set_bit},
+    buf::{BitSet, Codec, List, TrustedCompoundTag, set_bit},
     chunk::{
         BIOMES, BLOCKS, BlockEntityInfo, ChunkData, Heightmaps, LightData, Paletted, Strategy,
     },
@@ -840,9 +840,9 @@ impl ChunkEncoder {
     /// The tag of a block change at `pos`: [`Self::update_tag`] with a mod's
     /// queued one-shot fields taken and put over it. It takes them, so build it
     /// once, with viewers, and send it to them all; a chunk or a single player's
-    /// resend uses `update_tag`, which leaves them for such a change. Fields that would take the
-    /// tag past what a client reads (`buf::check_network_nbt`) are dropped, and the plain
-    /// `update_tag` goes instead: no viewer is disconnected or misses the change.
+    /// resend uses `update_tag`, which leaves them for such a change. `BlockEntityData` uses
+    /// vanilla's trusted compound codec, not the chunk tag's heap quota. If the merged compound
+    /// cannot be encoded, drop the one-shot fields and use the plain `update_tag`.
     pub fn change_tag(
         &self,
         pos: (i32, i32, i32),
@@ -862,7 +862,7 @@ impl ChunkEncoder {
         };
         merged.extend(fields);
         let merged = Tag::Compound(merged);
-        match check_network_nbt(&merged) {
+        match TrustedCompoundTag::validate(&merged) {
             Ok(()) => Some(merged),
             Err(e) => {
                 log::warn!(
@@ -2044,26 +2044,23 @@ mod tests {
             encoder.change_tag(pos, 0, &entities[&pos]),
             Some(Tag::Compound(Compound::from([progress, effect.clone()])))
         );
-        // Fields a client can't read (one byte past vanilla's 2 MiB network quota, or one tag past
-        // the 262,144 it allows) are dropped: the change still sends the plain tag, nothing waits.
         let BlockEntity::Mod(queued) = &entities[&pos] else {
             unreachable!()
         };
-        for unreadable in [
-            Tag::ByteArray(vec![0; 2_097_153]),
-            Tag::List(vec![Tag::Byte(0); 262_145]),
-        ] {
-            queued.set_client_update_fields(Compound::from([(
-                JavaString::from("effect"),
-                unreadable,
-            )]));
-            assert_eq!(
-                encoder.change_tag(pos, 0, &entities[&pos]),
-                Some(plain.clone())
-            );
-            assert!(!queued.has_client_update_fields());
-        }
+        // This fits on wire but exceeds the default NBT heap quota. The one-shot
+        // merge must not discard it: the update packet uses the trusted codec.
+        let large = Tag::List(vec![Tag::Byte(0); sunrise_protocol::buf::NBT_MAX_TAGS + 1]);
+        let key = JavaString::from("effect");
+        queued.set_client_update_fields(Compound::from([(key.clone(), large.clone())]));
+        let merged = encoder.change_tag(pos, 0, &entities[&pos]).unwrap();
+        assert_eq!(merged.get("effect"), Some(&large));
+        assert!(!queued.has_client_update_fields());
+
+        // A named End still cannot be serialized; that field is consumed without replacing
+        // the plain tag.
+        queued.set_client_update_fields(Compound::from([(key, Tag::End)]));
         assert_eq!(encoder.change_tag(pos, 0, &entities[&pos]), Some(plain));
+        assert!(!queued.has_client_update_fields());
         // A block entity whose mod sends no tag still sends its fields, alone.
         let silent = ModBlockEntity::new("test:machine".into(), Default::default());
         silent.set_client_update_fields(Compound::from([effect.clone()]));

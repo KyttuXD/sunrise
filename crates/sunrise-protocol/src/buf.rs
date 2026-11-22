@@ -461,20 +461,33 @@ impl Codec<Tag> for Nbt {
         w.nbt(v)
     }
 }
-/// ByteBufCodecs.OPTIONAL_COMPOUND_TAG (`Tag::End` when absent; 2 MiB / 262,144 tags / depth 512).
+/// `ByteBufCodecs.OPTIONAL_COMPOUND_TAG`: `Tag::End` when absent;
+/// `FriendlyByteBuf.readNbt` reads using `NbtAccounter.defaultQuota` (2 MiB of heap).
 pub struct OptionalCompoundTag;
 impl Codec<Tag> for OptionalCompoundTag {
     fn read(r: &mut Reader) -> Result<Tag> {
-        let tag = r.nbt()?;
+        let (tag, used) = Tag::from_network_bytes(r.unread(), None)
+            .map_err(|error| Error::new(format!("NBT: {error}")))?;
         match tag {
-            Tag::End | Tag::Compound(_) => Ok(tag),
+            Tag::End | Tag::Compound(_) => {
+                r.pos += used;
+                Ok(tag)
+            }
             _ => Err(Error::new("NBT: expected compound tag or end")),
         }
     }
     fn validate(v: &Tag) -> Result<()> {
         match v {
             Tag::End => Ok(()),
-            Tag::Compound(_) => check_network_nbt(v),
+            Tag::Compound(_) => {
+                // The bytes must be readable under the peer's heap quota, not just small on wire.
+                let bytes = v
+                    .to_network_bytes()
+                    .map_err(|error| Error::new(format!("NBT: {error}")))?;
+                Tag::from_network_bytes(&bytes, None)
+                    .map(drop)
+                    .map_err(|error| Error::new(format!("NBT: {error}")))
+            }
             _ => Err(Error::new("NBT: expected compound tag or end")),
         }
     }
@@ -487,11 +500,7 @@ impl Codec<Tag> for OptionalCompoundTag {
             matches!(v, Tag::Compound(_)),
             "OptionalCompoundTag::write requires Tag::Compound or Tag::End"
         );
-        let limits = nbt::Limits {
-            max_bytes: NBT_QUOTA,
-            ..nbt::Limits::default()
-        };
-        w.try_nbt(v, limits)
+        w.try_nbt(v, TRUSTED_NBT_LIMITS)
             .expect("OptionalCompoundTag must be validated before write");
     }
 }
@@ -1038,7 +1047,7 @@ mod tests {
         )]));
         let valid = Tag::Compound(nbt::Compound::from([("k".into(), Tag::Int(7))]));
 
-        // OptionalCompoundTag: End allowed, compounds bound by 2 MiB / 512 depth / no named End.
+        // OptionalCompoundTag: End allowed, 2 MiB heap quota, depth 512, no named End.
         assert!(OptionalCompoundTag::validate(&Tag::End).is_ok());
         assert!(OptionalCompoundTag::validate(&valid).is_ok());
         assert!(OptionalCompoundTag::validate(&deep).is_err());
@@ -1077,6 +1086,22 @@ mod tests {
         assert!(chunk_packet(deep.clone()).try_encode().is_err());
         assert!(chunk_packet(named_end.clone()).try_encode().is_err());
         assert!(chunk_packet(large.clone()).try_encode().is_err());
+
+        // ListTag.loadList and ByteTag.readAccounted charge 13 heap bytes per entry,
+        // even though this list needs only one wire byte per entry.
+        let heap_heavy = chunk_packet(Tag::compound([(
+            "bytes",
+            Tag::List(vec![Tag::Byte(0); 200_000]),
+        )]));
+        let error = heap_heavy.try_encode().unwrap_err();
+        assert!(error.to_string().contains("heap quota exceeded"), "{error}");
+        // Deliberately bypass sender validation to exercise the receiver on the same packet.
+        let wire = heap_heavy.encode();
+        assert!(wire.len() < NBT_QUOTA);
+        let mut reader = Reader::new(&wire);
+        let id = reader.varint().unwrap();
+        let error = Clientbound::decode(id, reader.rest()).unwrap_err();
+        assert!(error.to_string().contains("heap quota exceeded"), "{error}");
 
         // TrustedCompoundTag: non-null compound, unlimited heap, still bounded by depth 512.
         assert!(TrustedCompoundTag::validate(&Tag::End).is_err());
