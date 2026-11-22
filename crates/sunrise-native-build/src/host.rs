@@ -53,10 +53,23 @@ pub(crate) fn trf_with(
     en: &str,
     args: &[(&str, &str)],
 ) -> String {
-    let mut out = tr(en).to_string();
-    for (name, value) in args {
-        out = out.replace(&format!("{{{name}}}"), value);
+    let mut template = tr(en);
+    let mut out = String::with_capacity(template.len());
+    // Only the translated template can contain holes; argument values are literal text.
+    while let Some((literal, tail)) = template.split_once('{') {
+        out.push_str(literal);
+        if let Some((rest, value)) = args.iter().find_map(|&(name, value)| {
+            let rest = tail.strip_prefix(name)?.strip_prefix('}')?;
+            Some((rest, value))
+        }) {
+            out.push_str(value);
+            template = rest;
+        } else {
+            out.push('{');
+            template = tail;
+        }
     }
+    out.push_str(template);
     out
 }
 

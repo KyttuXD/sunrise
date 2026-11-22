@@ -164,6 +164,24 @@ mod tests {
     }
 
     #[test]
+    fn native_state_refusal_does_not_expand_holes_in_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "stateful{state}", "");
+        let path = dir.path().join(manifest::MANIFEST);
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(
+            path,
+            format!("{text}[[native.state]]\nid='autosave{{mod}}'\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_with(dir.path(), |en| en).unwrap_err(),
+            "E_MIXIN_STATE_LAYOUT: stateful{state}:autosave{mod}: native state changes the prebuilt game's layout; use an attachment instead"
+        );
+    }
+
+    #[test]
     fn native_state_is_refused_by_the_package_reader_before_staging() {
         fn localized(en: &str) -> &str {
             match en {
