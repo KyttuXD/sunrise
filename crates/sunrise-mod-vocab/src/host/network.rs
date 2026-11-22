@@ -39,25 +39,28 @@ pub trait NetworkClientHost {
     /// Side: client.
     /// Submits a vanilla play packet to any server, including unrelated plugin
     /// payloads. The body is validated once and outgoing credit is reserved before
-    /// acceptance. Publication waits for the current root transaction to commit;
-    /// rollback, disconnect, or a protocol incarnation change cancels it.
+    /// acceptance. At root commit the packet joins any active play holds without
+    /// releasing its credit, otherwise it publishes. Rollback, disconnect or a
+    /// protocol incarnation change cancels it.
     /// Registered and engine-reserved channels are refused: use their payload or
     /// service API. Unrelated plugin bodies retain vanilla's discard-codec limit.
     /// No effects are applied locally. Typed packet builders validate wire fields;
     /// sequence numbers and required client state remain the mod's responsibility.
     /// Chat and commands use `send_chat`, which owns signing. API 409.
     fn send_packet(&mut self, packet: ServerboundPlayPacket) -> Result<(), SendPacketError>;
-    /// Side: client. Starts an ordered hold of uncancelled outgoing play packets.
-    /// A second hold is refused with Limit while one is active. The limits are 256 packets
-    /// and 1,048,576 encoded bytes. Overflow ends and flushes the hold oldest first;
-    /// its next release or drop returns Limit. Network-thread replies (keep-alives, chunk batch
-    /// acknowledgements, cookies) bypass holds.
+    /// Side: client. Starts a hold owned by the calling mod on the current joined
+    /// physical play connection. It covers subsequent uncancelled engine play sends
+    /// and mod packets committed while it is active. Holds can overlap. A pending
+    /// packet retains its ordinary writer credit; pressure never releases a hold.
+    /// Control replies (including keep-alives, chunk batch acknowledgements and cookies)
+    /// bypass holds. Disconnect, protocol changes and aborted travel invalidate the id.
     fn hold_packets(&mut self) -> Result<HoldId, HoldError>;
-    /// Side: client. Sends the queue oldest first and ends the hold. On failure,
-    /// Send reports the number published and the remaining packets are dropped.
-    /// Disconnect, protocol changes and aborted travel invalidate the id.
+    /// Side: client. Ends only this mod's hold. Publishes the newly unblocked prefix
+    /// in original send order and returns its count, which can be zero. Other holds
+    /// still block their packets. `Send` reports a published prefix on transport failure.
     fn release_held(&mut self, hold: HoldId) -> Result<usize, HoldError>;
-    /// Side: client. Ends the hold and discards its packets without publication.
+    /// Side: client. Ends only this mod's hold and discards packets it covered,
+    /// including overlapping packets. It publishes nothing and keeps the other holds active.
     fn drop_held(&mut self, hold: HoldId) -> Result<(), HoldError>;
     /// Side: client.
     /// Leaves the server or the single-player world (NeoForge's

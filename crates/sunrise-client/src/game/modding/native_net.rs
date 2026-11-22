@@ -3,6 +3,7 @@ use super::Game;
 #[path = "native_net/packet_hold.rs"]
 mod packet_hold;
 use mod_api::{SendPacketError, ServerboundPlayPacket};
+pub(in crate::game) use packet_hold::PlaySend;
 use std::collections::HashMap;
 #[derive(Default)]
 pub(super) struct NativeNet {
@@ -73,9 +74,9 @@ impl Game<'_> {
         if !remote.joined || remote.reconfiguring.is_some() {
             return Err(SendPacketError::NotInPlay);
         }
-        let body = packet.clone();
         let prepared = remote.session.prepare_mod_packet(packet)?;
-        self.after_commit(super::transactions::After::Packet(prepared, body));
+        let owner = mod_api::content::crash::current_native_mod();
+        self.after_commit(super::transactions::After::Packet(prepared, owner));
         Ok(())
     }
 }

@@ -36,32 +36,41 @@ entity or level handle when the task runs; a disconnect or dimension change may 
 
 ## Holding outgoing play packets
 
-Call `host.hold_packets()` to start an ordered hold and receive its opaque `HoldId`.
-Keep the issued ID locally to release or discard the hold; it has no `Wire` encoding.
-While a hold is active, another `hold_packets()` returns
-`HoldError::Limit { packets: 256, bytes: 1_048_576 }` and leaves the first hold intact.
-Uncancelled packets from `client_packet_send` queue in creation order;
-mod packets accepted by `send_packet` join the queue when their root transaction commits.
-`release_held(id)` sends them oldest first and returns the published count. `drop_held(id)`
-discards the queue. Neither operation replays the cancellation hook or exposes the packet bodies.
+Call `host.hold_packets()` to open a hold for your mod on the current physical play connection.
+Store the issued `HoldId` locally; it has no `Wire` encoding. Only the issuing mod can end it.
+Using another mod's live ID returns `HoldError::WrongOwner` and changes nothing.
+Without an owning native mod, the call returns `NoOwner`.
 
-The bounds are **256 packets** and **1,048,576 encoded bytes**, including packet type ids.
-Overflow ends the hold and flushes it oldest first, including the packet that exceeded the bound.
-Later packets send normally. The next release or drop of that id returns
-`HoldError::Limit { packets: 256, bytes: 1_048_576 }`; subsequent calls return `Unknown`.
-A failed release returns `HoldError::Send { sent, error }`, using `SendPacketError` for the reason,
-and drops the unsent tail.
+A hold covers uncancelled engine play sends and mod packets whose root transactions commit
+while it is active. Holds may overlap. There is one queue in original send order:
 
-Disconnect, a protocol incarnation change, or an aborted dimension crossing discards the hold;
-its id then returns `Unknown`. Starting without a joined physical play connection returns `NoWorld`.
+- `host.release_held(id)` ends your hold and publishes only the newly unblocked prefix.
+  Its return value is the number queued to the writer, not the number delivered to the server.
+  It can return `Ok(0)` if an older hold still blocks the queue.
+- `host.drop_held(id)` ends your hold and discards the packets it covered, including overlapping
+  packets. It leaves older packets and all other holds active and sends nothing.
+
+For example, if A holds before packet 1 and B starts holding between packets 1 and 2, releasing
+A sends packet 1; packet 2 still waits for B. Releasing B first sends nothing. Dropping B instead
+would discard packet 2 without discarding packet 1 or ending A's hold. Neither operation replays
+`client_packet_send` or exposes packet bodies.
+
+Held packets retain ordinary transport credit. There is no separate hold limit and no automatic
+flush. A `send_packet` can return `SendPacketError::Backpressure` if the physical writer has no
+credit; an engine send hitting the writer's terminal pressure path still closes the connection.
+If publication fails while releasing a prefix, `HoldError::Send { sent, error }` reports the number
+already queued and the transport error; the rest of that prefix is discarded.
+
+Disconnect, a protocol incarnation change, or an aborted dimension crossing discards the holds;
+their IDs are then `Unknown`. Starting without a joined physical play connection returns `NoWorld`.
 Keep-alives, chunk batch acknowledgements, configuration packets, cookies and resource-pack
-answers bypass holds. Standalone cookies and transfers run on the main thread. While the receive
-queue has room, the receiver answers standalone keep-alives and chunk batches without waiting for
-queued bundle handlers. Inside a bundle, each handler runs inline on the main thread in member
-order, including registered NETWORK payload handlers.
-Those handlers still cannot borrow a host directly; use queued work for that. In either case,
-`client_packet` hears neither the batch's start nor its finish (it does hear the chunks between
-them), and `client_packet_send` neither sees nor can cancel the acknowledgement.
+answers bypass holds, standalone or bundled. Standalone cookies and transfers run on the main
+thread. While the receive queue has room, the receiver answers standalone keep-alives and chunk
+batches without waiting for queued bundle handlers. Inside a bundle, each handler runs inline on
+the main thread in member order, including registered NETWORK payload handlers. Those handlers
+cannot borrow a host directly; use queued work for that. In either case, `client_packet` hears
+neither the batch's start nor its finish (it does hear the chunks between them), and
+`client_packet_send` neither sees nor can cancel the acknowledgement.
 No packet inspection or editing beyond the existing `ClientPacket` view is provided.
 
 ## Configuration tasks before play

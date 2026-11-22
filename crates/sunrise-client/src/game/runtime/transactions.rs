@@ -586,11 +586,9 @@ struct KeptMenus {
 pub(super) enum After {
     /// Reserved raw bytes publish only when their connection incarnation is still live.
     Payload(super::payload_transport::Deferred),
-    /// A mod's validated vanilla packet, bound to its physical protocol incarnation.
-    Packet(
-        sunrise_client::net::PreparedPacket,
-        mod_api::ServerboundPlayPacket,
-    ),
+    /// A mod's validated vanilla packet, bound to its physical protocol incarnation,
+    /// and the submitting identity for publication errors.
+    Packet(sunrise_client::net::PreparedPacket, Option<&'static str>),
     Composter(super::composter::Effects),
     /// A mod's world pickup or placement of fluid, its block already set: what is left of it
     /// (`Game::commit_fluid_write`).
@@ -2021,7 +2019,7 @@ impl Game<'_> {
             After::PlayerRespawn(conn) => self.commit_player_respawn(conn),
             After::Trade(effect) => self.commit_merchant_effect(*effect),
             After::Payload(payload) => payload.publish(),
-            After::Packet(packet, body) => self.publish_mod_held(packet, body),
+            After::Packet(packet, owner) => self.publish_mod_packet(packet, owner),
             After::Composter(effects) => self.commit_composter_effects(effects),
             After::FluidWrite(written) => self.commit_fluid_write(*written),
             After::FluidEffects(effects) => self.commit_fluid_effects(*effects),

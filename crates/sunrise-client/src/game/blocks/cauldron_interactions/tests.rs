@@ -1706,8 +1706,17 @@ fn cauldron_packet_pass_resumes_item_use_once_without_client_prediction() {
         };
         game.forced_hit = Some(hit);
         let client_swings = game.swings_started;
-        let hold = matches!(case.as_str(), "hold-drop" | "hold-release")
-            .then(|| game.hold_packets().unwrap());
+        let hold_call = || {
+            mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                id: "packet_cauldron",
+                hook: "client_tick",
+                part: None,
+            })
+        };
+        let hold = matches!(case.as_str(), "hold-drop" | "hold-release").then(|| {
+            let _owner = hold_call();
+            game.hold_packets().unwrap()
+        });
         game.remote_use(mod_api::InteractionAttempt::Press);
         // In the vanilla transport control, paper's air use passes, so the
         // off hand still gets its ordinary block turn even though it's empty.
@@ -1732,6 +1741,7 @@ fn cauldron_packet_pass_resumes_item_use_once_without_client_prediction() {
                 read_uses(game).is_empty(),
                 "held block use must not reach the peer"
             );
+            let _owner = hold_call();
             if case == "hold-drop" {
                 game.drop_held(hold).unwrap();
             } else {

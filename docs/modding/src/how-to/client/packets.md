@@ -2,8 +2,9 @@
 
 `ClientHost::send_packet` submits an owned `ServerboundPlayPacket`. The game validates the
 body and reserves outgoing credit. Publication waits for the current root transaction to
-commit; rollback, disconnect or a protocol change cancels it. Submission applies no local
-prediction or inventory effects, and the server still checks reach, permissions and state.
+commit and for any [play holds](networking.md#holding-outgoing-play-packets) to release it.
+Rollback, disconnect or a protocol change cancels it. Submission applies no local prediction or
+inventory effects, and the server still checks reach, permissions and state.
 
 Build common packet bodies with these portable associated constructors. Each returns
 `Result<ServerboundPlayPacket, PacketBuildError>`:
