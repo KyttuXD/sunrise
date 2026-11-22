@@ -1294,6 +1294,19 @@ impl<'a> EquipmentRead<'a> {
         Cow::Owned(stack)
     }
 
+    /// Whether this stack matches `other` (`ItemStack.matches`), including any
+    /// separate gear overlay, without cloning the stack or its components.
+    pub fn matches_stack(&self, other: &ItemStack) -> bool {
+        match self.overlays {
+            None => self.base.matches(other),
+            Some((gear, index)) => self.base.matches_with_overlay(
+                other,
+                &gear.slots[index],
+                gear.trims[index].as_ref(),
+            ),
+        }
+    }
+
     /// Encode selected extra components with the same gear overlay as a full projection.
     /// Encode only the selected gear values over the resident patch, without cloning the slot.
     pub fn extra_components_matching(
@@ -3096,6 +3109,29 @@ mod tests {
         assert!(!halloween_date(10, 30));
         assert!(!halloween_date(11, 1));
         assert!(!halloween_date(1, 1));
+    }
+
+    #[test]
+    fn equipment_read_matches_stack_with_and_without_gear_overlays() {
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        let mut m = crate::mobs::Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
+        set_item(&mut m, CHEST, "minecraft:iron_chestplate");
+        set_slot_enchantments(&mut m, CHEST, vec![(Arc::from("minecraft:thorns"), 3)]);
+        let trim: gear::Trim = ("minecraft:gold".into(), "minecraft:coast".into());
+        gear::set_trim(&mut m, gear::CHEST, Some(trim));
+        set_slot_damage(&mut m, CHEST, 2);
+
+        let read = equipment_slot(&m, EquipmentSlot::Chest).unwrap();
+        let projected = read.project().into_owned();
+        assert!(read.matches_stack(&projected));
+
+        let mut altered = projected.clone();
+        altered.damage = 3;
+        assert!(!read.matches_stack(&altered));
+
+        let mut unenchanted = ItemStack::new("minecraft:iron_chestplate", 1);
+        unenchanted.damage = 2;
+        assert!(!read.matches_stack(&unenchanted));
     }
 }
 

@@ -157,9 +157,16 @@ pub struct StackData {
     /// What the server sent for this stack, for sending it back unchanged.
     pub wire: Wire,
 }
-impl PartialEq for StackData {
-    fn eq(&self, other: &Self) -> bool {
-        // Exhaustive: adding a component must also choose its equality here.
+impl StackData {
+    /// `PartialEq` with `overlay_enchantments` (when non-empty) and
+    /// `overlay_trim` (when `Some`) substituted for `self`'s fields without
+    /// cloning. Exhaustive: adding a component must also choose its equality here.
+    fn eq_with_overlay(
+        &self,
+        other: &Self,
+        overlay_enchantments: &[(Arc<str>, u32)],
+        overlay_trim: Option<&Trim>,
+    ) -> bool {
         // The two ItemEnchantments fields use map equality; all other fields
         // retain their existing equality, including ordered list components.
         let Self {
@@ -201,9 +208,15 @@ impl PartialEq for StackData {
             other: preserved,
             wire,
         } = self;
+        let effective_enchantments = if overlay_enchantments.is_empty() {
+            enchantments.as_slice()
+        } else {
+            overlay_enchantments
+        };
+        let effective_trim = overlay_trim.or(trim.as_ref());
         damage_set == &other.damage_set
             && banner_patterns_set == &other.banner_patterns_set
-            && enchantments_equal(enchantments, &other.enchantments)
+            && enchantments_equal(effective_enchantments, &other.enchantments)
             && enchantments_equal(stored_enchantments, &other.stored_enchantments)
             && repair_cost == &other.repair_cost
             && explicit_zero_damage == &other.explicit_zero_damage
@@ -214,7 +227,7 @@ impl PartialEq for StackData {
             && villager_food == &other.villager_food
             && potion == &other.potion
             && potion_extra == &other.potion_extra
-            && trim == &other.trim
+            && effective_trim == other.trim.as_ref()
             && container == &other.container
             && charged == &other.charged
             && fireworks == &other.fireworks
@@ -234,6 +247,11 @@ impl PartialEq for StackData {
             && map_post_processing == &other.map_post_processing
             && preserved == &other.other
             && wire == &other.wire
+    }
+}
+impl PartialEq for StackData {
+    fn eq(&self, other: &Self) -> bool {
+        self.eq_with_overlay(other, &[], None)
     }
 }
 impl std::hash::Hash for StackData {
@@ -1519,6 +1537,28 @@ impl ItemStack {
     /// `ItemStack.matches`: the same item, count and components.
     pub fn matches(&self, other: &Self) -> bool {
         self.count == other.count && self.same_item_same_components(other)
+    }
+    /// `ItemStack.matches` with separate mob gear overlays (`enchantments` when
+    /// non-empty, `trim` when `Some`) applied to `self` without cloning.
+    pub fn matches_with_overlay(
+        &self,
+        other: &Self,
+        enchantments: &[(Arc<str>, u32)],
+        trim: Option<&Trim>,
+    ) -> bool {
+        if self.count != other.count || self.item != other.item || self.damage != other.damage {
+            return false;
+        }
+        if enchantments.is_empty() && trim.is_none() {
+            return self.data() == other.data();
+        }
+        let Some(other_data) = other.data() else {
+            return false;
+        };
+        match self.data() {
+            Some(self_data) => self_data.eq_with_overlay(other_data, enchantments, trim),
+            None => StackData::default().eq_with_overlay(other_data, enchantments, trim),
+        }
     }
     /// `getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS)`: the stack's own
     /// `attribute_modifiers` component when it has one (none at all when it
@@ -4803,5 +4843,33 @@ mod custom_data_boundary_tests {
             assert_eq!(loaded.other(CUSTOM), Some(&bad));
             assert_eq!(components_tag(0, Some(&loaded)), Some(input));
         }
+    }
+
+    #[test]
+    fn matches_with_overlay_matches_projected_enchantments_and_trim_without_cloning() {
+        let mut base = ItemStack::new("minecraft:iron_chestplate", 1);
+        base.damage = 4;
+        let enchants = vec![
+            (Arc::from("minecraft:protection"), 2),
+            (Arc::from("minecraft:unbreaking"), 3),
+        ];
+        let trim: Trim = ("minecraft:gold".into(), "minecraft:coast".into());
+
+        let mut projected = base.clone();
+        projected.data_mut().enchantments = vec![
+            (Arc::from("minecraft:unbreaking"), 3),
+            (Arc::from("minecraft:protection"), 2),
+        ];
+        projected.data_mut().trim = Some(trim.clone());
+
+        assert!(base.matches_with_overlay(&projected, &enchants, Some(&trim)));
+        assert!(!base.matches_with_overlay(&projected, &[], Some(&trim)));
+        assert!(!base.matches_with_overlay(&projected, &enchants, None));
+        assert!(!base.matches_with_overlay(&base, &enchants, Some(&trim)));
+        assert!(base.matches_with_overlay(&base, &[], None));
+
+        let mut different_damage = projected.clone();
+        different_damage.damage = 5;
+        assert!(!base.matches_with_overlay(&different_damage, &enchants, Some(&trim)));
     }
 }

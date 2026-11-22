@@ -3632,22 +3632,19 @@ impl Game<'_> {
     }
     /// A mob's, an armor stand's or a connected player's equipment slot took a
     /// different stack (NeoForge's `LivingEquipmentChangeEvent`,
-    /// `LivingEntity.collectEquipmentChanges`): `entity` its ID, `kind` its type
-    /// (`minecraft:player` for a player), `slot` the `EquipmentSlot`, `from` what
-    /// the slot held when last heard and `to` what it holds now. Once per changed
-    /// slot, after the mobs' tick; one new to the level counts from empty. A
-    /// player's `mainhand` is the selected hotbar slot; their `body` and `saddle`
-    /// are never told. The world host's own player is heard by `native_on_equip`.
-    /// It only hears. Server-side.
+    /// `LivingEntity.collectEquipmentChanges` / `detectEquipmentUpdates`):
+    /// `entity` its `LivingRef`, `slot` the `EquipmentSlot`, `from` a lazy
+    /// `ItemStackView` of what the slot held when last heard and `to` a lazy
+    /// `ItemStackView` of what it holds now. Once per changed slot across all
+    /// eight `EquipmentSlot`s, after the mobs' tick; one new to the level
+    /// counts from empty. A player's `MainHand` is the selected hotbar slot.
+    /// The world host's own player is heard by `native_on_equip`. It only
+    /// hears. Server-side.
     pub(in crate::game) fn native_living_equipment_change(
         &mut self,
-        entity: u32,
-        kind: &str,
-        slot: &str,
-        from: Option<&ItemStack>,
-        to: Option<&ItemStack>,
+        call: mod_api::__private::LivingEquipmentChangeCall<'_>,
     ) {
-        self.fire_living_equipment_change(entity, kind, slot, from, to);
+        self.fire_living_equipment_change(call);
     }
     /// `player` died: where `ServerPlayer.die` starts, with the death
     /// message's key when the game knows it (`death.attack.lava`; none for a

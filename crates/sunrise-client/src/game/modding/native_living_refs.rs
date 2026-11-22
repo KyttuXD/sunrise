@@ -2705,11 +2705,10 @@ pub(in crate::game) mod tests {
                 host: &mut dyn ServerHost,
                 event: &mut LivingEquipmentChangeEvent<'_>,
             ) {
-                if event.entity == 18 && event.slot == "mainhand" {
-                    let entity = host.entity(event.entity).unwrap();
-                    let living = host.living(entity).unwrap();
+                if event.entity.id() == 18 && event.slot == EquipmentSlot::MainHand {
                     assert!(
-                        living
+                        event
+                            .entity
                             .set_equipment(
                                 host,
                                 EquipmentSlot::Head,

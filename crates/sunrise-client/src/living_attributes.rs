@@ -620,6 +620,18 @@ impl LivingAttributes {
         }
     }
 
+    /// Whether any slot of `equipment` differs from what the live attribute map
+    /// currently holds (`LivingEntity.equipmentHasChanged`), without allocating.
+    pub fn equipment_changed(&self, equipment: &Equipment) -> bool {
+        (0..8).any(|slot| {
+            let was = self.worn.as_ref().and_then(|w| w[slot].as_ref());
+            !match (equipment.get(slot), was) {
+                (Some(now), Some(was)) => now.matches(was),
+                (now, was) => now.is_none() && was.is_none(),
+            }
+        })
+    }
+
     /// `LivingEntity.collectEquipmentChanges` for the item modifiers: every
     /// slot, in `EquipmentSlot` order, whose item is not the one the map
     /// holds loses the old item's modifiers; then the changed slots, in the
@@ -682,7 +694,7 @@ impl LivingAttributes {
                 apply_item(map, new, slot, items, true)?;
             }
         }
-        self.worn = Some(worn);
+        self.worn = (!worn.is_empty()).then_some(worn);
         Ok(())
     }
 

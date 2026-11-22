@@ -1394,10 +1394,10 @@ pub struct Extra {
     /// What a piglin's or hoglin's brain remembers: its avoid target, the
     /// adults its sensor sees and the activity it is in.
     pub piglin: piglin::Memories,
-    /// What the native mods last heard it hold and wear
-    /// (`LivingEntity.lastEquipmentItems`, empty at first), by
-    /// `EquipmentSlot` ordinal: see `Mob::equipment_stacks`.
-    pub equipment_heard: Option<Box<sunrise_items::equipment::Equipment>>,
+    /// What `LivingEntity.detectEquipmentUpdates` / `collectEquipmentChanges`
+    /// last saw this mob hold and wear (`LivingEntity.lastEquipmentItems`,
+    /// empty at first), by `EquipmentSlot` ordinal: see `Mob::equipment_stacks`.
+    pub last_equipment: Option<Box<sunrise_items::equipment::Equipment>>,
     /// The live attribute map (`AttributeMap`), built when an item with
     /// attribute modifiers is worn or it is read. Mob logic still reads
     /// `MobType::attributes` and `attributes` above.

@@ -223,7 +223,7 @@ impl Game<'_> {
         if fresh {
             // A new body (joined, respawned, changed level): nothing on it yet,
             // its effects' modifiers and armor protection included.
-            play.equipped = None;
+            play.last_equipment = None;
             play.potions = Default::default();
             play.sculk = Default::default();
             // A new ServerPlayer has everything to record again.

@@ -99,23 +99,94 @@ pub(in crate::game) fn write_unspawned_attribute(
 }
 
 impl Game<'_> {
-    /// `LivingEntity.tick`'s `collectEquipmentChanges` for what the server
-    /// simulates besides players: each slot whose item is not the one the map
-    /// holds swaps the old item's attribute modifiers for the new one's. An
-    /// entity that changed nothing costs a compare of its eight slots, and
-    /// one that wears nothing and never wore anything is skipped outright.
+    /// `LivingEntity.tick`'s `detectEquipmentUpdates` / `collectEquipmentChanges`
+    /// for what the server simulates besides players: for ticking mobs when a mod
+    /// listens, compares each slot by borrow against `last_equipment`, posts
+    /// `living_equipment_change` before updating attribute modifiers (matching
+    /// NeoForge), and updates `last_equipment` once per changed slot; then
+    /// refreshes each entity's live attribute map. An entity that changed nothing
+    /// costs a borrow compare of its eight slots, and one that wears nothing and
+    /// never wore anything is skipped outright.
     pub(super) fn tick_equipment_attributes(&mut self) {
         if self.remote.is_some() || self.options.execution_role.is_client() {
             return;
         }
         let catalog = self.motion.attributes.clone();
-        let items = world_items!(self);
-        for m in self.mobs.iter_mut().filter(|m| !m.removed) {
-            if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
-                continue;
+        if let Some(epoch) = self.living_equipment_notify_epoch() {
+            let ticking = self.entity_ticking_area();
+            let mut changed_mobs = Vec::new();
+            for (hint, m) in self.mobs.iter().enumerate() {
+                if m.removed {
+                    continue;
+                }
+                let is_ticking = ticking(m.position.x.floor() as i32, m.position.z.floor() as i32);
+                let notify_changed = is_ticking && super::native_mobs::mob_equipment_changed(m);
+                let attr_changed = (!m.extra.equipment.is_empty() || m.extra.live.has_worn())
+                    && m.extra.live.equipment_changed(&m.extra.equipment);
+                if notify_changed || attr_changed {
+                    changed_mobs.push((hint, m.id, is_ticking));
+                }
             }
-            collect_equipment(&catalog, items, m);
+            for (hint, id, is_ticking) in changed_mobs {
+                if is_ticking {
+                    let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
+                    for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
+                        let Some(m) = super::native_mobs::mob_by_hint_mut(&mut self.mobs, hint, id)
+                            .filter(|m| !m.removed)
+                        else {
+                            break;
+                        };
+                        let index = slot as usize;
+                        let current = finalize::equipment_slot(m, slot);
+                        let prev = m
+                            .extra
+                            .last_equipment
+                            .as_deref()
+                            .and_then(|last| last[index].as_ref());
+                        if super::native_mobs::equipment_read_matches(current.as_ref(), prev) {
+                            continue;
+                        }
+                        let to = current.map(|read| read.project().into_owned());
+                        let from = m
+                            .extra
+                            .last_equipment
+                            .as_deref_mut()
+                            .and_then(|last| last[index].take());
+                        self.dispatch_living_equipment_change(
+                            living,
+                            slot,
+                            from.as_ref(),
+                            to.as_ref(),
+                        );
+                        if let Some(m) =
+                            super::native_mobs::mob_by_hint_mut(&mut self.mobs, hint, id)
+                        {
+                            super::native_mobs::store_equipment_history(
+                                &mut m.extra.last_equipment,
+                                index,
+                                to,
+                            );
+                        }
+                    }
+                }
+                let items = world_items!(self);
+                if let Some(m) = super::native_mobs::mob_by_hint_mut(&mut self.mobs, hint, id)
+                    .filter(|m| !m.removed)
+                    && (!m.extra.equipment.is_empty() || m.extra.live.has_worn())
+                {
+                    collect_equipment(&catalog, items, m);
+                }
+            }
+        } else {
+            let items = world_items!(self);
+            for m in self.mobs.iter_mut().filter(|m| !m.removed) {
+                if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
+                    continue;
+                }
+                collect_equipment(&catalog, items, m);
+            }
         }
+        let items = world_items!(self);
         for a in self.armor_stands.iter_mut() {
             if a.equipment.is_empty() && !a.live.has_worn() {
                 continue;

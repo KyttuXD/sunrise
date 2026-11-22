@@ -78,7 +78,8 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut()
             && let Some(play) = host.play.get_mut(&conn)
         {
-            play.equipment_heard = None;
+            // The replacement ServerPlayer's lastEquipmentItems starts empty.
+            play.last_equipment = None;
             play.inventory_heard = None;
             play.level_up_sound = Default::default();
         }

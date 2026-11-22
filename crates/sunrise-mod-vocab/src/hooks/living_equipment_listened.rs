@@ -5,10 +5,11 @@ pub trait Hooks {
     /// Whether a mod listens to the mobs' and players'
     /// `living_equipment_change`: a mod that hooks it hooks this one too
     /// and sets `listened` (HEAD, `*listened = true`). Without it the game does
-    /// not read every mob's and connected player's equipment each tick, and
-    /// neither is told (armor stands still are). A mob that ticks, or a player
-    /// who is in the level, once it is set counts from empty. Asked once a tick
-    /// for the mobs, after their tick, and once for the players. Server-side.
+    /// not dispatch `living_equipment_change` for mobs and connected players
+    /// each tick (armor stands still fire). A mob that ticks, or a player whose
+    /// body ticks, once it is set counts from empty. Asked once a tick before
+    /// the mobs' equipment update pass and once before the players' connection
+    /// tick pass. Server-side.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_equipment_listened",
         dispatch = "flat",

@@ -1,19 +1,30 @@
-//! `living_equipment_change` for a server's players (#3417): a hotbar selection, a pickup into
-//! the selected slot and a helmet put on are each one change on the next tick, and nothing is
-//! told while no mod sets `living_equipment_listened`.
+//! `living_equipment_change` for a server's players and mobs (#3417, debt p3-39):
+//! borrow-based comparison without blanket equipment cloning, all eight
+//! `EquipmentSlot`s matching vanilla `LivingEntity.collectEquipmentChanges` and
+//! `PlayerEquipment`, lazy `ItemStackView` delivery, and minimal history retention.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent, ServerHost};
-use sunrise_client::items::ItemStack;
+use mod_api::{
+    self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent,
+    ServerHost,
+};
+use sunrise_client::{
+    chunk::Chunk,
+    items::ItemStack,
+    lan::guest::SPECTATOR,
+    mobs::{Mob, finalize},
+};
+use sunrise_core::geometry::Vec3;
+use sunrise_items::equipment::{BODY, CHEST, SADDLE};
 
 use super::api_values::TryIntoApi;
 use super::native_guest_turn_tests::with_guests;
 
-/// What each call saw: the entity, its kind, the slot, and the stacks before and after.
+/// What each call saw: the entity id, its resolved kind, the slot, and projected stacks.
 type Heard = Vec<(
     u32,
-    String,
-    String,
+    Option<String>,
+    EquipmentSlot,
     Option<mod_api::ItemStack>,
     Option<mod_api::ItemStack>,
 )>;
@@ -33,15 +44,20 @@ impl Hooks for Counter {
     }
     fn living_equipment_change(
         &self,
-        _: &mut dyn ServerHost,
+        host: &mut dyn ServerHost,
         event: &mut LivingEquipmentChangeEvent<'_>,
     ) {
+        let kind = event
+            .entity
+            .entity()
+            .kind(host)
+            .and_then(|kind| kind.id(host));
         self.heard.lock().unwrap().push((
-            event.entity,
-            event.kind.to_owned(),
-            event.slot.to_owned(),
-            event.from.cloned(),
-            event.to.cloned(),
+            event.entity.id(),
+            kind,
+            event.slot,
+            event.from.as_ref().and_then(|stack| stack.project()),
+            event.to.as_ref().and_then(|stack| stack.project()),
         ));
     }
 }
@@ -55,6 +71,9 @@ fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mu
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("counter", Box::new(counter))].into();
     mod_platform::testing::with_mods(mods, || {
         with_guests(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
             // A joined guest has its play state from the login on.
             let host = game.lan.as_mut().unwrap();
             for conn in [12, 13] {
@@ -73,8 +92,12 @@ fn take(heard: &Mutex<Heard>) -> Heard {
     std::mem::take(&mut *heard.lock().unwrap())
 }
 
-fn player(slot: &str, from: Option<mod_api::ItemStack>, to: Option<mod_api::ItemStack>) -> Heard {
-    vec![(12, "minecraft:player".into(), slot.into(), from, to)]
+fn player(
+    slot: EquipmentSlot,
+    from: Option<mod_api::ItemStack>,
+    to: Option<mod_api::ItemStack>,
+) -> Heard {
+    vec![(12, Some("minecraft:player".into()), slot, from, to)]
 }
 
 #[test]
@@ -84,9 +107,17 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
         let sword = ItemStack::new("minecraft:iron_sword", 1);
         let stone = ItemStack::new("minecraft:stone", 1);
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
-        // Both guests start empty-handed in slot 0: counting from empty, nothing changed.
-        game.native_players_equipment();
+        let body = ItemStack::new("minecraft:diamond_horse_armor", 1);
+        let saddle = ItemStack::new("minecraft:saddle", 1);
+        // Both guests start empty-handed in slot 0: counting from empty, nothing changed
+        // and no history table is allocated.
+        game.tick_guests();
         assert_eq!(take(heard), Heard::new());
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .last_equipment
+                .is_none()
+        );
 
         // Selecting hotbar slot 1, which holds a sword, moves it into the main hand.
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
@@ -94,28 +125,157 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
             g.inventory[1] = Some(sword.clone());
             g.selected = 1;
         });
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", None, api(&sword)));
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, None, api(&sword))
+        );
 
         // Back to the empty slot 0, then a stone picked up into it.
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.selected = 0);
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", api(&sword), None));
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, api(&sword), None)
+        );
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .last_equipment
+                .is_none()
+        );
+
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.inventory[0] = Some(stone.clone()));
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("mainhand", None, api(&stone)));
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, None, api(&stone))
+        );
 
         // A helmet put on from the inventory screen (`armor` runs head to feet).
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| g.armor[0] = Some(helmet.clone()));
-        game.native_players_equipment();
-        assert_eq!(take(heard), player("head", None, api(&helmet)));
+        game.tick_guests();
+        assert_eq!(take(heard), player(EquipmentSlot::Head, None, api(&helmet)));
+
+        // Body and saddle slots follow vanilla `PlayerEquipment` / `EquipmentSlot.VALUES`.
+        let guests = &mut game.lan.as_mut().unwrap().hub.guests;
+        guests.update(0, |g| {
+            g.equipment[BODY] = Some(body.clone());
+            g.equipment[SADDLE] = Some(saddle.clone());
+        });
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            vec![
+                (
+                    12,
+                    Some("minecraft:player".into()),
+                    EquipmentSlot::Body,
+                    None,
+                    api(&body)
+                ),
+                (
+                    12,
+                    Some("minecraft:player".into()),
+                    EquipmentSlot::Saddle,
+                    None,
+                    api(&saddle)
+                ),
+            ]
+        );
 
         // A tick with no change tells nothing.
-        game.native_players_equipment();
+        game.tick_guests();
         assert_eq!(take(heard), Heard::new());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn item_use_completion_reports_equipment_change_in_same_server_tick() {
+    with_counter(true, |game, heard| {
+        let apple = ItemStack::new("minecraft:golden_apple", 1);
+        let guests = &mut game.lan.as_mut().unwrap().hub.guests;
+        guests.update(0, |g| {
+            g.inventory[0] = Some(apple.clone());
+            g.selected = 0;
+        });
+        game.tick_guests();
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, None, api(&apple))
+        );
+
+        let duration = game
+            .as_guest(12, |g| {
+                assert!(g.start_using_item());
+                g.use_duration
+            })
+            .unwrap();
+        assert_eq!(duration, 32);
+
+        for _ in 0..(duration - 1) {
+            game.tick_guests();
+        }
+        assert_eq!(take(heard), Heard::new());
+        assert!(game.lan.as_ref().unwrap().hub.guests[0].inventory[0].is_some());
+
+        // On the final use tick, `tick_using` finishes consuming the apple and
+        // `detect_guest_equipment_updates` reports the emptied MainHand in the
+        // same server tick, before dropping the empty history box.
+        game.tick_guests();
+        assert!(game.lan.as_ref().unwrap().hub.guests[0].inventory[0].is_none());
+        assert_eq!(
+            take(heard),
+            player(EquipmentSlot::MainHand, api(&apple), None)
+        );
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .last_equipment
+                .is_none()
+        );
+
+        game.tick_guests();
+        assert_eq!(take(heard), Heard::new());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn spectator_touching_unloaded_chunk_skips_equipment_change_hook() {
+    with_counter(true, |game, heard| {
+        let helmet = ItemStack::new("minecraft:iron_helmet", 1);
+        game.world.chunks.clear();
+        let guests = &mut game.lan.as_mut().unwrap().hub.guests;
+        guests.update(0, |g| {
+            g.game_mode = SPECTATOR;
+            g.position = [8.5, 64.0, 8.5];
+            g.armor[0] = Some(helmet.clone());
+        });
+
+        // Spectator touching an unloaded chunk skips `ServerPlayer.doTick`'s
+        // body (`super.tick()` -> `detectEquipmentUpdates`).
+        game.tick_guests();
+        assert_eq!(take(heard), Heard::new());
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .last_equipment
+                .is_none()
+        );
+
+        // Once its chunk is loaded, its body ticks and reports the helmet.
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.tick_guests();
+        assert_eq!(take(heard), player(EquipmentSlot::Head, None, api(&helmet)));
+        assert!(
+            game.lan.as_ref().unwrap().play[&12]
+                .last_equipment
+                .is_some()
+        );
     });
 }
 
@@ -129,7 +289,69 @@ fn players_are_not_told_without_the_listened_opt_in() {
             g.selected = 1;
             g.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
         });
-        game.native_players_equipment();
+        game.tick_guests();
         assert_eq!(take(heard), Heard::new());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
+    with_counter(true, |game, heard| {
+        let zombie = game
+            .res
+            .mob_types()
+            .get("minecraft:zombie")
+            .unwrap()
+            .clone();
+        let pos = Vec3::new(3.0, 64.0, 5.0);
+        game.mobs.push(Mob::new(41, zombie.clone(), pos, 0.0));
+        game.mobs.push(Mob::new(42, zombie, pos, 0.0));
+
+        // Naked mobs emit nothing and allocate no equipment history.
+        game.tick_equipment_attributes();
+        assert_eq!(take(heard), Heard::new());
+        assert!(game.mobs[0].extra.last_equipment.is_none());
+        assert!(game.mobs[1].extra.last_equipment.is_none());
+
+        // Equip mob 42 with a damaged enchanted chestplate (gear overlay on stored stack).
+        let mut chest = ItemStack::new("minecraft:iron_chestplate", 1);
+        chest.damage = 3;
+        chest.set_crafting_enchantments(vec![(Arc::from("minecraft:protection"), 2)]);
+        finalize::set_item_stack(&mut game.mobs[1], CHEST, chest.clone());
+
+        game.tick_equipment_attributes();
+        assert_eq!(
+            take(heard),
+            vec![(
+                42,
+                Some("minecraft:zombie".into()),
+                EquipmentSlot::Chest,
+                None,
+                api(&chest),
+            )]
+        );
+        // Unchanged mob 41 still allocates no history; mob 42 retains only chest.
+        assert!(game.mobs[0].extra.last_equipment.is_none());
+        assert!(game.mobs[1].extra.last_equipment.is_some());
+
+        // An unchanged tick with overlaid gear reports nothing.
+        game.tick_equipment_attributes();
+        assert_eq!(take(heard), Heard::new());
+
+        // Clearing the chestplate reports the removal and drops the empty history box.
+        game.mobs[1].set_equipment_stack(CHEST, None);
+        game.tick_equipment_attributes();
+        assert_eq!(
+            take(heard),
+            vec![(
+                42,
+                Some("minecraft:zombie".into()),
+                EquipmentSlot::Chest,
+                api(&chest),
+                None,
+            )]
+        );
+        assert!(game.mobs[1].extra.last_equipment.is_none());
     });
 }

@@ -1,5 +1,16 @@
 use super::*;
 
+fn guest_by_hint(
+    guests: &sunrise_client::lan::guest_list::GuestList,
+    hint: usize,
+    conn: u32,
+) -> Option<&sunrise_client::lan::guest::Guest> {
+    guests
+        .get(hint)
+        .filter(|g| g.conn == conn)
+        .or_else(|| guests.get(guests.connection_index(conn)?))
+}
+
 impl Game<'_> {
     /// The level path: `ServerLevel.tick` calls `ServerPlayer.tick` before the
     /// server starts its connection ticks.
@@ -54,7 +65,6 @@ impl Game<'_> {
         self.lan_menu_links_tick();
         self.lan_containers_tick();
         self.tick_lan_mount_menus();
-        self.native_players_equipment();
         self.announce_guest_advancements();
         let mut told = None;
         for &(conn, _) in &turns {
@@ -206,6 +216,9 @@ impl Game<'_> {
             })
             .map(|g| g.conn)
             .collect();
+        let notify_equipment = (!conns.is_empty())
+            .then(|| self.living_equipment_notify_epoch())
+            .flatten();
         let mut active_level = None;
         let mut collision = None;
         for conn in conns {
@@ -245,7 +258,7 @@ impl Game<'_> {
             if let Some((colliders, _parts)) = &collision {
                 sunrise_client_render::moving_colliders::in_level(colliders.clone(), || {
                     sunrise_client::block_contact::in_level(self.tick, Some(dim.id()), || {
-                        self.tick_guest_connection(conn);
+                        self.tick_guest_connection(conn, notify_equipment);
                     });
                 });
                 self.drain_entity_inside();
@@ -253,7 +266,7 @@ impl Game<'_> {
                     host.hub.sync_guest_after_tick(conn);
                 }
             } else {
-                self.tick_guest_connection(conn);
+                self.tick_guest_connection(conn, notify_equipment);
             }
         }
         if across_levels && active_level.is_some() {
@@ -268,8 +281,8 @@ impl Game<'_> {
         self.flush_native_sounds();
     }
 
-    fn tick_guest_connection(&mut self, conn: u32) {
-        self.tick_guest_connection_body(conn);
+    fn tick_guest_connection(&mut self, conn: u32, notify_equipment: Option<mod_api::WorldEpoch>) {
+        self.tick_guest_connection_body(conn, notify_equipment);
         if !self.on_server_trip(conn) {
             // Like the rest of doTick outside Player.tick, LOCATION also runs
             // for unloaded spectators and canceled entity ticks.
@@ -308,7 +321,11 @@ impl Game<'_> {
         }
     }
 
-    fn tick_guest_connection_body(&mut self, conn: u32) {
+    fn tick_guest_connection_body(
+        &mut self,
+        conn: u32,
+        notify_equipment: Option<mod_api::WorldEpoch>,
+    ) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -453,19 +470,19 @@ impl Game<'_> {
         // LivingEntity.tick's detectEquipmentUpdates, part of the body: after the
         // item use above and before aiStep's travel and updatePlayerPose, so a new
         // scale modifier rebuilds the box this tick.
-        if body
-            && let Some(host) = self.lan.as_mut()
-            && {
-                let g = &host.hub.guests[gi];
-                let held = g.inventory.get(g.selected).and_then(Option::as_ref);
-                let play = host.play.entry(conn).or_default();
-                equipment_changed(&mut play.equipped, &g.armor, held, g.offhand.as_ref())
-            }
-        {
-            let _ = self.as_guest_at(gi, conn, |g| g.put_equipment_modifiers());
+        if body {
+            self.detect_guest_equipment_updates(gi, conn, notify_equipment);
         }
         self.guest_server_tick(conn, body);
         let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let Some(gi) = host
+            .hub
+            .guests
+            .connection_index(conn)
+            .filter(|&i| host.hub.here(&host.hub.guests[i]))
+        else {
             return;
         };
         let sleeping = host.hub.guests[gi].sleeping;
@@ -505,6 +522,91 @@ impl Game<'_> {
             self.guest_player_tick(gi, conn, mod_api::HookId::PlayerTickPost, |game, player| {
                 game.native_player_tick_post(mod_api::__private::PlayerTickPostCall { player })
             });
+        }
+    }
+
+    /// `LivingEntity.detectEquipmentUpdates` / `collectEquipmentChanges` for a
+    /// server guest inside its body tick, after `tick_using` and before
+    /// `guest_server_tick`: compares all eight `EquipmentSlot`s by borrow
+    /// against `play.last_equipment`, posts `living_equipment_change` per
+    /// changed slot before updating attributes (matching NeoForge), updates
+    /// `last_equipment` once per changed slot, and refreshes equipment
+    /// attribute modifiers when any slot changed.
+    fn detect_guest_equipment_updates(
+        &mut self,
+        gi: usize,
+        conn: u32,
+        notify_epoch: Option<mod_api::WorldEpoch>,
+    ) {
+        use crate::game::native_mobs::{
+            equipment_stack_matches, guest_equipment_changed, guest_equipment_slot,
+            store_equipment_history,
+        };
+
+        let Some((entity_id, changed)) = self.lan.as_ref().and_then(|host| {
+            let g = guest_by_hint(&host.hub.guests, gi, conn).filter(|g| host.hub.here(g))?;
+            let last = host
+                .play
+                .get(&conn)
+                .and_then(|play| play.last_equipment.as_deref());
+            Some((g.entity_id as u32, guest_equipment_changed(g, last)))
+        }) else {
+            return;
+        };
+        if !changed {
+            return;
+        }
+        let mut any_changed = false;
+        let living = notify_epoch
+            .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, entity_id)));
+        for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
+            let index = slot as usize;
+            let (from, to) = {
+                let Some(host) = self.lan.as_mut() else {
+                    return;
+                };
+                let Some(g) =
+                    guest_by_hint(&host.hub.guests, gi, conn).filter(|g| host.hub.here(g))
+                else {
+                    break;
+                };
+                let play = host.play.entry(conn).or_default();
+                let current = guest_equipment_slot(g, slot);
+                let prev = play
+                    .last_equipment
+                    .as_deref()
+                    .and_then(|last| last[index].as_ref());
+                if equipment_stack_matches(current, prev) {
+                    continue;
+                }
+                any_changed = true;
+                let to = current.cloned();
+                if living.is_none() {
+                    store_equipment_history(&mut play.last_equipment, index, to);
+                    continue;
+                }
+                let from = play
+                    .last_equipment
+                    .as_deref_mut()
+                    .and_then(|last| last[index].take());
+                (from, to)
+            };
+            if let Some(living) = living {
+                self.dispatch_living_equipment_change(living, slot, from.as_ref(), to.as_ref());
+                if let Some(host) = self.lan.as_mut()
+                    && let Some(play) = host.play.get_mut(&conn)
+                {
+                    store_equipment_history(&mut play.last_equipment, index, to);
+                }
+            }
+        }
+        if any_changed
+            && let Some(gi) = self.lan.as_ref().and_then(|host| {
+                let gi = host.hub.guests.connection_index(conn)?;
+                host.hub.here(&host.hub.guests[gi]).then_some(gi)
+            })
+        {
+            let _ = self.as_guest_at(gi, conn, |g| g.put_equipment_modifiers());
         }
     }
 

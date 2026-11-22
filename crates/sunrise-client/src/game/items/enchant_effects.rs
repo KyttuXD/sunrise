@@ -33,6 +33,28 @@ pub(super) fn stack_enchanted_damage(
     enchantments.modify_value(Some(stack), "minecraft:damage", ctx, random, base)
 }
 
+fn stand_by_hint(
+    stands: &[sunrise_client::entities::ArmorStand],
+    hint: usize,
+    id: u32,
+) -> Option<&sunrise_client::entities::ArmorStand> {
+    if stands.get(hint).is_some_and(|s| s.id == id) {
+        return stands.get(hint);
+    }
+    stands.iter().find(|s| s.id == id)
+}
+
+fn stand_by_hint_mut(
+    stands: &mut [sunrise_client::entities::ArmorStand],
+    hint: usize,
+    id: u32,
+) -> Option<&mut sunrise_client::entities::ArmorStand> {
+    if stands.get(hint).is_some_and(|s| s.id == id) {
+        return stands.get_mut(hint);
+    }
+    stands.iter_mut().find(|s| s.id == id)
+}
+
 /// `EquipmentSlot.getName` of each `mobs::finalize` slot (hands, feet to head).
 const MOB_SLOTS: [&str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
 
@@ -1278,41 +1300,67 @@ impl Game<'_> {
     /// for an armor stand: run location effects before travel (including a
     /// piston push), on landing, and for newly equipped items.
     pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+        use super::native_mobs::equipment_stack_matches;
+
         let stand = &mut self.armor_stands[index];
         let block = BlockPos::containing(stand.position);
         let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
         // `collectEquipmentChanges` walks every `EquipmentSlot`, body and
         // saddle included; only the six slots below wear enchantments.
-        let changed: [bool; 8] =
-            std::array::from_fn(|i| stand.equipment[i] != stand.enchantment_equipment[i]);
-        if !moved && !landed && !changed.iter().any(|c| *c) {
+        let any_initial_change = (0..8).any(|i| {
+            !equipment_stack_matches(
+                stand.equipment[i].as_ref(),
+                stand.enchantment_equipment[i].as_ref(),
+            )
+        });
+        if !moved && !landed && !any_initial_change {
             return;
         }
         let id = stand.id;
-        let told: Vec<_> = (0..changed.len())
-            .filter(|&i| changed[i])
-            .map(|i| {
-                let slot = sunrise_items::equipment::SLOT_NAMES[i];
-                (
-                    slot,
-                    stand.enchantment_equipment[i].clone(),
-                    stand.equipment[i].clone(),
-                )
-            })
-            .collect();
-        stand.enchantment_equipment.clone_from(&stand.equipment);
-        if self.remote.is_none() && !self.options.execution_role.is_client() {
-            for (slot, from, to) in told {
-                self.native_living_equipment_change(
-                    id,
-                    "minecraft:armor_stand",
-                    slot,
-                    from.as_ref(),
-                    to.as_ref(),
-                );
+        let mut changed = [false; 8];
+        if any_initial_change {
+            let notify_epoch = (self.remote.is_none()
+                && !self.options.execution_role.is_client()
+                && mod_api::__private::listened(mod_api::HookId::LivingEquipmentChange))
+            .then(|| self.native_lifecycle.epoch())
+            .flatten();
+            if let Some(epoch) = notify_epoch {
+                let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
+                for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
+                    let i = slot as usize;
+                    let Some(stand) = stand_by_hint_mut(&mut self.armor_stands, index, id) else {
+                        break;
+                    };
+                    if equipment_stack_matches(
+                        stand.equipment[i].as_ref(),
+                        stand.enchantment_equipment[i].as_ref(),
+                    ) {
+                        continue;
+                    }
+                    changed[i] = true;
+                    let to = stand.equipment[i].clone();
+                    let from = stand.enchantment_equipment[i].take();
+                    self.dispatch_living_equipment_change(living, slot, from.as_ref(), to.as_ref());
+                    if let Some(stand) = stand_by_hint_mut(&mut self.armor_stands, index, id) {
+                        stand.enchantment_equipment[i] = to;
+                    }
+                }
+            } else {
+                let stand = &mut self.armor_stands[index];
+                for (i, is_changed) in changed.iter_mut().enumerate() {
+                    if !equipment_stack_matches(
+                        stand.equipment[i].as_ref(),
+                        stand.enchantment_equipment[i].as_ref(),
+                    ) {
+                        *is_changed = true;
+                        stand.enchantment_equipment[i] = stand.equipment[i].clone();
+                    }
+                }
             }
         }
-        let stand = &self.armor_stands[index];
+        let Some(stand) = stand_by_hint(&self.armor_stands, index, id) else {
+            return;
+        };
         let at = [stand.position.x, stand.position.y, stand.position.z];
         let who = Who::Mob(stand.id);
         let equipment = stand
