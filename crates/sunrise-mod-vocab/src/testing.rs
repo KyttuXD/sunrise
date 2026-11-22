@@ -416,9 +416,6 @@ impl crate::prelude::BlockStatesHost for FakeHost {
     }
 }
 impl crate::prelude::LevelsHost for FakeHost {
-    fn lit_block_name(&self, _: [i32; 3]) -> Option<crate::BlockKey> {
-        None
-    }
     fn is_loaded(&self, id: &str) -> bool {
         self.registries.is_loaded(id)
     }

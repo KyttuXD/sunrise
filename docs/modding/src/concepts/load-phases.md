@@ -133,11 +133,12 @@ transactions. Callbacks that take `DataLoadContext` use its restricted reads. Ne
 opening a world handle or transaction. In setup and reload, `context.block_states()` and
 `context.fluid_states()` still read registry tables, and an `ItemResource` can query
 `damageable(context)`, `foil(context)`, or `repairable(context, &material)`. A position-based
-lookup such as `lit_block_name(pos)` requires a live game host. The first client registration and prepare run on the loader
-thread; later registration runs on the render thread, prepare on its worker, and apply on the
-owning game thread. A panic during reload listener registration discards only that callback’s
-pending listeners, dependencies and retained entries. Registration errors are returned and
-reported without failing the whole reload; a cycle in the completed graph still fails it.
+lookup such as `level.block_state(host, pos)` needs a live game host and the actual level. The
+first client registration and prepare run on the loader thread; later registration runs on the
+render thread, prepare on its worker, and apply on the owning game thread. A panic during reload
+listener registration discards only that callback’s pending listeners, dependencies and retained
+entries. Registration errors are returned and reported without failing the whole reload; a cycle
+in the completed graph still fails it.
 
 ## Load contexts
 

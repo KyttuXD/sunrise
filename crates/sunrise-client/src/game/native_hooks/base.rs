@@ -4103,39 +4103,6 @@ impl Game<'_> {
     pub(in crate::game) fn attachments(&mut self) -> &mut dyn AttachmentStore {
         self
     }
-    /// Read a loaded, light-emitting block. No implicit chunk loading.
-    pub(in crate::game) fn lit_block_name(&self, pos: [i32; 3]) -> Option<mod_api::BlockKey> {
-        self.world
-            .chunks
-            .contains_key(&(pos[0].div_euclid(16), pos[2].div_euclid(16)))
-            .then(|| {
-                self.res
-                    .facts()
-                    .get(self.world.block(pos[0], pos[1], pos[2]))
-            })
-            .filter(|f| f.emission > 0)
-            .and_then(|f| mod_api::__private::block_key(&f.name))
-    }
-    /// A small local vanilla particle; caller should rate-limit emission.
-    pub(in crate::game) fn flame_particle(&mut self, at: [f64; 3], soul: bool) {
-        use sunrise_client::particles::{ParticleOptions, ParticleType};
-        if !self.native_window() || at.iter().any(|v| !v.is_finite()) {
-            return;
-        }
-        let Some(p) = self.native_player() else {
-            return;
-        };
-        if (at[0] - p.x).powi(2) + (at[1] - p.y).powi(2) + (at[2] - p.z).powi(2) > 1024.0 {
-            return;
-        }
-        let kind = if soul {
-            ParticleType::SoulFireFlame
-        } else {
-            ParticleType::Flame
-        };
-        self.particles
-            .add(&ParticleOptions::simple(kind), at, [0.0, 0.01, 0.0]);
-    }
     /// Whether the player left mod `mod_id` on in Options > Mods. A mod
     /// turned off does nothing (check this first in each hook) until the
     /// launcher's next build leaves it out.

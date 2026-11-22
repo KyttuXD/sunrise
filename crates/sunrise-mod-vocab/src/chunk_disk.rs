@@ -110,9 +110,6 @@ impl<'a> OwningChunkDisk<'a> {
 impl Host for OwningChunkDisk<'_> {}
 crate::impl_host_areas!(OwningChunkDisk<'_>, except(levels, config));
 impl prelude::LevelsHost for OwningChunkDisk<'_> {
-    fn lit_block_name(&self, _: [i32; 3]) -> Option<crate::BlockKey> {
-        None
-    }
     fn is_loaded(&self, id: &str) -> bool {
         self.resources.mods().get(id).is_some()
     }
