@@ -1,4 +1,5 @@
 version = 1
+handle = "handle:PlayerRef::destroy_block"
 doc = "PlayerRef::destroy_block uses the player's main hand and the direct ServerPlayerGameMode.destroyBlock and NeoForge CommonHooks.fireBlockBreak checks, not mining packet admission. Restricted attempts on live blocks post break_block pre-canceled while preserving hard game-mode and game-master restrictions. A listener can chain direct breaks without a fixed nesting limit. Each invocation owns its drop destination and does not repeat removal effects if a listener removed the block or completed a nested player break at that position in that level, even when a non-air block or fluid remains."
 tests = [
     "crates/sunrise-client/src/game/modding/native_player_break.rs::a_mod_breaks_stone_as_the_player_with_their_pickaxe",

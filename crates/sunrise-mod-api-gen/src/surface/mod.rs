@@ -780,6 +780,7 @@ pub(crate) fn build(
                         signature,
                         impl_generics: String::new(),
                         refs,
+                        behaviour_versions: BTreeMap::new(),
                     },
                 );
                 record.paths = paths;
@@ -839,6 +840,7 @@ pub(crate) fn build(
                     signature,
                     impl_generics,
                     refs,
+                    behaviour_versions: BTreeMap::new(),
                 },
             );
             handles.insert(handle_id, record);
@@ -907,7 +909,7 @@ pub(crate) fn build(
     let hooks = hook_records(hooks, &types, &mut notes);
     let parts = part_records(&hooks, &traits, &mut notes);
     capabilities.extend(manifest_capabilities(root, &mut notes));
-    let behaviours = behaviours::read(root).map_err(|e| e.to_string())?;
+    let behaviours = behaviours::read(root, &mut handles).map_err(|e| e.to_string())?;
     notes.sort();
     notes.dedup();
     Ok(Export {

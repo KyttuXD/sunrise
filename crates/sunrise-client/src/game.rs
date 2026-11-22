@@ -6649,7 +6649,7 @@ impl Game<'_> {
                 pos,
                 removed_by_nested: false,
             });
-            let mut guard = ActiveBreakGuard { game: self, depth };
+            let guard = ActiveBreakGuard { game: self, depth };
             guard
                 .game
                 .native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
