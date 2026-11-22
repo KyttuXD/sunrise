@@ -651,8 +651,8 @@ fn another_guests_services_work_during_a_turn() {
 
     struct Accept;
     impl CriterionTest for Accept {
-        fn test(&self, criterion: &dyn CriterionContext) -> Result<bool, CriterionTestError> {
-            assert_eq!(criterion.conditions_json(), "null");
+        fn test(&mut self, criterion: &dyn CriterionContext) -> Result<bool, CriterionTestError> {
+            assert!(criterion.conditions().is_null());
             Ok(true)
         }
     }
@@ -671,6 +671,7 @@ fn another_guests_services_work_during_a_turn() {
                 name: "seen".into(),
                 trigger: "turns:probe".into(),
                 conditions: serde_json::Value::Null.into(),
+                player: None,
             }],
             requirements: vec![vec!["seen".into()]],
             rewards: Default::default(),
@@ -712,17 +713,11 @@ fn another_guests_services_work_during_a_turn() {
                 Some(stone.clone())
             );
             assert_eq!(
-                a.trigger_criterion(game, &vanilla_trigger, Arc::new(Accept)),
-                Err(TriggerCriterionError::InvalidTrigger)
+                a.trigger_criterion(game, &vanilla_trigger, &mut Accept),
+                Err(TriggerCriterionError::BuiltinTrigger)
             );
-            assert_eq!(
-                b.trigger_criterion(game, &trigger, Arc::new(Accept)),
-                Ok(())
-            );
-            assert_eq!(
-                a.trigger_criterion(game, &trigger, Arc::new(Accept)),
-                Ok(())
-            );
+            assert_eq!(b.trigger_criterion(game, &trigger, &mut Accept), Ok(()));
+            assert_eq!(a.trigger_criterion(game, &trigger, &mut Accept), Ok(()));
             assert!(game.native_run_command("give guest13 minecraft:diamond 2"));
             assert!(game.native_run_command("give @a[name=guest13] minecraft:diamond 1"));
             assert!(game.native_run_command(
@@ -737,7 +732,7 @@ fn another_guests_services_work_during_a_turn() {
                 assert!(game.native_inventory(12, Player).is_err());
                 assert!(game.native_inventory(13, Player).is_err());
                 assert_eq!(
-                    a.trigger_criterion(game, &trigger, Arc::new(Accept)),
+                    a.trigger_criterion(game, &trigger, &mut Accept),
                     Err(TriggerCriterionError::PlayerUnavailable)
                 );
                 assert!(!game.native_run_command("give guest12 minecraft:dirt 1"));

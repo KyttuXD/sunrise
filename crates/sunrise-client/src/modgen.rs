@@ -163,6 +163,9 @@ impl ChunkGenerator for ModTerrain {
         }
         Box::new(chunk)
     }
+    fn light_view(&self, proto: &crate::streaming::Proto) -> Option<Chunk> {
+        proto.downcast_ref::<Chunk>().cloned()
+    }
     fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
         *proto.downcast::<Chunk>().expect("mod terrain proto")
     }

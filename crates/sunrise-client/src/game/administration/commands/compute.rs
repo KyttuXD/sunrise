@@ -39,7 +39,7 @@ fn context_entities<'a>(
         this: source_this.filter(|_| c.without_this.is_none()),
         origin: c.without_this.unwrap_or(source_pos),
         tool: None,
-        block_pos: None,
+        event_block: None,
         target,
         interacting,
     }
@@ -324,6 +324,9 @@ mod tests {
     /// A world with nothing in it: the entity conditions under test read none of it.
     struct Void;
     impl adv::World for Void {
+        fn is_loaded(&self, _: [i32; 3]) -> bool {
+            false
+        }
         fn dimension(&self) -> &str {
             "minecraft:overworld"
         }

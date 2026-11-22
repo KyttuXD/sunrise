@@ -63,9 +63,10 @@ contact is false. It is deliberately not equivalent to checking `eye_fluid` now.
 mods can also use. It uses the same advancement path as food and potions, with the supplied stack,
 in the player's own level. It does not eat, update inventory, or award a used statistic.
 `Ok(())` means reached, whether or not a criterion matched. Invalid stacks return
-`TriggerCriterionError::Stack` before firing; clients return `NotServer`, and stale, offline or
-nested-turn displaced players return `PlayerUnavailable`. The generic `trigger_criterion` still
-refuses `minecraft:` trigger identifiers.
+`TriggerCriterionError::Stack` before firing; clients return `NotServer`. A stale, offline or
+nested-turn displaced player, or a player whose level cannot be entered, returns `PlayerUnavailable`.
+The generic `trigger_criterion` refuses this
+exact built-in key, not every identifier in the `minecraft` namespace. See [advancement triggers](../native-mods.md#advancement-triggers).
 
 ## Portals and leashes
 

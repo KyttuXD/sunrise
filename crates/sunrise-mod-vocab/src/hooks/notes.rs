@@ -1121,29 +1121,19 @@ whatever conditions the mod reads:
 }
 ```
 
-- `player.trigger_criterion(host, &trigger, test)` fires it on a `PlayerRef`, with a mutable `ServerHost`,
-  a mod-owned `Identifier` such as `mymod:pipe_connected`, and an `Arc<dyn CriterionTest>`. Each criterion with that
-  trigger the player hasn't been granted, of an advancement not done yet, goes to `test`, then to its `player`
-  predicate, as vanilla tests one. Those that pass are granted; an advancement they complete is awarded as by the game's
-  own triggers: the toast, the chat line, the rewards and the player's saved progress.
-- `CriterionTest::test(&self, criterion: &dyn CriterionContext)` returns `Result<bool, CriterionTestError>`.
-  The context is a scoped game resource, borrowed only for this test; neither it nor its private world can be retained.
-  `criterion.conditions_json()` gives owned JSON (`"null"` when conditions are absent).
-  `criterion.item(key, &stack)` tests the item predicate under `key` as the game's own triggers read one: `items`
-  (an id, a list or a `#tag`), `count`, the `potion_contents` and `damage` components, and the `enchantments` and
-  `damage` predicates. Other components and predicates aren't checked. A missing key passes. Tag membership is
-  evaluated in the target player's world, not from a detached conditions snapshot.
-- It reaches the acting player inside their hook, and another player on the server in their own level, including
-  during a guest's turn. A displaced outer player is unavailable. `Ok(())` means the player was reached, not that
-  anything was granted. `TriggerCriterionError` distinguishes an invalid trigger (`minecraft:` is reserved; empty
-  namespace/path is refused), a remote client, an unavailable player, a missing game backend, and a failed test.
-  A failed test stops further tests; earlier matching criteria may already be granted. The test itself is not retained.
-- Both resource interfaces and their glue are generated from the traits. Predicates run synchronously with the
-  criterion context, which expires on return. `CriterionTestError::Unavailable` propagates as
-  `TriggerCriterionError::Test` rather than treating the criterion as a nonmatch.
-
-Diverges from upstream: this replaces the unscoped `Host` closure helper with a player receiver and generated
-criterion resources; the private advancement world remains solely in the native implementation.
+- `player.trigger_criterion(host, &trigger, &mut test)` lends a `CriterionTest` to the server for one synchronous
+  call. For each open criterion of that exact trigger, the matcher runs first; then the game tests `player` in
+  the target player's own level. Matches receive the usual progress, rewards, chat line and toast.
+- `CriterionTest::test(&mut self, criterion: &dyn CriterionContext)` returns `Result<bool, CriterionTestError>`.
+  The test may borrow from the triggering event. `criterion.conditions()` borrows the parsed `Value` bound at
+  advancement load (`Value::Null` when absent). `criterion.item(key, &stack)` tests an item predicate using the
+  target level's tags. A missing key matches; an invalid stack yields `CriterionTestError::Stack`.
+- `Ok(())` means the player was reached, not that anything matched. An exact built-in key uses its built-in
+  trigger path; a custom key does not need to be in the calling mod's namespace. An unavailable player or a
+  client is refused, as is a player whose level cannot be entered. An inline `player` predicate uses the vanilla
+  loot condition codec's `type` field; a malformed condition rejects the advancement at load. A callback refusal
+  or panic ends the current invocation, not later calls with the same key. A panic logs and shows an error toast
+  naming the mod.
 
 ### Explosions
 
@@ -1731,7 +1721,7 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
 
 - `Hooks::component_hover` (vanilla's `GuiGraphicsExtractor.componentHoverEffect`; NeoForge has no event for it) is asked for the hover of the text component under the cursor in the chat, a book or a dialog, before the game draws it. `hover` is the typed hover action (`TextHover`: its text, an item or an entity), `x` and `y` the cursor. Set `cancel` and the game draws nothing for it, and a mod can draw its own with `draw`. Left alone, a text hover is split at half the screen's width (at least 200), an item hover draws its stack's tooltip, which asks `item_tooltip` and the `render_tooltip_*` hooks as any item tooltip does, and an entity hover shows its name, type and UUID while advanced tooltips are on. It runs each frame a hovered component shows, only while a mod listens. Diverges from upstream: new hook.
 
-- [advancement triggers](#advancement-triggers) of a mod's own: `player.trigger_criterion(host, trigger, test)` fires a trigger
+- [advancement triggers](#advancement-triggers) of a mod's own: `player.trigger_criterion(host, &trigger, &mut test)` fires a trigger
   an advancement of a content mod or a data pack names (`mymod:pipe_connected`) for one player, as a NeoForge mod's
   `SimpleCriterionTrigger.trigger`.
 

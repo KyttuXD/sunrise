@@ -215,7 +215,7 @@ impl Game<'_> {
                     this: Some(&me),
                     origin: me.position,
                     tool: None,
-                    block_pos: None,
+                    event_block: None,
                     target: None,
                     interacting: None,
                 };

@@ -369,6 +369,22 @@ pub(crate) fn log_and_queue_named_panic(
             "mod {mod_id} panicked in hook {hook} and has been disabled for this hook for the rest of the session: {reason}"
         );
     }
+    queue_callback_panic(installed, mod_id, hook);
+}
+
+/// A one-call predicate has no retained registration to disable.
+pub(crate) fn report_borrowed_callback_panic(
+    operation: &'static str,
+    mod_id: &'static str,
+    label: &str,
+    payload: &(dyn std::any::Any + Send),
+) {
+    let reason = crate::callback_owner::panic_payload_text(payload);
+    log::error!("mod {mod_id} panicked in {operation} ({label}): {reason}");
+    queue_callback_panic(installed(), mod_id, operation);
+}
+
+fn queue_callback_panic(installed: Option<&Installed>, mod_id: &'static str, hook: &'static str) {
     if let Some(installed) = installed {
         let mut queue = installed
             .hook_panics

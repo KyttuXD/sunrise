@@ -77,7 +77,7 @@ Reading or changing a value preserves zero and negative saved values rather than
 clamping them through an unsigned representation. A negative value does not grant
 positive experience when picked up.
 
-Advancement triggers instead live on `PlayerRef::trigger_criterion`, with a mod-owned
+Advancement triggers instead live on `PlayerRef::trigger_criterion`, with a borrowed
 `CriterionTest` and the game's scoped `CriterionContext` resource. The context keeps real
 world-aware item predicates; it is not a conditions-only snapshot. See
 [advancement triggers](https://playsunrise.net/docs/modding/reference/hook-notes#advancement-triggers) for the contract.
@@ -109,12 +109,11 @@ the predicate evaluators are `DefaultBlockInteractionTrigger`,
 `ItemUsedOnLocationTrigger`, and `AnyBlockInteractionTrigger`.
 
 `Ok(())` means the player was reached, even if no criterion matched. Failures are
-`NotServer` for a remote client, `PlayerUnavailable` for a stale, offline or
-displaced handle, `UnloadedChunk` for a position outside loaded chunks, and
-`Stack(StackWriteError)` when the item boundary rejects the snapshot before any
-trigger fires. The
-`minecraft:` guard on `trigger_criterion` remains: this grants no general access
-to fire arbitrary vanilla triggers.
+`NotServer` for a client, `PlayerUnavailable` for a stale, offline or displaced
+handle, and `Stack(StackWriteError)` when the item boundary rejects the snapshot
+before firing. An unloaded position fails only predicates that need live world
+data. The exact built-in-key check on `trigger_criterion` prevents a custom
+matcher from substituting for a built-in trigger’s event matcher.
 
 The following catalog hooks are not in the trait:
 

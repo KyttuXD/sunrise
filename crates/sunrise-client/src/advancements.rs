@@ -4,7 +4,11 @@
 //! conditions advancements use).
 mod data;
 mod state_ranges;
+mod triggers;
+#[cfg(test)]
 use data::parse;
+use data::{PredicateSource, parse_with};
+pub use triggers::is_builtin_trigger;
 
 use serde_json::Value;
 use std::{
@@ -32,13 +36,70 @@ pub struct Display {
     pub announce: bool,
     pub hidden: bool,
 }
+/// A `LootItemCondition.CODEC` predicate decoded and bound at advancement load
+/// from its `"type"` discriminator and the active datapack predicate registry.
+#[derive(Clone, Debug)]
+pub enum BoundCondition {
+    Inverted(Box<BoundCondition>),
+    AllOf(Vec<BoundCondition>),
+    AnyOf(Vec<BoundCondition>),
+    Leaf { kind: String, data: Value },
+}
+
+impl BoundCondition {
+    /// Evaluate the exact condition decoded by `LootItemCondition.CODEC` at load.
+    pub fn test(&self, ctx: &Entities, w: &dyn World) -> bool {
+        match self {
+            Self::Inverted(term) => !term.test(ctx, w),
+            Self::AllOf(terms) => terms.iter().all(|term| term.test(ctx, w)),
+            Self::AnyOf(terms) => terms.iter().any(|term| term.test(ctx, w)),
+            Self::Leaf { kind, data } => condition_leaf_typed(kind, data, ctx, w),
+        }
+    }
+
+    fn any_leaf(&self, predicate: &mut impl FnMut(&Value) -> bool) -> bool {
+        match self {
+            Self::Inverted(term) => term.any_leaf(predicate),
+            Self::AllOf(terms) | Self::AnyOf(terms) => {
+                terms.iter().any(|term| term.any_leaf(predicate))
+            }
+            Self::Leaf { data, .. } => predicate(data),
+        }
+    }
+
+    fn facts_asked(&self) -> FactsAsked {
+        match self {
+            Self::Inverted(term) => term.facts_asked(),
+            Self::AllOf(terms) | Self::AnyOf(terms) => {
+                terms.iter().fold(FactsAsked::default(), |acc, term| {
+                    acc.or(term.facts_asked())
+                })
+            }
+            Self::Leaf { data, .. } => facts_asked_in(data),
+        }
+    }
+}
+
+fn has_json_key(v: &Value, keys: &[&str]) -> bool {
+    match v {
+        Value::Array(list) => list.iter().any(|item| has_json_key(item, keys)),
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| keys.contains(&k.as_str()) || has_json_key(v, keys)),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Criterion {
     pub name: String,
     pub trigger: String,
-    /// Read on first test: ~1,300 recipe advancements' criteria, most never
-    /// tested in a game, took ~4 MB as `Value`s.
+    /// Custom trigger conditions bind at load for the borrowed native matcher.
+    /// Built-in criteria parse lazily: most recipe criteria are never tested.
     pub conditions: LazyJson,
+    /// The engine-owned `SimpleInstance.player` predicate decoded and bound at
+    /// load for custom triggers (`LootItemCondition.CODEC`).
+    pub player: Option<BoundCondition>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Rewards {
@@ -190,7 +251,9 @@ impl Tree {
     /// files, and each kept its own copy (7 MB). A world whose data packs bring
     /// advancements gets its own tree ([`Tree::load_with`]).
     pub fn shared(data: &Path, overlay: &sunrise_world::loot::PackOverlay) -> Arc<Tree> {
-        if overlay.kind("advancement").next().is_some() {
+        if overlay.kind("advancement").next().is_some()
+            || overlay.kind("predicate").next().is_some()
+        {
             return Arc::new(Tree::load_with(data, overlay));
         }
         type TreeKey = (PathBuf, sunrise_world::conditions::LoadConditions);
@@ -217,6 +280,22 @@ impl Tree {
     /// The tree with a world's data packs' advancement files over the game's
     /// own: the top pack's file for each id replaces it.
     pub fn load_with(data: &Path, overlay: &sunrise_world::loot::PackOverlay) -> Tree {
+        Self::load_inner(data, overlay, PredicateSource::from_disk(data, overlay))
+    }
+    /// Load advancements and bind custom criteria's `player` predicates against
+    /// the active datapack predicate registry (`LootData::predicates`).
+    pub fn load_with_predicates(
+        data: &Path,
+        overlay: &sunrise_world::loot::PackOverlay,
+        predicates: &HashMap<String, Value>,
+    ) -> Tree {
+        Self::load_inner(data, overlay, PredicateSource::from_predicates(predicates))
+    }
+    fn load_inner(
+        data: &Path,
+        overlay: &sunrise_world::loot::PackOverlay<'_>,
+        mut source: PredicateSource<'_, '_>,
+    ) -> Tree {
         let mut tree = Tree::default();
         let Ok(namespaces) = std::fs::read_dir(data) else {
             return tree;
@@ -248,7 +327,7 @@ impl Tree {
             if !overlay.conditions.allows_id(&v, "advancement", &id) {
                 continue;
             }
-            if let Some(a) = parse(&id, &v) {
+            if let Some(a) = parse_with(&id, &v, &mut source) {
                 let index = tree.list.len();
                 for (ci, c) in a.criteria.iter().enumerate() {
                     tree.by_trigger
@@ -297,7 +376,11 @@ impl Tree {
         self.looking_at_triggers = (self.list.iter().flat_map(|a| &a.criteria))
             .filter(|c| {
                 let json = c.conditions.json();
-                json.contains("\"looking_at\"") || reference.iter().any(|r| json.contains(r))
+                json.contains("\"looking_at\"")
+                    || reference.iter().any(|r| json.contains(r))
+                    || c.player.as_ref().is_some_and(|p| {
+                        p.any_leaf(&mut |data| has_json_key(data, &["looking_at"]))
+                    })
             })
             .map(|c| c.trigger.clone())
             .collect();
@@ -320,6 +403,9 @@ impl Tree {
             .filter(|c| {
                 let json = c.conditions.json();
                 keys.iter().any(|k| json.contains(k))
+                    || c.player.as_ref().is_some_and(|p| {
+                        p.any_leaf(&mut |data| has_json_key(data, &["nbt", "minecraft:nbt"]))
+                    })
             })
             .map(|c| c.trigger.clone())
             .collect();
@@ -341,7 +427,7 @@ impl Tree {
         let mut out: HashMap<String, FactsAsked> = HashMap::new();
         for c in self.list.iter().flat_map(|a| &a.criteria) {
             let json = c.conditions.json();
-            let asked = if reference.iter().any(|r| json.contains(r)) {
+            let mut asked = if reference.iter().any(|r| json.contains(r)) {
                 FactsAsked::ALL
             } else if json.contains("type_specific/player") {
                 FactsAsked {
@@ -351,8 +437,11 @@ impl Tree {
                     recipes: json.contains("\"recipes\""),
                 }
             } else {
-                continue;
+                FactsAsked::default()
             };
+            if let Some(player) = &c.player {
+                asked = asked.or(player.facts_asked());
+            }
             if asked == FactsAsked::default() {
                 continue;
             }
@@ -584,6 +673,8 @@ impl Progress {
 /// What predicates may ask about the world.
 pub trait World {
     fn dimension(&self) -> &str;
+    /// Whether a predicate can inspect the real block position in this level.
+    fn is_loaded(&self, pos: [i32; 3]) -> bool;
     /// Effective rain/thunder booleans, including the level's dimension rules.
     fn weather(&self) -> (bool, bool);
     fn biome(&self, pos: [i32; 3]) -> String;
@@ -888,42 +979,53 @@ pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
         .map(|state| state.name.as_str())
         .or_else(|| owned.as_ref().map(|(name, _)| name.as_str()))
         .unwrap_or_default();
-    if !id_matches(&v["blocks"], "block", name, w) {
-        return false;
-    }
-    if let Some(state) = v["state"].as_object() {
-        for (k, want) in state {
-            let have = match borrowed {
-                Some(s) => s.properties.get(k),
-                None => owned.as_ref().and_then(|(_, props)| props.get(k)),
-            }
-            .map(String::as_str)
-            .unwrap_or_default();
-            let ok = match want {
-                Value::String(s) => have == s,
-                Value::Bool(b) => have == if *b { "true" } else { "false" },
-                Value::Number(n) => have == n.to_string(),
-                Value::Object(bounds) => w
-                    .block_property_values(name, k)
-                    .is_some_and(|domain| state_ranges::matches(bounds, have, &domain)),
-                _ => false,
-            };
-            if !ok {
-                return false;
-            }
-        }
-    }
-    // `matchesBlockEntity`: the block entity's data holds the pattern
-    // (`NbtPredicate.matches`, `NbtUtils.compareNbt`); no block entity fails.
-    if let Some(nbt) = v["nbt"].as_str() {
-        let Ok((pattern, _)) = sunrise_core::nbt::parse_snbt(nbt) else {
+    id_matches(&v["blocks"], "block", name, w)
+        && block_properties_match(
+            &v["state"],
+            name,
+            |key| match borrowed {
+                Some(state) => state.properties.get(key),
+                None => owned.as_ref().and_then(|(_, props)| props.get(key)),
+            },
+            w,
+        )
+        && block_entity_matches(&v["nbt"], || w.block_entity_nbt(pos))
+}
+
+/// `StatePropertiesPredicate` on either the world block or an event's `BLOCK_STATE`.
+fn block_properties_match<'a>(
+    state: &Value,
+    block: &str,
+    property: impl Fn(&str) -> Option<&'a String>,
+    w: &dyn World,
+) -> bool {
+    state.as_object().into_iter().flatten().all(|(key, want)| {
+        let Some(have) = property(key) else {
             return false;
         };
-        if !crate::nbt_path::compare_nbt(&pattern, w.block_entity_nbt(pos).as_ref()) {
-            return false;
+        match want {
+            Value::String(s) => have == s,
+            Value::Bool(b) => have == if *b { "true" } else { "false" },
+            Value::Number(n) => *have == n.to_string(),
+            Value::Object(bounds) => w
+                .block_property_values(block, key)
+                .is_some_and(|domain| state_ranges::matches(bounds, have, &domain)),
+            _ => false,
         }
-    }
-    true
+    })
+}
+
+/// `BlockPredicate.matchesBlockEntity`: the block entity's data holds the pattern
+/// (`NbtPredicate.matches`, `NbtUtils.compareNbt`); no block entity fails.
+fn block_entity_matches(
+    nbt: &Value,
+    actual: impl FnOnce() -> Option<sunrise_core::nbt::Tag>,
+) -> bool {
+    nbt.is_null()
+        || sunrise_world::loot::nbt_predicate_tag(nbt).is_some_and(|pattern| {
+            matches!(pattern, sunrise_core::nbt::Tag::Compound(_))
+                && crate::nbt_path::compare_nbt(&pattern, actual().as_ref())
+        })
 }
 /// Where `LocationCheck.test` looks: the block centre of `block_pos` (else
 /// `origin`) plus the check's offsets.
@@ -971,6 +1073,16 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
     {
         return false;
     }
+    // LocationPredicate and its Light/Block/Fluid predicates ask for a loaded
+    // position only when they read those world facts. A coordinate-only check
+    // and a match against the event's supplied block state do not require it.
+    if ["biomes", "structures", "smokey", "light", "block", "fluid"]
+        .iter()
+        .any(|&key| !v[key].is_null())
+        && !w.is_loaded(pos)
+    {
+        return false;
+    }
     if !v["biomes"].is_null() && !id_matches(&v["biomes"], "worldgen/biome", &w.biome(pos), w) {
         return false;
     }
@@ -982,11 +1094,6 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
         {
             return false;
         }
-    }
-    if let Some(b) = v["can_see_sky"].as_bool()
-        && b != w.can_see_sky(pos)
-    {
-        return false;
     }
     if let Some(b) = v["smokey"].as_bool()
         && b != w.smokey(pos)
@@ -1007,7 +1114,9 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
             return false;
         }
     }
-    true
+    v["can_see_sky"]
+        .as_bool()
+        .is_none_or(|b| b == w.can_see_sky(pos))
 }
 /// `DataComponentExactPredicate.test` on an entity: every expected
 /// component equals what the entity reports (absent ones never match).
@@ -1311,7 +1420,7 @@ pub fn killed_by_arrow(
             this: Some(e),
             origin: me.position,
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         }
@@ -1348,7 +1457,7 @@ pub fn killed(
         this: Some(me),
         origin: me.position,
         tool: None,
-        block_pos: None,
+        event_block: None,
         target: None,
         interacting: None,
     };
@@ -1442,12 +1551,21 @@ pub struct Entities<'a> {
     pub this: Option<&'a EntityView>,
     pub origin: [f64; 3],
     pub tool: Option<&'a ItemView>,
-    pub block_pos: Option<[i32; 3]>,
+    pub event_block: Option<BlockEvent<'a>>,
     /// `LootContextParams.TARGET_ENTITY`.
     pub target: Option<&'a EntityView>,
     /// `LootContextParams.INTERACTING_ENTITY`.
     pub interacting: Option<&'a EntityView>,
 }
+/// The block-use event's `BLOCK_STATE` and optional `BLOCK_ENTITY`, not a `LocationPredicate` read.
+#[derive(Clone, Copy)]
+pub struct BlockEvent<'a> {
+    pub state: &'a sunrise_world::chunk::BlockState,
+    /// The position of `BLOCK_ENTITY` when the event carries that parameter. The immutable view
+    /// can read its NBT on demand, and returns none when there is no block entity there.
+    pub block_entity: Option<[i32; 3]>,
+}
+
 impl<'a> Entities<'a> {
     /// A `LootContext.EntityTarget` of this context; the targets a context
     /// does not carry (`attacker`, `direct_attacker`, `attacking_player`)
@@ -1473,7 +1591,7 @@ pub fn item_entity(
         this: Some(player),
         origin: player.position,
         tool: None,
-        block_pos: None,
+        event_block: None,
         target: None,
         interacting: None,
     };
@@ -1621,55 +1739,7 @@ pub(crate) fn condition_leaf(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
                 .or_else(|| o.get("type"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            match &*full(ty) {
-                // EntityHasScoreCondition.test/hasScore: missing objective or
-                // score fails; this bounded path supports constant integer ranges.
-                "minecraft:entity_scores" => {
-                    let scores = ctx
-                        .entity(v["entity"].as_str().unwrap_or("this"))
-                        .and_then(|e| e.scores.as_ref());
-                    v["scores"].as_object().is_some_and(|tests| {
-                        scores.is_some_and(|scores| {
-                            tests.iter().all(|(objective, range)| {
-                                // Do not treat unsupported number providers as
-                                // absent min/max bounds in the shared range helper.
-                                let numeric = range.as_i64().is_some()
-                                    || range.as_object().is_some_and(|bounds| {
-                                        bounds.iter().all(|(key, value)| {
-                                            matches!(key.as_str(), "min" | "max")
-                                                && value.as_i64().is_some()
-                                        })
-                                    });
-                                numeric
-                                    && scores
-                                        .get(objective)
-                                        .is_some_and(|score| range_i(range, i64::from(*score)))
-                            })
-                        })
-                    })
-                }
-                "minecraft:entity_properties" => ctx
-                    .entity(v["entity"].as_str().unwrap_or("this"))
-                    .is_some_and(|e| entity(&v["predicate"], e, w, ctx.origin)),
-                "minecraft:location_check" => location_check(v, ctx.block_pos, ctx.origin, w),
-                "minecraft:match_block" => ctx.block_pos.is_some_and(|b| block(v, b, w)),
-                "minecraft:block_state_property" => ctx.block_pos.is_some_and(|b| {
-                    let mut pred = serde_json::Map::new();
-                    pred.insert("blocks".into(), v["block"].clone());
-                    if !v["properties"].is_null() {
-                        pred.insert("state".into(), v["properties"].clone());
-                    }
-                    block(&Value::Object(pred), b, w)
-                }),
-                "minecraft:match_tool" => ctx.tool.is_some_and(|t| item(&v["predicate"], t, w)),
-                "minecraft:weather_check" => {
-                    // WeatherCheck.test: absent fields impose no constraint.
-                    let (rain, thunder) = w.weather();
-                    v["raining"].as_bool().is_none_or(|r| r == rain)
-                        && v["thundering"].as_bool().is_none_or(|t| t == thunder)
-                }
-                _ => false,
-            }
+            condition_leaf_typed(&full(ty), v, ctx, w)
         }
         // An inline entity predicate (old-style).
         Value::Object(_) => ctx.this.is_some_and(|e| entity(v, e, w, ctx.origin)),
@@ -1677,6 +1747,67 @@ pub(crate) fn condition_leaf(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
         Value::String(id) => w
             .predicate(&full(id))
             .is_some_and(|v| conditions_with(v, ctx, &mut |v, ctx| condition_leaf(v, ctx, w))),
+        _ => false,
+    }
+}
+
+fn condition_leaf_typed(kind: &str, v: &Value, ctx: &Entities, w: &dyn World) -> bool {
+    match kind {
+        // EntityHasScoreCondition.test/hasScore: missing objective or
+        // score fails; this bounded path supports constant integer ranges.
+        "minecraft:entity_scores" => {
+            let scores = ctx
+                .entity(v["entity"].as_str().unwrap_or("this"))
+                .and_then(|e| e.scores.as_ref());
+            v["scores"].as_object().is_some_and(|tests| {
+                scores.is_some_and(|scores| {
+                    tests.iter().all(|(objective, range)| {
+                        // Do not treat unsupported number providers as
+                        // absent min/max bounds in the shared range helper.
+                        let numeric = range.as_i64().is_some()
+                            || range.as_object().is_some_and(|bounds| {
+                                bounds.iter().all(|(key, value)| {
+                                    matches!(key.as_str(), "min" | "max")
+                                        && value.as_i64().is_some()
+                                })
+                            });
+                        numeric
+                            && scores
+                                .get(objective)
+                                .is_some_and(|score| range_i(range, i64::from(*score)))
+                    })
+                })
+            })
+        }
+        "minecraft:entity_properties" => ctx
+            .entity(v["entity"].as_str().unwrap_or("this"))
+            .is_some_and(|e| entity(&v["predicate"], e, w, ctx.origin)),
+        "minecraft:location_check" => location_check(v, None, ctx.origin, w),
+        "minecraft:match_block" => ctx.event_block.is_some_and(|event| {
+            let block = event.state;
+            id_matches(&v["blocks"], "block", &block.name, w)
+                && block_properties_match(&v["state"], &block.name, |k| block.properties.get(k), w)
+                && block_entity_matches(&v["nbt"], || {
+                    event.block_entity.and_then(|pos| w.block_entity_nbt(pos))
+                })
+        }),
+        "minecraft:block_state_property" => ctx.event_block.is_some_and(|event| {
+            let block = event.state;
+            id_matches(&v["block"], "block", &block.name, w)
+                && block_properties_match(
+                    &v["properties"],
+                    &block.name,
+                    |k| block.properties.get(k),
+                    w,
+                )
+        }),
+        "minecraft:match_tool" => ctx.tool.is_some_and(|t| item(&v["predicate"], t, w)),
+        "minecraft:weather_check" => {
+            // WeatherCheck.test: absent fields impose no constraint.
+            let (rain, thunder) = w.weather();
+            v["raining"].as_bool().is_none_or(|r| r == rain)
+                && v["thundering"].as_bool().is_none_or(|t| t == thunder)
+        }
         _ => false,
     }
 }
@@ -2124,6 +2255,9 @@ mod tests {
     }
     struct Flat;
     impl World for Flat {
+        fn is_loaded(&self, _: [i32; 3]) -> bool {
+            true
+        }
         fn dimension(&self) -> &str {
             "minecraft:overworld"
         }
@@ -2174,6 +2308,9 @@ mod tests {
         /// An unpowered beacon: its saved data has `Levels:0`.
         struct Beacon;
         impl World for Beacon {
+            fn is_loaded(&self, _: [i32; 3]) -> bool {
+                true
+            }
             fn dimension(&self) -> &str {
                 Flat.dimension()
             }
@@ -2225,7 +2362,7 @@ mod tests {
             this: None,
             origin: [0.0; 3],
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };
@@ -2669,6 +2806,7 @@ mod tests {
                     name: "c".into(),
                     trigger: "minecraft:inventory_changed".into(),
                     conditions: LazyJson::new(&conditions),
+                    player: None,
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),
@@ -2718,6 +2856,7 @@ mod tests {
                     name: "c".into(),
                     trigger: "minecraft:recipe_unlocked".into(),
                     conditions: LazyJson::new(&conditions),
+                    player: None,
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),
@@ -2737,11 +2876,18 @@ mod tests {
     }
     #[test]
     fn bucket_axolotl_block_advancements_require_the_placed_block() {
+        let state = sunrise_world::chunk::BlockState {
+            name: "minecraft:stone".into(),
+            properties: Default::default(),
+        };
         let ctx = Entities {
             this: None,
-            origin: [0.0; 3],
+            origin: [0.5; 3],
             tool: None,
-            block_pos: Some([0; 3]),
+            event_block: Some(BlockEvent {
+                state: &state,
+                block_entity: None,
+            }),
             target: None,
             interacting: None,
         };
@@ -2750,7 +2896,7 @@ mod tests {
         assert!(conditions(&stone, &ctx, &Flat));
         assert!(!conditions(&wheat, &ctx, &Flat));
         let absent = Entities {
-            block_pos: None,
+            event_block: None,
             ..ctx
         };
         assert!(!conditions(&stone, &absent, &Flat));
@@ -2773,7 +2919,7 @@ mod tests {
             this: Some(&source),
             origin: [0.0; 3],
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: Some(&target),
             interacting: Some(&actor),
         };
@@ -2830,7 +2976,7 @@ mod tests {
             this: Some(&player),
             origin: player.position,
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };
@@ -2933,6 +3079,183 @@ mod tests {
             "bare ids not read as minecraft: {failed:?}"
         );
     }
+    #[test]
+    fn custom_criteria_decode_the_player_field_but_leave_custom_fields_opaque() {
+        struct Raining;
+        impl World for Raining {
+            fn is_loaded(&self, pos: [i32; 3]) -> bool {
+                Flat.is_loaded(pos)
+            }
+            fn dimension(&self) -> &str {
+                Flat.dimension()
+            }
+            fn weather(&self) -> (bool, bool) {
+                (true, false)
+            }
+            fn biome(&self, pos: [i32; 3]) -> String {
+                Flat.biome(pos)
+            }
+            fn structures(&self, pos: [i32; 3]) -> Vec<String> {
+                Flat.structures(pos)
+            }
+            fn block(&self, pos: [i32; 3]) -> (String, BTreeMap<String, String>) {
+                Flat.block(pos)
+            }
+            fn fluid(&self, pos: [i32; 3]) -> Option<String> {
+                Flat.fluid(pos)
+            }
+            fn can_see_sky(&self, pos: [i32; 3]) -> bool {
+                Flat.can_see_sky(pos)
+            }
+            fn light(&self, pos: [i32; 3]) -> i32 {
+                Flat.light(pos)
+            }
+            fn smokey(&self, pos: [i32; 3]) -> bool {
+                Flat.smokey(pos)
+            }
+            fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
+                Flat.in_tag(registry, tag, id)
+            }
+        }
+        let ctx = Entities {
+            this: None,
+            origin: [0.0; 3],
+            tool: None,
+            event_block: None,
+            target: None,
+            interacting: None,
+        };
+        let definition = |player| {
+            serde_json::json!({"criteria": {"seen": {
+                "trigger": "test:connected",
+                "conditions": {"player": player, "custom": {"type": "test:shape", "terms": false}}
+            }}})
+        };
+        // Missing required `terms` fails at load.
+        let malformed = definition(serde_json::json!({"type": "minecraft:all_of"}));
+        assert!(parse("test:malformed", &malformed).is_none());
+        let valid = definition(serde_json::json!({"type": "minecraft:all_of", "terms": []}));
+        let advancement = parse("test:valid", &valid).unwrap();
+        assert_eq!(advancement.criteria[0].conditions["custom"]["terms"], false);
+        assert!(
+            advancement.criteria[0]
+                .player
+                .as_ref()
+                .unwrap()
+                .test(&ctx, &Flat)
+        );
+        // Conflicting `condition` discriminator must not override the decoded `type`,
+        // both at top level and nested inside `all_of`.
+        let conflicting = definition(serde_json::json!({
+            "type": "minecraft:weather_check",
+            "raining": true,
+            "condition": "minecraft:all_of"
+        }));
+        let bound = parse("test:conflicting", &conflicting)
+            .unwrap()
+            .criteria
+            .pop()
+            .unwrap();
+        assert_eq!(bound.conditions["custom"]["terms"], false);
+        let player = bound.player.unwrap();
+        assert!(!player.test(&ctx, &Flat));
+        assert!(player.test(&ctx, &Raining));
+
+        let nested_conflicting = definition(serde_json::json!({
+            "type": "minecraft:all_of",
+            "condition": "minecraft:weather_check",
+            "terms": [{
+                "type": "minecraft:weather_check",
+                "raining": true,
+                "condition": "minecraft:all_of"
+            }]
+        }));
+        let player = parse("test:nested", &nested_conflicting)
+            .unwrap()
+            .criteria
+            .pop()
+            .unwrap()
+            .player
+            .unwrap();
+        assert!(!player.test(&ctx, &Flat));
+        assert!(player.test(&ctx, &Raining));
+
+        // Unresolved predicate references (top-level and nested) fail at load;
+        // valid references in the active registry bind and evaluate.
+        assert!(
+            parse(
+                "test:missing_ref",
+                &definition(serde_json::json!("test:missing"))
+            )
+            .is_none()
+        );
+        assert!(
+            parse(
+                "test:missing_nested",
+                &definition(serde_json::json!({
+                    "type": "minecraft:all_of",
+                    "terms": ["test:missing"]
+                }))
+            )
+            .is_none()
+        );
+        let predicates = HashMap::from([(
+            "test:rainy".to_owned(),
+            serde_json::json!({
+                "type": "minecraft:weather_check",
+                "raining": true,
+                "condition": "minecraft:all_of"
+            }),
+        )]);
+        let mut source = PredicateSource::from_predicates(&predicates);
+        let bound_ref = parse_with(
+            "test:valid_ref",
+            &definition(serde_json::json!({
+                "type": "minecraft:all_of",
+                "terms": ["test:rainy"]
+            })),
+            &mut source,
+        )
+        .unwrap()
+        .criteria
+        .pop()
+        .unwrap()
+        .player
+        .unwrap();
+        assert!(!bound_ref.test(&ctx, &Flat));
+        assert!(bound_ref.test(&ctx, &Raining));
+
+        // Loading a data directory binds references against `data/<ns>/predicate/`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("test/advancement")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test/predicate")).unwrap();
+        std::fs::write(
+            dir.path().join("test/predicate/rainy.json"),
+            serde_json::json!({"type": "minecraft:weather_check", "raining": true}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("test/advancement/good.json"),
+            definition(serde_json::json!({"type": "minecraft:all_of", "terms": ["test:rainy"]}))
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("test/advancement/bad.json"),
+            definition(serde_json::json!({"type": "minecraft:all_of", "terms": ["test:unknown"]}))
+                .to_string(),
+        )
+        .unwrap();
+        let tree = Tree::load(dir.path());
+        assert!(tree.get("test:bad").is_none());
+        let good = tree.get("test:good").unwrap().criteria[0]
+            .player
+            .as_ref()
+            .unwrap();
+        assert!(!good.test(&ctx, &Flat));
+        assert!(good.test(&ctx, &Raining));
+    }
+
     /// A bare trigger, item or recipe id reaches the indexes as `minecraft:`.
     #[test]
     fn bare_ids_reach_the_trigger_and_item_indexes() {
@@ -3009,7 +3332,7 @@ mod tests {
             this: Some(&player),
             origin: player.position,
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };
@@ -3678,7 +4001,7 @@ mod tests {
             this: None,
             origin: [0.0; 3],
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };
@@ -3706,7 +4029,7 @@ mod tests {
             this: None,
             origin: [0.0; 3],
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };
@@ -3745,7 +4068,7 @@ mod tests {
             this: None,
             origin: [0.0; 3],
             tool: None,
-            block_pos: None,
+            event_block: None,
             target: None,
             interacting: None,
         };

@@ -838,6 +838,7 @@ fn a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted() {
                     conditions:
                         serde_json::json!({"recipes": [PLANKS], "ingredients": [{"items": LOG}]})
                             .into(),
+                    player: None,
                 }],
             });
             tree.by_id.insert(ID.into(), 0);

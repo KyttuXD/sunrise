@@ -217,6 +217,7 @@ fn advancement_tree(game: &mut Game<'_>) {
                 name: "seen".into(),
                 trigger,
                 conditions: serde_json::json!({}).into(),
+                player: None,
             }],
             requirements: vec![vec!["seen".into()]],
             rewards: Default::default(),

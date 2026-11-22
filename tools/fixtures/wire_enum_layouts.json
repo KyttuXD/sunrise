@@ -165,12 +165,6 @@
       "canonical_path": "crate::client::extras::Corner"
     },
     {
-      "name": "CriterionTestError",
-      "path": "crate::world::criteria::CriterionTestError",
-      "hash": "48447796fabf2ddf",
-      "canonical_path": "crate::world::criteria::CriterionTestError"
-    },
-    {
       "name": "DataMapError",
       "path": "crate::world::data_maps::DataMapError",
       "hash": "3c338ccd2a00316e",

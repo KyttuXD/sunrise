@@ -250,7 +250,7 @@ impl Game<'_> {
                 this: Some(e),
                 origin,
                 tool: None,
-                block_pos: None,
+                event_block: None,
                 target: None,
                 interacting: None,
             };

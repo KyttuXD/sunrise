@@ -255,6 +255,7 @@ mod pickup_tests {
                 name: "pickup".into(),
                 trigger: TRIGGER.into(),
                 conditions: LazyJson::new(&serde_json::json!({})),
+                player: None,
             }],
             requirements: vec![vec!["pickup".into()]],
             rewards: Default::default(),

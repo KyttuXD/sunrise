@@ -174,6 +174,28 @@ impl Types {
             .ok_or_else(|| format!("unknown loot condition type {kind}"))?
             .test(kind, data, ctx, random, tags)
     }
+    /// Decode an inline `LootItemCondition.CODEC` field embedded in another record
+    /// against the active predicate registry (`RegistryFileCodec.decode`).
+    pub fn validate_condition_field(
+        &self,
+        value: &Value,
+        predicates: &HashMap<String, Value>,
+        path: &str,
+    ) -> io::Result<()> {
+        let modifiers = HashMap::new();
+        Walker {
+            types: self,
+            tables: HashMap::new(),
+            visiting_tables: HashSet::new(),
+            predicates,
+            modifiers: &modifiers,
+            visiting: HashSet::new(),
+            validated: HashMap::new(),
+            allowed: None,
+        }
+        .entry(value, false, path)
+    }
+
     pub fn validate<'a>(
         &self,
         tables: impl Iterator<Item = (&'a str, &'a Value)>,

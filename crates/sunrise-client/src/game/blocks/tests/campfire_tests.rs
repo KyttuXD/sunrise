@@ -95,6 +95,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
                     "predicate": {"block": {"blocks": "minecraft:campfire"}}
                 }
             })),
+            player: None,
         }],
         requirements: vec![vec!["food".into()]],
         rewards: Rewards::default(),

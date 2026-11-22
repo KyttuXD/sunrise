@@ -3029,27 +3029,43 @@ impl Streaming {
         if !self.set_forced(x, z, true) {
             return false;
         }
-        self.wait_for_column(world, |world| world.chunks.is_ticking_ready((x, z)));
+        self.wait_for_column(world, |_, world| world.chunks.is_ticking_ready((x, z)));
         true
     }
 
-    /// `Level.getChunk` for a block read: obtain the full column, without leaving a
-    /// forced chunk ticket behind or waiting for the column to become entity-ticking.
-    pub fn load_full_column(&mut self, world: &mut World, chunk: (i32, i32)) -> bool {
-        if world.chunks.contains_key(&chunk) {
+    /// Resolve a single FULL column for an authoritative read, as `ServerChunkCache.getChunk`
+    /// does with its UNKNOWN ticket. This request is not a ticking or saved `/forceload` ticket.
+    pub fn load_full_column(&mut self, world: &mut World, column: (i32, i32)) -> bool {
+        let is_full = |streaming: &Self, world: &World| {
+            streaming.lit.contains(&column)
+                && world.chunks.get(&column).is_some_and(|chunk| chunk.lit)
+        };
+        if is_full(self, world) {
             return true;
         }
-        if self.paused || self.remote || self.shared.aborted.load(Ordering::Relaxed) {
+        if self.paused {
+            return world.chunks.contains_key(&column);
+        }
+        if self.remote || self.shared.aborted.load(Ordering::Relaxed) {
             return false;
         }
-        self.extra.push((chunk, 0));
-        let loaded = self.wait_for_column(world, |world| world.chunks.contains_key(&chunk));
+        // Extra areas finish through radius + 1. Request just the target at FULL.
+        self.extra.push((column, -1));
+        self.rank_full_task(column.0, column.1);
+        if world.chunks.contains_key(&column) && !self.lighting.contains_key(&column) {
+            world.dirty_light.insert(column);
+        }
+        let loaded = self.wait_for_column(world, is_full);
         self.extra.pop();
         loaded
     }
 
-    fn wait_for_column(&mut self, world: &mut World, ready: impl Fn(&World) -> bool) -> bool {
-        while !ready(world) {
+    fn wait_for_column(
+        &mut self,
+        world: &mut World,
+        ready: impl Fn(&Self, &World) -> bool,
+    ) -> bool {
+        while !ready(self, world) {
             if self.shared.aborted.load(Ordering::Relaxed) {
                 return false;
             }
@@ -3061,7 +3077,7 @@ impl Streaming {
             let (meshes, unloaded) = self.finish_update(world, plan);
             debug_assert!(unloaded.is_empty());
             self.free(meshes);
-            if !ready(world) {
+            if !ready(self, world) {
                 self.wait(std::time::Duration::from_millis(5));
             }
         }

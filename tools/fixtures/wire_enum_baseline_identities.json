@@ -26,7 +26,6 @@
   "crate::content::config_files::ConfigEntryKind",
   "crate::game::ConfigKind",
   "crate::client::extras::Corner",
-  "crate::world::criteria::CriterionTestError",
   "crate::world::data_maps::DataMapError",
   "crate::world::types::DataMapsUpdateCause",
   "crate::world::datapack_registry_set::DatapackReadError",
