@@ -47,22 +47,21 @@ pub(crate) trait MapRegistries {
     fn tag(&self, registry: &str, tag: &str) -> Vec<String>;
 }
 
-/// A world's registries while its server tables build: every registry's ids
-/// as the command registries hold them (built in, the packs' and content
-/// mods'), the world's loaded datapack registries (the authority for a
-/// mod-declared one the command ids do not list), the loaded item and block
-/// tags, and another registry's tags read from the same packs on first use.
+/// A world's registries while its server tables build: candidate IDs, the
+/// declared registries' admitted entries, and the candidate's bound tags.
+/// Standalone readers can also supply their own registry metadata and packs.
 pub(crate) struct WorldRegistries<'a> {
     ids: BTreeMap<&'a str, &'a [String]>,
+    candidate: Option<&'a super::load_conditions::RegistryView>,
     datapack: Option<&'a mod_api::DatapackRegistrySet>,
-    item_tags: &'a HashMap<String, HashSet<String>>,
-    block_tags: &'a HashMap<String, HashSet<String>>,
+    items: &'a sunrise_client::items::Items,
+    bound_tags: Option<&'a PackTags>,
     root: &'a std::path::Path,
     overlay: &'a sunrise_world::loot::PackOverlay<'a>,
     id_sets: RefCell<HashMap<String, HashSet<String>>>,
-    datapack_ids: RefCell<HashMap<String, HashSet<String>>>,
     tags: RefCell<HashMap<String, HashMap<String, HashSet<String>>>>,
 }
+type PackTags = HashMap<&'static str, HashMap<String, HashSet<String>>>;
 impl<'a> WorldRegistries<'a> {
     pub(crate) fn new(
         ids: impl IntoIterator<Item = (&'a str, &'a [String])>,
@@ -73,15 +72,25 @@ impl<'a> WorldRegistries<'a> {
     ) -> Self {
         Self {
             ids: ids.into_iter().collect(),
+            candidate: None,
             datapack,
-            item_tags: &items.item_tags,
-            block_tags: &items.block_tags,
+            items,
+            bound_tags: None,
             root,
             overlay,
             id_sets: RefCell::default(),
-            datapack_ids: RefCell::default(),
             tags: RefCell::default(),
         }
+    }
+    /// Prefer the complete staged registry and tag bindings over command metadata.
+    pub(super) fn with_candidate(
+        mut self,
+        candidate: &'a super::load_conditions::RegistryView,
+        tags: &'a PackTags,
+    ) -> Self {
+        self.candidate = Some(candidate);
+        self.bound_tags = Some(tags);
+        self
     }
     /// Whether a mod's declaration names `registry`.
     fn declared(&self, registry: &str) -> bool {
@@ -89,40 +98,33 @@ impl<'a> WorldRegistries<'a> {
             .iter()
             .any(|declaration| declaration.key == registry)
     }
-    /// The loaded entries of a mod-declared datapack registry, read once.
-    fn datapack_entries(&self, registry: &str) -> Option<HashSet<String>> {
-        let mut sets = self.datapack_ids.borrow_mut();
-        Some(
-            sets.entry(registry.to_owned())
-                .or_insert_with(|| {
-                    self.datapack
-                        .and_then(|set| set.entries(registry).ok())
-                        .map(|entries| entries.into_iter().map(String::from).collect())
-                        .unwrap_or_default()
-                })
-                .clone(),
-        )
-    }
 }
 impl MapRegistries for WorldRegistries<'_> {
     fn known(&self, registry: &str) -> bool {
-        self.ids.contains_key(registry) || TYPED.contains(&registry) || self.declared(registry)
+        self.candidate
+            .is_some_and(|candidate| candidate.ids.contains_key(registry))
+            || self.ids.contains_key(registry)
+            || TYPED.contains(&registry)
+            || self.declared(registry)
     }
     fn contains(&self, registry: &str, entry: &str) -> bool {
+        if self.declared(registry) {
+            return self
+                .datapack
+                .is_some_and(|set| set.contains_entry(registry, entry));
+        }
+        if let Some(ids) = self
+            .candidate
+            .and_then(|candidate| candidate.ids.get(registry))
+        {
+            return ids.contains(entry);
+        }
         if let Some(ids) = self.ids.get(registry).filter(|ids| !ids.is_empty()) {
             let mut sets = self.id_sets.borrow_mut();
             let set = sets
                 .entry(registry.to_owned())
                 .or_insert_with(|| ids.iter().cloned().collect());
             return set.contains(entry);
-        }
-        // A mod-declared datapack registry the command ids do not list: the
-        // world's loaded entries are the authority, and an id not held is
-        // refused (#3357's unknown-id rejection).
-        if self.declared(registry) {
-            return self
-                .datapack_entries(registry)
-                .is_some_and(|set| set.contains(entry));
         }
         // A typed registry the sync did not list: no source says its entries.
         true
@@ -133,10 +135,22 @@ impl MapRegistries for WorldRegistries<'_> {
                 .map(|set| set.iter().cloned().collect())
                 .unwrap_or_default()
         };
+        if self.declared(registry) {
+            return self.datapack.map_or_else(Vec::new, |set| {
+                mod_api::__private::game::datapack_tag_members(set, registry, tag).to_vec()
+            });
+        }
         match registry {
-            "minecraft:item" => members(self.item_tags),
-            "minecraft:block" => members(self.block_tags),
+            "minecraft:item" => members(&self.items.item_tags),
+            "minecraft:block" => members(&self.items.block_tags),
+            "minecraft:fluid" => members(&self.items.fluid_tags),
             _ => {
+                if let Some(tags) = self
+                    .bound_tags
+                    .and_then(|tags| tags.get(folder(registry).as_str()))
+                {
+                    return members(tags);
+                }
                 let mut loaded = self.tags.borrow_mut();
                 let tags = loaded.entry(registry.to_owned()).or_insert_with(|| {
                     sunrise_client::items::load_tags(self.root, &folder(registry), self.overlay)

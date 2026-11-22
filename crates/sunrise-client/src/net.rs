@@ -1881,7 +1881,7 @@ fn configure(
                         ),
                     }))?;
                     // And the mods' datapack registries it has (#811).
-                    if let Some(data) = crate::datapack_net::offer() {
+                    if let Some(data) = crate::datapack_net::offer().map_err(Reason::plain)? {
                         reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
                             channel: crate::datapack_net::OFFER_CHANNEL.into(),
                             data,

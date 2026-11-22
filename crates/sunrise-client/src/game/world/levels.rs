@@ -867,6 +867,23 @@ impl Game<'_> {
             Some((generate, seed)) => (Some(generate), seed),
             None => (None, self.level.seed),
         };
+        let biomes = self
+            .world_biomes
+            .as_ref()
+            .unwrap_or_else(|| self.res.biomes());
+        let overrides = match &self.world_tables {
+            Some(tables) => super::world_loading::world_worldgen_overrides(
+                self.fns.enabled_packs(),
+                &tables.biomes,
+            ),
+            None => {
+                sunrise_client::datapack::worldgen_overrides(
+                    &self.fns.enabled_packs().collect::<Vec<_>>(),
+                    |id| biomes.contains(id),
+                )
+                .0
+            }
+        };
         let (streaming, save, locator) = super::world_loading::make_streaming(
             &self.res,
             &self.pack,
@@ -877,10 +894,8 @@ impl Game<'_> {
             self.level_shapes.get(dim.id()),
             seed,
             &self.level,
-            self.world_biomes
-                .as_ref()
-                .unwrap_or_else(|| self.res.biomes())
-                .clone(),
+            biomes.clone(),
+            &overrides,
             generate.as_ref(),
             self.save.chunk_reports().clone(),
             self.save.save_failure_reporter().clone(),

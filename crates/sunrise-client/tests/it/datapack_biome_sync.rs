@@ -19,6 +19,8 @@ impl Drop for Scratch {
     }
 }
 
+const BASE_BIOME: &str = r##"{"has_precipitation":true,"temperature":0.5,"downfall":0.5,"effects":{"water_color":"#0000ff"},"carvers":[],"features":[]}"##;
+
 /// A resource folder with two biomes and 1x1 colormaps, loaded.
 fn write_base(root: &std::path::Path) -> Biomes {
     let maps = root.join("assets/minecraft/textures/colormap");
@@ -37,7 +39,7 @@ fn write_base(root: &std::path::Path) -> Biomes {
         writer.write_image_data(&[1, 2, 3]).unwrap();
     }
     for name in ["plains", "river"] {
-        std::fs::write(biome_dir.join(format!("{name}.json")), "{}").unwrap();
+        std::fs::write(biome_dir.join(format!("{name}.json")), BASE_BIOME).unwrap();
     }
     Biomes::load(&sunrise_assets::resource_source::ResourceRoot::directory(
         root.to_path_buf(),
@@ -50,7 +52,8 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let root = std::env::temp_dir().join(format!("sunrise-sync-biomes-{}", std::process::id()));
     let _scratch = Scratch(root.clone());
     let base = write_base(&root);
-    let pack: Value = serde_json::from_str(r##"{"effects":{"grass_color":"#123456"}}"##).unwrap();
+    let mut pack: Value = serde_json::from_str(BASE_BIOME).unwrap();
+    pack["effects"]["grass_color"] = "#123456".into();
     let world = base.with_packs([("minecraft:tundra_x", &pack)]);
     let defaults = sunrise_world::item_defaults::read(&root).unwrap();
     let items = sunrise_client::items::Items::catalog(
@@ -107,11 +110,15 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     );
 
     // Data a client already has in its own file is nothing new, sent or not.
-    let own = json_to_tag(&serde_json::from_str::<Value>("{}").unwrap());
-    let same: Vec<_> = received
-        .iter()
-        .filter(|(n, _)| base.contains(n))
-        .map(|(n, _)| (n.clone(), Some(own.clone())))
+    let same: Vec<_> = sync
+        .registry_packets(false, &LevelShapes::VANILLA)
+        .into_iter()
+        .find(|r| r.registry == BIOME_REGISTRY)
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(|entry| base.contains(&entry.id))
+        .map(|entry| (entry.id, entry.data))
         .collect();
     assert!(client_biomes(&base, &same).is_none());
 
@@ -145,7 +152,7 @@ fn a_server_replacement_of_a_known_biome_keeps_its_id_and_changes_its_data() {
     let _scratch = Scratch(root.clone());
     let base = write_base(&root);
     let replaced: Value = serde_json::from_str(
-        r##"{"effects":{"water_color":"#112233"},"attributes":{"minecraft:visual/ambient_particles":{"argument":[{"particle":{"type":"minecraft:ash"},"probability":0.25}]}}}"##,
+        r##"{"effects":{"water_color":"#112233"},"attributes":{"minecraft:visual/ambient_particles":[{"particle":{"type":"minecraft:ash"},"probability":0.25}]}}"##,
     )
     .unwrap();
     let received = vec![
@@ -175,9 +182,11 @@ fn a_biome_the_mods_modifiers_changed_is_sent_to_a_client_that_knows_the_vanilla
         r#"{"unmodified":{"minecraft:plains":"{}"}}"#,
     )
     .unwrap();
+    let mut plains: Value = serde_json::from_str(BASE_BIOME).unwrap();
+    plains["effects"]["grass_color"] = "#112233".into();
     std::fs::write(
         root.join("data/minecraft/worldgen/biome/plains.json"),
-        r##"{"effects":{"grass_color":"#112233"}}"##,
+        plains.to_string(),
     )
     .unwrap();
     let defaults = sunrise_world::item_defaults::read(&root).unwrap();

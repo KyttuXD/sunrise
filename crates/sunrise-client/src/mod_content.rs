@@ -3336,8 +3336,11 @@ pub fn biome_modifiers_over_packs(
     let packed = packs.apply("biomes", read(BIOMES)?);
     let mut start = packed.clone();
     for (id, text) in &saved.unmodified {
-        if packs.entries("biomes").all(|(p, _)| p != id) {
-            start.insert(id.clone(), text.clone());
+        if packs.entries("biomes").all(|(p, _)| p != id)
+            && let Some(value) = start.get_mut(id)
+        {
+            // Restore the pre-modifier value, not a holder refused by the world load.
+            value.clone_from(text);
         }
     }
     let mut doc = J::Obj(start.into_iter().map(|(id, t)| (id, J::Str(t))).collect());

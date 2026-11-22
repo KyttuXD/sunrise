@@ -177,7 +177,9 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                 sunrise_client::datapack_net::serve(Some(std::sync::Arc::new(
                     mod_api::DatapackRegistrySet::from_candidate(remote),
                 )));
-                let offer = sunrise_client::datapack_net::offer().unwrap();
+                let offer = sunrise_client::datapack_net::offer()
+                    .unwrap()
+                    .expect("synchronized registry offer required");
                 let sunrise_client::datapack_net::Step::Send(bytes) =
                     sunrise_client::datapack_net::server_step(true, Some(&offer))
                 else {

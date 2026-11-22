@@ -188,7 +188,7 @@ fn advancement_criteria_straddle_the_player_body_even_with_entity_cancel() {
                 game.world_root = game.options.game_dir.clone().unwrap();
                 // Load the world's tables before installing the test trees. Otherwise
                 // the first tick's scheduled functions replace the game's tree.
-                game.open_world_datapacks(&[]).unwrap();
+                game.open_world_datapacks(&[], None).unwrap();
                 open_to_lan(game);
                 game.world
                     .chunks

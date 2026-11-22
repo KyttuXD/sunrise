@@ -82,11 +82,10 @@ fn registered_conditions_cache_each_entry_and_new_reload_evaluates_again() {
     );
 }
 #[test]
-fn unavailable_context_does_not_hide_a_registered_handler_error() {
+fn unavailable_context_does_not_hide_a_reached_handler_error() {
     let conditions = registered(Arc::new(AtomicUsize::new(0)));
     assert!(!conditions.allows_file(
         &json!({"neoforge:conditions":[{"type":"neoforge:or","values":[
-            {"type":"neoforge:always"},
             {"type":"neoforge:tag_empty","tag":"testmod:empty"},
             {"type":"testmod:flag","value":"bad"}
         ]}]}),
@@ -96,6 +95,67 @@ fn unavailable_context_does_not_hide_a_registered_handler_error() {
         conditions.check_errors().unwrap_err(),
         "bad.json: value must be a boolean"
     );
+}
+
+#[test]
+fn only_typed_context_reads_partition_cached_conditions() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let load = LoadConditions::new([]).with_lookup([("test:flag", {
+        let count = count.clone();
+        move |args: &Value| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(args["value"] == "neoforge:registered")
+        }
+    })]);
+    let literal = json!({"neoforge:conditions":[
+        {"type":"test:flag","value":"neoforge:registered"}
+    ]});
+    let file = json!({"neoforge:conditions":[{"type":"neoforge:and","values":[
+        {"type":"neoforge:registered","registry":"test:spells","value":"test:flame"},
+        {"type":"neoforge:not","value":{"type":"neoforge:tag_empty","tag":"test:fuels"}},
+        {"type":"test:flag","value":"neoforge:registered"}
+    ]}]});
+    let literal_program = load.decode_file_conditions(&literal).unwrap();
+    literal_program.visit_context_reads(|read| panic!("unexpected context read: {read:?}"));
+    let program = load.decode_file_conditions(&file).unwrap();
+    let mut reads = Vec::new();
+    program.visit_context_reads(|read| reads.push(read));
+    assert_eq!(
+        reads,
+        [
+            ConditionContextRead::Registered {
+                registry: "test:spells",
+                entry: "test:flame",
+            },
+            ConditionContextRead::TagEmpty {
+                registry: "minecraft:item",
+                tag: "test:fuels",
+            },
+        ]
+    );
+
+    let empty = load
+        .clone()
+        .with_registries([("test:spells", ["test:flame"])])
+        .with_tags([("item", ["test:other"])]);
+    let filled = empty.with_tags([("item", ["test:fuels"])]);
+    assert!(empty.allows_file(&literal, "literal.json"));
+    assert_eq!(
+        literal_program.allows_file_isolated(&filled, "literal.json"),
+        Ok(true)
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        program.allows_file_isolated(&empty, "nested.json"),
+        Ok(false)
+    );
+    assert_eq!(
+        program.allows_file_isolated(&filled, "nested.json"),
+        Ok(true)
+    );
+    assert!(filled.allows_file(&file, "nested.json"));
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    assert_eq!(load.check_errors(), Ok(()));
 }
 #[test]
 fn no_mod_conditions_do_not_construct_file_context_for_known_nodes() {

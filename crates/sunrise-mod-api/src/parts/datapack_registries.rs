@@ -9,10 +9,10 @@ impl DatapackRegistriesRegistrar for PartRegistrar {
         mut fields: Vec<DatapackField>,
     ) -> Result<(), DatapackRegistrationError> {
         let result = (|| {
-            if mod_vocab::__private::parts_installation::loaded_mods()
+            let side = mod_vocab::__private::parts_installation::loaded_mods()
                 .get(self.mod_id)
-                .is_some_and(|package| package.side() != crate::Side::Both)
-            {
+                .map(|package| package.side());
+            if side == Some(crate::Side::Client) {
                 return Err(DatapackRegistrationError::WrongSide);
             }
             let (namespace, name) = path.split_once(':').unwrap_or((self.mod_id, path));
@@ -23,7 +23,12 @@ impl DatapackRegistriesRegistrar for PartRegistrar {
             {
                 return Err(DatapackRegistrationError::InvalidKey);
             }
-            if self.declaration_side_not_both(&key) {
+            // A server-only declarer is checked by the package join-content rule;
+            // a both-side declarer may not add a required registry for a server-only supplier.
+            if sync == DatapackRegistrySync::Required
+                && side != Some(crate::Side::Server)
+                && self.declaration_side_not_both(&key)
+            {
                 return Err(DatapackRegistrationError::WrongSide);
             }
             if self
@@ -186,6 +191,52 @@ mod tests {
             Err(E::DuplicateKey)
         );
         assert_eq!(registrar.datapack_registries.len(), 1);
+    }
+
+    #[test]
+    fn server_package_requires_clients_only_for_required_registries() {
+        use DatapackRegistrySync::{Optional, Required, ServerOnly};
+
+        let package = crate::PackageInfo::new(
+            "example".into(),
+            "1".into(),
+            crate::PackageKind::Code,
+            crate::Side::Server,
+            vec!["example".into()],
+            vec![],
+        );
+        crate::load_state::with_test_package_inventory(vec![package], || {
+            crate::testing::with_mods(Default::default(), || {
+                for (required, reason) in [
+                    (false, None),
+                    (
+                        true,
+                        Some("declares the required datapack registry example:shared"),
+                    ),
+                ] {
+                    let mut registrar = PartRegistrar::new("example");
+                    registrar
+                        .declare_datapack_registry("local", ServerOnly, power())
+                        .unwrap();
+                    registrar
+                        .declare_datapack_registry("offered", Optional, power())
+                        .unwrap();
+                    if required {
+                        registrar
+                            .declare_datapack_registry("shared", Required, power())
+                            .unwrap();
+                    }
+                    // No payload channels are registered in either installation.
+                    super::super::install_registrar(registrar, &crate::parts::tests::rule_schema())
+                        .unwrap();
+                    assert_eq!(
+                        crate::__private::client_requirement("example").as_deref(),
+                        reason
+                    );
+                    assert_eq!(crate::__private::client_requirement("unrelated"), None);
+                }
+            });
+        });
     }
 
     #[test]

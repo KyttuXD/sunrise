@@ -17,6 +17,8 @@ impl Drop for Scratch {
     }
 }
 
+const BASE_BIOME: &str = r##"{"has_precipitation":true,"temperature":0.5,"downfall":0.5,"effects":{"water_color":"#0000ff"},"carvers":[],"features":[]}"##;
+
 /// A resource folder with the built-in biomes plains and river and 1x1 colormaps, and the
 /// biome bundle `bundle` when there is one.
 fn write_root(root: &std::path::Path, bundle: Option<&str>) {
@@ -36,7 +38,7 @@ fn write_root(root: &std::path::Path, bundle: Option<&str>) {
         writer.write_image_data(&[1, 2, 3]).unwrap();
     }
     for name in ["plains", "river"] {
-        std::fs::write(biome_dir.join(format!("{name}.json")), "{}").unwrap();
+        std::fs::write(biome_dir.join(format!("{name}.json")), BASE_BIOME).unwrap();
     }
     if let Some(bundle) = bundle {
         std::fs::create_dir_all(root.join("worldgen")).unwrap();
@@ -56,8 +58,8 @@ fn load(root: &std::path::Path) -> Biomes {
 const BUNDLE: &str = r##"{
     "minecraft:plains": "{}",
     "minecraft:river": "{}",
-    "zinc:foo": "{\"effects\":{\"grass_color\":\"#445566\"},\"attributes\":{\"minecraft:visual/ambient_particles\":{\"argument\":[{\"particle\":{\"type\":\"minecraft:ash\"},\"probability\":0.25}]}}}",
-    "alpha:zed": "{\"effects\":{\"grass_color\":\"#778899\"}}"
+    "zinc:foo": "{\"has_precipitation\":true,\"temperature\":0.5,\"downfall\":0.5,\"effects\":{\"water_color\":\"#0000ff\",\"grass_color\":\"#445566\"},\"carvers\":[],\"features\":[],\"attributes\":{\"minecraft:visual/ambient_particles\":[{\"particle\":{\"type\":\"minecraft:ash\"},\"probability\":0.25}]}}",
+    "alpha:zed": "{\"has_precipitation\":true,\"temperature\":0.5,\"downfall\":0.5,\"effects\":{\"water_color\":\"#0000ff\",\"grass_color\":\"#778899\"},\"carvers\":[],\"features\":[]}"
 }"##;
 
 fn server_load() -> sunrise_world::native_load_context::LoadContext {

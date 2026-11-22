@@ -438,7 +438,9 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                 // A same-process server snapshot is deliberately present on the client Game too.
                 game.mods.datapack_registries = Some(Arc::new(server_set.clone()));
                 sunrise_client::datapack_net::serve(Some(Arc::new(server_set)));
-                let offer = sunrise_client::datapack_net::offer().unwrap();
+                let offer = sunrise_client::datapack_net::offer()
+                    .unwrap()
+                    .expect("synchronized registry offer required");
                 let sunrise_client::datapack_net::Step::Send(bytes) =
                     sunrise_client::datapack_net::server_step(true, Some(&offer))
                 else {

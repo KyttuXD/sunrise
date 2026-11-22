@@ -18,6 +18,13 @@ pub struct FeatureCatalog {
     tags: BTreeMap<String, Vec<String>>,
     empty_tags: BTreeSet<String>,
 }
+/// A placed-feature holder in a biome decoration step. Direct holders keep
+/// their own identity, unlike references to a named registry entry.
+pub(super) enum BiomePlacedFeature {
+    Named(String),
+    Direct(String),
+}
+
 struct Expansion {
     remaining: usize,
     active: Vec<(bool, String)>,
@@ -34,9 +41,6 @@ impl Expansion {
 fn resources(
     source: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, Box<RawValue>>, DecodeError> {
-    if source.len() > 8192 {
-        return Err(DecodeError::Field("feature resource count"));
-    }
     let mut result = BTreeMap::new();
     for (name, json) in source {
         if result
@@ -68,9 +72,10 @@ impl FeatureCatalog {
     ) -> Result<Self, DecodeError> {
         let features = resources(features)?;
         let placed = resources(placed)?;
-        let built = tags
-            .build(|name, _| placed.contains_key(name).then(|| name.to_owned()))
-            .map_err(|e| DecodeError::Registry(e.to_string()))?;
+        let built = tags.bind(|name, _| placed.contains_key(name).then(|| name.to_owned()));
+        for (tag, missing) in &built.missing {
+            log::warn!("placed feature tag {tag} has missing entries: {missing:?}");
+        }
         Ok(Self {
             features,
             placed,
@@ -88,11 +93,56 @@ impl FeatureCatalog {
     pub(super) fn placed_names(&self) -> impl Iterator<Item = &str> {
         self.placed.keys().map(String::as_str)
     }
+    pub(super) fn placed_source(&self, id: &str) -> Result<&str, DecodeError> {
+        self.placed
+            .get(id)
+            .map(|source| source.get())
+            .ok_or_else(|| DecodeError::Registry(format!("unknown placed feature {id}")))
+    }
     pub(super) fn placed_in_tag(&self, name: &str, tag: &str) -> bool {
         self.tags
             .get(tag)
             .is_some_and(|members| members.iter().any(|member| member == name))
     }
+    /// `PlacedFeature.LIST_OF_LISTS_CODEC`: each step is a tag or a list of
+    /// placed-feature holders, not a single compact holder.
+    pub(super) fn biome_steps(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<Vec<Vec<BiomePlacedFeature>>, DecodeError> {
+        value
+            .as_array()
+            .ok_or(DecodeError::Field("features"))?
+            .iter()
+            .map(|step| {
+                if let Some(tag) = step.as_str().and_then(|name| name.strip_prefix('#')) {
+                    let tag = super::tags::identifier(tag)?;
+                    let names = self.tags.get(&tag).ok_or_else(|| {
+                        DecodeError::Registry(format!("unknown placed-feature tag {tag}"))
+                    })?;
+                    return Ok(names
+                        .iter()
+                        .cloned()
+                        .map(BiomePlacedFeature::Named)
+                        .collect());
+                }
+                step.as_array()
+                    .ok_or(DecodeError::Field("biome feature step"))?
+                    .iter()
+                    .map(|holder| {
+                        if let Some(name) = holder.as_str() {
+                            let name = identifier(name)?;
+                            self.placed_source(&name)?;
+                            Ok(BiomePlacedFeature::Named(name))
+                        } else {
+                            Ok(BiomePlacedFeature::Direct(holder.to_string()))
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     pub fn feature(&self, json: &str) -> Result<FeatureDefinition, DecodeError> {
         self.feature_with_optional_blocks(json, None)
     }

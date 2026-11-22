@@ -15,7 +15,7 @@ use super::{
     block_feature::FeatureBlockBindings,
     decoration::{DecorationWorld, FeatureDecorationPlan},
     feature::{FeatureBlocks, FeatureWorld},
-    feature_catalog::FeatureCatalog,
+    feature_catalog::{BiomePlacedFeature, FeatureCatalog},
     feature_graph::PlacedFeatureDefinition,
     feature_region::{RegionError, TerrainRegion},
     feature_sort::FeatureIdentity,
@@ -23,7 +23,6 @@ use super::{
         DecorateStats, GenBlockStates, GeneratorData, GeneratorError, ProtoChunk, WorkerState,
     },
     placement::{LayerBlock, PlacementContext, PlacementQueryError},
-    tags::TagDefinitions,
     terrain::PreLightChunkStage,
     write_zone::GenerationWriteZone,
 };
@@ -176,12 +175,11 @@ impl Decoration {
             return Ok(None);
         };
         let registry = data.registry();
-        let mut feature_tags = TagDefinitions::default();
-        for (name, json) in &resources.feature_tags {
-            feature_tags.apply_json(name, "vanilla", json)?;
-        }
-        let catalog =
-            FeatureCatalog::from_resources(&resources.features, &resources.placed, &feature_tags)?;
+        let catalog = FeatureCatalog::from_resources(
+            &resources.features,
+            &resources.placed,
+            &resources.placed_tags,
+        )?;
         let biomes = Arc::new(BiomePredicateBindings::new(
             &data
                 .biome_names()
@@ -219,24 +217,31 @@ impl Decoration {
                     )?,
                 )?;
         }
-        let tags = feature_tags
-            .build(|name, _| resources.placed.contains_key(name).then(|| name.to_owned()))
-            .map_err(|e| resource(format!("feature tags: {e:?}")))?
-            .tags;
         let mut ids = BTreeMap::<String, FeatureIdentity>::new();
         let mut names = Vec::new();
         let mut features = Vec::new();
-        let mut identity = |name: &str| -> FeatureIdentity {
-            *ids.entry(name.to_owned()).or_insert_with(|| {
-                let id = FeatureIdentity(names.len() as u32);
-                names.push(name.to_owned());
-                features.push(
-                    catalog
-                        .placed_feature_with_blocks(&Value::from(name).to_string(), &bindings)
-                        .map_err(|e| e.to_string()),
-                );
-                id
-            })
+        let mut identity = |holder, biome: &str| -> FeatureIdentity {
+            let (name, json) = match holder {
+                BiomePlacedFeature::Named(name) => {
+                    match ids.entry(name.clone()) {
+                        std::collections::btree_map::Entry::Occupied(entry) => return *entry.get(),
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(FeatureIdentity(names.len() as u32));
+                        }
+                    }
+                    let json = Value::from(name.as_str()).to_string();
+                    (name, json)
+                }
+                BiomePlacedFeature::Direct(json) => (format!("inline feature in {biome}"), json),
+            };
+            let id = FeatureIdentity(names.len() as u32);
+            names.push(name);
+            features.push(
+                catalog
+                    .placed_feature_with_blocks(&json, &bindings)
+                    .map_err(|e| e.to_string()),
+            );
+            id
         };
         let mut biome_features = vec![Vec::new(); data.biome_names().len()];
         let mut plan = Vec::new();
@@ -246,17 +251,16 @@ impl Decoration {
                 .ok_or_else(|| resource(format!("unknown biome {name}")))?;
             let json: Value = serde_json::from_str(data.biome_json(id))?;
             let mut steps = Vec::new();
-            for (index, step) in json["features"]
-                .as_array()
+            for (index, step) in catalog
+                .biome_steps(&json["features"])?
                 .into_iter()
-                .flatten()
                 .enumerate()
             {
                 let mut list = Vec::new();
                 // The builder takes the lakes first, then the biome's steps it keeps.
                 if flat.is_some_and(|f| f.lakes) && index == LAKES_STEP {
-                    for name in FLAT_LAKES {
-                        let feature = identity(name);
+                    for lake in FLAT_LAKES {
+                        let feature = identity(BiomePlacedFeature::Named(lake.into()), &name);
                         list.push(feature);
                         set_feature_bit(&mut biome_features[id.0 as usize], feature);
                     }
@@ -265,24 +269,8 @@ impl Decoration {
                     steps.push(list);
                     continue;
                 }
-                let entries = match step {
-                    Value::String(tag) if tag.starts_with('#') => tags
-                        .get(&super::tags::identifier(&tag[1..])?)
-                        .cloned()
-                        .ok_or_else(|| resource(format!("unknown feature tag {tag}")))?,
-                    Value::String(name) => vec![name.clone()],
-                    Value::Array(values) => values
-                        .iter()
-                        .map(|v| {
-                            v.as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(|| resource("inline placed feature in biome"))
-                        })
-                        .collect::<Result<_, _>>()?,
-                    _ => return Err(resource("biome feature step")),
-                };
-                for entry in entries {
-                    let feature = identity(&super::tags::identifier(&entry)?);
+                for holder in step {
+                    let feature = identity(holder, &name);
                     list.push(feature);
                     set_feature_bit(&mut biome_features[id.0 as usize], feature);
                 }
@@ -291,7 +279,9 @@ impl Decoration {
             // A biome with fewer steps still gets the lakes (`PlainBuilder` grows its list).
             if flat.is_some_and(|f| f.lakes) && steps.len() <= LAKES_STEP {
                 steps.resize_with(LAKES_STEP, Vec::new);
-                let lakes = FLAT_LAKES.map(&mut identity).to_vec();
+                let lakes = FLAT_LAKES
+                    .map(|id| identity(BiomePlacedFeature::Named(id.into()), &name))
+                    .to_vec();
                 for &feature in &lakes {
                     set_feature_bit(&mut biome_features[id.0 as usize], feature);
                 }

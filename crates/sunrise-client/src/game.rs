@@ -3001,6 +3001,7 @@ struct WorldTables {
     /// Registry definitions stay frozen at world open, even when tags reload.
     packed_registries: Arc<sunrise_client::lan::data::PackRegistryDefinitions>,
     providers: Providers,
+    biomes: Arc<world_loading::WorldBiomeRegistry>,
     loot: Arc<sunrise_world::loot::LootData>,
     loot_modifier_manager: Arc<mod_api::GlobalLootModifierManager>,
     recipes: Recipes,
@@ -9098,48 +9099,42 @@ impl Game<'_> {
     }
     fn finish_open_world(
         &mut self,
-        prepared: world_loading::PreparedWorld,
+        mut prepared: world_loading::PreparedWorld,
     ) -> Result<functions::PackStack> {
         self.reset_tutorial();
         // Another world: its generator, not the last one's Density line.
         self.debug_density.borrow_mut().clear();
-        let world_loading::PreparedWorld {
-            save_root,
-            shapes,
-            level,
-            world,
-            biomes,
-            streaming,
-            save,
-            session_lock,
-            rand_sequences,
-            locator,
-            loot,
-            owner_migration,
-        } = prepared;
-        self.server_loot = loot;
-        let dim = Dim::from_id(&level.dimension);
-        self.level_shapes = shapes;
-        self.world_root = save_root.clone();
+        self.server_loot = Default::default();
+        self.world_root.clone_from(&prepared.save_root);
         // The root moves before the prepared level is installed. Until then a
         // final save must not run: the lock below only marks tag tables.
         self.world_adopted = false;
-        self.owner_migration = owner_migration;
-        // Saves and chunk readers share the same placeholder IDs.
-        self.world_biomes = Some(biomes);
-        self.world_biomes_base = self.world_biomes.clone();
+        self.owner_migration = prepared.owner_migration;
         sunrise_client::crash::set_detail(
             "World",
-            format!("{} ({})", level.name, save_root.display()),
+            format!("{} ({})", prepared.level.name, prepared.save_root.display()),
         );
-        self.end.set_locator(locator);
-        self.share_spawn_conditions();
         self.score = Default::default();
         reset_world_progress(&mut self.adv, &mut self.stats);
         self.reset_creative_contents();
-        let stack = self
-            .open_world_datapacks(&level.enabled_features)
+        let features = prepared.level.enabled_features.clone();
+        let (stack, terrain) = self
+            .open_world_datapacks(&features, Some(&mut prepared))
             .map_err(|error| error.diagnostic())?;
+        let world_loading::PreparedTerrain {
+            world,
+            streaming,
+            save,
+            ..
+        } = terrain.expect("opening a world prepares its terrain");
+        let world_loading::PreparedWorld {
+            save_root,
+            level,
+            session_lock,
+            rand_sequences,
+            ..
+        } = prepared;
+        let dim = Dim::from_id(&level.dimension);
         let root = self.options.resources.clone();
         self.damage_tag_generation = self.damage_tag_generation.wrapping_add(1);
         // A code-mod switch can have rebuilt the root since `Game::new`.

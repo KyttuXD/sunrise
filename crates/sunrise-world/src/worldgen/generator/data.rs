@@ -5,6 +5,7 @@ pub(in crate::worldgen) struct FeatureResources {
     pub(in crate::worldgen) features: BTreeMap<String, String>,
     pub(in crate::worldgen) placed: BTreeMap<String, String>,
     pub(in crate::worldgen) feature_tags: BTreeMap<String, String>,
+    pub(in crate::worldgen) placed_tags: TagDefinitions,
     pub(in crate::worldgen) fluid_tags: BTreeMap<String, Vec<String>>,
     pub(in crate::worldgen) state_providers: BTreeMap<String, String>,
     /// Block properties, support, collision and survival for placement checks.
@@ -112,12 +113,83 @@ fn read_optional_bundle(
         Ok(None)
     }
 }
+
+/// A registry can have pack entries without a corresponding prepared bundle.
+pub(in crate::worldgen) fn read_registry_bundle(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+    name: &str,
+) -> Result<Option<Bundle>, GeneratorError> {
+    let prepared = read_optional_bundle(dir, overrides, name)?;
+    Ok(prepared.or_else(|| {
+        overrides.entries(name).next()?;
+        Some(overrides.apply(name, BTreeMap::new()))
+    }))
+}
+
+/// A registry's tags are independent of its element bundle. Bind them only
+/// against actual holders, after applying the pack layers in priority order.
+pub(in crate::worldgen) fn registry_tag_definitions(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+    registry: &str,
+    bundle: &str,
+) -> Result<TagDefinitions, GeneratorError> {
+    let mut tags = TagDefinitions::default();
+    if let Some(root) = dir.parent() {
+        let data = root.join("data");
+        for namespace in crate::json_folder::namespaces(&data) {
+            let folder = data.join(&namespace).join("tags/worldgen").join(registry);
+            match crate::json_folder::read(&folder) {
+                Ok(folder) => {
+                    for file in &folder.files {
+                        let id = format!("{namespace}:{}", file.name);
+                        let result = file
+                            .bytes()
+                            .and_then(|bytes| std::str::from_utf8(bytes).map_err(io::Error::other))
+                            .and_then(|text| {
+                                tags.apply_json(&id, "prepared data", text)
+                                    .map_err(io::Error::other)
+                            });
+                        if let Err(error) = result {
+                            log::warn!("{}: {error}", file.path.display());
+                        }
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    for (id, pack, json) in overrides.tags(bundle) {
+        if let Err(error) = tags.apply_json(id, pack, json) {
+            log::warn!("{pack}: {registry} tag {id}: {error}");
+        }
+    }
+    Ok(tags)
+}
+
+pub(in crate::worldgen) fn load_carvers(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+) -> Result<CarverCatalog, GeneratorError> {
+    let carvers = read_registry_bundle(dir, overrides, "carvers")?.unwrap_or_default();
+    Ok(
+        CarverCatalog::from_json(&carvers)?.with_tags(&registry_tag_definitions(
+            dir,
+            overrides,
+            "carver",
+            "carver_tags",
+        )?),
+    )
+}
+
 /// The tags of the bundle `name`, the data packs' tag files after the
 /// prepared ones. A tag naming what is not there fails on its own, as
 /// vanilla's TagLoader leaves it out. Without packs the prepared tags must
 /// all resolve; with them (a pack's tag can also break a prepared tag that
 /// includes it), each failed tag goes into `dropped` for the log.
-pub(super) fn build_tags(
+pub(in crate::worldgen) fn build_tags(
     raw: &Bundle,
     overrides: &WorldgenOverrides,
     name: &str,
@@ -293,7 +365,7 @@ impl GeneratorData {
         }
         let source_catalog =
             BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
-        let carvers = CarverCatalog::from_json(&read_bundle(dir, ov, "carvers")?)?;
+        let carvers = load_carvers(dir, ov)?;
         let mut biome_names = Vec::new();
         let mut biome_ids = BTreeMap::new();
         let mut biome_json = Vec::new();
@@ -316,13 +388,19 @@ impl GeneratorData {
         )
         .map_err(|e| resource(format!("carving blocks: {e}")))?;
         let feature_resources = match (
-            read_optional_bundle(dir, ov, "features")?,
-            read_optional_bundle(dir, ov, "placed_features")?,
+            read_registry_bundle(dir, ov, "features")?,
+            read_registry_bundle(dir, ov, "placed_features")?,
         ) {
             (Some(features), Some(placed)) => Some(FeatureResources {
                 features,
                 placed,
                 feature_tags: read_optional_bundle(dir, ov, "feature_tags")?.unwrap_or_default(),
+                placed_tags: registry_tag_definitions(
+                    dir,
+                    ov,
+                    "placed_feature",
+                    "placed_feature_tags",
+                )?,
                 blocks: joined(blocks)?,
                 fluid_tags,
                 state_providers: read_optional_bundle(dir, ov, "state_providers")?

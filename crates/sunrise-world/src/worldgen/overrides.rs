@@ -40,11 +40,12 @@ const KINDS: [(&str, &str); 16] = [
     ("worldgen/template_pool", "template_pools"),
 ];
 /// Tag folders the chunk generator reads, and the tag bundle each joins.
-const TAG_KINDS: [(&str, &str); 4] = [
+const TAG_KINDS: [(&str, &str); 5] = [
     ("tags/block", "block_tags"),
     ("tags/fluid", "fluid_tags"),
     ("tags/worldgen/biome", "biome_tags"),
     ("tags/worldgen/carver", "carver_tags"),
+    ("tags/worldgen/placed_feature", "placed_feature_tags"),
 ];
 /// The pack folders the worldgen resolver reads, in walk order.
 pub const PACK_KINDS: [&str; 5] = [
@@ -213,6 +214,8 @@ pub struct WorldgenOverrides {
     templates: BTreeMap<String, sunrise_assets::resource_source::Resource>,
     /// Bundle name → id → the highest pack's JSON text for it.
     entries: BTreeMap<String, BTreeMap<String, String>>,
+    /// The winning file failed a world registry condition, including replaced base entries.
+    omitted_biomes: std::collections::BTreeSet<String>,
     /// Tag bundle name → (tag id, pack id, tag file text), lowest pack first.
     tags: BTreeMap<String, Vec<(String, String, String)>>,
 }
@@ -230,7 +233,23 @@ impl WorldgenOverrides {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.tags.is_empty() && self.templates.is_empty()
+        self.entries.is_empty()
+            && self.tags.is_empty()
+            && self.templates.is_empty()
+            && self.omitted_biomes.is_empty()
+    }
+    /// Project already admitted biome files into the generator's bundle. A skipped
+    /// winning file must also remove any lower file in the prepared bundle.
+    pub fn set_biome_winners(
+        &mut self,
+        files: BTreeMap<String, String>,
+        omitted: std::collections::BTreeSet<String>,
+    ) {
+        self.entries.remove("biomes");
+        if !files.is_empty() {
+            self.entries.insert("biomes".into(), files);
+        }
+        self.omitted_biomes = omitted;
     }
     /// A pack's file for `id` in `bundle`: called for packs from the lowest
     /// to the highest, so the last call for an id wins.
@@ -506,6 +525,9 @@ impl WorldgenOverrides {
     ) -> BTreeMap<String, String> {
         for (id, json) in self.entries(bundle) {
             base.insert(id.to_owned(), json.to_owned());
+        }
+        if bundle == "biomes" {
+            base.retain(|id, _| !self.omitted_biomes.contains(id));
         }
         base
     }

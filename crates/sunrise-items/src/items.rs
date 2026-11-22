@@ -1047,13 +1047,14 @@ impl Items {
         defaults: &ItemDefaults,
     ) -> Result<Self> {
         let mut items = Self::load_registry(root, registry, facts, overlay, defaults)?;
+        items.load_songs(root, overlay);
         items.load_resource_registries(root, overlay, defaults)?;
         items.load_table_loot(root, overlay, defaults)?;
         Ok(items)
     }
 
     /// Load the item registry and tags before admitting dependent registries.
-    /// The owning load must then install instruments, enchantments and loot.
+    /// The owning load must then install songs, instruments, enchantments and loot.
     pub fn load_registry(
         root: &Path,
         registry: &BlockRegistry,
@@ -1156,6 +1157,7 @@ impl Items {
             Self::load_with(root, &HashMap::new(), &bindings, overlay, defaults, |id| {
                 block_items.contains_key(id)
             })?;
+        items.load_songs(root, overlay);
         load_registries(&mut items)?;
         items.block_items = Arc::new(block_items);
         Ok(items)
@@ -1409,7 +1411,6 @@ impl Items {
             mob_visibility,
             order,
             registry_order,
-            songs: load_songs(root, overlay),
             ..Self::default()
         };
         table.bind_tags(root, overlay, defaults, contains_block)?;
@@ -1435,6 +1436,11 @@ impl Items {
         );
         self.set_tags(TagRegistry::Fluid, fluid_tag_list(root, overlay)?);
         Ok(())
+    }
+
+    /// Install jukebox definitions with the owning load's condition context.
+    pub fn load_songs(&mut self, root: &Path, overlay: &PackOverlay<'_>) {
+        self.songs = load_songs(root, overlay);
     }
 
     /// Load from resource files when there is no staged world registry snapshot.

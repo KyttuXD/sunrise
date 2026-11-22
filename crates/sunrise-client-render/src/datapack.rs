@@ -3,6 +3,7 @@
 //! line continuation), function tags and predicates.
 use crate::packs::{Filter, filter_of};
 use crate::resource_source::{ResourcePath, ResourceSource};
+use mod_api::__private::game::{datapack_entry_id, datapack_registry_directory};
 use sunrise_core::identifier::Identifier;
 use sunrise_world::loot::RecipePriorityLayer;
 mod slot_sources;
@@ -812,82 +813,78 @@ fn resource_id(file: &str, kind: &str, ext: &str) -> Option<String> {
         .strip_suffix(ext)?;
     Some(format!("{ns}:{path}"))
 }
-/// The entry files of mods' datapack registries in `packs`, lowest pack first: each file
-/// `data/<entry namespace>/<registry namespace>/<registry path>/<entry>.json` of a registry
-/// in `registries` (`(namespace, path)` of its key), by that path, each path's versions in
-/// pack order, each with its pack's id. Only the highest accepted version is read into
-/// the returned map. `fallback` permits trying lower versions after a condition refusal;
-/// registered conditions disable fallback so losing callbacks never run. The folders
-/// are the mods' own, so the fixed kinds `DataStore` lists never cover them.
+/// The winning pack id and bytes at each physical resource path.
+pub type RegistryFiles = BTreeMap<String, (String, Vec<u8>)>;
+
+/// Like `ResourceManagerRegistryLoadTask.load`, read only the winning files for the
+/// registry keys in `registries`. `packs` is lowest priority first. A file under
+/// more than one registry directory still has only one winning source. An unreadable
+/// winner fails the load and identifies its pack and file.
 pub fn registry_files(
     packs: &[&DataPack],
-    registries: &[(&str, &str)],
-    mut accepts: impl FnMut(&str, &[u8]) -> bool,
-) -> Result<BTreeMap<String, Vec<(String, Vec<u8>)>>, Box<mod_api::DatapackLoadError>> {
-    let mut kinds: Vec<&str> = registries.iter().map(|(namespace, _)| *namespace).collect();
+    registries: &[&str],
+) -> Result<RegistryFiles, Box<mod_api::DatapackLoadError>> {
+    let directories: Vec<_> = registries
+        .iter()
+        .filter_map(|&key| {
+            let directory = datapack_registry_directory(key)?;
+            // PathPackResources.listResources rejects an undecomposable directory
+            // on its own. Do not let it invalidate the combined filesystem walk.
+            if !sunrise_assets::resource_source::stays_inside(&directory) {
+                log::error!("Invalid datapack directory {directory:?} for registry {key}");
+                return None;
+            }
+            Some((key, directory))
+        })
+        .collect();
+    let mut kinds: Vec<_> = directories
+        .iter()
+        .map(|(_, directory)| directory.as_ref())
+        .collect();
+    if kinds.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     kinds.sort_unstable();
     kinds.dedup();
-    let mut sources = BTreeMap::new();
+    let mut sources: BTreeMap<String, _> = BTreeMap::new();
     for pack in packs {
+        if !pack.filter.is_empty() {
+            sources.retain(|file, _| {
+                let (namespace, path) = file
+                    .strip_prefix("data/")
+                    .and_then(|path| path.split_once('/'))
+                    .expect("paths came from registry directories");
+                !pack
+                    .filter
+                    .iter()
+                    .any(|filter| filter.matches(namespace, path))
+            });
+        }
         for file in pack.list_kinds(&kinds) {
-            let in_registry = file
-                .strip_prefix("data/")
-                .and_then(|rest| rest.split_once('/'))
-                .is_some_and(|(_, rest)| {
-                    file.ends_with(".json")
-                        && registries.iter().any(|(namespace, path)| {
-                            rest.strip_prefix(namespace)
-                                .and_then(|rest| rest.strip_prefix('/'))
-                                .and_then(|rest| rest.strip_prefix(path))
-                                .is_some_and(|rest| rest.starts_with('/'))
-                        })
-                });
-            if in_registry {
-                sources.insert(file, pack);
+            // The first match is only for I/O diagnostics. Each registry interprets
+            // the winner independently when it decodes its entries.
+            if let Some((registry, entry)) = directories.iter().find_map(|(key, directory)| {
+                datapack_entry_id(directory, &file).map(|entry| (*key, entry))
+            }) {
+                sources.insert(file, (pack, registry, entry));
             }
         }
     }
-    let mut files = BTreeMap::new();
-    let mut total = 0;
-    for (file, pack) in sources {
-        // Read at most the custom-registry limit plus a refusal byte, including
-        // decompressed output. A rejected winner never reveals a lower file.
-        let bytes = pack
-            .source
-            .read_head(&file, mod_api::MAX_DATAPACK_ENTRY_BYTES as u64 + 1)
-            .unwrap_or_default();
-        let oversized = bytes.len() > mod_api::MAX_DATAPACK_ENTRY_BYTES;
-        if !oversized && !accepts(&file, &bytes) {
-            continue;
-        }
-        total += bytes.len();
-        if !oversized && total > mod_api::MAX_SNAPSHOT_BYTES {
-            let (namespace, path) = registries
-                .iter()
-                .find(|(namespace, path)| {
-                    file.splitn(3, '/')
-                        .nth(2)
-                        .is_some_and(|rest| rest.starts_with(&format!("{namespace}/{path}/")))
+    sources
+        .into_iter()
+        .map(|(file, (pack, registry, entry))| {
+            let bytes = pack.source.read(&file).map_err(|error| {
+                Box::new(mod_api::DatapackLoadError {
+                    registry: registry.to_owned(),
+                    entry,
+                    file: file.clone(),
+                    pack: pack.id.clone(),
+                    reason: mod_api::DatapackLoadReason::ReadFile(error.to_string()),
                 })
-                .expect("listed custom registry file");
-            let rest = file.strip_prefix("data/").unwrap();
-            let (entry_namespace, rest) = rest.split_once('/').unwrap();
-            let entry = rest
-                .strip_prefix(&format!("{namespace}/{path}/"))
-                .unwrap()
-                .strip_suffix(".json")
-                .unwrap();
-            return Err(Box::new(mod_api::DatapackLoadError {
-                registry: format!("{namespace}:{path}"),
-                entry: format!("{entry_namespace}:{entry}"),
-                file,
-                pack: pack.id.clone(),
-                reason: mod_api::DatapackLoadReason::CandidateTooLarge,
-            }));
-        }
-        files.insert(file, vec![(pack.id.clone(), bytes)]);
-    }
-    Ok(files)
+            })?;
+            Ok((file, (pack.id.clone(), bytes)))
+        })
+        .collect()
 }
 
 /// Read the singleton at NeoForge's resource location. An absent file is not a layer;
@@ -2458,6 +2455,8 @@ mod tests {
             for file in [
                 "data/example/example/spell/fire.json",
                 "data/addon/example/spell/nested/ice.json",
+                "data/addon/worldgen/spell/frost.json",
+                "data/addon/minecraft/worldgen/spell/skip.json",
                 "data/addon/example/other/skip.json",
                 "data/addon/example/spell/note.txt",
                 "data/addon/example/spellbook/skip.json",
@@ -2472,35 +2471,67 @@ mod tests {
             ));
         }
         let refs = packs.iter().collect::<Vec<_>>();
-        let files = registry_files(&refs, &[("example", "spell")], |_, _| true).unwrap();
+        let keys = [
+            "example:spell",
+            "minecraft:example/spell/nested",
+            "minecraft:worldgen/spell",
+            "example:../missing",
+        ];
+        let path = "data/example/example/spell/fire.json";
+        let mut wide = vec![b' '; 1 << 20];
+        wide.extend_from_slice(br#"{"power":7}"#);
+        std::fs::write(root.join("high").join(path), &wide).unwrap();
+        let files = registry_files(&refs, &keys).unwrap();
         assert_eq!(
             files.keys().map(String::as_str).collect::<Vec<_>>(),
             [
                 "data/addon/example/spell/nested/ice.json",
+                "data/addon/worldgen/spell/frost.json",
                 "data/example/example/spell/fire.json"
             ]
         );
+        assert_eq!(files[path], ("high".to_owned(), wide));
         assert_eq!(
-            files["data/example/example/spell/fire.json"],
-            vec![("high".to_owned(), b"high".to_vec())]
+            files["data/addon/example/spell/nested/ice.json"],
+            ("high".to_owned(), b"high".to_vec())
         );
-        assert!(registry_files(&refs, &[], |_, _| true).unwrap().is_empty());
-        assert!(
-            registry_files(&refs, &[("example", "spell")], |_, bytes| bytes == b"low")
-                .unwrap()
-                .is_empty(),
-            "a rejected winning resource does not reveal the lower version"
-        );
-        // Oversized losing files are never read; an oversized winner is retained
-        // only as the bounded refusal prefix, not as its full payload.
-        let path = "data/example/example/spell/fire.json";
-        std::fs::write(root.join("low").join(path), vec![b' '; 1_048_577]).unwrap();
-        let files = registry_files(&refs, &[("example", "spell")], |_, _| true).unwrap();
-        assert_eq!(files[path], vec![("high".to_owned(), b"high".to_vec())]);
-        std::fs::write(root.join("high").join(path), vec![b' '; 1_048_578]).unwrap();
-        let files = registry_files(&refs, &[("example", "spell")], |_, _| true).unwrap();
-        assert_eq!(files[path].len(), 1);
-        assert_eq!(files[path][0].1.len(), 1_048_577);
+        assert!(registry_files(&refs, &[]).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn registry_files_names_the_unreadable_winner_without_falling_back() {
+        use sunrise_assets::resource_source::Resource;
+
+        let path = "data/addon/example/spell/nested/fire.json";
+        let readable = DataPack::from_source(
+            "readable".into(),
+            ResourceSource::indexed(BTreeMap::from([(
+                path.to_owned(),
+                Resource::bytes(br#"{"power":7}"#.to_vec()),
+            )])),
+        );
+        let unreadable = DataPack::from_source(
+            "unreadable".into(),
+            ResourceSource::indexed(BTreeMap::from([(
+                path.to_owned(),
+                Resource::file(ResourceSource::default(), path.to_owned()),
+            )])),
+        );
+        let keys = ["example:spell"];
+        let error = registry_files(&[&readable, &unreadable], &keys).unwrap_err();
+        assert_eq!(error.registry, "example:spell");
+        assert_eq!(error.entry, "addon:nested/fire");
+        assert_eq!(error.pack, "unreadable");
+        assert_eq!(error.file, path);
+        assert!(
+            matches!(error.reason, mod_api::DatapackLoadReason::ReadFile(message) if !message.is_empty())
+        );
+
+        let files = registry_files(&[&unreadable, &readable], &keys).unwrap();
+        assert_eq!(
+            files[path],
+            ("readable".to_owned(), br#"{"power":7}"#.to_vec())
+        );
     }
 }
