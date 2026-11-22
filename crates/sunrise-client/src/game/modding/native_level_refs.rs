@@ -2208,7 +2208,7 @@ mod tests {
     }
     /// The slot of a registered controller id.
     fn known_slot(id: &str) -> Option<u32> {
-        TicketController::from_id(id).map(TicketController::slot)
+        mod_api::__ticket_controller_runtime::saved_controller_slot(id)
     }
     fn quarry() -> TicketController {
         controller("machines:quarry")
@@ -2820,7 +2820,7 @@ mod tests {
         }
     }
     fn controller_slot(id: &str) -> u32 {
-        controller(id).slot()
+        known_slot(id).unwrap()
     }
 
     #[test]
@@ -2953,9 +2953,10 @@ mod tests {
                 for ticket in tickets {
                     saved_rows.insert(ticket);
                 }
-                save.save_mod_tickets(&saved_rows, |slot| {
-                    TicketController::from_slot(slot).map(TicketController::id)
-                })
+                save.save_mod_tickets(
+                    &saved_rows,
+                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                )
                 .unwrap();
                 game.enter_level(second).unwrap();
                 assert_eq!(calls.panicking.load(Ordering::Relaxed), 1);
@@ -2990,9 +2991,10 @@ mod tests {
                 let mut tickets = sunrise_client::mod_chunk_tickets::ModTickets::default();
                 tickets.insert(saved("machines:quarry", [1, 64, 1], (7, 7)));
                 tickets.insert(saved("machines:quarry", [9, 64, 9], (8, 8)));
-                save.save_mod_tickets(&tickets, |slot| {
-                    TicketController::from_slot(slot).map(TicketController::id)
-                })
+                save.save_mod_tickets(
+                    &tickets,
+                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                )
                 .unwrap();
                 let back = game.dim;
                 game.enter_level(other).unwrap();

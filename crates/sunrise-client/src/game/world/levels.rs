@@ -902,7 +902,7 @@ impl Game<'_> {
         tickets.restore_portal(save.load_portal_tickets());
         streaming.load_forced(
             save.load_forced_chunks(),
-            save.load_mod_tickets(|id| mod_api::TicketController::from_id(id).map(|c| c.slot())),
+            save.load_mod_tickets(mod_api::__ticket_controller_runtime::saved_controller_slot),
         );
     }
 
@@ -2042,8 +2042,7 @@ mod tests {
     #[ignore = "daily"]
     fn built_in_levels_restore_saved_tickets_before_the_first_tick() {
         use mod_api::{
-            Hooks, LevelRef, ModEntry, Registrar, RegistrationContext, ServerHost,
-            TicketController, TicketValidation,
+            Hooks, LevelRef, ModEntry, Registrar, RegistrationContext, ServerHost, TicketValidation,
         };
         use std::sync::atomic::{AtomicBool, Ordering};
         use sunrise_client::mod_chunk_tickets::{ModTicket, ModTickets, TicketOwner};
@@ -2093,9 +2092,12 @@ mod tests {
             let nether = Dim::Nether;
             let end = Dim::End;
             let commanded_chunk = (4, -5);
-            let controller = TicketController::from_id("startup_tickets:quarry").unwrap();
+            let controller = mod_api::__ticket_controller_runtime::saved_controller_slot(
+                "startup_tickets:quarry",
+            )
+            .unwrap();
             let ticket = ModTicket {
-                controller: controller.slot(),
+                controller,
                 owner: TicketOwner::Block(OWNER),
                 chunk: (12, -13),
                 natural_spawning: false,
@@ -2106,9 +2108,10 @@ mod tests {
             let mut tickets = ModTickets::default();
             tickets.insert(ticket.clone());
             SaveDir::new(dimension_dir(&world, nether.id()), nether.shape(), None)
-                .save_mod_tickets(&tickets, |slot| {
-                    TicketController::from_slot(slot).map(TicketController::id)
-                })
+                .save_mod_tickets(
+                    &tickets,
+                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                )
                 .unwrap();
 
             let mut resources = None;
@@ -2129,7 +2132,7 @@ mod tests {
                 nether_level
                     .streaming
                     .mod_tickets()
-                    .of_controller(controller.slot())
+                    .of_controller(controller)
                     .next(),
                 Some(&ticket)
             );
