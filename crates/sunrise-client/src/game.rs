@@ -3977,7 +3977,7 @@ struct Game<'a> {
     mods: mods::ModsState,
     /// The in-game browser's worker, separate from the cloneable reload inputs.
     mod_jobs: mod_browser::Jobs,
-    /// Every item and recipe, for mods (`game/modding/native_recipes.rs`), made once.
+    /// Live recipe and known-display tables for typed mod reads.
     recipe_tables: native_recipes::RecipeTables,
     /// The item panel beside container screens (`game/modding/native_panel.rs`).
     panel: native_panel::Panel,
@@ -12778,7 +12778,6 @@ impl Game<'_> {
                         self.physical_buttons.remove(&button);
                         return Ok(());
                     }
-                    self.extras_mouse(button, pressed);
                     if pressed && self.settings.keys.get("key.smoothCamera") == input {
                         self.smooth_camera_action();
                     }

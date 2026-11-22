@@ -80,40 +80,6 @@ pub struct ChannelRef {
     pub id: u64,
 }
 
-/// A player on the server, as a server hook sees them.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ServerPlayer {
-    /// The player's UUID.
-    pub uuid: u128,
-    /// The player's name.
-    pub name: String,
-    /// The operator level, 0 to 4 (`ops.json`; single player's owner with
-    /// cheats on is 4).
-    pub permission: u8,
-    /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
-    pub dimension: String,
-    /// The player's position in blocks.
-    pub position: [f64; 3],
-    /// 0 survival, 1 creative, 2 adventure, 3 spectator.
-    pub game_mode: i32,
-    /// Health points, 20 at full; 0 once dead.
-    pub health: f32,
-    /// Where they look, in degrees (`yRot`, `xRot`), as their last move told
-    /// the server.
-    pub yaw: f32,
-    /// The player's pitch in degrees.
-    pub pitch: f32,
-    /// The network entity id the player has this session, the one hooks that only know entity ids
-    /// (`living_incoming_damage`, `living_knockback`) give for the player; 0 when not known.
-    /// API @API:server_player_entity_id@.
-    pub entity_id: i32,
-    /// The IP address the player connects from, without the port (empty
-    /// when not known).
-    pub address: String,
-}
-
 /// A persistent entity UUID in the same bit order as the value from `EntityRef::uuid`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
 // exhaustive: a UUID is exactly one public 128-bit value

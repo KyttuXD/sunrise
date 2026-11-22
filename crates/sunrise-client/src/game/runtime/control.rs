@@ -931,17 +931,9 @@ impl Game<'_> {
                     self.mod_mappings_button(button, false);
                 }
                 match action {
-                    "down" => {
-                        self.extras_mouse(button, true);
-                        self.mouse_mapping(button, true, Source::Agent)?
-                    }
-                    "up" => {
-                        self.extras_mouse(button, false);
-                        self.mouse_mapping(button, false, Source::Agent)?
-                    }
+                    "down" => self.mouse_mapping(button, true, Source::Agent)?,
+                    "up" => self.mouse_mapping(button, false, Source::Agent)?,
                     "click" => {
-                        self.extras_mouse(button, true);
-                        self.extras_mouse(button, false);
                         self.mouse_mapping(button, true, Source::Agent)?;
                         self.mouse_mapping(button, false, Source::Agent)?;
                     }

@@ -2861,8 +2861,6 @@ pub(in crate::game) fn game_rule_registry() -> sunrise_client_core::gamerules::R
 
 #[path = "api_values/game_rule_values.rs"]
 mod game_rule_values;
-#[path = "api_values/item_properties.rs"]
-mod item_properties;
 #[path = "api_values/loot_values.rs"]
 pub(crate) mod loot_values;
 #[path = "api_values/package_snapshot.rs"]

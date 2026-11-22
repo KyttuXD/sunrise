@@ -70,7 +70,7 @@ pub(super) struct GuestPlay {
     /// `EquipmentSlot`: main hand, off hand, feet, legs, chest, head.
     pub(super) equipment_heard: Option<Box<[Option<crate::items::ItemStack>; 6]>>,
     /// The slots of the guest's inventories the mods last heard (`native_players_inventory_changes`),
-    /// by `NativeInventoryKind`: Player, Ender, Cursor, Crafting.
+    /// in player inventory, ender chest, cursor and crafting order.
     pub(super) inventory_heard: Option<Box<[Vec<Option<crate::items::ItemStack>>; 4]>>,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,

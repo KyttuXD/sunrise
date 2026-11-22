@@ -12,16 +12,8 @@ impl Game<'_> {
         if stack.count == 0 {
             return None;
         }
-        if !stack.carries_component(
-            self.res.items().get(&stack.item),
-            "minecraft:bundle_contents",
-        ) {
-            return None;
-        }
         Some(
-            stack
-                .data()
-                .map_or(&[][..], |data| &data.bundle_contents[..])
+            sunrise_items::bundle::contents_of(self.res.items(), stack)?
                 .iter()
                 .cloned()
                 .map(Some)
@@ -56,7 +48,7 @@ impl Game<'_> {
         let moved = bundle.try_insert(self.res.items(), &mut item.clone(), fits);
         let mut changed = stack.clone();
         changed.count = 1;
-        bundle.store(&mut changed);
+        bundle.store(self.res.items(), &mut changed);
         changed.data_mut().wire = Default::default();
         changed.tidy();
         Some((moved, changed))
@@ -67,13 +59,8 @@ impl Game<'_> {
         slot: usize,
         max: u32,
     ) -> Option<(Option<ItemStack>, ItemStack)> {
-        if !stack.carries_component(
-            self.res.items().get(&stack.item),
-            "minecraft:bundle_contents",
-        ) {
-            return None;
-        }
-        if stack.count == 0 {
+        if stack.count == 0 || sunrise_items::bundle::contents_of(self.res.items(), stack).is_none()
+        {
             return None;
         }
         if slot != 0 || max == 0 {
@@ -82,18 +69,23 @@ impl Game<'_> {
         // Selection belongs to the UI. Automation always takes from the front.
         let mut changed = stack.clone();
         changed.count = 1;
-        changed.data_mut().bundle_selected = sunrise_items::item_data::BundleSelected(-1);
+        if let Some(data) = changed.extra.as_deref_mut() {
+            data.bundle_selected = sunrise_items::item_data::BundleSelected(-1);
+        }
         let mut bundle = Bundle::of(self.res.items(), &changed)?;
         let Some(mut out) = bundle.remove_one(self.res.items()) else {
             return Some((None, changed));
         };
         let take = out.count.min(max);
-        bundle.store(&mut changed);
+        bundle.store(self.res.items(), &mut changed);
         if take < out.count {
             let mut rest = out.clone();
             rest.count -= take;
             // Preserve the remainder even for command-created overfull contents.
-            changed.data_mut().bundle_contents.insert(0, rest);
+            let data = changed.data_mut();
+            data.bundle_contents.insert(0, rest);
+            data.set_other("minecraft:bundle_contents", None);
+            data.set_other("!minecraft:bundle_contents", None);
         }
         out.count = take;
         changed.data_mut().wire = Default::default();

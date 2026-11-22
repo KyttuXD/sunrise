@@ -796,7 +796,6 @@ mod stubs {
     pub(super) struct Command;
     pub(super) struct LifecycleContext;
     pub(super) struct Load(pub &'static str);
-    pub(super) struct ServerPlayer;
     #[derive(Clone, Copy)]
     pub(super) struct ServerTickPhase;
     #[derive(Clone, Copy)]

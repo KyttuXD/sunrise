@@ -921,20 +921,6 @@ impl OpenNativeScreen {
     }
 }
 
-/// The player as a native mod reads it.
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativePlayer {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    /// Degrees; 0 faces south, 90 west (`Direction.fromYRot`).
-    pub yaw: f32,
-    pub pitch: f32,
-    /// `minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`.
-    pub dimension: &'static str,
-}
-
 /// How the panel lays out a recipe of `native_panel_recipes`.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -985,87 +971,6 @@ pub(crate) struct NativeRecipeView {
     pub(crate) note: String,
     /// The action button beside it: none, enabled, or shown greyed.
     pub(crate) action: Option<bool>,
-}
-
-/// An item of [`NativeRecipes::items`], by its index there, with a count
-/// and the components it has beyond the item's own, in vanilla's item
-/// syntax (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`),
-/// or "".
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct NativeRecipeStack {
-    pub(crate) item: u32,
-    pub(crate) count: u32,
-    pub(crate) components: String,
-}
-
-/// The station a recipe is made at.
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeRecipeKind {
-    CraftingShaped,
-    CraftingShapeless,
-    Smelting,
-    Blasting,
-    Smoking,
-    Campfire,
-    Stonecutting,
-    Smithing,
-    Brewing,
-}
-
-/// A recipe of [`NativeRecipes`].
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeRecipe {
-    /// `minecraft:oak_planks`.
-    pub(crate) id: String,
-    pub(crate) kind: NativeRecipeKind,
-    /// The recipe book's tab (`crafting_building_blocks`, `furnace_food`),
-    /// or "".
-    pub(crate) category: String,
-    /// Recipes the book shows on one button share a group, or "".
-    pub(crate) group: String,
-    /// A shaped recipe's grid: `slots` holds its cells row by row. 0 for
-    /// the other kinds.
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    /// Each slot's stacks, any one of which fits; an empty list is an empty
-    /// cell. Cooking and stonecutting: the input. Smithing: the template,
-    /// the base, the addition. Brewing: the bottle, the reagent.
-    pub(crate) slots: Vec<Vec<NativeRecipeStack>>,
-    /// What it makes; several when that varies (a trim on any armour).
-    pub(crate) results: Vec<NativeRecipeStack>,
-    /// Cooking: game ticks and experience; 0 for the other kinds.
-    pub(crate) cooking_time: u32,
-    pub(crate) experience: f32,
-    /// The recipe book's id for it (one per way the book shows it), as
-    /// `known_recipes` lists them; -1 for the kinds the book doesn't
-    /// show (campfire, stonecutting, smithing, brewing).
-    pub(crate) book_id: i32,
-}
-
-/// An item of [`NativeRecipes::items`].
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct NativeItem {
-    /// `minecraft:diamond`, `<mod>:<path>`.
-    pub(crate) id: String,
-    /// In the player's language.
-    pub(crate) name: String,
-    /// Its item tags, without the `#`.
-    pub(crate) tags: Vec<String>,
-}
-
-/// Every item and recipe the game knows (`native_recipes`): `items` in the
-/// registry's order, which each [`NativeRecipeStack::item`] indexes; the
-/// recipes are the book's in its order, then campfire, stonecutting,
-/// smithing and brewing.
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct NativeRecipes {
-    pub(crate) items: Vec<NativeItem>,
-    pub(crate) recipes: Vec<NativeRecipe>,
 }
 
 /// A physical press and its original receiver. Activation counters, unlike screen IDs or
@@ -3532,31 +3437,6 @@ pub(super) fn config_dir(game_dir: &Path) -> std::io::Result<PathBuf> {
     let dir = game_dir.join("config");
     fs::create_dir_all(&dir)?;
     Ok(dir)
-}
-
-/// An item entity as `native_item_entities` lists it.
-/// Read by mods only.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub(super) struct NativeItemEntity {
-    /// The entity's ID.
-    pub id: u32,
-    pub position: [f64; 3],
-    pub stack: ItemStack,
-    /// Ticks before a player may pick it up (`ItemEntity.pickupDelay`);
-    /// hoppers take it whatever this is.
-    pub pickup_delay: u32,
-}
-
-/// `AABB.intersects`: the boxes overlap, touching faces excluded.
-fn box_meets(b: &sunrise_core::geometry::Aabb, min: [f64; 3], max: [f64; 3]) -> bool {
-    let (lo, hi) = (b.min_position(), b.max_position());
-    lo.x < max[0]
-        && hi.x > min[0]
-        && lo.y < max[1]
-        && hi.y > min[1]
-        && lo.z < max[2]
-        && hi.z > min[2]
 }
 
 /// What `mod_screen_open(mod_id)` does over `screen` (`blocked`: an

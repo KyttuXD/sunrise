@@ -364,7 +364,8 @@ pub struct ItemInfo {
     pub cushion_color: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
-    /// Has a default `bundle_contents` (the bundles, `BundleItem`).
+    /// Registered as a `BundleItem` (`Items.BUNDLE`, `Items.DYED_BUNDLE`, or a
+    /// content mod item templated on one).
     pub bundle: bool,
     /// The ids of the item's default components (its prototype's keys).
     pub components: Vec<String>,
@@ -383,6 +384,29 @@ impl ItemInfo {
     pub fn is(&self, vanilla: &str) -> bool {
         &*self.id == vanilla || self.template.as_deref() == Some(vanilla)
     }
+}
+/// Vanilla items registered as `BundleItem` (`Items.BUNDLE` and `Items.DYED_BUNDLE`).
+fn is_vanilla_bundle(id: &str) -> bool {
+    matches!(
+        id,
+        "minecraft:bundle"
+            | "minecraft:white_bundle"
+            | "minecraft:orange_bundle"
+            | "minecraft:magenta_bundle"
+            | "minecraft:light_blue_bundle"
+            | "minecraft:yellow_bundle"
+            | "minecraft:lime_bundle"
+            | "minecraft:pink_bundle"
+            | "minecraft:gray_bundle"
+            | "minecraft:light_gray_bundle"
+            | "minecraft:cyan_bundle"
+            | "minecraft:purple_bundle"
+            | "minecraft:blue_bundle"
+            | "minecraft:brown_bundle"
+            | "minecraft:green_bundle"
+            | "minecraft:red_bundle"
+            | "minecraft:black_bundle"
+    )
 }
 /// `Item.Properties.craftRemainder` (not a data component, so not in the
 /// default-component report): what an item leaves in the grid when crafted with.
@@ -1252,6 +1276,9 @@ impl Items {
             {
                 return Err(format!("{name}: invalid consume effect component").into());
             }
+            let template: Option<Arc<str>> = mod_templates.get(name).map(|t| Arc::from(t.as_str()));
+            let bundle =
+                is_vanilla_bundle(name) || template.as_deref().is_some_and(is_vanilla_bundle);
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -1313,7 +1340,7 @@ impl Items {
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
                     cushion_color: c["minecraft:cushion/color"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
-                    bundle: c.get("minecraft:bundle_contents").is_some(),
+                    bundle,
                     components: c
                         .as_object()
                         .map(|c| c.keys().cloned().collect())
@@ -1335,7 +1362,7 @@ impl Items {
                         .find(|(item, _)| *item == name)
                         .map(|(_, rest)| (*rest).to_owned())
                         .or_else(|| mod_remainders.get(name).cloned()),
-                    template: mod_templates.get(name).map(|t| Arc::from(t.as_str())),
+                    template,
                     villager_food,
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()

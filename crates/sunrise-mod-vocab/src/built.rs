@@ -358,51 +358,6 @@ impl From<PlayerAbilities> for super::PlayerAbilities {
     }
 }
 // exhaustive: the game builds it with a literal; mods only read it
-// no wire: borrowed game-to-hook adapter; its call fields cross separately.
-pub struct ServerPlayer {
-    pub uuid: u128,
-    pub name: String,
-    pub permission: u8,
-    pub dimension: String,
-    pub position: [f64; 3],
-    pub game_mode: i32,
-    pub health: f32,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub entity_id: i32,
-    pub address: String,
-}
-impl From<ServerPlayer> for super::ServerPlayer {
-    fn from(v: ServerPlayer) -> Self {
-        let ServerPlayer {
-            uuid,
-            name,
-            permission,
-            dimension,
-            position,
-            game_mode,
-            health,
-            yaw,
-            pitch,
-            entity_id,
-            address,
-        } = v;
-        Self {
-            uuid,
-            name,
-            permission,
-            dimension,
-            position,
-            game_mode,
-            health,
-            yaw,
-            pitch,
-            entity_id,
-            address,
-        }
-    }
-}
-// exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct ChannelRef {
     pub id: u64,

@@ -148,7 +148,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   (a quiet batch drops them). The player's state is not swapped in, and `PlayerRef::tell` and the other helpers that take a
   UUID reach nobody inside this hook: answer through `replies`. Commands may carry secrets (`/msg`, a login plugin's
   password), so don't log them carelessly.
-- **`player_respawned(player, name, end_conquered)`**: once after `PlayerList.respawn` places and synchronizes the replacement (NeoForge's `PlayerRespawnEvent`). The player's state is swapped in for the call. `end_conquered` is true after the End credits (health, food and experience are kept) and false after death. An ordinary End teleport does not fire it.
+- **`player_respawned(player, name, end_conquered)`**: once after `PlayerList.respawn` places and synchronizes the replacement (NeoForge's `PlayerRespawnEvent`). The player's state is swapped in for the call, so `host.players().acting_player()` names them. `end_conquered` is true after the End credits (health, food and experience are kept) and false after death. An ordinary End teleport does not fire it.
 - **`player_login(player, name, cancel, reason)`**: a player the server has accepted (their name, the whitelist,
   bans and the player limit are checked) and who holds a place, heard before their saved state is loaded and before they
   are placed in a level (NeoForge's `PlayerNegotiationEvent`). Set `cancel` and they are disconnected with `reason` (a
@@ -512,19 +512,14 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 
 ### Mobs
 
-`crates/sunrise-client/src/game/modding/native_mobs.rs`: helpers for server mods, for the level in place, on a server only (on a
-client they do nothing, and the readers give nothing). Each takes the `dimension` (`minecraft:overworld`) of the level it means, as
-`native_set_block` does, and is refused when another level is in place. The per-level tick hooks run with a defined level in
-place; `server_tick` does not define one, so name the dimension and expect a refusal there.
-
 - `LevelRef::spawn_mob(host, kind, pos, reason)` spawns a mob and returns an `EntityRef`, or `None` when refused.
   `SpawnReason` controls finalization; the new mob is not persistent, as for a natural spawn. Spawn limits and natural
   spawn rules do not apply, as for `/summon`. A non-mob kind, invalid or out-of-bounds position, unloaded chunk,
   stale or unavailable level, or cancellation during finalization or level entry refuses the spawn. Configure the
   resulting entity through its handle rather than a spawn-options record.
-- `native_mob(dimension, id)` and `native_mobs(dimension)` read the living mobs: id, dimension, kind, position, yaw, health and maximum health.
+- Visit the level with `level.visit_all_entities(host, &mut visit)` and narrow the handles with `host.mob(entity)` or `host.living(entity)`.
 - A mob's health is set with `living.set_health(host, health)` on its `LivingRef`.
-- `native_kill_mob(dimension, id)` kills as `/kill` does, with its loot. `EntityRef::discard` removes an entity without death or loot: from the call on selectors and handles no longer find it, its passengers are off and `entity_leave_level` has fired, in the same hook.
+- `kill_mob(dimension, id)` kills as `/kill` does, with its loot. `EntityRef::discard` removes an entity without death or loot: from the call on selectors and handles no longer find it, its passengers are off and `entity_leave_level` has fired, in the same hook.
 - While the game ticks its mobs they are out of the level: from a hook inside that tick, a spawned mob joins after the tick, and the others
   read as gone.
 
@@ -1088,7 +1083,7 @@ more of it draws this frame: model, layers, name tag, shadow, flames, leash, out
   `native_draw_block` and `native_draw_item` under its pose stack, which starts at the mob's feet turned with its body: +z
   is the way it faces, +x its left, +y up, in blocks. Turn a head or swing a leg with `rotate_about` and a pivot. It holds
   the mob's light.
-- A mod's own creature is an ordinary mob (`native_spawn_mob`) drawn this way: a quiet villager, an allay or a bat
+- A mod's own creature is an ordinary mob (`LevelRef::spawn_mob`) drawn this way: a quiet villager, an allay or a bat
   gives it movement, sounds and saving, and the mod gives it a model and animations of its own. Tell yours apart by the
   ids the server half sends with mod messages, or by its custom name.
 - Players wrap the living hooks with `render_player_pre(player, who, draw, model, canceled)` (`RenderPlayerEvent.Pre`)
@@ -1489,9 +1484,7 @@ mod mixin or use it replaces in its design or PR."#]
 - [A block's items](#a-blocks-items) are available to server mods through the item capability and
   `move_resources`, so a pipe or machine can move items transactionally.
 
-- What a server mod needs for a public server's screens: `native_sidebar(uuid, sidebar)` shows one
-  player a sidebar of up to 15 lines (a text, and one where the score would be) that only their client holds (the
-  server's scoreboard never sees it; a mod sends it again when they rejoin), or takes it away with `None`;
+- `host.set_display_slot(DisplaySlot::Sidebar, Some(objective))` shows an objective from the server scoreboard.
   `player.tab_list(host, header, footer)` sets the lines over and under their Tab list; `native_tick_stats()` reads the
   server's tick rate and average tick time in ms (`/tick query`'s); and `player.set_sleep_ignored(host, ignored)` leaves a
   player out of `players_sleeping_percentage`'s count until they are in bed (players away from the keyboard). It refuses
@@ -1518,7 +1511,7 @@ mod mixin or use it replaces in its design or PR."#]
   sent back counts as landed (`Ghast.hurtServer`). A negative amount hurts by 0 and a NaN or infinite one by
   `Float.MAX_VALUE`, as vanilla clamps them. It fires for the players, mobs and the ender dragon the game hurts, and
   runs on the thread that ticks the world (the server thread), so state a mod shares with its render thread hooks needs
-  synchronising. `/kill` and `native_kill_mob` don't reach it yet: they set the health to 0 instead of hurting with
+  synchronising. `/kill` and `kill_mob` don't reach it yet: they set the health to 0 instead of hurting with
   `minecraft:generic_kill` as vanilla does. A mod may also install owned reduction modifier closures on the live
   container (`container.add_reduction_modifier(Reduction::Armor, |view, amount| amount * 0.5)`, NeoForge's
   `addModifier` / `IReductionFunction`): each runs in registration order when its reduction stage executes
@@ -1709,7 +1702,7 @@ settings on disk at that moment, whatever the dispatch order. Missing registries
 context with no engine snapshot return `None`. These contexts are supplied by the engine and have no
 game `Host`, handle constructors or transactions. Declarations still go on each event or registrar.
 
-- `component_types(context, event)` runs once before content loads. Call `event.register(id)` with each owned namespaced ID. Duplicates, invalid IDs and the `minecraft` namespace stop startup. `native_component`, `native_set_component` and `native_remove_component` read, set and remove registered components, including item defaults. Values use NBT and must fit the network reader limits.
+- `component_types(context, event)` runs once before content loads. Call `event.register(id)` with each owned namespaced ID. Duplicates, invalid IDs and the `minecraft` namespace stop startup. `ItemResource::value` reads effective components, including defaults; `ItemResource::with_component` and `ItemResource::without_component` edit detached resources, and `ItemPlace::edit` edits a resident stack. Values use NBT and must fit the network reader limits.
 
 - `create_skull_models`, `map_decoration_types`, `register_entity_spectator_shaders`, `register_fluid_models`, `register_render_pipelines` and `register_texture_atlases` take one entry per `event.register(entry)` call. `block_entity_type_add_blocks` adds memberships with `event.modify(kind, blocks)` or `event.modify_matching(predicate, blocks)`; `event.types` lists registered types, not additions. These registration methods stage entries in listener order. A listener cannot read, edit or remove earlier registrations; a phase refusal discards only that listener's additions. `register_render_pipelines` (version 4) accepts any valid pipeline `Identifier` without a namespace ownership gate. Mod pipeline IDs are unique across required and optional registrations; collisions with vanilla are checked in the matching registry as in NeoForge `RegisterRenderPipelinesEvent`. Fluid models and texture atlases are collected again on resource reload. Atlas timing and duplicate handling are unchanged.
 
@@ -2232,7 +2225,7 @@ registration path.
   tick, and `music_layers(layers)` lists looping tracks played over it, each easing to its own volume (stems that
   grow fuller).
 
-- A server's recipes reach its Sunrise clients, as NeoForge's `OnDatapackSyncEvent.sendRecipes` and `RecipesReceivedEvent`: on the server, `native_datapack_sync(player, recipe_types)` takes the recipe types (`minecraft:smelting`, `mymod:crusher`) a mod's client half needs, asked once the joining player exists, after admission and before their recipes are sent; `player` is a required `PlayerRef`. Reload asks once per online player, at most once per player per reload, before re-sending their recipes; with nobody online it is not asked. Configuration tags precede admission; Sunrise sends their final recipes (data packs merged, load conditions held) to that Sunrise client when it joins and after each `/reload`, in payloads within the clientbound cap, and nothing to a vanilla client. On the client the recipe helpers (`native_recipes`, `native_recipes_of_type`) then give the server's recipes of those types in place of the window's own, single player included, and `recipes_received(recipe_types)` says they came. Vanilla recipe serializers send resolved item candidates, not native ingredient predicates; mod serializers send their own writer's output. Unsent types retain their already-loaded local recipes. No type asked: nothing is sent and nothing changes; none asked after a load that asked some: the clients go back to their own recipes and `recipes_received` comes with no types.
+- A server's recipes reach its Sunrise clients, as NeoForge's `OnDatapackSyncEvent.sendRecipes` and `RecipesReceivedEvent`: on the server, `native_datapack_sync(player, recipe_types)` takes the recipe types (`minecraft:smelting`, `mymod:crusher`) a mod's client half needs, asked once the joining player exists, after admission and before their recipes are sent; `player` is a required `PlayerRef`. Reload asks once per online player, at most once per player per reload, before re-sending their recipes; with nobody online it is not asked. Configuration tags precede admission; Sunrise sends their final recipes (data packs merged, load conditions held) to that Sunrise client when it joins and after each `/reload`, in payloads within the clientbound cap, and nothing to a vanilla client. On the client `host.recipes_of_type` then gives the server's recipes of those types in place of the window's own, single player included, and `recipes_received(recipe_types)` says they came. Vanilla recipe serializers send resolved item candidates, not native ingredient predicates; mod serializers send their own writer's output. Unsent types retain their already-loaded local recipes. No type asked: nothing is sent and nothing changes; none asked after a load that asked some: the clients go back to their own recipes and `recipes_received` comes with no types.
 - `level.recipe_for(host, &recipe_type, &inputs)` matches through the game's crafting, cooking, stonecutting and smithing matchers, including data-pack recipes of those vanilla types. `RecipeInput` has Crafting, Single and Smithing variants. A `RecipeMatch` carries recipe id, typed output, ordered remainders, experience and processing time. Valid non-matching input is `Ok(None)`; malformed input, invalid items and unavailable levels are typed errors. Mod-owned types return `RecipeLookupError::NotMatchable`: cache `recipes_of_type` once per load/reload and match in mod memory, with no per-tick host crossing. Dynamic custom outputs/contextual predicates stay mod-owned. Lookup does not consume inputs; cache the result until the input changes.
 
 - `input_key(key, layout_key, raw_code, action, modifiers)` (version 2) runs after a real window keyboard event finishes handling, including shortcuts, screen consumption and repeats (`InputEvent.Key`). key is vanilla's name for the physical key (`key.keyboard.a`; `key.keyboard.unknown` for one it doesn't name; `getKey`), layout_key its name for the key the layout produced (`getKeycode`: a letter or digit names itself, so AZERTY's key at QWERTY's W is `key.keyboard.z`; a named key keeps the physical name; `None` otherwise), raw_code the platform scan code, or winit's native code for a key it doesn't identify, so unnamed keys stay apart (`getScanCode`; stable within a platform only), action is `KeyAction::Press`, `Repeat` or `Release`, and modifiers use the screen hooks' GLFW bits, captured before handling. Not cancellable. Foreign-window and OS synthetic focus events skip it. Window callback only: pad, focus and control-socket input are not window key events.
@@ -2285,7 +2278,9 @@ registration path.
 
 - An item's use tick and release: `living_entity_use_item_tick` replaces the ticks left after the may-still-use check. Effects run only above 0, then the counter decrements. On the server, canceling or setting 0 or below finishes the use without release-using; setting 1 finishes in that same tick after effects. A use-on-release item's counter goes negative until release instead. On the client, canceling sets the counter to -1 before decrement and skips effects; the negative countdown continues. `on_use_tick` is what a mod's own item does then (cook, charge). Canceling Start prevents beginning (duration 0 still begins); canceling Stop skips only release-using, while the use still clears. Finish cannot be canceled, but its result stack can be replaced. `release_using` acts with the ticks left; setting `used` starts the item's cooldown. Change the world only where this game runs the world, not on a server's client.
 
-- `native_inventory(uuid, kind)`: a player's inventory (`Player`: 41 slots, main, armour, off hand; `Ender`: 27), live when they are on the server, else from their file, never while they log in, are dead, or have their inventory swapped out. Other guests' live inventories remain available during a turn; `native_move_stack((from, kind, slot), expected, (to, kind))`: one stack moved, checked against `expected`, where it fits whole, or nothing moves (at most one side a file, written first); `native_send_map(uuid, map_id, colors)`: a 128 x 128 map picture sent to a player, for a filled map with that `map_id`. What an operator's `/invsee` and a price chart on a map need.
+- `player.with_inventory(host, read)` and `player.with_ender_chest(host, read)` lend a live player's inventories.
+  Use the matching slot setters on `PlayerRef` for writes. `player.send_map(host, map_id, colors)` sends a picture for
+  a filled map with that `map_id`.
 
 - A loot table's custom function or condition uses a codec registered by id through `Registrar::register_loot_function_type` or `Registrar::register_loot_condition_type`. Data validates before publication; unknown types refuse the load. Callbacks receive read-only context facts, authoritative tags and the actual evaluation random. Entry, pool and table order is preserved in both loot evaluators.
 
@@ -2337,7 +2332,6 @@ registration path.
 
 - A player starting or stopping flight: `player_toggle_flight(player, name, flying, cancel)` is heard once for each change a player's client makes to its flying (vanilla honours it only for a player who may fly), on a server, with the player's state swapped in. A mod sets `cancel` to refuse it: the player keeps the state they had and the server sends their abilities back, so the client lands or flies again. Only what a client asks for is heard, not the flight a game-mode change starts or ends, and not a LAN host's own player.
 
-- `native_physical_window_size()`, the window's width and height in physical pixels, independent of GUI scale. It returns no size on a server or when no window exists.
 
 
 - A player changing dimension: `player_changed_dimension(player, name, from, to)` is heard once after a cross-dimension portal or command teleport lands, with `from` and `to` as dimension ids and the player's state swapped in. It is server-only. Same-level moves and replacement by `PlayerList.respawn` are not heard; use `player_respawned` for death or the return after the End credits.
@@ -2374,7 +2368,6 @@ registration path.
 
 - `native_state_block(state)` names the block a state belongs to (`BlockState.getBlock()`); a `state_for_placement` part compares it with its own block. On the server, `LevelRef::state_for_placement(host, block, &context)` asks those parts with an already-resolved context, without placing the candidate.
 
-- The helper `native_physical_window_size()`, which returns the window's width and height in physical pixels, independent of GUI scale. It returns no size on a server or when no window exists.
 
 - A recipe ingredient of a mod's own kind asks `ingredient(context, event)` once per occurrence in the owning recipe load, including nested occurrences and slots outside `ingredients`. The first `Some(IngredientDefinition::new(items, test))` wins. The candidate list is deduplicated in first-seen order and kept with the predicate, apart from recipe JSON. No answer refuses the recipe with its file and kind; an answered empty list keeps manual matching without supplying placement candidates. A reload asks again; a remote client does not perform `ServerDataLoad`.
 

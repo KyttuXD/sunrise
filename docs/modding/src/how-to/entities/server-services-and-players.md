@@ -63,7 +63,10 @@ on a client and `PlayerWorldRefusal::Stale` for a stale handle.
 The online list includes connected players during nested player turns. Name,
 permission and address reads work for connected players whose bodies are displaced
 by another player's turn; stale handles are refused. Entity and living handles
-provide world-state reads, which require a resolvable body.
+provide world-state reads, which require a resolvable body. Read position and
+rotation through `player.entity().position(host)` and `player.entity().rotation(host)`;
+resolve that entity with `host.living(player.entity())` for `living.health(host)`.
+These reads use the live player, rather than a single player snapshot.
 
 `player.level(host)` returns the authoritative `LevelRef`;
 `player.dimension(host)` returns its dimension `Identifier`, including registered

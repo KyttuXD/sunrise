@@ -532,15 +532,13 @@ impl Game<'_> {
         self.fire_datapack_sync(call);
     }
     /// The server's recipes of `recipe_types` arrived (NeoForge's
-    /// `RecipesReceivedEvent`): from now on the recipe helpers
-    /// (`native_recipes`, `recipes_of_type`) give the server's recipes
-    /// of those types in place of the window's own, so rebuild what you made
-    /// of them. It comes after a join, once the window has its player, and
+    /// `RecipesReceivedEvent`): `host.recipes_of_type` now reads the server's
+    /// recipes of those types in place of the window's own. It comes after a
+    /// join, once the window has its player, and
     /// after every `/reload`, on a server whose mods asked for them
     /// (`native_datapack_sync`), single player included; with no types when
     /// the server stopped sending them and the window is back on its own
-    /// recipes. A recipe the
-    /// window's own recipe book doesn't know has `book_id` -1. Client-side.
+    /// recipes. Client-side.
     pub(in crate::game) fn native_recipes_received(&mut self, recipe_types: &[String]) {
         self.fire_recipes_received(recipe_types);
     }
@@ -1475,7 +1473,7 @@ impl Game<'_> {
     /// the host's own editing of a sign on a LAN or single-player world
     /// (the editor writes into their world directly), and the sign changes
     /// that are no edit of the text (dyeing, glow ink, waxing, `/data`,
-    /// `/setblock`, mods' `native_with_mod_block_entity`).
+    /// `/setblock`, or a mod using `BlockEntityRef::replace_data`).
     pub(in crate::game) fn native_sign_changed(
         &mut self,
         call: mod_api::__private::SignChangedCall<'_>,
@@ -4122,10 +4120,14 @@ impl Game<'_> {
         if !self.native_window() || at.iter().any(|v| !v.is_finite()) {
             return;
         }
-        let Some(p) = self.native_player() else {
+        let Some(position) = self.player.as_ref().map(|player| player.position) else {
             return;
         };
-        if (at[0] - p.x).powi(2) + (at[1] - p.y).powi(2) + (at[2] - p.z).powi(2) > 1024.0 {
+        if (at[0] - position.x).powi(2)
+            + (at[1] - position.y).powi(2)
+            + (at[2] - position.z).powi(2)
+            > 1024.0
+        {
             return;
         }
         let kind = if soul {

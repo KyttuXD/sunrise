@@ -28,41 +28,6 @@ pub(crate) fn native_menu_inventory_slot(size: usize, slot: i32) -> Option<usize
     }
 }
 
-/// Adds every stack of `gets` to the 36 slots of `inventory`, onto matching
-/// stacks first, then into empty slots, hotbar first; false when one doesn't
-/// fit whole. `max` is an item's stack size.
-pub(super) fn fit(
-    inventory: &mut [Option<ItemStack>],
-    gets: &[ItemStack],
-    max: &impl Fn(&ItemStack) -> u32,
-) -> bool {
-    for stack in gets {
-        let mut left = stack.count;
-        let max = max(stack).max(1);
-        for slot in inventory.iter_mut().take(36).flatten() {
-            if left > 0 && slot.same_item_same_components(stack) && slot.count < max {
-                let n = (max - slot.count).min(left);
-                slot.count += n;
-                left -= n;
-            }
-        }
-        for slot in inventory.iter_mut().take(36) {
-            if left > 0 && slot.is_none() {
-                let n = max.min(left);
-                *slot = Some(ItemStack {
-                    count: n,
-                    ..stack.clone()
-                });
-                left -= n;
-            }
-        }
-        if left > 0 {
-            return false;
-        }
-    }
-    true
-}
-
 /// Server menus, for server mods. The players are named by UUID;
 /// none of these runs while a player's state is swapped in (inside
 /// a command executor, the menus can be opened and filled).

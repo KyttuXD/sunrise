@@ -314,11 +314,10 @@ pub trait Notes {
 - [Server data reload listeners](#server-data-reload-listeners) read a mod's pack resources with datapack overrides, once per reload.
 - [Client asset reload listeners](#client-asset-reload-listeners) read a mod's pack resources with resource-pack overrides, once per reload.
 
-- The item entities near a block, for machines that pick up items as a hopper does:
-  `native_item_entities(dimension, min, max)` lists those whose box meets `min`..`max` (vanilla's
-  `Level.getEntitiesOfClass(ItemEntity.class, box)`), each with its entity ID, position, stack and pickup delay, and
-  `ItemEntityRef::set_stack` changes one's nonempty stack; discarding an entity is a separate operation. The query acts on
-  the level in place.
+- For item entities near a block, visit `level.visit_entities_in(host, min, max, &mut visit)` and
+  narrow each handle with `host.item_entity(entity)`. Read the stack with `item.with_stack(host, read)`
+  and the delay with `item.pickup_delay(host)`. Retain the handle for later writes; `item.set_stack`
+  changes its nonempty stack, and discarding the entity is a separate operation.
 
 - `level.with_random(host, |rng| rng.next_int_bound(bound))` borrows the named server level's live
   stream (`Level.getRandom()`), including levels parked while the server ticks another. In a restricted
