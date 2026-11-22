@@ -6,3 +6,5 @@ sunrise-client game::native_menu_places::tests::backed_slot_rules_ask_the_live_h
 sunrise-client game::native_menu_places::tests::backed_clicks_enforce_handler_pickup_probe_before_taking_or_quick_moving lib daily resources
 sunrise-client game::native_menus::tests::bulk_menu_updates_send_the_live_owner_and_abort_without_packets lib daily resources
 sunrise-client game::slot_pickup_tests::quick_move_and_live_rules_see_the_same_prepared_result_until_the_grid_changes lib daily resources
+sunrise-client game::mod_menu_decisions_tests::a_replaced_block_entity_makes_an_admitted_quick_move_stale lib daily resources
+sunrise-client game::slot_pickup_tests::a_quick_move_rolls_back_both_ends_if_its_linked_source_changes lib daily resources

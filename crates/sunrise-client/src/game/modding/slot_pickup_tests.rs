@@ -61,6 +61,14 @@ thread_local! {
     /// The clicked stack the override was given.
     static QUICK_MOVE_SOURCE: Cell<Option<u32>> = const { Cell::new(None) };
     static QUICK_MOVE_CONSUME: Cell<Option<usize>> = const { Cell::new(None) };
+    static LINK_CHANGE: Cell<Option<LinkChange>> = const { Cell::new(None) };
+    static LINK_CHANGED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LinkChange {
+    Insert,
+    Remove,
 }
 
 struct Pot;
@@ -130,6 +138,51 @@ impl BlockEntityPart for PotBlock {
                         .with_view(|mut view| view.set_item_slot(slot as u32, None)),
                     Some(Ok(true))
                 );
+            }
+            if let Some(change) = LINK_CHANGE.take() {
+                use mod_api::{
+                    BlockState, BlockUpdateFlags, HostBlockStates, ITEMS, ItemResource,
+                    ResourceHandler,
+                };
+                let mut moved = source.clone();
+                moved.set_count(source.count() - left).unwrap();
+                assert_eq!(
+                    event
+                        .subject
+                        .with_view(|mut view| view.set_item_slot(0, Some(moved))),
+                    Some(Ok(true))
+                );
+                let pos = [LINK.0, LINK.1, LINK.2];
+                match change {
+                    LinkChange::Insert => {
+                        let result: Result<(), ()> = event.subject.transaction(|scope, tx| {
+                            let host = scope.host();
+                            let level = host.level("minecraft:overworld").unwrap();
+                            let items = level.capability(host, &ITEMS, pos, None).unwrap();
+                            assert_eq!(
+                                items.insert_at(host, tx, 0, &ItemResource::of(source), 1),
+                                1
+                            );
+                            Ok(())
+                        });
+                        result.unwrap();
+                    }
+                    LinkChange::Remove => {
+                        let host = event.subject.host();
+                        let level = host.level("minecraft:overworld").unwrap();
+                        let air = BlockState::of(
+                            &host.block_states(),
+                            mod_api::__private::block_key("minecraft:air").unwrap(),
+                            &[],
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            level.set_block(host, pos, air, BlockUpdateFlags::KNOWN_SHAPE),
+                            Ok(true)
+                        );
+                    }
+                }
+                LINK_CHANGED.set(true);
             }
             if left == 0 {
                 *event.stack = None;
@@ -633,6 +686,51 @@ fn a_handled_quick_move_writes_its_remainder_to_the_link_not_the_owner() {
             game.world.block_entities.get(&POS).unwrap().slots()[LINKED_SLOT],
             stone(2)
         );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_quick_move_rolls_back_both_ends_if_its_linked_source_changes() {
+    with_pot(|game, rx| {
+        link_pot(game);
+        let generation = game.world.block_entities.generation(&LINK).unwrap();
+        let block = game.world.block(LINK.0, LINK.1, LINK.2);
+        for change in [LinkChange::Insert, LinkChange::Remove] {
+            QUICK_MOVE_LEFT.set(Some(3));
+            LINK_CHANGE.set(Some(change));
+            click(
+                game,
+                rx,
+                (LINKED_SLOT as i32, 0, Input::QuickMove),
+                Vec::new(),
+                None,
+            );
+            assert!(
+                LINK_CHANGED.take(),
+                "the callback reached the source: {change:?}"
+            );
+            assert_eq!(QUICK_MOVE_SOURCE.take(), Some(7));
+            assert_eq!(game.world.block(LINK.0, LINK.1, LINK.2), block);
+            assert_eq!(
+                game.world.block_entities.generation(&LINK),
+                Some(generation)
+            );
+            assert_eq!(
+                game.world.block_entities.get(&LINK).unwrap().slots()[0],
+                stone(7)
+            );
+            assert_eq!(
+                game.world.block_entities.get(&POS).unwrap().slots()[0],
+                None
+            );
+            assert!(
+                game.lan.as_ref().unwrap().hub.guests[0]
+                    .inventory
+                    .iter()
+                    .all(Option::is_none)
+            );
+        }
     });
 }
 
