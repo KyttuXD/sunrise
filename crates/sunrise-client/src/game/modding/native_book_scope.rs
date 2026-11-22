@@ -120,9 +120,6 @@ impl Game<'_> {
                 let Some(BlockEntity::Mod(block)) = self.world.block_entities.get(&pos) else {
                     return Err(Refusal::Unavailable);
                 };
-                if block.id().is_empty() {
-                    return Err(Refusal::Unavailable);
-                }
                 (
                     Some((
                         self.world.block(pos.0, pos.1, pos.2).0,

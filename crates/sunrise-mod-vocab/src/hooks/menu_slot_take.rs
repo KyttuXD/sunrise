@@ -2,9 +2,13 @@
 
 pub trait Hooks {
     /// A player took a stack out of slot `slot` of the mod menu type `menu`
-    /// open on the mod block entity `entity`, on the server (`Slot.onTake`):
-    /// a notice after the item left the slot, which refuses nothing (the
-    /// pickup rule, `menu_slot_rules`' `may_pickup`, refuses). `player` is the
+    /// open on the mod block entity (`Slot.onTake`), on the server: a notice
+    /// after the item left the slot, which refuses nothing (the pickup rule,
+    /// `menu_slot_rules`' `may_pickup`, refuses). `subject` lends sequential
+    /// access to the live resident block entity (`subject.with_view(...)`),
+    /// the server `Host` (`subject.host()`), and atomic transactions
+    /// (`subject.transaction(...)`); `with_view` returns `None` if the block
+    /// entity was removed or replaced during the call. `player` is the
     /// player's UUID; `slot` is the menu's index, the block's own slots first
     /// (linked containers and the player's inventory are never heard). `taken` is
     /// a copy of the stack that left the slot, components included, and `left`
@@ -31,24 +35,34 @@ pub trait Hooks {
     /// rule refused or a quick move that moved nothing; menu buttons, recipe
     /// placement and creative slot sets are not clicks and never reach it.
     ///
-    /// The take and the listeners are one action: what a listener writes
-    /// through the host stays when it returns, and if a listener fails
-    /// (panics or writes an invalid block entity snapshot), all writes and
-    /// takes from that click are undone before the menu is resent. `entity` is out of the world during the
-    /// call, as in `menu_button`. Not `item_crafted` or `item_smelted`, which
-    /// keep their meaning: a result slot that gives experience or unlocks a
-    /// recipe does it here through the host. Nothing is asked when no mod
-    /// listens.
+    /// Writes through `subject.with_view(...)` are checked at the boundary
+    /// and apply to the live resident block entity in place, marking the
+    /// chunk dirty and firing container updates when items change (matching
+    /// vanilla `BlockEntity.setChanged`). On game-routed clicks an enclosing
+    /// click transaction is open, so a panicking listener is contained and
+    /// disabled for `menu_slot_take` for the rest of the session and the click
+    /// undoes its transaction before resending the menu. On a shift-click
+    /// handled by `menu_quick_move`, the remainder is applied and published
+    /// first with no enclosing click transaction: wrap writes that must abort
+    /// together in `subject.transaction(...)`, while live writes made outside
+    /// a transaction survive (and still publish container updates) alongside
+    /// the earlier quick-move settlement. Not `item_crafted` or
+    /// `item_smelted`, which keep their meaning: a result slot that gives
+    /// experience or unlocks a recipe does it here through the host. Nothing
+    /// is asked when no mod listens.
     #[hook(
+        receiver = "associated",
         dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "block_entity",
-        key = "entity",
+        key = "kind",
+        version = 2,
         neoforge = "none (a Java menu's slot overrides Slot.onTake; NeoForge adds no event)"
     )]
     fn menu_slot_take(
-        entity: &mut ModBlockEntity,
+        kind: mod_api::BlockEntityTypeKey,
+        subject: mod_api::BlockEntityScope<'_>,
         player: u128,
         menu: &str,
         slot: usize,

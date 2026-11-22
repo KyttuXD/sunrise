@@ -89,10 +89,10 @@ tick does not open a transaction for you. Use `event.subject.transaction` to mak
 a subject edit and a dropped-item write atomic:
 
 ```rust,ignore
-use mod_api::{BlockEntityTickScope, ItemEntityRef, ItemStack};
+use mod_api::{BlockEntityScope, ItemEntityRef, ItemStack};
 
 fn update(
-    tick: &mut BlockEntityTickScope<'_>,
+    tick: &mut BlockEntityScope<'_>,
     item: ItemEntityRef,
     replacement: ItemStack,
     progress: i32,

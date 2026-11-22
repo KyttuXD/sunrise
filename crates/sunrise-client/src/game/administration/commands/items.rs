@@ -497,7 +497,6 @@ impl Game<'_> {
     }
     fn block_container_size(&self, p: [i32; 3]) -> Option<usize> {
         let size = match self.world.block_entities.get(&(p[0], p[1], p[2]))? {
-            BlockEntity::Mod(m) if m.id().is_empty() => 0,
             BlockEntity::Mod(_) => self
                 .world
                 .block_entities

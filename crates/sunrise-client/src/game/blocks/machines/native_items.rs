@@ -132,7 +132,7 @@ impl Game<'_> {
     }
     /// The level in place, as a handle: where the game's capability lookups (a hopper's) are.
     /// None where no world is simulated.
-    pub(super) fn native_level_here(&self) -> Option<LevelRef> {
+    pub(in crate::game) fn native_level_here(&self) -> Option<LevelRef> {
         let epoch = self.native_lifecycle.epoch()?;
         self.native_simulates()
             .then(|| self.level_ref(epoch, self.dim.key()))

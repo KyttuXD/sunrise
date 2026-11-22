@@ -8,7 +8,7 @@ pub trait Hooks {
     /// sent and whenever its block changes, on the server thread; a client's copy of the block
     /// entity (made by `block_entity` there) merges it into its `nbt`.
     /// Leave it unset to send no tag of yours. A block change puts the one-shot fields of
-    /// `ModBlockEntityView::set_client_update_fields` over it, and sends them alone when it is unset.
+    /// `BlockEntityView::set_client_update_fields` over it, and sends them alone when it is unset.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_block_entity_update_tag",
         receiver = "associated",

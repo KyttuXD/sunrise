@@ -5,11 +5,14 @@ use crate::game::{
     transactions::OpenTransactions,
 };
 use mod_api::{
-    BlockEntityItemError, BlockEntityRef, BlockEntityTickAccess, BlockEntityTickScope,
-    BlockEntityView, ResidentBlockEntity, ServerHost,
+    BlockEntityAccess, BlockEntityItemError, BlockEntityRef, BlockEntityScope, BlockEntityView,
+    ResidentBlockEntity, ServerHost, Transaction,
 };
 use std::collections::HashMap;
-use sunrise_client::{block_entities::BlockEntityLoan, chunk_map::ChunkMap, fast_hash::FxHashMap};
+use sunrise_client::{
+    block_entities::BlockEntityLoan, chunk_map::ChunkMap, fast_hash::FxHashMap,
+    world::ModifiedChunks,
+};
 use sunrise_core::nbt::{Compound, JavaString, Tag};
 use sunrise_items::items::Items;
 
@@ -47,12 +50,9 @@ impl Game<'_> {
         };
         let subject =
             mod_api::__private::game::block_entity_ref(level, [pos.0, pos.1, pos.2], generation);
-        let mut access = TickAccess {
-            game: self,
-            subject,
-            checked: Some(live_state),
-        };
-        Self::native_block_entity_tick(kind, BlockEntityTickScope::new(&mut access));
+        let mut access =
+            ResidentBlockEntityAccess::new(self, Some(subject), Loan::Tick(Some(live_state)));
+        Self::native_block_entity_tick(kind, BlockEntityScope::new(&mut access));
         self.world
             .block_entities
             .clear_ticker_warning(pos, generation);
@@ -62,7 +62,7 @@ impl Game<'_> {
     /// Dispatch the one resident server ticker; the scope owns access to the Host.
     pub(in crate::game) fn native_block_entity_tick(
         kind: mod_api::BlockEntityTypeKey,
-        subject: mod_api::BlockEntityTickScope<'_>,
+        subject: mod_api::BlockEntityScope<'_>,
     ) {
         Self::fire_block_entity_tick(kind, subject);
     }
@@ -72,24 +72,81 @@ fn valid_tick_subject(block: &str, entity: &EngineBlockEntity) -> bool {
     sunrise_client::block_entity_types::valid(block, entity.id()) == Some(true)
 }
 
-struct TickAccess<'g, 'w> {
-    game: &'g mut Game<'w>,
-    subject: BlockEntityRef,
-    /// The live state this instance was last found valid on. Validity depends only on the
-    /// state's block and the instance's fixed type, and the loan already pins the instance,
-    /// so a borrow over the same state needs no second `BlockEntityType.isValid`.
-    checked: Option<BlockStateId>,
+#[derive(Clone, Copy)]
+enum Loan {
+    // Reuse the ticker's validity result for this instance and state.
+    Tick(Option<BlockStateId>),
+    Menu(BlockStateId),
+    OnLoad,
 }
 
-impl BlockEntityTickAccess for TickAccess<'_, '_> {
+pub(in crate::game) struct ResidentBlockEntityAccess<'g, 'w> {
+    game: &'g mut Game<'w>,
+    subject: Option<BlockEntityRef>,
+    loan: Loan,
+    items_changed: bool,
+}
+
+impl<'g, 'w> ResidentBlockEntityAccess<'g, 'w> {
+    fn new(game: &'g mut Game<'w>, subject: Option<BlockEntityRef>, loan: Loan) -> Self {
+        Self {
+            game,
+            subject,
+            loan,
+            items_changed: false,
+        }
+    }
+
+    pub(in crate::game) fn for_handle(
+        game: &'g mut Game<'w>,
+        subject: BlockEntityRef,
+        state: BlockStateId,
+    ) -> Self {
+        Self::new(game, Some(subject), Loan::Menu(state))
+    }
+
+    pub(in crate::game) fn blockless(game: &'g mut Game<'w>) -> Self {
+        Self::new(game, None, Loan::OnLoad)
+    }
+
+    pub(super) fn on_load(game: &'g mut Game<'w>, subject: BlockEntityRef) -> Self {
+        Self::new(game, Some(subject), Loan::OnLoad)
+    }
+
+    pub(in crate::game) fn items_changed(&self) -> bool {
+        self.items_changed
+    }
+}
+
+impl Game<'_> {
+    /// The resident mod block entity and admitted block state behind a menu callback.
+    pub(in crate::game) fn resident_block_entity_target(
+        &self,
+        pos: Pos,
+    ) -> Option<(BlockEntityRef, BlockStateId)> {
+        let level = self.level(self.dim.id())?;
+        let handle = self.block_entity(level, [pos.0, pos.1, pos.2])?;
+        matches!(
+            self.world.block_entities.get(&pos),
+            Some(BlockEntity::Mod(_))
+        )
+        .then(|| (handle, self.world.block(pos.0, pos.1, pos.2)))
+    }
+}
+
+impl BlockEntityAccess for ResidentBlockEntityAccess<'_, '_> {
     fn with_view(&mut self, call: &mut dyn FnMut(BlockEntityView<'_>)) {
         use mod_api::__private::game::Fields;
-        let target = self.subject.fields();
+        let Some(subject) = self.subject else { return };
+        let target = subject.fields();
         let [x, y, z] = target.position;
         if !self.game.level_in_place(target.level) || !self.game.world.loaded(x, z) {
             return;
         }
         let live_state = self.game.world.block(x, y, z);
+        if matches!(self.loan, Loan::Menu(admitted) if admitted != live_state) {
+            return;
+        }
         let Ok(state) = live_state.try_into_api() else {
             return;
         };
@@ -108,11 +165,13 @@ impl BlockEntityTickAccess for TickAccess<'_, '_> {
         else {
             return;
         };
-        if self.checked != Some(live_state) {
+        if let Loan::Tick(checked) = &mut self.loan
+            && *checked != Some(live_state)
+        {
             if !valid_tick_subject(&self.game.res.facts().get(live_state).name, loan.entity) {
                 return;
             }
-            self.checked = Some(live_state);
+            *checked = Some(live_state);
         }
         let mut data = ServerBlockEntityData {
             dim: self.game.dim,
@@ -124,16 +183,37 @@ impl BlockEntityTickAccess for TickAccess<'_, '_> {
             chunks: &self.game.world.chunks,
             names: &self.game.world.block_names,
             hoppers: &self.game.hoppers,
+            menu: matches!(self.loan, Loan::Menu(_))
+                .then_some((&mut self.game.world.modified, &mut self.items_changed)),
+            dirty: false,
         };
-        call(BlockEntityView::new(self.subject, state, &mut data));
+        call(BlockEntityView::new(subject, state, &mut data));
     }
 
     fn host(&mut self) -> &mut dyn ServerHost {
         self.game
     }
+
+    fn transaction(
+        &mut self,
+        call: &mut dyn FnMut(&mut dyn BlockEntityAccess, &Transaction) -> bool,
+    ) {
+        let (subject, loan) = (self.subject, self.loan);
+        let committed = mod_api::run_transaction(self.game, |game, tx| {
+            let mut child = ResidentBlockEntityAccess::new(game, subject, loan);
+            if call(&mut child, tx) {
+                Ok(child.items_changed)
+            } else {
+                Err(())
+            }
+        });
+        if let Ok(changed) = committed {
+            self.items_changed |= changed;
+        }
+    }
 }
 
-pub(super) struct ServerBlockEntityData<'a> {
+struct ServerBlockEntityData<'a> {
     pub(super) dim: Dim,
     pub(super) pos: Pos,
     pub(super) loan: BlockEntityLoan<'a>,
@@ -143,6 +223,8 @@ pub(super) struct ServerBlockEntityData<'a> {
     pub(super) chunks: &'a ChunkMap,
     pub(super) names: &'a FxHashMap<Pos, Tag>,
     pub(super) hoppers: &'a HashMap<Pos, super::super::machines::HopperState>,
+    menu: Option<(&'a mut ModifiedChunks, &'a mut bool)>,
+    dirty: bool,
 }
 
 impl ServerBlockEntityData<'_> {
@@ -150,7 +232,8 @@ impl ServerBlockEntityData<'_> {
         self.loan.entity
     }
 
-    fn edit(&mut self) -> &mut EngineBlockEntity {
+    fn edit(&mut self, saved: bool) -> &mut EngineBlockEntity {
+        self.dirty |= saved;
         self.journal.journal_block_entity_loan(
             self.dim,
             self.pos,
@@ -160,6 +243,18 @@ impl ServerBlockEntityData<'_> {
             self.hoppers.get(&self.pos).copied(),
         );
         self.loan.entity
+    }
+}
+
+impl Drop for ServerBlockEntityData<'_> {
+    fn drop(&mut self) {
+        if self.dirty
+            && let Some((modified, _)) = &mut self.menu
+        {
+            let (x, _, z) = self.pos;
+            self.journal
+                .mark_scoped_menu_write(self.dim, (x >> 4, z >> 4), modified);
+        }
     }
 }
 
@@ -181,7 +276,7 @@ impl ResidentBlockEntity for ServerBlockEntityData<'_> {
         {
             return false;
         }
-        self.edit().data[index] = value;
+        self.edit(false).data[index] = value;
         true
     }
 
@@ -189,7 +284,7 @@ impl ResidentBlockEntity for ServerBlockEntityData<'_> {
         if self.entity().data == data {
             return false;
         }
-        let dest = &mut self.edit().data;
+        let dest = &mut self.edit(false).data;
         dest.clear();
         dest.extend_from_slice(data);
         true
@@ -219,7 +314,7 @@ impl ResidentBlockEntity for ServerBlockEntityData<'_> {
         if unchanged {
             return false;
         }
-        let entity = self.edit();
+        let entity = self.edit(true);
         if is_items {
             entity.items.clear();
         }
@@ -279,7 +374,10 @@ impl ResidentBlockEntity for ServerBlockEntityData<'_> {
         {
             return Ok(false);
         }
-        let entity = self.edit();
+        if let Some((_, changed)) = &mut self.menu {
+            **changed = true;
+        }
+        let entity = self.edit(true);
         if index >= entity.items.len() {
             entity.items.resize(slots, None);
         }
@@ -291,7 +389,7 @@ impl ResidentBlockEntity for ServerBlockEntityData<'_> {
 
     fn set_client_update_fields(&mut self, fields: Compound) {
         if !fields.is_empty() || self.entity().has_client_update_fields() {
-            self.edit().set_client_update_fields(fields);
+            self.edit(false).set_client_update_fields(fields);
         }
     }
 }

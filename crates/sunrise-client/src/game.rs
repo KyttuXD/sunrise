@@ -947,8 +947,6 @@ mod mob_looting;
 mod mob_sounds;
 #[path = "game/modding/mod_api_host.rs"]
 mod mod_api_host;
-#[path = "game/modding/mod_block_entity_lost_contents.rs"]
-mod mod_block_entity_lost_contents;
 #[path = "game/interface/mod_browser.rs"]
 mod mod_browser;
 #[path = "game/modding/mod_container_openers.rs"]

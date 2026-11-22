@@ -87,11 +87,7 @@ impl BlockPart for Pot {
 }
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Pot {
-    fn menu_slot_take(
-        &self,
-        host: &mut dyn mod_api::ServerHost,
-        event: &mut MenuSlotTakeEvent<'_>,
-    ) {
+    fn menu_slot_take(&self, event: &mut MenuSlotTakeEvent<'_>) {
         let heard = (
             event.player,
             event.menu.to_owned(),
@@ -108,43 +104,71 @@ impl BlockEntityPart for Pot {
             player: event.player,
             slot: 8,
         };
-        let tx = host.transaction_current().expect("a take is tentative");
         match SCRIPT.get() {
             TakeScript::Hear => {}
             TakeScript::PanicWithoutReward => panic!("a broken craft listener"),
-            TakeScript::Reward | TakeScript::Panic | TakeScript::Invalid => {
+            TakeScript::Reward | TakeScript::Panic => {
+                let host = event.subject.host();
+                let tx = host.transaction_current().expect("a take is tentative");
                 assert_eq!(
                     place.insert(host, &tx, &ItemResource::of(event.taken), 1),
                     1
                 );
-                if matches!(SCRIPT.get(), TakeScript::Invalid) {
-                    event.entity.items[0] = Some(api_item("minecraft:stone", 65));
-                }
                 if matches!(SCRIPT.get(), TakeScript::Panic) {
                     panic!("a broken listener");
                 }
             }
+            TakeScript::Invalid => {
+                let err = event
+                    .subject
+                    .with_view(|mut entity| {
+                        entity.set_item_slot(0, Some(api_item("minecraft:stone", 65)))
+                    })
+                    .expect("live resident block entity")
+                    .expect_err("oversized stack must be refused at the boundary");
+                assert!(matches!(
+                    err,
+                    mod_api::BlockEntityItemError::StackRejected(_)
+                ));
+            }
             TakeScript::RefillGrid if heard_count == 1 => {
-                assert!(
-                    event.entity.items[0].is_none(),
-                    "the craft consumed its log"
-                );
                 assert_eq!(
-                    place.amount(host),
+                    place.amount(event.subject.host()),
                     4,
                     "the first craft already reached hotbar 8"
                 );
-                event.entity.items[0] = Some(api_item("minecraft:oak_log", 1));
-                event.entity.items[10] = Some(api_item("minecraft:stone", 7));
+                event
+                    .subject
+                    .with_view(|mut entity| {
+                        assert!(entity.item_slot(0).is_none(), "the craft consumed its log");
+                        assert_eq!(
+                            entity.set_item_slot(0, Some(api_item("minecraft:oak_log", 1))),
+                            Ok(true)
+                        );
+                        assert_eq!(
+                            entity.set_item_slot(10, Some(api_item("minecraft:stone", 7))),
+                            Ok(true)
+                        );
+                    })
+                    .expect("live resident block entity");
             }
             TakeScript::RefillThenPanic => {
                 if heard_count == 2 {
                     panic!("the second throw failed");
                 }
-                assert!(event.entity.items[0].is_none());
-                event.entity.items[0] = Some(api_item("minecraft:stone", 2));
+                event
+                    .subject
+                    .with_view(|mut entity| {
+                        assert!(entity.item_slot(0).is_none());
+                        assert_eq!(
+                            entity.set_item_slot(0, Some(api_item("minecraft:stone", 2))),
+                            Ok(true)
+                        );
+                    })
+                    .expect("live resident block entity");
             }
             TakeScript::RemoveBacking | TakeScript::RemoveBackingDuringSwap => {
+                let host = event.subject.host();
                 let level = host.level("minecraft:overworld").unwrap();
                 let air = mod_api::BlockState::of(
                     &host.block_states(),
@@ -161,13 +185,18 @@ impl BlockEntityPart for Pot {
                     ),
                     Ok(true)
                 );
+                assert!(event.subject.with_view(|_| ()).is_none());
             }
             TakeScript::SwapRoom => {
+                let host = event.subject.host();
+                let tx = host.transaction_current().expect("a take is tentative");
                 // The old slot stack has not been added to inventory or dropped yet.
                 let dirt = place.resource(host).expect("hotbar 8 still holds dirt");
                 assert_eq!(place.extract(host, &tx, &dirt, 64), 64);
             }
             TakeScript::ReplacePickAllCursor if heard_count == 1 => {
+                let host = event.subject.host();
+                let tx = host.transaction_current().expect("a take is tentative");
                 let player = host.player(event.player).unwrap();
                 let cursor = player.container_menu(host).unwrap().cursor();
                 assert_eq!(
@@ -178,6 +207,8 @@ impl BlockEntityPart for Pot {
                 assert_eq!(cursor.insert(host, &tx, &pearls, 14), 14);
             }
             TakeScript::LinkedWriteThenPanic => {
+                let host = event.subject.host();
+                let tx = host.transaction_current().expect("a take is tentative");
                 let level = host.level("minecraft:overworld").unwrap();
                 let items = level
                     .capability(host, &ITEMS, [LINK.0, LINK.1, LINK.2], None)
@@ -534,6 +565,13 @@ fn an_exchange_an_insertion_and_a_refused_take_are_silent() {
 #[ignore = "daily"]
 fn a_failing_listener_undoes_its_writes_and_the_take() {
     with_pot(pot_type(SLOTS, None), |game| {
+        // A listener that returns keeps its write, and the take stands.
+        SCRIPT.set(TakeScript::Reward);
+        set(game, &[(0, stone(5))], &[], None);
+        click(game, 0, 0, 0);
+        assert_eq!(heard(), [took(0, 5, 0)]);
+        assert_eq!(in_pot(game, 0), 0);
+        assert_eq!(held(game, 8), (1, 5));
         // The listener puts one stone in hotbar slot 8, then fails: the stone it put is gone,
         // the five stone are back in the slot and the cursor is empty.
         SCRIPT.set(TakeScript::Panic);
@@ -542,12 +580,6 @@ fn a_failing_listener_undoes_its_writes_and_the_take() {
         assert_eq!(heard(), [took(0, 5, 0)]);
         assert_eq!(in_pot(game, 0), 5);
         assert_eq!(held(game, 8), (0, 0));
-        // A listener that returns keeps its write, and the take stands.
-        SCRIPT.set(TakeScript::Reward);
-        click(game, 0, 0, 0);
-        assert_eq!(heard(), [took(0, 5, 0)]);
-        assert_eq!(in_pot(game, 0), 0);
-        assert_eq!(held(game, 8), (1, 5));
     });
 }
 
@@ -555,24 +587,30 @@ fn a_failing_listener_undoes_its_writes_and_the_take() {
 #[ignore = "daily"]
 fn invalid_snapshot_or_failed_offhand_swap_rolls_back_without_publishing() {
     with_pot(pot_type(SLOTS, None), |game| {
-        for script in [TakeScript::Invalid, TakeScript::Panic] {
-            SCRIPT.set(script);
-            set(game, &[(0, stone(5))], &[], None);
-            click(game, 0, 40, 2);
-            assert_eq!(heard(), [took(0, 5, 0)]);
-            assert_eq!(in_pot(game, 0), 5);
-            assert_eq!(held(game, 8), (0, 0));
-            assert!(game.lan.as_ref().unwrap().hub.guests[0].offhand.is_none());
-            assert_eq!(
-                CHANGED.get(),
-                0,
-                "a refused take publishes no storage notice"
-            );
-        }
-        SCRIPT.set(TakeScript::Hear);
+        // An oversized `set_item_slot` write is rejected at the boundary without mutating slot 0;
+        // the valid offhand swap commits and publishes its storage notice.
+        SCRIPT.set(TakeScript::Invalid);
+        set(game, &[(0, stone(5))], &[], None);
         click(game, 0, 40, 2);
-        assert_eq!(CHANGED.get(), 1);
+        assert_eq!(heard(), [took(0, 5, 0)]);
+        assert_eq!(in_pot(game, 0), 0);
         assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].offhand, stone(5));
+        assert_eq!(CHANGED.get(), 1);
+
+        // A panicking listener aborts the enclosing click transaction without publishing.
+        CHANGED.set(0);
+        SCRIPT.set(TakeScript::Panic);
+        set(game, &[(0, stone(5))], &[], None);
+        click(game, 0, 40, 2);
+        assert_eq!(heard(), [took(0, 5, 0)]);
+        assert_eq!(in_pot(game, 0), 5);
+        assert_eq!(held(game, 8), (0, 0));
+        assert!(game.lan.as_ref().unwrap().hub.guests[0].offhand.is_none());
+        assert_eq!(
+            CHANGED.get(),
+            0,
+            "a refused take publishes no storage notice"
+        );
     });
 }
 
@@ -635,13 +673,6 @@ fn linked_sources_are_silent_and_linked_writes_abort_with_the_click() {
 #[ignore = "daily"]
 fn a_throw_repeat_sees_the_previous_notice_and_oversized_swap_delivers_after_it() {
     with_pot(pot_type(SLOTS, None), |game| {
-        set(game, &[(0, stone(2))], &[], None);
-        SCRIPT.set(TakeScript::RefillThenPanic);
-        click(game, 0, 1, 4);
-        assert_eq!(heard(), [took(0, 2, 0), took(0, 2, 0)]);
-        assert_eq!(in_pot(game, 0), 2);
-        assert!(game.dropped.is_empty());
-
         let dirt: Vec<_> = (0..36).map(|i| (i, item("minecraft:dirt", 64))).collect();
         set(game, &[(0, stone(5))], &dirt, None);
         SCRIPT.set(TakeScript::SwapRoom);
@@ -662,6 +693,13 @@ fn a_throw_repeat_sees_the_previous_notice_and_oversized_swap_delivers_after_it(
             game.lan.as_ref().unwrap().hub.guests[0].inventory[8],
             stone(5)
         );
+        assert!(game.dropped.is_empty());
+
+        set(game, &[(0, stone(2))], &[], None);
+        SCRIPT.set(TakeScript::RefillThenPanic);
+        click(game, 0, 1, 4);
+        assert_eq!(heard(), [took(0, 2, 0), took(0, 2, 0)]);
+        assert_eq!(in_pot(game, 0), 2);
         assert!(game.dropped.is_empty());
     });
 }
@@ -781,22 +819,31 @@ fn a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted() {
     const ID: &str = "take:crafted";
     const CRITERION: &str = "planks";
     const TRIGGER: &str = "minecraft:recipe_crafted";
-    with_pot(pot_type(10, Some(GRID)), |game| {
-        let mut tree = Tree::default();
-        tree.list.push(Advancement {
-            id: ID.into(), parent: None, display: None, rewards: Default::default(),
-            requirements: vec![vec![CRITERION.into()]],
-            criteria: vec![Criterion { name: CRITERION.into(), trigger: TRIGGER.into(), conditions: serde_json::json!({"recipes": [PLANKS], "ingredients": [{"items": LOG}]}).into() }],
-        });
-        tree.by_id.insert(ID.into(), 0);
-        tree.by_trigger.insert(TRIGGER.into(), vec![(0, 0)]);
-        game.adv.tree = Arc::new(tree);
-        let mut full: Vec<_> = (1..36).map(|i| (i, item("minecraft:dirt", 64))).collect();
-        full.push((0, item(PLANKS, 62)));
-        for (script, success) in [
-            (TakeScript::PanicWithoutReward, false),
-            (TakeScript::Hear, true),
-        ] {
+    for (script, success) in [
+        (TakeScript::PanicWithoutReward, false),
+        (TakeScript::Hear, true),
+    ] {
+        with_pot(pot_type(10, Some(GRID)), |game| {
+            let mut tree = Tree::default();
+            tree.list.push(Advancement {
+                id: ID.into(),
+                parent: None,
+                display: None,
+                rewards: Default::default(),
+                requirements: vec![vec![CRITERION.into()]],
+                criteria: vec![Criterion {
+                    name: CRITERION.into(),
+                    trigger: TRIGGER.into(),
+                    conditions:
+                        serde_json::json!({"recipes": [PLANKS], "ingredients": [{"items": LOG}]})
+                            .into(),
+                }],
+            });
+            tree.by_id.insert(ID.into(), 0);
+            tree.by_trigger.insert(TRIGGER.into(), vec![(0, 0)]);
+            game.adv.tree = Arc::new(tree);
+            let mut full: Vec<_> = (1..36).map(|i| (i, item("minecraft:dirt", 64))).collect();
+            full.push((0, item(PLANKS, 62)));
             set(game, &[(0, item(LOG, 1))], &full, None);
             SCRIPT.set(script);
             click(game, 9, 0, 1);
@@ -817,30 +864,32 @@ fn a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted() {
             );
             assert_eq!(host.hub.guests[0].advancements.has(ID, CRITERION), success);
             assert_eq!(CRAFTED.get(), 0);
-        }
-        let host = game.lan.as_mut().unwrap();
-        host.hub.close_container(12);
-        host.hub.guests.update(0, |guest| {
-            guest.craft_grid[0] = item(LOG, 1);
-            guest.carried = None;
+            if success {
+                let host = game.lan.as_mut().unwrap();
+                host.hub.close_container(12);
+                host.hub.guests.update(0, |guest| {
+                    guest.craft_grid[0] = item(LOG, 1);
+                    guest.carried = None;
+                });
+                game.lan_guest_packet(
+                    12,
+                    Serverbound::ContainerClick(ContainerClick {
+                        container: 0,
+                        state: 0,
+                        slot: 0,
+                        button: 0,
+                        input: 0,
+                        changed: Vec::new(),
+                        carried: None,
+                    }),
+                );
+                assert_eq!(
+                    CRAFTED.get(),
+                    1,
+                    "the vanilla inventory crafting notice is unchanged"
+                );
+                assert!(heard().is_empty());
+            }
         });
-        game.lan_guest_packet(
-            12,
-            Serverbound::ContainerClick(ContainerClick {
-                container: 0,
-                state: 0,
-                slot: 0,
-                button: 0,
-                input: 0,
-                changed: Vec::new(),
-                carried: None,
-            }),
-        );
-        assert_eq!(
-            CRAFTED.get(),
-            1,
-            "the vanilla inventory crafting notice is unchanged"
-        );
-        assert!(heard().is_empty());
-    });
+    }
 }

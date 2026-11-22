@@ -102,11 +102,7 @@ struct PotBlock;
 impl BlockPart for PotBlock {}
 #[mod_api::sunrise_part]
 impl BlockEntityPart for PotBlock {
-    fn menu_quick_move(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut MenuQuickMoveEvent<'_>,
-    ) -> mod_api::Flow {
+    fn menu_quick_move(&self, event: &mut MenuQuickMoveEvent<'_>) -> mod_api::Flow {
         MOVED.with(|moved| moved.borrow_mut().push(event.slot));
         if let Some(left) = QUICK_MOVE_LEFT.take() {
             let source = event.stack.as_mut().unwrap();

@@ -8,7 +8,8 @@ pub trait Hooks {
     /// it held that the game doesn't: they scatter as `Containers.dropItemStack`
     /// scatters them, after the block entity's own container. The block entity
     /// is still in place, so its attachments read as they were. Answered from
-    /// inside the level's write: don't change the world here.
+    /// inside the level's write: don't change the world here. This also runs
+    /// when a menu button callback removes the backing block through the Host.
     /// Set `keep_contents` to skip the base container slots. Each `drops` entry
     /// is a slot: `None` draws the empty slot's scatter position but spawns nothing.
     /// Then `spawns` creates each (stack, position) with default pickup delay,
@@ -18,20 +19,20 @@ pub trait Hooks {
     #[notes = r#"- `pre_remove_side_effects` is a mod block entity's `BlockEntity.preRemoveSideEffects`: its block is being
   replaced or broken with side effects (not under flag 256). Its part puts the stacks it held in `drops`, and they
   scatter as `Containers.dropItemStack` scatters them, after the block entity's own container slots.
-  Version 2 uses `Option<ItemStack>` entries: `None` consumes an empty slot's three position draws.
+  `drops` uses `Option<ItemStack>` entries: `None` consumes an empty slot's three position draws.
   `keep_contents` skips the base container slots; then `spawns` creates (stack, position) entries
   with default pickup delay, and `experience` awards (amount, position) entries as orbs.
   Each list is limited to 1024 entries and positions must be finite. It runs inside
   the level's write with the level host, like `neighbor_changed`; the block entity is still in place, so the part
   reads its attachments with `TYPE.get(host, Holder::BlockEntity(pos))`, the level host being their store. A part that returns nothing draws nothing.
-  A ticking block entity stays in the level: removing its block through the Host runs the usual removal, and the
-  old tick scope can no longer lend a view. A block entity detached for `menu_button` is out of the level for that
-  call, so its part isn't asked: its attachments go with it, and only its container slots come back out."#]
+  A ticking or menu-hook (`menu_button`, `menu_quick_move`, `menu_slot_take`) block entity stays in the level:
+  removing its block through the Host runs the usual removal, and the old scope can no longer lend a view.
+  Version 4 includes removal from a menu callback; do not drop the same contents manually there."#]
     #[hook(
         side = "server",
         contract = "collect",
         out = "drops",
-        version = 3,
+        version = 4,
         scope = "block_entity",
         key = "entity",
         target = "sunrise_client::game::native_hooks::pre_remove_side_effects::GameLevel<'_>::native_pre_remove_side_effects",

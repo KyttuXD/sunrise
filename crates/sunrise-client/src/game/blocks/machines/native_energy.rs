@@ -35,9 +35,8 @@ fn extract_amount(buffer: &ModEnergyBuffer, energy: i32, asked: i32) -> i32 {
 }
 
 impl Game<'_> {
-    /// The buffer of the mod block at `at` in the level in place and the energy it holds (its
-    /// block entity's, and not the placeholder standing in while it ticks), if `at`'s side
-    /// reaches a fill or a drain (none: every side does).
+    /// The buffer of the mod block at `at` in the level in place and the energy it holds,
+    /// if `at`'s side reaches a fill or a drain (none: every side does).
     fn energy_buffer(&self, at: BlockSide) -> Option<(Arc<ModEnergyBuffer>, i32)> {
         if !self.level_in_place(at.level) {
             return None;
@@ -50,11 +49,8 @@ impl Game<'_> {
         let reached = at.side.is_none_or(|face| {
             buffer.insert_faces[face as usize] || buffer.extract_faces[face as usize]
         });
-        // The block entity is out of the world while it ticks.
         match self.world.block_entities.get(&(x, y, z)) {
-            Some(BlockEntity::Mod(m)) if reached && !m.id().is_empty() => {
-                Some((Arc::clone(buffer), read_energy(&m.nbt)))
-            }
+            Some(BlockEntity::Mod(m)) if reached => Some((Arc::clone(buffer), read_energy(&m.nbt))),
             _ => None,
         }
     }

@@ -644,10 +644,6 @@ fn fluid_id(name: &str) -> Option<u32> {
 pub use sunrise_items::item_nbt::{
     decode_items, encode_item, encode_items, item_from_nbt, item_to_nbt,
 };
-/// Whether a mod block entity is temporarily out of the world for its tick.
-pub fn block_entity_placeholder(entity: &crate::containers::BlockEntity) -> bool {
-    matches!(entity, crate::containers::BlockEntity::Mod(m) if m.id().is_empty())
-}
 
 /// The block entity type ID for the block it sits in (a chest-like container
 /// is a chest, trapped chest or barrel).
@@ -1431,9 +1427,6 @@ fn encode_full(
     let mut block_entities: Vec<Tag> = chunk
         .block_entities
         .iter()
-        // A mod block entity a native mod is ticking right now
-        // (`tick_mod_block_entity`): its data is out of the world.
-        .filter(|(_, e)| !block_entity_placeholder(e))
         .map(|(p, e)| {
             let block = block_name(p);
             let stored = extras

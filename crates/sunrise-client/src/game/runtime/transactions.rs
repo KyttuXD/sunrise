@@ -35,12 +35,13 @@ use super::{BlockEntity, BlockStateId, Dim, Game, machines::HopperState, maps::M
 use mod_api::{LevelRef, Transaction, TransactionLifecycle, TransactionSeal};
 use std::collections::{BTreeMap, HashMap};
 use sunrise_client::{
+    block_entities::BlockEntityIdentity,
     effects::EffectInstance,
     fast_hash::FxHashSet,
     items::ItemStack,
     living_attributes::ModifierChanges,
     mobs::{Mob, StoredEffect, finalize::EffectModifierUndo, gear::Gear},
-    world::{BlockEntityExtras, World},
+    world::{BlockEntityExtras, ModifiedChunks, World},
 };
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::LegacyRandom};
 use sunrise_items::equipment::Equipment;
@@ -55,6 +56,23 @@ pub(in crate::game) use entities::{Announcement, ArrivalRollback};
 #[path = "transactions/scratch.rs"]
 mod scratch;
 
+/// A notice names the container that received the write, not a replacement at its position.
+pub(super) struct QuickMoveNotice {
+    dim: Dim,
+    holder: BlockEntityIdentity,
+}
+
+struct QuickMoveNotices<'a, 'g> {
+    game: &'a mut Game<'g>,
+    outer: Option<Vec<QuickMoveNotice>>,
+}
+
+impl Drop for QuickMoveNotices<'_, '_> {
+    fn drop(&mut self) {
+        self.game.transactions.quick_move_notices = self.outer.take();
+    }
+}
+
 type Pos = (i32, i32, i32);
 /// The last pending value at this depth for a connection, menu generation and data index.
 type MenuDataJournal = BTreeMap<(u32, u64, usize), i32>;
@@ -68,6 +86,8 @@ pub(super) struct OpenTransactions {
     levels: Vec<Level>,
     pub(in crate::game) attachment_query_scopes: AttachmentQueryScopes,
     closing: Option<TransactionLifecycle>,
+    /// Implicit container notices waiting for this quick move's source settlement.
+    quick_move_notices: Option<Vec<QuickMoveNotice>>,
     /// How many writes the journals have been asked to keep, ever: a whole-state epoch that no
     /// restore moves back. A decision that read a player's inventory or a container's slots
     /// compares it before and after its listeners ran; an equal rewrite counts as a write.
@@ -153,6 +173,19 @@ impl OpenTransactions {
                 extras: BlockEntityExtras::capture(chunks, pos),
                 contents_watches: loan.contents_watches.snapshot(loan.identity),
             });
+        }
+    }
+
+    pub(super) fn mark_scoped_menu_write(
+        &mut self,
+        dim: Dim,
+        chunk: (i32, i32),
+        modified: &mut ModifiedChunks,
+    ) {
+        if let Some(level) = entities::open_in(self, dim) {
+            level.save_chunks.insert((dim, chunk));
+        } else {
+            modified.insert(chunk);
         }
     }
 
@@ -563,10 +596,8 @@ pub(super) enum After {
     FluidEffects(Box<super::world_fluids::FluidEffects>),
     /// `BlockEntity.setChanged`.
     Changed(Pos),
-    /// Detached mod entity state (not necessarily items) was edited.
-    DirtyBlockEntity(Pos),
-    /// A detached menu listener removed its holder; spill any unreturned contents only on commit.
-    LostMenuContents(Pos, Box<sunrise_client::containers::ModBlockEntity>),
+    /// An implicit notice staged during a mod quick move.
+    QuickMoveChanged(QuickMoveNotice),
     GuestMenu(u32, Box<super::lan_crafting::GuestMenuEffects>),
     MenuClick(Box<super::lan_menus::MenuClickReply>),
     MenuPlacesNotice(u32, u128, i32),
@@ -653,8 +684,7 @@ impl After {
             Self::Block(_)
                 | Self::BulkBlocks(..)
                 | Self::Changed(_)
-                | Self::DirtyBlockEntity(_)
-                | Self::LostMenuContents(..)
+                | Self::QuickMoveChanged(_)
                 | Self::Capabilities(_)
                 | Self::LevelWrite(_)
                 | Self::FluidWrite(_)
@@ -1882,8 +1912,59 @@ impl Game<'_> {
     pub(super) fn defer_effect(&mut self, effect: DeferredEffect) {
         self.after_commit(After::Effect(effect));
     }
+    /// Collect committed implicit `setChanged` notices while the callback runs without opening
+    /// a transaction. Direct calls to `BlockEntityRef::set_changed` remain immediate.
+    pub(super) fn collect_quick_move_notices<R>(
+        &mut self,
+        dispatch: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Vec<QuickMoveNotice>) {
+        let outer = self.transactions.quick_move_notices.replace(Vec::new());
+        let scope = QuickMoveNotices { game: self, outer };
+        let result = dispatch(&mut *scope.game);
+        let notices = scope
+            .game
+            .transactions
+            .quick_move_notices
+            .take()
+            .expect("active quick-move notice scope");
+        (result, notices)
+    }
+
+    /// Release accepted writes after source settlement, in their original levels and only to
+    /// the same storage rows. Don't enqueue the notices in an enclosing quick move again.
+    pub(super) fn publish_quick_move_notices(&mut self, notices: Vec<QuickMoveNotice>) {
+        for QuickMoveNotice { dim, holder } in notices {
+            let back = self.enter_command_level(dim);
+            let [x, y, z] = holder.position;
+            let pos = (x, y, z);
+            if self.dim == dim && self.world.block_entities.identity(pos) == Some(holder) {
+                self.container_changed(pos);
+            }
+            if let Some(back) = back {
+                self.enter_command_level(back);
+            }
+        }
+    }
+
     /// Runs `after` at once, or at the root commit inside a transaction.
     pub(super) fn after_commit(&mut self, after: After) {
+        let after = match after {
+            After::Changed(pos) if self.transactions.quick_move_notices.is_some() => {
+                let reentering = !self.contents_changing.is_empty()
+                    && self.native_level_here().is_some_and(|level| {
+                        self.contents_notice_active(level, BlockPos::new(pos.0, pos.1, pos.2))
+                    });
+                if !reentering && let Some(holder) = self.world.block_entities.identity(pos) {
+                    After::QuickMoveChanged(QuickMoveNotice {
+                        dim: self.dim,
+                        holder,
+                    })
+                } else {
+                    After::Changed(pos)
+                }
+            }
+            after => after,
+        };
         let frame = if after.level_owned() {
             entities::open_in(&mut self.transactions, self.dim)
         } else {
@@ -1909,10 +1990,13 @@ impl Game<'_> {
                 self.post_block_game_event(id, pos, Some(who), Some(state));
             }
             After::Changed(pos) => self.container_changed(pos),
-            After::DirtyBlockEntity(pos) => {
-                self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            After::QuickMoveChanged(notice) => {
+                if let Some(queue) = &mut self.transactions.quick_move_notices {
+                    queue.push(notice);
+                } else {
+                    self.publish_quick_move_notices(vec![notice]);
+                }
             }
-            After::LostMenuContents(pos, taken) => self.drop_unreturned_mod_contents(pos, *taken),
             After::GuestMenu(conn, effects) => self.publish_guest_menu_effects(conn, *effects),
             After::MenuClick(reply) => self.publish_menu_click(*reply),
             After::MenuPlacesNotice(conn, uuid, window) => {
@@ -2116,16 +2200,6 @@ impl Game<'_> {
             packets.publish();
         }
         self.commit_menu_data(level.menu_data);
-        // A menu callback removed its detached block entity. Its accepted remainder is
-        // spilled separately and must not be replayed here.
-        let detached: std::collections::HashSet<_> = level
-            .after
-            .iter()
-            .filter_map(|after| match after {
-                After::LostMenuContents(pos, _) => Some(*pos),
-                _ => None,
-            })
-            .collect();
         // Replay from the old group so committed callbacks see writes in order. A fresh
         // publication entry survives only if the final group differs from that baseline.
         let mut clean_groups = Vec::new();
@@ -2198,12 +2272,15 @@ impl Game<'_> {
             }
         }
         let mut told = std::collections::HashSet::new();
+        let mut told_holders = FxHashSet::default();
         let mut explicit_group_since_block = std::collections::HashSet::new();
         let mut biome_columns = std::collections::HashSet::new();
         for after in level.after {
             match after {
                 // Each storage tells the world once, after every write.
-                After::Changed(pos) if detached.contains(&pos) || !told.insert(Ok(pos)) => {}
+                After::Changed(pos) if !told.insert(Ok(pos)) => {}
+                After::QuickMoveChanged(ref notice)
+                    if !told_holders.insert((notice.dim, notice.holder)) => {}
                 After::ConnectionGroup(dim, pos, group) => {
                     if let Some(world) = self.connection_group_world_mut(dim) {
                         world.set_connection_group(pos.0, pos.1, pos.2, group, true);
@@ -2215,9 +2292,7 @@ impl Game<'_> {
                 After::Block(step) if mixed.contains(&step.pos) => {
                     let (x, y, z) = step.pos;
                     explicit_group_since_block.remove(&step.pos);
-                    if step.removed.is_some()
-                        && (!step.replay.replay_removal || detached.contains(&step.pos))
-                    {
+                    if step.removed.is_some() && !step.replay.replay_removal {
                         self.world.block_entities.remove(&step.pos);
                     }
                     self.set_block_live(
@@ -2271,8 +2346,7 @@ impl Game<'_> {
                     // stood at removal, or leave it in place if the old block kind survived.
                     let b = self.res.behaviours();
                     let net_keeps_group = b.keeps_block_entity(was, now);
-                    if !detached.contains(&pos)
-                        && (replay_removal || b.block(now) == b.block(was))
+                    if (replay_removal || b.block(now) == b.block(was))
                         && let Some((entity, generation)) =
                             level.removed_block_entities.remove(&pos).flatten()
                     {

@@ -6,11 +6,11 @@ use crate::*;
 pub trait BlockEntitiesHost {
     /// Side: both.
     /// Find a block entity in a loaded chunk of an open level, or on a client in
-    /// the level it shows. Tick callbacks keep the entity resident and readable until removal.
+    /// the level it shows. Tick and menu callbacks keep the entity resident and readable until removal.
     fn block_entity(&self, level: LevelRef, pos: [i32; 3]) -> Option<BlockEntityRef>;
     /// Side: both.
     /// The handle [`BlockEntitiesHost::block_entity`] gives, and also for a block entity
-    /// temporarily detached for a menu operation. Its identity and attachments stay in place,
+    /// temporarily taken out by an engine operation. Its identity and attachments stay in place,
     /// so its Part state (`BlockEntityPartState`) can still check its handle even though
     /// data reads find nothing until the row is put back.
     fn block_entity_identity(&self, level: LevelRef, pos: [i32; 3]) -> Option<BlockEntityRef>;
@@ -28,7 +28,7 @@ pub trait BlockEntitiesServerHost {
     /// entities). Call it when what clients show changed (a machine started),
     /// not for every tick's progress: a menu's data slots carry that. Nothing
     /// happens for an unloaded block. It also sends the one-shot fields of
-    /// `ModBlockEntityView::set_client_update_fields`.
+    /// `BlockEntityView::set_client_update_fields`.
     fn block_entity_sync(&mut self, pos: [i32; 3]);
 }
 /// The handles' reads of the `block_entities` area, implemented by the game and reached through [`Backend`].

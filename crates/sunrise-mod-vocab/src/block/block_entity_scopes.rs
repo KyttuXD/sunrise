@@ -1,6 +1,6 @@
 //! Scoped views and sequential host loans for block-entity lifecycle and sync hooks.
 use crate::{
-    BlockEntityRef, BlockEntityTickScope, BlockEntityTypeKey, BlockState, ClientHost, Compound,
+    BlockEntityRef, BlockEntityScope, BlockEntityTypeKey, BlockState, ClientHost, Compound,
     HostSide, ItemKey, ItemStack, LevelHost, LevelRef,
 };
 
@@ -247,7 +247,7 @@ impl<'a> BlockEntityLevelReadScope<'a> {
 // no wire: the sequential loans cannot escape their call.
 pub enum BlockEntitySideScope<'a> {
     /// The logical server's mutable block-entity scope (view, `ServerHost` and `transaction`).
-    Server(BlockEntityTickScope<'a>),
+    Server(BlockEntityScope<'a>),
     /// The client's read-only block-entity scope (read view and mutable `ClientHost`).
     Client(BlockEntityClientScope<'a>),
 }

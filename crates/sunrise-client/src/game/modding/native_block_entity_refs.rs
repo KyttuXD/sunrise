@@ -31,7 +31,7 @@ impl Game<'_> {
         world_block_entity(world, level, pos)
     }
 
-    /// `block_entity`, also for a block entity temporarily detached for a menu operation:
+    /// `block_entity`, also for a block entity temporarily taken out by an engine operation:
     /// its generation stays in place while it is out.
     pub(super) fn block_entity_identity(
         &self,
@@ -191,7 +191,10 @@ impl Game<'_> {
     }
 
     /// A loaded block entity of the server level in place, when a write may change it.
-    fn native_block_entity_write_key(&self, entity: BlockEntityRef) -> Option<(i32, i32, i32)> {
+    pub(super) fn native_block_entity_write_key(
+        &self,
+        entity: BlockEntityRef,
+    ) -> Option<(i32, i32, i32)> {
         if !self.level_in_place(entity.fields().level) {
             return None;
         }
@@ -850,7 +853,7 @@ pub(super) fn part_snapshot(
 }
 
 /// The handle of the loaded block entity at `pos`, without loading a chunk or taking one
-/// that is out of the world for its own tick.
+/// temporarily absent from the resident table.
 pub(super) fn world_block_entity(
     world: &World,
     level: LevelRef,
@@ -889,10 +892,7 @@ fn loaded_block_entity(world: &World, [x, y, z]: [i32; 3]) -> Option<&BlockEntit
     if !world.loaded(x, z) || !world.shape.contains_y(y) {
         return None;
     }
-    world
-        .block_entities
-        .get(&(x, y, z))
-        .filter(|entity| !save::block_entity_placeholder(entity))
+    world.block_entities.get(&(x, y, z))
 }
 
 #[cfg(test)]

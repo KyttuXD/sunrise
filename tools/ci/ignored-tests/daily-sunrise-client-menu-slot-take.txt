@@ -1,4 +1,4 @@
-sunrise-client game::mod_menu_decisions_tests::a_handled_cross_block_move_commits_only_if_its_take_returns lib daily resources
+sunrise-client game::mod_menu_decisions_tests::a_handled_cross_block_move_fires_slot_take_and_contains_take_panics lib daily resources
 sunrise-client game::slot_take_tests::a_failing_listener_undoes_its_writes_and_the_take lib daily resources
 sunrise-client game::slot_take_tests::a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted lib daily resources
 sunrise-client game::slot_take_tests::a_pickup_hears_what_left_the_slot_and_what_stayed lib daily resources

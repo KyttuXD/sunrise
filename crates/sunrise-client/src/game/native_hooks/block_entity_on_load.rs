@@ -1,61 +1,7 @@
 use super::block_entity_client_tick::ClientBlockEntityAccess;
-use super::block_entity_tick::ServerBlockEntityData;
+use super::block_entity_tick::ResidentBlockEntityAccess;
 use super::*;
-use crate::game::api_values::TryIntoApi;
-use mod_api::{
-    BlockEntityClientScope, BlockEntityRef, BlockEntitySideScope, BlockEntityTickAccess,
-    BlockEntityTickScope, BlockEntityView, ServerHost,
-};
-
-struct OnLoadServerAccess<'g, 'w> {
-    game: &'g mut Game<'w>,
-    subject: BlockEntityRef,
-}
-
-impl BlockEntityTickAccess for OnLoadServerAccess<'_, '_> {
-    fn with_view(&mut self, call: &mut dyn FnMut(BlockEntityView<'_>)) {
-        use mod_api::__private::game::Fields;
-        let target = self.subject.fields();
-        let [x, y, z] = target.position;
-        if !self.game.level_in_place(target.level) || !self.game.world.loaded(x, z) {
-            return;
-        }
-        let state_id = self.game.world.block(x, y, z);
-        let Ok(state) = state_id.try_into_api() else {
-            return;
-        };
-        let slot_count = self
-            .game
-            .world
-            .block_entities
-            .mod_container(state_id.0)
-            .map_or(0, |c| c.slots);
-        let pos = (x, y, z);
-        let Some(loan) = self
-            .game
-            .world
-            .block_entities
-            .loan_mod_entity(pos, target.generation)
-        else {
-            return;
-        };
-        let mut data = ServerBlockEntityData {
-            pos,
-            loan,
-            slot_count,
-            items: self.game.res.items(),
-            journal: &mut self.game.transactions,
-            chunks: &self.game.world.chunks,
-            names: &self.game.world.block_names,
-            hoppers: &self.game.hoppers,
-        };
-        call(BlockEntityView::new(self.subject, state, &mut data));
-    }
-
-    fn host(&mut self) -> &mut dyn ServerHost {
-        self.game
-    }
-}
+use mod_api::{BlockEntityClientScope, BlockEntityScope, BlockEntitySideScope};
 
 impl Game<'_> {
     pub(in crate::game) fn authoritative_world_for_mods(
@@ -142,13 +88,10 @@ impl Game<'_> {
                 generation,
             );
             if server {
-                let mut access = OnLoadServerAccess {
-                    game: self,
-                    subject,
-                };
+                let mut access = ResidentBlockEntityAccess::on_load(self, subject);
                 Self::native_block_entity_on_load(mod_api::__private::BlockEntityOnLoadCall {
                     id,
-                    subject: BlockEntitySideScope::Server(BlockEntityTickScope::new(&mut access)),
+                    subject: BlockEntitySideScope::Server(BlockEntityScope::new(&mut access)),
                 });
             } else {
                 let mut access = ClientBlockEntityAccess {

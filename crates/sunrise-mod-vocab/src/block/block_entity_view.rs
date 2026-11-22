@@ -1,10 +1,10 @@
-//! The resident server ticker's two sequential loans: its subject and the world.
+//! Sequential loans of a resident block entity and its server Host.
 use crate::{
     BlockEntityItemError, BlockEntityRef, BlockState, Compound, ItemKey, ItemStack, JavaString,
     LevelRef, ServerHost, Tag, Transaction,
 };
 
-/// The block entity this server ticker is running. Its storage stays in the level.
+/// A resident block entity lent by a server callback. Its storage stays in the level.
 /// Keep a [`BlockEntityRef`] from [`Self::handle`] if you need to find it after the call.
 // exhaustive: only the engine constructs a view.
 // no wire: an exclusive loan, not a payload.
@@ -33,11 +33,11 @@ impl<'a> BlockEntityView<'a> {
     pub fn position(&self) -> [i32; 3] {
         self.subject.position
     }
-    /// The level the entity is ticking in.
+    /// The level the entity resides in.
     pub fn level(&self) -> LevelRef {
         self.subject.level
     }
-    /// The block's live [`BlockState`] at the time of this [`BlockEntityTickScope::with_view`]
+    /// The block's live [`BlockState`] at the time of this [`BlockEntityScope::with_view`]
     /// loan, updating when the block changes in place to another valid state for this block
     /// entity type.
     pub fn state(&self) -> BlockState {
@@ -47,7 +47,7 @@ impl<'a> BlockEntityView<'a> {
     pub fn id(&self) -> &str {
         self.data.id()
     }
-    /// A generation-bound handle to keep after this tick.
+    /// A generation-bound handle to keep after this callback.
     pub fn handle(&self) -> BlockEntityRef {
         self.subject
     }
@@ -143,7 +143,7 @@ impl BlockEntityStackView<'_> {
     }
 }
 
-/// Sequential access to the ticking block entity and the server Host.
+/// Sequential access to the resident block entity and the server Host.
 ///
 /// ```compile_fail,E0501
 /// use mod_vocab::BlockEntityTickEvent;
@@ -156,27 +156,30 @@ impl BlockEntityStackView<'_> {
 /// ```
 // exhaustive: the engine constructs this scope around a single dispatch.
 // no wire: the sequential loans cannot escape their call.
-pub struct BlockEntityTickScope<'a>(&'a mut dyn BlockEntityTickAccess);
+pub struct BlockEntityScope<'a>(&'a mut dyn BlockEntityAccess);
 
-impl<'a> BlockEntityTickScope<'a> {
-    // hidden: the engine supplies the loan backend for this one ticker dispatch.
+impl<'a> BlockEntityScope<'a> {
+    // hidden: the engine supplies the loan backend for this dispatch.
     #[doc(hidden)]
-    pub fn new(access: &'a mut dyn BlockEntityTickAccess) -> Self {
+    pub fn new(access: &'a mut dyn BlockEntityAccess) -> Self {
         Self(access)
     }
 
+    // hidden: dispatch shortens the scope to the same lifetime as the other event fields.
+    #[doc(hidden)]
+    pub fn reborrow(&mut self) -> BlockEntityScope<'_> {
+        BlockEntityScope(&mut *self.0)
+    }
+
     /// Lend the original subject for `f`. Once `f` returns, you can use the Host
-    /// and then ask for the view again. Each loan verifies the block entity instance
-    /// (same level, loaded chunk, same generation) and that the live block at `pos`
-    /// is still valid for the block entity's type (`BlockEntityType.isValid`).
-    /// In-place block-state updates of a valid block keep the loan valid and expose
-    /// the live [`BlockState`]; removal, replacement, or an invalid block returns
-    /// `None` without running `f`.
+    /// and then ask for the view again. A blockless menu or a removal or replacement
+    /// of the original block entity returns `None` without calling `f`. A ticker's
+    /// view tracks in-place states valid for the same entity type; a menu only lends
+    /// the block state admitted for its callback.
     ///
-    /// Successful storage edits are visible to subsequent loans and listeners, and
-    /// menu data uses the normal menu sync. Storage edits do not automatically mark
-    /// the chunk unsaved, send a block update, or notify neighbors—call `set_changed`
-    /// explicitly when saved state changes.
+    /// Successful writes are visible to subsequent loans and listeners. Menu data uses
+    /// normal menu sync. Saved storage edits in the menu hooks mark the chunk unsaved;
+    /// a ticker or on-load callback calls [`BlockEntityRef::set_changed`] explicitly.
     pub fn with_view<R>(&mut self, f: impl FnOnce(BlockEntityView<'_>) -> R) -> Option<R> {
         let mut f = Some(f);
         let mut result = None;
@@ -200,23 +203,31 @@ impl<'a> BlockEntityTickScope<'a> {
     /// open transaction and never open a savepoint by themselves.
     pub fn transaction<T, E>(
         &mut self,
-        f: impl FnOnce(&mut Self, &Transaction) -> Result<T, E>,
+        f: impl FnOnce(&mut BlockEntityScope<'_>, &Transaction) -> Result<T, E>,
     ) -> Result<T, E> {
-        crate::item::transaction::run_transaction_on(
-            self,
-            |scope| scope.0.host().transaction_open(),
-            |scope, seal, commit| scope.0.host().transaction_close(seal, commit),
-            f,
-        )
+        let mut f = Some(f);
+        let mut result = None;
+        self.0.transaction(&mut |access, tx| {
+            let Some(f) = f.take() else {
+                return false;
+            };
+            let mut scope = BlockEntityScope::new(access);
+            let out = f(&mut scope, tx);
+            let commit = out.is_ok();
+            result = Some(out);
+            commit
+        });
+        result.expect("BlockEntityAccess::transaction invokes its callback once")
     }
 }
 
 /// Engine backing for the sequential loans.
-// hidden: the engine owns the alternating view and Host loans; listeners receive BlockEntityTickScope.
+// hidden: the engine owns the alternating view and Host loans; listeners receive BlockEntityScope.
 #[doc(hidden)]
-pub trait BlockEntityTickAccess {
+pub trait BlockEntityAccess {
     fn with_view(&mut self, f: &mut dyn FnMut(BlockEntityView<'_>));
     fn host(&mut self) -> &mut dyn ServerHost;
+    fn transaction(&mut self, f: &mut dyn FnMut(&mut dyn BlockEntityAccess, &Transaction) -> bool);
 }
 
 /// Engine backing for a checked, journaled row loan.

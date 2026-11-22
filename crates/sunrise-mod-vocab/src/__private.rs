@@ -726,25 +726,6 @@ pub mod game {
         }
     }
 
-    mod modblockentityviewnew {
-        #[allow(unused_imports)]
-        use crate::*;
-        #[allow(unused_imports)]
-        use serde_json::{Map, Value};
-        #[allow(unused_imports)]
-        use std::sync::{Arc, OnceLock};
-        #[allow(unused_imports)]
-        use std::time::Duration;
-        pub trait ModBlockEntityViewNew<'a>: Sized {
-            fn new(entity: &'a mut ModBlockEntity) -> Self;
-        }
-        impl<'a> ModBlockEntityViewNew<'a> for ModBlockEntityView<'a> {
-            fn new(entity: &'a mut ModBlockEntity) -> Self {
-                ModBlockEntityView::new(entity)
-            }
-        }
-    }
-
     mod reloadfilesnew {
         #[allow(unused_imports)]
         use crate::world::reload::*;

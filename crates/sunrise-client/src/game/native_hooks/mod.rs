@@ -8,6 +8,7 @@
 
 /// Generated dispatch entry points, not hand-written hook implementations.
 mod fire;
+pub(in crate::game) use block_entity_tick::ResidentBlockEntityAccess;
 pub(in crate::game) use build_creative_mode_tab_contents::CreativeCache;
 pub(in crate::game) use client_pick::ClientPick;
 pub(in crate::game) use fire::{
@@ -40,12 +41,12 @@ use mod_api::{
     ClientAudioOptions, ClientChatOptions, ClientGraphicsOptions, ClientGuiOptions,
     ClientInputOptions, ClientMiningPrediction, ClientModifiers, ClientReloadListeners,
     ColorResolvers, EnchantmentDamageEffects, EnchantmentInfo, EntityLayers, EntityRef,
-    EntityRenderers, GameRuleActor, HandDrawContext, HandRender, InsideEffects,
-    InteractionAttempt, InteractionKey, ItemEntityRef, LifecycleContext,
-    LivingRef, LoadConditions, NoteBlockChange, ParticleProviders, PathComputationType, Placement,
-    PlayerRef, PoiTypeExtensions, RecipeBookCategory, ScreenId, ScreenOpening, ScreenTarget,
-    ScreenshotImage, ServerReloadListeners, ServerTickPhase, SpecialModelRenderers,
-    TicketController, ToolUse, VillagerProfessions, WorldPhase,
+    EntityRenderers, GameRuleActor, HandDrawContext, HandRender, InsideEffects, InteractionAttempt,
+    InteractionKey, ItemEntityRef, LifecycleContext, LivingRef, LoadConditions, NoteBlockChange,
+    ParticleProviders, PathComputationType, Placement, PlayerRef, PoiTypeExtensions,
+    RecipeBookCategory, ScreenId, ScreenOpening, ScreenTarget, ScreenshotImage,
+    ServerReloadListeners, ServerTickPhase, SpecialModelRenderers, TicketController, ToolUse,
+    VillagerProfessions, WorldPhase,
 };
 use mod_api::{
     ActiveEffect, AttachmentStore, BlockClick, BlockUpdateFlags, BonemealSource, ChunkRef,

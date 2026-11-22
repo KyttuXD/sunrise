@@ -60,8 +60,7 @@ impl Game<'_> {
     }
     /// Runs `change` on the mod block entity at `pos` (a generator charging
     /// the machine beside it) and returns what it returns; none for any
-    /// other block entity, and for the one ticking now, which is out of the
-    /// world. Afterwards, as its `setChanged` would, its chunk is saved next
+    /// other block entity. Afterwards, as its `setChanged` would, its chunk is saved next
     /// time and, when its items changed, comparators read it again.
     pub(in crate::game) fn native_with_mod_block_entity<R>(
         &mut self,
@@ -72,9 +71,6 @@ impl Game<'_> {
         let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&key) else {
             return None;
         };
-        if m.id().is_empty() {
-            return None;
-        }
         let items = m.items.clone();
         let out = change(m);
         let moved = m.items != items;
