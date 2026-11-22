@@ -5,8 +5,10 @@ items a player receives from the ground. It fires once per pickup that put anyth
 inventory: when the whole stack went in, and when only part of it did and the rest stayed on the
 ground, as when 8 apples lie there and only 5 fit.
 
-It does not fire when `item_picked_up` refused the pickup or the inventory took nothing. A creative
-player always takes the whole stack.
+It does not fire when `item_picked_up` refused the pickup or the inventory took nothing. A
+`TriState::False` answer from `item_picked_up` vetoes only the current touch without changing the
+item's pickup delay (matching NeoForge `ItemEntityPickupEvent.Pre`). A creative player always takes
+the whole stack.
 
 It carries the player's UUID, the item entity, `original`, a copy of the stack as it lay, and
 `remaining`, the item entity's live remainder: `None` after a whole pickup, the part that did not

@@ -965,8 +965,8 @@ handle, an entity the client doesn't track and a level it doesn't show:
   (`ServerLevel.getAllEntities`), with no box filter, skipping any member that cannot resolve and stopping
   immediately on `ControlFlow::Break(())`.
 - `level.pop_resource(host, pos, stack)` drops a stack as a broken block does (`Block.popResource`), `spawn_item(host, x, y, z,
-  stack, pickup_delay)` and `spawn_item_with_motion` spawn a plain item entity and give its handle, with the pickup delay
-  vanilla's `ItemEntity.setPickupDelay` sets at construction (10 a block's drop, 40 a player's throw, 32767 never), and
+  stack, pickup_delay)` and `spawn_item_with_motion` spawn a plain item entity and give its handle, with the signed
+  pickup delay vanilla's `ItemEntity.setPickUpDelay` sets at construction (10 a block's drop, 40 a player's throw, 32767 never), and
   `award_experience(host, x, y, z,
   amount)` splits experience into orbs (`ExperienceOrb.award`), all in the level in place.
 

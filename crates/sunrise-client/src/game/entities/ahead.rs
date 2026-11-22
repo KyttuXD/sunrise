@@ -165,10 +165,10 @@ pub(super) struct Ahead {
     moved: ItemEntity,
     result: Moved,
     /// What a merge before its turn can change: its count, age and pickup delay.
-    started: (u32, i32, i64),
+    started: (u32, i32, i32),
 }
 
-fn started(item: &ItemEntity) -> (u32, i32, i64) {
+fn started(item: &ItemEntity) -> (u32, i32, i32) {
     (item.stack.count, item.age, item.pickup_delay)
 }
 

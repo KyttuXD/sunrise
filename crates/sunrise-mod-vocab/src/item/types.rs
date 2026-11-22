@@ -217,8 +217,9 @@ pub struct ItemDrop {
     pub position: [f64; 3],
     /// Its motion in blocks per tick, as vanilla's constructor drew it.
     pub velocity: [f64; 3],
-    /// Ticks before a player may pick it up.
-    pub pickup_delay: u32,
+    /// Signed ticks before a player may pick it up (`ItemEntity.pickupDelay`;
+    /// 32767 is vanilla's infinite-delay sentinel).
+    pub pickup_delay: i32,
     /// `ItemEntity.setThrower`: the UUID of the entity that threw it, none by default.
     pub thrower: Option<u128>,
     /// `ItemEntity.setTarget`: the UUID of the only player who may pick it up, none (anyone)
@@ -232,12 +233,12 @@ pub struct ItemDrop {
 }
 
 impl ItemDrop {
-    /// A drop of `stack` at `position` with a `velocity` and `pickup_delay`.
+    /// A drop of `stack` at `position` with a `velocity` and signed `pickup_delay`.
     pub fn new(
         stack: ItemStack,
         position: [f64; 3],
         velocity: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Self {
         Self {
             stack,

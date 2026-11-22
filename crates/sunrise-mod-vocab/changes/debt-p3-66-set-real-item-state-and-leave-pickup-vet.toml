@@ -1,0 +1,21 @@
+ids = [
+    "hook:item_picked_up",
+    "handle:ItemEntityRef::set_stack",
+    "handle:ItemEntitySubjectView::pickup_delay",
+    "handle:ItemEntitySubjectView::set_stack",
+    "handle:LevelRef::spawn_item",
+    "handle:LevelRef::spawn_item_with_motion",
+    "type:ItemDrop",
+    "type:ItemDrop.pickup_delay",
+    "handle:ItemDrop::new",
+    "handle:PreparedDropView::pickup_delay",
+    "handle:PreparedDropMut::pickup_delay",
+    "handle:PreparedDropMut::set_pickup_delay",
+]
+why = "Matches vanilla 26.3 ItemEntity.setPickUpDelay, setItem, tick, and addAdditionalSaveData, and NeoForge ItemEntityPickupEvent.Pre/Post at ItemEntity.playerTouch: ItemEntity::pickup_delay and every spawn/drop entry point (LevelRef::spawn_item, LevelRef::spawn_item_with_motion, ItemDrop, PreparedDropView, PreparedDropMut) now carry vanilla's signed i32 counter directly without u32->i32 casting or the legacy u32::MAX infinite-delay alias, narrowing with (short) only at NBT save (and omitting Item when empty); ItemEntityRef::set_stack and ItemEntitySubjectView::set_stack accept Option<ItemStack> (allowing None or air to store an empty stack that normal ItemEntity.tick discards on its next tick, rather than refusing empty stacks); ItemEntitySubjectView::pickup_delay returns i32 directly; and item_picked_up (hook version 2 to 3) runs one unified ItemEntity.playerTouch sequence on both host-player and guest paths, exposing the live ground item entity on both paths, returning immediately on TriState::False without imposing a ten-tick pickup delay, evaluating live post-hook pickup_delay and target against the pre-event stack, and preserving explicit setter edits and removals."
+migrate = '''
+- `LevelRef::spawn_item`, `LevelRef::spawn_item_with_motion`, `ItemDrop::pickup_delay`, `ItemDrop::new`, `PreparedDropView::pickup_delay`, `PreparedDropMut::pickup_delay`, and `PreparedDropMut::set_pickup_delay` now use signed `i32` ticks instead of `u32`. Pass signed tick counts directly, and replace any legacy `u32::MAX` infinite-delay sentinel with `32767` (vanilla's `ItemEntity.INFINITE_PICKUP_DELAY`) or call `ItemEntityRef::set_never_pickup` / `ItemEntitySubjectView::set_never_pickup`.
+- `item.set_stack(host, stack)` on `ItemEntityRef` and `view.set_stack(stack)` on `ItemEntitySubjectView` now take `Option<ItemStack>`: pass `Some(stack)` for a non-empty stack, or `None` (or an air stack) to empty the item entity and let normal `ItemEntity.tick` discard it on its next tick. Use `EntityRef::discard` or `EntityRef::remove` if you need immediate removal.
+- `view.pickup_delay()` on `ItemEntitySubjectView` now returns `i32` directly instead of `Option<i32>`; drop the `.unwrap()` / pattern match on `Some`.
+- `Hooks::item_picked_up` (version 2 -> 3): returning `TriState::False` no longer sets a 10-tick pickup delay on the item entity. Listeners that want a cooldown after refusing a pickup must call `event.item.set_pickup_delay(host, ticks)` (or `set_default_pickup_delay`) explicitly. The item handle now reads and mutates the live ground entity on both host-player and guest pickup paths.
+'''

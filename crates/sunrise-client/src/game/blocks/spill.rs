@@ -231,7 +231,7 @@ pub(super) struct Spawn {
     pub(super) stack: ItemStack,
     pub(super) pos: [f64; 3],
     pub(super) motion: Option<[f64; 3]>,
-    pub(super) delay: u32,
+    pub(super) delay: i32,
 }
 
 /// The block-entity context bound to a block break at the moment the break begins, so a
@@ -274,7 +274,7 @@ pub(crate) struct BlockItemDrop {
     pub(super) stack: ItemStack,
     pub(super) position: [f64; 3],
     pub(super) velocity: [f64; 3],
-    pub(super) pickup_delay: u32,
+    pub(super) pickup_delay: i32,
     /// The item-entity state a drop hook set.
     pub(super) state: DropState,
 }
@@ -339,7 +339,7 @@ impl mod_api::PreparedBlockDropsAccess for EnginePreparedDrops<'_> {
         self.items.get(index).map(|item| item.velocity)
     }
 
-    fn pickup_delay(&self, index: usize) -> Option<u32> {
+    fn pickup_delay(&self, index: usize) -> Option<i32> {
         self.items.get(index).map(|item| item.pickup_delay)
     }
 
@@ -388,7 +388,7 @@ impl mod_api::PreparedBlockDropsAccess for EnginePreparedDrops<'_> {
         true
     }
 
-    fn set_pickup_delay(&mut self, index: usize, pickup_delay: u32) -> bool {
+    fn set_pickup_delay(&mut self, index: usize, pickup_delay: i32) -> bool {
         let Some(item) = self.items.get_mut(index) else {
             return false;
         };

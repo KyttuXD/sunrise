@@ -3545,7 +3545,7 @@ pub(super) struct NativeItemEntity {
     pub stack: ItemStack,
     /// Ticks before a player may pick it up (`ItemEntity.pickupDelay`);
     /// hoppers take it whatever this is.
-    pub pickup_delay: u32,
+    pub pickup_delay: i32,
 }
 
 /// `AABB.intersects`: the boxes overlap, touching faces excluded.

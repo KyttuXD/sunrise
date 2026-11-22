@@ -1926,7 +1926,9 @@ impl Game<'_> {
             let Some(host) = self.lan.as_mut() else {
                 return;
             };
-            let stack = host.hub.stack(&Some(d.stack.clone()));
+            let stack = host.hub.stack(
+                &Some(d.stack.clone()).filter(|s| s.count > 0 && &*s.item != "minecraft:air"),
+            );
             // `ServerEntity.getRequiresPrecisePosition` is false for an item:
             // `needs_sync` asks for its data again, not for an exact position.
             // The collision case is `full_precision_required` in the tracker.

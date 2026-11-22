@@ -198,7 +198,10 @@ mod tests {
                                         view.reset_fall_distance();
                                     })
                                     .unwrap();
-                                assert_eq!(peer.set_stack(scope.host(), stack.clone()), Ok(true));
+                                assert_eq!(
+                                    peer.set_stack(scope.host(), Some(stack.clone())),
+                                    Ok(true)
+                                );
                                 Ok::<_, ()>(())
                             })?;
                             commit.then_some(()).ok_or(())

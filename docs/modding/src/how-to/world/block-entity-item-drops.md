@@ -1,9 +1,11 @@
 # Dropped items during block-entity ticks
 
 Use the tick scope's Host to read or write other objects. A dropped item's
-`ItemEntityRef::set_stack` replaces its complete nonempty stack;
-`EntityRef::discard` or `EntityRef::remove` removes the item. A removed item
-stops resolving immediately. A numeric entity ID never retargets a
+`ItemEntityRef::set_stack` takes `Option<ItemStack>` (`ItemEntity.setItem`):
+`Some(stack)` writes a non-empty stack, while `None` (or an air stack) stores
+an empty stack that normal `ItemEntity.tick` discards on its next tick.
+`EntityRef::discard` or `EntityRef::remove` removes the item immediately. A
+removed item stops resolving immediately. A numeric entity ID never retargets a
 replacement or an item in another level.
 
 Use `item.with_stack(host, |stack| stack.count())` to inspect a dropped item's stack without

@@ -317,8 +317,8 @@ pub trait Notes {
 - The item entities near a block, for machines that pick up items as a hopper does:
   `native_item_entities(dimension, min, max)` lists those whose box meets `min`..`max` (vanilla's
   `Level.getEntitiesOfClass(ItemEntity.class, box)`), each with its entity ID, position, stack and pickup delay, and
-  `ItemEntityRef::set_stack` changes one's nonempty stack; discarding an entity is a separate operation. The query acts on
-  the level in place.
+  `ItemEntityRef::set_stack` replaces its stack, and `None` empties it for normal tick removal.
+  Discarding an entity immediately is a separate operation. The query acts on the level in place.
 
 - `level.with_random(host, |rng| rng.next_int_bound(bound))` borrows the named server level's live
   stream (`Level.getRandom()`), including levels parked while the server ticks another. In a restricted

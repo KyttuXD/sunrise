@@ -112,13 +112,8 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
         let project = |metadata| project_stack(stack, metadata).ok();
         call(mod_api::ItemStackView::resident(metadata, &project));
     }
-    fn pickup_delay(&self) -> Option<i32> {
-        let delay = self.game.dropped[self.index].pickup_delay;
-        if delay == i64::from(u32::MAX) {
-            Some(i32::from(i16::MAX))
-        } else {
-            i32::try_from(delay).ok()
-        }
+    fn pickup_delay(&self) -> i32 {
+        self.game.dropped[self.index].pickup_delay
     }
     fn age(&self) -> i32 {
         self.game.dropped[self.index].age
@@ -131,13 +126,14 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
     fn owner(&self) -> Option<mod_api::EntityRef> {
         self.game.item_entity_owner(self.subject)
     }
-    fn set_stack(&mut self, stack: mod_api::ItemStack) -> Result<bool, mod_api::StackWriteError> {
+    fn set_stack(
+        &mut self,
+        stack: Option<mod_api::ItemStack>,
+    ) -> Result<bool, mod_api::StackWriteError> {
         use crate::game::api_values::TryIntoEngine;
         let stack = stack.try_into_engine(self.game.res.items())?;
-        if stack.count == 0 || &*stack.item == "minecraft:air" {
-            return Ok(false);
-        }
-        Ok(self.game.journal_set_item_entity_at(self.index, stack))
+        self.game.journal_set_item_entity_at(self.index, stack);
+        Ok(true)
     }
     fn set_pickup_delay(&mut self, ticks: i32) -> bool {
         self.game.journal_set_item_pickup_delay(self.index, ticks);
@@ -513,13 +509,13 @@ mod on_entity_item_update_tests {
                         );
                         let result = scope.transaction(|scope, _| {
                             assert_eq!(
-                                scope.with_view(|mut view| view.set_stack(earlier.clone())),
+                                scope.with_view(|mut view| view.set_stack(Some(earlier.clone()))),
                                 Some(Ok(true))
                             );
                             scope.transaction(|scope, _| {
                                 scope
                                     .with_view(|mut view| {
-                                        assert_eq!(view.set_stack(later.clone()), Ok(true));
+                                        assert_eq!(view.set_stack(Some(later.clone())), Ok(true));
                                         assert!(view.set_pickup_delay(7));
                                         assert!(view.set_target(Some(8)));
                                         assert!(view.set_velocity([9.0; 3]));
@@ -534,7 +530,7 @@ mod on_entity_item_update_tests {
                                     })
                                     .unwrap();
                                 assert_eq!(
-                                    peer.set_stack(scope.host(), peer_stack.clone()),
+                                    peer.set_stack(scope.host(), Some(peer_stack.clone())),
                                     Ok(true)
                                 );
                                 Ok::<_, ()>(())

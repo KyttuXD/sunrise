@@ -1,0 +1,1 @@
+sunrise-client game::lan_actions::pickups::pickup_post_tests::pre_pickup_edits_and_removals_match_on_host_and_guest lib daily resources

@@ -65,7 +65,9 @@ impl Game<'_> {
         let mut nearby = Vec::new();
         let mut bubble_tops = Vec::new();
         let mut moves = ahead::Moves::work_out(self, &items, &obstacles, round, |item| {
-            !self.joined_during_entity_pass(item.id)
+            item.stack.count > 0
+                && &*item.stack.item != "minecraft:air"
+                && !self.joined_during_entity_pass(item.id)
                 && ticking(
                     item.position.x.floor() as i32,
                     item.position.z.floor() as i32,
@@ -127,6 +129,13 @@ impl Game<'_> {
             let mut expiry_discarded = false;
             'tick: {
                 if round.halted(items[i].id) {
+                    break 'tick;
+                }
+                // `ItemEntity.tick`: after `onEntityItemUpdate`, an empty stack discards itself.
+                if items[i].stack.count == 0 || &*items[i].stack.item == "minecraft:air" {
+                    pass.removed[i] = true;
+                    pass.gone = true;
+                    pass.cells.remove(i, items[i].position);
                     break 'tick;
                 }
                 self.tick_saved_invulnerable_time(items[i].id);
@@ -898,7 +907,7 @@ impl Game<'_> {
         stack: ItemStack,
         position: [f64; 3],
         velocity: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) {
         self.add_item_entity(stack, position, Some(velocity), pickup_delay);
     }
@@ -909,7 +918,7 @@ impl Game<'_> {
         &mut self,
         stack: ItemStack,
         position: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> [f64; 3] {
         self.add_item_entity(stack, position, None, pickup_delay)
     }
@@ -930,7 +939,7 @@ impl Game<'_> {
         stack: ItemStack,
         position: [f64; 3],
         velocity: Option<[f64; 3]>,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> [f64; 3] {
         self.add_item_entity_prepared(stack, position, velocity, pickup_delay, None)
     }

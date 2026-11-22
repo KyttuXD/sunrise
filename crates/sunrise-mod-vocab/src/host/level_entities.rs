@@ -181,10 +181,10 @@ pub trait LevelEntitiesBackendMut {
     /// Side: server.
     /// Spawns `stack` as an item entity at `x y z` (`new ItemEntity(level, x,
     /// y, z, stack)` and `addFreshEntity`): its own random motion (up 0.2, up
-    /// to 0.1 either way across), with `pickup_delay` ticks before it can be
-    /// picked up, as `ItemEntity.setPickupDelay` at construction (vanilla
-    /// passes 10 for a block's drop, 40 for a player's throw and 32767 for
-    /// never). None, with nothing
+    /// to 0.1 either way across), with signed `pickup_delay` ticks before it
+    /// can be picked up, as `ItemEntity.setPickUpDelay` at construction
+    /// (vanilla passes 10 for a block's drop, 40 for a player's throw, and
+    /// 32767 for never). None, with nothing
     /// spawned, for an empty stack or an unknown item, a value that isn't
     /// finite, on a client, for a stale handle, a level not in place, or an
     /// item a mod kept out (`entity_join_level`).
@@ -197,14 +197,14 @@ pub trait LevelEntitiesBackendMut {
         y: f64,
         z: f64,
         stack: ItemStack,
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Result<Option<EntityRef>, StackWriteError>;
     /// Side: server.
     /// `spawn_item` with the item entity's motion set to
     /// `motion` (blocks a tick), as `new ItemEntity(level, x, y, z, stack,
-    /// deltaX, deltaY, deltaZ)`, and the same `pickup_delay` ticks before it
-    /// can be picked up (`ItemEntity.setPickupDelay`). None in the same
-    /// cases, and for a motion that isn't finite.
+    /// deltaX, deltaY, deltaZ)`, and the same signed `pickup_delay` ticks
+    /// before it can be picked up (`ItemEntity.setPickUpDelay`). None in the
+    /// same cases, and for a motion that isn't finite.
     fn level_spawn_item_with_motion(
         &mut self,
         level: LevelRef,
@@ -213,7 +213,7 @@ pub trait LevelEntitiesBackendMut {
         z: f64,
         stack: ItemStack,
         motion: [f64; 3],
-        pickup_delay: u32,
+        pickup_delay: i32,
     ) -> Result<Option<EntityRef>, StackWriteError>;
     /// Side: server.
     /// Awards `amount` experience at `x y z` as vanilla's `ExperienceOrb.award`

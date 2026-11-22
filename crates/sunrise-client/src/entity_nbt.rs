@@ -2766,7 +2766,6 @@ pub fn item_entity_to_nbt(
     raw: Option<&Tag>,
     items: &crate::items::Items,
 ) -> Tag {
-    let item = sunrise_items::item_nbt::item_to_nbt(&e.stack, items);
     let base = Base {
         id: "minecraft:item",
         uuid,
@@ -2777,21 +2776,17 @@ pub fn item_entity_to_nbt(
         fall_distance: e.fall_distance,
     };
     let mut tag = base.non_mob_tag(raw);
+    if e.stack.count > 0 && &*e.stack.item != "minecraft:air" {
+        let item = sunrise_items::item_nbt::item_to_nbt(&e.stack, items);
+        put(&mut tag, "Item", item);
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Item".into());
+    }
     for (key, value) in [
-        ("Item", item),
         ("Health", Tag::Short(e.health as i16)),
         ("Fire", Tag::Short(e.fire_ticks as i16)),
-        (
-            "Age",
-            Tag::Short(e.age.clamp(i16::MIN as i32, i16::MAX as i32) as i16),
-        ),
-        (
-            "PickupDelay",
-            Tag::Short(
-                e.pickup_delay
-                    .clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16,
-            ),
-        ),
+        ("Age", Tag::Short(e.age as i16)),
+        ("PickupDelay", Tag::Short(e.pickup_delay as i16)),
     ] {
         put(&mut tag, key, value);
     }
@@ -2964,7 +2959,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
             .get("Lifespan")
             .and_then(int_value)
             .unwrap_or(ItemEntity::LIFETIME),
-        pickup_delay: i64::from(short("PickupDelay", 0)),
+        pickup_delay: i32::from(short("PickupDelay", 0)),
         bob_offset,
         ticks: 0,
         needs_sync: false,
@@ -5647,10 +5642,22 @@ mod tests {
                 }
             }
         }
-        let mut legacy = item_entity_from_nbt(&fresh, 1, 0.0).unwrap();
-        legacy.pickup_delay = i64::from(u32::MAX);
-        assert!(tick(&mut legacy));
-        assert_eq!(legacy.pickup_delay, i64::from(u32::MAX));
+        // `ItemEntity.addAdditionalSaveData` narrows `age` and `pickupDelay` with `(short)`
+        // rather than clamping to 32767 (which would fabricate infinite delay) and omits
+        // `Item` when empty.
+        let mut wide = item_entity_from_nbt(&fresh, 1, 0.0).unwrap();
+        wide.age = 40000;
+        wide.pickup_delay = 40000;
+        let saved = item_entity_to_nbt(&wide, [1, 2, 3, 4], None, &Default::default());
+        assert_eq!(saved.get("Age"), Some(&Tag::Short(40000_i32 as i16)));
+        assert_eq!(
+            saved.get("PickupDelay"),
+            Some(&Tag::Short(40000_i32 as i16))
+        );
+        wide.stack = ItemStack::new("minecraft:air", 0);
+        let saved_empty =
+            item_entity_to_nbt(&wide, [1, 2, 3, 4], Some(&saved), &Default::default());
+        assert_eq!(saved_empty.get("Item"), None);
     }
 
     #[test]

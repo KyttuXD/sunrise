@@ -98,7 +98,7 @@ fn update(
     progress: i32,
 ) -> Result<(), &'static str> {
     tick.transaction(|tick, _| {
-        if !item.set_stack(tick.host(), replacement).map_err(|_| "invalid stack")? {
+        if !item.set_stack(tick.host(), Some(replacement)).map_err(|_| "invalid stack")? {
             return Err("dropped-item write was refused");
         }
         let changed = tick.with_view(|mut view| view.set_data_slot(0, progress))
