@@ -32,7 +32,8 @@ pub(super) use registered_commands::NativeCommandState;
 use mod_api::LevelRef;
 use mod_api::{
     ActionOutcome, ActionRefused, FakeEffect, GameMode, GlobalPos, Identifier, PlayerAction,
-    PlayerActionSetup, PlayerFood, PlayerRef, PlayerRespawnConfig, ScopedActionResult,
+    PlayerActionSetup, PlayerDataRefusal, PlayerFood, PlayerRef, PlayerRespawnConfig,
+    ScopedActionResult,
 };
 use serde_json::{Map, Value, json};
 use std::sync::{
@@ -432,6 +433,25 @@ pub(super) enum PlayerRead<'a> {
         last_death: Option<&'a (String, [i32; 3])>,
     },
     Guest(&'a Guest),
+}
+
+/// The resident record a server write will borrow, without borrowing `Game` itself.
+pub(super) enum PlayerTurn {
+    Acting,
+    Parked(u32),
+}
+
+impl PlayerTurn {
+    pub(super) fn run<'a, R>(
+        self,
+        game: &mut Game<'a>,
+        f: impl FnOnce(&mut Game<'a>) -> R,
+    ) -> Option<R> {
+        match self {
+            Self::Acting => Some(f(game)),
+            Self::Parked(conn) => game.as_guest(conn, f),
+        }
+    }
 }
 
 impl PlayerRead<'_> {
@@ -1192,30 +1212,17 @@ impl Game<'_> {
     /// `Inventory.setSelectedSlot` for a server write: `slot` (0 to 8) becomes the hotbar slot the
     /// player holds and a guest's client is told (`SetHeldSlot`). A new slot ends a main-hand use,
     /// as `handleSetCarriedItem` does, without `player_switch_hotbar_slot_pre`, which is for the
-    /// player's own input. False for a slot past 8, a stale or dead player.
+    /// player's own input. False for a slot past 8 or an unavailable player.
     pub(super) fn player_set_selected_slot(&mut self, player: PlayerRef, slot: usize) -> bool {
         if slot >= 9 {
             return false;
         }
-        // The connection to tell: a parked guest's, or the acting guest's, whose state is in
-        // place for their turn (`leave_guest` stores the slot back but sends nothing). The host
-        // has none.
-        let conn = match self.player_handle_read(player) {
-            Some(PlayerRead::Guest(guest)) => Some(guest.conn),
-            Some(PlayerRead::Acting { .. }) => self.lan_acting_uuid.and_then(|uuid| {
-                self.lan
-                    .as_ref()?
-                    .hub
-                    .guests
-                    .iter()
-                    .find(|guest| guest.uuid == uuid)
-                    .map(|guest| guest.conn)
-            }),
-            None => None,
-        };
-        let changed = self.player_selected_slot(player) != Some(slot);
-        if !self.native_as_player_handle(player, |game| {
-            if changed
+        // `leave_guest` stores the selected slot back but sends nothing. Tell the same
+        // connection after the turn, whether the player was parked or already acting.
+        let mut conn = None;
+        if !self.native_as_resident_player(player, |game| {
+            conn = game.lan_acting;
+            if game.selected != slot
                 && game
                     .using
                     .is_some_and(|(held, _)| held != crate::game::shield::OFFHAND_SLOT)
@@ -2015,21 +2022,54 @@ impl Game<'_> {
         orb.age = age.unwrap_or(orb.age);
         true
     }
-    /// Runs `f` in the turn of the player a handle names, against the level in place. False
-    /// when it didn't run: stale or dead.
+    /// Runs `f` in the turn of a living player, against the level in place.
     pub(super) fn native_as_player_handle(
         &mut self,
         player: PlayerRef,
         f: impl FnOnce(&mut Self),
     ) -> bool {
-        match self.player_handle_read(player) {
-            None => false,
-            Some(PlayerRead::Acting { .. }) => self.native_as_acting(f),
-            Some(PlayerRead::Guest(g)) if !g.dead => {
-                let conn = g.conn;
-                self.as_guest(conn, f).is_some()
+        self.player_handle_turn(player, true)
+            .and_then(|turn| turn.run(self, f))
+            .is_some()
+    }
+
+    /// Resolve a server setter's receiver. Dead players still have a writable record.
+    pub(super) fn native_resident_player_turn(
+        &self,
+        player: PlayerRef,
+    ) -> Result<PlayerTurn, PlayerDataRefusal> {
+        if !self.is_logical_server() {
+            return Err(PlayerDataRefusal::Client);
+        }
+        self.player_handle_turn(player, false)
+            .ok_or(PlayerDataRefusal::Stale)
+    }
+
+    pub(super) fn native_as_resident_player(
+        &mut self,
+        player: PlayerRef,
+        f: impl FnOnce(&mut Self),
+    ) -> bool {
+        self.native_resident_player_turn(player)
+            .ok()
+            .and_then(|turn| turn.run(self, f))
+            .is_some()
+    }
+
+    fn player_handle_turn(&self, player: PlayerRef, require_living: bool) -> Option<PlayerTurn> {
+        match self.player_handle_read(player)? {
+            PlayerRead::Acting { body, .. } => {
+                if require_living {
+                    self.native_live_acting_body()?;
+                } else {
+                    body?;
+                }
+                Some(PlayerTurn::Acting)
             }
-            Some(PlayerRead::Guest(_)) => false,
+            PlayerRead::Guest(guest) if !require_living || !guest.dead => {
+                Some(PlayerTurn::Parked(guest.conn))
+            }
+            PlayerRead::Guest(_) => None,
         }
     }
 

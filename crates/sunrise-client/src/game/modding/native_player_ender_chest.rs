@@ -54,15 +54,14 @@ impl Game<'_> {
         slot: u32,
         stack: Option<ItemStack>,
     ) -> Result<(), PlayerDataRefusal> {
-        self.player_write_gate(player)?;
+        let turn = self.native_resident_player_turn(player)?;
         if slot as usize >= SLOTS {
             return Err(PlayerDataRefusal::SlotOutOfRange {
                 slot,
                 last: SLOTS as u32 - 1,
             });
         }
-        let mut set = false;
-        let ran = self.native_as_player_handle(player, |game| {
+        let set = turn.run(self, |game| {
             game.journal_player(player.uuid());
             if let Some(key) = game.ender_open {
                 game.journal_block_entity(key);
@@ -70,9 +69,9 @@ impl Game<'_> {
             if game.ender_items.len() < SLOTS {
                 game.ender_items.resize(SLOTS, None);
             }
-            set = game.slot_set(&Slot::Ender(slot as usize), stack.filter(|s| s.count > 0));
+            game.slot_set(&Slot::Ender(slot as usize), stack.filter(|s| s.count > 0))
         });
-        if ran && set {
+        if set == Some(true) {
             Ok(())
         } else {
             Err(PlayerDataRefusal::Stale)

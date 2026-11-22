@@ -498,7 +498,8 @@ pub trait LivingBackendMut {
     /// Puts `stack` in hand `hand` (`LivingEntity.setItemInHand`): the main
     /// hand's slot or the off hand's, written as `set_equipment`
     /// writes them, with its equip events and sound. None, air or a zero count
-    /// empties the hand. False means unsupported or stale.
+    /// empties the hand. A resident dead player can still be edited. False means
+    /// unsupported or unavailable.
     fn living_set_hand_item(
         &mut self,
         living: LivingRef,
