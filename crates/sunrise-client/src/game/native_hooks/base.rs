@@ -3300,12 +3300,13 @@ impl Game<'_> {
     ) {
         self.fire_release_using(stack, entity, time_left, used);
     }
-    /// A player breaks the block `state` at `pos`, once the game allowed it
-    /// (the held item can break blocks, the debug stick didn't take the
-    /// click): where `ServerPlayerGameMode.destroyBlock` starts. Set
-    /// `canceled` to keep the block: nothing is destroyed or dropped, and a
-    /// guest sees it back. Server-side, for every player of the world (the
-    /// helpers read the acting one).
+    /// A player attempts to break the live block `state` at `pos`
+    /// (`ServerPlayerGameMode.destroyBlock` / NeoForge `CommonHooks.fireBlockBreak`).
+    /// `canceled` starts `true` when the held item, game mode, or game-master check
+    /// refuses the break; `#[listener(receive_cancelled)]` listeners may observe it,
+    /// and clearing `canceled` cannot bypass hard game-mode or game-master
+    /// restrictions. Server-side, for every player of the world (the helpers read
+    /// the acting one).
     pub(in crate::game) fn native_break_block(
         &mut self,
         pos: [i32; 3],

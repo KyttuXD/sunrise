@@ -48,6 +48,7 @@ impl Game<'_> {
         }
         if let Some(removed) = destroyed {
             if removed {
+                self.invalidate_active_player_breaks(pos);
                 self.native_player_destroyed_block(pos, state, block_entity);
             }
             return (removed, state, self.harvest_after_removal(pos, state));

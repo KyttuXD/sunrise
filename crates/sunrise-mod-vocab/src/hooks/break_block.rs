@@ -2,15 +2,21 @@
 // catalog-order: 0038
 
 pub trait Hooks {
-    /// A player breaks the block `state` at `pos`, once the game allowed it
-    /// (the held item can break blocks, the debug stick didn't take the
-    /// click): where `ServerPlayerGameMode.destroyBlock` starts. Set
-    /// `canceled` to keep the block: nothing is destroyed or dropped, and a
-    /// guest sees it back. Set `exp_to_drop` to `Some(amount)` to replace
+    /// A player attempts to break the live block `state` at `pos`: where
+    /// `ServerPlayerGameMode.destroyBlock` posts NeoForge `CommonHooks.fireBlockBreak`.
+    /// `event.cancelled` starts `true` when the held item, game mode, or game-master
+    /// check refuses the break; listeners registered with `#[listener(receive_cancelled)]`
+    /// can observe restricted attempts, and clearing `event.cancelled` bypasses the held
+    /// item check while game-mode and game-master restrictions still prevent removal.
+    /// Set `canceled` (return `Flow::Cancel`) to keep the block: nothing is destroyed or
+    /// dropped, and a guest sees it back. Set `exp_to_drop` to `Some(amount)` to replace
     /// the experience sample later, after item drops are prepared;
     /// `None` keeps sampling. A subscribed block part's `exp_drop` answer is
     /// supplied as this event's initial amount. `block_drops` sees and may change that
-    /// amount afterwards; cancellation or disabled block drops suppresses it.
+    /// amount afterwards; cancellation or disabled block drops suppresses it. If a listener
+    /// already removed the block or completed a nested player break at that position in
+    /// that level (even if a non-air block or fluid remains), the outer break does not
+    /// apply removal effects again.
     /// Server-side, for every player of the world (the
     /// helpers read the acting one). Diverges from upstream: renamed from
     /// `destroy_block`, to NeoForge's `BreakBlockEvent`.
@@ -20,7 +26,8 @@ pub trait Hooks {
         side = "server",
         contract = "cancel",
         out = "canceled",
-        neoforge = "BreakBlockEvent"
+        neoforge = "BreakBlockEvent",
+        version = 2
     )]
     fn break_block(
         pos: [i32; 3],

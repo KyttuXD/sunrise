@@ -35,14 +35,14 @@ impl Game<'_> {
         self.carrier_break_block(pos)
     }
 
-    /// `ServerPlayerGameMode.destroyBlock`: whether the block was removed.
-    /// A break inside another (a mod breaking more blocks from its
-    /// `native_destroy_block`) keeps the outer break's own events.
-    pub(super) fn player_break_block(&mut self, pos: [i32; 3]) -> Result<bool> {
-        let outer = self.lan_break_pos.replace(pos);
-        let broken = self.with_player_actor(|game| game.break_block_as_player(pos));
-        self.lan_break_pos = outer;
-        broken
+    /// `ServerPlayerGameMode.destroyBlock`: whether the block was removed. Collects this
+    /// break's item drops instead of spawning them if a destination was supplied.
+    pub(super) fn player_break_block(
+        &mut self,
+        pos: [i32; 3],
+        collect: Option<&mut Vec<ItemStack>>,
+    ) -> Result<bool> {
+        self.with_player_actor(|game| game.break_block_as_player(pos, collect))
     }
 
     /// `BundleItem.dropContent`: `removeOneItemFromBundle` and `Player.drop`,

@@ -4244,13 +4244,8 @@ struct Game<'a> {
     lan_ender_menus: Vec<(u32, sunrise_core::nbt::Tag)>,
     /// Live attachments and original snapshots retained during player replacement.
     player_state: original_player::PlayerState,
-    /// The block the acting player is breaking (`break_block`): its destroy
-    /// event, and the ones before it, are the player's own (`Level.levelEvent`
-    /// with the player excluded); the events after it are not.
-    lan_break_pos: Option<[i32; 3]>,
-    /// Where a player's break puts the block's own drops instead of popping
-    /// them (`PlayerRef::destroy_block` with `into_inventory`).
-    break_collect: Option<Vec<ItemStack>>,
+    /// Active player breaks waiting on `break_block` listeners.
+    active_player_breaks: Vec<ActivePlayerBreak>,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
     /// Their UUID (`Player.getUUID`).
@@ -4350,6 +4345,27 @@ struct Game<'a> {
 /// and its server thread name the same dimensions.
 static EXTRA_DIMS: std::sync::RwLock<Vec<mod_api::DimensionKey>> =
     std::sync::RwLock::new(Vec::new());
+
+/// An active player break waiting on `break_block` listeners. When a nested
+/// player break completes removal at the same `(dim, pos)`, `removed_by_nested`
+/// is set so the outer break does not apply removal effects again even if a
+/// non-air block or fluid remains (such as fewer turtle eggs or water).
+struct ActivePlayerBreak {
+    dim: Dim,
+    pos: [i32; 3],
+    removed_by_nested: bool,
+}
+
+struct ActiveBreakGuard<'g, 'a> {
+    game: &'g mut Game<'a>,
+    depth: usize,
+}
+
+impl Drop for ActiveBreakGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.game.active_player_breaks.truncate(self.depth);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Dim {
@@ -6589,38 +6605,72 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| b.set_block(level, ticks, at, cracked, 260));
         cracked
     }
-    fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<bool> {
-        // DebugStickItem.canDestroyBlock: a left click selects a property and
-        // never destroys the block.
-        if !self.debug_stick_can_destroy(pos)? {
+    /// Marks every enclosing player break at `pos` in the current dimension as
+    /// already removed so it does not repeat removal effects when it resumes.
+    pub(in crate::game) fn invalidate_active_player_breaks(&mut self, pos: [i32; 3]) {
+        let dim = self.dim;
+        for active in &mut self.active_player_breaks {
+            if active.dim == dim && active.pos == pos {
+                active.removed_by_nested = true;
+            }
+        }
+    }
+    fn break_block_as_player(
+        &mut self,
+        pos: [i32; 3],
+        collect: Option<&mut Vec<ItemStack>>,
+    ) -> Result<bool> {
+        let [x, y, z] = pos;
+        let state = self.world.block(x, y, z);
+        // An absent block (also what the level reads for an unloaded chunk) has
+        // no subject for the break callback.
+        if self.res.behaviours().is_air(state) {
             return Ok(false);
         }
-        // ServerPlayerGameMode.destroyBlock.
-        if self.block_action_restricted(pos) {
-            return Ok(false);
-        }
-        if !self
-            .res
-            .items()
-            .can_destroy_block(self.held(), self.creative)
-        {
-            return Ok(false);
-        }
-        // ServerPlayerGameMode.destroyBlock (and MultiPlayerGameMode.destroyBlock
-        // on the client): a GameMasterBlock stays when the player cannot use
-        // game master blocks (Player.canUseGameMasterBlocks).
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        if !self.can_use_game_master_blocks()
-            && is_game_master_block(&self.res.facts().get(state).name)
-        {
-            return Ok(false);
-        }
-        // Native mods, once the game allowed the break: a canceled one keeps
-        // the block, and a guest's acknowledgement puts it back in its world.
-        let mut canceled = false;
+        // NeoForge CommonHooks.fireBlockBreak: pre-cancel when the held item,
+        // game mode, or game-master check refuses the break, then post
+        // `break_block` before applying `ServerPlayerGameMode.destroyBlock`'s
+        // hard restrictions.
+        let mut canceled = !self.debug_stick_can_destroy(pos)?
+            || !self
+                .res
+                .items()
+                .can_destroy_block(self.held(), self.creative)
+            || self.block_action_restricted(pos)
+            || (!self.can_use_game_master_blocks()
+                && is_game_master_block(&self.res.facts().get(state).name));
         let mut exp_to_drop = None;
-        self.native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
-        if canceled {
+        let removed_by_nested = if self.native_authoritative()
+            && (!canceled || mod_api::__private::listened(mod_api::HookId::BreakBlock))
+        {
+            let depth = self.active_player_breaks.len();
+            self.active_player_breaks.push(ActivePlayerBreak {
+                dim: self.dim,
+                pos,
+                removed_by_nested: false,
+            });
+            let mut guard = ActiveBreakGuard { game: self, depth };
+            guard
+                .game
+                .native_break_block(pos, state, &mut canceled, &mut exp_to_drop);
+            guard.game.active_player_breaks[depth].removed_by_nested
+        } else {
+            false
+        };
+        // If canceled, if a nested break already completed removal at this
+        // position in this level (even when a block or fluid remains), or if
+        // the listener left air here, do not apply removal effects again.
+        if canceled || removed_by_nested || self.res.behaviours().is_air(self.world.block(x, y, z))
+        {
+            return Ok(false);
+        }
+        // ServerPlayerGameMode.destroyBlock: hard game-master and game-mode
+        // restrictions still hold even if a `receive_cancelled` listener
+        // cleared the pre-cancel.
+        if (!self.can_use_game_master_blocks()
+            && is_game_master_block(&self.res.facts().get(state).name))
+            || self.block_action_restricted(pos)
+        {
             return Ok(false);
         }
         self.input_feedback(sunrise_client::input_source::Feedback::BlockBroken);
@@ -6719,7 +6769,7 @@ impl Game<'_> {
                     (stacks, exp_to_drop),
                 );
                 let canceled = dropped.canceled;
-                if let Some(kept) = self.break_collect.as_mut() {
+                if let Some(kept) = collect {
                     kept.extend(dropped.items.into_iter().map(|item| item.stack));
                     if dropped.experience > 0 {
                         self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), dropped.experience);
@@ -14032,8 +14082,7 @@ impl<'a> Game<'a> {
             crash_save: Default::default(),
             lan_ender_menus: Vec::new(),
             player_state: Default::default(),
-            lan_break_pos: None,
-            break_collect: None,
+            active_player_breaks: Vec::new(),
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),
