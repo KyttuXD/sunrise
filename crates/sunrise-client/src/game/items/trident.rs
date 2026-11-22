@@ -5,9 +5,7 @@
 //! lightning on a hit (`channeling.json`).
 use super::level_sounds::LevelSound;
 use super::{Game, commands::Target, minecarts::CartHit};
-use crate::game::collision_source::Mover;
 use mod_api::SoundSource;
-use sunrise_client::motion::MotionWorld;
 use sunrise_client::{
     arrows::{Pickup, back_off, clip_block_hit},
     collisions::SceneCollisions,
@@ -269,28 +267,11 @@ impl Game<'_> {
             // (LocalPlayer.move, through the move gate, #2414), which stops at a ceiling and whose
             // end writes the ground state, so the rest of the tick travels in the air.
             if self.player.as_ref().is_some_and(|p| p.ground.on_ground) {
-                let entities = self.entity_collisions(Mover::Player);
-                if let Some(player) = self.player.as_mut() {
-                    let side = game_side!(self);
-                    let _ = MotionWorld {
-                        side: &side,
-                        entities: &entities,
-                        player,
-                        scene: &mut self.world,
-                        assets: &self.pack.assets,
-                        collision_binding: self.collision,
-                        resources: self.motion,
-                        health: &self.health_resources,
-                        loop_context: &self.loop_context,
-                        damage_hooks: &self.damage_hooks,
-                        tag_items: Some(world_items!(self)),
-                        block_registries: Some(&self.pack.block_registries),
-                    }
-                    .move_self(
-                        &mut sunrise_world::move_gate::MoveGate::new(),
-                        Vec3::new(0.0, f64::from(1.1999999f32), 0.0),
-                    );
-                }
+                let _ = self.move_local_player(
+                    sunrise_world::entity_move::MoverType::SelfMovement,
+                    Vec3::new(0.0, f64::from(1.1999999f32), 0.0),
+                    true,
+                );
             }
             if !server_client {
                 let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
@@ -811,7 +792,7 @@ impl Game<'_> {
                         let damage =
                             self.evaluate_weapon_damage(&t.stack, Some((attacker, id)), ctx, 8.0);
                         t.dealt_damage = true;
-                        let mut hurt_at = None;
+                        let mut hurt_mob = None;
                         let aim = self.attacker_aim(Some(Who::Player));
                         let mut attack = self.attack_of(attacker as i32);
                         attack.projectile = Some(t.id as i32);
@@ -824,12 +805,16 @@ impl Game<'_> {
                             )
                             .expect("registered vanilla trident damage"),
                         );
-                        let plan =
-                            self.prepare_knockback_credit(id as i32, Some(Who::Player), &attack);
-                        let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(i) = self.mob_index.find(&self.mobs, id) {
+                            let plan = self.prepare_knockback_credit(
+                                id as i32,
+                                Some(Who::Player),
+                                &attack,
+                            );
+                            let mut credit = plan.lend(&mut self.last_hurt_by_player);
                             let from = Some([t.position.x, t.position.y, t.position.z]);
-                            let hurt = m.damage_projectile(
+                            let join = self.mobs[i].join;
+                            let hurt = self.mobs[i].damage_projectile(
                                 crate::game::entity::damage_level_of!(
                                     self,
                                     &attack,
@@ -846,8 +831,9 @@ impl Game<'_> {
                                 aim,
                                 [t.velocity.x, t.velocity.z],
                             );
+                            self.finish_mob_damage_at(i);
                             if hurt {
-                                hurt_at = Some([m.position.x, m.position.y, m.position.z]);
+                                hurt_mob = Some(join);
                             }
                         }
                         self.thrower_dealt_absorbed(t.guest);
@@ -912,13 +898,20 @@ impl Game<'_> {
                             self.trident_hits_guest(&t, conn, damage, attack);
                         }
                         // `minecraft:post_attack` of Channeling, on the victim.
-                        if let Some(at) = hurt_at
+                        if let Some(join) = hurt_mob
                             && t.stack.enchantment_level("minecraft:channeling") > 0
+                            && let Some(m) = self
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == id && m.join == join && !m.removed)
                         {
-                            self.channel_lightning(at, t.guest);
+                            self.channel_lightning(m.position.components(), t.guest);
                         }
-                        if hurt_at.is_some()
-                            && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                        if let Some(join) = hurt_mob
+                            && let Some(m) = self
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == id && m.join == join && !m.removed)
                         {
                             // LivingEntity.hurtServer: PLAYER_HURT_ENTITY.
                             let victim = self.mob_entity(m);

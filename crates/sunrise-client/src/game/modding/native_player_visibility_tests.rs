@@ -335,7 +335,7 @@ fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() 
     let land = |game: &mut super::Game<'_>| {
         // The player's centre is over air. Only the edge overlaps the slab.
         game.player.as_mut().unwrap().position = Vec3::new(1.125, 65.0, 0.5);
-        game.move_local_player(SelfMovement, Vec3::new(0.0, -1.0, 0.0))
+        game.move_local_player(SelfMovement, Vec3::new(0.0, -1.0, 0.0), false)
             .unwrap();
     };
 
@@ -372,7 +372,7 @@ fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() 
 
         for (dy, block_y) in [(0.5, 64), (0.1, 65)] {
             game.as_guest(12, |game| {
-                game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0))
+                game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0), false)
                     .unwrap();
             })
             .unwrap();
@@ -408,7 +408,7 @@ fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() 
         assert_eq!(player.supporting_block(game), Ok(Some(slab)));
         assert_eq!(player.on_block(game), Ok(Some(slab)));
         for (dy, block_y) in [(0.5, 64), (0.1, 65)] {
-            game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0))
+            game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0), false)
                 .unwrap();
             assert_eq!(player.supporting_block(game), Ok(None));
             assert_eq!(

@@ -258,9 +258,9 @@ impl Game<'_> {
                     self.prepare_knockback_credit(id as i32, source.attacker, self.combat.attack());
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
                 let mut survived_hit = false;
-                let killed = match self.mobs.iter_mut().find(|m| m.id == id) {
-                    Some(m) => {
-                        let hit = m.damage(
+                let killed = match self.mob_index.find(&self.mobs, id) {
+                    Some(index) => {
+                        let hit = self.mobs[index].damage(
                             crate::game::entity::damage_level_of!(
                                 self,
                                 self.combat.attack(),
@@ -270,8 +270,13 @@ impl Game<'_> {
                             amount,
                             source,
                         );
-                        survived_hit = hit && m.alive();
-                        hit && !m.alive()
+                        self.finish_mob_damage_at(index);
+                        let alive = self
+                            .mobs
+                            .get(index)
+                            .is_some_and(|m| m.id == id && m.alive());
+                        survived_hit = hit && alive;
+                        hit && !alive
                     }
                     None => false,
                 };

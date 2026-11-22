@@ -14,6 +14,7 @@ use super::{
 use crate::blocks::Fluid;
 use crate::health::DamageLevel;
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
 
 // Nautilus state: `tame`/`owner`, the saddle, `head` the body armour,
@@ -173,7 +174,7 @@ pub(super) fn travel(
     input: Vec3,
     events: &mut Vec<MobEvent>,
     pause: bool,
-) -> Result<(), super::living::TravelPause> {
+) -> ControlFlow<super::living::TravelPause> {
     let speed = m.ai.speed;
     m.move_relative(speed, input);
     m.travel_move(w, level, events, pause, |m, _, _, _| {

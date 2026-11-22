@@ -18,6 +18,8 @@ pub trait Hooks {
     /// the same snapshots; their queued changes apply in Part order afterward
     /// (with the declaring package's — or, for a `served_by` content package,
     /// its serving native host's — Parts running first).
+    /// On mobs, each queued hurt finishes its damage, death or protection, and
+    /// `living_damage_post` before the next queued change or the effect countdown.
     /// Clearing `keep` skips later Parts. Server-side.
     #[hook(
         side = "server",

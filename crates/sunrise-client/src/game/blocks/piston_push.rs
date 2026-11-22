@@ -462,7 +462,7 @@ impl Game<'_> {
             .is_some_and(|p| !p.spectator && p.bounds().intersects(area))
             && !self.lid_spares(lid, root, MoveWho::Player, false)
         {
-            let _ = self.move_local_player(lid.mover(), movement);
+            let _ = self.move_local_player(lid.mover(), movement, false);
         }
         for boat in boats {
             let Some(target @ MoveWho::Entity(handle)) = self.resolve_push_target(boat) else {
@@ -599,7 +599,7 @@ impl Game<'_> {
         stand_grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
     ) {
         if target == MoveWho::Player {
-            let _ = self.move_local_player(mover, movement);
+            let _ = self.move_local_player(mover, movement, false);
             return;
         }
         // Armor stands arm their gate in their own collided shove.
@@ -762,37 +762,87 @@ impl Game<'_> {
         }
     }
 
-    /// The local player's ordinary `Entity.move(mover, …)`: the collision scan stops
-    /// and steps it, and the end of the move updates its ground, fall and velocity state.
+    /// `Entity.move(mover, …)` for the player in place, with `LocalPlayer.move`'s
+    /// auto-jump tail where the caller uses it (riptide). An acting guest's landing
+    /// settles while the original turn and resolved collision are still in place.
     pub(in crate::game) fn move_local_player(
         &mut self,
         mover: MoverType,
         movement: Vec3,
+        auto_jump: bool,
     ) -> sunrise_client::Result<Option<Vec3>> {
-        let entities = self.entity_collisions(Mover::Player);
-        let section_scope = self.player_section_scope();
-        let Some(player) = self.player.as_mut() else {
+        use sunrise_client::landing::PlayerLandingPause;
+
+        let Some(player) = self.player.as_ref() else {
             return Ok(None);
         };
-        let side = game_side!(self);
-        let _sections = section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
-        let before = player.position;
-        MotionWorld {
-            side: &side,
-            entities: &entities,
-            player,
-            scene: &mut self.world,
-            assets: &self.pack.assets,
-            collision_binding: self.collision,
-            resources: self.motion,
-            health: &self.health_resources,
-            loop_context: &self.loop_context,
-            damage_hooks: &self.damage_hooks,
-            tag_items: Some(world_items!(self)),
-            block_registries: Some(&self.pack.block_registries),
+        let (before, id, conn, dim) =
+            (player.position, player.entity_id, self.lan_acting, self.dim);
+        // A guest landing can call Game in between these borrows. Rebind the
+        // original body and its level, or abandon the rest of the old move.
+        macro_rules! motion_phase {
+            ($world:ident, $body:expr) => {{
+                if self.lan_acting != conn || self.dim != dim {
+                    return Ok(None);
+                }
+                let entities = self.entity_collisions(Mover::Player);
+                let section_scope = self.player_section_scope();
+                let Some(player) = self.player.as_mut().filter(|p| p.entity_id == id) else {
+                    return Ok(None);
+                };
+                let side = game_side!(self);
+                let _sections = section_scope.map(|scope| scope.begin(&mut self.native_lifecycle));
+                let mut $world = MotionWorld {
+                    side: &side,
+                    entities: &entities,
+                    player,
+                    scene: &mut self.world,
+                    assets: &self.pack.assets,
+                    collision_binding: self.collision,
+                    resources: self.motion,
+                    health: &self.health_resources,
+                    loop_context: &self.loop_context,
+                    damage_hooks: &self.damage_hooks,
+                    tag_items: Some(world_items!(self)),
+                    block_registries: Some(&self.pack.block_registries),
+                };
+                $body
+            }};
         }
-        .move_with_cause(mover, movement)?;
-        Ok(Some(player.position.subtract(before)))
+        let pause = motion_phase!(
+            world,
+            world.move_ordinary(
+                &mut MoveGate::new(),
+                mover,
+                movement,
+                auto_jump,
+                conn.is_some(),
+            )
+        )?;
+        if let Some(pause) = pause {
+            let landing = match pause.landing {
+                PlayerLandingPause::Trample(trample) => {
+                    self.trample_farmland(id as u32, true, trample);
+                    motion_phase!(world, world.finish_trample_fall(trample))?
+                }
+                PlayerLandingPause::Damage(landing) => Some(landing),
+            };
+            if let Some(landing) = landing {
+                if self.finish_guest_damage_before_resume().is_err() {
+                    return Ok(None);
+                }
+                motion_phase!(world, {
+                    world.finish_guest_landing(landing)?;
+                    pause.movement.finish(&mut world)
+                })?;
+            } else {
+                motion_phase!(world, pause.movement.finish(&mut world))?;
+            }
+        }
+        Ok(self
+            .player
+            .as_ref()
+            .map(|player| player.position.subtract(before)))
     }
 
     fn push_for_piston(
@@ -1295,7 +1345,7 @@ impl Game<'_> {
         // check, restitution and block speed).
         if target == MoveWho::Player {
             with_piston_noclip(piston_direction, || {
-                let _ = self.move_local_player(cause, movement);
+                let _ = self.move_local_player(cause, movement, false);
             });
             let after = self.player.as_ref().map_or(before, |p| p.bounds());
             self.piston_block_triggers(before, after);

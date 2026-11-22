@@ -1168,11 +1168,11 @@ sunrise-client game::native_custom_geometry::tests::each_stage_is_asked_in_frame
 sunrise-client game::native_custom_geometry::tests::fill_world_geometry_commits_an_accepted_batch lib daily resources
 sunrise-client game::native_custom_geometry::tests::persistent_groups_cpu_routes_and_lifetime lib daily resources
 sunrise-client game::native_custom_geometry::tests::persistent_groups_match_batch lib daily resources
-sunrise-client game::native_damage_tests::a_cancelled_deaths_post_fires_once_before_the_death_hooks lib daily resources
+sunrise-client game::native_damage_tests::a_cancelled_deaths_post_fires_once_after_the_death_hooks lib daily resources
 sunrise-client game::native_damage_tests::a_game_built_level_has_every_damage_hook lib daily resources
 sunrise-client game::native_damage_tests::a_hit_inside_the_cooldown_no_stronger_than_the_last_fires_no_post lib daily resources
 sunrise-client game::native_damage_tests::a_hit_on_the_dragon_fires_pre_and_post lib daily resources
-sunrise-client game::native_damage_tests::a_killing_blows_post_fires_once_before_the_death_hooks lib daily resources
+sunrise-client game::native_damage_tests::a_killing_blows_post_fires_once_after_the_death_hooks lib daily resources
 sunrise-client game::native_damage_tests::arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon lib daily resources
 sunrise-client game::native_damage_tests::mob_and_dragon_post_records_fresh_hit_decision lib daily resources
 sunrise-client game::native_damage_tests::post_fires_for_a_player_hit_a_shield_blocked_whole lib daily resources
@@ -1180,11 +1180,10 @@ sunrise-client game::native_damage_tests::post_fires_for_a_player_hit_that_absor
 sunrise-client game::native_damage_tests::post_fires_once_for_a_killing_blow_on_a_mob lib daily resources
 sunrise-client game::native_damage_tests::pre_draws_from_the_level_random_of_the_hit lib daily resources
 sunrise-client game::native_damage_tests::pre_fires_for_a_hit_its_reductions_took_to_zero lib daily resources
-sunrise-client game::native_damage_tests::pre_sets_the_health_lost_and_the_last_hurt_the_cooldown_compares lib daily resources
+sunrise-client game::native_damage_tests::pre_sets_health_lost_but_cooldown_compares_the_outer_hit lib daily resources
 sunrise-client game::native_damage_tests::snapshot_crosses_the_real_damage_hook_with_reductions lib daily resources
 sunrise-client game::native_damage_tests::the_container_names_what_armor_took lib daily resources
 sunrise-client game::native_damage_tests::the_original_damage_is_the_hit_before_the_incoming_hook lib daily resources
-sunrise-client game::native_damage_tests::unsubscribed_damage_does_not_convert lib daily resources
 sunrise-client game::native_data_bound::tests::a_remote_login_announces_the_client_cause_before_the_tags lib daily resources
 sunrise-client game::native_data_bound::tests::defaults_are_announced_bound_before_the_tags lib daily resources
 sunrise-client game::native_data_bound::tests::the_first_open_announces_bound_defaults_readable lib daily resources

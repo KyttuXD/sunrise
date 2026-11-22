@@ -79,7 +79,7 @@ impl Hooks for Probe {
             ),
             zero_bound: attacker.next_int(level, 0),
         });
-        event.container.set_new_damage(0.0);
+        event.container.set_new_damage(0.0).unwrap();
         Flow::Cancel
     }
 }

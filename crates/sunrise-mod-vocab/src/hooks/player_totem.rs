@@ -10,6 +10,7 @@ pub trait Hooks {
     /// the health state machine, before a mod is asked, so a mod cannot veto
     /// it from here. The player's state is swapped in, so
     /// `host.players().acting_player()`, `PlayerRef::tell` and the item helpers reach them.
+    /// When a fall triggered the totem, the same landing is still in progress.
     /// Once for each totem, on a server; the host of a LAN world's totem is
     /// not heard.
     #[hook(

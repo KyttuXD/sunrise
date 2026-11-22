@@ -1538,32 +1538,54 @@ mod mixin or use it replaces in its design or PR."#]
   source with no direct entity stay 0 even during that projectile's impact; and `position`, `getSourcePosition`), the `victim`'s
   position and view vector, the direct entity's `weapon` (`getWeaponItem`) when Sunrise knows it (a player's or mob's
   melee hit or projectile's saved weapon), `causing_weapon` (the causing living entity's current main hand; None for absent,
-  unknown, non-living or gone owners), and `DamageContainer` before reductions. Entity ids are 0 for none and for the untracked sources listed below. A mod may change the container's new damage or the
-  invulnerability ticks a fresh hit leaves (vanilla's 20), or set `canceled`: nothing of `hurtServer` itself happens
-  then (no damage, hurt sound, knockback, invulnerable time, statistics or criteria), and the caller acts as on a
-  refused hit, so a blast still pushes a mob whose hit was canceled, as vanilla pushes one that refused it. A canceled
-  hit on the ender dragon still counts as landed, as vanilla's `EnderDragon.hurt` returns true whatever `reallyHurt`
-  did: the arrow is spent and the melee effects run. A ghast's canceled hit by a fireball it was sent back counts as
-  landed (`Ghast.hurtServer`). A negative amount hurts by 0 and a NaN or infinite one by `Float.MAX_VALUE`, as vanilla
-  clamps them. It fires for the players, mobs and the ender dragon the game hurts, and runs on the thread that ticks
-  the world (the server thread), so state a mod shares with its render thread hooks needs synchronising. `/kill` and
-  `native_kill_mob` don't reach it yet: they set the health to 0 instead of hurting with `minecraft:generic_kill` as
-  vanilla does. A mod may also register reduction modifiers on the container
-  (`container.add_reduction_modifier(Reduction::Armor, ReductionChange::Scale(0.5))`, NeoForge's
-  `addReductionModifier`): each changes what one reduction (the damage cooldown, armor, Resistance, protection
-  enchantments, a witch's innate resistance, the absorption hearts) takes off this hit, in the order added, and
-  the recorded reduction and the damage the sequence goes on with are the changed ones, kept between 0 and what
-  there was to take. A step the hit skips (a source that bypasses armor, no Resistance effect) runs none. They
-  last for the hit.
+  unknown, non-living or gone owners), and a live mutable borrow of the engine's `DamageContainer` before reductions
+  (no snapshot conversion). Entity ids are 0 for none and for the untracked sources listed below. A mod may change the
+  container's new damage or the invulnerability ticks a fresh hit leaves (vanilla's 20), or set `canceled`: nothing of
+  `hurtServer` itself happens then (no damage, hurt sound, knockback, invulnerable time, statistics or criteria), and
+  the caller acts as on a refused hit, so a blast still pushes a mob whose hit was canceled, as vanilla pushes one that
+  refused it. A canceled hit on the ender dragon still counts as landed, as vanilla's `EnderDragon.hurt` returns true
+  whatever `reallyHurt` did: the arrow is spent and the melee effects run. A ghast's canceled hit by a fireball it was
+  sent back counts as landed (`Ghast.hurtServer`). A negative amount hurts by 0 and a NaN or infinite one by
+  `Float.MAX_VALUE`, as vanilla clamps them. It fires for the players, mobs and the ender dragon the game hurts, and
+  runs on the thread that ticks the world (the server thread), so state a mod shares with its render thread hooks needs
+  synchronising. `/kill` and `native_kill_mob` don't reach it yet: they set the health to 0 instead of hurting with
+  `minecraft:generic_kill` as vanilla does. A mod may also install owned reduction modifier closures on the live
+  container (`container.add_reduction_modifier(Reduction::Armor, |view, amount| amount * 0.5)`, NeoForge's
+  `addReductionModifier` / `IReductionFunction`): each runs in registration order when its reduction stage executes
+  (the damage cooldown, armor, Resistance, protection enchantments, a witch's innate resistance, the absorption hearts),
+  receiving a read-only `DamageContainerView` of the live container at that stage and the current reduction value
+  (vanilla's or the preceding modifier's output). Matching NeoForge's `DamageContainer` semantics, the modified
+  reduction is recorded verbatim without clamping to `[0, before]` or substituting for `NaN`, and only the resulting
+  damage is floored at `0.0` (`Math.max(new_damage - modified, 0.0F)`). For `Reduction::Absorption`, modifiers receive
+  `Math.min(hearts, damage)`, the modified value is recorded as `Reduction::Absorption`, remaining damage is
+  `Math.max(damage - modified, 0.0F)`, and the absorption pool deducts `Math.min(damage, modified)` floored at `0.0`
+  (`Math.max(0.0F, hearts - absorbed)`). Guarded stages the hit does not enter (for example, `#bypasses_effects`, zero
+  Resistance reduction, no Protection enchantments, a non-matching Witch hit, or a Wolf hit absorbed by wolf armor) run
+  no modifier; `Reduction::Armor` and `Reduction::Absorption` run at their enclosing `actuallyHurt` sites even with a
+  `0.0` starting reduction. Modifiers last for the hit. A panic inside a reduction callback is caught through the
+  shared hook panic boundary (without writing a crash report), disables that mod's reduction
+  callbacks for the rest of the session, reports loudly via `log::error!` and an error toast naming the mod, and leaves
+  the incoming reduction value unchanged so other mods and the hit continue; a phase refusal is logged as a warning on
+  each occurrence without latching and leaves the reduction value unchanged.
+
+- `living_damage_pre` (NeoForge's `LivingDamageEvent.Pre`) runs in `LivingEntity.actuallyHurt` after armor and magic
+  reductions and before absorption, lending the same live mutable `DamageContainer` (no snapshot conversion). A listener
+  may read earlier reductions, edit `new_damage` or `post_attack_invulnerability_ticks`, or call
+  `add_reduction_modifier` for subsequent stages (such as `Reduction::Absorption`, following the same unclamped
+  recording, `max(damage - modified, 0)` remaining damage, `max(hearts - damage.min(modified), 0)` absorption pool
+  deduction, and per-mod panic-disabling semantics as `living_incoming_damage`).
 
 - `living_damage_post` (NeoForge's `LivingDamageEvent.Post`) observes every hit that passed `living_incoming_damage`
-  and the cooldown, at the end of `hurtServer` (after a totem and the hurt sounds; the death hooks follow it,
-  Sunrise's order, not NeoForge's), even one that took no health (`container.health_damage()` 0). Its
-  `container.should_cause_side_effects()` is `hurtServer`'s fresh-hit decision (`shouldCauseSideEffects`), taken
-  before the damage: true for a fresh hit, false for a stronger hit inside the invulnerability window, and true for a
-  source that bypasses the cooldown. The flag is not inferred from final damage or invulnerability ticks, so a damage
-  listener changing those leaves it. It accompanies the reductions and damages and describes
-  the decision to cause fresh-hit effects, not whether every effect occurred.
+  and the cooldown, at the end of `hurtServer` (after the sounds and that hit's death or totem protection),
+  before the hurt caller resumes, even for a hit that took no health (`container.health_damage()` 0).
+  The next hazard, poison application or rider's hit sees the preceding hit completed; no callback waits for
+  the next tick or turn exit. A bee's drowning hurt finishes before stinger expiry is checked,
+  and an expiry hurt finishes before nectar and anger bookkeeping and the server AI controls.
+  Post lends a read-only live `DamageContainerView` (no snapshot conversion). Its `container.should_cause_side_effects()` is `hurtServer`'s
+  fresh-hit decision (`shouldCauseSideEffects`), taken before the damage: true for a fresh hit, false for a stronger hit
+  inside the invulnerability window, and true for a source that bypasses the cooldown. The flag is not inferred from
+  final damage or invulnerability ticks, so a damage listener changing those leaves it. It accompanies the reductions
+  and damages and describes the decision to cause fresh-hit effects, not whether every effect occurred.
 
 A player's damage type is the source's own. A mob's and the dragon's come from the kind of damage Sunrise keeps for
 the hit, which doesn't tell every vanilla type apart yet:

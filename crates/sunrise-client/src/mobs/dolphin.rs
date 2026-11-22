@@ -7,6 +7,7 @@ use super::{
     goals::{Cx, Goal, JUMP, LOOK, MOVE, goal_clone, reduced},
 };
 use crate::blocks::Fluid;
+use std::ops::ControlFlow;
 use sunrise_core::geometry::trig::Mth;
 use sunrise_core::random::RandomSource;
 
@@ -282,6 +283,7 @@ pub struct FollowPlayerRidden {
     following: bool,
     recalc: i32,
     leading: bool,
+    // One rider sample belongs to the whole move, even if its landing yields again.
     pending_rider: Option<(sunrise_core::geometry::Vec3, f32)>,
 }
 impl FollowPlayerRidden {
@@ -349,13 +351,14 @@ impl Goal for FollowPlayerRidden {
     /// `FollowPlayerRiddenEntityGoal.stop`.
     fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
         self.following = false;
+        self.pending_rider = None;
     }
     /// `FollowPlayerRiddenEntityGoal.tick`.
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.move_to_rider(m, cx, false);
     }
 
-    fn tick_until_trample(
+    fn tick_until_movement_pause(
         &mut self,
         m: &mut Mob,
         cx: &mut Cx,
@@ -363,7 +366,7 @@ impl Goal for FollowPlayerRidden {
         self.move_to_rider(m, cx, true)
     }
 
-    fn after_trample(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+    fn after_movement(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if let Some((position, yaw)) = self.pending_rider.take() {
             self.repath(m, cx, position, yaw);
             true
@@ -389,7 +392,9 @@ impl FollowPlayerRidden {
             f64::from(m.ai.zza),
         );
         m.move_relative(speed, input);
-        if let Err(movement) = m.travel_move(cx.w, cx.level, cx.events, pause, |_, _, _, _| {}) {
+        if let ControlFlow::Break(movement) =
+            m.travel_move(cx.w, cx.level, cx.events, pause, |_, _, _, _| {})
+        {
             self.pending_rider = Some((position, yaw));
             return Some(movement);
         }

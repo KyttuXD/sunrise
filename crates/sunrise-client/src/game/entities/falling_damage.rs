@@ -29,11 +29,24 @@ impl Game<'_> {
                     position: Some([block.position.x, block.position.y, block.position.z]),
                     ..Default::default()
                 };
-                for index in 0..self.mobs.len() {
-                    if !self.mobs[index].alive()
-                        || !falling_block::bounds(block.position)
-                            .intersects(self.mobs[index].bounds())
-                    {
+                // FallingBlockEntity.causeFallDamage selects the entities first, then hurts
+                // them in order. Death listeners can spawn or remove rows between hits.
+                let bounds = falling_block::bounds(block.position);
+                let victims: Vec<_> = self
+                    .mobs
+                    .iter()
+                    .filter(|mob| mob.alive() && !mob.removed && bounds.intersects(mob.bounds()))
+                    .map(|mob| mob.join)
+                    .collect();
+                let source = sunrise_client::mobs::Damage {
+                    from: attack.position,
+                    ..sunrise_client::mobs::Damage::of(mob_kind)
+                };
+                for join in victims {
+                    let Some(index) = self.mobs.locate(join) else {
+                        continue;
+                    };
+                    if self.mobs[index].removed {
                         continue;
                     }
                     let plan = self.prepare_knockback_credit(
@@ -42,13 +55,12 @@ impl Game<'_> {
                         self.combat.attack(),
                     );
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                    falling_block::hurt_mobs_with_kind(
+                    self.mobs[index].damage(
                         crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
-                        [&mut self.mobs[index]],
-                        block.position,
                         impact.amount,
-                        mob_kind,
+                        source,
                     );
+                    self.finish_mob_damage_at(index);
                 }
                 // Enderman.hurtServer: a falling block is no living attacker.
                 if let Err(e) = self.settle_hurt_teleports() {
@@ -258,6 +270,7 @@ impl Game<'_> {
                 blocked: false,
             });
         }
+        self.finish_guest_damage();
     }
 }
 

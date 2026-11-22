@@ -728,12 +728,13 @@ impl Game<'_> {
                 self.mark_block_entity_updated(key);
             }
         }
-        let Some(m) = conduit
+        let Some(index) = conduit
             .target
-            .and_then(|id| self.mobs.iter_mut().find(|m| m.id == id))
+            .and_then(|id| self.mob_index.find(&self.mobs, id))
         else {
             return;
         };
+        let m = &mut self.mobs[index];
         let at = [m.position.x, m.position.y, m.position.z];
         m.damage(
             crate::game::entity::damage_level_of!(
@@ -745,6 +746,7 @@ impl Game<'_> {
             4.0,
             Damage::of(DamageKind::Magic),
         );
+        self.finish_mob_damage_at(index);
         self.audio
             .play("minecraft:block.conduit.attack.target", Some(at), 1.0, 1.0);
     }

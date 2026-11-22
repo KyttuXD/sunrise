@@ -66,7 +66,8 @@ impl Game<'_> {
             attack.projectile_weapon = weapon.cloned();
         }
     }
-    /// Commit the weapon only after hurtServer committed this projectile's source.
+    /// Hurt and settle a living target before the projectile resumes its on-hit work.
+    /// The weapon is committed only when hurtServer accepts this projectile's source.
     pub(in crate::game) fn damage_projectile_with_weapon(
         &mut self,
         projectile: &Projectile,
@@ -81,21 +82,24 @@ impl Game<'_> {
                 game.damage_projectile_with_weapon(projectile, id, amount, source, aim)
             });
         }
-        let plan = self.prepare_knockback_credit(id as i32, source.attacker, self.combat.attack());
-        let mut credit = plan.lend(&mut self.last_hurt_by_player);
-        let Some(mob) = self.mobs.iter_mut().find(|mob| mob.id == id) else {
+        let Some(index) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| !self.mobs[i].removed)
+        else {
             return false;
         };
-        let hurt = mob.damage_projectile(
+        let plan = self.prepare_knockback_credit(id as i32, source.attacker, self.combat.attack());
+        let mut credit = plan.lend(&mut self.last_hurt_by_player);
+        let hurt = self.mobs[index].damage_projectile(
             crate::game::entity::damage_level_of!(self, self.combat.attack(), &mut credit, None),
             amount,
             source,
             aim,
             [projectile.velocity.x, projectile.velocity.z],
         );
-        if sunrise_client::mobs::creaking::has_pending_hurt(mob) {
-            self.settle_creaking_hurt(id);
-        }
+        self.finish_mob_damage_at(index);
+        self.settle_creaking_hurt(id);
         hurt
     }
     /// What an arrow or a thrown trident hits an entity of type `victim`

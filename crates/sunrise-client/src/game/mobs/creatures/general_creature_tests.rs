@@ -126,7 +126,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             }
             assert_eq!(game.resolve_player_credit(credit), Some(Some(12)));
             let victim = game.mobs[1].clone();
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             let stats = &game.lan.as_ref().unwrap().play.get(&12).unwrap().stats;
             assert_eq!(stats.get("custom", "minecraft:mob_kills"), 1);
             game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
@@ -137,7 +137,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             second.id = 102;
             game.last_hurt_by_player
                 .insert(102, super::super::combat::PlayerCredit(12));
-            game.as_guest(12, |game| game.mob_died(&second)).unwrap();
+            game.as_guest(12, |game| game.mob_die(&second)).unwrap();
             let host = game.lan.as_ref().unwrap();
             assert_eq!(host.play[&12].stats.get("custom", "minecraft:mob_kills"), 2);
             assert!(host.hub.guests[0].advancements.has("test:catalyst", "kill"));
@@ -155,7 +155,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             game.resolve_player_responsible(101, Damage::mob(100, [0.0; 3]));
             let credit = game.last_hurt_by_player.remove(&101).unwrap();
             game.last_hurt_by_player.insert(103, credit);
-            game.mob_died(&third);
+            game.mob_die(&third);
             let host = game.lan.as_ref().unwrap();
             assert_eq!(host.play[&12].stats.get("custom", "minecraft:mob_kills"), 3);
             game.mobs[0].extra.owner = None;

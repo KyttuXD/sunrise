@@ -181,11 +181,33 @@ fn living_incoming_damage(
 ) -> Flow {
     if event.kind == "minecraft:pig" {
         let halved = event.container.new_damage() * 0.5;
-        event.container.set_new_damage(halved);
+        let _ = event.container.set_new_damage(halved); // refused writes leave the hit unchanged
     }
     Flow::Continue
 }
 ```
+
+Each accepted hit has its own `living_damage_post` after its hurt sounds and any death or
+protection that hit caused, before the hurt caller resumes. This is not a next-tick or turn-exit
+notification. The next hazard, poison application or rider's hit observes the preceding hit
+completed; a later hit never shares the first hit's `DamageContainerView`. A mob's queued effect
+hurt finishes before the next action, and a dolphin's dry-out hurt finishes before its hop on land.
+A bee finishes drowning damage before checking stinger expiry. The bee uses the stung state
+it read before drowning, but the expiry hit uses its current health. The expiry hit finishes
+before the bee updates nectar and anger and runs its movement controls.
+A server player's landing hurt settles death or protection and Post on the landing body before
+`HIT_GROUND`, the fall-distance reset, and the next accepted move. In a mob's own tick, landing
+hurt settles before the fall-distance reset, the rest of movement, a gliding collision hurt or
+another goal. This includes `GoalSpec::BreathAir` installed with either `MobRef::add_goal` or
+`MobRef::add_target_goal`, and a dolphin's move to follow a rider. The target selector finishes
+before the action selector ticks. Trampling farmland is still decided before the landing hurt.
+A pufferfish's sting on a mob finishes the hurt, including any death and `living_damage_post`,
+before applying that sting's poison or starting the next sting. The fish's own `entity_tick_post`
+follows all of its stings.
+Direct projectile hits finish before the on-hit follow-up: for example, shulker bullet levitation,
+trident Channeling, or the damage from a large fireball's explosion. A mounted fall settles each
+rider's hurt before continuing to the next hit. A horse's own hurt finishes before the fall is
+passed to its passengers.
 
 For incoming damage, `event.weapon` is the direct entity's weapon, including a projectile's
 saved firing weapon. `event.causing_weapon` is instead the causing living entity's current

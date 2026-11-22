@@ -478,7 +478,7 @@ fn incoming_damage_carries_the_attack_data() {
                 .map(|axis| (from[axis] - at[axis]) * look[axis])
                 .sum::<f64>();
             if behind < 0.0 && event.weapon.is_some() {
-                event.container.0 *= 3.0;
+                *event.container.0 *= 3.0;
             }
             Flow::Continue
         }
@@ -507,7 +507,7 @@ fn incoming_damage_carries_the_attack_data() {
             position: [0.0; 3],
             view: [0.0, 0.0, 1.0],
         };
-        let (mut container, mut canceled) = (DamageContainer(4.0), false);
+        let (mut amount, mut canceled) = (4.0, false);
         dispatch_living_incoming_damage(
             &mut TestLevel,
             calls::LivingIncomingDamageCall {
@@ -517,11 +517,11 @@ fn incoming_damage_carries_the_attack_data() {
                 victim: &victim,
                 weapon,
                 causing_weapon: Some(&causing),
-                container: &mut container,
+                container: DamageContainer(&mut amount),
                 canceled: &mut canceled,
             },
         );
-        assert_eq!((container.0, canceled), (expected, false));
+        assert_eq!((amount, canceled), (expected, false));
     }
 }
 
@@ -669,7 +669,7 @@ fn dispatch_contracts() {
         position: [0.0; 3],
         view: [0.0; 3],
     };
-    let mut container = DamageContainer(1.0);
+    let mut amount = 1.0;
     let mut canceled = false;
     dispatch_living_incoming_damage(
         &mut TestLevel,
@@ -680,12 +680,12 @@ fn dispatch_contracts() {
             victim: &victim,
             weapon: None,
             causing_weapon: None,
-            container: &mut container,
+            container: DamageContainer(&mut amount),
             canceled: &mut canceled,
         },
     );
     // Each mod sees the one before: (1 × 2 + 1) × 2 + 2, kept though mod 2 cancels.
-    assert_eq!(container.0, 8.0);
+    assert_eq!(amount, 8.0);
     assert!(canceled);
     let chained: Vec<ModEntry> = [1, 3]
         .map(|id| {
@@ -700,7 +700,7 @@ fn dispatch_contracts() {
         .into();
     let chained: Arc<[ModEntry]> = chained.into();
     install(chained.clone());
-    let mut container = DamageContainer(1.0);
+    let mut amount = 1.0;
     let mut canceled = false;
     dispatch_living_incoming_damage(
         &mut TestLevel,
@@ -711,11 +711,11 @@ fn dispatch_contracts() {
             victim: &victim,
             weapon: None,
             causing_weapon: None,
-            container: &mut container,
+            container: DamageContainer(&mut amount),
             canceled: &mut canceled,
         },
     );
-    assert_eq!(container.0, 9.0);
+    assert_eq!(amount, 9.0);
     assert!(!canceled);
     install(mods.clone());
     calls.lock().unwrap().clear();

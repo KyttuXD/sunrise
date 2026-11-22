@@ -38,7 +38,7 @@ impl MotionWorld<'_, '_, '_> {
         )?;
         Ok(())
     }
-    pub(super) fn tick_remaining_fire(&mut self) -> Result<()> {
+    pub(super) fn hurt_from_remaining_fire(&mut self) -> Result<()> {
         if self.player.spectator {
             self.player.fire_ticks = 0;
         } else if self.player.mod_fire_immune {
@@ -47,14 +47,11 @@ impl MotionWorld<'_, '_, '_> {
         if self.player.invulnerable && self.player.fire_ticks > 1 {
             self.player.fire_ticks = 1;
         }
-        if self.player.fire_ticks > 0 {
-            if self.player.fire_ticks % 20 == 0 && !self.player.is_in_lava() {
-                self.environment_hurt("minecraft:on_fire", 1.0)?;
-            }
-            self.player.fire_ticks -= 1;
-        }
-        if self.player.fluids.was_touching_water {
-            self.player.fire_ticks = self.player.fire_ticks.min(0);
+        if self.player.fire_ticks > 0
+            && self.player.fire_ticks % 20 == 0
+            && !self.player.is_in_lava()
+        {
+            self.environment_hurt("minecraft:on_fire", 1.0)?;
         }
         Ok(())
     }
@@ -164,11 +161,8 @@ impl MotionWorld<'_, '_, '_> {
         self.player.ignite_for_ticks(300)?;
         self.environment_hurt("minecraft:lava", 4.0)
     }
-    /// What a server's `LivingEntity.baseTick` adds for a player it hosts:
-    /// the void (`Entity.checkBelowWorld`, 4 a tick, which creative players
-    /// take too) and suffocation (`isInWall`, which the caller decides from
-    /// the blocks at the eyes).
-    pub fn server_hazards_tick(&mut self, in_wall: bool) -> Result<()> {
+    /// Entity.checkBelowWorld: the void damages even a creative player.
+    pub fn check_below_world(&mut self) -> Result<()> {
         if self.player.position.y < self.scene.below_world_y() {
             let id = self
                 .health
@@ -190,11 +184,14 @@ impl MotionWorld<'_, '_, '_> {
                 4.0,
             )?;
         }
-        if in_wall {
-            self.environment_hurt("minecraft:in_wall", 1.0)?;
-        }
         Ok(())
     }
+
+    /// LivingEntity.baseTick's eye-in-wall hurt, after the owning server's shape check.
+    pub fn suffocation_hurt(&mut self) -> Result<()> {
+        self.environment_hurt("minecraft:in_wall", 1.0)
+    }
+
     pub fn apply_fire_contact(&mut self) -> Result<()> {
         if self.player.spectator {
             self.player.fire_ticks = 0;
@@ -459,7 +456,7 @@ mod below_world_tests {
     use super::*;
     use crate::chunk::LevelShape;
 
-    /// The player's health after one `server_hazards_tick` at `y` in a level of `shape`.
+    /// The player's health after the server hazard steps at `y` in a level of `shape`.
     fn health_after_hazards(shape: LevelShape, y: f64) -> f32 {
         let root = std::path::PathBuf::from(
             std::env::var_os("SUNRISE_TEST_RESOURCES").expect("SUNRISE_TEST_RESOURCES"),
@@ -489,7 +486,7 @@ mod below_world_tests {
             resources: &resources,
             health: &resources.health,
         }
-        .server_hazards_tick(false)
+        .check_below_world()
         .unwrap();
         player.health.health()
     }

@@ -96,7 +96,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                     },
                     0,
                 ));
-                game.mob_died(&victim);
+                game.mob_die(&victim);
             }
             let mut killer = Mob::new(41, ty.clone(), Vec3::ZERO, 0.0);
             killer
@@ -112,7 +112,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 let mut damage = Damage::of(kind);
                 damage.attacker = attacker;
                 victim.last_damage = Some((damage, 0));
-                game.mob_died(&victim);
+                game.mob_die(&victim);
             }
             // Predicate attempts cannot become the source of a later unrelated death.
             for (id, refused) in [(76, false), (77, true)] {
@@ -133,7 +133,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 victim.invulnerable = 0;
                 assert!(game.mob_hits_mob(id, 1000.0, Damage::fall()));
                 let victim = game.mobs.iter().find(|m| m.id == id).unwrap().clone();
-                game.mob_died(&victim);
+                game.mob_die(&victim);
             }
             // IDs belong to the killing blow, not a lookup of a surviving mob.
             game.mobs.retain(|m| m.id != 41);
@@ -141,7 +141,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
             let mut damage = Damage::of(DamageKind::Arrow);
             damage.attacker = Some(Who::Mob(41));
             victim.last_damage = Some((damage, 0));
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             let mods = vec![
                 mod_api::ModEntry::new(
                     "cancel_once",
@@ -156,10 +156,10 @@ fn death_loot_uses_call_scoped_source_and_hand() {
             .into();
             mod_platform::testing::with_mods(mods, || {
                 let before = seen.lock().unwrap().len();
-                game.mob_died(&victim);
+                game.mob_die(&victim);
                 assert_eq!(seen.lock().unwrap().len(), before);
                 victim.last_damage = Some((Damage::fall(), 1));
-                game.mob_died(&victim);
+                game.mob_die(&victim);
                 assert_eq!(seen.lock().unwrap().len(), before + 1);
             });
         });
@@ -275,10 +275,10 @@ fn death_loot_killer_is_not_the_acting_guest() {
                 game.last_hurt_by_player
                     .insert(id, crate::game::combat::PlayerCredit(12));
                 if let Some(conn) = acting {
-                    game.as_guest(conn, |g| g.mob_died(&victim)).unwrap();
+                    game.as_guest(conn, |g| g.mob_die(&victim)).unwrap();
                 } else {
                     assert!(game.lan_acting.is_none());
-                    game.mob_died(&victim);
+                    game.mob_die(&victim);
                 }
             }
         });
@@ -352,7 +352,7 @@ fn death_loot_nested_death_keeps_outer_context() {
             mod_api::ModEntry::new("nested_probe", Box::new(Probe(seen.clone()))),
         ]
         .into();
-        mod_platform::testing::with_mods(mods, || game.mob_died(&victim));
+        mod_platform::testing::with_mods(mods, || game.mob_die(&victim));
         assert_eq!(
             *seen.lock().unwrap(),
             [

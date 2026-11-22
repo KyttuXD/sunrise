@@ -856,7 +856,13 @@ impl Game<'_> {
                     .ok_or("the target is gone")?;
                 let kind = self.mobs[index].kind.id.clone();
                 let bonus = self.smash_damage_bonus(&kind);
-                let hurt = self.hurt_by_player(index, base + bonus, source);
+                let join = self.mobs[index].join;
+                let (hurt, _) = self.hurt_by_player(index, base + bonus, source);
+                let index = self
+                    .mob_index
+                    .find(&self.mobs, id)
+                    .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+                    .ok_or("the target is gone")?;
                 // The hurt sound the mob raised, where it stands.
                 for event in std::mem::take(&mut self.mobs[index].outbox) {
                     if let sunrise_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {

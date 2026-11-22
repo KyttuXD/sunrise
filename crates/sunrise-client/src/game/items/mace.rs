@@ -282,7 +282,13 @@ impl Game<'_> {
     }
     /// `LivingEntity.hurtServer` of the mob at `index` by the player's hit:
     /// the weapon's `armor_effectiveness` enchantments (Breach) thin its armor.
-    pub(super) fn hurt_by_player(&mut self, index: usize, amount: f32, source: Damage) -> bool {
+    /// Returns whether the hurt landed and whether it killed, before death listeners ran.
+    pub(super) fn hurt_by_player(
+        &mut self,
+        index: usize,
+        amount: f32,
+        source: Damage,
+    ) -> (bool, bool) {
         let attack = self.attack_of_who(Some(sunrise_client::mobs::Who::Player));
         let plan =
             self.prepare_knockback_credit(self.mobs[index].id as i32, source.attacker, &attack);
@@ -314,7 +320,11 @@ impl Game<'_> {
                 fraction,
             )
         };
-        let old_health = self.mobs[index].health;
+        let (id, join, old_health) = (
+            self.mobs[index].id,
+            self.mobs[index].join,
+            self.mobs[index].health,
+        );
         // The causing entity's aim, for what turns a blow by where it points
         // (`SulfurCube.knockback`).
         self.mobs[index].creative_attacker = self.creative;
@@ -342,7 +352,15 @@ impl Game<'_> {
             )
         });
         self.mobs[index].outbox = rest;
+        let killed = hurt && old_health > 0.0 && !self.mobs[index].alive();
         let _ = self.handle_mob_events(hits);
+        let Some(index) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+        else {
+            return (hurt, killed);
+        };
         // LivingEntity.actuallyHurt: Stats.DAMAGE_DEALT_ABSORBED for the attacking player,
         // awarded here, during that player's own attack (a server's guest has its own
         // statistics only inside `as_guest`).
@@ -354,8 +372,16 @@ impl Game<'_> {
         if hurt && self.mobs[index].health != old_health {
             self.mob_damage_event(id);
         }
-        self.settle_mob_hurt(id);
-        hurt
+        if let Some(index) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+        {
+            // The accepted hit already committed its player credit, including Thorns.
+            self.finish_mob_damage_at(index);
+            self.settle_mob_hurt(id);
+        }
+        (hurt, killed)
     }
     /// Takes the absorbed tenths a projectile's hit left on the mobs; the shooter gets them
     /// as `damage_dealt_absorbed` when it is the player (`LivingEntity.actuallyHurt`).
@@ -743,16 +769,27 @@ impl Game<'_> {
             let source = self.attack_source(from);
             // hurtServer first; the knockback and post-attack effects follow
             // only when it landed.
-            let old_health = self.mobs[i].health;
-            if self.hurt_by_player(i, amount, source) {
-                if old_health > 0.0 && !self.mobs[i].alive() {
+            let join = self.mobs[i].join;
+            let (hurt, killed) = self.hurt_by_player(i, amount, source);
+            if hurt {
+                if killed
+                    && let Some(i) = self.mob_index.find(&self.mobs, id)
+                    && self.mobs[i].join == join
+                    && !self.mobs[i].removed
+                {
                     self.native_kill_event(i);
                 }
+                let Some(i) = self
+                    .mob_index
+                    .find(&self.mobs, id)
+                    .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+                else {
+                    continue;
+                };
                 let plan = self.prepare_knockback_credit(id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
                 let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
                 self.mobs[i].knockback(level, 0.4, xd, zd, &source, amount);
-                self.remember_mob_player_credit(self.mobs[i].id);
                 self.post_attack(i);
             }
         }

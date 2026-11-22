@@ -964,8 +964,8 @@ impl Game<'_> {
         for &(id, amount) in hits {
             let plan = self.prepare_knockback_credit(id as i32, attacker, &attack);
             let mut credit = plan.lend(&mut self.last_hurt_by_player);
-            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                let hurt = m.damage(
+            if let Some(index) = self.mob_index.find(&self.mobs, id) {
+                let hurt = self.mobs[index].damage(
                     crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
                     amount,
                     Damage::fireworks(attacker, at),
@@ -976,6 +976,7 @@ impl Game<'_> {
                 if hurt && attacker == Some(Who::Player) {
                     self.remember_mob_player_credit(id);
                 }
+                self.finish_mob_damage_at(index);
             }
             self.settle_mob_hurt(id);
         }

@@ -402,34 +402,34 @@ impl Game<'_> {
                     from: Some([p.previous.x, p.previous.y, p.previous.z]),
                     attacker_species: owner_breeze.then_some(Species::Breeze),
                 };
-                let mut hurt = false;
+                let Some(index) = self.mob_index.find(&self.mobs, id) else {
+                    return;
+                };
+                let m = &self.mobs[index];
+                // Breeze.isInvulnerableTo: its own kind's charges. A refused hit does
+                // not get kill credit, but `wind_charge_hit` still makes the burst.
+                if (owner_breeze && m.species() == Species::Breeze)
+                    || sunrise_client::mobs::wither::armor_refuses(m, &p.kind)
+                {
+                    return;
+                }
                 let plan =
                     self.prepare_knockback_credit(id as i32, source.attacker, self.combat.attack());
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    // Breeze.isInvulnerableTo: its own kind's charges.
-                    if owner_breeze && m.species() == Species::Breeze {
-                        return;
-                    }
-                    // Refused before the hurt, so the kill is not credited
-                    // either; the burst of `wind_charge_hit` still goes off.
-                    if sunrise_client::mobs::wither::armor_refuses(m, &p.kind) {
-                        return;
-                    }
-                    hurt = m.damage(
-                        crate::game::entity::damage_level_of!(
-                            self,
-                            self.combat.attack(),
-                            &mut credit,
-                            None
-                        ),
-                        1.0,
-                        source,
-                    );
-                }
+                let hurt = self.mobs[index].damage(
+                    crate::game::entity::damage_level_of!(
+                        self,
+                        self.combat.attack(),
+                        &mut credit,
+                        None
+                    ),
+                    1.0,
+                    source,
+                );
                 if p.owner == Some(Who::Player) {
                     self.remember_mob_player_credit(id);
                 }
+                self.finish_mob_damage_at(index);
                 self.settle_mob_hurt(id);
                 if hurt {
                     self.shot_post_attack(p, who, p.kind.id(), "minecraft:wind_charge");

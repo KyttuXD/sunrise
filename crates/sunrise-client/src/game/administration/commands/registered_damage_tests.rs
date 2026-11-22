@@ -463,7 +463,7 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         let index = game.mobs.iter().position(|m| m.id == warden_id).unwrap();
         let health_after_first = game.mobs[index].health;
         let from = game.target_position(Target::Player).unwrap();
-        assert!(!game.hurt_by_player(index, 1.0, Damage::player(from)));
+        assert!(!game.hurt_by_player(index, 1.0, Damage::player(from)).0);
         assert_eq!(game.mobs[index].health, health_after_first);
         assert_eq!(warden_state(game), (Some(Who::Player), 100));
 

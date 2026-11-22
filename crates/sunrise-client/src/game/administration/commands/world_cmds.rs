@@ -140,7 +140,24 @@ impl Game<'_> {
     /// factory chooses the type based on the attacker; an explicit registry
     /// type must not. Other registered types keep their id and tags as `Named`.
     pub(in crate::game) fn damage_kind(catalog: &DamageCatalog, ty: &str) -> DamageKind {
-        match ty.strip_prefix("minecraft:").unwrap_or(ty) {
+        Self::builtin_damage_kind(ty)
+            .or_else(|| NamedDamage::registered(catalog, ty).map(DamageKind::Named))
+            .unwrap_or(DamageKind::Generic)
+    }
+
+    /// Resolve a mod-supplied source against the world's registry, with no default on a miss.
+    pub(in crate::game) fn registered_damage_kind(
+        catalog: &DamageCatalog,
+        ty: &str,
+    ) -> Option<DamageKind> {
+        match Self::builtin_damage_kind(ty) {
+            Some(kind) => catalog.id(ty).map(|_| kind),
+            None => NamedDamage::registered(catalog, ty).map(DamageKind::Named),
+        }
+    }
+
+    fn builtin_damage_kind(ty: &str) -> Option<DamageKind> {
+        Some(match ty.strip_prefix("minecraft:").unwrap_or(ty) {
             "player_attack" => DamageKind::PlayerAttack,
             "mace_smash" => DamageKind::MaceSmash,
             "spear" => DamageKind::Spear,
@@ -181,10 +198,8 @@ impl Game<'_> {
             "wind_charge" => DamageKind::WindCharge,
             "wither" => DamageKind::Wither,
             "generic" => DamageKind::Generic,
-            _ => {
-                NamedDamage::registered(catalog, ty).map_or(DamageKind::Generic, DamageKind::Named)
-            }
-        }
+            _ => return None,
+        })
     }
     /// `DamageCommand.damage`: apply its source and report an accepted hit.
     pub(super) fn cmd_damage(&mut self, ctx: &Context) -> R<i32> {
@@ -517,12 +532,16 @@ impl Game<'_> {
     /// `Zombie.hurtServer`'s reinforcement requests before the command returns.
     /// Health-changing hits also raise their damage vibration before return.
     fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
+        let Some(index) = self.mob_index.find(&self.mobs, id) else {
+            return false;
+        };
         let plan = self.prepare_knockback_credit(id as i32, damage.attacker, self.combat.attack());
         let attack = self.combat.attack();
         let mut credit = plan.lend(&mut self.last_hurt_by_player);
         let mut reinforcements = Vec::new();
-        let mut health_changed = false;
-        let hurt = self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+        let health_changed;
+        let hurt = {
+            let m = &mut self.mobs[index];
             let queued = m.outbox.len();
             let old_health = m.health;
             let hurt = m.damage(
@@ -535,7 +554,7 @@ impl Game<'_> {
                 reinforcements = take_new_reinforcements(&mut m.outbox, queued);
             }
             hurt
-        });
+        };
         if hurt {
             if damage.attacker == Some(Who::Player) {
                 self.remember_mob_player_credit(id);
@@ -554,6 +573,7 @@ impl Game<'_> {
                 self.mob_damage_event(id);
             }
         }
+        self.finish_mob_damage_at(index);
         for (mob, target) in reinforcements {
             self.call_reinforcements(mob, target);
         }
@@ -2293,7 +2313,7 @@ mod allay_owner_damage_tests {
                     game.mobs.push(mob);
                     let source = Damage::player([20.5, 102.0, 20.5]);
                     let accepted = if melee {
-                        game.hurt_by_player(0, 2.0, source)
+                        game.hurt_by_player(0, 2.0, source).0
                     } else {
                         // The command entry point lends its resolved attacker to the damage path.
                         let attack = game.attack_of_who(source.attacker);

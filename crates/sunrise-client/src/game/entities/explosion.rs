@@ -925,6 +925,7 @@ impl Game<'_> {
             let attack = self.current_attack();
             self.after_block(outcome, (None, false), source, &attack);
         }
+        self.finish_guest_damage();
         pushed
     }
 
@@ -1284,6 +1285,7 @@ impl Game<'_> {
                                 }
                             }
                         }
+                        self.finish_mob_damage_at(i);
                         // Enderman.hurtServer teleports inside the hurt, before
                         // the push (the mob order stays as it was).
                         if let Err(e) = self.settle_hurt_teleports() {

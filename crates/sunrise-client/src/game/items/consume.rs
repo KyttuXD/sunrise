@@ -310,15 +310,7 @@ impl Game<'_> {
                         .iter_mut()
                         .find(|m| m.id == id && m.alive() && !m.removed)
                     {
-                        mob.apply_consume_effect(
-                            crate::game::entity::damage_level_of!(
-                                self,
-                                &sunrise_client::health::NO_ATTACK,
-                                no_push,
-                                None
-                            ),
-                            effect,
-                        );
+                        mob.apply_consume_effect(effect);
                     }
                 }
             }

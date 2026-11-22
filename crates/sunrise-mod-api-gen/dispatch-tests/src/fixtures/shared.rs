@@ -725,7 +725,7 @@ impl Hooks for Mod {
         _: &mut dyn HitHost,
         event: &mut LivingIncomingDamageEvent<'_>,
     ) -> Flow {
-        event.container.0 = event.container.0 * 2.0 + self.id as f32;
+        *event.container.0 = *event.container.0 * 2.0 + self.id as f32;
         if self.id == 2 {
             Flow::Cancel
         } else {

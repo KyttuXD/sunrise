@@ -425,13 +425,12 @@ pub fn apply_consumption(
     decision: &Consumption,
     w: &MobWorld,
     m: &mut Mob,
-    level: &mut crate::health::DamageLevel<'_>,
     events: &mut Vec<MobEvent>,
 ) -> bool {
     if !decision.still_valid(m) {
         return false;
     }
-    if !consume(w, m, level, events, &decision.stack) {
+    if !consume(w, m, events, &decision.stack) {
         return false;
     }
     let info = w.items.and_then(|items| items.get(&decision.stack.item));
@@ -442,14 +441,9 @@ pub fn apply_consumption(
 /// `Fox.tick` and `Fox.aiStep`: eating, and `SoundEvents.FOX_AGGRO`
 /// (`Entity.playSound` at its feet) while the fox is defending. Only the
 /// server broadcasts that sound.
-pub fn ai_step(
-    m: &mut Mob,
-    w: &MobWorld,
-    level: &mut crate::health::DamageLevel<'_>,
-    events: &mut Vec<MobEvent>,
-) {
+pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if let Some(decision) = ai_step_until_consumption(m, w, events) {
-        apply_consumption(&decision, w, m, level, events);
+        apply_consumption(&decision, w, m, events);
         before_living_ai_step(m, w);
     }
     finish_ai_step(m, w, events);
@@ -562,7 +556,6 @@ fn eats(w: &MobWorld, stack: &crate::items::ItemStack) -> bool {
 fn consume(
     w: &MobWorld,
     m: &mut Mob,
-    level: &mut crate::health::DamageLevel<'_>,
     events: &mut Vec<MobEvent>,
     stack: &sunrise_items::items::ItemStack,
 ) -> bool {
@@ -595,7 +588,7 @@ fn consume(
                 1.0,
             ));
         } else {
-            m.apply_consume_effect(level, effect);
+            m.apply_consume_effect(effect);
         }
     }
     // `user.gameEvent(animation == DRINK ? GameEvent.DRINK : GameEvent.EAT)` at
@@ -1770,12 +1763,7 @@ mod consume_tests {
                         fox.extra.set_main_hand_stack(Some(stack.clone()));
                         assert!(decide_consumption(&fox, w).is_none(), "{removed}");
                         let mut events = Vec::new();
-                        ai_step(
-                            &mut fox,
-                            w,
-                            &mut crate::health::TestLevel::new(0).level(),
-                            &mut events,
-                        );
+                        ai_step(&mut fox, w, &mut events);
                         assert_eq!(fox.extra.main_hand_stack(), Some(&stack), "{removed}");
                         assert!(!events.iter().any(|event| matches!(
                             event,
@@ -1802,13 +1790,7 @@ mod consume_tests {
                     let decision = decide_consumption(&fox, w)
                         .expect("effective components make stone edible");
                     let mut events = Vec::new();
-                    assert!(apply_consumption(
-                        &decision,
-                        w,
-                        &mut fox,
-                        &mut crate::health::TestLevel::new(0).level(),
-                        &mut events
-                    ));
+                    assert!(apply_consumption(&decision, w, &mut fox, &mut events));
                     assert_eq!(fox.extra.main_hand_stack().unwrap().count, 1);
                     assert!(events.iter().any(|event| matches!(
                         event,
@@ -1840,13 +1822,7 @@ mod consume_tests {
                         fox.extra.set_main_hand_stack(Some(stack));
                         fox.extra.ints[TICKS_SINCE_EATEN] = 601;
                         let decision = decide_consumption(&fox, w).unwrap();
-                        assert!(apply_consumption(
-                            &decision,
-                            w,
-                            &mut fox,
-                            &mut crate::health::TestLevel::new(0).level(),
-                            &mut Vec::new()
-                        ));
+                        assert!(apply_consumption(&decision, w, &mut fox, &mut Vec::new()));
                         assert_eq!(
                             fox.extra.main_hand_id(),
                             expected,
@@ -1877,13 +1853,7 @@ mod consume_tests {
                     fox.extra.set_main_hand_stack(Some(stack));
                     let decision = decide_consumption(&fox, w).unwrap();
                     let mut events = Vec::new();
-                    assert!(apply_consumption(
-                        &decision,
-                        w,
-                        &mut fox,
-                        &mut crate::health::TestLevel::new(0).level(),
-                        &mut events
-                    ));
+                    assert!(apply_consumption(&decision, w, &mut fox, &mut events));
                     let effects: Vec<_> = events
                         .iter()
                         .filter_map(|event| match event {
@@ -1959,12 +1929,7 @@ mod consume_tests {
                 // Past the 600 ticks `Fox.aiStep` waits before it finishes the item.
                 m.extra.ints[TICKS_SINCE_EATEN] = 601;
                 let mut events = Vec::new();
-                ai_step(
-                    &mut m,
-                    w,
-                    &mut crate::health::TestLevel::new(0).level(),
-                    &mut events,
-                );
+                ai_step(&mut m, w, &mut events);
                 assert_ne!(m.position, Vec3::new(0.5, 1.0, 0.5), "the fruit moved it");
                 // `Entity.randomTeleport` drops the drawn height by one per
                 // step until the block below it is ground: just above the stone.
@@ -2061,12 +2026,7 @@ mod consume_tests {
                 m.extra.set_main_hand(Some("minecraft:golden_apple".into()));
                 m.extra.ints[TICKS_SINCE_EATEN] = 601;
                 let mut events = Vec::new();
-                ai_step(
-                    &mut m,
-                    w,
-                    &mut crate::health::TestLevel::new(0).level(),
-                    &mut events,
-                );
+                ai_step(&mut m, w, &mut events);
                 // `ApplyStatusEffectsConsumeEffect`: regeneration II for 100
                 // ticks, then absorption for 2400.
                 assert!(

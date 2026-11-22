@@ -294,66 +294,118 @@ impl Game<'_> {
         }
     }
 
+    /// The combat history follows the body into and out of an acting turn.
+    pub(in crate::game) fn guest_combat_record(
+        &self,
+        conn: u32,
+    ) -> Option<&crate::game::combat::CombatTracker> {
+        if self.lan_acting == Some(conn) {
+            Some(&self.combat)
+        } else {
+            self.guest_combat.get(&conn)
+        }
+    }
+
+    /// Run part of `ServerPlayer.die` on the victim's body. A hit that already
+    /// has the body installed must not try to enter the same guest again.
+    fn with_dying_guest(&mut self, conn: u32, f: impl FnOnce(&mut Self)) {
+        if self.lan_acting == Some(conn) {
+            f(self);
+        } else {
+            self.as_guest(conn, f);
+        }
+    }
+
     /// `ServerPlayer.die` for a guest whose health has run out: the death
     /// message, the loot and experience, the death screen.
     pub(in crate::game) fn guest_die(&mut self, gi: usize, conn: u32) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        let dying = host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead;
+        let guest = &host.hub.guests[gi];
+        let id = guest.entity_id;
+        let acting = self.lan_acting == Some(conn);
+        let dying = |game: &Self, guest: &sunrise_client::lan::guest::Guest| {
+            !guest.dead
+                && if acting {
+                    game.player
+                        .as_ref()
+                        .is_some_and(|body| body.health.health() <= 0.0)
+                } else {
+                    guest.health <= 0.0
+                }
+        };
+        if !dying(self, guest) {
+            return;
+        }
         // The killing blow, for the death hooks.
-        let blow = (dying && !mod_api::__private::mods().is_empty())
-            .then(|| self.guest_damage_source(conn));
-        if dying && self.guest_death_canceled(gi, conn) {
+        let blow = (!mod_api::__private::mods().is_empty()).then(|| self.guest_damage_source(conn));
+        if self.guest_death_canceled(gi, conn) {
             return;
         }
         // A dead player carries no mob a mod seated on it.
-        if dying && let Some(carrier) = self.lan.as_ref().map(|h| h.hub.guests[gi].entity_id as u32)
-        {
-            self.eject_player_riders(Some(carrier));
-        }
+        self.eject_player_riders(Some(id as u32));
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
-            self.guest_forget_digging(conn);
-            // FishingHook.shouldStopFishing: its owner is dead.
-            if let Some(play) = self.lan.as_mut().and_then(|host| host.play.get_mut(&conn)) {
-                play.hook.discard();
-            }
-        }
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        let here = host.hub.here(&host.hub.guests[gi]);
         let g = &host.hub.guests[gi];
-        if g.health <= 0.0 && !g.dead {
-            host.hub.guests.update(gi, |g| {
-                g.dead = true;
-                g.last_death = Some((g.dimension.clone(), g.position.map(|v| v.floor() as i32)));
-            });
-            let g = &host.hub.guests[gi];
-            let (id, at) = (g.entity_id, g.position);
-            let reward = Experience {
-                level: g.xp_level,
-                progress: g.xp_progress,
-                total: g.xp_total,
-            }
-            .death_reward(
+        if dying(self, g) {
+            let (uuid, name) = (g.uuid, g.name.clone());
+            let here = host.hub.here(g);
+            let (at, eye, xp, spectator) = if acting {
+                let Some(body) = self.player.as_ref() else {
+                    return;
+                };
+                (
+                    [body.position.x, body.position.y, body.position.z],
+                    f64::from(body.dimensions.eye_height),
+                    self.experience,
+                    self.spectator(),
+                )
+            } else {
+                (
+                    g.position,
+                    g.eye_height(),
+                    Experience {
+                        level: g.xp_level,
+                        progress: g.xp_progress,
+                        total: g.xp_total,
+                    },
+                    g.game_mode == SPECTATOR,
+                )
+            };
+            let last_death = Some((g.dimension.clone(), at.map(|v| v.floor() as i32)));
+            let reward = xp.death_reward(
                 self.ui
                     .rules
                     .bool_at(sunrise_client::gamerules::vanilla::KEEP_INVENTORY)
-                    || g.game_mode == SPECTATOR,
+                    || spectator,
             );
-            let (name, uuid) = (g.name.clone(), g.uuid);
-            // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
-            let drops = (g.game_mode != SPECTATOR)
-                .then(|| [at[0], at[1] + g.eye_height() - f64::from(0.3f32), at[2]]);
-            let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            let drops = (!spectator).then(|| [at[0], at[1] + eye - f64::from(0.3f32), at[2]]);
+            let cause = if acting {
+                self.mining = None;
+                self.destroy_delay = 0;
+                self.using = None;
+                self.hook.discard();
+                self.level.last_death = last_death;
+                self.ui.death_cause.take()
+            } else {
+                self.guest_forget_digging(conn);
+                self.lan.as_mut().and_then(|host| {
+                    host.hub.guests.update(gi, |g| g.last_death = last_death);
+                    host.play.get_mut(&conn).and_then(|play| {
+                        play.hook.discard();
+                        play.death_cause.take()
+                    })
+                })
+            };
+            if let Some(host) = self.lan.as_mut() {
+                host.hub.guests.update(gi, |g| g.dead = true);
+            }
             // ServerPlayer.die opens with `gameEvent(ENTITY_DIE)` at the player:
             // sculk sensors and wardens hear the death.
             if here {
-                self.as_guest(conn, |game| {
+                self.with_dying_guest(conn, |game| {
                     let ctx = game.player_context(None);
                     game.post_game_event("minecraft:entity_die", at, ctx);
                 });
@@ -369,7 +421,9 @@ impl Game<'_> {
             // The death's last blow, read before the death message empties the
             // combat record: ServerPlayer.die's triggers read it from a record
             // that CombatTracker.recheckStatus clears only at the end of die.
-            let killing = self.guest_combat.get(&conn).and_then(|c| c.killing_blow());
+            let killing = self
+                .guest_combat_record(conn)
+                .and_then(|c| c.killing_blow());
             // ServerPlayer.die: with showDeathMessages, the message goes to
             // the dying player's death screen and to everyone the team lets
             // see it; without it, the death screen gets an empty one.
@@ -434,8 +488,7 @@ impl Game<'_> {
             host.hub.entity_event(id, 3);
             let recently_hit = killing.is_some()
                 && self
-                    .guest_combat
-                    .get(&conn)
+                    .guest_combat_record(conn)
                     .is_some_and(|c| c.recently_hit_by_player(self.world.game_time));
             let dropping = crate::game::creatures::DyingDrops {
                 entity: id as u32,
@@ -462,7 +515,7 @@ impl Game<'_> {
             // ServerPlayer.die: the drops, the deathCount objectives, the
             // experience (`dropAllDeathLoot`), then a kill credit's `killed_by`,
             // awardKillScore and wither rose, then `deaths` and the two timers.
-            self.as_guest(conn, |game| {
+            self.with_dying_guest(conn, |game| {
                 if let Some(eyes) = drops {
                     game.drop_inventory(eyes, &dropping);
                 }
@@ -480,10 +533,14 @@ impl Game<'_> {
                 let attacker = if mod_api::__private::mods().is_empty() {
                     None
                 } else {
-                    self.guest_combat
-                        .get_mut(&conn)
-                        .and_then(|c| c.take_hurt_by_player(now))
-                        .and_then(|c| self.resolve_player_credit(c).map(|_| c.0))
+                    let credit = if acting {
+                        self.combat.take_hurt_by_player(now)
+                    } else {
+                        self.guest_combat
+                            .get_mut(&conn)
+                            .and_then(|c| c.take_hurt_by_player(now))
+                    };
+                    credit.and_then(|c| self.resolve_player_credit(c).map(|_| c.0))
                 };
                 let reward = self.living_experience_drop(
                     id as u32,
@@ -497,7 +554,7 @@ impl Game<'_> {
             }
             self.guest_killed_player_trigger(conn, at, killing);
             self.guest_award_kill_score(conn, at);
-            self.as_guest(conn, |game| {
+            self.with_dying_guest(conn, |game| {
                 game.award_custom_stat("deaths", 1);
                 game.stats.reset_death_timers();
             });
@@ -521,7 +578,7 @@ impl Game<'_> {
             return;
         };
         let now = self.world.game_time;
-        let combat = self.guest_combat.get(&conn);
+        let combat = self.guest_combat_record(conn);
         let player_credit = combat.and_then(|c| c.player_credit(now));
         let who = if let Some(credit) = player_credit {
             self.resolve_player_credit(credit)
@@ -646,8 +703,7 @@ impl Game<'_> {
         const TRIGGER: &str = "minecraft:entity_killed_player";
         let now = self.world.game_time;
         let Some(id) = self
-            .guest_combat
-            .get(&conn)
+            .guest_combat_record(conn)
             .and_then(|c| c.kill_credit(now))
         else {
             return;
@@ -656,7 +712,7 @@ impl Game<'_> {
             return;
         };
         let blow = self.guest_killing_blow(blow, at, TRIGGER);
-        self.as_guest(conn, |g| {
+        self.with_dying_guest(conn, |g| {
             g.trigger_killed_as(TRIGGER, &killer, blow.as_ref());
         });
     }
@@ -668,8 +724,7 @@ impl Game<'_> {
     /// or the ender dragon.
     fn guest_kill_credit_type(&self, conn: u32) -> Option<String> {
         let id = self
-            .guest_combat
-            .get(&conn)?
+            .guest_combat_record(conn)?
             .kill_credit(self.world.game_time)?;
         let in_place = self.lan_acting.is_none()
             && self
@@ -757,16 +812,18 @@ impl Game<'_> {
     /// The scalar death-tail/death-message source. `living_death` uses the
     /// full accepted hit retained on the body instead.
     pub(super) fn guest_damage_source(&self, conn: u32) -> (String, u32) {
-        let (damage_type, attacker) = match self
-            .lan
-            .as_ref()
-            .and_then(|host| host.play.get(&conn))
-            .and_then(|p| p.death_cause.as_deref())
-        {
+        let cause = if self.lan_acting == Some(conn) {
+            self.ui.death_cause.as_deref()
+        } else {
+            self.lan
+                .as_ref()
+                .and_then(|host| host.play.get(&conn))
+                .and_then(|p| p.death_cause.as_deref())
+        };
+        let (damage_type, attacker) = match cause {
             Some("death.attack.genericKill") => ("minecraft:generic_kill", 0),
             _ => self
-                .guest_combat
-                .get(&conn)
+                .guest_combat_record(conn)
                 .and_then(|tracker| tracker.last_blow())
                 .unwrap_or(("minecraft:generic", 0)),
         };
@@ -780,6 +837,9 @@ impl Game<'_> {
         conn: u32,
         me: sunrise_client::text::Text,
     ) -> sunrise_client::text::Text {
+        if self.lan_acting == Some(conn) {
+            return self.combat_death_message_for(me);
+        }
         let mut tracker = self.guest_combat.remove(&conn).unwrap_or_default();
         std::mem::swap(&mut self.combat, &mut tracker);
         let text = self.combat_death_message_for(me);

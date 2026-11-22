@@ -225,10 +225,6 @@ fn payload_enum_cases_have_declared_field_bytes() {
         SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
         (1u32, SpawnerKey::new("example:spawn").unwrap()),
     );
-    fields(ReductionChange::Add(1.25), (0u8, 1.25f32));
-    fields(ReductionChange::Scale(2.5), (1u8, 2.5f32));
-    fields(ReductionChange::AtLeast(3.75), (2u8, 3.75f32));
-    fields(ReductionChange::AtMost(4.5), (3u8, 4.5f32));
     let pos = [2i32, -4, 6];
     fields(
         crate::client::particles::PositionSource::Block([2, -4, 6]),
@@ -301,20 +297,6 @@ fn snapshot_records_have_declared_field_bytes() {
             Vec::<StateConstraint>::new(),
         ),
     );
-    let values = DamageValues {
-        original: 31.0,
-        new_damage: 29.0,
-        blocked: 2.0,
-        shield_damage: 3.0,
-        post_attack_invulnerability_ticks: 17,
-        should_cause_side_effects: true,
-        reductions: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        reduction_modifiers: vec![(Reduction::Armor, ReductionChange::Scale(0.5))],
-        entered_pre: 23.0,
-        inflicted: 19.0,
-        health_damage: 11.0,
-    };
-    fields(DamageContainer::from(values.clone()), (values,));
     let revision = crate::item::containers::ModRevision::from_snapshot(31, 47);
     fields(revision, (31u64, 47u64));
 }

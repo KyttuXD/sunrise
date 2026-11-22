@@ -261,11 +261,26 @@ impl Game<'_> {
         } else {
             0.0
         };
-        let old_health = self.mobs[index].health;
-        let hurt = deals_damage && self.hurt_by_player(index, total, Damage::spear(from));
-        if hurt && old_health > 0.0 && !self.mobs[index].alive() {
-            self.native_kill_event(index);
+        let (old_health, join) = (self.mobs[index].health, self.mobs[index].join);
+        let (hurt, killed) = if deals_damage {
+            self.hurt_by_player(index, total, Damage::spear(from))
+        } else {
+            (false, false)
+        };
+        if killed
+            && let Some(i) = self.mob_index.find(&self.mobs, id)
+            && self.mobs[i].join == join
+            && !self.mobs[i].removed
+        {
+            self.native_kill_event(i);
         }
+        let Some(index) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+        else {
+            return hurt;
+        };
         // causeExtraKnockback: a push of 0.4, then the weapon's Knockback.
         if deals_knockback {
             let (xd, zd) = self.extra_knockback_direction();
@@ -300,6 +315,7 @@ impl Game<'_> {
             return false;
         }
         let mob = &self.mobs[index];
+        let actual = old_health - mob.health;
         let (feet, width, height) = (
             [mob.position.x, mob.position.y, mob.position.z],
             mob.kind.width,
@@ -320,11 +336,7 @@ impl Game<'_> {
             self.weapon_wear(&stack);
         }
         // damageStatsAndHearts.
-        let actual = old_health - self.mobs[index].health;
         self.damage_stats_and_hearts(actual, feet, height);
-        if hurt {
-            self.remember_mob_player_credit(id);
-        }
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {

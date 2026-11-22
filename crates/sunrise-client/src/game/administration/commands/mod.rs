@@ -2298,7 +2298,7 @@ impl Game<'_> {
                     && !m.removed
                     && self.died.insert(id)
                 {
-                    self.mob_died(&m);
+                    self.mob_die(&m);
                 }
             }
             Target::Item(id) => {

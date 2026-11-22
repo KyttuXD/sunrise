@@ -4,7 +4,10 @@ use std::{
     cell::{Cell, RefCell},
     sync::OnceLock,
 };
-use sunrise_core::position::BlockPos;
+use sunrise_core::{
+    geometry::{Aabb, Axis, Direction, Vec3},
+    position::BlockPos,
+};
 use sunrise_world::{
     level::{InsideWrite, LandingWrite},
     registry::BlockStateId,
@@ -142,73 +145,89 @@ pub fn sweep_inside_blocks<W: InsideWalk>(
     effects: &mut W::Effects,
     max_iterations: i32,
 ) -> Result<i32, W::Error> {
-    let epsilon = sunrise_core::geometry::Vec3::new(W::DEFLATE, W::DEFLATE, W::DEFLATE);
-    let deflated = walk.bounds_at(to).deflate(epsilon);
-    let mut hits = Vec::new();
-    let iterations = sweep_inside_cells(from, to, deflated, max_iterations, |p, step, precise| {
-        if !walk.is_alive() {
-            return false;
-        }
-        let state = walk.block(p);
-        if !walk.is_air(state) {
-            hits.push((p, step, precise, state));
-        }
-        true
-    });
-    for (p, step, precise, state) in hits {
-        let contact = contact_at(walk, state, p, from, to);
-        if !contact.any() || !visited.insert(p.pack()) {
-            continue;
-        }
-        if contact.block {
-            // `isPrecise` and the step advance, then the block's own moment.
-            effects.advance_step(step);
-            walk.entity_inside(p, state, step, precise, effects)?;
-        }
-        if contact.fluid {
-            effects.advance_step(step);
-            walk.fluid_inside(p, step, effects)?;
-        }
-    }
-    Ok(iterations)
+    let (mut segment, used) = SweepSegment::collect(walk, from, to, max_iterations);
+    segment.run(walk, visited, effects, |_| false)?;
+    Ok(used)
 }
 
-/// `Entity.checkInsideBlocks`' per-movement budget.
-pub(crate) const INSIDE_MOVEMENT_STEPS: i32 = 16;
+#[derive(Debug)]
+struct SweepSegment {
+    from: Vec3,
+    to: Vec3,
+    deflated: Aabb,
+    moved_far: bool,
+    hits: std::vec::IntoIter<(i32, BlockPos)>,
+}
 
-/// Enumerate `Entity.checkInsideBlocks`' geometry without a world loan. Its
-/// caller shares one visited set across a movement's passes, spends vanilla's
-/// 16-step budget across the axes, and visits the target box if it runs out.
-/// A mob can hold the remaining cells across a hurt and read live states.
-pub(crate) fn sweep_inside_cells(
-    from: sunrise_core::geometry::Vec3,
-    to: sunrise_core::geometry::Vec3,
-    deflated: sunrise_core::geometry::Aabb,
-    max_iterations: i32,
-    mut each: impl FnMut(BlockPos, i32, bool) -> bool,
-) -> i32 {
-    // Mth.square(0.9999900000002526): a long move counts every block it crosses as precise.
-    let far = 0.999_990_000_000_252_6_f64;
-    let moved_far = from.distance_squared(to) > far * far;
-    let mut iterations = 0;
-    let _ = sunrise_core::geometry::sweep_intersected_blocks(
-        from,
-        to,
-        deflated,
-        (max_iterations.max(0) as usize).max(1_000_000),
-        |p, step| {
-            if step >= max_iterations {
-                return false;
+impl SweepSegment {
+    fn collect<W: InsideWalk>(walk: &W, from: Vec3, to: Vec3, max_iterations: i32) -> (Self, i32) {
+        let epsilon = Vec3::new(W::DEFLATE, W::DEFLATE, W::DEFLATE);
+        let deflated = walk.bounds_at(to).deflate(epsilon);
+        // Mth.square(0.9999900000002526): a long move counts every block it crosses as precise.
+        let far = 0.999_990_000_000_252_6_f64;
+        let moved_far = from.distance_squared(to) > far * far;
+        let mut iterations = 0;
+        let mut hits = Vec::new();
+        let _ = sunrise_core::geometry::sweep_intersected_blocks(
+            from,
+            to,
+            deflated,
+            (max_iterations.max(0) as usize).max(1_000_000),
+            |p, iteration| {
+                if !walk.is_alive() || iteration >= max_iterations {
+                    return false;
+                }
+                iterations = iteration;
+                hits.push((iteration, p));
+                true
+            },
+        );
+        (
+            Self {
+                from,
+                to,
+                deflated,
+                moved_far,
+                hits: hits.into_iter(),
+            },
+            iterations + 1,
+        )
+    }
+
+    fn run<W: InsideWalk>(
+        &mut self,
+        walk: &mut W,
+        visited: &mut crate::fast_hash::FxHashSet<i64>,
+        effects: &mut W::Effects,
+        halt: impl Fn(&W) -> bool,
+    ) -> Result<bool, W::Error> {
+        for (step, p) in self.hits.by_ref() {
+            if !walk.is_alive() {
+                break;
             }
-            let precise = moved_far || deflated.intersects(sunrise_core::geometry::Aabb::block(p));
-            if !each(p, step, precise) {
-                return false;
+            let state = walk.block(p);
+            if walk.is_air(state) {
+                continue;
             }
-            iterations = step;
-            true
-        },
-    );
-    iterations + 1
+            let contact = contact_at(walk, state, p, self.from, self.to);
+            if !contact.any() || !visited.insert(p.pack()) {
+                continue;
+            }
+            if contact.block {
+                let precise = self.moved_far || self.deflated.intersects(Aabb::block(p));
+                effects.advance_step(step);
+                walk.entity_inside(p, state, step, precise, effects)?;
+            }
+            if contact.fluid {
+                effects.advance_step(step);
+                walk.fluid_inside(p, step, effects)?;
+            }
+            if halt(walk) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// The cells a box covers, x then y then z, each floor to floor inclusive: the
@@ -243,31 +262,66 @@ pub fn visit_box_cells<W: InsideWalk>(
     visited: &mut crate::fast_hash::FxHashSet<i64>,
     effects: &mut W::Effects,
 ) -> Result<(), W::Error> {
-    let mut result = Ok(());
-    box_cells(area, |p| {
-        let state = walk.block(p);
-        if walk.is_air(state) {
-            return true;
+    BoxCellSweep::new(area, at).run(walk, visited, effects, |_| false)?;
+    Ok(())
+}
+
+/// The exact next stationary cell, so a hurt need not replay previous contacts.
+#[derive(Debug)]
+pub(crate) struct BoxCellSweep {
+    lo: BlockPos,
+    hi: BlockPos,
+    at: Vec3,
+    next: Option<BlockPos>,
+}
+
+impl BoxCellSweep {
+    pub(crate) fn new(area: Aabb, at: Vec3) -> Self {
+        let at_cell =
+            |p: Vec3| BlockPos::new(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+        let lo = at_cell(area.min_position());
+        let hi = at_cell(area.max_position());
+        let next = (lo.x <= hi.x && lo.y <= hi.y && lo.z <= hi.z).then_some(lo);
+        Self { lo, hi, at, next }
+    }
+
+    pub(crate) fn run<W: InsideWalk>(
+        &mut self,
+        walk: &mut W,
+        visited: &mut crate::fast_hash::FxHashSet<i64>,
+        effects: &mut W::Effects,
+        halt: impl Fn(&W) -> bool,
+    ) -> Result<bool, W::Error> {
+        while let Some(p) = self.next {
+            self.next = if p.z < self.hi.z {
+                Some(BlockPos::new(p.x, p.y, p.z + 1))
+            } else if p.y < self.hi.y {
+                Some(BlockPos::new(p.x, p.y + 1, self.lo.z))
+            } else if p.x < self.hi.x {
+                Some(BlockPos::new(p.x + 1, self.lo.y, self.lo.z))
+            } else {
+                None
+            };
+            let state = walk.block(p);
+            if walk.is_air(state) {
+                continue;
+            }
+            let contact = contact_at(walk, state, p, self.at, self.at);
+            if !contact.any() || !visited.insert(p.pack()) {
+                continue;
+            }
+            if contact.block {
+                walk.entity_inside(p, state, 0, false, effects)?;
+            }
+            if contact.fluid {
+                walk.fluid_inside(p, 0, effects)?;
+            }
+            if halt(walk) {
+                return Ok(false);
+            }
         }
-        let contact = contact_at(walk, state, p, at, at);
-        if !contact.any() || !visited.insert(p.pack()) {
-            return true;
-        }
-        if contact.block
-            && let Err(error) = walk.entity_inside(p, state, 0, false, effects)
-        {
-            result = Err(error);
-            return false;
-        }
-        if contact.fluid
-            && let Err(error) = walk.fluid_inside(p, 0, effects)
-        {
-            result = Err(error);
-            return false;
-        }
-        true
-    });
-    result
+        Ok(true)
+    }
 }
 
 /// `Entity.checkInsideBlocks(movements, collector)`: every movement of a tick, each
@@ -280,39 +334,88 @@ pub fn sweep_movements<W: InsideWalk>(
     visited: &mut crate::fast_hash::FxHashSet<i64>,
     effects: &mut W::Effects,
 ) -> Result<(), W::Error> {
-    use sunrise_core::geometry::{Axis, Direction};
-    for movement in movements {
-        let mut from = movement.from;
-        let delta = movement.to.subtract(movement.from);
-        let mut budget = INSIDE_MOVEMENT_STEPS;
-        match movement.original {
-            Some(original) if delta.length_squared() > 0.0 => {
-                for axis in Axis::step_order(original) {
-                    let step = delta.component(axis);
-                    if step != 0.0 {
-                        let to = from.relative(
-                            match axis {
+    MovementSweep::default().run(walk, movements, visited, effects, |_| false)?;
+    Ok(())
+}
+
+/// Walk state is made of values, not borrows of the level or the moving entity.
+#[derive(Debug, Default)]
+pub(crate) struct MovementSweep {
+    row: usize,
+    axis: usize,
+    from: Option<Vec3>,
+    budget: i32,
+    segment: Option<SweepSegment>,
+}
+
+impl MovementSweep {
+    pub(crate) fn run<W: InsideWalk>(
+        &mut self,
+        walk: &mut W,
+        movements: &[sunrise_world::entity_move::MovementRecord],
+        visited: &mut crate::fast_hash::FxHashSet<i64>,
+        effects: &mut W::Effects,
+        halt: impl Fn(&W) -> bool,
+    ) -> Result<bool, W::Error> {
+        loop {
+            if let Some(segment) = self.segment.as_mut() {
+                if !segment.run(walk, visited, effects, &halt)? {
+                    return Ok(false);
+                }
+                self.segment = None;
+            }
+            let Some(movement) = movements.get(self.row) else {
+                return Ok(true);
+            };
+            let mut from = match self.from {
+                Some(from) => from,
+                None => {
+                    self.axis = 0;
+                    self.budget = 16;
+                    movement.from
+                }
+            };
+            let delta = movement.to.subtract(movement.from);
+            let to = match movement.original {
+                Some(original) if delta.length_squared() > 0.0 => {
+                    let axes = Axis::step_order(original);
+                    let mut to = None;
+                    while let Some(&axis) = axes.get(self.axis) {
+                        self.axis += 1;
+                        let step = delta.component(axis);
+                        if step != 0.0 {
+                            let direction = match axis {
                                 Axis::X => Direction::East,
                                 Axis::Y => Direction::Up,
                                 Axis::Z => Direction::South,
-                            },
-                            step,
-                        );
-                        budget -= sweep_inside_blocks(walk, from, to, visited, effects, budget)?;
-                        from = to;
+                            };
+                            to = Some(from.relative(direction, step));
+                            break;
+                        }
                     }
+                    to
                 }
+                _ if self.axis == 0 => {
+                    self.axis = 1;
+                    from = movement.from;
+                    Some(movement.to)
+                }
+                _ => None,
+            };
+            if let Some(to) = to {
+                let (segment, used) = SweepSegment::collect(walk, from, to, self.budget);
+                self.budget -= used;
+                self.from = Some(to);
+                self.segment = Some(segment);
+            } else {
+                if self.budget <= 0 {
+                    self.segment = Some(SweepSegment::collect(walk, movement.to, movement.to, 1).0);
+                }
+                self.row += 1;
+                self.from = None;
             }
-            _ => {
-                budget -=
-                    sweep_inside_blocks(walk, movement.from, movement.to, visited, effects, 16)?;
-            }
-        }
-        if budget <= 0 {
-            sweep_inside_blocks(walk, movement.to, movement.to, visited, effects, 1)?;
         }
     }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]

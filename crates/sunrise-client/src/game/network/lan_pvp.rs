@@ -533,8 +533,7 @@ impl Game<'_> {
     /// score.
     pub(super) fn guest_award_kill_score(&mut self, victim: u32, at: [f64; 3]) {
         let Some(id) = self
-            .guest_combat
-            .get(&victim)
+            .guest_combat_record(victim)
             .and_then(|c| c.kill_credit(self.world.game_time))
         else {
             return;

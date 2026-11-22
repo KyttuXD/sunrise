@@ -302,10 +302,22 @@ impl Game<'_> {
             Some(f) => self.attack_source(f),
             None => sunrise_client::mobs::Damage::of(sunrise_client::mobs::DamageKind::Generic),
         };
-        let landed = self.hurt_by_player(index, amount, source);
-        if landed && old_health > 0.0 && !self.mobs[index].alive() {
-            self.native_kill_event(index);
+        let (id, join) = (self.mobs[index].id, self.mobs[index].join);
+        let (landed, killed) = self.hurt_by_player(index, amount, source);
+        if killed
+            && let Some(i) = self.mob_index.find(&self.mobs, id)
+            && self.mobs[i].join == join
+            && !self.mobs[i].removed
+        {
+            self.native_kill_event(i);
         }
+        let Some(index) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+        else {
+            return;
+        };
         if landed {
             let victim = self.mob_entity(&self.mobs[index]);
             self.player_hit(
@@ -401,7 +413,6 @@ impl Game<'_> {
                     randomization: 0,
                 });
             }
-            self.remember_mob_player_credit(self.mobs[index].id);
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
             } else if scale > 0.9 {
@@ -422,7 +433,15 @@ impl Game<'_> {
                 self.audio.play(sound, from, 1.0, 1.0);
             }
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
-            // its voice pitch from its own random).
+            // its voice pitch from its own random). A sweep's own hurt/death
+            // listeners may have changed the entity list.
+            let Some(index) = self
+                .mob_index
+                .find(&self.mobs, id)
+                .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+            else {
+                return;
+            };
             let queued = std::mem::take(&mut self.mobs[index].outbox);
             let mut infested = Vec::new();
             for event in queued {
@@ -443,7 +462,12 @@ impl Game<'_> {
             for (at, velocities) in infested {
                 self.spawn_infested(at, velocities);
             }
-            self.weapon_hit(index);
+            if let Some(i) = self.mob_index.find(&self.mobs, id)
+                && self.mobs[i].join == join
+                && !self.mobs[i].removed
+            {
+                self.weapon_hit(i);
+            }
             // Player.attack: causeFoodExhaustion(0.1F) only when the hit hurt
             // (inside `if (wasHurt)`), after damageStatsAndHearts.
             if let Some(p) = self.player.as_mut()

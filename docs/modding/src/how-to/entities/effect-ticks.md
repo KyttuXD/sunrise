@@ -15,8 +15,10 @@ Implement the Part with `#[mod_api::sunrise_part]`. Its two methods are:
 - `apply_effect_tick` runs only when this Part's own cadence method says to apply. It receives the
   holder's `LivingRef`, dimension, health, maximum health and optional `PlayerFood`.
   Queue `heal`, `hurt`, `eat` or `add_exhaustion` changes through the event. These
-  apply after every Part returns, in Part order. Clear `event.keep` to end the effect
-  immediately, before its duration counts down, and skip later Parts.
+  apply after every Part returns, in Part order. On a mob, each queued `hurt`
+  finishes its damage, including death or protection and `living_damage_post`, before
+  the next change runs. Clear `event.keep` to end the effect after its accepted changes,
+  before its duration counts down, and skip later Parts.
 
 These are version 4 methods in the `effect` scope, keyed by `effect`; there are no
 corresponding global `Hooks` methods. Each Part has its own `apply`, starting false,

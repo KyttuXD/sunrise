@@ -24,6 +24,9 @@ mod item_fallthrough;
 #[cfg(test)]
 #[path = "shared/label_tests.rs"]
 mod label_tests;
+#[cfg(test)]
+#[path = "shared/live_damage_tests.rs"]
+mod live_damage_tests;
 #[path = "shared/loot.rs"]
 mod loot;
 #[cfg(test)]
@@ -1728,6 +1731,112 @@ pub(super) fn invulnerability_check(
     invulnerable
 }
 
+fn engine_reduction(reduction: mod_api::Reduction) -> sunrise_world::living_damage::Reduction {
+    match reduction {
+        mod_api::Reduction::Invulnerability => {
+            sunrise_world::living_damage::Reduction::Invulnerability
+        }
+        mod_api::Reduction::Armor => sunrise_world::living_damage::Reduction::Armor,
+        mod_api::Reduction::Enchantments => sunrise_world::living_damage::Reduction::Enchantments,
+        mod_api::Reduction::MobEffects => sunrise_world::living_damage::Reduction::MobEffects,
+        mod_api::Reduction::Absorption => sunrise_world::living_damage::Reduction::Absorption,
+        mod_api::Reduction::InnateResistance => {
+            sunrise_world::living_damage::Reduction::InnateResistance
+        }
+        _ => unreachable!("unknown API reduction"),
+    }
+}
+
+struct LiveDamageRead<'a>(&'a sunrise_world::living_damage::DamageState);
+
+impl mod_api::__private::DamageContainerRead for LiveDamageRead<'_> {
+    fn original(&self) -> f32 {
+        self.0.original()
+    }
+    fn new_damage(&self) -> f32 {
+        self.0.new_damage()
+    }
+    fn blocked(&self) -> f32 {
+        self.0.blocked()
+    }
+    fn shield_damage(&self) -> f32 {
+        self.0.shield_damage()
+    }
+    fn post_attack_invulnerability_ticks(&self) -> i32 {
+        self.0.post_attack_invulnerability_ticks()
+    }
+    fn should_cause_side_effects(&self) -> bool {
+        self.0.should_cause_side_effects()
+    }
+    fn inflicted(&self) -> f32 {
+        self.0.inflicted()
+    }
+    fn health_damage(&self) -> f32 {
+        self.0.health_damage()
+    }
+    fn reduction(&self, reduction: mod_api::Reduction) -> f32 {
+        self.0.reduction(engine_reduction(reduction))
+    }
+}
+
+struct LiveDamageContainer<'a>(&'a mut DamageContainer);
+
+impl mod_api::__private::DamageContainerRead for LiveDamageContainer<'_> {
+    fn original(&self) -> f32 {
+        self.0.original()
+    }
+    fn new_damage(&self) -> f32 {
+        self.0.new_damage()
+    }
+    fn blocked(&self) -> f32 {
+        self.0.blocked()
+    }
+    fn shield_damage(&self) -> f32 {
+        self.0.shield_damage()
+    }
+    fn post_attack_invulnerability_ticks(&self) -> i32 {
+        self.0.post_attack_invulnerability_ticks()
+    }
+    fn should_cause_side_effects(&self) -> bool {
+        self.0.should_cause_side_effects()
+    }
+    fn inflicted(&self) -> f32 {
+        self.0.inflicted()
+    }
+    fn health_damage(&self) -> f32 {
+        self.0.health_damage()
+    }
+    fn reduction(&self, reduction: mod_api::Reduction) -> f32 {
+        self.0.reduction(engine_reduction(reduction))
+    }
+}
+
+impl mod_api::__private::DamageContainerBackend for LiveDamageContainer<'_> {
+    fn set_new_damage(&mut self, value: f32) {
+        self.0.record_new_damage(value);
+    }
+    fn set_post_attack_invulnerability_ticks(&mut self, value: i32) {
+        self.0.record_post_attack_invulnerability_ticks(value);
+    }
+    fn add_reduction_modifier(
+        &mut self,
+        reduction: mod_api::Reduction,
+        owner: Option<&'static str>,
+        modifier: Box<dyn FnMut(mod_api::DamageContainerView<'_>, f32) -> f32>,
+    ) {
+        let mut wrapped = mod_api::__private::wrap_reduction_modifier(owner, modifier);
+        self.0.add_reduction_modifier(
+            engine_reduction(reduction),
+            Box::new(move |engine_container: &DamageContainer, amount: f32| {
+                wrapped(
+                    mod_api::DamageContainerView::new(&LiveDamageRead(engine_container)),
+                    amount,
+                )
+            }),
+        );
+    }
+}
+
 /// `native_living_incoming_damage` for the damage code: whether it
 /// canceled the hit.
 pub(super) fn incoming_damage(
@@ -1736,7 +1845,14 @@ pub(super) fn incoming_damage(
     victim: Victim,
     container: &mut DamageContainer,
 ) -> bool {
-    if !mod_api::__private::listened(mod_api::HookId::LivingIncomingDamage) {
+    let listens_incoming = mod_api::__private::listened(mod_api::HookId::LivingIncomingDamage);
+    if listens_incoming
+        || mod_api::__private::listened(mod_api::HookId::LivingDamagePre)
+        || mod_api::__private::listened(mod_api::HookId::LivingDamagePost)
+    {
+        container.enable_live_reductions();
+    }
+    if !listens_incoming {
         return false;
     }
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
@@ -1751,7 +1867,7 @@ pub(super) fn incoming_damage(
     let Ok(causing_weapon) = causing_weapon.try_into_api() else {
         return false;
     };
-    let mut snapshot = (*container).try_into_api().expect("scalar damage snapshot");
+    let mut live = LiveDamageContainer(container);
     HitLevel(level).native_living_incoming_damage(mod_api::__private::LivingIncomingDamageCall {
         entity,
         kind,
@@ -1759,12 +1875,9 @@ pub(super) fn incoming_damage(
         victim: &victim,
         weapon: weapon.as_ref(),
         causing_weapon: causing_weapon.as_ref(),
-        container: &mut snapshot,
+        container: mod_api::DamageContainer::new(&mut live),
         canceled: &mut canceled,
     });
-    *container = snapshot
-        .try_into_engine(&())
-        .expect("scalar damage snapshot");
     canceled
 }
 
@@ -1777,12 +1890,15 @@ pub(super) fn damage_pre(
     if !mod_api::__private::listened(mod_api::HookId::LivingDamagePre) {
         return;
     }
+    container.enable_live_reductions();
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
-    let mut snapshot = (*container).try_into_api().expect("scalar damage snapshot");
-    HitLevel(level).native_living_damage_pre(entity, kind, &source, &mut snapshot);
-    *container = snapshot
-        .try_into_engine(&())
-        .expect("scalar damage snapshot");
+    let mut live = LiveDamageContainer(container);
+    HitLevel(level).native_living_damage_pre(
+        entity,
+        kind,
+        &source,
+        mod_api::DamageContainer::new(&mut live),
+    );
 }
 
 /// `native_living_damage_post` for the damage code.
@@ -1795,8 +1911,13 @@ pub(super) fn damage_post(
         return;
     }
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
-    let snapshot = (*container).try_into_api().expect("scalar damage snapshot");
-    HitLevel(level).native_living_damage_post(entity, kind, &source, &snapshot);
+    let live = LiveDamageRead(container);
+    HitLevel(level).native_living_damage_post(
+        entity,
+        kind,
+        &source,
+        mod_api::DamageContainerView::new(&live),
+    );
 }
 
 /// `native_living_shield_block` for the damage code. Its one
@@ -1820,6 +1941,34 @@ pub(super) fn shield_block(
 }
 
 impl Game<'_> {
+    /// Finish a lethal or totem-protected hit only once the owning level has settled it.
+    pub(in crate::game) fn finish_damage_post(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        post: std::sync::Arc<sunrise_client::health::DamagePost>,
+    ) {
+        let (source, state, original_lend) = post.view();
+        let (player, mobs) = (&mut self.player, &mut self.mobs);
+        let lend = original_lend.and_then(|id| {
+            sunrise_client::health::HitLend::attacking_player(player.as_mut(), id)
+                .or_else(|| sunrise_client::health::HitLend::attacking_mob(mobs.iter_mut(), id))
+        });
+        let level = crate::game::entity::damage_level_of!(
+            self,
+            &sunrise_client::health::NO_ATTACK,
+            no_push,
+            lend
+        );
+        let live = LiveDamageRead(state);
+        HitLevel(level.reborrow()).native_living_damage_post(
+            entity,
+            kind,
+            &source,
+            mod_api::DamageContainerView::new(&live),
+        );
+    }
+
     /// The [`Attack`] of `attacker` (an entity id, 0 for none) for the level a hit lands in
     /// ([`DamageLevel::attacked_by`]). While a native mod listens it also records what the
     /// attacker holds (the player's selected and off-hand stacks, a mob's main hand) for
@@ -1939,6 +2088,7 @@ pub(super) const DAMAGE_HOOKS: DamageHooks = DamageHooks {
     incoming: Some(incoming_damage),
     pre: Some(damage_pre),
     post: Some(damage_post),
+    owner_post_listened: Some(|| mod_api::__private::listened(mod_api::HookId::LivingDamagePost)),
     knockback: Some(knockback),
     totem: Some(use_totem),
     shield: Some(shield_block),

@@ -128,18 +128,43 @@ pub fn different(a: f64, b: f64) -> bool {
 pub fn move_entity<W: EntityMoveWorld>(
     world: &mut W,
     mover: MoverType,
-    mut movement: Vec3,
+    movement: Vec3,
 ) -> Result<(), W::Error> {
+    move_entity_until_landing(world, mover, movement, |world, dy, grounded, state, p| {
+        world.check_fall_damage(dy, grounded, state, p)?;
+        Ok(None::<std::convert::Infallible>)
+    })
+    .map(|_| ())
+}
+
+/// The part of `Entity.move` after its authoritative `checkFallDamage` call.
+/// Keep the resolved movement and support block, not a borrow of the entity or level.
+pub struct MoveTail {
+    resolved: Vec3,
+    x: bool,
+    z: bool,
+    nonzero_y: bool,
+    p: BlockPos,
+    state: BlockStateId,
+}
+
+/// Run a move, pausing its tail only if the landing needs the owning level.
+pub fn move_entity_until_landing<W: EntityMoveWorld, P>(
+    world: &mut W,
+    mover: MoverType,
+    mut movement: Vec3,
+    check_fall: impl FnOnce(&mut W, f64, bool, BlockStateId, BlockPos) -> Result<Option<P>, W::Error>,
+) -> Result<Option<(P, MoveTail)>, W::Error> {
     if world.no_physics() {
         world.set_position(world.position().add_vector(movement))?;
         world.record_movement(mover, movement)?;
         world.set_collision_flags(CollisionFlags::default());
-        return Ok(());
+        return Ok(None);
     }
     if mover == MoverType::Piston {
         movement = world.limit_piston_movement(movement)?;
         if java_zero(movement) {
-            return Ok(());
+            return Ok(None);
         }
     }
     let stuck = world.stuck_multiplier();
@@ -195,27 +220,52 @@ pub fn move_entity<W: EntityMoveWorld>(
     world.set_collision_flags(flags);
     let p = world.legacy_on_position()?;
     let state = world.block_state(p)?;
+    let tail = MoveTail {
+        resolved,
+        x,
+        z,
+        nonzero_y,
+        p,
+        state,
+    };
     if world.locally_authoritative()? {
         let grounded = world.on_ground()?;
-        world.check_fall_damage(resolved.y, grounded, state, p)?;
-    }
-    if world.removed()? {
-        return Ok(());
-    }
-    if world.can_simulate()?
-        && (nonzero_y && world.collision_flags().vertical || world.collision_flags().horizontal)
-    {
-        world.restitute(state, p, x, z, resolved)?;
-    }
-    if !world.client_side()? || world.locally_authoritative()? {
-        let emission = world.movement_emission()?;
-        if emission.anything() && !world.passenger()? {
-            world.apply_movement_emission(emission, resolved, p, state)?;
+        if let Some(pause) = check_fall(world, resolved.y, grounded, state, p)? {
+            return Ok(Some((pause, tail)));
         }
     }
-    let factor = world.block_speed_factor()?;
-    let velocity = scale_by_block_speed(world.velocity()?, factor);
-    world.set_velocity(velocity)
+    tail.finish(world)?;
+    Ok(None)
+}
+
+impl MoveTail {
+    pub fn finish<W: EntityMoveWorld>(self, world: &mut W) -> Result<(), W::Error> {
+        let Self {
+            resolved,
+            x,
+            z,
+            nonzero_y,
+            p,
+            state,
+        } = self;
+        if world.removed()? {
+            return Ok(());
+        }
+        if world.can_simulate()?
+            && (nonzero_y && world.collision_flags().vertical || world.collision_flags().horizontal)
+        {
+            world.restitute(state, p, x, z, resolved)?;
+        }
+        if !world.client_side()? || world.locally_authoritative()? {
+            let emission = world.movement_emission()?;
+            if emission.anything() && !world.passenger()? {
+                world.apply_movement_emission(emission, resolved, p, state)?;
+            }
+        }
+        let factor = world.block_speed_factor()?;
+        let velocity = scale_by_block_speed(world.velocity()?, factor);
+        world.set_velocity(velocity)
+    }
 }
 /// The last step of `Entity.move`: the horizontal velocity is multiplied by
 /// `getBlockSpeedFactor()` (soul sand, honey), the vertical one is untouched.

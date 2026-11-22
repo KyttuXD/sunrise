@@ -602,10 +602,10 @@ pub fn tick_until_consumption(
     w: &MobWorld,
     level: &mut super::DamageLevel<'_>,
     events: &mut Vec<super::MobEvent>,
-    continuation: &mut Option<super::ai::MobContinuation>,
+    movement: &mut Option<super::ai::MobMovement>,
 ) -> super::ai::TickProgress {
     tick_with(mobs, index, w, level, events, |m, w, level, events| {
-        m.tick_until_consumption(w, level, events, continuation)
+        m.tick_until_consumption(w, level, events, movement)
     })
 }
 
@@ -617,17 +617,11 @@ pub fn resume_after_consumption(
     level: &mut super::DamageLevel<'_>,
     was_on_fire: bool,
     events: &mut Vec<super::MobEvent>,
-    continuation: &mut Option<super::ai::MobContinuation>,
+    movement: &mut Option<super::ai::MobMovement>,
 ) -> super::ai::TickProgress {
     tick_with(mobs, index, w, level, events, |m, w, level, events| {
-        let progress = super::ai::resume_after_consumption(
-            m,
-            w,
-            level,
-            was_on_fire,
-            events,
-            Some(continuation),
-        );
+        let progress =
+            super::ai::resume_after_consumption(m, w, level, was_on_fire, events, Some(movement));
         if matches!(progress, super::ai::TickProgress::Complete(_)) {
             super::neutral_anger::after_tick(m, w.game_time);
         }
@@ -645,7 +639,7 @@ pub fn resume_after_breathing(
     known_speed: sunrise_core::geometry::Vec3,
     breath: Option<crate::breathing::Breath>,
     events: &mut Vec<super::MobEvent>,
-    continuation: &mut Option<super::ai::MobContinuation>,
+    movement: &mut Option<super::ai::MobMovement>,
 ) -> super::ai::TickProgress {
     tick_with(mobs, index, w, level, events, |m, w, level, events| {
         let progress = super::ai::resume_after_breathing(
@@ -656,7 +650,7 @@ pub fn resume_after_breathing(
             air,
             known_speed,
             breath,
-            Some(continuation),
+            Some(movement),
         );
         if matches!(progress, super::ai::TickProgress::Complete(_)) {
             super::neutral_anger::after_tick(m, w.game_time);
@@ -665,17 +659,36 @@ pub fn resume_after_breathing(
     })
 }
 
-/// Resume after the level applied (or refused) the paused landing.
-pub fn resume_mob(
+/// Resume the tick with its current navigation owner after settling a hit.
+pub fn resume_after_damage(
     mobs: &mut JoinList<Mob>,
     index: usize,
     w: &MobWorld,
     level: &mut super::DamageLevel<'_>,
-    continuation: &mut Option<super::ai::MobContinuation>,
+    resume: super::ai::DamageResume,
+    events: &mut Vec<super::MobEvent>,
+    movement: &mut Option<super::ai::MobMovement>,
+) -> super::ai::TickProgress {
+    tick_with(mobs, index, w, level, events, |m, w, level, events| {
+        let progress = super::ai::resume_after_damage(m, w, level, events, resume, Some(movement));
+        if matches!(progress, super::ai::TickProgress::Complete(_)) {
+            super::neutral_anger::after_tick(m, w.game_time);
+        }
+        progress
+    })
+}
+
+/// Resume after the level applied (or refused) the paused landing.
+pub fn resume_movement(
+    mobs: &mut JoinList<Mob>,
+    index: usize,
+    w: &MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    movement: &mut Option<super::ai::MobMovement>,
     events: &mut Vec<super::MobEvent>,
 ) -> super::ai::TickProgress {
     tick_with(mobs, index, w, level, events, |m, w, level, events| {
-        let progress = super::ai::resume_mob(m, w, level, continuation, events);
+        let progress = super::ai::resume_movement(m, w, level, movement, events);
         if matches!(progress, super::ai::TickProgress::Complete(_)) {
             super::neutral_anger::after_tick(m, w.game_time);
         }

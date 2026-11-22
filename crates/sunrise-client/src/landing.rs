@@ -15,9 +15,9 @@ use sunrise_world::native_load_context::LoopContext;
 use sunrise_world::{
     block_entity_push::BlockPushWorld,
     block_landing::{
-        BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDefinition,
-        FarmlandTrample, LandingDamage, LandingDefinition, LandingEntityKind, LandingEvent,
-        LandingSound,
+        BlockFall, BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDamageCall,
+        FallDamageTail, FallDefinition, FarmlandTrample, LandingDamage, LandingDefinition,
+        LandingEntityKind, LandingEvent, LandingSound,
     },
     entity_obstruction::EntityIdentity,
     fall_damage::FallDamageWorld,
@@ -392,52 +392,108 @@ impl MotionWorld<'_, '_, '_> {
         BlockLandingWorld::cause_fall_damage(self, distance, multiplier, LandingDamage::Fall)
     }
 }
+/// The owner must handle the trample or settle the hurt before the landing can continue.
+pub enum PlayerLandingPause {
+    Trample(FarmlandTrample),
+    Damage(PlayerLandingTail),
+}
+
+/// The selected block reaction and ground-hit tail, with no borrow of the player or level.
+pub struct PlayerLandingTail {
+    state: BlockStateId,
+    tail: FallDamageTail,
+    damaged: bool,
+}
+
 impl MotionWorld<'_, '_, '_> {
     pub(crate) fn block_fall(
         &mut self,
         state: BlockStateId,
         position: BlockPos,
         distance: f64,
-        pause: bool,
-    ) -> Result<Option<FarmlandTrample>> {
-        let previous = self.player.block_landing.take();
-        if crate::block_contact::fall_listens(state) {
-            self.player.block_landing = Some((state, position, distance));
-        }
-        let result = self.resources.landing.fall_on_until_trample(
-            self,
-            state,
-            position,
-            LandingEntityKind::Player,
-            distance,
-            pause,
-        );
-        let pending = self.player.block_landing.take();
-        self.player.block_landing = previous;
-        match result {
-            Ok(None) => {
-                if let Some((state, position, distance)) = pending {
-                    // Some landing rules never call causeFallDamage.
+        handoff: bool,
+    ) -> Result<Option<PlayerLandingPause>> {
+        match self
+            .resources
+            .landing
+            .begin_fall_on(
+                self,
+                state,
+                position,
+                LandingEntityKind::Player,
+                distance,
+                handoff,
+            )
+            .map_err(|err| err.to_string())?
+        {
+            BlockFall::Done => {
+                // Some landing rules never call causeFallDamage.
+                if crate::block_contact::fall_listens(state) {
                     self.mod_block_fall(state, position, distance, 0.0);
                 }
                 Ok(None)
             }
-            Ok(Some(trample)) => Ok(Some(trample)),
-            Err(err) => Err(err.to_string().into()),
+            BlockFall::Trample(trample) => Ok(Some(PlayerLandingPause::Trample(trample))),
+            BlockFall::Damage(call) => self
+                .apply_block_fall_damage(state, position, distance, call, handoff)
+                .map(|tail| tail.map(PlayerLandingPause::Damage)),
         }
     }
 
-    /// Finish `Block.fallOn` and `LivingEntity.checkFallDamage` after the game's
-    /// push and write. A refusal leaves the original fall still to finish.
-    pub fn finish_trample_fall(&mut self, trample: FarmlandTrample) -> Result<()> {
-        let previous = self.player.block_landing.take();
-        if crate::block_contact::fall_listens(trample.state) {
-            self.player.block_landing = Some((trample.state, trample.position, trample.distance));
-        }
-        let result = trample.finish_fall(self);
+    fn apply_block_fall_damage(
+        &mut self,
+        state: BlockStateId,
+        position: BlockPos,
+        distance: f64,
+        call: FallDamageCall,
+        handoff: bool,
+    ) -> Result<Option<PlayerLandingTail>> {
+        let contact =
+            crate::block_contact::fall_listens(state).then_some((state, position, distance));
+        let previous = std::mem::replace(&mut self.player.block_landing, contact);
+        let was_dead = self.player.health.dead;
+        let damaged = call.apply(self);
         self.player.block_landing = previous;
-        result.map_err(|err| err.to_string())?;
-        sunrise_world::living_landing::finish_living_landing(self, trample.state)
+        let damaged = damaged.map_err(|err| err.to_string())?;
+        let tail = call.tail();
+        // Death still needs its owner when no mod listens to Post.
+        if handoff && (self.hit_needs_owner() || (!was_dead && self.player.health.dead)) {
+            return Ok(Some(PlayerLandingTail {
+                state,
+                tail,
+                damaged,
+            }));
+        }
+        tail.after_hurt(self, damaged)
+            .map_err(|err| err.to_string())?;
+        Ok(None)
+    }
+
+    /// Resume `FarmlandBlock.fallOn` after the game's lift and write (or refusal),
+    /// still using the original block's superclass call and part contact.
+    pub fn finish_trample_fall(
+        &mut self,
+        trample: FarmlandTrample,
+    ) -> Result<Option<PlayerLandingTail>> {
+        let tail = self.apply_block_fall_damage(
+            trample.state,
+            trample.position,
+            trample.distance,
+            trample.damage_call(),
+            true,
+        )?;
+        if tail.is_none() {
+            sunrise_world::living_landing::finish_living_landing(self, trample.state)?;
+        }
+        Ok(tail)
+    }
+
+    /// Finish the selected block reaction and the ground hit after death or protection and Post.
+    pub fn finish_guest_landing(&mut self, tail: PlayerLandingTail) -> Result<()> {
+        tail.tail
+            .after_hurt(self, tail.damaged)
+            .map_err(|err| err.to_string())?;
+        sunrise_world::living_landing::finish_living_landing(self, tail.state)
     }
 }
 impl FallDamageWorld for MotionWorld<'_, '_, '_> {

@@ -189,6 +189,7 @@ impl Game<'_> {
                     {
                         m.extra.counter2 = 64;
                     }
+                    self.finish_mob_damage_at(index);
                 }
                 let m = &mut self.mobs[index];
                 if extinguishes && m.is_on_fire() && m.alive() {

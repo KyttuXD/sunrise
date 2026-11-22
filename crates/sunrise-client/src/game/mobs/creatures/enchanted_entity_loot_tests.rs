@@ -114,7 +114,7 @@ fn a_kills_loot_uses_the_level_a_mod_answers() {
             victim.ai.last_hurt_by_player = 100;
             game.last_hurt_by_player
                 .insert(victim.id, PlayerCredit(127));
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             let looted = |level| {
                 heard(
                     "minecraft:zombie",
@@ -143,7 +143,7 @@ fn a_kills_loot_uses_the_level_a_mod_answers() {
             victim.ai.last_hurt_by_player = 100;
             game.last_hurt_by_player
                 .insert(victim.id, PlayerCredit(127));
-            game.as_guest(5, |g| g.mob_died(&victim)).unwrap();
+            game.as_guest(5, |g| g.mob_die(&victim)).unwrap();
             assert_eq!(*seen.lock().unwrap(), [looted(2), looted(2)]);
 
             // Another mob's blow: no player, so its rare drops read no
@@ -153,7 +153,7 @@ fn a_kills_loot_uses_the_level_a_mod_answers() {
             // Keep the admitted row's residency and attachment lifetime.
             game.mobs.last_mut().unwrap().health = 20.0;
             let victim = zombie(game, Damage::mob(skeleton.id, [0.0; 3]));
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             assert_eq!(
                 *seen.lock().unwrap(),
                 [heard(
@@ -195,7 +195,7 @@ fn the_hosts_kill_hands_the_host_as_the_attacker() {
             let mut victim = zombie(game, by_player);
             victim.ai.last_hurt_by_player = 100;
             game.last_hurt_by_player.insert(victim.id, PlayerCredit(99));
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             let looted = || {
                 heard(
                     "minecraft:zombie",
@@ -220,7 +220,7 @@ fn a_death_with_no_attacker_is_asked_at_level_0() {
         with_game(|game| {
             game.load_server_loot();
             let victim = zombie(game, Damage::fall());
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             assert_eq!(
                 *seen.lock().unwrap(),
                 [Heard {
@@ -398,7 +398,7 @@ fn an_answer_of_the_same_level_leaves_the_drops_alone() {
                 game.load_server_loot();
                 for _ in 0..8 {
                     let victim = zombie(game, Damage::mob(0, [0.0; 3]));
-                    game.mob_died(&victim);
+                    game.mob_die(&victim);
                     counts.push(dropped(game, "minecraft:rotten_flesh"));
                 }
             });

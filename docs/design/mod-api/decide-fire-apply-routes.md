@@ -56,7 +56,7 @@ Two consequences a reviewer should keep in mind:
 | `living_breathe` | `hooks/living_breathe.rs` | `breathing.rs` `AirStep` | server, listen | decided air step, hook fired with the owning host, answer applied to the decided air | typed decision |
 | `living_drown` | `hooks/living_drown.rs:25` | `breathing.rs:71` | server, cancel | query + write-back + cancel | typed decision |
 | `living_fall` | `hooks/living_fall.rs:16` | `landing.rs:45` | both, cancel | value transform + cancel | typed decision |
-| `farmland_trample` | `hooks/farmland_trample.rs` | `block_landing.rs` `fall_on_until_trample` | server, cancel | pause only on an actual trample; fire with the owning host, re-check, lift and write, then resume the fall | typed decision |
+| `farmland_trample` | `hooks/farmland_trample.rs` | `block_landing.rs` `begin_fall_on` | server, cancel | pause for an actual trample; fire with the owning host, re-check, lift and write, then run the superclass fall damage selected before the write | typed decision |
 | `ender_entity_teleport` | `hooks/ender_entity_teleport.rs:16` | `mobs/enderman.rs:79` | server, cancel | target write-back + cancel | typed decision |
 | `ingredient` | `hooks/ingredient.rs` | `crafting/native_hooks.rs` | both, replace, data load | first attributed `IngredientDefinition` | read-only fire |
 | `recipe_property_sets` | `hooks/recipe_property_sets.rs:27` | `crafting/native_hooks.rs:40` | both, collect, data load | collect (additions) | read-only fire |

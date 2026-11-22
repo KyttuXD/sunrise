@@ -560,7 +560,7 @@ impl Game<'_> {
             .as_mut()
             .map(|p| std::mem::take(&mut p.events))
             .unwrap_or_default();
-        // The callbacks a turn ends with (combat, armor, the totem, the food hook) can reach a
+        // The callbacks a turn ends with (combat, armor, the food hook) can reach a
         // mod and panic. The swap is still restored below and the guest's progress written
         // back; the panic resumes at the end (#2240). `as_guest_at` calls this after catching a
         // panic of the turn itself, so a panic here then goes on in place of that one.
@@ -569,8 +569,6 @@ impl Game<'_> {
                 self.record_combat(&turn_events);
                 self.wear_armor(&turn_events);
             }
-            // A totem that saved the guest this turn (its hurt set it off).
-            let totem = self.apply_totem();
             // The mods hear the food level the turn changed (eating, hunger,
             // starving...), once for the change it made as a whole, with the
             // guest's state still swapped in; they may change or undo it before it
@@ -598,15 +596,11 @@ impl Game<'_> {
                     }
                 }
             }
-            totem
         }));
-        let (totem, panic) = match callbacks {
-            Ok(totem) => (totem, None),
-            Err(payload) => {
-                self.record_open_turns();
-                (None, Some(payload))
-            }
-        };
+        let panic = callbacks.err();
+        if panic.is_some() {
+            self.record_open_turns();
+        }
         let GuestSwap {
             attachments,
             conn,
@@ -1026,18 +1020,8 @@ impl Game<'_> {
                 g.send(&g.abilities_packet());
             }
         });
-        // LivingEntity.checkTotemDeathProtection's entity event, to every
-        // client tracking the guest and its own; this window draws it too.
-        if let Some(body) = totem {
-            let id = host.hub.guests[i].entity_id;
-            host.hub.entity_event(id, crate::game::totem::TOTEM_EVENT);
-            if self.player.is_some() {
-                self.totem_event(sunrise_client::particles::TrackingTarget::Entity(id), body);
-            }
-        }
-        let Some(host) = self.lan.as_mut() else {
-            unreachable!("LanHost dropped inside a guest turn; closes are deferred");
-        };
+        let ended_digging = host.hub.guests[i].dead
+            && (play.digging.is_some() || play.delayed.is_some() || play.destroy_pos.is_some());
         host.play.insert(conn, play);
         let finished = self.lan_guest_swaps.pop();
         debug_assert_eq!(finished, Some(conn));
@@ -1056,6 +1040,9 @@ impl Game<'_> {
             self.release_removed_vehicle(vehicle);
         }
         self.bind_current_hook_residency();
+        if ended_digging {
+            self.guest_forget_digging(conn);
+        }
         for event in turn_events {
             match event {
                 MotionEvent::Health(sunrise_client::health::HealthEvent::DamageBroadcast {

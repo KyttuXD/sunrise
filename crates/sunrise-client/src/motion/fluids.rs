@@ -285,6 +285,13 @@ impl MotionWorld<'_, '_, '_> {
     /// `Entity.baseTick`'s fluid phase: `wasEyeInWater`, `updateFluidInteraction`,
     /// swimming and remaining fire, lava's fall halving, then the first-tick clear.
     pub fn fluid_base_tick(&mut self) -> Result<()> {
+        self.fluid_and_burn_tick()?;
+        self.finish_fluid_base_tick();
+        Ok(())
+    }
+
+    /// Fluid state and the burning hit in Entity.baseTick, before decrementing fire.
+    pub fn fluid_and_burn_tick(&mut self) -> Result<()> {
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(WATER);
         self.update_fluids()?;
         // `Player.updateSwimming`'s flying guard over `Entity.updateSwimming`,
@@ -305,12 +312,21 @@ impl MotionWorld<'_, '_, '_> {
                         WATER,
                     )
             };
-        self.tick_remaining_fire()?;
+        self.hurt_from_remaining_fire()
+    }
+
+    /// Entity.baseTick after the burning hit returned to its owner.
+    pub fn finish_fluid_base_tick(&mut self) {
+        if self.player.fire_ticks > 0 {
+            self.player.fire_ticks -= 1;
+        }
+        if self.player.fluids.was_touching_water {
+            self.player.fire_ticks = self.player.fire_ticks.min(0);
+        }
         if self.player.is_in_lava() {
             self.player.fall_distance *= 0.5;
         }
         self.player.fluids.first_tick = false;
-        Ok(())
     }
     /// `Entity.updateFluidInteraction`: immersion heights, then touching water
     /// resets the fall and splashes on entry, then the currents push.

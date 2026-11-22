@@ -934,43 +934,68 @@ impl Game<'_> {
     /// player, the server players and the mob on its back each get it, with
     /// their own safe distance and armour.
     pub(super) fn fall_to_passengers(&mut self, mob: u32, distance: f64, modifier: f32) {
-        if self.riding == Some(mob) {
-            self.rider_fall_damage(distance, modifier);
-        }
-        let guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
-            h.hub
-                .guests
-                .iter()
-                .filter(|g| g.vehicle == Some(mob) && Some(g.conn) != self.lan_acting)
-                .map(|g| g.conn)
-                .collect()
-        });
-        for conn in guests {
-            self.guest_hit_by(conn, |g| g.rider_fall_damage(distance, modifier));
-        }
-        let riders: Vec<u32> = self
-            .mobs
-            .iter()
-            .filter(|m| m.extra.mount == Some(mob))
-            .map(|m| m.id)
-            .collect();
-        for rider in riders {
-            if let Some(r) = self.mobs.iter_mut().find(|m| m.id == rider) {
-                let mut events = Vec::new();
-                r.cause_fall_damage_from(
-                    &self.loop_context,
-                    crate::game::entity::damage_level_of!(
-                        self,
-                        &sunrise_client::health::NO_ATTACK,
-                        no_push,
-                        None
-                    ),
-                    distance,
-                    modifier,
-                    &mut events,
-                );
-                let _ = self.handle_mob_events(events);
+        let seats = self.seated_passengers(mob);
+        for (_, id, player) in seats {
+            if player {
+                if self.riding == Some(mob)
+                    && self
+                        .player
+                        .as_ref()
+                        .is_some_and(|p| p.entity_id as u32 == id)
+                {
+                    self.rider_fall_damage(distance, modifier);
+                } else if let Some(conn) = self.lan.as_ref().and_then(|host| {
+                    host.hub
+                        .guests
+                        .iter()
+                        .find(|g| g.entity_id as u32 == id && g.vehicle == Some(mob))
+                        .map(|g| g.conn)
+                }) {
+                    self.guest_hit_by(conn, |g| g.rider_fall_damage(distance, modifier));
+                }
+                continue;
             }
+            let Some(i) = self.mob_index.find(&self.mobs, id) else {
+                continue;
+            };
+            let join = self.mobs[i].join;
+            let fall = sunrise_client::mobs::living::PassengerFall { distance, modifier };
+            let mut resume = None;
+            let mut events = Vec::new();
+            while let Some(i) = self.mob_index.find(&self.mobs, id) {
+                let rider = &mut self.mobs[i];
+                if rider.join != join
+                    || rider.removed
+                    || (resume.is_none() && rider.extra.mount != Some(mob))
+                {
+                    break;
+                }
+                let level = crate::game::entity::damage_level_of!(
+                    self,
+                    &sunrise_client::health::NO_ATTACK,
+                    no_push,
+                    None
+                );
+                let pause = match resume.take() {
+                    None => rider.passenger_fall_until_pause(
+                        &self.loop_context,
+                        level,
+                        &mut events,
+                        fall,
+                    ),
+                    Some(pause) => rider.resume_passenger_fall(level, &mut events, pause),
+                };
+                let Some(pause) = pause else {
+                    break;
+                };
+                if let Some(passengers) = pause.passengers() {
+                    self.fall_to_passengers(id, passengers.distance, passengers.modifier);
+                } else {
+                    self.finish_mob_damage_at(i);
+                }
+                resume = Some(pause);
+            }
+            let _ = self.handle_mob_events(events);
         }
     }
     /// The player this game runs (the local one, or the server player it acts
@@ -998,6 +1023,9 @@ impl Game<'_> {
             block_registries: Some(&self.pack.block_registries),
         }
         .cause_mount_fall(distance, modifier);
+        if self.lan_acting.is_some() {
+            self.finish_guest_damage();
+        }
     }
     /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
     fn jumps(species: Species) -> bool {

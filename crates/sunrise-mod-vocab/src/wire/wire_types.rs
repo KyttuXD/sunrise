@@ -374,31 +374,6 @@ impl Wire for crate::Reduction {
         })
     }
 }
-impl Wire for crate::ReductionChange {
-    layout_fields!("tag" => u8, "0:Add" => f32, "1:Scale" => f32, "2:AtLeast" => f32, "3:AtMost" => f32);
-    const MIN: usize = 5;
-    fn put(&self, out: &mut Writer) {
-        let (kind, value) = match *self {
-            Self::Add(v) => (0u8, v),
-            Self::Scale(v) => (1, v),
-            Self::AtLeast(v) => (2, v),
-            Self::AtMost(v) => (3, v),
-        };
-        out.put(&kind);
-        out.put(&value);
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        let kind: u8 = input.take()?;
-        let value = input.take()?;
-        Ok(match kind {
-            0 => Self::Add(value),
-            1 => Self::Scale(value),
-            2 => Self::AtLeast(value),
-            3 => Self::AtMost(value),
-            _ => return Err(WireError::Invalid("invalid reduction change")),
-        })
-    }
-}
 
 impl Wire for crate::ItemPlace {
     layout_fields!("tag" => u32, "0:PlayerSlot.player" => u128, "0:PlayerSlot.slot" => i32, "1:PlayerHand.player" => u128, "1:PlayerHand.hand" => crate::Hand, "2:PlayerCursor.menu" => crate::MenuRef, "3:BlockEntity.level" => crate::LevelRef, "3:BlockEntity.pos" => [i32;3], "3:BlockEntity.side" => Option<crate::Direction>, "3:BlockEntity.slot" => usize, "4:ItemEntity.id" => u32, "5:EntitySlot.entity" => u32, "5:EntitySlot.slot" => usize, "6:Nested.parent" => Box<crate::ItemPlace>, "6:Nested.slot" => usize, "7:MenuSlot.menu" => crate::MenuRef, "7:MenuSlot.slot" => usize, "8:Mod.provider" => &'static str, "8:Mod.key" => u64, "9:Equipment.entity" => u32, "9:Equipment.slot" => crate::EquipmentSlot, "10:Scratch.0" => u64, "11:Strict.0" => Box<crate::ItemPlace>, "12:OneByOne.0" => Box<crate::ItemPlace>, "13:InfiniteMaterials.player" => u128, "13:InfiniteMaterials.inner" => Box<crate::ItemPlace>, "14:ScratchSlots.0" => u64);

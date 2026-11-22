@@ -285,6 +285,7 @@ impl Game<'_> {
                     attacker_species: None,
                 },
             );
+            self.finish_mob_damage_at(index);
             self.settle_mob_hurt(id);
             if hurt && owner.is_some() {
                 self.mob_post_attack(

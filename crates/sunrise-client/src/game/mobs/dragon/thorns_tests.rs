@@ -370,7 +370,7 @@ fn a_still_guardian_spikes_the_player_who_hit_it() {
             .collect();
         g.as_guest(11, |g| {
             g.player.as_mut().unwrap().health.advance_clock();
-            assert!(!g.hurt_by_player(0, 2.0, Damage::player([9.5, 64.0, 0.5])));
+            assert!(!g.hurt_by_player(0, 2.0, Damage::player([9.5, 64.0, 0.5])).0);
             g.player.as_mut().unwrap().health.advance_clock();
             assert_eq!(
                 g.player.as_ref().unwrap().health.health(),

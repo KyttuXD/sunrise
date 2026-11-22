@@ -1,6 +1,7 @@
 //! Vanilla's `GoalSelector` (priorities, MOVE/LOOK/JUMP/TARGET control flags,
 //! interruption) and the shared goals of `net.minecraft.world.entity.ai.goal`.
 use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use sunrise_core::{
     geometry::{Aabb, Vec3},
@@ -64,9 +65,9 @@ pub trait Goal: std::fmt::Debug + Send + Sync {
         false
     }
     fn tick(&mut self, _m: &mut Mob, _cx: &mut Cx) {}
-    /// Goals that move the body itself can stop for the owning level to apply
-    /// a landing decision. The ordinary goal path runs without a pause.
-    fn tick_until_trample(
+    /// Goals that move the body itself can stop for the owning level to handle
+    /// a trample, passenger fall, or hurt. The ordinary path runs without a pause.
+    fn tick_until_movement_pause(
         &mut self,
         mob: &mut Mob,
         cx: &mut Cx,
@@ -75,7 +76,7 @@ pub trait Goal: std::fmt::Debug + Send + Sync {
         None
     }
     /// Finish a goal that stopped in its own movement; false for a different goal.
-    fn after_trample(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
+    fn after_movement(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
         false
     }
     fn box_clone(&self) -> Box<dyn Goal>;
@@ -122,10 +123,10 @@ pub struct GoalSelector {
     pub disabled: u8,
 }
 #[derive(Debug)]
-pub(super) struct GoalTrample {
+pub(super) struct GoalMovementPause {
     pub(super) movement: super::living::TravelPause,
     slot: usize,
-    force: bool,
+    pub(super) force: bool,
 }
 
 impl GoalSelector {
@@ -233,12 +234,12 @@ impl GoalSelector {
             }
         }
     }
-    pub(super) fn tick_until_trample(
+    pub(super) fn tick_until_movement_pause(
         &mut self,
         m: &mut Mob,
         cx: &mut Cx,
         force: bool,
-    ) -> Option<GoalTrample> {
+    ) -> Option<GoalMovementPause> {
         if force {
             self.prepare_tick(m, cx);
         }
@@ -251,13 +252,13 @@ impl GoalSelector {
         cx: &mut Cx,
         force: bool,
         start: usize,
-    ) -> Option<GoalTrample> {
+    ) -> Option<GoalMovementPause> {
         for (slot, g) in self.goals.iter_mut().enumerate().skip(start) {
             if g.running
                 && (force || g.goal.every_tick())
-                && let Some(movement) = g.goal.tick_until_trample(m, cx)
+                && let Some(movement) = g.goal.tick_until_movement_pause(m, cx)
             {
-                return Some(GoalTrample {
+                return Some(GoalMovementPause {
                     movement,
                     slot,
                     force,
@@ -267,21 +268,24 @@ impl GoalSelector {
         None
     }
 
-    pub(super) fn resume_after_trample(
+    pub(super) fn resume_movement(
         &mut self,
         m: &mut Mob,
         cx: &mut Cx,
-        paused: GoalTrample,
-    ) -> Option<GoalTrample> {
-        if let Err(movement) = paused.movement.resume(m, cx.w, cx.level, cx.events) {
-            return Some(GoalTrample { movement, ..paused });
+        paused: GoalMovementPause,
+    ) -> Option<GoalMovementPause> {
+        if let ControlFlow::Break(movement) = paused.movement.resume(m, cx.w, cx.level, cx.events) {
+            return Some(GoalMovementPause { movement, ..paused });
+        }
+        if m.removed {
+            return None;
         }
         // An owning-host listener can remove or shift the running goal. Only
         // the still-resident goal holding this pause can finish its path update.
         let next = self
             .goals
             .iter_mut()
-            .position(|g| g.goal.after_trample(m, cx))
+            .position(|g| g.goal.after_movement(m, cx))
             .map_or(paused.slot, |slot| slot + 1);
         self.tick_from(m, cx, paused.force, next)
     }
@@ -3005,7 +3009,9 @@ impl Goal for EatBlock {
 
 /// BreathAirGoal: swim up to air when the air supply runs low.
 #[derive(Clone, Debug, Default)]
-pub struct BreathAir;
+pub struct BreathAir {
+    movement_paused: bool,
+}
 impl BreathAir {
     /// `BreathAirGoal.findAirPosition`: `BlockPos.neighborColumn` walks the
     /// center, north, east, south and west columns, each bottom to top.
@@ -3045,6 +3051,18 @@ impl BreathAir {
             1.0,
         );
     }
+
+    fn move_to_air(m: &mut Mob, cx: &mut Cx, pause: bool) -> Option<super::living::TravelPause> {
+        Self::find_air(m, cx);
+        let input = Vec3::new(
+            f64::from(m.ai.xxa),
+            f64::from(m.ai.yya),
+            f64::from(m.ai.zza),
+        );
+        m.move_relative(0.02, input);
+        m.travel_move(cx.w, cx.level, cx.events, pause, |_, _, _, _| {})
+            .break_value()
+    }
 }
 impl Goal for BreathAir {
     goal_clone!();
@@ -3062,16 +3080,22 @@ impl Goal for BreathAir {
         Self::find_air(m, cx);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        Self::find_air(m, cx);
-        let input = Vec3::new(
-            f64::from(m.ai.xxa),
-            f64::from(m.ai.yya),
-            f64::from(m.ai.zza),
-        );
-        m.move_relative(0.02, input);
-        let mut ev = Vec::new();
-        m.do_move(cx.w, cx.level, &mut ev, &mut Default::default()); // the fresh gate, armed by `do_move`
-        cx.events.extend(ev);
+        let _ = Self::move_to_air(m, cx, false);
+    }
+    fn tick_until_movement_pause(
+        &mut self,
+        m: &mut Mob,
+        cx: &mut Cx,
+    ) -> Option<super::living::TravelPause> {
+        let movement = Self::move_to_air(m, cx, true);
+        self.movement_paused = movement.is_some();
+        movement
+    }
+    fn after_movement(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
+        std::mem::take(&mut self.movement_paused)
+    }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.movement_paused = false;
     }
 }
 /// TryFindLiquidGoal (water): head for nearby water when stranded on land.

@@ -657,6 +657,7 @@ impl Game<'_> {
                         f32::MAX,
                         damage,
                     );
+                    self.finish_mob_damage_at(i);
                     continue;
                 }
                 Species::Creeper => {
@@ -695,6 +696,7 @@ impl Game<'_> {
                 5.0,
                 damage,
             );
+            self.finish_mob_damage_at(i);
         }
         for entity in powered {
             self.native_creeper_power(entity, [at[0], at[1], at[2]]);

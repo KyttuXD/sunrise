@@ -1299,19 +1299,18 @@ mod tests {
     }
 
     #[test]
-    fn reduction_adjustments_survive_wire_in_order() {
-        use crate::{Reduction::*, ReductionChange::*};
-        let changes = vec![
-            (Armor, Add(2.5)),
-            (Enchantments, Scale(0.5)),
-            (MobEffects, AtLeast(3.0)),
-            (Absorption, AtMost(4.0)),
-            (Invulnerability, Add(-1.0)),
-            (InnateResistance, Scale(2.0)),
+    fn reductions_survive_wire_in_order() {
+        use crate::Reduction::*;
+        let reductions = vec![
+            Armor,
+            Enchantments,
+            MobEffects,
+            Absorption,
+            Invulnerability,
+            InnateResistance,
         ];
-        round(changes);
+        round(reductions);
         assert!(Reader::decode::<crate::Reduction>(&[6]).is_err());
-        assert!(Reader::decode::<crate::ReductionChange>(&[4, 0, 0, 0, 0]).is_err());
     }
 
     #[test]

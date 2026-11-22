@@ -758,14 +758,15 @@ impl Game<'_> {
                         &attack,
                     );
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        m.damage(
+                    if let Some(index) = self.mob_index.find(&self.mobs, id) {
+                        self.mobs[index].damage(
                             crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
                             amount,
                             sunrise_client::mobs::Damage::player(at),
                         );
+                        self.remember_mob_player_credit(id);
+                        self.finish_mob_damage_at(index);
                     }
-                    self.remember_mob_player_credit(id);
                 }
                 // Creeper.ignite: the next tick primes the fuse.
                 "ignite" | "ate" => {

@@ -3009,8 +3009,6 @@ pub(in crate::game) fn game_rule_registry() -> sunrise_client_core::gamerules::R
     .expect("validated at registration")
 }
 
-#[path = "api_values/damage.rs"]
-pub(in crate::game) mod damage;
 #[path = "api_values/game_rule_values.rs"]
 mod game_rule_values;
 #[path = "api_values/item_properties.rs"]
