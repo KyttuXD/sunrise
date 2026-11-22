@@ -382,6 +382,13 @@ fn normalize_end(data: &mut [u8]) {
             + u16_at(data, p + 30) as usize
             + u16_at(data, p + 32) as usize;
     }
+    // A Zip64 archive (more than 65535 entries, as CraftEngine's packs are) has its Zip64 record and
+    // locator between the directory and the END record, and its END length leaves them out: `cenpos` then
+    // starts inside the directory, the recount finds nothing, and writing that over the END record would
+    // make the archive look empty. Its Zip64 record holds the real counts: leave the record as it is.
+    if count == 0 && end >= 20 && data[end - 20..end - 16] == [0x50, 0x4b, 0x06, 0x07] {
+        return;
+    }
     let disk = u16_at(data, end + 4);
     let with_directory = u16_at(data, end + 6);
     if disk == 0
@@ -443,6 +450,39 @@ mod tests {
         bytes[end + 8..end + 12].fill(0);
         let zip = opened("end-counts", &bytes).unwrap();
         assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
+    }
+    /// A pack of more entries than the ZIP32 record counts (CraftEngine's, with its many generated
+    /// files) opens as an archive of its entries, not an empty one: `pack.mcmeta` is read.
+    #[test]
+    fn a_zip64_archive_opens_with_all_its_entries() {
+        use std::io::Write as _;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file("pack.mcmeta", options).unwrap();
+        writer.write_all(b"{\"pack\":{}}").unwrap();
+        for i in 0..65_537 {
+            writer
+                .start_file(format!("assets/ruby/{i}.json"), options)
+                .unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        // As Java's `ZipOutputStream` writes the END record of a Zip64 archive: the directory's real
+        // size and offset (the `zip` crate writes all ones there), the counts all ones.
+        let end = bytes.len() - END_HEADER;
+        let record = end - 76;
+        assert_eq!(bytes[record..record + 4], [0x50, 0x4b, 0x06, 0x06]);
+        let (size, offset) = (
+            bytes[record + 40..record + 48].to_vec(),
+            bytes[record + 48..record + 56].to_vec(),
+        );
+        bytes[end + 12..end + 16].copy_from_slice(&size[..4]);
+        bytes[end + 16..end + 20].copy_from_slice(&offset[..4]);
+        let zip = opened("zip64-open", &bytes).unwrap();
+        assert_eq!(zip.names().count(), 65_538);
+        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
     }
     #[test]
     fn a_file_is_opened_with_equal_nonzero_disk_numbers() {
