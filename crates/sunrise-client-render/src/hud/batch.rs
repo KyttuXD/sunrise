@@ -87,64 +87,27 @@ pub struct HudBatch {
     /// Player object profiles encountered while painting text this frame.
     pub inline_profiles: Vec<std::sync::Arc<serde_json::Value>>,
 }
-/// The paint appended by one retained callback, excluding any painters it delegates to.
+/// The paint appended by one retained callback.
 pub struct HudPaintCheckpoint {
     start: usize,
     pictures: usize,
     profiles: usize,
-    own_start: usize,
-    own_ranges: SmallVec<[std::ops::Range<usize>; 2]>,
-    delegated: bool,
 }
 
 impl HudPaintCheckpoint {
-    /// Exclude paint appended by a completed delegation.
-    pub fn preserve_delegated(&mut self, range: std::ops::Range<usize>) {
-        if self.own_start != range.start {
-            self.own_ranges.push(self.own_start..range.start);
-        }
-        self.own_start = range.end;
-        self.delegated = true;
-    }
-
     pub fn discard(self, batch: &mut HudBatch) {
-        // Remove from back to front so earlier ranges still refer to the original indices.
-        for range in std::iter::once(self.own_start..batch.vertices.len())
-            .chain(self.own_ranges.into_iter().rev())
-            .filter(|range| !range.is_empty())
-        {
-            let start = range.start as u32;
-            let len = (range.end - range.start) as u32;
-            let move_endpoint = |at: u32| at - at.saturating_sub(start).min(len);
-            drop(batch.vertices.drain(range));
+        if self.start < batch.vertices.len() {
+            let start = self.start as u32;
+            batch.vertices.truncate(self.start);
             let first = batch.blends.partition_point(|(run, _)| run.end <= start);
             for (run, _) in &mut batch.blends[first..] {
-                *run = move_endpoint(run.start)..move_endpoint(run.end);
+                run.end = run.end.min(start);
             }
             batch.blends.retain(|(run, _)| !run.is_empty());
         }
-        // Glyph atlas uploads are reusable by other painters. A delegated draw can also
-        // share a picture or inline skin first seen by the wrapper. Picture references
-        // can be checked against surviving blend runs; the inline skin cache deduplicates
-        // across the frame and does not carry a per-vertex reference.
-        if !self.delegated {
-            batch.pictures.truncate(self.pictures);
-            batch.inline_profiles.truncate(self.profiles);
-        } else {
-            let first = batch
-                .blends
-                .partition_point(|(run, _)| run.end <= self.start as u32);
-            let surviving = &batch.blends[first..];
-            let mut i = 0;
-            batch.pictures.retain(|picture| {
-                let keep = i < self.pictures
-                    || surviving
-                        .iter()
-                        .any(|(_, blend)| *blend == Blend::Picture(picture.id));
-                i += 1;
-                keep
-            });
-        }
+        // Glyph atlas uploads are reusable by other painters.
+        batch.pictures.truncate(self.pictures);
+        batch.inline_profiles.truncate(self.profiles);
     }
 }
 
@@ -216,14 +179,10 @@ impl HudBatch {
     }
     /// Start tracking one callback's writes to this batch without copying existing paint.
     pub fn paint_checkpoint(&self) -> HudPaintCheckpoint {
-        let start = self.vertices.len();
         HudPaintCheckpoint {
-            start,
+            start: self.vertices.len(),
             pictures: self.pictures.len(),
             profiles: self.inline_profiles.len(),
-            own_start: start,
-            own_ranges: SmallVec::new(),
-            delegated: false,
         }
     }
 

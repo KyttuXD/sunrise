@@ -544,7 +544,195 @@ fn mod_layers_draw_in_their_place_and_hide_like_vanilla_layers() {
 
 #[test]
 #[ignore = "daily"]
+fn failed_gui_layer_keeps_completed_paint_and_isolates_following_layers() {
+    use mod_api::{
+        __private::{HookPanicReport, take_hook_panics},
+        GuiClipRefusal, GuiPaintError,
+        client::hud_layout::PoseOp,
+    };
+    use sunrise_client::hud::rgba;
+
+    fn color_bounds(batch: &HudBatch, color: u32) -> Option<[f32; 4]> {
+        batch
+            .vertices
+            .iter()
+            .filter(|v| v.color == color)
+            .fold(None, |acc, v| {
+                let [x0, y0, x1, y1] = acc.unwrap_or([v.pos[0], v.pos[1], v.pos[0], v.pos[1]]);
+                Some([
+                    x0.min(v.pos[0]),
+                    y0.min(v.pos[1]),
+                    x1.max(v.pos[0]),
+                    y1.max(v.pos[1]),
+                ])
+            })
+    }
+
+    crate::game::in_own_process(
+        "game::gui_layer_tests::failed_gui_layer_keeps_completed_paint_and_isolates_following_layers",
+        || {
+            struct CheckedLayer;
+            #[mod_api::__subscriptions]
+            impl Hooks for CheckedLayer {
+                fn register_gui_layers(
+                    &self,
+                    _: &RegistrationContext,
+                    event: &mut RegisterGuiLayersEvent<'_>,
+                ) {
+                    assert!(event.layers.register(
+                        "hud_test:checked".into(),
+                        GuiLayerPlacement::AboveAll,
+                        Box::new(|_, draw| {
+                            // Unpopped pose stays lexical to gui_paint; malformed draw/clip checks
+                            // stay independent of layer containment.
+                            assert_eq!(
+                                draw.gui_paint(&[GuiDraw::Push(vec![PoseOp::Translate(
+                                    50.0, 50.0
+                                )])]),
+                                Ok(())
+                            );
+                            assert_eq!(
+                                draw.push_clip([f32::NAN, 0.0, 1.0, 1.0]),
+                                Err(GuiClipRefusal::NotFinite)
+                            );
+                            draw.push_clip([10.0, 10.0, 5.0, 5.0]).unwrap();
+                            draw.fill([0.0, 0.0, 100.0, 100.0], 0xFFFF_0000);
+                            assert_eq!(
+                                draw.gui_paint(&[
+                                    GuiDraw::Fill {
+                                        x0: 10,
+                                        y0: 10,
+                                        x1: 15,
+                                        y1: 15,
+                                        color: 0xFFFF_FF00,
+                                    },
+                                    GuiDraw::Item {
+                                        slot: 99,
+                                        x: 0,
+                                        y: 0,
+                                        seed: 0,
+                                        scale: [1.0, 1.0],
+                                        pivot: [0.0, 0.0],
+                                    },
+                                ]),
+                                Err(GuiPaintError::ItemSlot { index: 1, slot: 99 })
+                            );
+                            log("checked");
+                        }),
+                    ));
+                }
+            }
+
+            struct PanickingLayer;
+            #[mod_api::__subscriptions]
+            impl Hooks for PanickingLayer {
+                fn register_gui_layers(
+                    &self,
+                    _: &RegistrationContext,
+                    event: &mut RegisterGuiLayersEvent<'_>,
+                ) {
+                    assert!(event.layers.register(
+                        "hud_test:panicking".into(),
+                        GuiLayerPlacement::AboveAll,
+                        Box::new(|_, draw| {
+                            draw.push_clip([20.0, 20.0, 4.0, 4.0]).unwrap();
+                            draw.fill([0.0, 0.0, 100.0, 100.0], 0xFF00_00FF);
+                            log("panicking");
+                            panic!("broken layer");
+                        }),
+                    ));
+                }
+            }
+
+            struct NextLayer;
+            #[mod_api::__subscriptions]
+            impl Hooks for NextLayer {
+                fn register_gui_layers(
+                    &self,
+                    _: &RegistrationContext,
+                    event: &mut RegisterGuiLayersEvent<'_>,
+                ) {
+                    assert!(event.layers.register(
+                        "hud_test:next".into(),
+                        GuiLayerPlacement::AboveAll,
+                        Box::new(|_, draw| {
+                            draw.fill([0.0, 0.0, 100.0, 100.0], 0xFF00_FF00);
+                            log("next");
+                        }),
+                    ));
+                }
+                fn gui_layer_post(&self, _: &dyn ClientHost, event: &mut GuiLayerPostEvent<'_>) {
+                    log(format!("post {}", event.layer));
+                }
+            }
+
+            with_client_game(|game| {
+                mod_platform::__private::install(
+                    vec![
+                        ModEntry::new("checked_layer", Box::new(CheckedLayer)),
+                        ModEntry::new("panicking_layer", Box::new(PanickingLayer)),
+                        ModEntry::new("next_layer", Box::new(NextLayer)),
+                    ]
+                    .into(),
+                );
+                mods::register_gui_layers(ExecutionRole::Client);
+                let red = rgba(255, 0, 0, 255);
+                let blue = rgba(0, 0, 255, 255);
+                let green = rgba(0, 255, 0, 255);
+
+                let mut batch = HudBatch::scratch([320, 240]);
+                game.hud_layer_next = Some(0);
+                game.draw_mod_gui_layers(None, &mut batch);
+                assert_eq!(
+                    take(),
+                    [
+                        "checked",
+                        "post hud_test:checked",
+                        "panicking",
+                        "post hud_test:panicking",
+                        "next",
+                        "post hud_test:next",
+                    ]
+                );
+                assert_eq!(color_bounds(&batch, red), Some([10.0, 10.0, 15.0, 15.0]));
+                assert_eq!(color_bounds(&batch, blue), Some([20.0, 20.0, 24.0, 24.0]));
+                assert_eq!(color_bounds(&batch, green), Some([0.0, 0.0, 100.0, 100.0]));
+                assert_eq!(color_bounds(&batch, rgba(255, 255, 0, 255)), None);
+                assert_eq!(
+                    take_hook_panics(),
+                    [HookPanicReport {
+                        mod_id: "panicking_layer",
+                        hook: "gui_layer_draw",
+                    }]
+                );
+
+                // The layer with a draw error still runs; the panicking layer stays disabled.
+                let mut batch = HudBatch::scratch([320, 240]);
+                game.hud_layer_next = Some(0);
+                game.draw_mod_gui_layers(None, &mut batch);
+                assert_eq!(
+                    take(),
+                    [
+                        "checked",
+                        "post hud_test:checked",
+                        "post hud_test:panicking",
+                        "next",
+                        "post hud_test:next",
+                    ]
+                );
+                assert_eq!(color_bounds(&batch, red), Some([10.0, 10.0, 15.0, 15.0]));
+                assert_eq!(color_bounds(&batch, blue), None);
+                assert_eq!(color_bounds(&batch, green), Some([0.0, 0.0, 100.0, 100.0]));
+                assert!(take_hook_panics().is_empty());
+            });
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
 fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
+    use mod_api::__private::{HookPanicReport, take_hook_panics};
     use sunrise_client::hud::{Blend, rgba};
 
     let test = "game::gui_layer_tests::a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal";
@@ -568,8 +756,12 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
                             ctx.draw_previous();
                             ctx.with_draw(&mut |draw| draw.fill([0.0, 0.0, 4.0, 4.0], 0xFF00_00FF));
                             ctx.draw_previous();
-                            ctx.with_draw(&mut |draw| draw.fill([0.0, 0.0, 4.0, 4.0], 0xFFFF_0000));
-                            panic!("broken wrapper");
+                            ctx.with_draw(&mut |draw| {
+                                draw.push_clip([0.0, 0.0, 4.0, 4.0]).unwrap();
+                                draw.fill([0.0, 0.0, 20.0, 20.0], 0xFFFF_0000);
+                                panic!("broken wrapper");
+                            });
+                            return;
                         }
                         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             ctx.draw_previous();
@@ -595,6 +787,8 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
             mods::register_gui_layers(ExecutionRole::Client);
             let mut batch = HudBatch::scratch([320, 240]);
             let white = rgba(255, 255, 255, 255);
+            let red = rgba(255, 0, 0, 255);
+            let blue = rgba(0, 0, 255, 255);
             let green = rgba(0, 255, 0, 255);
             let yellow = rgba(255, 255, 0, 255);
             let mut paint_calls = 0;
@@ -620,11 +814,31 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
             );
             assert_eq!(
                 batch.vertices.iter().map(|v| v.color).collect::<Vec<_>>(),
-                [[white; 6], [green; 6], [yellow; 6]].concat()
+                [
+                    [white; 6],
+                    [red; 6],
+                    [green; 6],
+                    [blue; 6],
+                    [yellow; 6],
+                    [red; 6],
+                ]
+                .concat()
+            );
+            assert!(
+                batch.vertices[30..36]
+                    .iter()
+                    .all(|v| (0.0..=4.0).contains(&v.pos[0]) && (0.0..=4.0).contains(&v.pos[1]))
             );
             assert_eq!(
                 batch.blends,
-                [(6..12, Blend::Invert), (12..18, Blend::Invert)]
+                [(12..18, Blend::Invert), (24..30, Blend::Invert)]
+            );
+            assert_eq!(
+                take_hook_panics(),
+                [HookPanicReport {
+                    mod_id: "broken",
+                    hook: "gui_layer_wrapper",
+                }]
             );
 
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -641,6 +855,7 @@ fn a_gui_wrapper_panic_is_contained_but_delegated_engine_paint_is_fatal() {
                 ["outer", "inner", "caught by inner", "caught by outer"]
             );
             assert_eq!(current_native_mod(), None);
+            assert!(take_hook_panics().is_empty());
 
             game.gui_layer(VanillaGuiLayer::Hotbar, &mut batch, &mut |_, _| {
                 log("vanilla paint");

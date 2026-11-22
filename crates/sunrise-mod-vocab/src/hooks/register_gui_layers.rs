@@ -40,8 +40,8 @@ retiring a body is reported against its owner without undoing the replacement or
 A layer fires `Hooks::gui_layer_pre` with its ID, runs its installed body, and fires
 `Hooks::gui_layer_post` once. No body or Post runs if Pre cancels. Drawing a previous
 body does not fire layer hooks again. A callback panic disables only that callback for the
-session and reports its mod through the shared error log and toast. A non-panic refusal is
-reported without disabling the callback.
+session and reports its mod through the shared error log and toast. Completed paint stays in
+the batch, and errors returned by a drawing method do not disable the callback.
 
 The status slots run in order: `minecraft:player_health`, `minecraft:armor_level`,
 `minecraft:food_level`, `minecraft:vehicle_health` and `minecraft:air_level`.
