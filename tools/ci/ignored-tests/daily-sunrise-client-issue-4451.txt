@@ -86,7 +86,7 @@ sunrise-client game::block_entity_ticks::furnace_changed_tests::a_refuel_while_l
 sunrise-client game::block_entity_ticks::jukebox_stop_tests::a_jukebox_that_stops_tells_the_listeners lib daily resources
 sunrise-client game::block_entity_ticks::own_block_entity_tests::a_mods_block_entity_on_a_vanilla_block_is_only_its_own_mods lib daily resources
 sunrise-client game::block_entity_ticks::own_block_entity_tests::an_entity_replaced_by_another_mods_type_does_not_tick_as_the_old_one lib daily resources
-sunrise-client game::block_entity_ticks::own_block_entity_tests::each_slot_counts_only_its_own_mods_block_entities lib daily resources
+sunrise-client game::block_entity_ticks::own_block_entity_tests::each_slot_counts_only_its_own_mods_block_entities lib daily child-process
 sunrise-client game::block_entity_ticks::slot_guard_tests::a_slot_is_entered_as_its_mod_before_and_after_an_entry lib daily resources
 sunrise-client game::block_entity_ticks::slot_mutation_tests::a_caught_nested_panic_leaves_the_enclosing_pass_its_scratch lib daily resources
 sunrise-client game::block_entity_ticks::slot_mutation_tests::a_nested_pass_leaves_the_enclosing_pass_its_scratch lib daily resources
