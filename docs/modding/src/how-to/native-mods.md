@@ -13,22 +13,32 @@ The pages in this section follow a mod from its source to a player's game and a 
 
 <!-- section-pages -->
 
-## Living knockback entry
+## Living knockback
 
-`living_knockback` fires once per full-entry call, before resistance and motion changes.
-The read-only `entry` is `KnockbackEntry::Short` when the short overload delegated the push,
-otherwise `KnockbackEntry::Full`. To model doubling strength at both entries, double it
-once, then double it again only on `Short`: an input of 0.4 becomes 1.6 for `Short`
-and 0.8 for `Full`. There is no second hook dispatch. Two non-commuting listeners run
-in dispatch order, each completing its rewrites before the next; this does not simulate
-two separate passes over the listener list. Cancellation still leaves motion unchanged.
+`living_knockback` (contract version 3) fires once when a push reaches the living knockback
+implementation, before resistance and motion changes. This matches vanilla `LivingEntity.knockback`
+(whose short overload delegates directly to the full overload) and NeoForge's
+`CommonHooks.onLivingKnockBack` / `LivingKnockBackEvent`. Listeners run in dispatch order, each
+completing its `strength`, `x`, and `z` rewrites before the next. Cancellation leaves the pushed
+entity's motion unchanged.
 
-Version 2 also supplies `kill_credit` and `kill_credit_main`: the pushed living entity's
-kill credit and that entity's current main-hand stack, read after accepted-hit memories
-are committed and before the push. A remembered player takes precedence over the last
-hurting mob, including a tame wolf's owner. An unresolved remembered player yields 0 and
-no stack, not a fallback to the mob. After the remembered player expires, the recent mob
-may receive credit. This context is distinct from `attacker` and its captured source weapon. Both fields are additions: NeoForge's
+A sulfur cube carrying a block handles its own launch when the source has a causing entity, so
+neither an ordinary push nor an effect push on that path fires the event. The ender dragon can
+receive its own default knockback when it is not sitting; its wing push on other entities does not
+fire the event.
+
+`attacker_main`, `attacker_off`, and `kill_credit_main` lazily borrow the credited stacks as
+`Option<ItemStackView<'_>>`. Reading `item()`, `count()`, `damage()`, or `damage_component()`
+requires no component encoding; call `project()` only when components or an owned `ItemStack` are
+needed. An empty or unrepresentable stack omits only that view (`None`), and an unprojectable
+component patch returns `None` from `project()` without suppressing the event.
+
+`kill_credit` and `kill_credit_main` report the pushed living entity's kill credit and that
+entity's current main-hand stack, read after accepted-hit memories are committed and before the
+push. A remembered player takes precedence over the last hurting mob, including a tame wolf's
+owner. An unresolved remembered player yields 0 and no stack, not a fallback to the mob. After the
+remembered player expires, the recent mob may receive credit. This context is distinct from
+`attacker` and its captured source weapon. Both fields are additions: NeoForge's
 `LivingKnockBackEvent` doesn't carry them.
 
 ## Living death contract version 2

@@ -1,6 +1,6 @@
 pub use crate::entity::health::{
-    DamageContainer, DamageContainerView, DamageWriteRefusal, HurtSource, KnockbackEntry,
-    Reduction, ShieldBlock, Victim,
+    DamageContainer, DamageContainerView, DamageWriteRefusal, HurtSource, Reduction, ShieldBlock,
+    Victim,
 };
 
 mod __private {

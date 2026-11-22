@@ -287,9 +287,6 @@ pub struct DamageLevel<'a> {
     attack: &'a Attack,
     /// Whether this is a client's level, for a hook asked on both sides ([`Self::on_client`]).
     client_side: bool,
-    /// Which entry of `LivingEntity.knockback` a push in progress came through, for
-    /// `living_knockback` ([`Self::through_short_knockback`]).
-    knock_entry: mod_api::KnockbackEntry,
     /// Who a push credits: the site's per-victim loan, or [`KnockbackCredit`]'s memory
     /// resolution where the level was built without one.
     credit: Credit<'a>,
@@ -330,7 +327,6 @@ impl<'a> DamageLevel<'a> {
             hooks,
             attack: &NO_ATTACK,
             client_side: false,
-            knock_entry: mod_api::KnockbackEntry::Full,
             credit: Credit::Memory,
             players: None,
             effects: None,
@@ -358,7 +354,6 @@ impl<'a> DamageLevel<'a> {
             hooks,
             attack: &NO_ATTACK,
             client_side: false,
-            knock_entry: mod_api::KnockbackEntry::Full,
             credit: Credit::Memory,
             players: None,
             effects: None,
@@ -379,7 +374,6 @@ impl<'a> DamageLevel<'a> {
             hooks: self.hooks,
             attack: self.attack,
             client_side: self.client_side,
-            knock_entry: self.knock_entry,
             credit: self.credit.reborrow(),
             players: self
                 .players
@@ -459,36 +453,27 @@ impl<'a> DamageLevel<'a> {
             }
         }
     }
-    /// Only the game bridge calls this after checking for a knockback subscriber. Without a
-    /// site's loan the credit comes from the pushed entity's own hurt memories and this hit's
-    /// attack ([`kill_credit::from_memory`]).
-    pub fn knockback_credit(
-        &self,
+    /// Only the game bridge calls this after checking for a knockback subscriber. Splits out
+    /// the credit loan so the returned main-hand borrow can outlive moving `self` into the
+    /// hook host. Without a site's loan the credit comes from the pushed entity's own hurt
+    /// memories and this hit's attack ([`kill_credit::from_memory`]).
+    pub fn split_knockback_credit(
+        mut self,
         pushed: &Hurting<'_>,
-    ) -> (i32, Option<&crate::items::ItemStack>) {
-        match &self.credit {
-            Credit::Loan(credit) => credit.snapshot(pushed, self.attack),
+    ) -> (Self, i32, Option<&'a crate::items::ItemStack>) {
+        let credit = std::mem::replace(&mut self.credit, Credit::Memory);
+        let (id, main) = match credit {
+            Credit::Loan(credit) => {
+                let credit: &'a dyn KnockbackCredit = &*credit;
+                credit.snapshot(pushed, self.attack)
+            }
             Credit::Memory => kill_credit::from_memory(pushed, self.attack),
             Credit::NoPush => {
                 debug_assert!(false, "living_knockback push from a no_push damage site");
                 kill_credit::from_memory(pushed, self.attack)
             }
-        }
-    }
-
-    /// Runs `push` as the short entry of `LivingEntity.knockback` (power and direction), which
-    /// delegates to the full entry: the knockback hook, fired once inside the full entry, tells
-    /// its listener the push came in as [`mod_api::KnockbackEntry::Short`]. A direct call of the
-    /// full entry stays `Full`.
-    pub fn through_short_knockback<R>(&mut self, push: impl FnOnce(&mut Self) -> R) -> R {
-        let before = std::mem::replace(&mut self.knock_entry, mod_api::KnockbackEntry::Short);
-        let out = push(self);
-        self.knock_entry = before;
-        out
-    }
-    /// Which entry of `LivingEntity.knockback` the push in progress came through.
-    pub fn knockback_entry(&self) -> mod_api::KnockbackEntry {
-        self.knock_entry
+        };
+        (self, id, main)
     }
     /// The same level, on a client when `client_side`: a hook asked on both sides tells its
     /// listener so.

@@ -4037,19 +4037,22 @@ impl HitLevel<'_> {
     /// attacker's side), and the entity is pushed the other way. `source` is the push's
     /// `DamageSource`, named as `native_living_incoming_damage` names a hit's. `attacker` is the
     /// attacking entity's network id, falling back to the victim's last hurt-by mob, or 0 when
-    /// unknown; `attacker_main` and `attacker_off` are what it holds (a player's selected and
-    /// off-hand stacks, a mob's main hand), none when unknown. Change `strength`, `x` or `z`, or
+    /// unknown; `attacker_main`, `attacker_off` and `kill_credit_main` lazily borrow the
+    /// credited stacks as `ItemStackView` (a player's selected and off-hand stacks, a mob's main
+    /// hand; none when unknown, empty or unrepresentable, never skipping the event on component
+    /// projection failure). Change `strength`, `x` or `z`, or
     /// set `canceled`, and the push follows them: canceled, the entity's motion is left alone. A
     /// `strength` of 0 or less after the hook is no push, and a direction too short to tell
     /// draws a random one after it, as in vanilla. A value a mod leaves that is not a finite
     /// number is put back as it was. It fires for the players, mobs and armor stands the game
     /// knocks back: a hit's own push, a sprinting or Knockback hit, a sweep, a spear, a
-    /// shield's push on its holder, a goat's ram and a mob's melee push. It does not fire for a
-    /// sulfur cube with a block that a hit with a causing entity knocks back
-    /// (`SulfurCube.knockback` does not call `super` there), for the pushes vanilla doesn't make
-    /// with `LivingEntity.knockback` (the ender dragon's wings, Punch arrows, explosions, wind
-    /// charges, a mace smash's area, a hoglin's throw), nor for the ones Sunrise makes another
-    /// way (the ender dragon's). The level is the hit's: its blocks, random and own attachments.
+    /// shield's push on its holder, a goat's ram and a mob's melee push. The ender dragon can
+    /// also receive a default knockback when it is not sitting. The event does not fire when
+    /// `SulfurCube.knockback` launches a cube carrying a block and the source has a causing
+    /// entity, because it does not call the living implementation. Pushes that do not use
+    /// `LivingEntity.knockback` also do not fire it: the dragon's wing push, Punch arrows,
+    /// explosions, wind charges, a mace smash's area and a hoglin's throw. The level is the
+    /// hit's: its blocks, random and own attachments.
     pub(in crate::game) fn native_living_knockback(
         &mut self,
         call: mod_api::__private::LivingKnockbackCall<'_>,

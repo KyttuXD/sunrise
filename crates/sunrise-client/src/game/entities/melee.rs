@@ -346,8 +346,10 @@ impl Game<'_> {
         if landed {
             if knockback > 0.0 {
                 let (xd, zd) = self.extra_knockback_direction();
+                let aim = self.attacker_aim(source.attacker);
                 let plan = self.prepare_knockback_credit(self.mobs[index].id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
+                self.mobs[index].attacker_aim = aim;
                 let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
                 self.mobs[index].knockback_full(
                     level,
@@ -358,6 +360,7 @@ impl Game<'_> {
                     amount,
                     true,
                 );
+                self.mobs[index].attacker_aim = None;
                 self.stop_sprint_after_extra_knockback();
             }
             let mob = &self.mobs[index];

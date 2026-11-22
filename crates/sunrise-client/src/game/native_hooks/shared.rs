@@ -2110,27 +2110,56 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
             causing => causing,
         },
     };
-    let (kill_credit, credit_main) = level.knockback_credit(&pushed);
-    let Ok(credit_main) = credit_main.map(TryIntoApi::try_into_api).transpose() else {
-        return false;
-    };
-    let (entity, kind, source) = hurt_server_args(pushed, level.attack());
+    let (level, kill_credit, credit_main) = level.split_knockback_credit(&pushed);
+    let (entity, kind, source) = hurt_server_args(pushed, attack);
     let mut canceled = false;
     let [main, off] = &attack.held;
-    let (Ok(main), Ok(off)) = (main.try_into_api(), off.try_into_api()) else {
-        return false;
+    let read_metadata = |slot: &str, stack: Option<&sunrise_client::items::ItemStack>| {
+        let stack = stack?;
+        if stack.count == 0 || &*stack.item == "minecraft:air" {
+            return None;
+        }
+        match crate::game::api_values::stack_read_metadata(stack) {
+            Ok(metadata) => Some(metadata),
+            Err(error) => {
+                log::warn!(
+                    "living_knockback on entity {entity} ({kind}): omitting unrepresentable {slot} '{}' (count {}): {error:?}",
+                    stack.item,
+                    stack.count,
+                );
+                None
+            }
+        }
     };
-    let entry = level.knockback_entry();
+    let main_metadata = read_metadata("attacker_main", main.as_ref());
+    let off_metadata = read_metadata("attacker_off", off.as_ref());
+    let credit_metadata = read_metadata("kill_credit_main", credit_main);
+    let project_main = |metadata| {
+        main.as_ref()
+            .and_then(|stack| crate::game::api_values::project_stack(stack, metadata).ok())
+    };
+    let project_off = |metadata| {
+        off.as_ref()
+            .and_then(|stack| crate::game::api_values::project_stack(stack, metadata).ok())
+    };
+    let project_credit = |metadata| {
+        credit_main.and_then(|stack| crate::game::api_values::project_stack(stack, metadata).ok())
+    };
+    let attacker_main =
+        main_metadata.map(|metadata| mod_api::ItemStackView::resident(metadata, &project_main));
+    let attacker_off =
+        off_metadata.map(|metadata| mod_api::ItemStackView::resident(metadata, &project_off));
+    let kill_credit_main =
+        credit_metadata.map(|metadata| mod_api::ItemStackView::resident(metadata, &project_credit));
     HitLevel(level).native_living_knockback(mod_api::__private::LivingKnockbackCall {
         entity,
         kind,
         source: &source,
         attacker,
-        attacker_main: main.as_ref(),
-        attacker_off: off.as_ref(),
+        attacker_main,
+        attacker_off,
         kill_credit,
-        kill_credit_main: credit_main.as_ref(),
-        entry,
+        kill_credit_main,
         strength: &mut knock.strength,
         x: &mut knock.x,
         z: &mut knock.z,

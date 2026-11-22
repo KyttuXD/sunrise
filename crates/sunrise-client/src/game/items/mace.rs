@@ -733,10 +733,7 @@ impl Game<'_> {
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
                 let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
                 let pushed = sunrise_client::health::Hurting::ArmorStand(id as i32, source);
-                // The smash pushes the armor stand through the short entry, as it pushes the mobs
-                // below (`knockback(power, x, z)`).
-                let canceled = level
-                    .through_short_knockback(|level| level.knockback_canceled(pushed, &mut knock));
+                let canceled = level.knockback_canceled(pushed, &mut knock);
                 if canceled || knock.strength <= 0.0 {
                     continue;
                 }
@@ -786,10 +783,13 @@ impl Game<'_> {
                 else {
                     continue;
                 };
+                let aim = self.attacker_aim(source.attacker);
                 let plan = self.prepare_knockback_credit(id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
+                self.mobs[i].attacker_aim = aim;
                 let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
                 self.mobs[i].knockback(level, 0.4, xd, zd, &source, amount);
+                self.mobs[i].attacker_aim = None;
                 self.post_attack(i);
             }
         }

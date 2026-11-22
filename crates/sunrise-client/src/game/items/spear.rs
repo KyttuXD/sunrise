@@ -285,14 +285,18 @@ impl Game<'_> {
         if deals_knockback {
             let (xd, zd) = self.extra_knockback_direction();
             let source = Damage::spear(from);
+            let aim = self.attacker_aim(source.attacker);
             let plan = self.prepare_knockback_credit(id as i32, None, &attack);
             let mut credit = plan.lend(&mut self.last_hurt_by_player);
+            self.mobs[index].attacker_aim = aim;
             let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
             self.mobs[index].knockback_full(level, 0.4, xd, zd, &source, total, false);
+            self.mobs[index].attacker_aim = None;
             let (strength, _) = self.extra_knockback(&kind, 0.0);
             if strength > 0.0 {
                 let plan = self.prepare_knockback_credit(id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.last_hurt_by_player);
+                self.mobs[index].attacker_aim = aim;
                 let level = crate::game::entity::damage_level_of!(self, &attack, &mut credit, None);
                 self.mobs[index].knockback_full(
                     level,
@@ -303,6 +307,7 @@ impl Game<'_> {
                     total,
                     true,
                 );
+                self.mobs[index].attacker_aim = None;
             }
             // ...and the attacker stops sprinting.
             self.stop_sprint_after_extra_knockback();

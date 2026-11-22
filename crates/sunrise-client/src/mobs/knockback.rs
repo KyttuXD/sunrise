@@ -5,7 +5,8 @@ impl Mob {
     /// `comes_from_effect = false`. Both entries are independent native internals points.
     /// API access refuses the `Mob` receiver and the unmirrored `DamageLevel`/`Damage`
     /// context.
-    /// The living hook runs once, before resistance, motion changes and random draws.
+    /// When the push reaches the living implementation, the hook runs once before resistance,
+    /// motion changes and random draws.
     #[sunrise_mod_api_macros::replaceable]
     pub fn knockback(
         &mut self,
@@ -16,9 +17,7 @@ impl Mob {
         source: &Damage,
         damage: f32,
     ) {
-        level.through_short_knockback(|level| {
-            self.knockback_full(level, power, xd, zd, source, damage, false);
-        });
+        self.knockback_full(level, power, xd, zd, source, damage, false);
     }
     /// `getAttributeValue(KNOCKBACK_RESISTANCE)`: the mob's own, and what its gear adds.
     pub fn knockback_resistance(&self) -> f64 {
@@ -27,7 +26,8 @@ impl Mob {
     }
     /// Full knockback entry, including whether this is an extra effect push.
     /// The short entry delegates here once; direct full calls bypass the short entry.
-    /// A sulfur cube's effect push retains its special launch, before the living hook.
+    /// `SulfurCube.knockback` handles a block-carrying cube pushed by a causing entity without
+    /// calling the living implementation. An effect push changes only the launch multiplier.
     /// API access has the same receiver/context refusal as the short entry.
     #[sunrise_mod_api_macros::replaceable]
     pub fn knockback_full(
@@ -40,12 +40,17 @@ impl Mob {
         damage: f32,
         comes_from_effect: bool,
     ) {
-        if comes_from_effect
-            && self.species() == Species::SulfurCube
+        if self.species() == Species::SulfurCube
             && sulfur_cube::has_body(self)
             && source.attacker.is_some()
-            && sulfur_cube::knockback(self, (xd, zd), source.from, damage, Some(power))
         {
+            sulfur_cube::knockback(
+                self,
+                (xd, zd),
+                source.from,
+                damage,
+                comes_from_effect.then_some(power),
+            );
             return;
         }
         if creaking::is_creaking(self) && !creaking::can_move(self) {
