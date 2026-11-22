@@ -22,13 +22,6 @@
 use glam::{Mat4, Vec3};
 use sunrise_core::geometry::Direction;
 
-/// Conservative `f64` bound slightly above `f32::MAX` plus four `f32` rounding steps.
-/// Any `f32` affine transform component whose exact magnitude exceeds this is provably non-finite.
-const FINITE_F32_BOUND: f64 = 3.402_825e38;
-
-/// Exact integer boundary where `f32` unit spacing becomes `>= 2.0`, so `a.floor() + 1.0 == a`.
-const F32_UNIT_STEP_LIMIT: f64 = 16_777_216.0;
-
 /// Controls a still-fluid box. The tint is stack ARGB, independent of biome tint.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeFluidRenderOptions {
@@ -87,186 +80,145 @@ pub fn fluid_box(
     }
 }
 
-struct FaceSpans {
-    a_range: (f64, f64),
-    b_range: (f64, f64),
-    col_a: [f64; 3],
-    col_b: [f64; 3],
-    base: [f64; 3],
-    coupled_clip: bool,
+struct FacePose {
+    rows: [[f32; 4]; 3],
+    axes: [usize; 3],
+    plane: f32,
 }
 
-fn intersect_linear(range: (f64, f64), coeff: f64, offset: f64) -> Option<(f64, f64)> {
-    let (lo, hi) = range;
-    if lo > hi {
-        return None;
-    }
-    if coeff == 0.0 {
-        return (offset.abs() <= FINITE_F32_BOUND).then_some((lo, hi));
-    }
-    let low_rhs = -FINITE_F32_BOUND - offset;
-    let high_rhs = FINITE_F32_BOUND - offset;
-    let (bound_lo, bound_hi) = if coeff > 0.0 {
-        (low_rhs / coeff, high_rhs / coeff)
-    } else {
-        (high_rhs / coeff, low_rhs / coeff)
-    };
-    let lo = lo.max(bound_lo);
-    let hi = hi.min(bound_hi);
-    (lo <= hi).then_some((lo, hi))
+#[derive(Clone, Copy)]
+enum SpanRequirement {
+    /// A coordinate can stay if each constraint could be satisfied somewhere on the other axis.
+    Possible,
+    /// Every corner in the strip must be finite, at both ends of the other axis.
+    AllCorners,
 }
 
-fn derive_face_spans(side: Direction, face: [f32; 5], pose: Mat4) -> Option<FaceSpans> {
-    let [a0, b0, a1, b1, plane] = face;
-    if a0 >= a1 || b0 >= b1 {
-        return None;
-    }
-    let col_f64 = |v: glam::Vec4| [f64::from(v.x), f64::from(v.y), f64::from(v.z)];
-    let (col_a, col_b, col_plane_f32) = match side {
-        Direction::Down | Direction::Up => (
-            col_f64(pose.x_axis),
-            col_f64(pose.z_axis),
-            pose.y_axis.truncate().to_array(),
-        ),
-        Direction::North | Direction::South => (
-            col_f64(pose.x_axis),
-            col_f64(pose.y_axis),
-            pose.z_axis.truncate().to_array(),
-        ),
-        Direction::West | Direction::East => (
-            col_f64(pose.z_axis),
-            col_f64(pose.y_axis),
-            pose.x_axis.truncate().to_array(),
-        ),
-    };
-    let w = col_f64(pose.w_axis);
-    let mut base = [0.0; 3];
-    for k in 0..3 {
-        if !(col_plane_f32[k] * plane).is_finite() {
-            return None;
-        }
-        base[k] = f64::from(col_plane_f32[k]) * f64::from(plane) + w[k];
-    }
-
-    let mut a_range = (f64::from(a0), f64::from(a1));
-    let mut b_range = (f64::from(b0), f64::from(b1));
-    for k in 0..3 {
-        a_range = intersect_linear(a_range, col_a[k], 0.0)?;
-        b_range = intersect_linear(b_range, col_b[k], 0.0)?;
-    }
-
-    // Exact 2D Fourier-Motzkin projection of |col_a * a + col_b * b + base| <= FINITE_F32_BOUND
-    // and b in b_range onto `a`, eliminating any face or `a`-subspan with no feasible `b`.
-    let mut b_bounds = [(0.0_f64, b_range.0, b_range.1); 4];
-    let mut b_bound_count = 1usize;
-    for k in 0..3 {
-        let cb = col_b[k];
-        if cb == 0.0 {
-            a_range = intersect_linear(a_range, col_a[k], base[k])?;
-        } else {
-            let slope = -col_a[k] / cb;
-            let center = -base[k] / cb;
-            let half = FINITE_F32_BOUND / cb.abs();
-            b_bounds[b_bound_count] = (slope, center - half, center + half);
-            b_bound_count += 1;
+impl FacePose {
+    fn new(side: Direction, plane: f32, pose: Mat4) -> Self {
+        let axes = match side {
+            Direction::Down | Direction::Up => [0, 2, 1],
+            Direction::North | Direction::South => [0, 1, 2],
+            Direction::West | Direction::East => [2, 1, 0],
+        };
+        Self {
+            rows: [0, 1, 2].map(|row| pose.row(row).to_array()),
+            axes,
+            plane,
         }
     }
-    for i in 0..b_bound_count {
-        let (slope_i, lo_i, _) = b_bounds[i];
-        for j in 0..b_bound_count {
-            let (slope_j, _, hi_j) = b_bounds[j];
-            let s = slope_i - slope_j;
-            let rhs = hi_j - lo_i;
-            if s == 0.0 {
-                if rhs < 0.0 {
+
+    fn clip_axis(
+        &self,
+        axis: usize,
+        mut span: [f32; 2],
+        other: [f32; 2],
+        requirement: SpanRequirement,
+    ) -> Option<[f32; 2]> {
+        let varying = self.axes[axis];
+        let fixed = self.axes[1 - axis];
+        let all_corners = matches!(requirement, SpanRequirement::AllCorners);
+        for row in self.rows {
+            for end in 0..2 {
+                // Along either axis each product and partial sum is monotone, with the sign of
+                // that axis's coefficient. Use the favorable opposite-axis endpoint for a broad
+                // span and the unfavorable one when both endpoints must fit (a tile strip).
+                let high = (end == 1) == (row[varying] >= 0.0);
+                let other_high = (high == all_corners) == (row[fixed] >= 0.0);
+                let mut point = [0.0; 3];
+                point[fixed] = other[usize::from(other_high)];
+                point[self.axes[2]] = self.plane;
+                let outside = |coord| {
+                    let mut point = point;
+                    point[varying] = coord;
+                    overflows_toward(row, point, high)
+                };
+                if !outside(span[end]) {
+                    continue;
+                }
+                if outside(span[1 - end]) {
                     return None;
                 }
-            } else if s > 0.0 {
-                a_range.1 = a_range.1.min(rhs / s);
-            } else {
-                a_range.0 = a_range.0.max(rhs / s);
-            }
-            if a_range.0 > a_range.1 {
-                return None;
-            }
-        }
-    }
-
-    for k in 0..3 {
-        let ca = col_a[k];
-        let (ca_min, ca_max) = if ca >= 0.0 {
-            (ca * a_range.0, ca * a_range.1)
-        } else {
-            (ca * a_range.1, ca * a_range.0)
-        };
-        let cb = col_b[k];
-        if cb == 0.0 {
-            if base[k] + ca_min > FINITE_F32_BOUND || base[k] + ca_max < -FINITE_F32_BOUND {
-                return None;
-            }
-        } else {
-            let low_rhs = -FINITE_F32_BOUND - (base[k] + ca_max);
-            let high_rhs = FINITE_F32_BOUND - (base[k] + ca_min);
-            let (lo, hi) = if cb > 0.0 {
-                (low_rhs / cb, high_rhs / cb)
-            } else {
-                (high_rhs / cb, low_rhs / cb)
-            };
-            b_range.0 = b_range.0.max(lo);
-            b_range.1 = b_range.1.min(hi);
-            if b_range.0 > b_range.1 {
-                return None;
-            }
-        }
-    }
-
-    let mut coupled_clip = false;
-    for k in 0..3 {
-        for a in [a_range.0, a_range.1] {
-            for b in [b_range.0, b_range.1] {
-                if (col_a[k] * a + col_b[k] * b + base[k]).abs() > FINITE_F32_BOUND {
-                    coupled_clip = true;
+                // Search the ordered f32 encodings so we keep the exact rounded boundary,
+                // independently of the scale of the input coordinates.
+                let key = |v: f32| {
+                    let bits = v.to_bits();
+                    if v.is_sign_negative() {
+                        !bits
+                    } else {
+                        bits ^ (1 << 31)
+                    }
+                };
+                let float = |key: u32| {
+                    f32::from_bits(if key >> 31 == 0 {
+                        !key
+                    } else {
+                        key ^ (1 << 31)
+                    })
+                };
+                let mut rejected = key(span[end]);
+                let mut kept = key(span[1 - end]);
+                while rejected.abs_diff(kept) > 1 {
+                    let mid = rejected.midpoint(kept);
+                    if outside(float(mid)) {
+                        rejected = mid;
+                    } else {
+                        kept = mid;
+                    }
                 }
+                span[end] = float(kept);
             }
         }
+        Some(span)
     }
-
-    Some(FaceSpans {
-        a_range,
-        b_range,
-        col_a,
-        col_b,
-        base,
-        coupled_clip,
-    })
 }
 
-fn align_span(start: f32, end: f32, valid: (f64, f64)) -> Option<(f32, f64)> {
-    let (lo, hi) = valid;
-    if lo > hi || start >= end || hi < f64::from(start) || lo > f64::from(end) {
-        return None;
-    }
+/// Test every rounded stage of `Mat4::transform_point3`, not just its affine result. Once an
+/// operation overflows the corner is invalid. Saturating the *proof* terms lets later stages
+/// stay monotone even at an already invalid corner (no infinity cancellation or NaNs); it
+/// has no effect on finite corners or on the actual vertex transform below.
+fn overflows_toward(row: [f32; 4], point: [f32; 3], high: bool) -> bool {
+    let infinity = if high {
+        f32::INFINITY
+    } else {
+        f32::NEG_INFINITY
+    };
+    let mut overflowed = false;
+    let mut finite = |v: f32| {
+        overflowed |= v == infinity;
+        v.clamp(f32::MIN, f32::MAX)
+    };
+    let x = finite(row[0] * point[0]);
+    let y = finite(row[1] * point[1]);
+    let xy = finite(x + y);
+    let z = finite(row[2] * point[2]);
+    let xyz = finite(xy + z);
+    let _ = finite(xyz + row[3]);
+    overflowed
+}
+
+fn align_span(start: f32, end: f32, [lo, hi]: [f32; 2]) -> Option<(f32, f32)> {
     let next_start = start.floor() + 1.0;
     if next_start <= start {
-        return (f64::from(start) >= lo && f64::from(end) <= hi).then_some((start, f64::from(end)));
+        return (start >= lo && end <= hi).then_some((start, end));
     }
-    let aligned_start = if lo <= f64::from(start) {
+    let aligned_start = if lo <= start {
         start
     } else {
-        let cand = lo.ceil().max(f64::from(next_start));
-        if cand > F32_UNIT_STEP_LIMIT || cand >= f64::from(end) {
+        let cand = lo.ceil().max(next_start);
+        // A unit step cannot reach past the exact integer range of f32.
+        if cand > (1 << f32::MANTISSA_DIGITS) as f32 || cand >= end {
             return None;
         }
-        cand as f32
+        cand
     };
-    let max_end = hi.min(f64::from(end));
     let first_next = aligned_start.floor() + 1.0;
     let first_end = if first_next > aligned_start {
         first_next.min(end)
     } else {
         end
     };
-    (f64::from(first_end) <= max_end).then_some((aligned_start, max_end))
+    (first_end <= hi).then_some((aligned_start, hi))
 }
 
 fn tiled_face(
@@ -277,15 +229,20 @@ fn tiled_face(
     ratio: f32,
 ) -> bool {
     let [a0, b0, a1, b1, plane] = face;
-    let Some(spans) = derive_face_spans(side, face, pose) else {
+    if a0 >= a1 || b0 >= b1 {
+        return true;
+    }
+    let face_pose = FacePose::new(side, plane, pose);
+    let Some(a_span) = face_pose.clip_axis(0, [a0, a1], [b0, b1], SpanRequirement::Possible) else {
         return true;
     };
-    let Some((start_a, max_end_a)) = align_span(a0, a1, spans.a_range) else {
+    let Some((start_a, max_end_a)) = align_span(a0, a1, a_span) else {
         return true;
     };
-    let Some((default_start_b, default_max_end_b)) = align_span(b0, b1, spans.b_range) else {
-        return true;
-    };
+    let b_span = [b0, b1];
+    let whole_width =
+        face_pose.clip_axis(1, b_span, [start_a, max_end_a], SpanRequirement::AllCorners)
+            == Some(b_span);
     let positive = matches!(side, Direction::Up | Direction::South | Direction::East);
     let shrink = ratio * 0.25;
     let lerp = |v| v + shrink * (0.5 - v);
@@ -293,42 +250,20 @@ fn tiled_face(
     while a < a1 {
         let next_a = a.floor() + 1.0;
         let end_a = if next_a > a { next_a.min(a1) } else { a1 };
-        if f64::from(end_a) > max_end_a {
+        if end_a > max_end_a {
             break;
         }
-        let (start_b, max_end_b) = if spans.coupled_clip {
-            let mut strip_b = spans.b_range;
-            let mut valid = true;
-            for k in 0..3 {
-                let Some(r) = intersect_linear(
-                    strip_b,
-                    spans.col_b[k],
-                    spans.col_a[k] * f64::from(a) + spans.base[k],
-                ) else {
-                    valid = false;
-                    break;
-                };
-                let Some(r) = intersect_linear(
-                    r,
-                    spans.col_b[k],
-                    spans.col_a[k] * f64::from(end_a) + spans.base[k],
-                ) else {
-                    valid = false;
-                    break;
-                };
-                strip_b = r;
-            }
-            if !valid {
-                a = end_a;
-                continue;
-            }
-            let Some(aligned_b) = align_span(b0, b1, strip_b) else {
+        let (start_b, max_end_b) = if whole_width {
+            (b0, b1)
+        } else {
+            let Some(aligned) = face_pose
+                .clip_axis(1, b_span, [a, end_a], SpanRequirement::AllCorners)
+                .and_then(|span| align_span(b0, b1, span))
+            else {
                 a = end_a;
                 continue;
             };
-            aligned_b
-        } else {
-            (default_start_b, default_max_end_b)
+            aligned
         };
         let (u0, u1) = if matches!(side, Direction::North | Direction::East) {
             (end_a.ceil() - end_a, end_a.ceil() - a)
@@ -340,7 +275,7 @@ fn tiled_face(
         while b < b1 {
             let next_b = b.floor() + 1.0;
             let end_b = if next_b > b { next_b.min(b1) } else { b1 };
-            if f64::from(end_b) > max_end_b {
+            if end_b > max_end_b {
                 break;
             }
             let (v0, v1) = if side == Direction::Up {
@@ -581,6 +516,61 @@ mod tests {
         // West is at x0 = -1_000_000 (overflows -> 0).
         assert_eq!(kept, 13);
         assert!(seen <= 20, "leading invalid span enumerated tiles: {seen}");
+    }
+
+    #[test]
+    fn partial_transform_overflow_skips_wide_spans_but_keeps_neighboring_tiles() {
+        use glam::Vec4;
+
+        for (side, pose, wide, neighbors) in [
+            // X + Y overflows on the top face even though translation would cancel Y.
+            (
+                Direction::Up,
+                Mat4::from_cols(
+                    Vec4::new(2e32, 0.0, 0.0, 0.0),
+                    Vec4::new(-2e38, 1.0, 0.0, 0.0),
+                    Vec4::Z,
+                    Vec4::new(-2e38, 0.0, 0.0, 1.0),
+                ),
+                [1_000_000.0, 0.0, 1_200_000.0, 1_000_000.0, -1.0],
+                [701_409.0, 0.0, 701_415.0, 2.0, -1.0],
+            ),
+            // X + Y is finite here, but adding the Z term overflows, along the other tile axis.
+            (
+                Direction::North,
+                Mat4::from_cols(
+                    Vec4::Y,
+                    Vec4::new(2e32, 0.0, 0.0, 0.0),
+                    Vec4::new(-2e38, 0.0, 1.0, 0.0),
+                    Vec4::new(-2e38, 0.0, 0.0, 1.0),
+                ),
+                [0.0, 1_000_000.0, 1_000_000.0, 1_200_000.0, -1.0],
+                [0.0, 701_409.0, 2.0, 701_415.0, -1.0],
+            ),
+        ] {
+            let [a0, b0, a1, b1, plane] = wide;
+            assert!(
+                FacePose::new(side, plane, pose)
+                    .clip_axis(0, [a0, a1], [b0, b1], SpanRequirement::Possible)
+                    .is_none(),
+                "the whole face is invalid before tile traversal"
+            );
+            let mut quads = 0;
+            tiled_face(
+                &mut |quad| {
+                    assert!(quad.iter().all(|v| v.pos.into_iter().all(f32::is_finite)));
+                    quads += 1;
+                    true
+                },
+                side,
+                neighbors,
+                pose,
+                0.0,
+            );
+            // [701409, 701410] and [701410, 701411] are both finite; the next tile's far
+            // endpoint is not. Each accepted interval pairs with two tiles on the other axis.
+            assert_eq!(quads, 4);
+        }
     }
 
     #[test]

@@ -11,18 +11,35 @@ const CHUNK: u64 = 1 << 20;
 pub struct Uploads {
     belt: wgpu::util::StagingBelt,
     chunk: u64,
+    buffer_limit: u64,
+}
+
+fn staging_slice_size(size: NonZeroU64, chunk: u64, buffer_limit: u64) -> NonZeroU64 {
+    if size.get() <= chunk {
+        return size;
+    }
+    // The final size class ends at the device limit, rounded down to the belt's copy
+    // alignment. Do not reduce the write itself: it must already fit the destination.
+    let aligned_limit = buffer_limit / wgpu::COPY_BUFFER_ALIGNMENT * wgpu::COPY_BUFFER_ALIGNMENT;
+    let rounded = size
+        .checked_next_power_of_two()
+        .map_or(aligned_limit, NonZeroU64::get);
+    NonZeroU64::new(rounded.min(aligned_limit)).map_or(size, |padded| size.max(padded))
 }
 
 impl Uploads {
     pub fn new(device: &wgpu::Device) -> Self {
         Self::with_chunk(device, CHUNK)
     }
-    /// A belt whose staging buffers hold `chunk` bytes (a larger write gets
-    /// a buffer of its own, rounded up to a power of two).
+    /// A belt whose staging buffers hold up to `chunk` bytes (a larger write gets
+    /// a buffer of its own, rounded up only as far as the device allows).
     pub fn with_chunk(device: &wgpu::Device, chunk: u64) -> Self {
+        let buffer_limit = device.limits().max_buffer_size;
+        let chunk = chunk.min(buffer_limit);
         Self {
             belt: wgpu::util::StagingBelt::new(device.clone(), chunk),
             chunk,
+            buffer_limit,
         }
     }
     /// A mapped staging slice of at least `size` bytes. The belt gives a
@@ -30,14 +47,10 @@ impl Uploads {
     /// good and only reuses it for writes that fit: an upload that grows a
     /// little every frame (the entity batch while mobs appear) took a new
     /// buffer each frame until the game ran out of memory (#2826). Rounded up
-    /// to a power of two, the large buffers it keeps are reused, one per
-    /// doubling.
+    /// to a power of two (or to the device's last aligned size class), the
+    /// large buffers are reused, one per doubling.
     fn allocate(&mut self, size: NonZeroU64, alignment: NonZeroU64) -> wgpu::BufferSlice<'_> {
-        let size = if size.get() > self.chunk {
-            size.checked_next_power_of_two().unwrap_or(size)
-        } else {
-            size
-        };
+        let size = staging_slice_size(size, self.chunk, self.buffer_limit);
         self.belt.allocate(size, alignment)
     }
     /// Copy tightly packed RGBA8 `pixels` (`width` by `height`) into one mip
@@ -123,6 +136,19 @@ impl Uploads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_admitted_entity_write_fits_staging_on_a_non_power_of_two_device() {
+        use crate::gfx::EntityQuadCapacity;
+
+        let limit = CHUNK + CHUNK / 2 + 3;
+        let capacity = EntityQuadCapacity::from_max_buffer_size(limit);
+        let size =
+            NonZeroU64::new(capacity.max_quads() as u64 * EntityQuadCapacity::VERTEX_QUAD_BYTES)
+                .unwrap();
+        assert!(size.get() <= limit && size.get().next_power_of_two() > limit);
+        assert_eq!(staging_slice_size(size, CHUNK, limit).get(), limit - 3);
+    }
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = crate::gfx::test_gpu::instance();

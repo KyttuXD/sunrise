@@ -3042,20 +3042,13 @@ impl Renderer {
                 pass.stage(self.own_timing.as_mut(), "additive entities");
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                let mut first = 0;
-                for run in frame.additive.as_chunks::<4>().0.chunk_by(|a, b| {
-                    (a[0].layer & 0xffff == DRAGON_RAYS_OVERLAY)
-                        == (b[0].layer & 0xffff == DRAGON_RAYS_OVERLAY)
-                }) {
-                    let rays = run[0][0].layer & 0xffff == DRAGON_RAYS_OVERLAY;
+                for (rays, indices) in classic_additive_runs(frame.additive, additive_quads) {
                     pass.set_pipeline(if rays {
                         &self.dragon_rays_pipeline
                     } else {
                         &self.additive_pipeline
                     });
-                    let end = first + run.len() as u32;
-                    pass.draw_indexed(first * 6..end * 6, (world_quads * 4) as i32, 0..1);
-                    first = end;
+                    pass.draw_indexed(indices, (world_quads * 4) as i32, 0..1);
                 }
                 if light_marks(self.output.frame.format, self.hdr.is_some()) {
                     // The dragon's eyes and death rays, marked as entities are.
@@ -3661,6 +3654,25 @@ fn mark_layers(active: &mut [u64], layers: &[u16]) {
         let layer = usize::from(layer);
         active[layer / u64::BITS as usize] |= 1 << (layer % u64::BITS as usize);
     }
+}
+
+/// With OIT off, the additive vertices uploaded by `EntityBatch` are exactly this prefix.
+pub(super) fn classic_additive_runs(
+    additive: &[Vertex],
+    admitted_quads: u32,
+) -> impl Iterator<Item = (bool, std::ops::Range<u32>)> {
+    let rays = |quad: &[Vertex; 4]| quad[0].layer & 0xffff == DRAGON_RAYS_OVERLAY;
+    let mut first = 0;
+    additive[..admitted_quads as usize * 4]
+        .as_chunks::<4>()
+        .0
+        .chunk_by(move |a, b| rays(a) == rays(b))
+        .map(move |run| {
+            let end = first + run.len() as u32 * 6;
+            let indices = first..end;
+            first = end;
+            (rays(&run[0]), indices)
+        })
 }
 
 /// The vertices the entity buffer grows to for a frame of `vertices`: the next power of two,

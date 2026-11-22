@@ -152,11 +152,12 @@ impl<'a> EntityQuadScope<'a> {
         self.has_room()
     }
 
-    /// Drops any trailing partial quad and truncates `self.vertices` to complete quads within this
-    /// scope's budget.
-    pub fn truncate_to_budget(&mut self) {
-        let keep = self.vertices.len().min(self.vertex_limit) / 4 * 4;
-        self.vertices.truncate(keep);
+    /// Truncates the contribution starting at `start` to complete quads within the remaining
+    /// budget. Earlier geometry (and the caller's offsets into it) belongs to the caller.
+    pub fn truncate_to_budget_since(&mut self, start: usize) {
+        let end = self.vertices.len().min(self.vertex_limit);
+        self.vertices
+            .truncate(start + end.saturating_sub(start) / 4 * 4);
     }
 
     /// Compacts `vertices[start..]` in place to retain only complete finite quads within this
@@ -518,7 +519,7 @@ impl EntityBatch {
     }
 
     #[cfg(test)]
-    fn update(
+    pub(super) fn update(
         &mut self,
         entities: &[Vertex],
         additive: &[Vertex],

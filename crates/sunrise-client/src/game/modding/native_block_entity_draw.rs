@@ -314,6 +314,8 @@ pub struct BlockEntityDraw {
     parent_poses: Vec<(Mat4, Option<ModelNormals>, Option<DVec3>)>,
     lights: (Vec3, Vec3),
     vertices: Vec<Vertex>,
+    /// Earlier frame vertices are not owned by this draw and must keep their offsets.
+    first_vertex: usize,
     kept: bool,
     /// Where each turning part starts in `vertices` (`spin`), and where the
     /// parts standing still start again (`still`, none).
@@ -569,6 +571,7 @@ impl BlockEntityDraw {
             local_light_translation: None,
             parent_poses: Vec::new(),
             lights,
+            first_vertex: vertices.len(),
             vertices,
             kept: false,
             spins: Vec::new(),
@@ -719,7 +722,8 @@ impl BlockEntityDraw {
     }
 
     fn finish_light(&mut self, level: Option<&LevelLight<'_>>) {
-        self.quad_scope().truncate_to_budget();
+        let first = self.first_vertex;
+        self.quad_scope().truncate_to_budget_since(first);
         for e in &self.lit {
             let end = e.end.min(self.vertices.len());
             if e.start >= end {
@@ -1268,6 +1272,7 @@ impl Game<'_> {
             local_light_translation: None,
             parent_poses: Vec::new(),
             lights: diffuse_lights(self.nether_lighting()),
+            first_vertex: out.len(),
             vertices: std::mem::take(out),
             kept: false,
             spins: Vec::new(),
@@ -1918,6 +1923,7 @@ mod tests {
             parent_poses: Vec::new(),
             lights: diffuse_lights(false),
             vertices: Vec::new(),
+            first_vertex: 0,
             kept: false,
             spins: Vec::new(),
             level_lit: false,
@@ -1990,6 +1996,29 @@ mod tests {
             surface.quad(corners, bad_uv, sprite(), 0xFFFFFF);
         }
         assert_eq!(surface.into_vertices().len(), 4);
+    }
+
+    #[test]
+    fn an_overfull_draw_keeps_earlier_entity_vertices_and_offsets() {
+        use sunrise_client::gfx::EntityQuadCapacity;
+
+        let capacity =
+            EntityQuadCapacity::from_max_buffer_size(EntityQuadCapacity::VERTEX_QUAD_BYTES * 2);
+        let mut draw = BlockEntityDraw::posed(
+            0.0,
+            0,
+            0,
+            [0; 3],
+            Mat4::IDENTITY,
+            diffuse_lights(false),
+            [marker(1.0); 8].to_vec(),
+        )
+        .with_quad_budget(capacity, 1);
+        // An engine-backed helper can append its geometry before finish_light budgets this draw.
+        draw.vertices.extend([marker(2.0); 4]);
+        let out = draw.into_vertices();
+        assert_eq!(out.len(), 8);
+        assert!(out.iter().all(|vertex| vertex.pos[0] == 1.0));
     }
 
     #[test]
