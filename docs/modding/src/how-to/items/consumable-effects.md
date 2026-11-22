@@ -8,12 +8,13 @@ type is `Result<Option<bool>, StackWriteError>`; handle stack-validation errors
 from `Err`. The following outcomes are inside `Ok`: `Some(true)` or
 `Some(false)` is the effect's result; `None` means the item, index or target is unavailable
 or the effect is unsupported. Mob random teleport, armor stands and dragons are not
-supported. Player random teleport uses the level random as normal.
+supported. Chance and random teleport use the target's own random stream, including when the
+engine swaps in a guest. `play_sound` accepts a registered id or a direct sound event
+(`{sound_id: "example:bell", range: 8.0}`); omitting `range` gives it the normal variable range.
 
 Mod-defined kinds dispatch through the ordinary `consume_effect` hook. Register
-their [type and codecs](consume-effects.md) to send them in stacks to a client. For these
-kinds, `Some(true)` means dispatch was entered, not that a listener changed game
-state; an unclaimed kind does nothing. Reapplying the same kind from inside
-its own handler on the same call stack returns `Some(false)` without recursion.
-Another kind, including one owned by another mod, dispatches normally, and a later
-independent call can apply the original kind again.
+their [type and codecs](consume-effects.md) to send them in stacks to a client.
+For these kinds, `Some(true)` means the bound callback completed, not that it changed game
+state. `Some(false)` means the callback was missing, disabled or failed. Nested
+applications of the same kind or another kind run immediately and return their
+own result. Do not rely on the engine to stop a cycle in your own effects.

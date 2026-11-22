@@ -348,7 +348,7 @@ use sunrise_world::component_value::{consume_effects::Admitted, source::normaliz
 #[derive(Clone, Debug, PartialEq)]
 struct ConsumableComponent {
     raw: Tag,
-    value: crate::items::ItemConsumable,
+    value: Arc<crate::items::ItemConsumable>,
     refused: bool,
 }
 impl ConsumableComponent {
@@ -384,7 +384,7 @@ impl ConsumableComponent {
         };
         Some(Arc::new(Self {
             raw,
-            value,
+            value: Arc::new(value),
             refused,
         }))
     }
@@ -575,10 +575,11 @@ impl StackData {
                     .flat_map(|effects| effects.iter()),
             )
             .find_map(|effect| match effect {
-                crate::items::ConsumeEffect::Native {
-                    registered: Some(effect),
-                    ..
-                } if matches(effect) => Some(effect.clone()),
+                crate::items::ConsumeEffect::Native(effect) => effect
+                    .registered
+                    .as_ref()
+                    .filter(|effect| matches(effect))
+                    .cloned(),
                 _ => None,
             })
             .or_else(|| {
@@ -1188,7 +1189,7 @@ impl ItemStack {
     pub fn consumable<'a>(
         &'a self,
         info: Option<&'a ItemInfo>,
-    ) -> Option<&'a crate::items::ItemConsumable> {
+    ) -> Option<&'a Arc<crate::items::ItemConsumable>> {
         if let Some(data) = self.data() {
             if data.other("!minecraft:consumable").is_some() {
                 return None;
@@ -4377,21 +4378,21 @@ mod carried_component_tests {
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack.extra = extra;
         let copied = stack.clone();
-        let (ConsumeEffect::Native { data: a, .. }, ConsumeEffect::Native { data: b, .. }) = (
+        let (ConsumeEffect::Native(a), ConsumeEffect::Native(b)) = (
             &stack.death_protection(None).unwrap()[0],
             &copied.death_protection(None).unwrap()[0],
         ) else {
             panic!("native effect")
         };
-        assert!(Arc::ptr_eq(a, b));
-        assert_eq!(a.get("amount"), Some(&Tag::Byte(42)));
+        assert!(Arc::ptr_eq(&a.data, &b.data));
+        assert_eq!(a.data.get("amount"), Some(&Tag::Byte(42)));
         assert_eq!(components_tag(0, stack.data()), Some(patch));
         stack
             .data_mut()
             .set_other("minecraft:death_protection", Some(component));
         assert!(matches!(
             &stack.death_protection(None).unwrap()[0],
-            ConsumeEffect::Native { .. }
+            ConsumeEffect::Native(_)
         ));
         stack
             .data_mut()

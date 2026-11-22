@@ -3315,10 +3315,11 @@ mod tests {
                     &client.consumable(None).unwrap().effects[..],
                     client.death_protection(None).unwrap(),
                 ] {
-                    let [crate::items::ConsumeEffect::Native { kind, data, .. }] = effects else {
+                    let [crate::items::ConsumeEffect::Native(effect)] = effects else {
                         panic!("expected custom effect: {effects:?}");
                     };
-                    assert_eq!(kind, "effect_test:charge");
+                    let data = &effect.data;
+                    assert_eq!(effect.kind.as_ref(), "effect_test:charge");
                     assert_eq!(data.get("points"), Some(&Tag::Int(0x1234)));
                     assert_eq!(data.get("samples"), Some(&Tag::IntArray(vec![3, 4])));
                     assert_eq!(data.get("flag"), Some(&Tag::Byte(7)));

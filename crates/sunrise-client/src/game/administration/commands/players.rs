@@ -7,7 +7,6 @@
 //! their chat.
 use super::{Game, Target};
 use sunrise_client::{command::args::Selector, lan::guest::Guest, text::Text};
-use sunrise_protocol::packets::play::{self, Clientbound as C};
 
 impl Target {
     /// A player, in place or not (`instanceof ServerPlayer`).
@@ -231,43 +230,39 @@ impl Game<'_> {
             _ => return None,
         };
         let back = self.dim;
-        let theirs = self
-            .lan
-            .as_ref()?
-            .hub
-            .guest(conn)
-            .map(|g| super::super::Dim::from_id(&g.dimension));
-        if let Some(dim) = theirs.filter(|d| *d != back)
-            && let Err(e) = self.enter_level(dim)
-        {
-            log::error!("could not open {}: {e}", dim.id());
-        }
-        let Some(swap) = self.enter_guest_in_dimension(conn, back) else {
-            if self.dim != back
-                && let Err(e) = self.enter_level(back)
+        let theirs = super::super::Dim::from_id(&self.lan.as_ref()?.hub.guest(conn)?.dimension);
+        // Opening a level or leaving the guest can itself fire hooks. Put the outer level
+        // back even when one of those hooks, rather than `f`, unwinds.
+        let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if theirs != back
+                && let Err(e) = self.enter_level(theirs)
             {
-                log::error!("could not reopen {}: {e}", back.id());
+                log::error!("could not open {}: {e}", theirs.id());
+                return None;
             }
-            return None;
-        };
-        let source = self.chat_capture.replace(Vec::new());
-        let out = f(self);
-        let told = std::mem::replace(&mut self.chat_capture, source).unwrap_or_default();
-        self.leave_guest(swap);
-        for line in told {
-            self.lan.as_ref()?.hub.send_to(
-                conn,
-                &C::SystemChat(play::SystemChat {
-                    content: sunrise_client::lan::data::component_nbt(&line.component()),
-                    overlay: false,
-                }),
-            );
-        }
+            let swap = self.enter_guest_in_dimension(conn, back)?;
+            let (result, messages) = self.capture_guest_messages(f);
+            if result.is_err() {
+                self.record_interrupted_turn(conn);
+            }
+            let exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.leave_guest(swap);
+            }));
+            self.send_guest_messages(conn, messages);
+            Some(match (exit, result) {
+                (Err(payload), _) => Err(payload),
+                (Ok(()), result) => result,
+            })
+        }));
         if self.dim != back
             && let Err(e) = self.enter_level(back)
         {
             log::error!("could not reopen {}: {e}", back.id());
         }
-        Some(out)
+        match turn {
+            Ok(Some(Ok(out))) => Some(out),
+            Ok(None) => None,
+            Ok(Some(Err(payload))) | Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }

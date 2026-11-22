@@ -1462,13 +1462,8 @@ pub(super) fn emit<'a>(
                 )
             }
             None if name == "consume_effect" => (
-                format!(
-                    "let Some(owner) = super::runtime::listening_kind_owner(HookId::{hook_id}, kind) else {{ return; }};"
-                ),
-                format!(
-                    "let mut {entered} = super::runtime::ListenerScope::new(); let {mod_item} = {entered}.enter(owner, \"{name}\"); {}",
-                    call(&mod_item, "owner.id", "", ""),
-                ),
+                String::new(),
+                format!("callback.invoke(|{mod_item}| {mod_item}.{name}({invoke}))"),
             ),
             None if hook.owner.is_some() => {
                 let owner_field = hook.owner.as_deref().unwrap();
@@ -1588,7 +1583,11 @@ pub(super) fn emit<'a>(
             let names: Vec<_> = carried.iter().map(|(arg, _)| arg.as_str()).collect();
             format!("let calls::{carrier} {{ {} }} = call;\n", names.join(", "))
         };
-        if scoped_write_replace {
+        if name == "consume_effect" {
+            dispatch.push_str(&format!(
+                "#[doc(hidden)] pub fn dispatch_{name}({dispatch_signature}, callback: super::runtime::ConsumeEffectBinding) -> bool {{ {unpack}{body} }}\n"
+            ));
+        } else if scoped_write_replace {
             let (part_trait, _) = scoped.as_ref().unwrap();
             let args = dispatch_params[1..]
                 .iter()

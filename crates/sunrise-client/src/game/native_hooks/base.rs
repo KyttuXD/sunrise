@@ -969,15 +969,27 @@ impl Game<'_> {
         *energy = mod_api::__private::parts_installation::block_energy(block);
     }
     /// A custom entry of the effective consumable, with its pre-shrink stack
-    /// and the living entity consuming it. Unclaimed kinds do nothing.
+    /// and the living entity consuming it. Dispatch uses the decode-time binding.
     pub(in crate::game) fn native_consume_effect(
         &mut self,
-        kind: &str,
-        data: &sunrise_core::nbt::Tag,
+        effect: &sunrise_client::items::NativeConsumeEffect,
         stack: &ItemStack,
         user: mod_api::EntityRef,
-    ) {
-        self.fire_consume_effect(kind, data, stack, user);
+    ) -> bool {
+        use crate::game::api_values::TryIntoApi;
+
+        let Some(binding) = effect.binding else {
+            log::warn!("consume effect {} has no registered callback", effect.kind);
+            return false;
+        };
+        let stack = match stack.try_into_api() {
+            Ok(stack) => stack,
+            Err(error) => {
+                log::warn!("consume effect {}: stack refused: {error:?}", effect.kind);
+                return false;
+            }
+        };
+        mod_api::dispatch_consume_effect(self, &effect.kind, &effect.data, &stack, user, binding)
     }
     /// What clients get of the block entity at `pos` when its `id` is
     /// yours (`BlockEntity.getUpdateTag`): set `tag` to it, read from

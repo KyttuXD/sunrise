@@ -29,6 +29,7 @@ impl GameLevel<'_> {
             .push(crate::game::creatures::NativeSound {
                 dimension: dimension_id(self.dimension),
                 sound: sound.to_owned(),
+                inline_range: None,
                 at,
                 source: source as i32,
                 volume,

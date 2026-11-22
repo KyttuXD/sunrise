@@ -693,8 +693,8 @@ impl Game<'_> {
                 effects,
                 probability,
             } => {
-                // ApplyStatusEffectsConsumeEffect draws from the user's random,
-                // even at probability 1. The level random stands in for a player's.
+                // ApplyStatusEffectsConsumeEffect draws from this consumer,
+                // even at probability 1 (also in a guest's swapped-in turn).
                 let draw = match mob {
                     Some(living) => {
                         let commands::Target::Mob(id) = self.native_living_target(living)? else {
@@ -706,7 +706,7 @@ impl Game<'_> {
                             .random
                             .next_float()
                     }
-                    None => self.world.random.next_float(),
+                    None => self.player.as_mut()?.random.next_float(),
                 };
                 if draw >= *probability {
                     return Some(false);
@@ -774,23 +774,35 @@ impl Game<'_> {
                     }
                     None => self.player.as_ref()?.position,
                 };
-                let b = sunrise_core::position::BlockPos::containing(at);
-                let at = [b.x, b.y, b.z].map(|v| f64::from(v) + 0.5);
-                let level = self.level(self.dim.id())?;
                 let source = match mob {
                     Some(living) => self.entity_sound_source(living.entity())?,
                     None => mod_api::SoundSource::Players,
                 };
-                self.native_queue_sound(level, sound, at, source, 1.0, 1.0, None)?;
+                self.queue_consume_sound(sound, BlockPos::containing(at), source)?;
                 true
             }
-            ConsumeEffect::Native { kind, data, .. } => {
-                consume_effect_dispatch::dispatch(kind, || {
-                    self.native_consume_effect(kind, data, consumed, user)
-                })
-            }
+            ConsumeEffect::Native(effect) => self.native_consume_effect(effect, consumed, user),
         })
     }
+    /// `PlaySoundConsumeEffect.apply` calls the level, not the entity, at the block's centre.
+    pub(super) fn queue_consume_sound(
+        &mut self,
+        sound: &sunrise_client::items::ConsumeSound,
+        pos: BlockPos,
+        source: mod_api::SoundSource,
+    ) -> Option<()> {
+        use sunrise_client::items::ConsumeSound;
+        let (id, inline_range) = match sound {
+            ConsumeSound::Registered(id) => (id, None),
+            ConsumeSound::Direct { id, range } => (id, Some(*range)),
+        };
+        let at = [pos.x, pos.y, pos.z].map(|v| f64::from(v) + 0.5);
+        let level = self.level(self.dim.id())?;
+        self.native_queue_sound(level, id, at, source, 1.0, 1.0, None)?
+            .inline_range = inline_range;
+        Some(())
+    }
+
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3, as
     /// many as the weapon's `projectile_count` says, fanned by its
     /// `projectile_spread`.

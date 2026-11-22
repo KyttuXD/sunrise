@@ -71,6 +71,8 @@ pub fn block_hook_inert(hook: HookId, state: BlockState) -> bool {
         .is_some()
 }
 
+pub use crate::runtime::ConsumeEffectBinding;
+
 /// Resolve a listener's owner by id, for dispatch through [`mod_index_on`].
 pub fn mod_index(id: &str) -> Option<usize> {
     crate::runtime::installed()?.by_id.get(id).copied()

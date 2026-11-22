@@ -320,8 +320,6 @@ mod composter;
 mod condition_reload_state;
 #[path = "game/items/consume.rs"]
 mod consume;
-#[path = "game/modding/consume_effect_dispatch.rs"]
-mod consume_effect_dispatch;
 #[cfg(test)]
 #[path = "game/modding/consume_effect_dispatch_tests.rs"]
 mod consume_effect_dispatch_tests;

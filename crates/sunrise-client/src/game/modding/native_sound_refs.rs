@@ -360,6 +360,31 @@ pub(super) mod tests {
                 packets(&rx_edge).is_empty(),
                 "a player exactly at the range edge hears nothing"
             );
+
+            // A direct holder is not looked up in the registry, and its range is used
+            // instead of the variable one (which would reach both players this time).
+            use sunrise_client::items::ConsumeSound;
+            use sunrise_core::position::BlockPos;
+            let id = "minecraft:test.inline";
+            assert!(
+                game.queue_consume_sound(
+                    &ConsumeSound::Direct {
+                        id: id.into(),
+                        range: Some(0.75)
+                    },
+                    BlockPos::new(0, 64, 0),
+                    SoundSource::Neutral,
+                )
+                .is_some()
+            );
+            game.flush_native_sounds();
+            let got = packets(&rx_near);
+            let [Clientbound::Sound(packet)] = got.as_slice() else {
+                panic!("the near player must receive the direct sound")
+            };
+            assert_eq!(packet.sound, (-1, Some((id.into(), Some(0.75)))));
+            assert_eq!((packet.x, packet.y, packet.z), (4, 516, 4));
+            assert!(packets(&rx_edge).is_empty());
         });
     }
 }

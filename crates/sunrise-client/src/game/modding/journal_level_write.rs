@@ -218,6 +218,7 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
         self.queue(PendingWrite::Sound(NativeSound {
             dimension: self.level.dimension_id(),
             sound: sound.to_owned(),
+            inline_range: None,
             at,
             source: source as i32,
             volume,

@@ -628,7 +628,14 @@ impl Game<'_> {
                 continue;
             };
             let Some(host) = &self.lan else { return };
-            if heard.name.starts_with("minecraft:")
+            // A listener replacing the event id is requesting a different holder.
+            let inline_range = if heard.name.as_ref() == sound.sound.as_str() {
+                sound.inline_range
+            } else {
+                None
+            };
+            if inline_range.is_none()
+                && heard.name.starts_with("minecraft:")
                 && host
                     .hub
                     .registry_id("minecraft:sound_event", &heard.name)
@@ -636,7 +643,7 @@ impl Game<'_> {
             {
                 continue;
             }
-            let packet = host.hub.sound_packet(
+            let mut packet = host.hub.sound_packet(
                 &heard.name,
                 sound.at,
                 heard.volume,
@@ -644,6 +651,11 @@ impl Game<'_> {
                 heard.source as i32,
                 sound.seed,
             );
+            if let Some(range) = inline_range
+                && let C::Sound(packet) = &mut packet
+            {
+                packet.sound = (-1, Some((heard.name.into_owned(), range)));
+            }
             // `Level.playSound(except, entity, ...)`: the same sound and
             // seed, bound to the entity.
             let packet = match (packet, sound.entity) {
@@ -658,7 +670,9 @@ impl Game<'_> {
                 (packet, _) => packet,
             }
             .encode();
-            let range = f64::from(heard.volume.max(1.0)) * 16.0;
+            let range = inline_range
+                .flatten()
+                .map_or_else(|| f64::from(heard.volume.max(1.0)) * 16.0, f64::from);
             // Wrapped for the level's viewers too: one bound to an entity for those tracking it.
             let (dimension, at) = (sound.dimension, sound.at);
             host.hub

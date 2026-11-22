@@ -80,14 +80,32 @@ pub enum ConsumeEffect {
     RemoveEffects(Vec<String>),
     /// `TeleportRandomlyConsumeEffect`.
     TeleportRandomly(sunrise_world::teleport_consume::TeleportConsume),
-    PlaySound(String),
-    /// A mod's own kind, kept as the file wrote it (the loader used to drop
-    /// it silently): the game hands it to `native_consume_effect`.
-    Native {
-        kind: String,
-        data: Arc<sunrise_core::nbt::Tag>,
-        registered: Option<sunrise_world::component_value::consume_effects::Admitted>,
-    },
+    PlaySound(ConsumeSound),
+    /// A mod's effect and its decode-time dispatch binding.
+    Native(NativeConsumeEffect),
+}
+
+/// `SoundEvent.CODEC`: a registry reference or an inline event with its own range.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConsumeSound {
+    Registered(String),
+    Direct { id: String, range: Option<f32> },
+}
+
+// no wire: the callback binding is local to the installed native mods.
+#[derive(Clone, Debug)]
+pub struct NativeConsumeEffect {
+    pub kind: Arc<str>,
+    pub data: Arc<sunrise_core::nbt::Tag>,
+    pub registered: Option<sunrise_world::component_value::consume_effects::Admitted>,
+    pub binding: Option<mod_vocab::__private::ConsumeEffectBinding>,
+}
+
+impl PartialEq for NativeConsumeEffect {
+    fn eq(&self, other: &Self) -> bool {
+        // Component equality is about the saved data, not the installed callable.
+        self.kind == other.kind && self.data == other.data && self.registered == other.registered
+    }
 }
 
 /// Typed consumable shared by item prototypes and stack component patches.
@@ -111,20 +129,7 @@ pub fn parse_consumable(
             .as_array()
             .into_iter()
             .flatten()
-            .map(|effect| {
-                if let Some(kind) = effect["type"].as_str().filter(|k| {
-                    k.contains(':') && !k.starts_with("minecraft:") && !k.starts_with(':')
-                }) {
-                    return sunrise_core::json_nbt::json_to_tag(effect).map(|data| {
-                        Some(ConsumeEffect::Native {
-                            kind: kind.to_owned(),
-                            data: Arc::new(data),
-                            registered: None,
-                        })
-                    });
-                }
-                Ok(parse_consume_effect(effect))
-            })
+            .map(parse_consume_effect)
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
@@ -132,21 +137,30 @@ pub fn parse_consumable(
     })
 }
 
-/// One `on_consume_effects` entry. A bare type name is minecraft's own, as
-/// a bare item id is: `apply_effects` and `:apply_effects` are
-/// `minecraft:apply_effects`. A
-/// namespaced kind outside `minecraft:` is the mod's own, kept whole for
-/// the hook. An unknown `minecraft:` kind and a missing type are dropped.
-pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect> {
-    let kind = effect.get("type")?.as_str()?;
-    // `Identifier.bySeparator`: no namespace, or an empty one (`:clear_all_effects`), is minecraft's.
-    let kind = match kind.split_once(':') {
-        Some(("", path)) => format!("minecraft:{path}"),
-        Some(_) => kind.to_owned(),
-        None => format!("minecraft:{kind}"),
+/// One `ConsumeEffect.CODEC` entry. The type selects the built-in decoder
+/// or binds an installed native listener at the definition boundary.
+fn parse_consume_effect(
+    effect: &Value,
+) -> std::result::Result<Option<ConsumeEffect>, sunrise_core::json_nbt::JsonNbtError> {
+    let Some(kind) = effect.get("type").and_then(Value::as_str) else {
+        return Ok(None);
     };
-    match kind.as_str() {
-        "minecraft:apply_effects" => {
+    // `Identifier.bySeparator`: a bare or empty namespace is minecraft's.
+    let path = match kind.split_once(':') {
+        Some(("" | "minecraft", path)) => path,
+        Some(_) => {
+            let data = sunrise_core::json_nbt::json_to_tag(effect)?;
+            return Ok(Some(ConsumeEffect::Native(NativeConsumeEffect {
+                kind: Arc::from(kind),
+                data: Arc::new(data),
+                registered: None,
+                binding: mod_vocab::__private::ConsumeEffectBinding::resolve(kind),
+            })));
+        }
+        None => kind,
+    };
+    Ok(match path {
+        "apply_effects" => {
             let probability = effect
                 .get("probability")
                 .and_then(|p| p.as_f64())
@@ -160,8 +174,8 @@ pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect>
                 probability,
             })
         }
-        "minecraft:clear_all_effects" => Some(ConsumeEffect::ClearAllEffects),
-        "minecraft:remove_effects" => {
+        "clear_all_effects" => Some(ConsumeEffect::ClearAllEffects),
+        "remove_effects" => {
             let mut targets = Vec::new();
             if let Some(eff) = effect.get("effects") {
                 if let Some(s) = eff.as_str() {
@@ -176,7 +190,7 @@ pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect>
             }
             Some(ConsumeEffect::RemoveEffects(targets))
         }
-        "minecraft:teleport_randomly" => Some(ConsumeEffect::TeleportRandomly(
+        "teleport_randomly" => Some(ConsumeEffect::TeleportRandomly(
             sunrise_world::teleport_consume::TeleportConsume {
                 diameter: effect
                     .get("diameter")
@@ -188,17 +202,26 @@ pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect>
                     .unwrap_or(true),
             },
         )),
-        "minecraft:play_sound" => effect
-            .get("sound")
-            .and_then(|s| s.as_str())
-            .map(|s| ConsumeEffect::PlaySound(s.to_string())),
-        k if !k.starts_with("minecraft:") => Some(ConsumeEffect::Native {
-            kind: k.to_owned(),
-            data: Arc::new(sunrise_core::json_nbt::json_to_tag(effect).ok()?),
-            registered: None,
+        "play_sound" => effect.get("sound").and_then(|sound| {
+            use sunrise_core::identifier::Identifier;
+            let holder = if let Some(id) = sound.as_str() {
+                ConsumeSound::Registered(Identifier::parse(id).ok()?.to_string())
+            } else {
+                ConsumeSound::Direct {
+                    id: Identifier::parse(sound.get("sound_id")?.as_str()?)
+                        .ok()?
+                        .to_string(),
+                    // SoundEvent.DIRECT_CODEC uses lenientOptionalFieldOf("range").
+                    range: sound
+                        .get("range")
+                        .and_then(serde_json::Value::as_f64)
+                        .map(|range| range as f32),
+                }
+            };
+            Some(ConsumeEffect::PlaySound(holder))
         }),
         _ => None,
-    }
+    })
 }
 
 /// Admit custom effects from saved NBT, or install effects already decoded by
@@ -264,13 +287,16 @@ pub(crate) fn stack_effects(
                     .map_err(|error| error.to_string())?;
                 Arc::new(data)
             };
-            effects.push(ConsumeEffect::Native {
-                kind,
+            let binding = mod_vocab::__private::ConsumeEffectBinding::resolve(&kind);
+            effects.push(ConsumeEffect::Native(NativeConsumeEffect {
+                kind: Arc::from(kind),
                 data,
                 registered,
-            });
+                binding,
+            }));
         } else if let Some(effect) =
             parse_consume_effect(&sunrise_client_core::scoreboard::tag_to_json(entry))
+                .map_err(|error| error.to_string())?
         {
             effects.push(effect);
         }
@@ -298,7 +324,7 @@ pub struct ItemInfo {
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
     /// `consumable`: its timing, sound, particles and `on_consume_effects`.
-    pub consumable: Option<sunrise_world::consumable::Consumable<String, ConsumeEffect>>,
+    pub consumable: Option<Arc<ItemConsumable>>,
     /// Death protection effects decoded at definition load.
     pub death_protection: Option<Vec<ConsumeEffect>>,
     /// Kinetic pose timing decoded once from the shared item prototype.
@@ -3551,12 +3577,12 @@ mod consume_effect_tests {
             serde_json::json!({"on_consume_effects": [{"type": "mymod:charge", "amount": 42}]});
         let value = parse_consumable(&good).unwrap();
         let copy = value.clone();
-        let (ConsumeEffect::Native { data: a, .. }, ConsumeEffect::Native { data: b, .. }) =
+        let (ConsumeEffect::Native(a), ConsumeEffect::Native(b)) =
             (&value.effects[0], &copy.effects[0])
         else {
             panic!("native payload")
         };
-        assert!(Arc::ptr_eq(a, b));
+        assert!(Arc::ptr_eq(&a.data, &b.data));
     }
 
     #[test]
@@ -3565,24 +3591,76 @@ mod consume_effect_tests {
         // A mod's own kind: Native with its JSON.
         let native =
             parse_consume_effect(&v(r#"{"type":"mymod:energy_boost","amount":42}"#)).unwrap();
-        assert!(matches!(&native, ConsumeEffect::Native { kind, data, .. }
-            if kind == "mymod:energy_boost" && data.get("amount") == Some(&sunrise_core::nbt::Tag::Byte(42))));
+        assert!(matches!(&native, Some(ConsumeEffect::Native(effect))
+            if effect.kind.as_ref() == "mymod:energy_boost" && effect.data.get("amount") == Some(&sunrise_core::nbt::Tag::Byte(42))));
         // A bare vanilla name and its namespaced form are the same kind.
         let bare = parse_consume_effect(&v(
             r#"{"type":"apply_effects","effects":[{"id":"minecraft:speed","duration":100}]}"#,
         ))
         .unwrap();
-        assert!(matches!(bare, ConsumeEffect::ApplyEffects { .. }));
+        assert!(matches!(bare, Some(ConsumeEffect::ApplyEffects { .. })));
         let named = parse_consume_effect(
             &v(r#"{"type":"minecraft:apply_effects","effects":[{"id":"minecraft:speed","duration":100}]}"#),
         ).unwrap();
-        assert!(matches!(named, ConsumeEffect::ApplyEffects { .. }));
+        assert!(matches!(named, Some(ConsumeEffect::ApplyEffects { .. })));
         // An empty namespace is minecraft's too (`Identifier.bySeparator`).
         let empty = parse_consume_effect(&v(r#"{"type":":clear_all_effects"}"#)).unwrap();
-        assert!(matches!(empty, ConsumeEffect::ClearAllEffects));
+        assert!(matches!(empty, Some(ConsumeEffect::ClearAllEffects)));
         // An unknown minecraft: kind and a missing type are dropped.
-        assert!(parse_consume_effect(&v(r#"{"type":"minecraft:future"}"#)).is_none());
-        assert!(parse_consume_effect(&v(r#"{"amount":42}"#)).is_none());
+        assert!(
+            parse_consume_effect(&v(r#"{"type":"minecraft:future"}"#))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_consume_effect(&v(r#"{"amount":42}"#))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn play_sound_consume_effect_uses_lenient_optional_range() {
+        let v = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        assert_eq!(
+            parse_consume_effect(&v(
+                r#"{"type":"minecraft:play_sound","sound":"minecraft:entity.fox.eat"}"#,
+            ))
+            .unwrap(),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Registered(
+                "minecraft:entity.fox.eat".into(),
+            )))
+        );
+        assert_eq!(
+            parse_consume_effect(&v(
+                r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime","range":24.5}}"#,
+            ))
+            .unwrap(),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: Some(24.5),
+            }))
+        );
+        assert_eq!(
+            parse_consume_effect(&v(
+                r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime"}}"#,
+            ))
+            .unwrap(),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: None,
+            }))
+        );
+        assert_eq!(
+            parse_consume_effect(&v(
+                r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime","range":"oops"}}"#,
+            ))
+            .unwrap(),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: None,
+            }))
+        );
     }
 }
 

@@ -178,14 +178,12 @@ mod root {
             invoke(hook, name, owner.unwrap_or("unknown"), || drop(value));
         }
 
-        pub(super) fn listening_kind_owner(
-            hook: super::HookId,
-            kind: &str,
-        ) -> Option<&'static super::ModEntry> {
-            let (namespace, _) = kind.split_once(':')?;
-            super::listening(hook)
-                .map(|(_, entry)| entry)
-                .find(|entry| entry.id == namespace)
+        pub struct ConsumeEffectBinding(&'static dyn super::Hooks);
+        impl ConsumeEffectBinding {
+            pub(super) fn invoke(self, call: impl FnOnce(&dyn super::Hooks)) -> bool {
+                call(self.0);
+                true
+            }
         }
 
         pub(super) fn entered_with_id_matching<'a>(

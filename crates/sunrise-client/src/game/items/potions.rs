@@ -973,12 +973,12 @@ impl Game<'_> {
         let duration = self.use_duration;
         let remaining = duration.saturating_sub_unsigned(ticks);
         let ticks = ticks + 1;
-        let eye = self.eye_position().unwrap_or_default();
-        // Consumable.emitParticlesAndSounds: the drink sound every 4 ticks near the end.
-        if remaining > 0 && remaining <= 25 && remaining % 4 == 0 {
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio
-                .play("minecraft:entity.generic.drink", Some(eye), 0.5, pitch);
+        // ItemStack.onUseTick runs the consumable's own emission before the item's tick.
+        if remaining > 0
+            && let Some(consumable) = self.consumable(stack)
+            && consumable.should_emit(remaining)
+        {
+            self.emit_consume(&consumable, stack, 5);
         }
         // ItemStack.onUseTick: the item's own tick after the consumable's.
         if !self.item_on_use_tick(stack, ticks - 1) {
@@ -1002,6 +1002,10 @@ impl Game<'_> {
         let eye = self.eye_position().unwrap_or_default();
         self.using = None;
         self.send_use_item_complete();
+        let consumable = self.consumable(stack);
+        if let Some(consumable) = &consumable {
+            self.emit_consume(consumable, stack, 16);
+        }
         // Consumable.onConsume: the used statistic and the consume_item
         // trigger, with the stack as drunk (before it shrinks).
         self.award_stat("used", &stack.item, 1);
@@ -1022,7 +1026,9 @@ impl Game<'_> {
                 self.apply_effect_action(a);
             }
         }
-        self.apply_drink_effects(stack);
+        if let Some(consumable) = &consumable {
+            self.apply_drink_effects(stack, consumable);
+        }
         self.post_entity_event("minecraft:drink", sunrise_client::mobs::Who::Player);
         if !self.creative && self.stack_in(slot) == Some(stack) {
             self.consume_player_slot(slot, 1);

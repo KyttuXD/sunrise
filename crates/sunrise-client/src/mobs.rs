@@ -1985,6 +1985,8 @@ pub enum MobEvent {
     },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
+    /// The hostless fox tick's `PlaySoundConsumeEffect`, at the fox's block position.
+    ConsumeSound(crate::items::ConsumeSound, sunrise_core::position::BlockPos),
     /// `Level.playLocalSound`: a sound the client plays for itself, never
     /// sent by a server (a breeze's whirl and idle sounds).
     LocalSound(&'static str, [f64; 3], f32, f32),

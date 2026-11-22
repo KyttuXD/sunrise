@@ -53,8 +53,9 @@ An entry then reads `{type: "example:charge", points: 10}` in SNBT, in either
 `on_consume_effects` or `death_effects`. The example accepts an NBT `Int`;
 accept other numeric tag types in `load` if your data format calls for them.
 Implement `Hooks::consume_effect` to handle a consumable's `on_consume_effects`
-entry whose type is in your mod's namespace. Only that namespace's enabled
-subscriber receives it. The hook runs on the server thread for the consuming
+entry whose type is in your mod's namespace. Decoding the definition binds it to
+that namespace's subscriber; only that callback receives the entry while enabled.
+The hook runs on the server thread for the consuming
 player or mob, including potions, ominous bottles, and witch and trader drinks.
 Entries run in the stack's effective consumable list order, interleaved with
 built-in effects; stack patches can change or remove the list.
@@ -67,7 +68,14 @@ built-in effects; stack patches can change or remove the list.
 - Replacing the stack during an effect does not change what later entries see. The finish
   does not shrink a replacement or generate a remainder from the invalidated use.
 - You can apply effects, play sounds, teleport entities and drop items through the host.
-- An unclaimed kind does nothing.
+- Nested [`LivingRef::apply_consume_effect`](consumable-effects.md) calls run immediately,
+  even for the same kind. If your effect can call itself, give that chain a stopping condition.
+- An unclaimed kind reports a missing callback when applied. A panic in the consume callback
+  logs the mod's name, queues the mod error toast and disables only that callback for the rest
+  of the session. The remaining built-in and other mods' effects still run. An unwind from
+  delegated engine work propagates instead: it does not disable the calling consume callback
+  or resume this use. Other listeners keep their own panic containment, including those invoked
+  by `add_effect` or `heal`.
 - Consumable and death protection payloads are decoded once for item definitions
   and stack component patches. The event borrows the retained payload. Player death
   protection uses this hook; mob death protection does not dispatch it.

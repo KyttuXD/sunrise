@@ -67,6 +67,7 @@ impl Game<'_> {
         self.creatures.lan_sounds.push(NativeSound {
             dimension,
             sound: sound.to_owned(),
+            inline_range: None,
             at,
             source: source.index() as i32,
             volume,

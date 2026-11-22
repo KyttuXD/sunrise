@@ -137,6 +137,8 @@ pub(super) struct DyingDrops<'a> {
 pub(super) struct NativeSound {
     pub dimension: &'static str,
     pub sound: String,
+    /// A direct holder, with or without a fixed broadcast radius.
+    pub inline_range: Option<Option<f32>>,
     pub at: [f64; 3],
     pub source: i32,
     pub volume: f32,
@@ -2599,6 +2601,9 @@ impl Game<'_> {
                 }
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
+                }
+                MobEvent::ConsumeSound(sound, at) => {
+                    self.queue_consume_sound(&sound, at, mod_api::SoundSource::Neutral);
                 }
                 MobEvent::GameEvent {
                     event, at, source, ..

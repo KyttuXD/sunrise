@@ -347,7 +347,6 @@ sunrise-client game::composter::capability_tests::sided_composter_transactions_p
 sunrise-client game::consume::fox_consumption_hook_tests::fox_consumption_adapter_uses_full_host_and_preserves_listener_writes lib daily resources
 sunrise-client game::consume::fox_consumption_hook_tests::fox_tick_pauses_before_movement_and_next_actor_and_preserves_full_host_writes lib daily resources
 sunrise-client game::consume::teleport_hook_tests::consumption_hook_keeps_the_stack_before_use_and_cancellation_stops_attempts lib daily resources
-sunrise-client game::consume_effect_dispatch_tests::a_living_handle_dispatches_custom_kinds_with_same_kind_recursion_refused lib daily resources
 sunrise-client game::contained_fluid_tests::a_mod_container_draws_the_fluid_its_part_reports lib daily resources
 sunrise-client game::copper_golems::golem_gift_tests::a_gifted_poppy_is_a_guaranteed_drop lib daily resources
 sunrise-client game::copper_golems::golem_gift_tests::an_antenna_that_holds_an_item_keeps_it_and_its_chance lib daily resources
