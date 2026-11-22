@@ -1,4 +1,5 @@
 """Inventory is discovered, never a hand-maintained enumeration of source types."""
+import json
 import sys
 import tempfile
 import unittest
@@ -27,15 +28,18 @@ POLICIES = {
     "serde_json::Value": "iterative preflight before serde; wire/depth_tests.rs",
     "serde_json::Map": "iterative preflight before serde; wire/depth_tests.rs",
     "WalkedIngredient": "no Wire; private parser work tree",
-    "DatapackField": "generic 32; wire/depth_tests.rs",
-    "DatapackFieldKind": "generic 32; wire/depth_tests.rs",
-    "DatapackValue": "generic 32; wire/depth_tests.rs",
 }
 
 
 class RecursiveWire(unittest.TestCase):
     def test_every_cycle_has_a_policy(self):
-        self.assertEqual(set(POLICIES), set(recursive_types(extra_paths=[ROOT / "crates/sunrise-core/src/nbt.rs"])))
+        policies = dict(POLICIES)
+        topics = Path(__file__).with_name("recursive_wire_policies")
+        for path in sorted(topics.glob("*.json")):
+            topic = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(policies.keys() & topic.keys(), f"duplicate policy: {path.name}")
+            policies.update(topic)
+        self.assertEqual(set(policies), set(recursive_types(extra_paths=[ROOT / "crates/sunrise-core/src/nbt.rs"])))
 
     def test_discovers_direct_and_indirect_cycles_not_variant_names(self):
         with tempfile.TemporaryDirectory() as directory:
