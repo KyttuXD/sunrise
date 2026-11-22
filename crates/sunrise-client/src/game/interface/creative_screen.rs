@@ -80,8 +80,8 @@ impl Game<'_> {
         lines
     }
     /// `CreativeModeInventoryScreen.extractRenderState`: item slots share the
-    /// container screen's hover target for their highlight and tooltip.
-    pub(super) fn draw_creative(&mut self, batch: &mut HudBatch) {
+    /// container screen's hover target for their highlight and tooltip. False if no tab was drawn.
+    pub(super) fn draw_creative(&mut self, batch: &mut HudBatch) -> bool {
         // CreativeModeInventoryScreen: `CommonComponents.EMPTY` for a title.
         screen_info::begin_container("creative");
         let (ox, oy) = Self::creative_origin(batch);
@@ -89,7 +89,7 @@ impl Game<'_> {
         // Only what is drawn of the tabs: their stacks stay where they are.
         let tabs = self.creative_screen.tab_headers();
         let Some(tab) = tabs.get(selected.min(tabs.len().saturating_sub(1))) else {
-            return;
+            return false;
         };
         let tab_sprite = |t: &sunrise_client::creative::Tab, on: bool| {
             format!(
@@ -292,6 +292,7 @@ impl Game<'_> {
         if let Some(tooltip) = browser_tip {
             self.draw_mod_browser_tooltip(batch, tooltip);
         }
+        true
     }
     pub(super) fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
         let (ox, oy) = Self::creative_origin(batch);

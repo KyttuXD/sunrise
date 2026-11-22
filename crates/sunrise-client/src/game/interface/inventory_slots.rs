@@ -434,10 +434,11 @@ impl Game<'_> {
             self.draw_slot_item(batch, drag.as_ref(), i, &stack, ox + sx, oy + sy);
         }
     }
-    pub(super) fn draw_inventory(&mut self, batch: &mut HudBatch) {
+    /// True when the inventory painter ran, not a station without its side regions.
+    pub(super) fn draw_inventory(&mut self, batch: &mut HudBatch) -> bool {
         screen_info::begin_container("container");
         if self.draw_station(batch) {
-            return;
+            return false;
         }
         let (ox, oy) = self.inventory_origin(batch);
         {
@@ -623,6 +624,7 @@ impl Game<'_> {
         if let Some(tooltip) = browser_tip {
             self.draw_mod_browser_tooltip(batch, tooltip);
         }
+        true
     }
 }
 

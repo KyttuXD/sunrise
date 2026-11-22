@@ -5289,6 +5289,7 @@ impl Game<'_> {
             self.screen
         };
         let drawn = self.draw_screen_with_pre_hook(&mut batch);
+        let mut region_screen = None;
         match screen {
             _ if !drawn => {}
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
@@ -5333,12 +5334,16 @@ impl Game<'_> {
             Screen::HudEditor => self.draw_hud_editor(&mut batch),
             Screen::Inventory => {
                 let from = batch.vertices.len();
-                self.draw_inventory(&mut batch);
+                if self.draw_inventory(&mut batch) {
+                    region_screen = Some(Screen::Inventory);
+                }
                 self.draw_pad_menu_guide(&mut batch, from);
             }
             Screen::Creative => {
                 let from = batch.vertices.len();
-                self.draw_creative(&mut batch);
+                if self.draw_creative(&mut batch) {
+                    region_screen = Some(Screen::Creative);
+                }
                 self.draw_pad_menu_guide(&mut batch, from);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
@@ -5348,7 +5353,7 @@ impl Game<'_> {
         // tooltips, so a native mod draws over it here. Never `Playing`: the
         // prompts, books and sign editors drawn over gameplay keep it, draw
         // after this point and so over what a mod drew.
-        self.publish_screen_regions(&batch, drawn.then_some(screen));
+        self.publish_screen_regions(&batch, region_screen);
         self.draw_screen_with_post_hook(&mut batch);
         self.draw_saving_indicator(&mut batch);
         self.draw_every_toast(&mut batch, !show_hud);

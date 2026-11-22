@@ -646,14 +646,16 @@ impl Game<'_> {
     /// painted, or nothing when `screen_render_pre` cancelled the drawing.
     /// Called once the screen has drawn, before `screen_render_post`; the
     /// input hooks then read it until the next draw.
-    pub(super) fn publish_screen_regions(&mut self, batch: &HudBatch, drawn: Option<Screen>) {
+    pub(super) fn publish_screen_regions(
+        &mut self,
+        batch: &HudBatch,
+        region_screen: Option<Screen>,
+    ) {
         use mod_api::{ScreenRegion, ScreenRegionKind};
         let (_, mut regions) = std::mem::take(&mut self.screen_state.regions);
         regions.clear();
         let tabs = self.screen_state.drawn_book_tabs.take();
-        let shown = drawn.filter(|screen| {
-            matches!(screen, Screen::Inventory | Screen::Creative) && self.screen_view_listened()
-        });
+        let shown = region_screen.filter(|_| self.screen_view_listened());
         if let Some(screen) = shown
             && let Some(layout) = self.built_container(batch)
         {
@@ -1673,6 +1675,21 @@ mod tests {
                     }
                 }
                 assert_eq!(tabs, expected);
+
+                // AnvilScreen does not paint the inventory's EffectsInInventory panel.
+                game.set_mode_id(0);
+                game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
+                    "speed", 200, 0,
+                )];
+                game.remote_open_station(
+                    1,
+                    "minecraft:anvil".into(),
+                    crate::game::stations::Kind::Anvil,
+                    sunrise_client::text::Text::literal("Anvil"),
+                    [0; 3],
+                );
+                game.build_screen_at(small);
+                assert!(render(game, small).is_empty());
             });
         });
     }
