@@ -33,8 +33,10 @@ pub trait ItemsHost {
     /// nonblank raw title. Otherwise the item's name is used: a mod item's `ItemPart::item_name`
     /// answer replaces its default; `None` keeps it. Vanilla item overrides (such as potion
     /// contents or a profiled player head) participate in the item-name step; the base item uses
-    /// its `item_name` component or default prototype, and an explicitly removed `item_name`
-    /// reads empty. Only a fallback written into a component is kept.
+    /// the stack's `item_name` patch or inherits its prototype's value. A removal in the
+    /// stack's patch reads empty; if a mod item's prototype has no `item_name` (including
+    /// when the mod removes it), the game uses its item or block translation key. Only a
+    /// fallback written into a component is kept.
     /// It carries no rarity colour or italics (`getStyledHoverName` adds those). Each viewer
     /// renders a translatable in their own language; call `text_string` on it for a string in
     /// this side's language. An invalid stack is a [`TextFormError`].

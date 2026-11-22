@@ -110,9 +110,11 @@ means none). Runtime selection is not a persistent component. Drawing receives t
 custom name wins, then a written book's nonblank raw title. Otherwise the item's name is used:
 a mod item's `ItemPart::item_name` answer replaces its default; `None` keeps it. Vanilla item
 overrides (such as potion contents or a profiled player head) participate in the item-name step;
-the base item uses its `item_name` component or default prototype, and an explicitly removed
-`item_name` reads empty. Only a fallback written into a component is kept. It has no rarity
-colour or italics. Each player renders the component in their own language: put it into world
+the base item uses the stack's `item_name` patch or inherits its prototype's value.
+Removing `item_name` in the stack's patch gives an empty name. If a mod item's prototype
+has no `item_name` (including when the mod removes it), the game uses its item or block
+translation key instead. Only a fallback written into a component is kept. The result has
+no rarity colour or italics. Each player renders the component in their own language: put it into world
 text or a display as it is. Call `host.text_string(&name)` for a string in the language of the
 side that calls it. An invalid stack is a `TextFormError`.
 
