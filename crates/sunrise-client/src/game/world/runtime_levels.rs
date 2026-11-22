@@ -319,20 +319,8 @@ pub(super) fn runtime_biome_source_json(
 /// `InvalidBiomeSource` (malformed identifier, bounds, holder set or empty source).
 pub(super) fn classify_biome_source_error(error: BiomeSourceError) -> RuntimeLevelError {
     match error {
-        BiomeSourceError::Decode(DecodeError::Field(
-            "unknown biome"
-            | "unknown biome tag"
-            | "missing End biome"
-            | "unknown biome preset holder"
-            | "unknown built-in biome preset",
-        ))
+        BiomeSourceError::Decode(DecodeError::MissingRegistryEntry(_))
         | BiomeSourceError::MissingPreset => RuntimeLevelError::UnknownBiomeSource,
-        BiomeSourceError::Decode(DecodeError::Registry(msg))
-        | BiomeSourceError::Registered(msg)
-            if msg.starts_with("unknown biome") || msg.contains("names the unknown biome ") =>
-        {
-            RuntimeLevelError::UnknownBiomeSource
-        }
         _ => RuntimeLevelError::InvalidBiomeSource,
     }
 }

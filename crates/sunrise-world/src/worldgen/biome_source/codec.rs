@@ -79,33 +79,38 @@ impl BiomeSourceCatalog {
         })
     }
     fn biome(&self, raw: &RawValue) -> Result<String, DecodeError> {
-        let name = identifier(&serde_json::from_str::<String>(raw.get())?)?;
+        self.biome_id(&serde_json::from_str::<String>(raw.get())?)
+    }
+    fn biome_id(&self, name: &str) -> Result<String, DecodeError> {
+        let name = identifier(name)?;
         if !self.biomes.contains(&name) {
-            return Err(DecodeError::Field("unknown biome"));
+            return Err(DecodeError::MissingRegistryEntry(format!(
+                "unknown biome {name}"
+            )));
         }
         Ok(name)
+    }
+    fn tag_members(&self, name: &str) -> Result<(String, Vec<String>), DecodeError> {
+        let name = identifier(name)?;
+        let members = self.tags.get(&name).ok_or_else(|| {
+            DecodeError::MissingRegistryEntry(format!("unknown biome tag #{name}"))
+        })?;
+        Ok((name, members.clone()))
     }
     fn set(&self, raw: &RawValue) -> Result<BiomeSet, DecodeError> {
         // NeoForge's set objects resolve through the shared decoder, in set order;
         // a plain list keeps its own order (checkerboard reads it).
         if raw.get().starts_with('{') {
             let set: serde_json::Value = serde_json::from_str(raw.get())?;
-            return crate::holder_set::resolve(&set, self)
-                .map(|ids| BiomeSet::Direct(ids.into_iter().collect()))
-                .map_err(DecodeError::Registry);
+            return crate::holder_set::resolve(&set, self).map(BiomeSet::Direct);
         }
         if raw.get().starts_with('"') {
             let name: String = serde_json::from_str(raw.get())?;
             if let Some(name) = name.strip_prefix('#') {
-                let name = identifier(name)?;
-                let members = self
-                    .tags
-                    .get(&name)
-                    .ok_or(DecodeError::Field("unknown biome tag"))?
-                    .clone();
+                let (name, members) = self.tag_members(name)?;
                 return Ok(BiomeSet::Tag { name, members });
             }
-            return Ok(BiomeSet::Direct(vec![self.biome(raw)?]));
+            return Ok(BiomeSet::Direct(vec![self.biome_id(&name)?]));
         }
         let values: Vec<Box<RawValue>> = serde_json::from_str(raw.get())?;
         Ok(BiomeSet::Direct(
@@ -151,8 +156,11 @@ impl BiomeSourceCatalog {
                     "small_end_islands",
                     "end_barrens",
                 ] {
-                    if !self.biomes.contains(&format!("minecraft:{name}")) {
-                        return Err(DecodeError::Field("missing End biome"));
+                    let name = format!("minecraft:{name}");
+                    if !self.biomes.contains(&name) {
+                        return Err(DecodeError::MissingRegistryEntry(format!(
+                            "missing End biome {name}"
+                        )));
                     }
                 }
                 BiomeSourceDefinition::End
@@ -171,7 +179,9 @@ impl BiomeSourceCatalog {
                 if raw.get().starts_with('"') {
                     let name = identifier(&serde_json::from_str::<String>(raw.get())?)?;
                     if !self.presets.contains(&name) {
-                        return Err(DecodeError::Field("unknown biome preset holder"));
+                        return Err(DecodeError::MissingRegistryEntry(format!(
+                            "unknown biome preset holder {name}"
+                        )));
                     }
                     BiomeSourceDefinition::Preset {
                         name,
@@ -183,7 +193,9 @@ impl BiomeSourceCatalog {
                         required(&preset, "preset")?.get(),
                     )?)?;
                     if !matches!(name.as_str(), "minecraft:overworld" | "minecraft:nether") {
-                        return Err(DecodeError::Field("unknown built-in biome preset"));
+                        return Err(DecodeError::MissingRegistryEntry(format!(
+                            "unknown built-in biome preset {name}"
+                        )));
                     }
                     BiomeSourceDefinition::Preset { name, inline: true }
                 }
@@ -192,9 +204,7 @@ impl BiomeSourceCatalog {
                 // A mod's source: its possible biomes must be the world's.
                 LevelBiomeSource::resolve(&kind, mod_biome_sources(), 0, |name| {
                     self.biomes.contains(name).then_some(())
-                })
-                .ok_or_else(|| DecodeError::Registry(format!("unknown biome source {kind}")))?
-                .map_err(DecodeError::Registry)?;
+                })?;
                 BiomeSourceDefinition::Registered(kind)
             }
         })
@@ -302,27 +312,18 @@ fn point_json(point: &ParameterPoint) -> String {
     format!("{{{}}}", fields.join(","))
 }
 
-impl crate::holder_set::HolderLookup for BiomeSourceCatalog {
+impl crate::holder_set::HolderLookup<DecodeError> for BiomeSourceCatalog {
     type Id = String;
     fn what(&self) -> &str {
         "biome"
     }
-    fn entry(&self, id: &str) -> Result<Vec<String>, String> {
-        let id = identifier(id).map_err(|e| e.to_string())?;
-        if self.biomes.contains(&id) {
-            Ok(vec![id])
-        } else {
-            Err(format!("unknown biome {id}"))
-        }
+    fn entry(&self, id: &str) -> Result<Vec<String>, DecodeError> {
+        self.biome_id(id).map(|id| vec![id])
     }
-    fn tag(&self, tag: &str) -> Result<Vec<String>, String> {
-        let tag = identifier(tag).map_err(|e| e.to_string())?;
-        self.tags
-            .get(&tag)
-            .cloned()
-            .ok_or_else(|| format!("unknown biome tag #{tag}"))
+    fn tag(&self, tag: &str) -> Result<Vec<String>, DecodeError> {
+        self.tag_members(tag).map(|(_, members)| members)
     }
-    fn all(&self) -> Result<Vec<String>, String> {
+    fn all(&self) -> Result<Vec<String>, DecodeError> {
         Ok(self.biomes.iter().cloned().collect())
     }
 }

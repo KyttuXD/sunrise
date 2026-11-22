@@ -25,8 +25,6 @@ pub enum BiomeSourceError {
     Sample(SampleError),
     Regions(RegionError),
     MissingPreset,
-    /// A mod's biome source that is gone or no longer fits the world's biomes.
-    Registered(String),
 }
 impl std::fmt::Display for BiomeSourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -102,13 +100,12 @@ impl BiomeSourceDefinition {
                     presets.get(name).ok_or(BiomeSourceError::MissingPreset)?,
                 )?)
             }
-            Self::Registered(id) => ResolvedBiomeSource::Registered(
-                LevelBiomeSource::resolve(id, mod_biome_sources(), seed, |name| {
-                    Some(name.to_owned())
-                })
-                .ok_or_else(|| BiomeSourceError::Registered(format!("unknown biome source {id}")))?
-                .map_err(BiomeSourceError::Registered)?,
-            ),
+            Self::Registered(id) => ResolvedBiomeSource::Registered(LevelBiomeSource::resolve(
+                id,
+                mod_biome_sources(),
+                seed,
+                |name| Some(name.to_owned()),
+            )?),
         })
     }
 }

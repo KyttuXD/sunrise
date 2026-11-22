@@ -140,8 +140,8 @@ fn runtime_biome_source_validates_local_fields() {
 fn biome_source_admission_errors_separate_invalid_from_unknown() {
     use std::collections::{BTreeMap, BTreeSet};
     use sunrise_world::worldgen::{
-        DecodeError,
         biome_source::{BiomeSourceCatalog, BiomeSourceError},
+        mod_biome_sources::{LevelBiomeSource, ModBiomeSource, ModBiomeSources},
     };
     let biomes = BTreeSet::from(["minecraft:plains".into(), "minecraft:desert".into()]);
     let tags = BTreeMap::from([(
@@ -159,11 +159,13 @@ fn biome_source_admission_errors_separate_invalid_from_unknown() {
     };
     for invalid in [
         r#"{"type":"minecraft:fixed","biome":"BAD!ID"}"#,
+        r#"{"type":"minecraft:fixed","biome":"test:bad names the unknown biome test:missing"}"#,
         r#"{"type":"minecraft:fixed","biome":""}"#,
         r##"{"type":"minecraft:checkerboard","biomes":"#BAD!TAG","scale":0}"##,
         r#"{"type":"minecraft:checkerboard","biomes":[],"scale":0}"#,
         r#"{"type":"minecraft:checkerboard","biomes":["minecraft:plains"],"scale":63}"#,
         r#"{"type":"minecraft:checkerboard","biomes":{"type":"neoforge:or"},"scale":0}"#,
+        r#"{"type":"minecraft:checkerboard","biomes":{"type":"neoforge:or","values":["test:bad names the unknown biome test:missing"]}}"#,
         r#"{"type":"minecraft:multi_noise","preset":"BAD!ID"}"#,
     ] {
         assert_eq!(
@@ -175,6 +177,7 @@ fn biome_source_admission_errors_separate_invalid_from_unknown() {
     for unknown in [
         r#"{"type":"minecraft:fixed","biome":"mymod:missing"}"#,
         r##"{"type":"minecraft:checkerboard","biomes":"#mymod:missing","scale":0}"##,
+        r#"{"type":"minecraft:checkerboard","biomes":{"type":"neoforge:or","values":["test:missing"]}}"#,
         r#"{"type":"minecraft:multi_noise","preset":"mymod:missing"}"#,
         r#"{"type":"minecraft:the_end"}"#,
         r#"{"type":"mymod:missing_source"}"#,
@@ -185,18 +188,30 @@ fn biome_source_admission_errors_separate_invalid_from_unknown() {
             "{unknown}"
         );
     }
-    assert_eq!(
-        classify_biome_source_error(BiomeSourceError::Decode(DecodeError::Registry(
-            "biome source test:empty lists no biome".into(),
-        ))),
-        RuntimeLevelError::InvalidBiomeSource
-    );
-    assert_eq!(
-        classify_biome_source_error(BiomeSourceError::Decode(DecodeError::Registry(
-            "biome source test:bad names the unknown biome test:missing".into(),
-        ))),
-        RuntimeLevelError::UnknownBiomeSource
-    );
+    struct Source(Vec<String>);
+    impl ModBiomeSource for Source {
+        fn possible_biomes(&self) -> &[String] {
+            &self.0
+        }
+        fn noise_biome(&self, _: [i32; 3], _: i64) -> u16 {
+            unreachable!("a refused source is not sampled")
+        }
+    }
+    for (entries, expected) in [
+        (vec![], RuntimeLevelError::InvalidBiomeSource),
+        (
+            vec!["test:missing".into()],
+            RuntimeLevelError::UnknownBiomeSource,
+        ),
+    ] {
+        let sources = ModBiomeSources::from([(
+            "test:source".into(),
+            Arc::new(Source(entries)) as Arc<dyn ModBiomeSource>,
+        )]);
+        let error =
+            LevelBiomeSource::<()>::resolve("test:source", &sources, 0, |_| None).unwrap_err();
+        assert_eq!(classify_biome_source_error(error.into()), expected);
+    }
     assert_eq!(
         classify_biome_source_error(BiomeSourceError::MissingPreset),
         RuntimeLevelError::UnknownBiomeSource
@@ -249,9 +264,18 @@ fn biome_source_admission_errors_separate_invalid_from_unknown() {
 #[test]
 #[ignore = "daily"]
 fn a_runtime_checkerboard_resolves_tags_before_admission_and_uses_their_biomes() {
+    use super::native_entity_refs::tests::run_fresh_cases;
     use sunrise_world::worldgen::mod_generators::{
         ChunkAccess, ModChunkGenerator, ModChunkGenerators,
     };
+    // Opening the level publishes its id in the process-wide dimension table.
+    if run_fresh_cases(
+        "game::runtime_levels_tests::a_runtime_checkerboard_resolves_tags_before_admission_and_uses_their_biomes",
+        "SUNRISE_RUNTIME_CHECKERBOARD_CHILD",
+        &["admission"],
+    ) {
+        return;
+    }
     struct Terrain;
     impl ModChunkGenerator for Terrain {
         fn build_terrain(&self, _: &mut dyn ChunkAccess) {}
@@ -289,6 +313,21 @@ fn a_runtime_checkerboard_resolves_tags_before_admission_and_uses_their_biomes()
             game.runtime_level_queue_open(
                 "checker:level",
                 level(vec!["BAD!ID".into()]),
+                &generators,
+            ),
+            Err(RuntimeLevelError::InvalidBiomeSource)
+        );
+        assert_eq!(
+            game.runtime_level_queue_open(
+                "checker:level",
+                RuntimeLevel::new(
+                    "minecraft:overworld",
+                    RuntimeGenerator::Mod("checker:test".into()),
+                    0,
+                )
+                .with_biome_source(RuntimeBiomeSource::Fixed(
+                    "test:bad names the unknown biome test:missing".into(),
+                )),
                 &generators,
             ),
             Err(RuntimeLevelError::InvalidBiomeSource)

@@ -280,8 +280,8 @@ mod tests {
             LevelBiomeSource::resolve(name, sources, seed, |name| {
                 biome_id(name).map(|_| name.to_owned())
             })
-            .unwrap_or_else(|| Err(format!("unknown biome source {name}")))
             .map(ResolvedBiomeSource::Registered)
+            .map_err(|e| e.to_string())
         } else {
             let biomes: BTreeSet<_> = [
                 "plains",

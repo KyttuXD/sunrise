@@ -8,22 +8,25 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// One registry, as a reader binds it: what an id and a tag resolve to.
-pub trait HolderLookup {
+pub trait HolderLookup<E = String> {
     type Id: Ord + Clone;
     /// The registry's entry noun in errors (`biome`, `block`, `item`...).
     fn what(&self) -> &str;
     /// The members one entry id stands for (a block stands for all its states).
-    fn entry(&self, id: &str) -> Result<Vec<Self::Id>, String>;
+    fn entry(&self, id: &str) -> Result<Vec<Self::Id>, E>;
     /// A tag's members; `tag` has no `#`.
-    fn tag(&self, tag: &str) -> Result<Vec<Self::Id>, String>;
+    fn tag(&self, tag: &str) -> Result<Vec<Self::Id>, E>;
     /// Every entry: what `any` holds and what `not` takes its value from.
-    fn all(&self) -> Result<Vec<Self::Id>, String>;
+    fn all(&self) -> Result<Vec<Self::Id>, E>;
 }
 
 /// The members `value` names in `lookup`'s registry, in holder-set order
 /// without repeats: `or` concatenates its values, `and` keeps its first
-/// value's order, `any` and `not` follow `all`.
-pub fn resolve<L: HolderLookup + ?Sized>(value: &Value, lookup: &L) -> Result<Vec<L::Id>, String> {
+/// value's order, `any` and `not` follow `all`. Lookup failures keep their error type.
+pub fn resolve<L: HolderLookup<E> + ?Sized, E: From<String>>(
+    value: &Value,
+    lookup: &L,
+) -> Result<Vec<L::Id>, E> {
     Ok(match value {
         Value::String(name) => unique(match name.strip_prefix('#') {
             Some(tag) => lookup.tag(tag)?,
@@ -79,10 +82,12 @@ pub fn resolve<L: HolderLookup + ?Sized>(value: &Value, lookup: &L) -> Result<Ve
                         .filter(|id| !inner.contains(id))
                         .collect()
                 }
-                _ => return Err(format!("{} set type {kind:?} is not read", lookup.what())),
+                _ => {
+                    return Err(format!("{} set type {kind:?} is not read", lookup.what()).into());
+                }
             }
         }
-        _ => return Err(format!("not a {} id, tag or list", lookup.what())),
+        _ => return Err(format!("not a {} id, tag or list", lookup.what()).into()),
     })
 }
 
