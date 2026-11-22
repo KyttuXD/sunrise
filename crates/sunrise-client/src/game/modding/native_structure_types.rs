@@ -5,7 +5,7 @@ use mod_api::{
     BiomeId, BlockKey, BlockMetadata, BlockState, ChunkPos, GenerationContext, HeightmapType,
     NoiseBlock, NoiseColumn, PieceContext, RandomSource, StructurePiece, StructureType,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use sunrise_core::{
     bounding_box::BoundingBox,
     nbt::{Compound, Tag},
@@ -255,34 +255,14 @@ impl PieceContext for Placing<'_> {
     }
     fn entity(&mut self, nbt: Compound) {
         CallbackOwner::call_engine(|| {
-            let pos = match nbt.get(&"Pos".into()) {
-                Some(Tag::List(coords)) if coords.len() == 3 => {
-                    match (&coords[0], &coords[1], &coords[2]) {
-                        (Tag::Double(x), Tag::Double(y), Tag::Double(z)) => {
-                            Some([f64::from_bits(*x), f64::from_bits(*y), f64::from_bits(*z)])
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
             if let Err(error) = self.world.entity(nbt) {
-                match pos {
-                    Some(pos) => log::error!(
-                        "mod {}: structure piece {} entity at {pos:?} in chunk ({}, {}) failed: {error}",
-                        self.mod_id,
-                        self.type_id,
-                        self.chunk.x,
-                        self.chunk.z,
-                    ),
-                    None => log::error!(
-                        "mod {}: structure piece {} entity in chunk ({}, {}) failed: {error}",
-                        self.mod_id,
-                        self.type_id,
-                        self.chunk.x,
-                        self.chunk.z,
-                    ),
-                }
+                log::error!(
+                    "mod {}: structure piece {} entity in chunk ({}, {}) failed: {error}",
+                    self.mod_id,
+                    self.type_id,
+                    self.chunk.x,
+                    self.chunk.z,
+                );
             }
         })
     }
@@ -315,7 +295,6 @@ pub(crate) struct Adapter {
     load_piece: CallbackOwner,
     bounding_box: CallbackOwner,
     beardifier: CallbackOwner,
-    add_additional_save_data: CallbackOwner,
     post_process: CallbackOwner,
     after_place: CallbackOwner,
 }
@@ -357,7 +336,7 @@ impl ModStructureType for Adapter {
             .pieces
             .into_iter()
             .filter_map(|piece| {
-                ModPiece::new(self, piece).map(|piece| {
+                ModPiece::new(self, piece, None).map(|piece| {
                     Box::new(piece)
                         as Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece>
                 })
@@ -390,7 +369,7 @@ impl ModStructureType for Adapter {
             }
         };
         let piece: Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece> =
-            Box::new(ModPiece::new(self, piece)?);
+            Box::new(ModPiece::new(self, piece, Some(tag.clone()))?);
         Some(piece)
     }
 }
@@ -433,13 +412,19 @@ struct ModPiece {
     ty: Arc<dyn StructureType>,
     id: &'static str,
     add_additional_save_data: CallbackOwner,
+    /// Last complete serialization of this piece, never a mod's partial output.
+    saved_tag: Mutex<Option<Compound>>,
     post_process: CallbackOwner,
     after_place: CallbackOwner,
 }
 impl ModPiece {
     /// Adapt a mod piece at generation or load: obtain its immutable bounding box and
     /// beardifier metadata under their callback owners, skipping the piece on failure.
-    fn new(adapter: &Adapter, piece: Arc<dyn StructurePiece>) -> Option<Self> {
+    fn new(
+        adapter: &Adapter,
+        piece: Arc<dyn StructurePiece>,
+        saved_tag: Option<Compound>,
+    ) -> Option<Self> {
         let bounding_box = adapter
             .bounding_box
             .call("structure piece", "StructurePiece::bounding_box", || {
@@ -459,7 +444,8 @@ impl ModPiece {
             beardifier,
             ty: adapter.inner.clone(),
             id: adapter.id,
-            add_additional_save_data: adapter.add_additional_save_data.clone(),
+            add_additional_save_data: CallbackOwner::for_mod(adapter.load_piece.id()),
+            saved_tag: Mutex::new(saved_tag),
             post_process: adapter.post_process.clone(),
             after_place: adapter.after_place.clone(),
         })
@@ -482,15 +468,20 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
             None,
             0,
         );
-        self.add_additional_save_data
-            .call(
-                "structure piece",
-                "StructurePiece::add_additional_save_data",
-                || self.piece.add_additional_save_data(&mut tag),
-            )
-            .map_err(|_| {
-                sunrise_world::worldgen::structure::legacy::PieceSaveError::Callback(None)
-            })?;
+        let saved = self.add_additional_save_data.call(
+            "structure piece",
+            "StructurePiece::add_additional_save_data",
+            || self.piece.add_additional_save_data(&mut tag),
+        );
+        let mut previous = self.saved_tag.lock().unwrap();
+        if saved.is_err() {
+            return Err(
+                sunrise_world::worldgen::structure::legacy::PieceSaveError::Callback(
+                    previous.clone(),
+                ),
+            );
+        }
+        *previous = Some(tag.clone());
         Ok(tag)
     }
     fn post_process(
@@ -562,7 +553,6 @@ impl Adapter {
             load_piece: CallbackOwner::for_mod(mod_id),
             bounding_box: CallbackOwner::for_mod(mod_id),
             beardifier: CallbackOwner::for_mod(mod_id),
-            add_additional_save_data: CallbackOwner::for_mod(mod_id),
             post_process: CallbackOwner::for_mod(mod_id),
             after_place: CallbackOwner::for_mod(mod_id),
         }

@@ -881,22 +881,31 @@ pub struct StructureStart {
     pub(crate) has_piece_beardifier: bool,
 }
 impl StructureStart {
-    /// `StructureStart.createTag` in its own chunk; None while one of its
-    /// pieces cannot be saved. `references` counts `addReference` calls,
-    /// which only locating structures makes: 0 in a freshly made world.
+    /// `StructureStart.createTag` in its own chunk. An unsupported built-in piece leaves the
+    /// whole start unencoded. Native callback failures omit only their own incomplete data.
     pub fn save(&self) -> Option<sunrise_core::nbt::Tag> {
+        use super::legacy::PieceSaveError;
         use sunrise_core::nbt::Tag;
-        let children: Option<Vec<Tag>> = self
-            .pieces
-            .iter()
-            .map(|p| p.save().ok().map(Tag::Compound))
-            .collect();
+        let mut children = Vec::with_capacity(self.pieces.len());
+        let mut unsupported = false;
+        for piece in &self.pieces {
+            match piece.save() {
+                Ok(tag) | Err(PieceSaveError::Callback(Some(tag))) => {
+                    children.push(Tag::Compound(tag));
+                }
+                Err(PieceSaveError::Callback(None)) => {}
+                Err(PieceSaveError::Unsupported) => unsupported = true,
+            }
+        }
+        if unsupported {
+            return None;
+        }
         Some(Tag::compound([
             ("id", Tag::String(self.name.as_str().into())),
             ("ChunkX", Tag::Int(self.chunk.x)),
             ("ChunkZ", Tag::Int(self.chunk.z)),
             ("references", Tag::Int(self.references)),
-            ("Children", Tag::List(children?)),
+            ("Children", Tag::List(children)),
         ]))
     }
 }

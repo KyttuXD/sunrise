@@ -1280,8 +1280,8 @@ fn piece_metadata_and_save_panics_stay_local_and_debug_skips_mod_fmt() {
     let debug = format!("{:?}", pieces[0]);
     assert!(debug.contains("ModPiece") && debug.contains("testmod:hostile"));
     assert!(pieces[0].save().is_err());
-    assert!(pieces[1].save().is_err());
-    assert_eq!(save_calls.load(Ordering::SeqCst), 1);
+    assert!(pieces[1].save().is_ok());
+    assert_eq!(save_calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         pieces[0].bounding_box(),
         BoundingBox::new([1, 64, 2], [3, 66, 4])

@@ -550,24 +550,13 @@ impl Decoration {
             }
         }
         for (pos, nbt) in std::mem::take(&mut world.block_entities) {
-            let index = ((pos[2] >> 4).wrapping_sub(center.z) + 1) * 3
-                + (pos[0] >> 4).wrapping_sub(center.x)
-                + 1;
-            if let Some(chunk) = usize::try_from(index).ok().and_then(|i| region.get_mut(i)) {
-                chunk.block_entities.push((pos, nbt));
+            if let Some(index) = nearby_slot(center, ChunkPos::new(pos[0] >> 4, pos[2] >> 4)) {
+                region[index].block_entities.push((pos, nbt));
             }
         }
-        // WorldGenRegion.addFreshEntity: into the chunk holding the position.
-        for nbt in std::mem::take(&mut world.entities) {
-            let Some(at) = block_of(&nbt) else {
-                continue;
-            };
-            let index = ((at[2] >> 4).wrapping_sub(center.z) + 1) * 3
-                + (at[0] >> 4).wrapping_sub(center.x)
-                + 1;
-            if let Some(chunk) = usize::try_from(index).ok().and_then(|i| region.get_mut(i)) {
-                chunk.entities.push(nbt);
-            }
+        // Destination and writability were checked before entity finalization.
+        for (index, nbt) in std::mem::take(&mut world.entities) {
+            region[index].entities.push(nbt);
         }
         for terrain in world.region.into_chunks() {
             let p = terrain.position();
@@ -691,7 +680,7 @@ impl World<'_> {
 struct World<'a> {
     full: Vec<ChunkPos>,
     block_entities: Vec<([i32; 3], sunrise_core::nbt::Compound)>,
-    entities: Vec<sunrise_core::nbt::Compound>,
+    entities: Vec<(usize, sunrise_core::nbt::Compound)>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
     structure_mobs: Option<Arc<dyn super::generator::StructureMobs>>,
     starts: Vec<Arc<super::structure::start::StructureStart>>,
@@ -1242,10 +1231,18 @@ impl PlacementContext for World<'_> {
         &mut self,
         mut nbt: sunrise_core::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
+        let at = block_of(&nbt).ok_or_else(|| query("entity is missing a valid Pos"))?;
+        let chunk = ChunkPos::new(at[0] >> 4, at[2] >> 4);
+        let index =
+            nearby_slot(self.center, chunk).ok_or(RegionError::MissingChunk([chunk.x, chunk.z]))?;
+        self.region.chunk(chunk.x, chunk.z)?;
+        // ImposterProtoChunk.addEntity is a no-op when !allowWrites.
+        if self.is_full_chunk(at) {
+            return Ok(());
+        }
         if let Some(mobs) = self.structure_mobs.clone()
             && nbt.contains_key(&"sunrise:finalize".into())
         {
-            let at = block_of(&nbt).unwrap_or([0; 3]);
             let biome = self
                 .biome_identity(at)
                 .ok()
@@ -1262,7 +1259,7 @@ impl PlacementContext for World<'_> {
                 nbt.remove(&"sunrise:finalize".into());
             }
         }
-        self.entities.push(nbt);
+        self.entities.push((index, nbt));
         Ok(())
     }
     /// SpikeFeature.placeSpike: the crystal is a fresh entity of the region,
@@ -1297,6 +1294,11 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         nbt: sunrise_core::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
+        self.region.chunk(position[0] >> 4, position[2] >> 4)?;
+        // ImposterProtoChunk.setBlockEntity is a no-op when !allowWrites.
+        if self.is_full_chunk(position) {
+            return Ok(());
+        }
         self.block_entities.retain(|(p, _)| *p != position);
         self.block_entities.push((position, nbt));
         Ok(())
@@ -1656,15 +1658,23 @@ impl PlacementContext for World<'_> {
     }
 }
 
+/// Row-major slot in the decoration write neighborhood, checking each axis before flattening.
+fn nearby_slot(center: ChunkPos, chunk: ChunkPos) -> Option<usize> {
+    let dx = i64::from(chunk.x) - i64::from(center.x) + 1;
+    let dz = i64::from(chunk.z) - i64::from(center.z) + 1;
+    ((0..3).contains(&dx) && (0..3).contains(&dz)).then_some((dz * 3 + dx) as usize)
+}
+
 /// The block an entity's `Pos` is in.
 fn block_of(nbt: &sunrise_core::nbt::Compound) -> Option<[i32; 3]> {
-    let Some(sunrise_core::nbt::Tag::List(p)) = nbt.get(&"Pos".into()) else {
+    use sunrise_core::nbt::Tag;
+    let Tag::List(coords) = nbt.get(&"Pos".into())? else {
         return None;
     };
-    Some(std::array::from_fn(|i| match p.get(i) {
-        Some(sunrise_core::nbt::Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
-        _ => 0,
-    }))
+    let [Tag::Double(x), Tag::Double(y), Tag::Double(z)] = coords.as_slice() else {
+        return None;
+    };
+    Some([*x, *y, *z].map(|bits| f64::from_bits(bits).floor() as i32))
 }
 
 /// Marks `feature` in a biome's feature bitset (one bit per feature identity).
@@ -1806,6 +1816,36 @@ mod tests {
             floor_bounds: [None; 9],
             shape_capture: Default::default(),
         };
+        use sunrise_core::nbt::{Compound, Tag};
+        let entity_at = |pos: [i32; 3]| {
+            Compound::from([(
+                "Pos".into(),
+                Tag::List(pos.map(|n| Tag::Double(f64::from(n).to_bits())).to_vec()),
+            )])
+        };
+        let missing = [32, 0, 0]; // the old flattened index aliased a valid southwest slot
+        for result in [
+            world.add_entity(entity_at(missing)),
+            world.set_block_entity(missing, Compound::new()),
+        ] {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("MissingChunk([2, 0])")
+            );
+        }
+        let full = [-16, 0, 0];
+        world.add_entity(entity_at(full)).unwrap();
+        world.set_block_entity(full, Compound::new()).unwrap();
+        assert!(world.entities.is_empty());
+        assert!(world.block_entities.is_empty());
+        let open = [16, 0, 0];
+        world.add_entity(entity_at(open)).unwrap();
+        world.set_block_entity(open, Compound::new()).unwrap();
+        assert_eq!(world.entities.len(), 1);
+        assert_eq!(world.block_entities.len(), 1);
+
         let retrogen = BelowZeroRetrogen::new(ChunkStatus::Features, Vec::new()).unwrap();
         world
             .region

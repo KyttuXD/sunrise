@@ -42,9 +42,10 @@ with a log and error toast while leaving other operations and structure types ac
 `StructureError`s log the registering mod, structure type (and chunk for placement) and full
 native source chain each time and end only that piece load or invocation without undoing
 completed writes or draws or disabling later pieces, `after_place` or later chunks. Piece
-`bounding_box` and `beardifier` are queried once at generation or load, failed saves emit no
-partial tag, and `PieceContext` write/entity/block-entity failures log position and cause while
-keeping chunk-box clipping and unchanged-state results quiet.
+`bounding_box` and `beardifier` are queried once at generation or load. A failed save disables
+only that piece's save callback: it preserves any previous complete tag and the other pieces.
+`PieceContext` operations resolve the exact destination before any effects, as in
+`WorldGenRegion.addFreshEntity` and `ImposterProtoChunk.addEntity` / `setBlockEntity`.
 """
 migrate = """
 Error wrappers (`type:FeatureError`, `type:FeatureError.0`, `handle:FeatureError::new`,
@@ -97,5 +98,18 @@ Structure callbacks (behavior-only `method:StructureType::find_generation_point`
 - `bounding_box` and `beardifier` are queried once when a piece is generated or loaded and cached
   on the engine piece; unordered beardifier bounds are warned and add no terrain adjustment.
 - Panics are isolated per operation per registration and disable only that operation for the
-  session with a log and error toast; a panic in `add_additional_save_data` emits no partial tag.
+  session with a log and error toast. A panic in `add_additional_save_data` disables that piece's
+  save callback, not other pieces of the type. It emits no partial tag, keeps that piece's last
+  complete tag if one exists, and does not prevent saving healthy siblings.
+
+Piece operations (behavior-only `method:PieceContext::set_block`, `method:PieceContext::entity`,
+`method:PieceContext::block_entity`):
+- `context.set_block(pos, state)` -> branch on the owning world's boolean. `false` no longer
+  implies that a write happened because the legacy helper completed. It can mean that the
+  position was clipped to the chunk box, the state was already present on a live level, or
+  the write was refused. Clipping and unchanged-state results are quiet.
+- Keep `context.entity(nbt)` and `context.block_entity(pos, nbt)` as calls returning `()`.
+  They no longer enqueue data for a missing destination: that operation logs a refusal, and
+  an imposter full chunk is left untouched. A logged write failure does not end the piece or
+  undo any previous block, entity or block-entity writes or random draws.
 """

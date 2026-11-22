@@ -1655,7 +1655,16 @@ fn encode_full(
         if !starts.is_empty()
             && let Some(Tag::Compound(s)) = map.get_mut(&"structures".into())
         {
-            s.insert("starts".into(), Tag::Compound(starts));
+            // Some starts are only available as saved data. Replace the entries that
+            // produced complete records, not the whole on-disk registry for the chunk.
+            let stored = s
+                .entry("starts".into())
+                .or_insert(Tag::Compound(Compound::new()));
+            if let Tag::Compound(stored) = stored {
+                stored.extend(starts);
+            } else {
+                *stored = Tag::Compound(starts);
+            }
         }
         map.entry("PostProcessing".into())
             .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); shape.section_count()]));
