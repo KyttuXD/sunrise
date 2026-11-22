@@ -336,17 +336,25 @@ pub(super) fn first_frame(
 }
 /// `image` inside a one-texel border copied from its opposite edges, the
 /// texels repeat addressing reads past each edge.
-pub(super) fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
-    let (bw, bh) = (w + 2, h + 2);
-    let mut out = Vec::with_capacity((bw * bh * 4) as usize);
-    for y in 0..bh {
-        let row = (y + h - 1) % h;
-        for x in 0..bw {
-            let at = ((row * w + (x + w - 1) % w) * 4) as usize;
+pub(super) fn wrap_border((name, w, h, data): &PackedImage) -> Result<PackedImage> {
+    let invalid = "sprite border exceeds the RGBA8 address space";
+    let (bw, bh) = (
+        w.checked_add(2).ok_or(invalid)?,
+        h.checked_add(2).ok_or(invalid)?,
+    );
+    let len = rgba_len([bw, bh]).ok_or(invalid)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)?;
+    let w = *w as usize;
+    let h = *h as usize;
+    for y in 0..bh as usize {
+        let row = (y + h - 1) % h * w;
+        for x in 0..bw as usize {
+            let at = (row + (x + w - 1) % w) * 4;
             out.extend_from_slice(&data[at..at + 4]);
         }
     }
-    (name.clone(), bw, bh, out)
+    Ok((name.clone(), bw, bh, out))
 }
 
 /// The texture of every `bitmap` font provider. A provider's `file` may name

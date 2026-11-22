@@ -1450,6 +1450,7 @@ pub fn render_hud(
         &frame.atlas,
         &sampler,
         false,
+        Vec::new(),
     )
     .map_err(|error| error.to_string())?;
     // As the game's renderer has it (gfx.rs): the batch's atlas patches, a map's or a mod's

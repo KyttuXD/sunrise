@@ -37,7 +37,14 @@ impl Game<'_> {
         };
         let flags = self.gui.atlas.flags.get(name).copied();
         let sampling = flags.map_or(0, sampling);
-        draw.push(corners, uv, [r.u0, r.v0, r.u1, r.v1], argb, sampling)
+        draw.push_on_atlas(
+            corners,
+            uv,
+            [r.u0, r.v0, r.u1, r.v1],
+            argb,
+            sampling,
+            self.gui.atlas.texture_atlas_page(name),
+        )
     }
     /// `DebugRenderer.refreshRendererList`: replace the active callbacks with newly collected
     /// ones whose entries are on. Runs at start, at login and when the selection changes.

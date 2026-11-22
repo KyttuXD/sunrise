@@ -928,17 +928,34 @@ fn paint_with<'a>(
                     r.v0 = v0;
                 }
                 let at = [*x as f32, *y as f32, *w as f32, *h as f32];
+                let draw = |batch: &mut crate::hud::HudBatch,
+                            name: &str,
+                            r,
+                            [x, y, w, h],
+                            color| {
+                    let start = batch.vertices.len();
+                    batch.rect_uv(x, y, w, h, r, color);
+                    if *blend == Blend::Crosshair {
+                        if let Some(page) = atlas.gui_atlas_page(name) {
+                            batch.blend_since(
+                                start,
+                                crate::hud::Blend::AtlasPage(page, crate::hud::AtlasBlend::Invert),
+                            );
+                        } else {
+                            batch.invert_since(start);
+                        }
+                    } else {
+                        batch.bind_gui_atlas(start, atlas, name);
+                    }
+                };
                 match crate::hud::sprite_modifiers::draws(atlas, sprite, r, at, abgr(*color)) {
                     // A Polytone screen sprite modifier: the sprite changed, then its overlays.
                     Some(draws) => {
                         for d in draws {
-                            batch.rect_uv(d.at[0], d.at[1], d.at[2], d.at[3], d.rect, d.color);
+                            draw(batch, &d.key, d.rect, d.at, d.color);
                         }
                     }
-                    None => batch.rect_uv(at[0], at[1], at[2], at[3], r, abgr(*color)),
-                }
-                if *blend == Blend::Crosshair {
-                    batch.invert_since(start);
+                    None => draw(batch, sprite, r, at, abgr(*color)),
                 }
             }
             GuiDraw::AtlasSprite {
@@ -978,11 +995,22 @@ fn paint_with<'a>(
                 r.u0 = u0;
                 r.v0 = v0;
                 batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, abgr(*color));
-                match blend {
-                    Blend::Textured => {}
-                    Blend::Vignette => batch.blend_since(start, crate::hud::Blend::Vignette),
-                    Blend::Nausea => batch.blend_since(start, crate::hud::Blend::Additive),
-                    Blend::Crosshair => batch.invert_since(start),
+                if let Some(page) = atlas.blit_atlas_page(texture.as_ref()) {
+                    use crate::hud::AtlasBlend;
+                    let blend = match blend {
+                        Blend::Textured => AtlasBlend::Alpha,
+                        Blend::Vignette => AtlasBlend::Vignette,
+                        Blend::Nausea => AtlasBlend::Additive,
+                        Blend::Crosshair => AtlasBlend::Invert,
+                    };
+                    batch.blend_since(start, crate::hud::Blend::AtlasPage(page, blend));
+                } else {
+                    match blend {
+                        Blend::Textured => {}
+                        Blend::Vignette => batch.blend_since(start, crate::hud::Blend::Vignette),
+                        Blend::Nausea => batch.blend_since(start, crate::hud::Blend::Additive),
+                        Blend::Crosshair => batch.invert_since(start),
+                    }
                 }
             }
             GuiDraw::Item {

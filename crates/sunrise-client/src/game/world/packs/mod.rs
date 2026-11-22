@@ -564,7 +564,10 @@ impl Game<'_> {
                     self.options.offscreen,
                     &pack,
                     &gui,
-                    self.renderer.as_ref(),
+                    self.renderer.as_ref().map_or(
+                        sunrise_client::gfx::RendererDevice::New,
+                        sunrise_client::gfx::RendererDevice::Reuse,
+                    ),
                     Some(textures),
                     self.settings.sunrise.api,
                     self.settings.sunrise.translucent_batching,

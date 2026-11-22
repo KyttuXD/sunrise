@@ -447,10 +447,36 @@ mod tests {
     }
 
     #[test]
+    fn a_larger_opened_device_restitches_even_when_the_provisional_hud_fits() {
+        let def = r#"{"sources":[{"type":"single","resource":"demo:wide","sprite":"demo:wide"}]}"#;
+        let staged = stage_texture_atlases(
+            root(&[
+                ("assets/demo/atlases/icons.json", def.into()),
+                ("assets/demo/textures/wide.png", fixture_png(4097, 1, 12)),
+            ]),
+            &[answered("demo", "demo:icons", "demo:icons")],
+        );
+        let source = staged.source();
+        let mut ui =
+            crate::game::UiResources::load_with_limit(source, staged.prepared(), 4096).unwrap();
+        let sprite = "demo:gui/atlases/icons/demo/wide";
+        assert!(ui.atlas.width.max(ui.atlas.height) <= 4096);
+        assert!(ui.atlas.gui_rect(sprite).is_none());
+        assert!(
+            ui.stitch_for_device(source, staged.prepared(), 8192)
+                .unwrap()
+        );
+        assert_eq!(
+            ui.atlas.gui_rect(sprite).map(|r| (r.w, r.h)),
+            Some((4097, 1))
+        );
+    }
+
+    #[test]
     fn oversized_registered_atlas_is_isolated_at_device_limit_without_shrinking_models_or_dropping_other_atlases()
      {
         let block = fixture_png(64, 64, 90);
-        let huge = fixture_png(1600, 1600, 12);
+        let huge = fixture_png(4097, 1, 12);
         let small = fixture_png(16, 16, 210);
         let huge_def = r#"{"sources":[
             {"type":"single","resource":"huge_mod:big","sprite":"huge_mod:big"},
@@ -753,7 +779,7 @@ mod tests {
         }
     }
 
-    /// The registered atlas's sprite is in the GUI atlas at its own size after a reload that
+    /// The registered atlas's sprite is in the GUI lookup at its own size after a reload that
     /// registers it, drawable by its name, and gone after a reload that no longer registers it.
     #[test]
     #[ignore = "daily"]

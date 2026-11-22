@@ -24,8 +24,12 @@ pub struct HudAtlas {
     /// sprites and the walked files a GUI entry stands on.
     pub non_gui: HashSet<String>,
     /// A registered atlas's sprites by their GUI names (`mymod:gui/atlases/icons/mymod/heart`),
-    /// each packed under a key of its own so that no model or GUI sprite can take its place.
+    /// with UVs local to their atlas texture, distinct from model or vanilla GUI sprites.
     pub registered: HashMap<String, Rect>,
+    pub(super) registered_owners: HashMap<String, usize>,
+    pub(crate) registered_pages: Vec<RegisteredAtlasPage>,
+    /// The dimension this generation was stitched against; absent on font-only or boot atlases.
+    pub stitch_limit: Option<u32>,
     /// The live (dynamic) textures by GUI id, a lane of their own: the GUI lookup reads it first,
     /// and no reload of another lane writes it ([`dynamic_textures::Names`]).
     pub live: HashMap<String, Rect>,
@@ -86,6 +90,15 @@ pub struct HudAtlas {
     /// ([`HudAtlas::build_over_with_dynamic_textures`]); their names are not among `sprites`.
     pub dynamic_texture_pool: Option<dynamic_textures::Pool>,
 }
+/// The CPU image and animations of one registered atlas, kept across renderer rebuilds.
+pub(crate) struct RegisteredAtlasPage {
+    pub(crate) atlas: String,
+    pub(crate) mod_id: Option<&'static str>,
+    pub(crate) size: [u32; 2],
+    pub(crate) pixels: Vec<u8>,
+    pub(crate) animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
+}
+
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
 /// The largest atlas side: the 2D texture limit of the GPUs Sunrise runs on
@@ -240,7 +253,11 @@ impl HudAtlas {
     /// API). They are compressed on a thread of their own; `pixels()` waits
     /// for it.
     pub fn pack_pixels(&mut self) {
-        if self.pixels.is_empty() || self.packed.is_some() {
+        // lz4_flex's packed representation prefixes the uncompressed length as u32.
+        if self.pixels.is_empty()
+            || self.packed.is_some()
+            || u32::try_from(self.pixels.len()).is_err()
+        {
             return;
         }
         let raw = Arc::new(std::mem::take(&mut self.pixels));
@@ -302,6 +319,30 @@ impl HudAtlas {
                 .flatten(),
         }
     }
+    pub(crate) fn gui_atlas_page(&self, name: &str) -> Option<usize> {
+        let name = name.strip_prefix("minecraft:").unwrap_or(name);
+        if self.live.contains_key(name) || self.gui.contains_key(name) {
+            return None;
+        }
+        self.registered_owners.get(name).copied()
+    }
+    /// A raw texture uses its own page only if the base atlas has no sprite of that name.
+    pub fn texture_atlas_page(&self, name: &str) -> Option<usize> {
+        if self.sprites.contains_key(name) {
+            return None;
+        }
+        self.registered_owners.get(name).copied()
+    }
+    pub(crate) fn blit_atlas_page(&self, name: &str) -> Option<usize> {
+        if self
+            .live
+            .contains_key(name.strip_prefix("minecraft:").unwrap_or(name))
+        {
+            return None;
+        }
+        self.texture_atlas_page(name)
+    }
+
     /// [`HudAtlas::gui_rect`] for a draw: an id the atlas lacks draws the missing texture, as vanilla's atlas does.
     pub fn gui_draw_rect(&self, id: &str) -> Option<&Rect> {
         if let Some(rect) = self.gui_rect(id) {
@@ -515,6 +556,9 @@ impl HudAtlas {
             gui: HashMap::new(),
             non_gui: HashSet::new(),
             registered: HashMap::new(),
+            registered_owners: HashMap::new(),
+            registered_pages: Vec::new(),
+            stitch_limit: None,
             live: HashMap::new(),
             object_skins: HashMap::new(),
             object_skins_revision: Self::next_revision(),
@@ -597,6 +641,9 @@ impl HudAtlas {
             gui: HashMap::new(),
             non_gui: HashSet::new(),
             registered: HashMap::new(),
+            registered_owners: HashMap::new(),
+            registered_pages: Vec::new(),
+            stitch_limit: None,
             live: HashMap::new(),
             object_skins: HashMap::new(),
             object_skins_revision: Self::next_revision(),

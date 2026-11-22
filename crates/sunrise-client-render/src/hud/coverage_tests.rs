@@ -115,6 +115,7 @@ impl Gpu {
             &view,
             &device.create_sampler(&Default::default()),
             true,
+            Vec::new(),
         )
         .unwrap();
         Some(Self { device, queue, hud })

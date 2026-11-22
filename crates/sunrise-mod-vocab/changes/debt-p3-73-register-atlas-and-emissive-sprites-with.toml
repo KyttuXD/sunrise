@@ -24,7 +24,10 @@ and replace `event.layers.push((base, overlay))` with
 overlay textures at any `assets/<namespace>/textures/<path>.png` without the `emissive/` prefix or
 32-entry cap.
 
-In Hooks::register_texture_atlases, call `event.register(atlas)` as before; non-built-in atlases in
+For `hook:register_texture_atlases` (version 4) and `hook:register_texture_atlases.atlases`,
+keep calling `event.register(atlas)` in `Hooks::register_texture_atlases` and look up and draw
+sprites by the same `TextureAtlasRegistration::sprite_name`; UVs are local to each stitched
+atlas texture. Non-built-in atlases in
 `minecraft:` or `sunrise:` are now accepted, collisions with vanilla 26.3's built-in engine atlases
 (`AtlasManager.KNOWN_ATLASES`) on either `definition` or `atlas` and duplicate `definition` or
 `atlas` ids are rejected with error diagnostics keeping the first registration, overflowing mod

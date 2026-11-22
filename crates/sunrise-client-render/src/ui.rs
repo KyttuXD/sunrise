@@ -106,10 +106,16 @@ pub fn nine_slice(
     match crate::hud::sprite_modifiers::draws(atlas, sprite, *r, [x, y, w, h], color) {
         Some(draws) => {
             for d in draws {
+                let start = batch.vertices.len();
                 draw_sprite(batch, d.rect, scaling(&d.key), d.at, d.color);
+                batch.bind_gui_atlas(start, atlas, &d.key);
             }
         }
-        None => draw_sprite(batch, *r, scaling(sprite), [x, y, w, h], color),
+        None => {
+            let start = batch.vertices.len();
+            draw_sprite(batch, *r, scaling(sprite), [x, y, w, h], color);
+            batch.bind_gui_atlas(start, atlas, sprite);
+        }
     }
 }
 fn draw_sprite(
@@ -218,6 +224,7 @@ pub fn tiled_sized(
     let Some(r) = atlas.gui_draw_rect(sprite).copied() else {
         return;
     };
+    let start = batch.vertices.len();
     tile(
         batch,
         r,
@@ -226,6 +233,7 @@ pub fn tiled_sized(
         [x, y, w, h],
         color,
     );
+    batch.bind_gui_atlas(start, atlas, sprite);
 }
 /// Text drawn at `scale` times its size (a scaled pose).
 pub fn text_scaled(

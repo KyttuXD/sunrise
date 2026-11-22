@@ -1,26 +1,5 @@
 use super::*;
 
-/// The shared HUD atlas was packed before the GPU device opened and exceeds that device's
-/// `max_texture_dimension_2d` limit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AtlasExceedsDeviceLimit {
-    pub width: u32,
-    pub height: u32,
-    pub limit: u32,
-}
-
-impl std::fmt::Display for AtlasExceedsDeviceLimit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "the shared atlas is {}x{}; this GPU allows {}x{}",
-            self.width, self.height, self.limit, self.limit
-        )
-    }
-}
-
-impl std::error::Error for AtlasExceedsDeviceLimit {}
-
 impl Renderer {
     pub async fn new(
         window: Arc<Window>,
@@ -32,12 +11,13 @@ impl Renderer {
         sprite_mips: &[crate::mipmap::Settings],
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
+        hud_pages: Option<&crate::hud::HudAtlas>,
         glint: (&[u8], u32, u32),
         glint_armor: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: Arc<panorama::Faces>,
         prepared: Option<PreparedTextures>,
-        previous: Option<&Self>,
+        render_device: RendererDevice<'_>,
         api: GraphicsApi,
         translucent_batching: bool,
         (shader_pack, pack_starts_wide): (bool, bool),
@@ -47,6 +27,10 @@ impl Renderer {
         request: output::FrameRequest,
         display: output::DisplayReading,
     ) -> Result<Self> {
+        let previous = match &render_device {
+            RendererDevice::Reuse(renderer) => Some(*renderer),
+            _ => None,
+        };
         let Opened {
             instance,
             surface,
@@ -55,11 +39,11 @@ impl Renderer {
             queue,
             device_lost,
             configured,
-        } = match previous {
+        } = match render_device {
             // Reload resources on the same device; replacing live Vulkan
             // devices can invalidate the driver's swapchain state on the same
             // window.
-            Some(renderer) => {
+            RendererDevice::Reuse(renderer) => {
                 describe_adapter(&renderer.adapter);
                 check_layers(&renderer.adapter, layers)?;
                 Opened {
@@ -84,10 +68,8 @@ impl Renderer {
                     configured: None,
                 }
             }
-            None => {
-                let _step = crate::spans::startup::step("renderer.open_device");
-                open_device(&window, offscreen, api, layers).await?
-            }
+            RendererDevice::Opened(opened) => *opened,
+            RendererDevice::New => Opened::for_window(&window, offscreen, api, layers).await?,
         };
         // Computed once: the sprite arrays, the shaders' constants and the
         // shader pack atlas all cut the sprites by it.
@@ -993,11 +975,9 @@ impl Renderer {
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
         let limit = device.limits().max_texture_dimension_2d;
         if atlas_width.max(atlas_height) > limit {
-            return Err(AtlasExceedsDeviceLimit {
-                width: atlas_width,
-                height: atlas_height,
-                limit,
-            }
+            return Err(format!(
+                "HUD atlas {atlas_width}x{atlas_height} exceeds device texture limit {limit}"
+            )
             .into());
         }
         let atlas = device.create_texture_with_data(
@@ -1086,6 +1066,13 @@ impl Renderer {
             &glint_armor_view,
             &glint_sampler,
             hud_coverage,
+            hud_pages.map_or_else(Vec::new, |atlas| {
+                atlas
+                    .registered_pages
+                    .iter()
+                    .map(|page| crate::hud::upload_atlas_page(&device, &queue, page))
+                    .collect()
+            }),
         )?;
         hud.atlas_texture = Some(atlas.clone());
         let entity_step = crate::spans::startup::step("renderer.entity_pipelines");
@@ -1124,44 +1111,51 @@ impl Renderer {
             label: Some("Atlas"),
             ..Default::default()
         });
-        let entity_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Entity resources"),
-            layout: &entity_bindings,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&glint_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
-                },
-            ],
-        });
+        let entity_group_for = |view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Entity resources"),
+                layout: &entity_bindings,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: globals.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&glint_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                    },
+                ],
+            })
+        };
+        let entity_group = entity_group_for(&atlas_view);
+        let screen_page_groups = hud
+            .atlas_page_views()
+            .map(|view| view.map(&entity_group_for))
+            .collect();
         let static_entity_transform =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Static block-entity camera position"),
@@ -2329,6 +2323,7 @@ impl Renderer {
             border_uniform,
             border_vertices,
             screen_pipelines,
+            screen_page_groups,
             screen_buffer,
             screen_capacity,
             entity_group,

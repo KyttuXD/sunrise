@@ -12,8 +12,9 @@ with a `TextureAtlasRegistration` giving an atlas id (`mymod:icons`) and its def
 (`mymod:icons` reads `assets/mymod/atlases/icons.json`). The definition is a `sources`
 list like vanilla's atlas definitions, and resource packs change it the same way.
 
-Sunrise packs vanilla's atlases into two, so a registered atlas's sprites are
-stitched into the GUI atlas, each under `TextureAtlasRegistration::sprite_name`:
+Each registered atlas has its own texture, stitched independently from the base
+HUD and other registered atlases. Its sprites are exposed in the GUI lookup under
+`TextureAtlasRegistration::sprite_name`:
 sprite `mymod:heart` of `mymod:icons` is `mymod:gui/atlases/icons/mymod/heart`.
 Look it up with `gui_sprite` in `texture_atlas_stitched` for `TextureAtlas::Gui`
 and draw it with `DrawContext::sprite` by that name. Every reload lists the
@@ -44,7 +45,7 @@ sprite path, the first stands and a warning names both."#]
         registration_append = "register",
         context = "registration",
         neoforge = "RegisterTextureAtlasesEvent",
-        version = 3
+        version = 4
     )]
     fn register_texture_atlases(atlases: &mut Vec<Answered<TextureAtlasRegistration>>);
 }

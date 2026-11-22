@@ -4294,7 +4294,9 @@ impl Game<'_> {
         r.u1 = r.u0 + src[2] * du;
         r.v1 = r.v0 + src[3] * dv;
         let [a, red, green, blue] = tint.unwrap_or(u32::MAX).to_be_bytes();
+        let start = batch.vertices.len();
         batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, rgba(red, green, blue, a));
+        batch.bind_gui_atlas(start, &self.gui.atlas, name);
         true
     }
     /// Item `item`'s icon (`mymod:machine`) with its top left at `at`,

@@ -228,28 +228,15 @@ impl Loading {
             "Sunrise: loading the title artwork after {} ms",
             self.started.elapsed().as_millis()
         );
-        if let Some(limit) = self
-            .renderer
-            .as_ref()
-            .map(|r| r.device.limits().max_texture_dimension_2d)
-            && gui.atlas.width.max(gui.atlas.height) > limit
+        if let Some(renderer) = &self.renderer
+            && let Err(error) = gui.stitch_for_device(
+                &source,
+                &self.vanilla_root,
+                renderer.device.limits().max_texture_dimension_2d,
+            )
         {
-            let game = sunrise_assets::resource_source::ResourceSource::directory(
-                self.vanilla_root.clone(),
-            );
-            match HudAtlas::build_over_with_dynamic_textures_and_limit(
-                &source,
-                &source,
-                &game,
-                resource_tables::dynamic_texture_pool(),
-                limit,
-            ) {
-                Ok(atlas) => gui.atlas = atlas,
-                Err(error) => {
-                    self.error = Some(error);
-                    return;
-                }
-            }
+            self.error = Some(error);
+            return;
         }
         let additional = self
             .options
@@ -367,7 +354,10 @@ impl Loading {
                 options.offscreen,
                 &loaded.pack,
                 &gui,
-                self.renderer.as_ref(),
+                self.renderer.as_ref().map_or(
+                    sunrise_client::gfx::RendererDevice::New,
+                    sunrise_client::gfx::RendererDevice::Reuse,
+                ),
                 loaded.renderer_cpu,
                 self.settings.sunrise.api,
                 self.settings.sunrise.translucent_batching,

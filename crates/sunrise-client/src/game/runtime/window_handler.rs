@@ -450,29 +450,24 @@ impl ApplicationHandler for Game<'_> {
                 return self.new_renderer(window.clone());
             };
             let models = &mut start.models;
-            let error = match self.renderer_for(window.clone(), &models.pack, &models.gui) {
-                Ok(renderer) => return Ok(renderer),
-                Err(error) => error,
-            };
-            let Some(exceeded) =
-                error.downcast_ref::<sunrise_client::gfx::AtlasExceedsDeviceLimit>()
-            else {
-                return Err(error);
-            };
-            let game =
-                sunrise_assets::resource_source::ResourceSource::directory(self.vanilla_root());
-            let source = &models.pack.source;
-            let mut atlas = HudAtlas::build_over_with_dynamic_textures_and_limit(
-                source,
-                source,
-                &game,
-                resource_tables::dynamic_texture_pool(),
-                exceeded.limit,
-            )?;
-            atlas.font.uniform = self.settings.force_unicode;
-            atlas.font.japanese = self.settings.japanese_glyphs;
-            models.gui.atlas = atlas;
-            self.renderer_for(window.clone(), &models.pack, &models.gui)
+            let device = pollster::block_on(sunrise_client::gfx::Opened::for_window(
+                &window,
+                self.options.offscreen,
+                self.settings.sunrise.api,
+                models.pack.render.texture_layers,
+            ))?;
+            if models.gui.stitch_for_device(
+                &models.pack.source,
+                &self.vanilla_root(),
+                device.max_atlas_size(),
+            )? {
+                self.particles.reload(
+                    &models.pack.source,
+                    &models.gui.atlas.sprites,
+                    &models.gui.atlas.translucent,
+                );
+            }
+            self.renderer_for(window.clone(), &models.pack, &models.gui, Some(device))
         })();
         self.resize_state = Some(self.resize_state_of(window.inner_size()));
         self.window = Some(window);
