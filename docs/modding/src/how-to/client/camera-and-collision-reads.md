@@ -25,8 +25,8 @@ its published sky light, even outside build height or in an unloaded column. See
 [Level hosts](../../concepts/hooks-and-the-host.md#level-hosts) for the boundary rules.
 
 `ClientHost::playing()` is true while the player is in the world with nothing over it: no screen, title, sign
-editor or book, so keys and zoom apply. A HUD or screen hook can read held state, the current binding,
-or its Controls label using a [live vanilla mapping](input.md#reading-live-vanilla-mappings) retained
+editor or book, so in-game keys and camera effects apply. A HUD or screen hook can read held state, the current
+binding, or its Controls label using a [live vanilla mapping](input.md#reading-live-vanilla-mappings) retained
 from `client_setup`.
 
 `ClientHost::select_hotbar_slot(slot)` chooses the local player's hotbar slot (0 to 8) as a number key
@@ -66,7 +66,9 @@ of the kind vanilla picks, and only while the camera is the player (a rider send
 packet). Several calls in one tick send the last values once, and a call after the sync goes out the
 next tick. NaN or infinity returns `NotFinite` and changes nothing; outside a world the call returns
 `NoWorld`. The server sees an ordinary client look, at tick granularity, as from a mouse.
-`calculate_player_turn` changes how far the mouse turns the view; `set_local_rotation` sets it directly.
+`calculate_player_turn` changes mouse sensitivity and cinematic smoothing (`MouseHandler.turnPlayer`);
+`player_turn` scales or adjusts the relative `Entity.turn` delta across mouse, controller and keyboard look;
+`set_local_rotation` sets the view directly.
 
 `ClientHost::set_camera_type(type)` is a queued client-only effect and takes `&self`, so
 shared callbacks such as `camera_pose` can request a perspective. `camera_type()` reports

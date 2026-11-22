@@ -30,18 +30,18 @@ impl Game {
     fn fov_effect_scale(&self) -> f32 { 1.0 }
     fn death_time(&self) -> Option<i32> { None }
     fn camera_fluid(&self, camera: [f64; 3]) { assert_eq!(camera, [1.0, 2.0, 3.0]); }
-    fn zoomed_fov_degrees(&self, fov: f32) -> f32 { fov / 2.0 }
     fn native_compute_fov(&self, partial: f32, camera: [f64; 3], degrees: &mut f32) {
-        assert_eq!(partial, 0.25); assert_eq!(camera, [1.0, 2.0, 3.0]); assert_eq!(*degrees, 35.0);
+        assert!(!self.studio.flying(), "studio freecam must bypass the hook");
+        assert_eq!(partial, 0.25); assert_eq!(camera, [1.0, 2.0, 3.0]); assert_eq!(*degrees, 70.0);
         if let Some(value) = self.override_fov { *degrees = value; }
     }
     METHOD
 }
 #[test]
 fn unchanged_narrow_wide_and_invalid() {
-    for (value, expected) in [(None, 35.0), (Some(15.0), 15.0), (Some(120.0), 120.0),
-        (Some(1.0), 1.0), (Some(179.0), 179.0), (Some(0.0), 35.0), (Some(180.0), 35.0),
-        (Some(-1.0), 35.0), (Some(f32::NAN), 35.0), (Some(f32::INFINITY), 35.0)] {
+    for (value, expected) in [(None, 70.0), (Some(15.0), 15.0), (Some(120.0), 120.0),
+        (Some(1.0), 1.0), (Some(179.0), 179.0), (Some(0.0), 70.0), (Some(180.0), 70.0),
+        (Some(-1.0), 70.0), (Some(f32::NAN), 70.0), (Some(f32::INFINITY), 70.0)] {
         let game = Game { view: View, settings: Settings { fov: 70.0 }, override_fov: value,
             studio: Studio { freecam: StudioFreecam { active: false, fov: 70.0 } } };
         assert_eq!(game.fov_degrees(0.25, [1.0, 2.0, 3.0]), expected);

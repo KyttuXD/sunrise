@@ -640,12 +640,18 @@ fn dispatch_contracts() {
     dispatch_level_tick_pre(HostSide::Server(&mut host), LevelRef);
     assert_eq!(*calls.lock().unwrap(), [1, 2]);
     calls.lock().unwrap().clear();
-    let mut zoom = None;
-    dispatch_zoom(&host, &mut zoom);
-    assert_eq!(zoom, Some(Zoom(1)));
+    let mut crafted = None;
+    dispatch_prepare_item_craft(&mut host, 0, "alex", None, &mut crafted);
+    assert_eq!(
+        crafted,
+        Some(ItemStack {
+            item: "test:crafted".into(),
+            count: 1,
+        })
+    );
     assert_eq!(*calls.lock().unwrap(), [1]);
     calls.lock().unwrap().clear();
-    dispatch_zoom(&host, &mut zoom);
+    dispatch_prepare_item_craft(&mut host, 0, "alex", None, &mut crafted);
     assert!(calls.lock().unwrap().is_empty());
     install_parts(Parts {
         items: vec![part(1, &calls), part(2, &calls)],

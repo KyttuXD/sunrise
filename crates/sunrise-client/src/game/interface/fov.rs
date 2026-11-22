@@ -3,7 +3,11 @@
 //! (`GameRenderer.bobHurt`, `bobView`), the portal and Nausea spin
 //! (`GameRenderer.renderLevel`) and the spyglass (`SpyglassItem`,
 //! `Hud.extractSpyglassOverlay`). The arithmetic is `sunrise_client::camera`.
-use super::Game;
+#[cfg(test)]
+#[path = "fov_camera_tests.rs"]
+mod camera_tests;
+
+use super::{Game, remote_camera::SpectatedEntity};
 use sunrise_core::position::BlockPos;
 
 pub(super) fn camera_effects_enabled(title: bool, studio_freecam: bool) -> bool {
@@ -22,6 +26,14 @@ use sunrise_client::{
     hud::HudBatch,
     hud_layout, hud_overlays,
 };
+
+fn fov_use_item(item: &str) -> UseItem {
+    match item {
+        "minecraft:bow" => UseItem::Bow,
+        "minecraft:spyglass" => UseItem::Spyglass,
+        _ => UseItem::Other,
+    }
+}
 
 fn valid_fov_modifier(modifier: f32, fallback: f32) -> f32 {
     if modifier.is_finite() && (0.01..=10.0).contains(&modifier) {
@@ -64,52 +76,71 @@ impl Game<'_> {
         let intensity = portal.max(self.nausea_blend(partial)) * (scale * scale);
         spinning_effect_matrix(intensity, fx.spinning_time + partial * fx.spinning_speed)
     }
-    /// What `AbstractClientPlayer.getFieldOfViewModifier` reads.
-    fn fov_player(&self) -> Option<FovPlayer> {
-        let p = self.player.as_ref()?;
-        let using = self.using.and_then(|(slot, ticks)| {
-            let stack = self.stack_in(slot)?;
-            let item = match &*stack.item {
-                "minecraft:bow" => UseItem::Bow,
-                "minecraft:spyglass" => UseItem::Spyglass,
-                _ => UseItem::Other,
-            };
-            Some((item, ticks as i32))
-        });
-        Some(FovPlayer {
-            flying: p.flying,
-            walking_speed: self.remote_walking_speed(),
-            // Player.aiStep keeps `speed` as the float movement speed attribute.
-            movement_speed: f64::from(p.speed),
-            using,
-        })
-    }
-    /// `Camera.tick`: the eye height and the field-of-view modifier ease
-    /// halfway toward the player's each tick.
+    /// `Camera.tick`: ease the eye height and FOV modifier toward the current
+    /// camera's values. `Camera.tickFov` uses the modifier of an
+    /// `AbstractClientPlayer` (local or remote), or 1 for anything else.
     pub(super) fn tick_fov(&mut self) {
-        let first_person = self.camera_type.is_first_person();
-        let effect = self.fov_effect_scale();
-        let target = self.fov_player().map_or(1.0, |player| {
-            let base = field_of_view_modifier(&player, first_person, effect);
-            let mut modifier = base;
-            self.native_compute_fov_modifier(&player, base, &mut modifier);
-            valid_fov_modifier(modifier, base)
-        });
-        let target = self.zoomed_fov_target(target);
-        // A server's spectator camera on a mob or an armor stand: its eye
-        // height. Its modifier stays 1 (another player's own modifier is not
-        // modelled here); the zoom extra still narrows it.
-        if let Some(e) = self.spectated_camera_snapshot() {
-            self.view
-                .tick(Some(e.eye_height), self.zoomed_fov_target(1.0));
-            return;
-        }
-        let eye = self.player.as_ref().map(|p| {
-            if self.sleeping.is_some() {
+        let (eye, player) = if let Some(camera) = self.spectated_camera() {
+            let player = match camera {
+                SpectatedEntity::Mob(m) if m.kind.id == "minecraft:player" => {
+                    let using = if m.extra.using_item > 0 {
+                        let hand = if m.extra.using_off_hand {
+                            sunrise_items::equipment::OFFHAND
+                        } else {
+                            sunrise_items::equipment::MAINHAND
+                        };
+                        m.extra
+                            .slot_stack(hand)
+                            .map(|stack| (fov_use_item(&stack.item), m.extra.using_item - 1))
+                    } else {
+                        None
+                    };
+                    Some(FovPlayer {
+                        // ClientPacketListener.handlePlayerAbilities updates only the local player.
+                        // A RemotePlayer keeps its default Abilities and synced movement attribute.
+                        flying: false,
+                        walking_speed: 0.1,
+                        movement_speed: m.attrs.speed,
+                        using,
+                    })
+                }
+                _ => None,
+            };
+            (Some(camera.snapshot().eye_height), player)
+        } else if let Some(p) = &self.player {
+            let eye = if self.sleeping.is_some() {
                 0.2
             } else {
                 p.dimensions.eye_height
+            };
+            let using = self.using.and_then(|(slot, ticks)| {
+                self.stack_in(slot)
+                    .map(|stack| (fov_use_item(&stack.item), ticks as i32))
+            });
+            (
+                Some(eye),
+                Some(FovPlayer {
+                    flying: p.flying,
+                    walking_speed: self.remote_walking_speed(),
+                    // Player.aiStep keeps `speed` as the float movement speed attribute.
+                    movement_speed: f64::from(p.speed),
+                    using,
+                }),
+            )
+        } else {
+            (None, None)
+        };
+        let first_person = self.camera_type.is_first_person();
+        let target = player.map_or(1.0, |player| {
+            let base = field_of_view_modifier(&player, first_person, self.fov_effect_scale());
+            // AbstractClientPlayer.getFieldOfViewModifier returns 0.1 before
+            // Mth.lerp / ComputeFovModifierEvent when scoping in first person.
+            if first_person && matches!(player.using, Some((UseItem::Spyglass, _))) {
+                return base;
             }
+            let mut modifier = base;
+            self.native_compute_fov_modifier(&player, base, &mut modifier);
+            valid_fov_modifier(modifier, base)
         });
         self.view.tick(eye, target);
     }
@@ -165,7 +196,7 @@ impl Game<'_> {
         if self.studio.flying() {
             return self.studio.freecam.fov.clamp(1.0, 179.0);
         }
-        let fov = self.view.calculate_fov(
+        let vanilla = self.view.calculate_fov(
             partial,
             self.settings.fov as i32,
             self.fov_effect_scale(),
@@ -173,7 +204,6 @@ impl Game<'_> {
             self.camera_fluid(camera),
             false,
         );
-        let vanilla = self.zoomed_fov_degrees(fov);
         let mut degrees = vanilla;
         self.native_compute_fov(partial, camera, &mut degrees);
         if degrees.is_finite() && (1.0..=179.0).contains(&degrees) {
@@ -185,10 +215,10 @@ impl Game<'_> {
     /// How many times the view is magnified right now: the player's field of
     /// view over the one actually in use, and 1 when nothing is zooming.
     ///
-    /// Reads the result rather than any one zoom, so it covers all three:
-    /// the spyglass (`AbstractClientPlayer.getFieldOfViewModifier`'s tenth
-    /// while `isScoping`), the zoom mod (`native_zoom`) and any mod that
-    /// narrows the field of view through `native_compute_fov`.
+    /// Reads the result rather than any one zoom, so it covers both the
+    /// spyglass (`AbstractClientPlayer.getFieldOfViewModifier`'s tenth while
+    /// `isScoping`) and any mod that narrows the field of view through
+    /// `native_compute_fov_modifier` or `native_compute_fov`.
     pub(super) fn zoom_magnification(&self, camera: [f64; 3]) -> f32 {
         let now = self.fov_degrees(1.0, camera);
         let base = self.settings.fov.clamp(1.0, 179.0);

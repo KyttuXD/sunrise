@@ -201,7 +201,7 @@ fn load_player_type(models: &sunrise_client::mobs::EntityModelDocument) -> Optio
             eye_height: 1.62,
             category: "misc".into(),
             max_health: 20.0,
-            speed: 0.1,
+            speed: f64::from(0.1_f32), // Player.createAttributes' MOVEMENT_SPEED
             flying_speed: 0.02,
             attack_damage: 1.0,
             attack_knockback: 0.0,
@@ -702,12 +702,18 @@ impl Game<'_> {
     /// agent's `turn`.
     /// The model's old pitch is the player's `xRotO`, which the turn moves
     /// with `xRot` (`turn_rotation`).
-    pub(super) fn turn_player(&mut self, xo: f64, yo: f64) {
+    pub(super) fn turn_player(&mut self, mut xo: f64, mut yo: f64) {
         if self.studio.flying() {
             self.studio
                 .freecam
                 .turn((xo * 0.15) as f32, (yo * 0.15) as f32);
             return;
+        }
+        if self.player.is_some() && mod_api::__private::listened(mod_api::HookId::PlayerTurn) {
+            let (orig_x, orig_y) = (xo, yo);
+            self.native_player_turn(self.own_entity_id(), self.own_uuid(), &mut xo, &mut yo);
+            xo = finite_turn_delta("x", orig_x, xo);
+            yo = finite_turn_delta("y", orig_y, yo);
         }
         let pitch_o = self.player_model.as_ref().map(|m| m.previous_head_pitch);
         let rotation = turn_rotation(self.yaw, self.pitch, pitch_o, xo, yo);
@@ -1736,9 +1742,30 @@ fn player_walk_distance(from: Vec3, to: Vec3) -> f32 {
     (dx * dx + dz * dz).sqrt() as f32
 }
 
+/// Keeps a listener-edited `Entity.turn` axis delta when vanilla's `(delta as f32) * 0.15`
+/// cast produces a finite turn; logs and reverts that axis otherwise.
+fn finite_turn_delta(axis: &'static str, original: f64, proposed: f64) -> f64 {
+    if ((proposed as f32) * 0.15).is_finite() {
+        proposed
+    } else {
+        log::warn!("player_turn: refused non-finite {axis} delta ({proposed}); keeping {original}");
+        original
+    }
+}
+
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn finite_turn_delta_keeps_finite_values_and_reverts_non_finite_ones() {
+        assert_eq!(finite_turn_delta("x", 10.0, 2.5), 2.5);
+        assert_eq!(finite_turn_delta("y", -4.0, 0.0), 0.0);
+        assert_eq!(finite_turn_delta("x", 10.0, -3600.0), -3600.0);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300] {
+            assert_eq!(finite_turn_delta("x", 10.0, bad), 10.0, "{bad}");
+        }
+    }
     #[test]
     fn a_spectators_own_model_stays_out_of_a_shader_packs_shadow_pass() {
         // First person, a shader pack whose shadow pass draws the player: a spectator's head

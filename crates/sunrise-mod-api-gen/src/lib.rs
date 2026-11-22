@@ -1112,7 +1112,7 @@ mod tests {
         );
         assert_eq!(
             super::free_function_source(
-                "sunrise_client::game::native_hooks::Game<'_>::native_zoom"
+                "sunrise_client::game::native_hooks::Game<'_>::native_compute_fov"
             ),
             None
         );
@@ -1120,16 +1120,17 @@ mod tests {
 
     #[test]
     fn contracted_hook_requires_dispatch_call() {
-        let missing: syn::ImplItemFn = syn::parse_quote! { fn native_zoom(&self) { unrelated(); } };
+        let missing: syn::ImplItemFn =
+            syn::parse_quote! { fn native_compute_fov(&self) { unrelated(); } };
         let present: syn::ImplItemFn =
-            syn::parse_quote! { fn native_zoom(&self) { mod_api::dispatch_zoom(); } };
-        assert!(!super::has_call(&missing.block, "dispatch_zoom"));
-        assert!(super::has_call(&present.block, "dispatch_zoom"));
+            syn::parse_quote! { fn native_compute_fov(&self) { mod_api::dispatch_compute_fov(); } };
+        assert!(!super::has_call(&missing.block, "dispatch_compute_fov"));
+        assert!(super::has_call(&present.block, "dispatch_compute_fov"));
         let generated: syn::ItemFn = syn::parse_quote! {
-            fn native_zoom(&self) { self.fire_zoom(); }
+            fn native_compute_fov(&self) { self.fire_compute_fov(); }
         };
         assert_eq!(
-            super::needs_fill(&generated, "dispatch_zoom", true),
+            super::needs_fill(&generated, "dispatch_compute_fov", true),
             Ok(false)
         );
     }

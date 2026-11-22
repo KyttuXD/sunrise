@@ -76,26 +76,28 @@ fn a_server_camera_takes_any_entity_the_level_holds() {
         tnts: std::slice::from_ref(&tnt),
     };
 
-    let view = entities.view(9).expect("a boat is a camera");
+    let view = entities.get(9).expect("a boat is a camera").snapshot();
     assert_eq!(view.position, [10.5, 64.0, -3.5]);
     assert_eq!(view.previous, [10.0, 64.0, -3.5]);
     assert_eq!((view.y_rot_o, view.y_rot), (45.0, 90.0));
     assert_eq!(view.eye_height, 0.5625);
     assert!(view.living.is_none(), "a boat has no camera distance");
 
-    let view = entities.view(11).expect("an item frame is a camera");
+    let view = entities
+        .get(11)
+        .expect("an item frame is a camera")
+        .snapshot();
     // `ItemFrame.createBoundingBox`: the block's centre pulled 0.46875 out of the
     // wall it hangs on (south: z - 0.46875), which `HangingEntity` makes its pos.
     assert_eq!(view.position, [2.5, 64.5, -4.96875]);
     assert_eq!((view.eye_height, view.y_rot), (0.0, 0.0));
 
-    let view = entities.view(13).expect("primed TNT is a camera");
+    let view = entities.get(13).expect("primed TNT is a camera").snapshot();
     assert_eq!(view.position, [4.5, 64.0, 7.5]);
     assert_eq!((view.eye_height, view.y_rot), (0.15, 135.0));
 
     // An id the level does not hold changes nothing.
-    assert!(!entities.holds(10));
-    assert!(entities.view(10).is_none());
+    assert!(entities.get(10).is_none());
 }
 
 /// `HangingEntity.setDirection`: a frame turns `get2DDataValue() * 90` in yaw
@@ -112,7 +114,7 @@ fn a_frame_camera_turns_with_its_facing() {
             frames: std::slice::from_ref(&frame),
             tnts: &[],
         };
-        let view = entities.view(1).unwrap();
+        let view = entities.get(1).unwrap().snapshot();
         (view.y_rot, view.x_rot)
     };
     assert_eq!(view(4), (90.0, 0.0));

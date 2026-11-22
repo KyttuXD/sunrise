@@ -489,6 +489,28 @@ fn player_turn_mods_receive_identity_and_chain_changes() {
 }
 
 #[test]
+fn player_turn_deltas_receive_identity_and_chain_changes() {
+    struct ScaleTurn;
+    #[mod_api::__subscriptions]
+    impl Hooks for ScaleTurn {
+        fn player_turn(&self, _host: &dyn ClientHost, event: &mut PlayerTurnEvent) {
+            assert_eq!((event.player_entity_id, event.player_uuid), (42, 123));
+            event.x *= 0.5;
+            event.y += 2.0;
+        }
+    }
+    let host = FakeHost::new();
+    let mods: Vec<ModEntry> = vec![
+        ModEntry::new("turn-1", Box::new(ScaleTurn)),
+        ModEntry::new("turn-2", Box::new(ScaleTurn)),
+    ];
+    install(mods.into());
+    let (mut x, mut y) = (8.0, -1.0);
+    dispatch_player_turn(&host, 42, 123, &mut x, &mut y);
+    assert_eq!((x, y), (2.0, 3.0));
+}
+
+#[test]
 fn a_part_reads_the_clicked_block_and_tells_the_acting_player() {
     // Another test installs parts with tags: a dispatch must run on a game thread.
     mark_game_thread();

@@ -311,12 +311,6 @@ impl Extras {
     }
 }
 
-/// The field-of-view modifier target `Camera.tickFov` eases toward: vanilla's
-/// (`getFieldOfViewModifier`) divided by a mod's zoom (`native_zoom`). A
-/// zoom of 1 leaves it as is.
-pub fn fov_target(vanilla: f32, zoom: f32) -> f32 {
-    if zoom == 1.0 { vanilla } else { vanilla / zoom }
-}
 /// Frame times over the last few seconds: frames per second, the minimum
 /// and the 1% low, recomputed twice a second.
 pub struct FpsCounter {
@@ -901,31 +895,6 @@ mod tests {
         let e = Extras::parse("sort:maybe\nsortKey:r\nnoise");
         assert!(!e.sort);
         assert_eq!(e.sort_key, "key.keyboard.unknown");
-    }
-
-    #[test]
-    fn a_mods_zoom_eases_like_the_spyglass() {
-        // Camera.tickFov halves the distance to the target each tick.
-        let mut camera = crate::camera::Camera::default();
-        camera.tick(None, 1.0);
-        for _ in 0..30 {
-            camera.tick(None, 1.0);
-        }
-        let target = fov_target(1.0, 4.0);
-        camera.tick(None, target);
-        let first = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((first - 70.0 * 0.625).abs() < 1e-3, "{first}");
-        for _ in 0..30 {
-            camera.tick(None, target);
-        }
-        let settled = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((settled - 70.0 / 4.0).abs() < 1e-3, "{settled}");
-        // Deeper than the 0.1 floor stops there, as vanilla clamps.
-        for _ in 0..30 {
-            camera.tick(None, fov_target(1.0, 20.0));
-        }
-        let floor = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((floor - 7.0).abs() < 1e-3, "{floor}");
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub(super) fn camera_after_packet(
 /// interpolated position, `getViewYRot`/`getViewXRot` and eye height, with
 /// its scale and camera distance for a detached view. A living entity's
 /// `getViewYRot` is its head's yaw (`yHeadRot`), not its body's `yRot`.
-pub(super) fn mob_camera_entity(m: &Mob) -> CameraEntity {
+fn mob_camera_entity(m: &Mob) -> CameraEntity {
     let attribute =
         |name: &str, default: f64| m.kind.attributes.get(name).copied().unwrap_or(default);
     CameraEntity {
@@ -150,6 +150,28 @@ pub(super) fn tnt_camera_entity(t: &super::tnt::PrimedTnt) -> CameraEntity {
     }
 }
 
+/// The effective spectator camera entity held by the client level.
+#[derive(Clone, Copy)]
+pub(super) enum SpectatedEntity<'a> {
+    Mob(&'a Mob),
+    Stand(&'a ArmorStand),
+    Boat(&'a super::boats::Boat),
+    Frame(&'a ItemFrame),
+    Tnt(&'a super::tnt::PrimedTnt),
+}
+
+impl SpectatedEntity<'_> {
+    pub(super) fn snapshot(self) -> CameraEntity {
+        match self {
+            Self::Mob(m) => mob_camera_entity(m),
+            Self::Stand(a) => stand_camera_entity(a),
+            Self::Boat(b) => boat_camera_entity(b),
+            Self::Frame(f) => frame_camera_entity(f),
+            Self::Tnt(t) => tnt_camera_entity(t),
+        }
+    }
+}
+
 /// The entity lists a server's camera can name (`Level.getEntity`): the kinds
 /// this client can follow.
 pub(super) struct CameraEntities<'a> {
@@ -160,31 +182,25 @@ pub(super) struct CameraEntities<'a> {
     pub tnts: &'a [super::tnt::PrimedTnt],
 }
 
-impl CameraEntities<'_> {
-    /// `ClientboundSetCameraPacket.getEntity`: the level holds the id.
-    pub(super) fn holds(&self, id: u32) -> bool {
-        self.mobs.iter().any(|m| m.id == id)
-            || self.stands.iter().any(|a| a.id == id)
-            || self.boats.iter().any(|b| b.id == id)
-            || self.frames.iter().any(|f| f.id == id)
-            || self.tnts.iter().any(|t| t.id == id)
-    }
-    /// `Camera.alignWithEntity`: the view out of the entity, `None` when the
-    /// level does not hold it.
-    pub(super) fn view(&self, id: u32) -> Option<CameraEntity> {
+impl<'a> CameraEntities<'a> {
+    /// `ClientboundSetCameraPacket.getEntity`: the entity the level holds.
+    pub(super) fn get(&self, id: u32) -> Option<SpectatedEntity<'a>> {
         if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
-            return Some(mob_camera_entity(m));
+            return Some(SpectatedEntity::Mob(m));
         }
         if let Some(a) = self.stands.iter().find(|a| a.id == id) {
-            return Some(stand_camera_entity(a));
+            return Some(SpectatedEntity::Stand(a));
         }
         if let Some(b) = self.boats.iter().find(|b| b.id == id) {
-            return Some(boat_camera_entity(b));
+            return Some(SpectatedEntity::Boat(b));
         }
         if let Some(f) = self.frames.iter().find(|f| f.id == id) {
-            return Some(frame_camera_entity(f));
+            return Some(SpectatedEntity::Frame(f));
         }
-        self.tnts.iter().find(|t| t.id == id).map(tnt_camera_entity)
+        self.tnts
+            .iter()
+            .find(|t| t.id == id)
+            .map(SpectatedEntity::Tnt)
     }
 }
 
@@ -199,7 +215,7 @@ impl Game<'_> {
     /// `ClientPacketListener.handleSetCamera`.
     pub(in crate::game) fn remote_set_camera(&mut self, camera_id: i32) {
         let id = camera_id as u32;
-        let in_level = self.camera_entities().holds(id);
+        let in_level = self.camera_entities().get(id).is_some();
         let player = self
             .remote
             .as_ref()
@@ -215,10 +231,12 @@ impl Game<'_> {
     /// `GameRenderer.checkEntityPostEffect` for the camera entity, or for none
     /// (`first_person` false: the third-person view clears it).
     pub(super) fn check_entity_post_effect(&mut self, first_person: bool) {
-        self.spectated_post_effect = self
-            .camera_mob()
-            .filter(|_| first_person)
-            .and_then(|m| entity_post_effect(&m.kind.id));
+        self.spectated_post_effect =
+            if first_person && let Some(SpectatedEntity::Mob(m)) = self.spectated_camera() {
+                entity_post_effect(&m.kind.id)
+            } else {
+                None
+            };
     }
     /// The entity a server attached the view to, when it is not the player.
     pub(in crate::game) fn remote_camera_id(&self) -> Option<u32> {
@@ -228,16 +246,13 @@ impl Game<'_> {
     pub(super) fn controls_camera(&self) -> bool {
         self.remote_camera_id().is_none()
     }
-    /// The mob the view follows, while the level still holds it.
-    pub(super) fn camera_mob(&self) -> Option<&Mob> {
-        let id = self.remote_camera_id()?;
-        self.mobs.iter().find(|m| m.id == id)
+    /// The entity a server attached the camera to, while the level still holds it.
+    pub(super) fn spectated_camera(&self) -> Option<SpectatedEntity<'_>> {
+        self.camera_entities().get(self.remote_camera_id()?)
     }
-    /// The view of the entity a server attached the camera to, while the
-    /// level still holds it.
+    /// The view of the spectated camera entity.
     pub(super) fn spectated_camera_snapshot(&self) -> Option<CameraEntity> {
-        let id = self.remote_camera_id()?;
-        self.camera_entities().view(id)
+        self.spectated_camera().map(SpectatedEntity::snapshot)
     }
     /// The level's entities a server camera may name.
     fn camera_entities(&self) -> CameraEntities<'_> {

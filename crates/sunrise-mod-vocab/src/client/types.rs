@@ -1217,20 +1217,6 @@ pub enum PanelEvent {
     Tab(u32),
 }
 
-/// The zoom a native mod asks for (`zoom`): the factor (1 is none), eased through the
-/// field of view like the spyglass when `smooth`, and the scale of mouse turning.
-#[derive(Clone, Copy, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Zoom {
-    /// The zoom as a multiple of the normal view; 1 is no zoom.
-    pub factor: f32,
-    /// Whether the camera eases into the zoom.
-    pub smooth: bool,
-    /// Scale applied to mouse turning while zoomed.
-    pub turn: f32,
-}
-
 /// `ParticleStatus`: how many particles a client shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

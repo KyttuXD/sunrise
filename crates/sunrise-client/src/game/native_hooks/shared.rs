@@ -3394,26 +3394,6 @@ impl Game<'_> {
         self.native_command(command, &mut ran);
         ran
     }
-    /// The zoom in effect while playing (a native mod's); the spyglass's own
-    /// view wins.
-    pub(super) fn native_zoom_now(&self) -> Option<mod_api::Zoom> {
-        if !self.playing() || self.scoping() {
-            return None;
-        }
-        let mut zoom = None;
-        self.native_zoom(&mut zoom);
-        let z = zoom?;
-        let factor = finite(z.factor, 1.0, 10.0);
-        (factor > 1.0).then_some(mod_api::Zoom {
-            factor,
-            smooth: z.smooth,
-            turn: if z.turn.is_finite() {
-                z.turn.clamp(0.05, 1.0)
-            } else {
-                1.0
-            },
-        })
-    }
     /// The pose of native mods' camera shake in this frame (`native_camera_shake`),
     /// none while not playing.
     pub(super) fn native_shake_matrix(&self, partial: f32) -> glam::Mat4 {

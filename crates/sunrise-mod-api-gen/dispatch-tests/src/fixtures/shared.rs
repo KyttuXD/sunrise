@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sunrise_core::game_mode::GameMode;
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct ItemStack {
     item: Arc<str>,
     count: u32,
@@ -55,8 +55,6 @@ use stubs::*;
 struct Text;
 #[derive(Clone)]
 struct ScreenshotImage;
-#[derive(Debug, PartialEq)]
-struct Zoom(u32);
 enum Flow {
     Continue,
     Cancel,
@@ -184,7 +182,7 @@ mod generated {
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
             Command, CommandRegistration, Config, Dispensed, InteractionResult, MapDecoration,
-            MapInfo, Zoom,
+            MapInfo,
         };
         #[derive(Clone)]
         pub struct FluidModel;
@@ -735,9 +733,16 @@ impl Hooks for Mod {
     fn level_tick_pre(&self, _: HostSide, _: &mut LevelTickPreEvent) {
         self.calls.lock().unwrap().push(self.id);
     }
-    fn zoom(&self, _: &dyn ClientHost, _: &mut ZoomEvent) -> Option<Zoom> {
+    fn prepare_item_craft(
+        &self,
+        _: &mut dyn ServerHost,
+        _: &mut PrepareItemCraftEvent<'_>,
+    ) -> Option<ItemStack> {
         self.calls.lock().unwrap().push(self.id);
-        Some(Zoom(self.id))
+        Some(ItemStack {
+            item: "test:crafted".into(),
+            count: self.id,
+        })
     }
     fn living_incoming_damage(
         &self,

@@ -1003,7 +1003,7 @@ one of these moments has to move that logic into a client native mod.
 |---|---|
 | `add_attribute_tooltips.rs` | `add_attribute_tooltips` |
 | `add_client_reload_listeners.rs` | `add_client_reload_listeners` |
-| `base.rs` | `biome_colors`, `block_entity_render_bounding_box`, `block_entity_submit`, `block_highlight`, `camera_distance`, `camera_shake`, `client_level_load`, `client_level_unload`, `client_resources_reloaded`, `command`, `compute_fog_color`, `compute_fov`, `emissive`, `framerate_limit`, `gui_layer_post`, `gui_layer_pre`, `interaction_key_mapping_triggered`, `item_bar`, `item_decorations`, `map_decorations`, `mouse_button_post`, `mouse_button_pre`, `mouse_scrolling`, `music`, `music_layers`, `panel_event`, `recipes_received`, `register_client_commands`, `render_fog`, `render_needs`, `screen_char_typed_pre`, `screen_key_pressed_pre`, `screen_key_released_pre`, `screen_mouse_button_pressed_pre`, `screen_mouse_button_released_pre`, `screen_mouse_dragged_pre`, `screen_mouse_scrolled_pre`, `screen_render_post`, `setting_changed`, `shader_params`, `standalone_models`, `tooltip`, `tooltip_component`, `tooltip_component_draw`, `use_animation`, `visuals`, `world_drawn`, `zoom` |
+| `base.rs` | `biome_colors`, `block_entity_render_bounding_box`, `block_entity_submit`, `block_highlight`, `camera_distance`, `camera_shake`, `client_level_load`, `client_level_unload`, `client_resources_reloaded`, `command`, `compute_fog_color`, `compute_fov`, `emissive`, `framerate_limit`, `gui_layer_post`, `gui_layer_pre`, `interaction_key_mapping_triggered`, `item_bar`, `item_decorations`, `map_decorations`, `mouse_button_post`, `mouse_button_pre`, `mouse_scrolling`, `music`, `music_layers`, `panel_event`, `recipes_received`, `register_client_commands`, `render_fog`, `render_needs`, `screen_char_typed_pre`, `screen_key_pressed_pre`, `screen_key_released_pre`, `screen_mouse_button_pressed_pre`, `screen_mouse_button_released_pre`, `screen_mouse_dragged_pre`, `screen_mouse_scrolled_pre`, `screen_render_post`, `setting_changed`, `shader_params`, `standalone_models`, `tooltip`, `tooltip_component`, `tooltip_component_draw`, `use_animation`, `visuals`, `world_drawn` |
 | `block_entity_view_distance.rs` | `block_entity_view_distance` |
 | `block_render_visibility.rs` | `block_render_visibility` |
 | `calculate_player_turn.rs` | `calculate_player_turn` |
@@ -1043,6 +1043,7 @@ one of these moments has to move that logic into a client native mod.
 | `left_click_empty.rs` | `left_click_empty` |
 | `movement_input_update.rs` | `movement_input_update` |
 | `player_heart_type.rs` | `player_heart_type` |
+| `player_turn.rs` | `player_turn` |
 | `register_block_tint_sources.rs` | `register_block_tint_sources` |
 | `register_color_resolvers.rs` | `register_color_resolvers` |
 | `register_debug_entries.rs` | `register_debug_entries` |
