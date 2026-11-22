@@ -1,0 +1,46 @@
+name: try mac build
+# Fork-only: builds the game for Apple silicon and Intel Macs on GitHub's hosted runners, to try a branch by hand.
+# Not part of any pull request.
+on:
+  push:
+    branches: [try/mac-build]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: macos-arm64, os: macos-15, target: aarch64-apple-darwin}
+          - {name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          targets: ${{ matrix.target }}
+      - name: Build the game
+        run: cargo build --profile fast --locked --target ${{ matrix.target }} -p sunrise-official --bin sunrise-official
+      - name: Name it as players know it, sign it ad hoc and pack it
+        run: |
+          set -euo pipefail
+          out="target/${{ matrix.target }}/fast"
+          cp "$out/sunrise-official" "$out/sunrise-client"
+          codesign --force -s - "$out/sunrise-client"
+          mkdir -p dist
+          cp "$out/sunrise-client" dist/
+          "$out/sunrise-client" --help | head -3 || true
+          (cd dist && zip -q ../sunrise-client-${{ matrix.name }}.zip sunrise-client)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sunrise-client-${{ matrix.name }}
+          path: sunrise-client-${{ matrix.name }}.zip
+          retention-days: 7
+          if-no-files-found: error
