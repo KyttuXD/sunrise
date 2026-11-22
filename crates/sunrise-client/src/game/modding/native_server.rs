@@ -20,7 +20,6 @@ mod selector_tests;
 
 use super::api_values::{TryIntoApi, TryIntoEngine};
 use super::{Dim, Game, commands::execute, respawn_anchor::RespawnConfig};
-use crate::game::level_control_hooks::LevelControl;
 pub(super) use argument_kinds::{CommandArguments, command_arguments};
 use argument_kinds::{
     UNCENTERED, argument_type, custom_value, dimension_value, nbt_value, parsed_type, parser,
@@ -1553,7 +1552,7 @@ impl Game<'_> {
         });
         self.native_send(uuid, packet)
     }
-    /// The server's tick rate (20 unless `/tick rate` changed it) and the
+    /// The server's tick rate (20 by default) and the
     /// milliseconds its ticks took on average lately, as `/tick query`
     /// reports them. The ticks a second it keeps up is the rate, or
     /// 1000 / milliseconds when that is lower.
@@ -1566,23 +1565,6 @@ impl Game<'_> {
     /// `TickRateManager.isFrozen`; None on a client, which follows its server's.
     pub(in crate::game) fn tick_rate_is_frozen(&self) -> Option<bool> {
         self.is_logical_server().then(|| self.clock.frozen())
-    }
-    /// A mod's `set_tick_rate`: `apply_tick_rate`, refused inside the `server_tick_rate_changed`
-    /// hook so a listener can't fire it again without end.
-    pub(in crate::game) fn set_tick_rate(&mut self, rate: f32) -> bool {
-        !LevelControl::TickRate.is_heard() && self.apply_tick_rate(rate)
-    }
-    /// `/tick rate`'s `ServerTickRateManager.setTickRate`, then `MinecraftServer.onTickRateChanged`
-    /// (the hook, and the autosave wait shortened). False for a rate outside 1 to 10000 and
-    /// on a client, which follows its server's rate. The command runs it from a listener too,
-    /// as vanilla does.
-    pub(in crate::game) fn apply_tick_rate(&mut self, rate: f32) -> bool {
-        if !self.is_logical_server() || !(1.0..=10_000.0).contains(&rate) {
-            return false;
-        }
-        self.clock.set_rate(rate);
-        self.on_tick_rate_changed();
-        true
     }
     /// Whether that player counts for `players_sleeping_percentage`: an
     /// ignored player who isn't in bed is left out of the players the night

@@ -262,6 +262,8 @@ pub fn isolated_failures() -> u64 {
 #[derive(Clone, Copy)]
 pub(crate) enum Callback {
     Hook(generated::HookId),
+    /// A callback whose failure is contained without aborting an enclosing action.
+    IndependentHook(generated::HookId),
     DamageReduction,
     Registration,
 }
@@ -275,7 +277,7 @@ impl From<generated::HookId> for Callback {
 impl Callback {
     fn index(self) -> usize {
         match self {
-            Self::Hook(hook) => hook as usize,
+            Self::Hook(hook) | Self::IndependentHook(hook) => hook as usize,
             Self::DamageReduction => generated::HOOK_COUNT,
             Self::Registration => generated::HOOK_COUNT + 1,
         }
@@ -287,8 +289,10 @@ impl Callback {
 /// untouched, unlike a whole-mod disable. Returns `true` only on the first panic for
 /// `(hook, id)`, so the error log line and error toast fire once.
 fn poison(callback: Callback, id: &'static str) -> bool {
-    let (entered, trapped) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    if !matches!(callback, Callback::IndependentHook(_)) {
+        let (entered, trapped) = LISTENER_SERIAL.get();
+        LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    }
     let Some(installed) = installed() else {
         return true;
     };
@@ -1030,8 +1034,46 @@ impl ListenerScope {
     }
 }
 
+/// Scope for hooks that can call their own setter again. Invocation still uses the
+/// standard ownership, panic and journal path.
+#[must_use]
+pub(crate) struct ActiveListener;
+
+impl Drop for ActiveListener {
+    fn drop(&mut self) {
+        ACTIVE_LISTENERS.with_borrow_mut(|active| {
+            active.pop();
+        });
+    }
+}
+
+pub(crate) fn enter_non_reentrant_listener(
+    hook: HookId,
+    name: &'static str,
+    id: &'static str,
+) -> Option<ActiveListener> {
+    let key = (hook as usize, id);
+    let entered = ACTIVE_LISTENERS.with_borrow_mut(|active| {
+        if active.contains(&key) {
+            return false;
+        }
+        active.push(key);
+        true
+    });
+    if entered {
+        Some(ActiveListener)
+    } else {
+        log::warn!("native refusal: {id} hook {name}: this callback is already running");
+        None
+    }
+}
+
 thread_local! {
-    /// Listener entries (including nested hooks) and poisoned traps on this thread.
+    /// Only hooks that opt out of reentry touch this stack.
+    static ACTIVE_LISTENERS: std::cell::RefCell<Vec<(usize, &'static str)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+    /// Listener entries (including nested hooks) and rollback-triggering traps on this thread.
     static LISTENER_SERIAL: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
 

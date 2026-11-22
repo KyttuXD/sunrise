@@ -4,17 +4,76 @@
 use super::*;
 
 impl Game<'_> {
+    /// `MinecraftServer.setWeatherParameters`: the dimension names the caller's origin,
+    /// but the weather timers and flags belong to the server. A veto skips only this write.
+    pub(in crate::game) fn set_weather_parameters(
+        &mut self,
+        origin_dimension: &str,
+        clear_ticks: i32,
+        weather_ticks: i32,
+        raining: bool,
+        thundering: bool,
+    ) -> bool {
+        let mut cancel = false;
+        self.native_weather_change(
+            origin_dimension,
+            clear_ticks,
+            weather_ticks,
+            raining,
+            thundering,
+            &mut cancel,
+        );
+        if cancel {
+            return false;
+        }
+
+        let weather = &mut self.world.weather;
+        weather.clear_time = clear_ticks;
+        weather.rain_time = weather_ticks;
+        weather.thunder_time = weather_ticks;
+        weather.raining = raining;
+        weather.thundering = thundering;
+        true
+    }
+
+    /// `ServerLevel.advanceWeatherCycle`: tick this level's interpolants against the
+    /// shared server timers and flags, even when its chunks and entities are idle.
+    pub(super) fn tick_level_weather(&mut self, dim: Dim) {
+        let parameters = self.world.weather;
+        let world = if dim == self.dim {
+            &mut self.world
+        } else if let Some(parked) = self.levels.parked_mut(dim) {
+            &mut parked.world
+        } else {
+            return;
+        };
+        if !world.shape.can_have_weather(dim == Dim::End) {
+            return;
+        }
+        if dim != self.dim {
+            world.weather.copy_parameters_from(parameters);
+        }
+        if self
+            .ui
+            .rules
+            .bool_at(sunrise_client::gamerules::vanilla::ADVANCE_WEATHER)
+        {
+            world.weather.tick_timers(&mut world.random);
+        }
+        world.weather.tick_levels();
+        if dim != self.dim {
+            let parameters = world.weather;
+            self.world.weather.copy_parameters_from(parameters);
+        }
+    }
+
     /// `Level.isDarkOutside`.
     pub(super) fn dark_outside(&self) -> bool {
         !self.dimension_type().has_fixed_time && self.sky_darken() >= 4
     }
 
     pub(super) fn can_have_weather(&self) -> bool {
-        level_can_have_weather(
-            self.world.shape.sky_light,
-            self.world.shape.has_ceiling,
-            self.dim == Dim::End,
-        )
+        self.world.shape.can_have_weather(self.dim == Dim::End)
     }
 
     /// The rain and thunder levels (`Level.getRainLevel`, `getThunderLevel`):

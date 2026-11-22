@@ -2190,7 +2190,9 @@ impl Game<'_> {
                 true,
             )
         };
-        self.set_weather_parameters(clear, time, raining, thundering);
+        if !self.set_weather_parameters(self.dim.id(), clear, time, raining, thundering) {
+            return Err(err("command.failed", &[]));
+        }
         self.feedback(Text::translate(key, &[]));
         Ok(duration.unwrap_or(-1))
     }

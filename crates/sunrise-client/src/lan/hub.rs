@@ -12,6 +12,7 @@ use super::{
     entity::{Entities, EntityState},
     equipment_cache,
     guest::{Guest, InboxItem, SentEffect, stack_to_network_projecting},
+    weather,
 };
 use crate::{
     chunk::Chunk,
@@ -109,6 +110,11 @@ pub struct HubConfig {
     /// The own seeds of the runtime levels a mod opened with one, by id; the world's seed for
     /// the others. Kept here, not in `levels`, whose tables are leaked.
     pub level_seeds: std::collections::BTreeMap<String, i64>,
+}
+
+/// `ChunkMap.setServerViewDistance`: bounds for chunk loading and tracking, not the advertised radius.
+pub fn effective_view_distance(advertised: i32) -> i32 {
+    advertised.clamp(2, 32)
 }
 
 /// What the other players see of a player's body besides sneaking and
@@ -973,16 +979,16 @@ impl Hub {
     /// and each one's chunks follow it, up to what they asked for
     /// (ChunkMap.getPlayerViewDistance).
     pub fn set_view_distance(&mut self, distance: i32) {
+        let previous = effective_view_distance(self.config.view_distance);
         self.config.view_distance = distance;
         self.broadcast(&C::SetChunkCacheRadius(play::Distance { distance }));
-        self.guests.update_all(|g| {
-            // Mth.clamp(requested, 2, serverViewDistance): Java's max then min order also
-            // handles a management value below two without panicking when the bounds cross.
-            g.view_distance = i32::from(g.info.view_distance)
-                .max(2)
-                .min(self.config.view_distance);
-            g.center = None;
-        });
+        let effective = effective_view_distance(distance);
+        if effective != previous {
+            self.guests.update_all(|g| {
+                g.view_distance = i32::from(g.info.view_distance).clamp(2, effective);
+                g.center = None;
+            });
+        }
     }
     /// PlayerList.setSimulationDistance.
     pub fn set_simulation_distance(&mut self, distance: i32) {
@@ -1075,10 +1081,18 @@ impl Hub {
             .filter(move |g| self.watches(g) && loads(g))
             .map(Guest::chunk)
     }
-    /// `PlayerList.broadcastAll(packet, dimension)`: the players in the level in place.
+    /// `PlayerList.broadcastAll(packet, dimension)`: the players watching the level in place.
     pub fn broadcast_level(&self, packet: &C) {
+        self.broadcast_in_level(&self.config.dimension, packet);
+    }
+    /// `PlayerList.broadcastAll(packet, dimension)`, for a level whether or not it is in place.
+    pub fn broadcast_in_level(&self, dimension: &str, packet: &C) {
         let mut body = None;
-        for g in self.guests.simulation_iter().filter(|g| self.watches(g)) {
+        for g in self
+            .guests
+            .simulation_iter()
+            .filter(|g| g.watches_level(dimension))
+        {
             g.sender
                 .send(body.get_or_insert_with(|| packet.encode()).clone());
         }
@@ -1434,7 +1448,12 @@ impl Hub {
         *ctx.next_entity += 1;
         let entity_id = *ctx.next_entity as i32;
         let conn = j.conn;
-        let mut guest = Guest::new(j, entity_id, ctx.spawn, self.config.view_distance);
+        let mut guest = Guest::new(
+            j,
+            entity_id,
+            ctx.spawn,
+            effective_view_distance(self.config.view_distance),
+        );
         self.bind_raw_player(&guest, entity_id);
         guest.last_action_tick = self.ticks;
         guest.game_mode = self.config.default_game_mode;
@@ -2309,20 +2328,10 @@ impl Hub {
         g.send(&C::InitializeBorder(super::border::initialize(ctx.border)));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
         g.send(&self.default_spawn(spawn, ctx.spawn_angle, ctx.spawn_dimension));
-        let w = &ctx.world.weather;
-        if w.raining {
-            g.send(&C::GameEvent(play::GameEvent {
-                event: game_event::START_RAINING,
-                param: 0.0,
-            }));
-            g.send(&C::GameEvent(play::GameEvent {
-                event: game_event::RAIN_LEVEL,
-                param: w.rain_level.1,
-            }));
-            g.send(&C::GameEvent(play::GameEvent {
-                event: game_event::THUNDER_LEVEL,
-                param: w.thunder_level.1,
-            }));
+        if weather::state(ctx.world, &g.dimension).0 {
+            // PlayerList uses the getters here, including thunder scaled by rain.
+            let (rain, thunder) = ctx.world.weather.levels(1.0);
+            weather::send_updates(None, (true, rain, thunder), |packet| g.send(packet));
         }
         if load_start {
             g.send(&C::GameEvent(play::GameEvent {
@@ -2837,12 +2846,18 @@ impl Hub {
         }
     }
 
+    /// `ServerTickRateManager.updateStateToClients`: send the current ticking state
+    /// and remember it for the next tick's synchronization.
+    pub fn send_ticking_state(&mut self, rate: f32, frozen: bool) {
+        self.ticking = (rate, frozen);
+        self.broadcast(&ticking_state(rate, frozen));
+    }
+
     /// `ServerTickRateManager.updateStepTicks` / `updateStateToClients`:
     /// send clock changes before the block events caused by their ticks.
     pub fn sync_ticking(&mut self, rate: f32, frozen: bool, steps: crate::clock::StepState) {
         if (rate, frozen) != self.ticking {
-            self.ticking = (rate, frozen);
-            self.broadcast(&ticking_state(rate, frozen));
+            self.send_ticking_state(rate, frozen);
         }
         // ServerTickRateManager.updateStepTicks: a step started or stopped.
         if steps.revision != self.stepping {
@@ -2913,31 +2928,11 @@ impl Hub {
             None => self.last_level_clock = (i64::MIN, 0.0),
         }
         self.sync_ticking(ctx.tick_rate, ctx.tick_frozen, ctx.tick_steps);
-        let w = &world.weather;
-        let (raining, rain, thunder) = self.weather;
-        if w.raining != raining {
-            self.broadcast_level(&C::GameEvent(play::GameEvent {
-                event: if w.raining {
-                    game_event::START_RAINING
-                } else {
-                    game_event::STOP_RAINING
-                },
-                param: 0.0,
-            }));
-        }
-        if (w.rain_level.1 - rain).abs() > f32::EPSILON {
-            self.broadcast_level(&C::GameEvent(play::GameEvent {
-                event: game_event::RAIN_LEVEL,
-                param: w.rain_level.1,
-            }));
-        }
-        if (w.thunder_level.1 - thunder).abs() > f32::EPSILON {
-            self.broadcast_level(&C::GameEvent(play::GameEvent {
-                event: game_event::THUNDER_LEVEL,
-                param: w.thunder_level.1,
-            }));
-        }
-        self.weather = (w.raining, w.rain_level.1, w.thunder_level.1);
+        let state = weather::state(world, &self.config.dimension);
+        weather::send_updates(Some(self.weather), state, |packet| {
+            self.broadcast_level(packet);
+        });
+        self.weather = state;
     }
 
     // ---- chunks --------------------------------------------------------
@@ -4384,14 +4379,11 @@ impl Hub {
                     }
                 }
                 S::ClientInformation(info) => {
+                    let effective = effective_view_distance(self.config.view_distance);
                     let (was_hat, hat, uuid) = self.guests.update(i, |g| {
                         // PlayerModelPart.HAT (bit 6): the tab list shows the hat layer.
                         let was_hat = g.info.model_customisation & 0x40 != 0;
-                        // max(2).min(view), not clamp: a live management value
-                        // below 2 would cross the bounds and panic (horizon-rust/horizon#8118).
-                        g.view_distance = i32::from(info.view_distance)
-                            .max(2)
-                            .min(self.config.view_distance);
+                        g.view_distance = i32::from(info.view_distance).clamp(2, effective);
                         let old_info = self.mods_loaded.then(|| Box::new(g.info.clone()));
                         g.info = info;
                         if let Some(old) = old_info {

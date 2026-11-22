@@ -112,6 +112,19 @@ pub(super) fn emit<'a>(
             .map_err(|e| format!("{name}: {e}"))?;
         let carried: Vec<_> = declared.iter().map(|(arg, ty)| (arg.clone(), ty)).collect();
         let mut args = carried.clone();
+        if hook.independent_listener
+            && (is_render
+                || declaration_only
+                || hook.scope.is_some()
+                || hook.owner.is_some()
+                || hook.context == Some(PhaseContext::ChunkDisk)
+                || name == "consume_effect"
+                || !matches!(hook.contract, Contract::Listen | Contract::Cancel))
+        {
+            return Err(format!(
+                "{name}: independent_listener requires a global listen or cancel dispatcher"
+            ));
+        }
         let carrier = format!("{}Call", hook_id(name));
         let uses_carrier = !declared.is_empty()
             && (name == "apply_effect_tick" && declaration_only
@@ -1106,18 +1119,30 @@ pub(super) fn emit<'a>(
                 inits.join(", "),
             )
         };
+        // A cancel-only hook can rebuild its inputs for each subscriber and forward
+        // only the cancellation accepted after the previous subscriber returned.
+        let local_cancel = hook.event_per_listener && mod_cancel;
+        if local_cancel
+            && (contract != Contract::Cancel
+                || !rollback.is_empty()
+                || staged.is_some()
+                || hook.output_validator.is_some())
+        {
+            return Err(format!(
+                "{name}: per-listener cancellation requires a cancel-only output"
+            ));
+        }
         // Each listener gets a fresh event with the original inputs. Writable borrowed
-        // payloads can still share their pointee. Write-back, the owner filter and chunk
-        // I/O checks use the outer event and cannot use a listener-local one.
+        // payloads can still share their pointee.
         let (build, local_event) = if staged.is_some() {
             (String::new(), build)
         } else if hook.event_per_listener || answered_return {
-            // A replace answer is returned outside the event. A regular collect
-            // output borrows one slot, reborrowed for each listener above. Answered
-            // collect batches and cancellation do not use this mode. An isolated collector's
-            // one return value is outside the event too; each mod gets the original inputs.
-            let reply_outside_event =
-                matches!(contract, Contract::Listen | Contract::Replace) || answered_return;
+            // A replace answer and an isolated collector's one return value live outside
+            // the event. A regular collect output borrows one slot, reborrowed for each
+            // listener above. Cancel-only hooks can forward just the accepted cancellation.
+            let reply_outside_event = matches!(contract, Contract::Listen | Contract::Replace)
+                || answered_return
+                || local_cancel;
             let shared_collect_output = collected.is_some() && !answered && !collect_cancel;
             if (!reply_outside_event && !shared_collect_output)
                 || !stack_outputs.is_empty()
@@ -1125,7 +1150,7 @@ pub(super) fn emit<'a>(
                 || hook.context == Some(PhaseContext::ChunkDisk)
             {
                 return Err(format!(
-                    "{name}: event_per_listener requires a listen or replace hook, or a collect hook with a shared borrowed output, without scalar or stack writeback or other shared event state"
+                    "{name}: event_per_listener requires a listen, replace, cancel-only or compatible collect hook without shared event state"
                 ));
             }
             (String::new(), build)
@@ -1188,7 +1213,7 @@ pub(super) fn emit<'a>(
             ));
         }
         let previous_cancel = snaps.len();
-        if mod_cancel {
+        if mod_cancel && !local_cancel {
             restores.push(format!("{event}.cancelled = {saved}.{previous_cancel};"));
             snaps.push(format!("{event}.cancelled"));
         }
@@ -1214,12 +1239,17 @@ pub(super) fn emit<'a>(
         } else {
             ""
         };
+        let callback = if hook.independent_listener {
+            format!("super::runtime::Callback::IndependentHook(HookId::{hook_id})")
+        } else {
+            format!("HookId::{hook_id}")
+        };
         let run_with = |mod_id_expr: &str,
                         on_abort: &str,
                         extra_restore: &str,
                         expression: &str| {
             let invocation = format!(
-                "super::runtime::invoke(HookId::{hook_id}, \"{name}\", {mod_id_expr}, || {expression})"
+                "super::runtime::invoke({callback}, \"{name}\", {mod_id_expr}, || {expression})"
             );
             let discard_batch = if answered_collect_batch {
                 let output = out.unwrap();
@@ -1371,7 +1401,17 @@ pub(super) fn emit<'a>(
                 "continue;",
                 &listener_call(&mod_item),
             );
-            if let Some(validator) = &hook.output_validator {
+            if local_cancel {
+                let out = cancel_out.unwrap();
+                let vetoed = fresh_name("vetoed", &mut used);
+                format!(
+                    "let {vetoed} = matches!({invocation}, Flow::Cancel);
+                     if {vetoed} || (!*{out} && {event}.cancelled) {{
+                         log::warn!(\"mod {{}}: hook {name} requested a veto\", {mod_entry}.id);
+                     }}
+                     *{out} = {event}.cancelled || {vetoed};"
+                )
+            } else if let Some(validator) = &hook.output_validator {
                 let flow = fresh_name("flow", &mut used);
                 let field = fresh_name("refused_field", &mut used);
                 let arguments = rollback
@@ -1406,6 +1446,16 @@ pub(super) fn emit<'a>(
             String::new()
         };
         let inert_owner = fresh_name("disabled_owner", &mut used);
+        let active_guard = fresh_name("_active_listener", &mut used);
+        let skip_active = |owner: &str| {
+            if hook.independent_listener {
+                format!(
+                    "let Some({active_guard}) = super::runtime::enter_non_reentrant_listener(HookId::{hook_id}, \"{name}\", {owner}) else {{ continue; }};"
+                )
+            } else {
+                String::new()
+            }
+        };
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => {
                 let output = out.unwrap();
@@ -1485,13 +1535,23 @@ pub(super) fn emit<'a>(
                     ),
                 )
             }
-            None if mod_cancel => (
-                String::new(),
-                format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {event}.cancelled && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {cancel_step} }} }} *{o} = {event}.cancelled;",
-                    o = cancel_out.unwrap()
-                ),
-            ),
+            None if mod_cancel => {
+                let out = cancel_out.unwrap();
+                let (cancelled, finish) = if local_cancel {
+                    (format!("*{out}"), String::new())
+                } else {
+                    let cancelled = format!("{event}.cancelled");
+                    let finish = format!("*{out} = {cancelled};");
+                    (cancelled, finish)
+                };
+                let active = skip_active(&format!("{mod_entry}.id"));
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {cancelled} && !{receives} {{ continue; }} {active} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} }} }} {finish}"
+                    ),
+                )
+            }
             None => {
                 let each = if filtered_subscribers {
                     format!(
@@ -1503,7 +1563,8 @@ pub(super) fn emit<'a>(
                 (
                     String::new(),
                     format!(
-                        "for ({listener_id}, {mod_item}) in {each} {{ {} }}",
+                        "for ({listener_id}, {mod_item}) in {each} {{ {} {} }}",
+                        skip_active(&listener_id),
                         call(&mod_item, &listener_id, "continue;", "break")
                     ),
                 )

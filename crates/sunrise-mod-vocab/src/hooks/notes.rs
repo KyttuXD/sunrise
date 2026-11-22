@@ -317,11 +317,12 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`prepare_item_craft(player, name, pos, result)`**: a crafting-grid result was prepared; `pos` is the crafting table, or None for the player's inventory grid. Change it before it is sent to the menu. Guest state is not swapped in.
 - **`trade_select(player, name, villager, index)`**: a player selected offer `index` in a villager's trading menu; `villager` is its entity id when known. The menu has updated and the player's state is not swapped in.
 - **`hopper_pickup_item(dimension, pos, item, count, cancel)`**: a hopper at `pos` is about to pick up a dropped stack; set `cancel` to leave it in the world.
-- **`weather_change(dimension, raining, thundering, cancel)`**: the server's `/weather` command is about to set
-  its final rain and thunder states in `dimension`. Set `cancel` to keep the previous weather parameters, including
-  their timers.
-- **`thunder_change(dimension, thundering, cancel)`**: the server's `/weather` command is about to change
-  thunder. Set `cancel` to keep the previous thunder state and timer.
+- **`weather_change(host, event)`** (`WeatherChangeEvent`, version 2): before `/weather`,
+  `level.set_weather` or a GameTest weather environment writes the server's shared timers and flags. `event.dimension` names the origin,
+  not the scope. `event.clear_ticks` is the proposed clear timer, and `event.weather_ticks` is
+  the proposed rain and thunder timer. Inspect both flags (`event.raining` and `event.thundering`)
+  in this one callback. Return `Flow::Cancel` or set `event.cancelled` to veto the whole write;
+  the setter returns `false` on a final veto without undoing any listener's Host writes.
 - **`lightning_strike(player, pos, cause, cancel)`**: a weather, Channeling-trident, or `/summon` lightning bolt
   is about to be created. Set `cancel` to prevent the bolt and its effects; `cause` names the creation path.
 - **`entity_struck_by_lightning(entity, bolt, cancel)`**: a lightning bolt is about to hit `entity`
@@ -336,8 +337,12 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   `wake_up_from_sleep` marker; a mod may set `Absolute`, `Relative` or another `Marker`, read with
   `level_clock_marker_time`. `new_time`: the morning, read only (contract 2). Level's own clock, resolved after every mod;
   a time before `current` or past `i64::MAX`, or a marker that clock lacks (only the Overworld's has any), moves to the morning.
-- **`world_border_bounds_changed()`**: `/worldborder set` or `/worldborder add` changed the border size or started a timed size change.
-- **`world_border_center_changed()`**: `/worldborder center` moved the border center. It hears successful commands only.
+- **`world_border_bounds_changed(host, event)`** (version 2): the border at `event.level`
+  was resized. `event.lerp_ticks` is `None` for a fixed write or `Some(requested_ticks)`
+  for a timed request, even if the requested size equals the current size.
+- **`world_border_center_changed(host, event)`** (version 2): the border at `event.level`
+  was recentered, including equal-value direct writes. Read the named border with
+  `event.level.world_border(host)` even if that level is not in place.
 - **`spawn_change(dimension, pos, angle)`**: `/setworldspawn` moved the world's spawn point to `pos` in level `dimension`, after its level, position and rotation are applied.
 - **`portal_create(dimension, pos)`**: a Nether portal built for dimension travel or the End arrival platform was completed in `dimension`; `pos` is its lower corner or platform origin.
 - **`raid_spawn_wave(raid, pos, wave, raiders)`**: a raid wave is about to be spawned at `pos`; `raiders` is the count Sunrise will spawn.
@@ -356,7 +361,9 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`inventory_move_item(source, destination, item, cancel)`**: a hopper is about to move one item between containers (a composter's bone meal too). Set `cancel` to leave it in the source slot. A chest boat or minecart is reported at the block it is in.
 - **`hopper_inventory_search(hopper, container, entity)`**: a hopper selects a block container or container entity while searching for items.
 - **`vault_loot(pos, item)`**: a vault is about to eject a loot item, before the item entity spawns.
-- **`world_border_bounds_change_finish()`**: a timed world border size change finished on the server, after the border reached its final size.
+- **`world_border_bounds_change_finish(host, event)`** (version 2): when an actual moving extent
+  reaches its target size at the start of `event.level`'s normal tick, even when the level is idle and
+  parked. Starting or replacing an extent is not a finish.
 - **`player_launch_projectile(player, name, item)`**: a server player launched a snowball, egg, ender pearl,
   potion or trident. It fires after the projectile is created and only for guest players in a LAN world.
 - **`entity_unleash(entity, kind)`**: a mob's leash was removed, before any lead drop is handled.
@@ -676,8 +683,9 @@ handle, an entity the client doesn't track and a level it doesn't show:
   weather. A server can read any open level, including parked levels; a client reads only its current synchronized
   level after login. Stale handles and unavailable levels return `None`; the read never loads a level.
 - `level.seed(host)`, `difficulty` (`"normal"`, as `/difficulty` names it), `game_rule(host, "keep_inventory")` (a
-  `GameRuleValue`, `Bool` or `Int`; None for an unknown rule), `game_rules` (every rule as a `minecraft:` id and its
-  value), `is_raining` and `is_thundering` read its server settings.
+  `GameRuleValue`, `Bool` or `Int`; None for an unknown rule), and `game_rules` (every rule as a `minecraft:` id and its
+  value) read server settings. `level.is_raining(host)` and `level.is_thundering(host)` read the named server level's
+  own strengths, not the shared flags, even for a parked level.
   `level.is_raining_at(host, pos)` (`Level.isRainingAt`) asks about one position of any open level: it rains there, the
   position has full sky light with nothing motion-blocking or fluid above it, and its biome's precipitation at that
   height is rain (not snow or none). It is `None` where the block read is, an unloaded chunk or a `y` outside the
@@ -2551,9 +2559,16 @@ registration path.
 
 - `spawn_change(dimension, pos, angle)` is told after `/setworldspawn` moves the world's spawn point, with its level, block position and rotation.
 
-- `world_border_bounds_changed()` is told after `/worldborder set` or `/worldborder add` changes the border size or starts its timed size change. It hears successful commands only.
+- `world_border_bounds_changed` hears successful command and direct size writes. Read the
+  affected border through `event.level.world_border(host)`; `event.lerp_ticks` distinguishes
+  the fixed and timed setters, including a timed write to the current size.
 
-- `world_border_center_changed()` is told after `/worldborder center` moves the border center. It hears successful commands only.
+- `world_border_center_changed` hears successful command and direct center writes, even an
+  equal-value direct write, and gives the affected `event.level`. Neither notification needs
+  the level to be in place or fires for loads or client packets. A nested border setter applies
+  normally; it skips same-hook callbacks already running on this thread. Panics are logged and
+  shown in an error toast and disable only the panicking callback for the session. Other
+  refusals are logged when they happen and do not disable the listener.
 
 - A server player completed an advancement after progress was recorded; `advancement` is its identifier, such as `minecraft:story/mine_stone`.
 
@@ -2648,15 +2663,19 @@ registration path.
 
 - `target_hit(dimension, pos, strength)` is called after a projectile hits the target block at `pos` and it takes the reported redstone output strength.
 
-- The server's `/weather` command is about to change thunder: `thunder_change(dimension, thundering, cancel)`. Set `cancel` and the previous thunder state and timer remain.
-
 - The overworld clock is about to jump after sleep or a `/time` command: `time_skip(dimension, from, to, cause, cancel)`. Set `cancel` to keep the old time.
 
 - A player selected a trade: `trade_select(player, name, villager, index)` is heard after the trading menu updates; `villager` is the entity id when known. The player's state is not swapped in.
 
 - `vault_change_state(dimension, pos, state)` is called after a vault at `pos` changes to `state` (`inactive`, `active`, `unlocking`, or `ejecting`).
 
-- The server's `/weather` command is about to change its rain and thunder parameters: `weather_change(dimension, raining, thundering, cancel)`. Set `cancel` and the prior weather and timers remain.
+- `weather_change` hears explicit server-wide weather parameter writes, not natural weather ticks
+  or strength changes. Each listener sees the proposed signed timers and flags. Return `Flow::Cancel`
+  or set `event.cancelled` to veto all the parameters; a veto is logged with the mod's ID and does
+  not undo any Host writes. On panic, the game ignores that listener's edits to cancellation,
+  logs the panic, shows an error toast and disables only that mod's callback for the session.
+  Phase and reentry refusals are logged each time without disabling the listener. A nested write
+  skips callbacks for this hook already running on the thread; other eligible listeners still run.
 
 - The dedicated server's whitelist changed state: `whitelist_state_update(enabled)` reports its final on/off state, after `/whitelist on` or `/whitelist off` from a player or console.
 
@@ -2750,7 +2769,9 @@ registration path.
 
 - A vault is about to eject a loot item: `vault_loot(pos, item)` supplies the vault position and item identifier before it spawns.
 
-- A timed world border size change finished: `world_border_bounds_change_finish()` fires after the border reaches its final size.
+- `world_border_bounds_change_finish` gives `event.level` when its moving border reaches the target
+  at the start of its normal tick. Starting or replacing an extent is not a finish. Panics isolate just
+  that callback for the session, with a log and error toast, as for the center and size notices.
 
 - `ClientHost::create_dynamic_texture(id, width, height, rgba)`, `update_dynamic_texture`, `free_dynamic_texture(id)` and `dynamic_texture_budget()`: vanilla's `DynamicTexture` registered in the `TextureManager` (`register`, `upload`, `release`), kept in the HUD atlas. A client mod names an RGBA image under a namespace it owns (`mymod:dynamic/panel`, its extra manifest namespaces, or a content package it serves via `served_by`); it takes a slot of the atlas's pool, of the smallest of three size classes that holds it (`DYNAMIC_TEXTURE_CLASSES`: 64, 256 and 1024 pixels square, 32, 8 and 2 slots), and its id names it as a GUI sprite, so `DrawContext::sprite`, `gui_nine_slice`, `tiled_sprite` and `gui_sprite` reach it as any sprite. The pool is packed only when a client mod is loaded (decided at load and on a resource reload, with no mixin), so a game without mods has no slot and no atlas growth. An update re-patches the same slot (a size of another class is `ClassChange`), a free drops the name and returns the slot, and a resource reload keeps every name and patches the new atlas from the last pixels, which the game keeps and counts in the calling mod's budget: `DYNAMIC_TEXTURE_MOD_IMAGES` (16) images and `DYNAMIC_TEXTURE_MOD_BYTES` (4 MiB), read with `dynamic_texture_budget`. Every refusal is named (`DynamicTextureError`: `NotOwned`, `BadSize`, `TooLarge` past 1024 pixels, `NoSlot`, `OverBudget`, `NameTaken`, `Unknown`, `ClassChange`, `Unavailable`) and changes nothing. Replaces `native_mod_image`, one 1024 by 1024 slot shared by every mod. Diverges from upstream: horizon-rust/horizon keeps `native_mod_image`.
 - A living entity drowning (`living_drown`), with changeable drowning, damage and bubble count, and cancellation.

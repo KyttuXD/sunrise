@@ -9,7 +9,7 @@ use mod_api::{
 };
 use std::sync::Arc;
 use sunrise_client::command::vanilla::DIFFICULTIES;
-use sunrise_client::world::World;
+use sunrise_client::world::{World, weather_flags};
 use sunrise_client_core::gamerules::Value as GameRuleValue;
 use sunrise_core::position::BlockPos;
 use sunrise_core::random::LegacyRandom;
@@ -21,20 +21,15 @@ fn weather_for_level(
     is_end: bool,
     levels: (f32, f32),
 ) -> (f32, f32) {
-    if shape.sky_light && !shape.has_ceiling && !is_end {
+    if shape.can_have_weather(is_end) {
         levels
     } else {
         (0.0, 0.0)
     }
 }
 
-fn weather_for_world(world: &World, is_end: bool) -> (f32, f32) {
+pub(super) fn weather_for_world(world: &World, is_end: bool) -> (f32, f32) {
     weather_for_level(world.shape, is_end, world.weather.levels(1.0))
-}
-
-/// `Level.isRaining` and `isThundering` from the rain and thunder levels.
-fn weather_flags((rain, thunder): (f32, f32)) -> (bool, bool) {
-    (rain > 0.2, thunder > 0.9)
 }
 
 /// `Level.isRainingAt` over `world`, the column of the level in dimension `dim`.
@@ -959,8 +954,11 @@ mod tests {
 
     #[test]
     fn rain_and_thunder_start_above_vanillas_thresholds() {
-        assert_eq!(super::weather_flags((0.2, 0.0)), (false, false));
-        assert_eq!(super::weather_flags((0.21, 0.9)), (true, false));
+        assert_eq!(
+            super::weather_flags((0.2_f32.next_down(), 0.0)),
+            (false, false)
+        );
+        assert_eq!(super::weather_flags((0.2, 0.9)), (true, false));
         assert_eq!(super::weather_flags((1.0, 0.95)), (true, true));
     }
 }

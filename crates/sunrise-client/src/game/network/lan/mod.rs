@@ -78,8 +78,6 @@ pub(super) struct LanHost {
     /// whose respawn replaces their waypoint.
     pub waypoints: std::collections::HashMap<String, lan::waypoints::Waypoints>,
     pub waypoint_dead: std::collections::HashSet<u128>,
-    /// The world border as the guests were last told of it (lan/border.rs).
-    pub border_sent: Option<lan::border::Sent>,
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/network/lan_actions/commands.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
@@ -1302,7 +1300,6 @@ impl Game<'_> {
             owner: None,
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
-            border_sent: None,
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
             far,
@@ -1744,11 +1741,18 @@ impl Game<'_> {
         }
     }
 
-    /// Update the live view distance used for player chunk tracking.
-    pub(super) fn set_view_distance(&mut self, distance: i32) {
-        if let Some(host) = self.lan.as_mut() {
-            host.hub.set_view_distance(distance);
+    /// `PlayerList.setViewDistance`: advertise the supplied distance, but keep the
+    /// effective `ChunkMap` radius for the server's streaming and tickets.
+    pub(super) fn set_view_distance(&mut self, distance: i32) -> bool {
+        if !self.is_logical_server() {
+            return false;
         }
+        let Some(host) = self.lan.as_mut() else {
+            return false;
+        };
+        host.hub.set_view_distance(distance);
+        self.settings.render_distance = sunrise_client::lan::hub::effective_view_distance(distance);
+        true
     }
 
     /// Update the live spawn-protection radius.
@@ -1758,11 +1762,18 @@ impl Game<'_> {
         }
     }
 
-    /// Update the live simulation distance sent to player clients.
-    pub(super) fn set_simulation_distance(&mut self, distance: i32) {
-        if let Some(host) = self.lan.as_mut() {
-            host.hub.set_simulation_distance(distance);
+    /// `PlayerList.setSimulationDistance`: store and advertise the supplied distance
+    /// and update the setting used for simulation tickets.
+    pub(super) fn set_simulation_distance(&mut self, distance: i32) -> bool {
+        if !self.is_logical_server() {
+            return false;
         }
+        let Some(host) = self.lan.as_mut() else {
+            return false;
+        };
+        host.hub.set_simulation_distance(distance);
+        self.settings.simulation_distance = distance;
+        true
     }
 
     /// Update the live entity tracking range percentage.
@@ -2738,7 +2749,11 @@ impl Game<'_> {
                 let mut idle_states = std::mem::take(&mut host.idle_states);
                 let mut kept = if self.level_pass.packets_drained {
                     let percent = if host.hub.config.integrated {
-                        (self.settings.entity_distance * 100.0).round() as i32
+                        let scale = self.serving.as_ref().map_or(
+                            self.settings.entity_distance,
+                            super::integrated::Serving::entity_distance,
+                        );
+                        (scale * 100.0).round() as i32
                     } else {
                         host.hub.entity_range_percent
                     };
@@ -2853,8 +2868,11 @@ impl Game<'_> {
                 // option scales what an integrated server or a LAN host tracks (a
                 // dedicated one keeps its entity-broadcast-range-percentage).
                 if host.hub.config.integrated {
-                    host.hub.entity_range_percent =
-                        (self.settings.entity_distance * 100.0).round() as i32;
+                    let scale = self.serving.as_ref().map_or(
+                        self.settings.entity_distance,
+                        super::integrated::Serving::entity_distance,
+                    );
+                    host.hub.entity_range_percent = (scale * 100.0).round() as i32;
                 }
                 host.hub.set_immediate_respawn(
                     self.ui
@@ -2950,7 +2968,6 @@ impl Game<'_> {
         self.lan_guest_poses();
         self.lan_update_waypoints();
         self.lan_sync_scoreboard();
-        self.lan_sync_border();
         drop(holding);
         self.flush_attachment_sync();
         self.flush_far_terrain();
@@ -3480,7 +3497,8 @@ impl Game<'_> {
         // chunks past it. An extra area finishes its chunks out to its radius + 1. That covers what
         // the player tracks (`ChunkTrackingView`, within its view distance + 1) and those chunks'
         // lit neighbours. The viewed areas (#3716) are squares of their own.
-        let radius = host.hub.config.view_distance + 1;
+        let radius =
+            sunrise_client::lan::hub::effective_view_distance(host.hub.config.view_distance) + 1;
         let rule = self
             .ui
             .rules
@@ -3681,7 +3699,6 @@ mod tests {
                 owner: None,
                 waypoints: Default::default(),
                 waypoint_dead: Default::default(),
-                border_sent: None,
                 commands: Default::default(),
                 quiet: Default::default(),
                 far: None,
@@ -5803,7 +5820,6 @@ mod merchant_packet_tests {
                 owner: None,
                 waypoints: Default::default(),
                 waypoint_dead: Default::default(),
-                border_sent: None,
                 commands: Default::default(),
                 quiet: Default::default(),
                 far: None,

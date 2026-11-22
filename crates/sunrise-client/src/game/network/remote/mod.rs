@@ -1353,10 +1353,29 @@ impl Game<'_> {
             C::PlayerInfoUpdate(p) => self.apply_player_info_update_packet(p),
             C::PlayerInfoRemove(p) => self.apply_player_info_remove_packet(p),
             C::TabList(p) => self.apply_tab_list_packet(p),
-            C::InitializeBorder(p) => self.apply_initialize_border_packet(p),
-            C::SetBorderCenter(p) => self.border.set_center([p.x, p.z]),
-            C::SetBorderLerpSize(p) => self.apply_set_border_lerp_size_packet(p),
-            C::SetBorderSize(p) => self.border.set_size(p.size),
+            C::InitializeBorder(p) => {
+                if let Err(error) = self.apply_initialize_border_packet(p) {
+                    log::warn!("invalid initialize_border packet: {error}");
+                }
+            }
+            C::SetBorderCenter(p) => {
+                if let Err(error) = self.border.set_center([p.x, p.z]) {
+                    log::warn!("invalid set_border_center packet: {error}");
+                }
+            }
+            C::SetBorderLerpSize(p) => {
+                if let Err(error) = self
+                    .border
+                    .lerp_between(p.old_size, p.new_size, p.lerp_time)
+                {
+                    log::warn!("invalid set_border_lerp_size packet: {error}");
+                }
+            }
+            C::SetBorderSize(p) => {
+                if let Err(error) = self.border.set_size(p.size) {
+                    log::warn!("invalid set_border_size packet: {error}");
+                }
+            }
             C::SetBorderWarningDelay(p) => self.border.warning_time = p.delay,
             C::SetBorderWarningDistance(p) => self.border.warning_distance = p.blocks,
             C::SetObjective(p) => self.remote_objective(p),

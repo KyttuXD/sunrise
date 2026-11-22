@@ -854,8 +854,6 @@ mod launch_timeout;
 mod leads;
 #[path = "game/blocks/level_access.rs"]
 mod level_access;
-#[path = "game/modding/level_control_hooks.rs"]
-mod level_control_hooks;
 #[path = "game/interface/level_particles.rs"]
 mod level_particles;
 #[path = "game/interface/level_sounds.rs"]
@@ -2301,6 +2299,8 @@ mod wither;
 #[cfg(test)]
 #[path = "game/mobs/wither_star_tests.rs"]
 mod wither_star_tests;
+#[path = "game/world/world_border.rs"]
+mod world_border;
 #[path = "game/world/world_entry.rs"]
 mod world_entry;
 #[cfg(test)]
@@ -4603,11 +4603,6 @@ mod view_vector_tests {
             );
         }
     }
-}
-/// `Level.canHaveWeather`: sky light, no ceiling, and not the End (the one
-/// level the rule names by id).
-fn level_can_have_weather(sky_light: bool, has_ceiling: bool, is_end: bool) -> bool {
-    sky_light && !has_ceiling && !is_end
 }
 /// `Camera.setRotation` (`rotationYXZ(π - yaw, -pitch, 0)`) for the player's
 /// view, turned round in third-person front view (`Camera.setup`).
@@ -7147,7 +7142,11 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.with_residency_tick(Self::tick_remote);
         }
-        self.tick_first_level()
+        let running = self.clock.world_runs();
+        if running {
+            sunrise_client::spans::time("tick_functions", || self.tick_functions());
+        }
+        self.tick_first_level(running)
     }
     /// The title remains the no-level sentinel while debug options or a mod's
     /// screen covers it. Only UI dispatch ignores it; world loading and

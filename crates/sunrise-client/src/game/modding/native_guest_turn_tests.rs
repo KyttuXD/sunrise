@@ -1,6 +1,6 @@
 //! Real-game regressions for native handles used during a guest's turn.
 
-use super::lan::LanSettings;
+use super::{execution_role::ExecutionRole, lan::LanSettings};
 use mod_api::{
     __private::{HookPanicReport, take_hook_panics},
     EntityMoveEvent, Flow, Hooks, LoopContext, MoveCause,
@@ -26,7 +26,15 @@ pub(in crate::game) fn with_guests_at(
     root: std::path::PathBuf,
     test: impl FnOnce(&mut super::Game<'_>),
 ) {
-    super::native_entity_refs::tests::with_game_at(root, |game| {
+    with_guests_for_role(root, ExecutionRole::IntegratedServer, test);
+}
+
+pub(in crate::game) fn with_guests_for_role(
+    root: std::path::PathBuf,
+    role: ExecutionRole,
+    test: impl FnOnce(&mut super::Game<'_>),
+) {
+    super::native_entity_refs::tests::with_game_role(root, role, |game| {
         let settings = LanSettings {
             port: 0,
             guest_commands: false,
@@ -49,7 +57,7 @@ pub(in crate::game) fn with_guests_at(
             allow_flight: true,
             seed: 0,
             max_players: 2,
-            integrated: true,
+            integrated: role == ExecutionRole::IntegratedServer,
             levels: game.level_shapes,
             level_seeds: game.levels.runtime.seeds(),
         };
@@ -111,7 +119,6 @@ pub(in crate::game) fn register_test_menu(
 #[test]
 #[ignore = "daily"]
 fn player_dimensions_validate_identity_on_both_server_roles() {
-    use super::execution_role::ExecutionRole;
     let previous_extra = super::EXTRA_DIMS.read().unwrap().clone();
     with_guests(|game| {
         super::Dim::add_extra("test:pocket");

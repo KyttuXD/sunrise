@@ -72,7 +72,7 @@ pub trait ConfigServerHost {
     /// Startup opt-in for test-only content. Test registration runs regardless.
     fn game_tests_enabled(&self) -> bool;
     /// Side: server.
-    /// The server's tick rate (20 unless `/tick rate` changed it) and the
+    /// The server's tick rate (20 by default) and the
     /// milliseconds its ticks took on average lately, as `/tick query`
     /// reports them. The ticks a second it keeps up is the rate, or
     /// 1000 / milliseconds when that is lower.
@@ -84,36 +84,40 @@ pub trait ConfigServerHost {
     /// has the average.
     fn tick_times(&self) -> Vec<u64>;
     /// Side: server.
-    /// The server's view distance in chunks (`PlayerList.getViewDistance`, `view-distance`):
-    /// how far players are sent chunks at most. None off a server open to players.
+    /// The live view distance in chunks advertised by `PlayerList.getViewDistance`.
+    /// Available on dedicated and integrated servers, including unpublished worlds;
+    /// `None` when no logical server player list is available.
     fn server_view_distance(&self) -> Option<i32>;
     /// Side: server.
-    /// The server's simulation distance in chunks (`PlayerList.getSimulationDistance`,
-    /// `simulation-distance`): how far around each player chunks tick. None off a server open
-    /// to players.
+    /// The live simulation distance in chunks advertised by `PlayerList.getSimulationDistance`.
+    /// Available on dedicated and integrated servers, including unpublished worlds;
+    /// `None` when no logical server player list is available.
     fn server_simulation_distance(&self) -> Option<i32>;
     /// Side: server.
-    /// Sets the server's view distance live, as `PlayerList.setViewDistance` (and the
-    /// management protocol's `serversettings/view_distance/set`) do: every player is sent
-    /// `ClientboundSetChunkCacheRadiusPacket` and their chunks follow, each up to what their
-    /// client asked for. `server.properties` is not written, so a restart goes back to it.
-    /// False for a distance outside 2 to 32, and off a dedicated server (an integrated
-    /// server follows its window's option).
+    /// Sets the live view distance through `PlayerList.setViewDistance` on either server,
+    /// including unpublished worlds. Players get the new chunk radius, and chunk tracking
+    /// and loading tickets use the new distance. Returns `false` and logs the refusal if
+    /// the player list is unavailable or the input is outside `ChunkMap`'s 2–32 supported range.
+    /// The integrated server follows the owner's render distance at the end of an unpaused tick.
+    /// A view-distance write from a server-tick listener can be superseded at the end of that tick.
+    /// This does not change `server.properties` or the owner's options.
     fn server_set_view_distance(&mut self, distance: i32) -> bool;
     /// Side: server.
-    /// Sets the server's simulation distance live, as `PlayerList.setSimulationDistance`
-    /// does: every player is sent `ClientboundSetSimulationDistancePacket`, and the chunks
-    /// around the players tick to the new distance from the next tick. `server.properties`
-    /// is not written. False for a distance outside 2 to 32, and off a dedicated server.
+    /// Sets the live simulation distance through `PlayerList.setSimulationDistance` on either
+    /// server, including unpublished worlds. Players get the new distance and simulation tickets
+    /// use it. Returns `false` and logs the refusal if the player list is unavailable or the input
+    /// is outside the 2–32 supported endpoints of `Options.simulationDistance`.
+    /// An unchanged owner option does not override this write; a changed one does.
+    /// This does not change `server.properties` or the owner's options.
     fn server_set_simulation_distance(&mut self, distance: i32) -> bool;
     /// Side: server.
-    /// Sets the server's tick rate, as `/tick rate` does (`ServerTickRateManager.setTickRate`):
-    /// the game ticks `rate` times a second from the next tick on, an autosave wait already
-    /// running is shortened when the new rate asks for less, and `server_tick_rate_changed`
-    /// fires. The players' clients follow on the next sync. False, with nothing changed, for a
-    /// rate outside 1 to 10000 (the command's range), one that isn't finite, a call from
-    /// inside `server_tick_rate_changed` (which would hear itself again without end), or on a
-    /// client.
+    /// Sets the logical server's tick rate (`ServerTickRateManager.setTickRate`).
+    /// `TickRateManager.setTickRate` raises finite values below 1 to 1; `/tick rate`'s upper
+    /// bound is only a command argument limit. Every accepted write, even an equal one, fires
+    /// `server_tick_rate_changed`, shortens the autosave wait if needed, then sends the final
+    /// rate and freeze state to clients. A nested write skips callbacks for this hook already
+    /// running on this thread. A non-finite rate or a call off the logical server returns
+    /// `false` and logs the refusal without changing the clock.
     fn set_tick_rate(&mut self, rate: f32) -> bool;
     /// Side: server.
     /// Whether the server's ticking is frozen (`TickRateManager.isFrozen`, `/tick freeze`). A

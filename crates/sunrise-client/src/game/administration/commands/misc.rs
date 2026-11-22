@@ -80,9 +80,7 @@ impl Game<'_> {
                     Some(Arg::Float(v)) => *v,
                     _ => 20.0,
                 };
-                // MinecraftServer.setTickRate: the autosave wait already
-                // running is shortened when the new rate asks for less.
-                self.apply_tick_rate(rate);
+                self.set_tick_rate(rate);
                 self.feedback(t(
                     "commands.tick.rate.success",
                     &[lit(format_fixed(f64::from(rate), 1))],

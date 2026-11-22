@@ -452,6 +452,164 @@ pub(in crate::game) mod tests {
         assert_eq!(game.remote.as_ref().unwrap().level, "minecraft:overworld");
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn a_dry_view_stays_dry_after_shared_weather_changes_and_promotion() {
+        use crate::game::{
+            native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game, native_guest_turn_tests::with_guests,
+            remote::RemoteDimensionEntry,
+        };
+        use std::sync::mpsc::{Receiver, channel};
+        use sunrise_client::{
+            chunk::{ExtraLevel, LevelShape},
+            lan::{
+                Out, PlayerSender,
+                hub::game_event::{RAIN_LEVEL, START_RAINING, STOP_RAINING, THUNDER_LEVEL},
+                viewed_levels::areas::{ChunkArea, ChunkAreaMode},
+            },
+            level_loading::Reason,
+        };
+
+        const OVERWORLD: &str = "minecraft:overworld";
+        const VIEWED: &str = "test:viewed_overworld";
+        crate::game::in_own_process(
+            "game::viewed_worlds::tests::a_dry_view_stays_dry_after_shared_weather_changes_and_promotion",
+            || {
+                with_guests(|server| {
+                    let mut host = server.lan.take().unwrap();
+                    let hub = &mut host.hub;
+                    hub.config.levels.extra = &[ExtraLevel {
+                        id: VIEWED,
+                        dimension_type: OVERWORLD,
+                        shape: LevelShape::OVERWORLD,
+                    }];
+                    let (view_tx, view_rx) = channel();
+                    let (plain_tx, plain_rx) = channel();
+                    hub.guests.update(0, |guest| {
+                        guest.dimension = OVERWORLD.into();
+                        guest.sender = PlayerSender::new(view_tx, Arc::default());
+                        guest.sender.viewed_levels = viewed_levels::Answer {
+                            revision: viewed_levels::REVISION_4,
+                            max_levels: 2,
+                        };
+                    });
+                    hub.guests.update(1, |guest| {
+                        guest.dimension = VIEWED.into();
+                        guest.sender = PlayerSender::new(plain_tx, Arc::default());
+                    });
+                    hub.set_dimension(VIEWED);
+                    hub.set_viewed_areas(
+                        12,
+                        "test:portal",
+                        vec![ChunkArea {
+                            level: VIEWED.into(),
+                            center: (0, 0),
+                            radius: 0,
+                            mode: ChunkAreaMode::Loaded,
+                        }],
+                    )
+                    .unwrap();
+
+                    let packets = |rx: &Receiver<Out>| {
+                        rx.try_iter()
+                            .flat_map(|out| match out {
+                                Out::Packet(body) => vec![body],
+                                Out::Packets(bodies) => bodies,
+                                Out::Disconnect(_) => panic!("unexpected disconnect"),
+                            })
+                            .map(|body| payload(&body))
+                            .collect::<Vec<_>>()
+                    };
+                    let plain_weather = || {
+                        packets(&plain_rx)
+                            .into_iter()
+                            .filter_map(|packet| match packet {
+                                C::GameEvent(p) => Some((p.event, p.param)),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let deliver_viewer_packets = |game: &mut Game<'_>| {
+                        for packet in packets(&view_rx) {
+                            if matches!(packet, C::Respawn(_) | C::GameEvent(_))
+                                || matches!(&packet, C::CustomPayload(p) if p.channel == viewed_levels::CHANNEL)
+                            {
+                                game.handle_packet(packet).unwrap();
+                            }
+                        }
+                    };
+                    with_client_game(|game| {
+                        let _transport = logged_client(game);
+                        game.remote.as_mut().unwrap().registries =
+                            Arc::new(hub.sync_data().dynamic.clone());
+                        game.enter_remote_dimension(
+                            &play::SpawnInfo {
+                                dimension_type: hub
+                                    .sync_data()
+                                    .id("minecraft:dimension_type", OVERWORLD)
+                                    .unwrap(),
+                                ..spawn(OVERWORLD)
+                            },
+                            RemoteDimensionEntry::Login,
+                            Reason::Other,
+                        );
+                        let ticks: [(_, &[_]); 4] = [
+                            ((true, 0.0, 0.0), &[]),
+                            // Local transitions send both strengths after START/STOP, even
+                            // when thunder hasn't changed.
+                            (
+                                (true, 0.25, 0.5),
+                                &[
+                                    (RAIN_LEVEL, 0.25),
+                                    (THUNDER_LEVEL, 0.5),
+                                    (START_RAINING, 0.0),
+                                    (RAIN_LEVEL, 0.25),
+                                    (THUNDER_LEVEL, 0.5),
+                                ],
+                            ),
+                            (
+                                (true, 0.0, 0.5),
+                                &[
+                                    (RAIN_LEVEL, 0.0),
+                                    (STOP_RAINING, 0.0),
+                                    (RAIN_LEVEL, 0.0),
+                                    (THUNDER_LEVEL, 0.5),
+                                ],
+                            ),
+                            // The shared flag flipped without a local transition.
+                            ((false, 0.0, 0.5), &[]),
+                        ];
+                        for ((shared_rain, rain, thunder), expected) in ticks {
+                            server.world.weather.raining = shared_rain;
+                            server.world.weather.set_levels(rain, thunder);
+                            let _ = hub.tick_level(&mut server.server_ctx());
+                            deliver_viewer_packets(game);
+                            let view = &viewed(game, 0).unwrap().weather;
+                            assert_eq!((view.rain_level.1, view.thunder_level.1), (rain, thunder));
+                            assert_eq!(plain_weather().as_slice(), expected);
+                        }
+
+                        hub.change_level(
+                            0,
+                            [0.5, 64.0, 0.5],
+                            0.0,
+                            None,
+                            false,
+                            0,
+                            &server.server_ctx(),
+                        );
+                        deliver_viewer_packets(game);
+                        assert_eq!(game.remote.as_ref().unwrap().level, VIEWED);
+                        assert_eq!(game.world.weather.rain_level, (0.0, 0.0));
+                        // A plain Respawn would have dropped the viewed level's raw thunder.
+                        assert_eq!(game.world.weather.thunder_level, (0.5, 0.5));
+                    });
+                });
+            },
+        );
+    }
+
     /// A wrapped `AddEntity` and its move put the entity in the viewed world, where it moves; the
     /// player's own world holds nothing of it. A wrapped `RemoveEntities` takes it out.
     #[test]
