@@ -15,7 +15,13 @@ pub use jar::{
 pub use runtime_files::{RUNTIME_DIR, RuntimeData, RuntimeTable};
 
 use mod_surface::uses::USES_FILE;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{
+        self, Visitor,
+        value::{MapAccessDeserializer, SeqAccessDeserializer},
+    },
+};
 use std::{
     fmt,
     io::Read,
@@ -51,8 +57,8 @@ pub const RESERVED_IDS: [&str; 7] = [
 /// A mod's saved settings, shared by native mods and modpack overrides.
 pub const STORAGE_DIR: &str = ".sunrise-mod-data";
 
-/// Maximum manifest bytes accepted by package readers and developer tools.
-pub const MAX_MANIFEST: u64 = 32 << 20;
+/// Maximum bytes in the complete manifest, including properties and dependency explanations.
+pub const MAX_MANIFEST: u64 = mod_surface::uses::MAX_MANIFEST_BYTES;
 
 /// The most source files (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/**`, the root notices) a
 /// package selects: as many as its content files, so a port laid out one file per class fits.
@@ -172,19 +178,18 @@ pub struct Manifest {
     /// Game internals used by this mod, fingerprinted against its pinned build.
     #[serde(default)]
     pub internals: Vec<Internal>,
-    /// Free-form values other mods read through `PackageInfo::property`.
+    /// Free-form scalar values other mods read through `PackageInfo::property`, with no limit
+    /// separate from the complete manifest's byte limit.
     #[serde(default)]
     pub properties: std::collections::BTreeMap<String, Property>,
 }
 
-/// The most `[properties]` keys a manifest may declare.
-pub const MAX_PROPERTIES: usize = 64;
-/// The most `[properties]` bytes: keys and strings by length, 8 per number, 1 per boolean.
-pub const MAX_PROPERTY_BYTES: usize = 8 << 10;
-
-/// One `[properties]` value: a table or array is refused.
+/// One `[properties]` value: a string, integer, float or boolean.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "expected a string, integer, float or boolean for [properties]"
+)]
 pub enum Property {
     Boolean(bool),
     Integer(i64),
@@ -192,11 +197,17 @@ pub enum Property {
     String(String),
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(untagged)]
+/// A `[dependencies]` entry: a semver requirement or a detailed table.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Dependency {
     Version(semver::VersionReq),
     Detailed(DependencyDetails),
+}
+
+impl<'de> Deserialize<'de> for Dependency {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        version_or_details(deserializer, Self::Version, Self::Detailed)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -208,15 +219,23 @@ pub struct DependencyDetails {
     /// The installation on which this dependency declaration applies.
     #[serde(default = "both_sides")]
     pub side: Side,
-    /// A mod-provided explanation, at most 512 bytes.
+    /// A mod-provided explanation, bound only by the complete manifest's byte limit.
     #[serde(default)]
     pub reason: Option<String>,
     /// An HTTPS link with more information.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "DependencyDetails::deserialize_url")]
     pub url: Option<String>,
     /// Dispatch ordering only; `none` does not remove a code link requirement.
     #[serde(default)]
     pub order: mod_vocab::DependencyOrder,
+}
+
+impl DependencyDetails {
+    fn deserialize_url<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        deserialize_https_url(deserializer)
+    }
 }
 
 impl Dependency {
@@ -238,11 +257,16 @@ impl Dependency {
 
 /// An `[incompatible]` or `[discouraged]` entry: the versions of the other mod it matches
 /// (`"<2"`), or a table that also gives the player a reason and a link.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Rule {
     Version(semver::VersionReq),
     Detailed(RuleDetails),
+}
+
+impl<'de> Deserialize<'de> for Rule {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        version_or_details(deserializer, Self::Version, Self::Detailed)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -251,15 +275,112 @@ pub struct RuleDetails {
     /// Every version when left out.
     #[serde(default = "any_version")]
     pub version: semver::VersionReq,
-    /// Why, shown when the rule fails: at most 512 bytes.
+    /// Why, shown when the rule fails: bound only by the complete manifest's byte limit.
     #[serde(default)]
     pub reason: Option<String>,
     /// Where to read more, shown with the reason: an `https://` link.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "RuleDetails::deserialize_url")]
     pub url: Option<String>,
     /// Where the rule holds: both sides, or only the client or the dedicated server.
     #[serde(default = "both_sides")]
     pub side: Side,
+}
+
+impl RuleDetails {
+    fn deserialize_url<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        deserialize_https_url(deserializer)
+    }
+}
+
+fn deserialize_https_url<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    struct OptionalUrl;
+
+    impl<'de> Visitor<'de> for OptionalUrl {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an https:// URL string")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            struct HttpsUrl;
+
+            impl Visitor<'_> for HttpsUrl {
+                type Value = String;
+
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("an https:// URL string")
+                }
+
+                fn visit_str<E: de::Error>(self, value: &str) -> Result<String, E> {
+                    if !value.starts_with("https://") {
+                        return Err(E::custom("url is not https://"));
+                    }
+                    Ok(value.to_owned())
+                }
+
+                fn visit_string<E: de::Error>(self, value: String) -> Result<String, E> {
+                    if !value.starts_with("https://") {
+                        return Err(E::custom("url is not https://"));
+                    }
+                    Ok(value)
+                }
+            }
+
+            deserializer.deserialize_string(HttpsUrl).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalUrl)
+}
+
+// Choose the form by its TOML type so mistakes in a detailed table retain their own errors.
+fn version_or_details<'de, D, T, V>(
+    deserializer: D,
+    version: fn(semver::VersionReq) -> V,
+    details: fn(T) -> V,
+) -> Result<V, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct VersionOrDetails<T, V> {
+        version: fn(semver::VersionReq) -> V,
+        details: fn(T) -> V,
+    }
+
+    impl<'de, T: Deserialize<'de>, V> Visitor<'de> for VersionOrDetails<T, V> {
+        type Value = V;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a semver requirement string or a dependency policy table")
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<V, E> {
+            value.parse().map(self.version).map_err(E::custom)
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<V, A::Error> {
+            T::deserialize(SeqAccessDeserializer::new(seq)).map(self.details)
+        }
+
+        fn visit_map<M: de::MapAccess<'de>>(self, map: M) -> Result<V, M::Error> {
+            T::deserialize(MapAccessDeserializer::new(map)).map(self.details)
+        }
+    }
+
+    deserializer.deserialize_any(VersionOrDetails { version, details })
 }
 
 fn both_sides() -> Side {
@@ -436,24 +557,30 @@ impl Internal {
 /// an unknown field with the nearest valid key when one is a few edits away.
 fn toml_error(text: &str, e: &toml::de::Error) -> String {
     let message = e.message();
-    let line = e
-        .span()
-        .map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1);
+    let line = e.span().map(|span| {
+        text.as_bytes()[..span.start.min(text.len())]
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count()
+            + 1
+    });
     let at = line.map_or(String::new(), |line| format!(" (line {line})"));
     let quoted = |after: &str| -> Option<String> {
         let rest = message.strip_prefix(after)?;
         Some(rest.split('`').next()?.to_owned())
     };
     if let Some(field) = quoted("missing field `") {
-        let example = match field.as_str() {
-            "id" => "id = \"my_mod\"".to_owned(),
-            "name" => "name = \"My Mod\"".to_owned(),
-            "version" => "version = \"0.1.0\"".to_owned(),
-            "game" => "game = \"26.3\"".to_owned(),
-            "sunrise" => "sunrise = \"<the 40-character game build commit>\"".to_owned(),
-            other => format!("{other} = …"),
+        let root_table = e.span().is_none_or(|span| span.is_empty());
+        let at = if root_table { "" } else { at.as_str() };
+        let example = match (root_table, field.as_str()) {
+            (true, "id") => "id = \"my_mod\"".to_owned(),
+            (true, "name") => "name = \"My Mod\"".to_owned(),
+            (true, "version") => "version = \"0.1.0\"".to_owned(),
+            (_, "game") => "game = \"26.3\"".to_owned(),
+            (_, "sunrise") => "sunrise = \"<the 40-character game build commit>\"".to_owned(),
+            (_, other) => format!("{other} = …"),
         };
-        return format!("{MANIFEST}: the field {field} is missing; add {example}");
+        return format!("{MANIFEST}: the field {field} is missing{at}; add {example}");
     }
     if let Some(field) = quoted("unknown field `") {
         let nearest = message
@@ -489,7 +616,11 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 impl Manifest {
+    /// Parse and validate a complete `sunrise-mod.toml`, under [`MAX_MANIFEST`].
     pub fn parse(text: &str) -> Result<Self, String> {
+        if text.len() as u64 > MAX_MANIFEST {
+            return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
+        }
         let m: Manifest = toml::from_str(text).map_err(|e| toml_error(text, &e))?;
         Internal::check_all(&m.internals)?;
         if !m.internals.is_empty() && m.native.is_none() {
@@ -556,31 +687,15 @@ impl Manifest {
                 ));
             }
         }
-        let rules = m.incompatible.iter().chain(&m.discouraged);
         for id in m
             .dependencies
             .keys()
-            .chain(rules.clone().map(|(id, _)| id))
+            .chain(m.incompatible.keys())
+            .chain(m.discouraged.keys())
             .chain(&m.load_before)
         {
             if !valid_mod_id(id) {
                 return Err(format!("{MANIFEST}: invalid dependency id {id:?}"));
-            }
-        }
-        let rule_notes = rules.map(|(id, rule)| {
-            let details = rule.details();
-            (id, details.reason, details.url)
-        });
-        let dependency_notes = m.dependencies.iter().map(|(id, dependency)| {
-            let details = dependency.details();
-            (id, details.reason, details.url)
-        });
-        for (id, reason, url) in rule_notes.chain(dependency_notes) {
-            if reason.as_ref().is_some_and(|reason| reason.len() > 512) {
-                return Err(format!("{MANIFEST}: rule for {id}: reason over 512 bytes"));
-            }
-            if url.as_ref().is_some_and(|url| !url.starts_with("https://")) {
-                return Err(format!("{MANIFEST}: rule for {id}: url is not https://"));
             }
         }
         mixin::Mixin::check_all(
@@ -694,25 +809,6 @@ impl Manifest {
             return Err(format!(
                 "unsupported content API {}; this Sunrise reads {API}: delete the api line, the tool writes it",
                 m.api
-            ));
-        }
-        let property_bytes: usize = m
-            .properties
-            .iter()
-            .map(|(key, value)| {
-                key.len()
-                    + match value {
-                        Property::Boolean(_) => 1,
-                        Property::Integer(_) | Property::Float(_) => 8,
-                        Property::String(text) => text.len(),
-                    }
-            })
-            .sum();
-        if m.properties.len() > MAX_PROPERTIES || property_bytes > MAX_PROPERTY_BYTES {
-            return Err(format!(
-                "{MANIFEST}: [properties] holds at most {MAX_PROPERTIES} keys and {MAX_PROPERTY_BYTES} \
-                 bytes; this one has {} keys and {property_bytes} bytes",
-                m.properties.len()
             ));
         }
         if m.capabilities != [Capability::Registries] {
@@ -914,9 +1010,6 @@ impl Package {
                 .take(MAX_MANIFEST + 1)
                 .read_to_string(&mut text)
                 .map_err(|e| format!("{MANIFEST}: {e}"))?;
-            if text.len() as u64 > MAX_MANIFEST {
-                return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
-            }
             text
         } else {
             if !metadata.is_file() {
@@ -1004,9 +1097,6 @@ impl Package {
             .take(MAX_MANIFEST + 1)
             .read_to_string(&mut toml)
             .map_err(|e| format!("{MANIFEST}: {e}"))?;
-        if toml.len() as u64 > MAX_MANIFEST {
-            return Err(format!("{MANIFEST}: over {} MiB", MAX_MANIFEST >> 20));
-        }
         let package = Self::from_parts(&toml, icon, has_cargo, has_source)?;
         if uses && !package.is_native() {
             return Err(format!("a content mod has no code, so no {USES_FILE}"));
@@ -1805,18 +1895,37 @@ capabilities = ["registries"]
     }
 
     #[test]
-    fn properties_are_typed_and_bounded() {
-        let properties = |rows: &str| Manifest::parse(&format!("{EXAMPLE}[properties]\n{rows}"));
-        let manifest = properties("tier = 3\nratio = 0.5\nlabel = 'x'\nfast = true\n").unwrap();
+    fn properties_keep_their_scalar_types() {
+        let text =
+            format!("{EXAMPLE}[properties]\ntier = 3\nratio = 0.5\nlabel = 'x'\nfast = true\n");
+        let manifest = Manifest::parse(&text).unwrap();
         assert_eq!(manifest.properties["tier"], Property::Integer(3));
         assert_eq!(manifest.properties["ratio"], Property::Float(0.5));
         assert_eq!(manifest.properties["label"], Property::String("x".into()));
         assert_eq!(manifest.properties["fast"], Property::Boolean(true));
-        let many: String = (0..65).map(|i| format!("k{i} = {i}\n")).collect();
-        let error = properties(&many).unwrap_err();
-        assert!(error.contains("at most 64 keys"), "{error}");
-        assert!(properties(&format!("text = '{}'\n", "a".repeat(8 << 10))).is_err());
-        assert!(properties("list = [1]\n").is_err());
+    }
+
+    #[test]
+    fn property_values_and_key_count_share_the_whole_manifest_limit() {
+        let value = "a".repeat(9 * 1024);
+        let mut text = format!("{EXAMPLE}[properties]\ntext = '{value}'\n");
+        use std::fmt::Write;
+        for key in 0..65 {
+            writeln!(text, "k{key} = {key}").unwrap();
+        }
+        let manifest = Manifest::parse(&text).unwrap();
+        assert_eq!(manifest.properties.len(), 66);
+        assert_eq!(manifest.properties["k64"], Property::Integer(64));
+        assert_eq!(manifest.properties["text"], Property::String(value));
+    }
+
+    #[test]
+    fn manifest_parse_rejects_input_over_the_published_byte_limit() {
+        let text = " ".repeat(32 * 1024 * 1024 + 1);
+        assert_eq!(
+            Manifest::parse(&text).unwrap_err(),
+            "sunrise-mod.toml: over 32 MiB"
+        );
     }
 
     #[test]

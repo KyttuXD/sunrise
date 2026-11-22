@@ -862,30 +862,45 @@ mod tests {
     }
 
     #[test]
-    fn declaration_boundaries_apply_to_dependencies_and_pair_rules() {
+    fn long_policy_reasons_are_preserved_for_dependencies_and_pair_rules() {
+        let reason = "Some context. ".repeat(100);
+        let entry = format!("target={{version='^1',reason='{reason}'}}");
+        let source = manifest(
+            "owner",
+            &format!("[dependencies]\n{entry}\n[incompatible]\n{entry}\n[discouraged]\n{entry}"),
+        );
+        let dependency = from_manifest(&source.dependencies, Side::Client);
+        assert_eq!(dependency[0].reason.as_deref(), Some(reason.as_str()));
+        let pairs = rules(&source, Side::Client);
+        assert_eq!(pairs.len(), 2);
+        for rule in pairs {
+            assert_eq!(rule.reason.as_deref(), Some(reason.as_str()));
+        }
+    }
+
+    #[test]
+    fn policy_schema_errors_are_refused_when_the_manifest_is_parsed() {
         for table in ["dependencies", "incompatible", "discouraged"] {
             let manifest = |entry: &str| {
                 crate::Manifest::parse(&format!(
-                    "id='owner'\nname='Owner'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n[{table}]\n{entry}"
+                    "id='owner'\nname='Owner'\nversion='1'\n[{table}]\n{entry}"
                 ))
             };
-            assert!(
-                manifest(&format!(
-                    "target={{version='^1',reason='{}',url='https://example.test'}}",
-                    "a".repeat(512)
-                ))
-                .is_ok()
-            );
-            let error = manifest(&format!(
-                "target={{version='^1',reason='{}'}}",
-                "a".repeat(513)
+            let url_error =
+                manifest("target={version='^1',url='http://example.test'}").unwrap_err();
+            assert_eq!(url_error, "sunrise-mod.toml: url is not https:// (line 5)");
+            let multiline_url_error = crate::Manifest::parse(&format!(
+                "id='owner'\nname='Owner'\nversion='1'\n[{table}.target]\nversion='^1'\nreason='Why'\nurl='http://example.test'\n"
             ))
             .unwrap_err();
-            assert!(error.contains("target") && error.contains("reason over 512 bytes"));
+            assert_eq!(
+                multiline_url_error,
+                "sunrise-mod.toml: url is not https:// (line 7)"
+            );
+            let reason_error = manifest("target={version='^1',reason=42}").unwrap_err();
             assert!(
-                manifest("target={version='^1',url='http://example.test'}")
-                    .unwrap_err()
-                    .contains("url is not https://")
+                reason_error.contains("expected a string (line 5)"),
+                "{reason_error}"
             );
             assert!(
                 manifest("'bad id'='^1'")
@@ -894,6 +909,61 @@ mod tests {
             );
             assert!(manifest("target='not a semver requirement'").is_err());
         }
+        let missing_inline = crate::Manifest::parse(
+            "id='owner'\nname='Owner'\nversion='1'\n[dependencies]\ntarget={optional=true}\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            missing_inline,
+            "sunrise-mod.toml: the field version is missing (line 5); add version = …"
+        );
+        let missing_multiline = crate::Manifest::parse(
+            "id='owner'\nname='Owner'\nversion='1'\n[dependencies.target]\noptional=true\n",
+        )
+        .unwrap_err();
+        assert_eq!(
+            missing_multiline,
+            "sunrise-mod.toml: the field version is missing (line 4); add version = …"
+        );
+    }
+
+    #[test]
+    fn positional_policy_arrays_decode_and_validate_at_parse() {
+        let parsed = manifest(
+            "owner",
+            "[dependencies]\ntarget = [\"^1\", false, \"both\", \"Context\", \"https://example.test\", \"after\"]\n\
+             [incompatible]\nold = [\"<2\", \"Conflicts\", \"https://example.test/old\", \"client\"]\n\
+             [discouraged]\nslow = [\"*\", \"Slow\", \"https://example.test/slow\", \"server\"]",
+        );
+        let dependency = from_manifest(&parsed.dependencies, Side::Client);
+        assert_eq!(dependency.len(), 1);
+        assert_eq!(dependency[0].id, "target");
+        assert!(!dependency[0].optional);
+        assert_eq!(dependency[0].side, Side::Both);
+        assert_eq!(dependency[0].reason.as_deref(), Some("Context"));
+        assert_eq!(dependency[0].url.as_deref(), Some("https://example.test"));
+        assert_eq!(dependency[0].order, mod_vocab::DependencyOrder::After);
+        let client_rules = rules(&parsed, Side::Client);
+        assert_eq!(client_rules.len(), 1);
+        assert_eq!(client_rules[0].id, "old");
+        assert_eq!(client_rules[0].reason.as_deref(), Some("Conflicts"));
+        assert_eq!(
+            client_rules[0].url.as_deref(),
+            Some("https://example.test/old")
+        );
+        let server_rules = rules(&parsed, Side::Server);
+        assert_eq!(server_rules.len(), 1);
+        assert_eq!(server_rules[0].id, "slow");
+        assert_eq!(server_rules[0].reason.as_deref(), Some("Slow"));
+        assert_eq!(
+            server_rules[0].url.as_deref(),
+            Some("https://example.test/slow")
+        );
+        let bad_url = crate::Manifest::parse(
+            "id='owner'\nname='Owner'\nversion='1'\n[dependencies]\ntarget = [\n  \"^1\",\n  false,\n  \"both\",\n  \"Context\",\n  \"http://example.test\",\n  \"after\",\n]\n",
+        )
+        .unwrap_err();
+        assert_eq!(bad_url, "sunrise-mod.toml: url is not https:// (line 10)");
     }
 
     #[test]

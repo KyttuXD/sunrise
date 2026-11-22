@@ -9,8 +9,11 @@ pub const MAX_SOURCE_BYTES: u64 = 8 << 20;
 pub const MAX_TOTAL_BYTES: u64 = 64 << 20;
 /// The most Rust source files read from one mod.
 pub const MAX_FILES: usize = 4096;
-/// The largest `sunrise-mod.toml` read, in bytes.
-pub const MAX_MANIFEST_BYTES: u64 = 64 << 10;
+/// The largest `Cargo.toml` read when locating a mod's library root, in bytes.
+pub const MAX_CARGO_TOML_BYTES: u64 = 64 << 10;
+/// The largest `sunrise-mod.toml` read by the standalone scan, in bytes: the published manifest
+/// boundary.
+pub const MAX_MANIFEST_BYTES: u64 = mod_surface::uses::MAX_MANIFEST_BYTES;
 
 /// What [`read`] found in a mod folder.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -248,7 +251,7 @@ fn references(text: &str, folder: &[String]) -> Result<Vec<String>, String> {
 fn library_root(dir: &Path) -> Result<String, ReadError> {
     let manifest = dir.join("Cargo.toml");
     let named = if manifest.is_file() {
-        let text = read_bounded(&manifest, "Cargo.toml", MAX_MANIFEST_BYTES)?;
+        let text = read_bounded(&manifest, "Cargo.toml", MAX_CARGO_TOML_BYTES)?;
         toml::from_str::<toml::Table>(&text)
             .ok()
             .and_then(|table| Some(table.get("lib")?.get("path")?.as_str()?.to_owned()))
@@ -313,19 +316,19 @@ fn read_bounded(path: &Path, shown: &str, most: u64) -> Result<String, ReadError
     })
 }
 
-/// Reads `dir`: the `.rs` files its package carries ([`package::source_files`], the selection
-/// packing makes), and `sunrise-mod.toml` when there is one, but not the files `skip` names
-/// (relative and `/`-separated), which are not the mod's own source. A symbolic link among them,
-/// or a linked `src/`, is refused; any other entry that is not a regular file is left unread.
+/// Reads the `.rs` files its package carries ([`package::source_files`], the selection
+/// packing makes), but not the files `skip` names (relative and `/`-separated), which are
+/// not the mod's own source. A symbolic link among them, or a linked `src/`, is refused;
+/// any other entry that is not a regular file is left unread.
 /// A `#[path]` or `include!` of a file the scan does not read, a skipped one included, is
-/// refused, and so is a `mod` declaration that may load a skipped file, and so is a skipped file
-/// that is the mod's library root.
-pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
+/// refused, as is a `mod` declaration that may load a skipped file or a skipped library root.
+/// Callers that already parsed `sunrise-mod.toml` use this instead of [`read`].
+pub fn read_sources(dir: &Path, skip: &[&str]) -> Result<Vec<(String, String)>, ReadError> {
     let root = library_root(dir)?;
     if skip.contains(&root.as_str()) {
         return Err(ReadError::RootSkipped(root));
     }
-    let mut input = ModInput::default();
+    let mut sources = Vec::new();
     let mut total = 0u64;
     let mut brought: Vec<(String, String)> = Vec::new();
     // A linked `src/` is not walked by the selection, so it is refused here, not read as empty.
@@ -350,9 +353,9 @@ pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
         let relative: Vec<String> = shown.split('/').map(str::to_owned).collect();
         let text = read_bounded(&path, &shown, MAX_SOURCE_BYTES)?;
         total += text.len() as u64;
-        if total > MAX_TOTAL_BYTES || input.sources.len() >= MAX_FILES {
+        if total > MAX_TOTAL_BYTES || sources.len() >= MAX_FILES {
             return Err(ReadError::TooLarge {
-                what: format!("the mod's source ({} files)", input.sources.len() + 1),
+                what: format!("the mod's source ({} files)", sources.len() + 1),
                 size: total,
                 most: MAX_TOTAL_BYTES,
             });
@@ -372,18 +375,27 @@ pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
                 });
             }
         }
-        input.sources.push((shown, text));
+        sources.push((shown, text));
     }
-    input.sources.sort();
+    sources.sort();
     for (file, target) in brought {
-        if input
-            .sources
+        if sources
             .binary_search_by(|(path, _)| path.as_str().cmp(&target))
             .is_err()
         {
             return Err(ReadError::NotScanned { file, target });
         }
     }
+    Ok(sources)
+}
+
+/// Reads `dir`: its packaged Rust sources (via [`read_sources`]) and `sunrise-mod.toml` when
+/// there is one, under [`MAX_MANIFEST_BYTES`].
+pub fn read(dir: &Path, skip: &[&str]) -> Result<ModInput, ReadError> {
+    let mut input = ModInput {
+        sources: read_sources(dir, skip)?,
+        ..ModInput::default()
+    };
     let manifest = dir.join("sunrise-mod.toml");
     if manifest.is_file() {
         let text = read_bounded(&manifest, "sunrise-mod.toml", MAX_MANIFEST_BYTES)?;
@@ -458,11 +470,34 @@ mod tests {
     fn the_manifest_and_each_source_are_read_with_a_cap() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let big = format!(
-            "capabilities = []\n# {}\n",
-            "x".repeat(MAX_MANIFEST_BYTES as usize)
+        // A manifest over Cargo.toml's 64 KiB cap is still accepted under the published 32 MiB
+        // manifest boundary.
+        let large_metadata = format!(
+            "capabilities = [\"registries\"]\n[properties]\nnotes = \"{}\"\n",
+            "x".repeat(MAX_CARGO_TOML_BYTES as usize + 1024)
         );
-        write(root, "sunrise-mod.toml", &big);
+        write(root, "sunrise-mod.toml", &large_metadata);
+        let input = read(root, &[]).unwrap();
+        assert_eq!(input.manifest_names, ["registries"]);
+        // Cargo.toml keeps its own cap, scoped to Cargo.toml.
+        write(
+            root,
+            "Cargo.toml",
+            &format!(
+                "[package]\n# {}\n",
+                "x".repeat(MAX_CARGO_TOML_BYTES as usize)
+            ),
+        );
+        assert!(matches!(
+            read(root, &[]).unwrap_err(),
+            ReadError::TooLarge { what, most: MAX_CARGO_TOML_BYTES, .. } if what == "Cargo.toml"
+        ));
+        std::fs::remove_file(root.join("Cargo.toml")).unwrap();
+        // A sunrise-mod.toml over the published 32 MiB boundary is refused by size.
+        std::fs::File::create(root.join("sunrise-mod.toml"))
+            .unwrap()
+            .set_len(MAX_MANIFEST_BYTES + 1)
+            .unwrap();
         assert!(matches!(
             read(root, &[]).unwrap_err(),
             ReadError::TooLarge { what, most: MAX_MANIFEST_BYTES, .. } if what == "sunrise-mod.toml"

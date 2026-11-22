@@ -105,9 +105,9 @@ base = { version = "^1", optional = false, side = "both", order = "after", reaso
 Versions refer to `sunrise-mod.toml`, not Cargo metadata. `optional` defaults to false;
 `side` defaults to `"both"`; `order` is `"after"` (default), `"before"` or `"none"`.
 After means the dependency's listeners/content precede the owner's; before reverses that
-**dispatch** edge; none removes it. Reason is at most 512 bytes and URL must start with
-`https://`. Unknown fields and malformed values refuse the manifest; there is no `kind`
-key or alternate optional spelling.
+**dispatch** edge; none removes it. `reason` is a string, and `url` must start with
+`https://`. Unknown fields and malformed values are reported when the manifest is parsed;
+there is no `kind` key or alternate optional spelling.
 
 Side is the **installation**, not the logical side executing a hook: an integrated server
 belongs to the client installation, a dedicated server to the server installation.
@@ -132,9 +132,10 @@ Top-level `served_by = "<native_mod_id>"` lets a content package delegate code-s
 - **Host-runtime trust contract:** setting `serves_content = true` allows any installed content package to name the host in `served_by`. The loader verifies package syntax, opt-in, side coverage, and load order, not provenance; the host runtime is responsible for checking which `served_by` packages in `context.mods()` it actually generated or understands before registering parts or declarations for their namespaces.
 - A served content package failing to load (missing jar, unreadable file, or content refusal) refuses startup so host code never runs without its served data. Toggling either the served package or its serving host on the Mods screen requires a restart; when a serving host is disabled at startup, its served packages are withheld (with a Mods-screen note naming the disabled host) rather than loaded without it.
 
-Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only,
-at most 64 keys and 8 KiB (keys and strings by length, 8 bytes per number, 1 per boolean); a table, an array
-or a larger table refuses the package. A mod reads any loaded package's manifest through
+Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only.
+Unsupported values, such as arrays or tables, are refused when the manifest is parsed. The complete
+`sunrise-mod.toml` byte limit applies; there is no separate limit on property count, property size or
+reason length. A mod reads any loaded package's manifest through
 `context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
 `issues`, `icon_path`, `kind`, `served_by`, `dependencies` and `property(key)`. Each read-only
 `PackageDependency` exposes `id()`, `version()`, `kind()`, `order()`, `side()`, `reason()` and
@@ -161,7 +162,7 @@ shaders = { version = "*", reason = "Flickers with the water shader", url = "htt
 ```
 
 An `[incompatible]` or `[discouraged]` entry is a semver requirement on the other mod's version, or a
-table with `version` (every version when left out), `reason` (at most 512 bytes), `url` (`https://`
+table with `version` (every version when left out), `reason` (a string), `url` (`https://`
 only) and `side` (`"both"`, the default, `"client"` or `"server"`, the dedicated server). A rule
 about a mod that isn't loaded holds nothing. A matching incompatible mod refuses startup with the
 owner's reason and link; a matching discouraged mod loads with a warning in the log and on

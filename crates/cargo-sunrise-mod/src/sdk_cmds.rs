@@ -301,8 +301,7 @@ fn package_uses(path: &Path, package: Package) -> Result<Subject, String> {
 
 /// The table of the mod folder at `root`, scanned against its pinned build.
 fn folder_subject(entry: ChildEntry, root: &Path) -> Result<Subject, String> {
-    let manifest =
-        std::fs::read_to_string(root.join(MANIFEST)).map_err(|e| format!("{MANIFEST}: {e}"))?;
+    let manifest = crate::bounded::read(&root.join(MANIFEST), crate::bounded::MAX_MANIFEST)?;
     let parsed = Manifest::parse(&manifest)?;
     let name = parsed.name.clone();
     if parsed.native.is_none() {
@@ -318,10 +317,10 @@ fn folder_subject(entry: ChildEntry, root: &Path) -> Result<Subject, String> {
         });
     }
     let sdk = ensure_sdk(root)?;
-    match uses_table::scan(entry, root, &surface_of(&sdk)?)? {
+    match uses_table::scan(entry, root, &parsed, &surface_of(&sdk)?)? {
         Scanned::Uses(uses) => Ok(Subject::Table {
             name,
-            table: uses_table::table(&uses, root, &sdk)?,
+            table: uses_table::table(&uses, root, &parsed, &sdk)?,
             manifest: Box::new(parsed),
         }),
         Scanned::Exact(why) => Ok(Subject::NotApplicable {
@@ -629,8 +628,7 @@ pub(crate) fn update_report(
     root: &Path,
     to: Option<&str>,
 ) -> Result<(), String> {
-    let manifest =
-        std::fs::read_to_string(root.join(MANIFEST)).map_err(|e| format!("{MANIFEST}: {e}"))?;
+    let manifest = crate::bounded::read(&root.join(MANIFEST), crate::bounded::MAX_MANIFEST)?;
     let name = display_name(&manifest)?;
     let exact_line = || {
         println!("{name} is made for exactly one build; its declarations are checked as it moves.")
@@ -646,7 +644,7 @@ pub(crate) fn update_report(
     }
     let old = ensure_sdk(root)?;
     let old_surface = surface_of(&old)?;
-    let uses = match uses_table::scan(entry, root, &old_surface)? {
+    let uses = match uses_table::scan(entry, root, &parsed, &old_surface)? {
         Scanned::Uses(uses) => uses,
         Scanned::Exact(_) => {
             exact_line();
@@ -662,7 +660,7 @@ pub(crate) fn update_report(
         report(&name, &old, &new, &uses, &old_surface, &new_surface, &notes)
     );
     // The game code the mod declares, by the new build's build data.
-    let made = uses_table::table(&uses, root, &old)?;
+    let made = uses_table::table(&uses, root, &parsed, &old)?;
     let (compared, uncompared) = game_fit(root, &parsed, &made, &new)?;
     for misfit in &compared.misfits {
         println!("{misfit}");
@@ -822,7 +820,7 @@ pub(crate) fn check_mod(entry: ChildEntry, show_uses: bool) -> Result<(), String
         }
         return Err(error);
     }
-    match uses_table::scan(entry, root, &surface)? {
+    match uses_table::scan(entry, root, &package.manifest, &surface)? {
         Scanned::Uses(uses) => {
             print!(
                 "{}",
