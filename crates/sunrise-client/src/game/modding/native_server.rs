@@ -28,7 +28,7 @@ use argument_kinds::{
 };
 use mod_api::__private::game::*;
 pub(super) use registered_commands::{
-    NativeClientCommandState, NativeCommandState, PendingClientCommand, PendingClientCommandKind,
+    ClientCommandChain, NativeClientCommandState, NativeCommandState, PendingClientCommandKind,
     RegisteredClientExecutor,
 };
 // Their old home, for mixin code that names them here.
@@ -2426,6 +2426,14 @@ impl Game<'_> {
         &mut self,
         line: &str,
     ) -> Option<ClientCommandOutcome> {
+        self.run_client_native_command_in_chain(line, None)
+    }
+
+    pub(super) fn run_client_native_command_in_chain(
+        &mut self,
+        line: &str,
+        ancestors: Option<Arc<ClientCommandChain>>,
+    ) -> Option<ClientCommandOutcome> {
         if self.is_logical_server() || self.lan_acting.is_some() {
             return None;
         }
@@ -2457,6 +2465,13 @@ impl Game<'_> {
             self.client_command_failure(Text::translate("command.failed", &[]));
             return Some(ClientCommandOutcome::Failed);
         };
+        if std::iter::successors(ancestors.as_deref(), |link| link.parent.as_deref())
+            .any(|link| link.executor == executor.callback)
+        {
+            log::warn!("recursive client command refused: {line}");
+            self.client_command_failure(Text::translate("command.failed", &[]));
+            return Some(ClientCommandOutcome::Failed);
+        }
         let invocation = match self.resolve_client_native_command(context) {
             Ok(invocation) => invocation,
             Err(error) => {
@@ -2464,9 +2479,12 @@ impl Game<'_> {
                 return Some(ClientCommandOutcome::Failed);
             }
         };
-        self.native_client_commands.executing = true;
+        self.native_client_commands.active_chain = Some(Arc::new(ClientCommandChain {
+            executor: executor.callback.clone(),
+            parent: ancestors,
+        }));
         let executed = executor.execute(self, &invocation);
-        self.native_client_commands.executing = false;
+        self.native_client_commands.active_chain = None;
         match executed {
             Ok(Some(result)) => Some(ClientCommandOutcome::Success(result)),
             failure => {
@@ -2483,13 +2501,10 @@ impl Game<'_> {
         }
     }
 
-    /// Dispatch one event-loop wave of slash submissions queued while a client command
-    /// executor was on the call stack. Taking the current batch before dispatching returns
-    /// control to the client event loop between steps of a recursive command cycle.
+    /// Dispatch one event-loop wave. The next submissions retain this wave's executor
+    /// ancestry but cannot run until the event loop returns again.
     pub(in crate::game) fn drain_pending_client_commands(&mut self) {
-        if self.native_client_commands.executing
-            || self.native_client_commands.pending_commands.is_empty()
-        {
+        if self.native_client_commands.active_chain.is_some() {
             return;
         }
         let pending = std::mem::take(&mut self.native_client_commands.pending_commands);
@@ -2497,14 +2512,7 @@ impl Game<'_> {
             if self.remote.is_none() {
                 break;
             }
-            match item.kind {
-                PendingClientCommandKind::Signed => {
-                    let _ = self.send_command(&item.command);
-                }
-                PendingClientCommandKind::Unattended => {
-                    self.send_unattended_command(&item.command);
-                }
-            }
+            let _ = self.submit_client_command(&item.command, item.kind, Some(item.chain));
         }
     }
 
@@ -5287,12 +5295,17 @@ mod tests {
                 event.commands.extend([
                     mod_api::Command::new("cping").executes_client(move |host, _| {
                         ping.lock().unwrap().push("ping");
-                        assert!(host.send_chat("/cpong").is_ok());
+                        for _ in 0..2 {
+                            assert!(host.send_chat("/cpong").is_ok());
+                        }
                         Some(1)
                     }),
                     mod_api::Command::new("cpong").executes_client(move |host, _| {
                         pong.lock().unwrap().push("pong");
-                        assert!(host.send_chat("/cping").is_ok());
+                        for _ in 0..2 {
+                            assert!(host.send_chat("/cping").is_ok());
+                        }
+                        assert!(host.send_chat("/csibling nested").is_ok());
                         Some(1)
                     }),
                 ]);
@@ -5548,25 +5561,53 @@ mod tests {
                     }
                     assert!(game.command_prompt_message().is_none());
 
-                    // Recursive Host submissions defer to the client event loop instead of
-                    // re-entering synchronously and overflowing the stack.
+                    // Submitting the same executor defers the attempt, then refuses it locally.
                     assert!(NetworkClientHost::send_chat(game, "/crecurse").is_ok());
                     assert_eq!(recursed.load(Ordering::Relaxed), 1);
-                    assert_eq!(game.native_client_commands.pending_commands.len(), 1);
+                    let chain = game.native_client_commands.pending_commands[0]
+                        .chain
+                        .clone();
                     game.native_frame_end().unwrap();
-                    assert_eq!(recursed.load(Ordering::Relaxed), 2);
-                    assert_eq!(game.native_client_commands.pending_commands.len(), 1);
-                    game.native_frame_end().unwrap();
-                    assert_eq!(recursed.load(Ordering::Relaxed), 3);
-                    game.native_client_commands.pending_commands.clear();
+                    assert_eq!(recursed.load(Ordering::Relaxed), 1);
+                    assert!(game.native_client_commands.pending_commands.is_empty());
+                    for (line, kind) in [
+                        ("crecurse", PendingClientCommandKind::Signed),
+                        ("/crecurse", PendingClientCommandKind::Unattended),
+                    ] {
+                        assert_eq!(
+                            game.submit_client_command(line, kind, Some(chain.clone())),
+                            Some(ClientCommandOutcome::Failed)
+                        );
+                    }
+                    assert!(game.command_prompt_message().is_none());
 
+                    // Both branches may run the same child, but neither may re-enter an
+                    // ancestor. Rebuilding the tree between frames doesn't reset the ancestry.
                     assert!(NetworkClientHost::send_chat(game, "/cping").is_ok());
                     assert_eq!(*ping_pong.lock().unwrap(), ["ping"]);
                     game.native_frame_end().unwrap();
-                    assert_eq!(*ping_pong.lock().unwrap(), ["ping", "pong"]);
+                    assert_eq!(*ping_pong.lock().unwrap(), ["ping", "pong", "pong"]);
+                    assert_eq!(sibling.lock().unwrap().len(), 4);
+                    game.chat_tree_for(Some(&server));
+                    let before_refusals = game.ui.chat.recent_lines(50).len();
                     game.native_frame_end().unwrap();
-                    assert_eq!(*ping_pong.lock().unwrap(), ["ping", "pong", "ping"]);
-                    game.native_client_commands.pending_commands.clear();
+                    assert_eq!(*ping_pong.lock().unwrap(), ["ping", "pong", "pong"]);
+                    assert_eq!(game.ui.chat.recent_lines(50).len(), before_refusals + 4);
+                    assert!(game.native_client_commands.pending_commands.is_empty());
+                    {
+                        let sibling = sibling.lock().unwrap();
+                        let nested = Some(mod_api::CommandArgumentValue::String("nested".into()));
+                        assert_eq!(sibling.len(), 6);
+                        for invocation in &sibling[4..] {
+                            assert_eq!(invocation.argument("word"), nested.as_ref());
+                        }
+                    }
+                    // A fresh player submission has no ancestors and still intercepts locally.
+                    assert_eq!(
+                        game.send_signed_chat_input("/cping"),
+                        Some(ClientCommandOutcome::Success(1))
+                    );
+                    assert_eq!(*ping_pong.lock().unwrap(), ["ping", "pong", "pong", "ping"]);
 
                     assert!(
                         !game

@@ -9,7 +9,7 @@ use super::{
     Game, Screen,
     books::BookScreen,
     dialogs::ClosedDialog,
-    native_server::{ClientCommandOutcome, PendingClientCommand, PendingClientCommandKind},
+    native_server::{ClientCommandChain, ClientCommandOutcome, PendingClientCommandKind},
 };
 use std::sync::Arc;
 use sunrise_client::{
@@ -281,33 +281,49 @@ impl Game<'_> {
         }));
     }
 
-    /// ClientPacketListener.sendCommand: a command with message arguments
-    /// (SignableCommand.of over the chat's tree, the server's once it sent one) has each of them signed,
-    /// all with the same time, salt and last seen (without a chat session the
-    /// signature list is empty, as in vanilla); any other command goes as the
-    /// unsigned packet.
+    /// `ClientPacketListener.sendCommand`: submit the player's slash command without its slash.
     pub(super) fn send_command(&mut self, command: &str) -> Option<ClientCommandOutcome> {
+        self.submit_client_command(command, PendingClientCommandKind::Signed, None)
+    }
+
+    /// `ClientCommandHandler.runCommand` precedes both signed and unattended server submission.
+    pub(super) fn submit_client_command(
+        &mut self,
+        input: &str,
+        kind: PendingClientCommandKind,
+        chain: Option<Arc<ClientCommandChain>>,
+    ) -> Option<ClientCommandOutcome> {
         self.remote.as_ref()?;
-        if self.native_client_commands.executing {
-            self.native_client_commands
-                .pending_commands
-                .push(PendingClientCommand {
-                    command: command.to_owned(),
-                    kind: PendingClientCommandKind::Signed,
-                });
+        let command = match kind {
+            PendingClientCommandKind::Signed => input,
+            PendingClientCommandKind::Unattended => {
+                let input = input.trim();
+                let command = input.strip_prefix('/').unwrap_or(input);
+                if command.is_empty() || !self.chat_abilities().allows(&format!("/{command}")) {
+                    return None;
+                }
+                command
+            }
+        };
+        if self.native_client_commands.defer(input, kind) {
             return None;
         }
-        if let Some(outcome) = self.run_client_native_command(command) {
+        if let Some(outcome) = self.run_client_native_command_in_chain(command, chain) {
             return Some(outcome);
         }
-        if !self.studio_command(command) {
-            self.send_server_command(command);
+        match kind {
+            PendingClientCommandKind::Signed if !self.studio_command(command) => {
+                self.send_server_command(command);
+            }
+            PendingClientCommandKind::Signed => {}
+            PendingClientCommandKind::Unattended => self.send_server_unattended_command(command),
         }
         None
     }
 
-    /// Send a command already offered to the local dispatcher. Sign against the server tree
-    /// alone: client-only display branches cannot decide what remote text is signed.
+    /// Sign message arguments against the server tree alone, never the merged display tree.
+    /// They share one time, salt and last-seen update. Commands without message arguments
+    /// go as the unsigned packet.
     pub(super) fn send_server_command(&mut self, command: &str) {
         let Some(r) = self.remote.as_mut() else {
             return;
@@ -355,26 +371,10 @@ impl Game<'_> {
     /// the player can only send it themselves, from the chat box. So neither
     /// a server nor a mod can have the player sign a message they never saw.
     pub(super) fn send_unattended_command(&mut self, command: &str) {
-        let command = command.trim();
-        let command = command.strip_prefix('/').unwrap_or(command);
-        if command.is_empty() || !self.chat_abilities().allows(&format!("/{command}")) {
-            return;
-        }
-        if self.remote.is_none() {
-            return;
-        }
-        if self.native_client_commands.executing {
-            self.native_client_commands
-                .pending_commands
-                .push(PendingClientCommand {
-                    command: format!("/{command}"),
-                    kind: PendingClientCommandKind::Unattended,
-                });
-            return;
-        }
-        if self.run_client_native_command(command).is_some() {
-            return;
-        }
+        let _ = self.submit_client_command(command, PendingClientCommandKind::Unattended, None);
+    }
+
+    fn send_server_unattended_command(&mut self, command: &str) {
         // Vanilla's dispatcher is empty until the server sends its tree.
         let check = self
             .remote

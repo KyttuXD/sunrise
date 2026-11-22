@@ -134,9 +134,11 @@ impl Command {
     /// argument resolution. Return `Some(n)` for success with result `n` (including zero),
     /// or `None` for failure. A failed executor or disabled owner never forwards the
     /// command to the server or gives another mod a turn. Only a parse from the current
-    /// client dispatcher generation can reach this executor. Capture owned or shared
-    /// state rather than borrowing the registration event. A panic disables the
-    /// usage from that mod for the session, including across command-tree refreshes.
+    /// client dispatcher generation can reach this executor. Slash commands submitted
+    /// during execution run later; an attempt to re-enter an executor in the same
+    /// submission chain fails locally, even after the dispatcher refreshes. Capture
+    /// owned or shared state rather than borrowing the registration event. A panic
+    /// disables the usage from that mod for the session, including across refreshes.
     pub fn executes_client(
         self,
         executor: impl Fn(&mut dyn ClientHost, &CommandInvocation) -> Option<i32>

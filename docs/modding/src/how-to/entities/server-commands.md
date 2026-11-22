@@ -449,3 +449,8 @@ client-safe argument kinds; player, entity and dimension handles and custom
 argument types with a server suggestion provider are unavailable. The chat display
 combines local and server branches, but dispatch is separate: only an unknown local
 command or argument goes to the server.
+
+Slash commands submitted by an executor wait until the next client event-loop
+pass. A nested command cannot re-enter an executor already in its submission
+chain; that refusal stays local, even if the dispatcher was refreshed. Unrelated
+nested commands still run normally.
