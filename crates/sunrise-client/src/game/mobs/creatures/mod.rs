@@ -2133,7 +2133,7 @@ impl Game<'_> {
                             self.audio.play(&full_id(s), Some(center), volume, pitch);
                         }
                         MobEvent::Infested { at, velocities } => infested.push((at, velocities)),
-                        MobEvent::DeathProtectionEffects {
+                        MobEvent::ConsumeEffects {
                             mob,
                             consumed,
                             effects,
@@ -2149,7 +2149,7 @@ impl Game<'_> {
             }
         }
         for (mob, consumed, effects) in protections {
-            self.apply_mob_death_protection_effects(mob, &consumed, &effects);
+            self.apply_mob_consumed_effects(mob, &consumed, &effects);
         }
         for (at, velocities) in infested {
             self.spawn_infested(at, velocities);
@@ -3631,12 +3631,12 @@ impl Game<'_> {
                         source.and_then(|id| self.entity(id)),
                     );
                 }
-                MobEvent::DeathProtectionEffects {
+                MobEvent::ConsumeEffects {
                     mob,
                     consumed,
                     effects,
                 } => {
-                    self.apply_mob_death_protection_effects(mob, &consumed, &effects);
+                    self.apply_mob_consumed_effects(mob, &consumed, &effects);
                 }
                 MobEvent::Ignite(target, seconds) => self.ignite_entity(target, seconds)?,
                 MobEvent::ZombieIgnite(target, seconds) if self.combat.hit_landed => {

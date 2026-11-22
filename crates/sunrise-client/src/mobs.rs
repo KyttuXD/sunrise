@@ -2457,7 +2457,7 @@ pub enum MobEvent {
     },
     /// The damage owner used a death-protection item. Its chance draws already happened
     /// on the borrowed mob; apply the accepted components with the living holder restored.
-    DeathProtectionEffects {
+    ConsumeEffects {
         mob: u32,
         consumed: crate::items::ItemStack,
         effects: Vec<crate::items::ConsumeEffect>,
@@ -4800,7 +4800,7 @@ impl Mob {
             _ => true,
         });
         if !effects.is_empty() {
-            self.outbox.push(MobEvent::DeathProtectionEffects {
+            self.outbox.push(MobEvent::ConsumeEffects {
                 mob: self.id,
                 consumed,
                 effects,
@@ -6587,7 +6587,7 @@ mod totem_tests {
         assert_eq!(m.health, 1.0);
         assert_eq!(m.extra.main_hand_id(), None, "the totem was used up");
         let mut outbox = m.outbox.iter();
-        assert!(outbox.any(|e| matches!(e, MobEvent::DeathProtectionEffects {
+        assert!(outbox.any(|e| matches!(e, MobEvent::ConsumeEffects {
             mob: 1, consumed, effects,
         } if consumed.item.as_ref() == "minecraft:totem_of_undying" && effects == &living::totem_death_effects())));
         assert!(outbox.any(|e| matches!(e, MobEvent::EntityEvent { event: 35, .. })));

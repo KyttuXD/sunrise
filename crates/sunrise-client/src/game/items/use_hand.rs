@@ -752,9 +752,9 @@ impl Game<'_> {
             }),
         })
     }
-    /// `DeathProtection.applyEffects` once the entity is back in the owning Game.
-    /// Status applications have already passed their random draw in the damage path.
-    pub(super) fn apply_mob_death_protection_effects(
+    /// Apply the effects of a consumed item once the mob is back in the owning Game.
+    /// Status applications have already passed their draw on the mob's random stream.
+    pub(super) fn apply_mob_consumed_effects(
         &mut self,
         mob: u32,
         consumed: &ItemStack,

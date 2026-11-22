@@ -4895,7 +4895,7 @@ mod poison_effect_tests {
         );
         assert_eq!(pig.health, 1.0);
         assert!(pig.outbox.iter().any(|e| matches!(e,
-            MobEvent::DeathProtectionEffects { mob: 1, effects, .. }
+            MobEvent::ConsumeEffects { mob: 1, effects, .. }
             if effects == &crate::mobs::living::totem_death_effects()
         )));
     }

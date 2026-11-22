@@ -424,13 +424,13 @@ pub fn apply_consumption(
     decision: &Consumption,
     w: &MobWorld,
     m: &mut Mob,
-    level: &mut crate::health::DamageLevel<'_>,
+    _level: &mut crate::health::DamageLevel<'_>,
     events: &mut Vec<MobEvent>,
 ) -> bool {
     if !decision.still_valid(m) {
         return false;
     }
-    if !consume(w, m, level, events, &decision.stack) {
+    if !consume(w, m, events, &decision.stack) {
         return false;
     }
     let remainder = crate::item_sync::use_remainder(
@@ -567,7 +567,6 @@ fn eats(w: &MobWorld, stack: &crate::items::ItemStack) -> bool {
 fn consume(
     w: &MobWorld,
     m: &mut Mob,
-    level: &mut crate::health::DamageLevel<'_>,
     events: &mut Vec<MobEvent>,
     stack: &sunrise_items::items::ItemStack,
 ) -> bool {
@@ -600,7 +599,16 @@ fn consume(
                 1.0,
             ));
         } else {
-            m.apply_consume_effect(level, effect);
+            if let ConsumeEffect::ApplyEffects { probability, .. } = effect
+                && m.random.next_float() >= *probability
+            {
+                continue;
+            }
+            events.push(MobEvent::ConsumeEffects {
+                mob: m.id,
+                consumed: stack.clone(),
+                effects: vec![effect.clone()],
+            });
         }
     }
     // `user.gameEvent(animation == DRINK ? GameEvent.DRINK : GameEvent.EAT)` at
