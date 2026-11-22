@@ -917,15 +917,19 @@ impl Game<'_> {
             .or_else(|| self.end_destination(entering, target))
             .unwrap_or(Vec3::new(from.x * scale, from.y, from.z * scale));
         self.end_portal_travel = false;
-        let (retired_window, mut pending_opens) = if source != target {
-            self.guest_close_menus_for_travel(conn)
+        let (retired_window, mut menu_hold) = if source != target {
+            let (window, hold) = self.guest_close_menus_for_travel(conn);
+            (window, Some(hold))
         } else {
-            (None, Vec::new())
+            (None, None)
         };
-        if !self.enter_travel_destination(conn, target, retired_window, &mut pending_opens) {
+        if !self.enter_travel_destination(conn, target, retired_window, &mut menu_hold) {
             return;
         }
         let Some(i) = self.guest_index(conn) else {
+            if let Some(hold) = menu_hold {
+                self.resume_menu_opens(hold);
+            }
             if let Err(e) = self.enter_level(source) {
                 log::error!("could not reopen {}: {e}", source.id());
             }
@@ -941,6 +945,9 @@ impl Game<'_> {
         // the exit is found (`arrive_server_trips`). The cooldown is the one
         // Entity.handlePortal set before the teleport.
         let Some(host) = self.lan.as_mut() else {
+            if let Some(hold) = menu_hold {
+                self.resume_menu_opens(hold);
+            }
             return;
         };
         let change = host
@@ -952,8 +959,8 @@ impl Game<'_> {
             host.hub.finish_level_change(i, change, true, &ctx);
         }
         self.bind_player_attachments(conn, false);
-        for open in pending_opens {
-            self.publish_menu_open(conn, *open);
+        if let Some(hold) = menu_hold {
+            self.resume_menu_opens(hold);
         }
         self.as_guest(conn, |g| {
             g.trigger_dimension(source, target, [from.x, from.y, from.z]);
@@ -995,14 +1002,14 @@ impl Game<'_> {
         conn: u32,
         dim: Dim,
         retired_window: Option<i32>,
-        pending_opens: &mut Vec<Box<super::native_menus::PendingMenuOpen>>,
+        menu_hold: &mut Option<super::lan_menus::MenuOpenHold>,
     ) -> bool {
         let Err(e) = self.enter_level(dim) else {
             return true;
         };
         log::error!("could not open {}: {e}", dim.id());
-        for open in pending_opens.drain(..) {
-            self.publish_menu_open(conn, *open);
+        if let Some(hold) = menu_hold.take() {
+            self.resume_menu_opens(hold);
         }
         if let Some(container) = retired_window
             && let Some(host) = self.lan.as_mut()
@@ -1545,38 +1552,41 @@ impl Game<'_> {
             }
             self.eject_player_riders(Some(id));
         }
-        let (retired_window, mut pending_opens) = if t.dim != source {
-            let window = self.guest_close_menus_for_travel(t.conn);
+        let (retired_window, mut menu_hold) = if t.dim != source {
+            let (window, hold) = self.guest_close_menus_for_travel(t.conn);
             if let Some(host) = self.lan.as_mut() {
                 drop_hook(host, t.conn);
             }
-            window
+            (window, Some(hold))
         } else {
-            (None, Vec::new())
+            (None, None)
         };
-        let index =
-            if self.enter_travel_destination(t.conn, t.dim, retired_window, &mut pending_opens) {
-                self.guest_index(t.conn)
-            } else {
-                None
-            };
+        let index = if self.enter_travel_destination(t.conn, t.dim, retired_window, &mut menu_hold)
+        {
+            self.guest_index(t.conn)
+        } else {
+            None
+        };
         let Some(i) = index else {
+            if let Some(hold) = menu_hold {
+                self.resume_menu_opens(hold);
+            }
             if let Err(e) = self.enter_level(back) {
                 log::error!("could not reopen {}: {e}", back.id());
             }
             return;
         };
-        let Some(host) = self.lan.as_ref() else {
+        let ctx = server_ctx!(self);
+        let Some(host) = self.lan.as_mut() else {
+            if let Some(hold) = menu_hold {
+                self.resume_menu_opens(hold);
+            }
             return;
         };
         let guest = &host.hub.guests[i];
         let [yaw, pitch] = t.rotation.unwrap_or([guest.yaw, guest.pitch]);
         let origin = guest.position;
         let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
-        let ctx = server_ctx!(self);
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
         let change = host
             .hub
             .begin_level_change(i, t.at, yaw, Some(pitch), cooldown, &ctx);
@@ -1603,8 +1613,8 @@ impl Game<'_> {
             });
         }
         self.bind_player_attachments(t.conn, false);
-        for open in pending_opens {
-            self.publish_menu_open(t.conn, *open);
+        if let Some(hold) = menu_hold {
+            self.resume_menu_opens(hold);
         }
         match kind {
             LevelTeleportKind::EndExit { .. } => {

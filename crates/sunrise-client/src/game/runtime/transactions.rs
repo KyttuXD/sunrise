@@ -88,6 +88,7 @@ pub(super) struct OpenTransactions {
     closing: Option<TransactionLifecycle>,
     /// Implicit container notices waiting for this quick move's source settlement.
     quick_move_notices: Option<Vec<QuickMoveNotice>>,
+    pub(super) menu_publications: HashMap<u32, super::lan_menus::MenuPublications>,
     /// How many writes the journals have been asked to keep, ever: a whole-state epoch that no
     /// restore moves back. A decision that read a player's inventory or a container's slots
     /// compares it before and after its listeners ran; an equal rewrite counts as a write.
@@ -614,7 +615,7 @@ pub(super) enum After {
     QuickMoveChanged(QuickMoveNotice),
     GuestMenu(u32, Box<super::lan_crafting::GuestMenuEffects>),
     MenuClick(Box<super::lan_menus::MenuClickReply>),
-    MenuOpen(u32, Box<super::native_menus::PendingMenuOpen>),
+    MenuOpen(u32, i32, Box<super::native_menus::PendingMenuOpen>),
     MenuPlacesNotice(u32, u128, i32),
     FurnaceMenu(Box<super::lan_crafting::FurnaceMenuEffects>),
     StoreCartItems(Pos),
@@ -2050,7 +2051,7 @@ impl Game<'_> {
             }
             After::GuestMenu(conn, effects) => self.publish_guest_menu_effects(conn, *effects),
             After::MenuClick(reply) => self.publish_menu_click(*reply),
-            After::MenuOpen(conn, open) => self.publish_menu_open(conn, *open),
+            After::MenuOpen(conn, identity, open) => self.publish_menu_open(conn, identity, open),
             After::MenuPlacesNotice(conn, uuid, window) => {
                 self.queue_menu_places_notice(conn, uuid, window);
             }
@@ -2231,6 +2232,13 @@ impl Game<'_> {
     }
 
     fn root_commit(&mut self, mut level: Level) {
+        // Reserve every deferred open's place before block replay or an older Close can
+        // run a callback. The requests are made ready at their existing lifecycle points.
+        for after in &level.after {
+            if let After::MenuOpen(conn, identity, _) = after {
+                self.reserve_menu_publication(*conn, *identity);
+            }
+        }
         // Storage is final. Publish save marks before any callback can unwind or start a save.
         for (dim, chunk) in level.save_chunks {
             let world = if dim == self.dim {

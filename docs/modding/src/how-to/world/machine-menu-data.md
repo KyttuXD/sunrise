@@ -311,7 +311,9 @@ from live protocol window ids (`0..=100`), and defers `container_opened` and ins
 block changes have replayed at outermost commit. The veto runs in the player's level outside
 the transaction. Read the allocated vanilla window id after commit from
 `player.container_menu(host)` or in `player_container_open`; an abort leaves the old menu and
-its window counter untouched.
+its window counter untouched. A staged request has no slots to write: transfer items into
+owned slots from `player_container_open`, once the replacement is installed. Requests made
+from a close callback publish after earlier requests for the same player.
 
 For a slotless status screen, declare `data/mymod/sunrise/menu/status.json` as
 `{ "slots": 0, "player_inventory": false, "data_slots": 2 }`. Register a screen factory

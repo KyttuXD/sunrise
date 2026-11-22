@@ -65,8 +65,9 @@ pub trait PlayerMenusBackendMut {
     /// runs in the player's level outside the transaction. The next vanilla window id
     /// (`1..=100`) is allocated when the open installs and exposed in `player_container_open`
     /// and `PlayerRef::container_menu`. An abort drops the request and keeps the old menu.
-    /// An open requested during menu removal likewise returns a staged identity and waits
-    /// until Close returns.
+    /// A staged identity cannot address a slot. Transfer items into the live menu from
+    /// `player_container_open`, after installation. An open requested during menu removal
+    /// also returns a staged identity and waits for Close and earlier requests for that player.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,

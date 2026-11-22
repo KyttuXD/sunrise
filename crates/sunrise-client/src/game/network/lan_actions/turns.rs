@@ -1094,6 +1094,7 @@ impl Game<'_> {
         }
         // An ender chest a mod opened for them in the turn (`player_open_ender_chest`).
         self.open_turn_ender_menus(conn);
+        self.drain_menu_opens(conn);
         // The turn's teleports are in the hub now: the mods hear them.
         self.flush_teleport_notes();
         if let Some(host) = self.lan.as_ref() {

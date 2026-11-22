@@ -3,9 +3,11 @@
 //! runs, so a menu owner kept there is out of reach of anything that runs inside the turn: another
 //! nested turn, a hook, an action that needs to find the menu to admit or undo. These owners stay
 //! in the host, by connection, for as long as the guest is here.
+use std::collections::VecDeque;
+
 use super::{
     lan::LanHost, lan_crafting::GuestCrafting, lan_stations::GuestStation,
-    transactions::decision::MenuOwner,
+    native_menus::PendingMenuOpen, transactions::decision::MenuOwner,
 };
 
 /// One guest's menu owners: the inventory menu, the crafting table and the furnace or brewing
@@ -27,16 +29,29 @@ pub(in crate::game) struct GuestMenus {
     /// The successful open already announced to mods, retained through a loan of `GuestPlay`.
     pub(in crate::game) menu_heard: Option<super::native_menus::HeardMenu>,
     /// Installed from the start of `removed` until the general Close returns.
-    pub(super) closing: Option<ClosingMenu>,
+    pub(super) closing: bool,
     /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
     /// None for every menu no mod backed.
     pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
 }
 
-#[derive(Default)]
-pub(super) struct ClosingMenu {
-    pub(super) opens: Vec<Box<super::native_menus::PendingMenuOpen>>,
+struct QueuedMenuOpen {
+    identity: i32,
+    open: Option<Box<PendingMenuOpen>>,
 }
+
+/// Per-connection FIFO from root commit through publication. A root reserves the positions
+/// of its opens before any callbacks reenter. The wire counter belongs to installation alone.
+#[derive(Default)]
+pub(super) struct MenuPublications {
+    queue: VecDeque<QueuedMenuOpen>,
+    holds: usize,
+    publishing: bool,
+}
+
+/// Moving or replacing the player's current menu holds publication until teardown and handoff
+/// complete. The hold identifies the same connection on release.
+pub(super) struct MenuOpenHold(u32);
 
 /// An authoritative click reply, published only once the click's transaction has committed.
 pub(super) struct MenuClickReply {
@@ -122,40 +137,106 @@ impl super::Game<'_> {
         self.reply_menu_click_for(conn, generation, ClickReply::Close(window));
     }
 
-    /// An open waits for an enclosing transaction or for the old menu to finish closing.
+    /// An open waits for its transaction or an older publication on the same connection.
     pub(super) fn menu_open_waits(&self, conn: u32) -> bool {
-        !self.transactions.is_empty()
-            || self
-                .lan
-                .as_ref()
-                .and_then(|host| host.menus.get(&conn))
-                .is_some_and(|menus| menus.closing.is_some())
+        !self.transactions.is_empty() || self.transactions.menu_publications.contains_key(&conn)
     }
 
-    pub(super) fn defer_menu_open(
-        &mut self,
-        conn: u32,
-        open: super::native_menus::PendingMenuOpen,
-    ) -> i32 {
-        let staged = self.transactions.next_staged_menu_open();
-        self.after_commit(super::transactions::After::MenuOpen(conn, Box::new(open)));
-        staged
+    pub(super) fn defer_menu_open(&mut self, conn: u32, open: PendingMenuOpen) -> i32 {
+        let identity = self.transactions.next_staged_menu_open();
+        self.after_commit(super::transactions::After::MenuOpen(
+            conn,
+            identity,
+            Box::new(open),
+        ));
+        identity
+    }
+
+    pub(super) fn reserve_menu_publication(&mut self, conn: u32, identity: i32) {
+        self.transactions
+            .menu_publications
+            .entry(conn)
+            .or_default()
+            .queue
+            .push_back(QueuedMenuOpen {
+                identity,
+                open: None,
+            });
     }
 
     pub(super) fn publish_menu_open(
         &mut self,
         conn: u32,
-        open: super::native_menus::PendingMenuOpen,
+        identity: i32,
+        open: Box<PendingMenuOpen>,
     ) {
-        if let Some(closing) = self
-            .lan
-            .as_mut()
-            .and_then(|host| host.menus.get_mut(&conn))
-            .and_then(|menus| menus.closing.as_mut())
-        {
-            closing.opens.push(Box::new(open));
+        let queue = &mut self
+            .transactions
+            .menu_publications
+            .entry(conn)
+            .or_default()
+            .queue;
+        if let Some(entry) = queue.iter_mut().find(|entry| entry.identity == identity) {
+            entry.open = Some(open);
         } else {
-            self.install_pending_menu_open(conn, open);
+            queue.push_back(QueuedMenuOpen {
+                identity,
+                open: Some(open),
+            });
+        }
+        self.drain_menu_opens(conn);
+    }
+
+    pub(super) fn hold_menu_opens(&mut self, conn: u32) -> MenuOpenHold {
+        self.transactions
+            .menu_publications
+            .entry(conn)
+            .or_default()
+            .holds += 1;
+        MenuOpenHold(conn)
+    }
+
+    pub(super) fn resume_menu_opens(&mut self, MenuOpenHold(conn): MenuOpenHold) {
+        self.transactions
+            .menu_publications
+            .get_mut(&conn)
+            .unwrap()
+            .holds -= 1;
+        self.drain_menu_opens(conn);
+    }
+
+    pub(super) fn drain_menu_opens(&mut self, conn: u32) {
+        let Some(stream) = self.transactions.menu_publications.get_mut(&conn) else {
+            return;
+        };
+        if stream.holds != 0 || stream.publishing {
+            return;
+        }
+        stream.publishing = true;
+        loop {
+            let stream = self.transactions.menu_publications.get_mut(&conn).unwrap();
+            if stream.holds != 0 {
+                break;
+            }
+            let Some(open) = stream.queue.front().and_then(|entry| entry.open.as_deref()) else {
+                break;
+            };
+            // Ender slots are in Game during the owner's turn. Waiting for the record
+            // to come back must not let another open overtake this one.
+            if matches!(open, PendingMenuOpen::Ender(..)) && self.lan_guest_swaps.contains(&conn) {
+                break;
+            }
+            let open = stream
+                .queue
+                .pop_front()
+                .and_then(|entry| entry.open)
+                .unwrap();
+            self.install_pending_menu_open(conn, *open);
+        }
+        let stream = self.transactions.menu_publications.get_mut(&conn).unwrap();
+        stream.publishing = false;
+        if stream.holds == 0 && stream.queue.is_empty() {
+            self.transactions.menu_publications.remove(&conn);
         }
     }
 

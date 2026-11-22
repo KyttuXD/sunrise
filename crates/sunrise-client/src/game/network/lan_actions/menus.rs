@@ -501,11 +501,10 @@ impl Game<'_> {
         tell: bool,
         open: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let (_, pending) = self.guest_remove_menus(conn, MenuRemoval::Live, tell);
+        let hold = self.hold_menu_opens(conn);
+        self.guest_remove_menus(conn, MenuRemoval::Live, tell);
         let result = open(self);
-        for next in pending {
-            self.publish_menu_open(conn, *next);
-        }
+        self.resume_menu_opens(hold);
         result
     }
 
@@ -562,45 +561,29 @@ impl Game<'_> {
 
     /// `Player.remove(CHANGED_DIMENSION)` removes both menus without dropping
     /// a cursor that still fits. Overflow belongs in the level the guest left.
-    /// Return the retired nonzero window (for a failed trip before respawn) and any
-    /// reentrant opens queued during close, which run after `Hub::change_level` so
-    /// `change_level` never retires them or sends `Respawn` after their open.
+    /// Hold reentrant opens until travel has sent Respawn and finished changing level.
+    /// The retired window is needed to send an explicit close only on a failed trip.
     pub(in crate::game) fn guest_close_menus_for_travel(
         &mut self,
         conn: u32,
-    ) -> (
-        Option<i32>,
-        Vec<Box<super::super::native_menus::PendingMenuOpen>>,
-    ) {
-        self.guest_remove_menus(conn, MenuRemoval::ChangedDimension, false)
+    ) -> (Option<i32>, super::super::lan_menus::MenuOpenHold) {
+        let hold = self.hold_menu_opens(conn);
+        let retired = self.guest_remove_menus(conn, MenuRemoval::ChangedDimension, false);
+        (retired, hold)
     }
 
     pub(in crate::game) fn guest_disconnected(&mut self, conn: u32) {
+        let hold = self.hold_menu_opens(conn);
         self.guest_remove_menus(conn, MenuRemoval::Disconnected, false);
+        self.resume_menu_opens(hold);
     }
 
-    fn guest_remove_menus(
-        &mut self,
-        conn: u32,
-        removal: MenuRemoval,
-        tell: bool,
-    ) -> (
-        Option<i32>,
-        Vec<Box<super::super::native_menus::PendingMenuOpen>>,
-    ) {
-        let Some(host) = self.lan.as_mut() else {
-            return (None, Vec::new());
-        };
-        let Some(gi) = host.hub.guests.connection_index(conn) else {
-            return (None, Vec::new());
-        };
-        if host
-            .menus
-            .get(&conn)
-            .is_some_and(|menus| menus.closing.is_some())
-        {
+    fn guest_remove_menus(&mut self, conn: u32, removal: MenuRemoval, tell: bool) -> Option<i32> {
+        let host = self.lan.as_mut()?;
+        let gi = host.hub.guests.connection_index(conn)?;
+        if host.menus.get(&conn).is_some_and(|menus| menus.closing) {
             // Nested closes of the same instance belong to the outer close.
-            return (None, Vec::new());
+            return None;
         }
         let guest = &host.hub.guests[gi];
         let generation = guest.menu_generation;
@@ -609,7 +592,7 @@ impl Game<'_> {
             .map(|(window, ..)| window)
             .or_else(|| hub_menu.map(|(window, _)| window));
         if let Some(container) = window {
-            host.menus.entry(conn).or_default().closing = Some(Default::default());
+            host.menus.entry(conn).or_default().closing = true;
             if tell {
                 host.hub
                     .send_to(conn, &C::ContainerClose(play::ContainerClose { container }));
@@ -620,20 +603,19 @@ impl Game<'_> {
         if removal != MenuRemoval::Live {
             self.lan_crafting_removed(conn, Some(0), removal);
         }
-        let Some(gi) = self.guest_index(conn) else {
-            return (None, Vec::new());
-        };
-        if removal.drops_items() {
-            self.guest_drop_carried(gi);
-        } else {
-            let returned = self
-                .lan
-                .as_mut()
-                .unwrap()
-                .hub
-                .take_closed_menu_cursors(conn)
-                .collect();
-            self.lan_place_back(gi, returned);
+        if let Some(gi) = self.guest_index(conn) {
+            if removal.drops_items() {
+                self.guest_drop_carried(gi);
+            } else {
+                let returned = self
+                    .lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .take_closed_menu_cursors(conn)
+                    .collect();
+                self.lan_place_back(gi, returned);
+            }
         }
         if let Some((window, slots)) = hub_menu {
             self.guest_container_closed(conn);
@@ -674,13 +656,10 @@ impl Game<'_> {
         {
             host.hub.finish_close_container(conn, generation);
         }
-        let pending = self
-            .lan
-            .as_mut()
-            .and_then(|host| host.menus.get_mut(&conn))
-            .and_then(|menus| menus.closing.take())
-            .map_or_else(Vec::new, |closing| closing.opens);
-        (window, pending)
+        if let Some(menus) = self.lan.as_mut().and_then(|host| host.menus.get_mut(&conn)) {
+            menus.closing = false;
+        }
+        window
     }
 
     /// `ContainerEntity`'s `Container.stopOpen` when a vehicle menu closes
@@ -834,10 +813,9 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_close_menus(&mut self, conn: u32, removal: MenuRemoval) {
-        let (_, pending) = self.guest_remove_menus(conn, removal, true);
-        for next in pending {
-            self.publish_menu_open(conn, *next);
-        }
+        let hold = self.hold_menu_opens(conn);
+        self.guest_remove_menus(conn, removal, true);
+        self.resume_menu_opens(hold);
     }
 
     /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest

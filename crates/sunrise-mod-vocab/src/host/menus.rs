@@ -24,7 +24,7 @@ pub trait MenusServerHost {
     /// the window counter. An active speculative quick move or trade action still refuses an open
     /// with `Ok(None)`.
     /// An open requested during menu removal also returns a staged identity;
-    /// it waits until the current Close returns.
+    /// it waits until the current Close returns and earlier requests for that player publish.
     #[serialize_text]
     fn open_menu(
         &mut self,

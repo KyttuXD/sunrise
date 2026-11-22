@@ -8,4 +8,6 @@ sunrise-client game::native_menus::owned_slots_tests::late_container_sync_invali
 sunrise-client game::native_menus::owned_slots_tests::disconnect_reports_logout_then_removed_then_close_with_live_views lib daily resources
 sunrise-client game::native_menus::owned_slots_tests::staging_replacement_keeps_nested_edits_on_the_live_owner_until_commit lib daily resources
 sunrise-client game::native_menus::owned_slots_tests::aborted_window_reservations_do_not_collide_at_wraparound lib daily resources
+sunrise-client game::native_menus::owned_slots_tests::reentrant_open_follows_both_root_opens_and_ignores_a_stale_close lib daily resources
+sunrise-client game::native_menus::owned_slots_tests::disconnect_before_publication_preserves_a_stack_offered_to_the_pending_menu lib daily resources
 sunrise-client game::native_menus::owned_slots_tests::reentrant_open_during_travel_close_opens_after_change_level lib daily resources
