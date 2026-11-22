@@ -15,13 +15,14 @@ use sunrise_core::{
 use {
     sunrise_core::nbt::Tag,
     sunrise_world::{
-        heightmap::HeightmapType,
+        heightmap::{HeightmapState, HeightmapType},
         item_defaults::ItemData,
-        registry::BlockRegistry,
+        registry::{BlockRegistry, BlockStateId},
         worldgen::{
             biome_source::regions::RegionLayout,
             generator::{
-                GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
+                DecorationDependencies, GenBlockStates, GeneratorData, GeneratorWorker,
+                OverworldGenerator, ProtoChunk, SurfaceSample,
             },
             overrides::WorldgenOverrides,
             structure::legacy::PieceRandom,
@@ -33,6 +34,91 @@ mod lod;
 mod structure_mobs;
 use lod::VanillaLodSampler;
 use structure_mobs::StructureMobFinalizer;
+
+/// Read-only view of resident `Arc<Chunk>` columns in the `FEATURES`
+/// `STRUCTURE_STARTS` dependency ring (Chebyshev distance `2..=8`).
+struct OuterColumns<'a>(&'a [Arc<Chunk>]);
+
+impl OuterColumns<'_> {
+    fn chunk(&self, cx: i32, cz: i32) -> Option<&Chunk> {
+        self.0
+            .iter()
+            .find(|c| c.x == cx && c.z == cz)
+            .map(Arc::as_ref)
+    }
+}
+
+impl DecorationDependencies for OuterColumns<'_> {
+    fn resident_block(&self, [x, y, z]: [i32; 3]) -> Option<BlockStateId> {
+        let chunk = self.chunk(x >> 4, z >> 4)?;
+        Some(chunk.block(x, y, z))
+    }
+    fn resident_height(
+        &self,
+        kind: HeightmapType,
+        x: i32,
+        z: i32,
+        build: (i32, i32),
+        properties: &GenBlockStates,
+    ) -> Option<i32> {
+        let (min_y, max_y) = build;
+        let chunk = self.chunk(x >> 4, z >> 4)?;
+        let low = min_y.max(chunk.min_y());
+        let high = max_y.min(chunk.max_y());
+        for y in (low..high).rev() {
+            let props = properties.get(chunk.block(x, y, z));
+            if !props.is_air_block() && kind.is_opaque(props) {
+                return Some(y + 1);
+            }
+        }
+        Some(min_y)
+    }
+}
+
+impl VanillaTerrain {
+    fn decorate_region(
+        &self,
+        worker: &mut GeneratorWorker,
+        region: &mut [Proto; 9],
+        dependencies: Option<&dyn DecorationDependencies>,
+    ) {
+        let taken: Vec<Box<VanillaProto>> = region
+            .iter_mut()
+            .map(|p| {
+                std::mem::replace(p, Box::new(()))
+                    .downcast::<VanillaProto>()
+                    .expect("vanilla proto")
+            })
+            .collect();
+        let all_ready = taken.iter().all(|p| matches!(**p, VanillaProto::Ready(_)));
+        if all_ready {
+            let (chunks, saved_biomes): (Vec<ProtoChunk>, Vec<Option<SavedBiomeCells>>) = taken
+                .into_iter()
+                .map(|p| match *p {
+                    VanillaProto::Ready(c) => (c.terrain_chunk, c.saved_biomes),
+                    VanillaProto::Failed(..) => unreachable!(),
+                })
+                .unzip();
+            let mut array: [ProtoChunk; 9] = match chunks.try_into() {
+                Ok(a) => a,
+                Err(_) => unreachable!(),
+            };
+            if let Err(e) = worker.decorate_with_dependencies(&mut array, dependencies) {
+                log::warn!("Sunrise: decorating chunk failed: {e}");
+            }
+            for ((slot, chunk), saved_biomes) in region.iter_mut().zip(array).zip(saved_biomes) {
+                *slot = Box::new(VanillaProto::Ready(Box::new(ResidentProto {
+                    terrain_chunk: chunk,
+                    saved_biomes,
+                })));
+            }
+        } else {
+            for (slot, p) in region.iter_mut().zip(taken) {
+                *slot = p;
+            }
+        }
+    }
+}
 
 /// The references a saved chunk keeps for its structure start: `(structure, chunk x, chunk z)`.
 pub type SavedReferences = std::sync::Arc<dyn Fn(&str, i32, i32) -> i32 + Send + Sync>;
@@ -1090,40 +1176,19 @@ impl ChunkGenerator for VanillaTerrain {
             .collect()
     }
     fn decorate(&self, worker: &mut GeneratorWorker, region: &mut [Proto; 9]) {
-        let taken: Vec<Box<VanillaProto>> = region
-            .iter_mut()
-            .map(|p| {
-                std::mem::replace(p, Box::new(()))
-                    .downcast::<VanillaProto>()
-                    .expect("vanilla proto")
-            })
-            .collect();
-        let all_ready = taken.iter().all(|p| matches!(**p, VanillaProto::Ready(_)));
-        if all_ready {
-            let (chunks, saved_biomes): (Vec<ProtoChunk>, Vec<Option<SavedBiomeCells>>) = taken
-                .into_iter()
-                .map(|p| match *p {
-                    VanillaProto::Ready(c) => (c.terrain_chunk, c.saved_biomes),
-                    VanillaProto::Failed(..) => unreachable!(),
-                })
-                .unzip();
-            let mut array: [ProtoChunk; 9] = match chunks.try_into() {
-                Ok(a) => a,
-                Err(_) => unreachable!(),
-            };
-            if let Err(e) = worker.decorate(&mut array) {
-                log::warn!("Sunrise: decorating chunk failed: {e}");
-            }
-            for ((slot, chunk), saved_biomes) in region.iter_mut().zip(array).zip(saved_biomes) {
-                *slot = Box::new(VanillaProto::Ready(Box::new(ResidentProto {
-                    terrain_chunk: chunk,
-                    saved_biomes,
-                })));
-            }
+        self.decorate_region(worker, region, None);
+    }
+    fn decorate_with_outer(
+        &self,
+        worker: &mut GeneratorWorker,
+        region: &mut [Proto; 9],
+        outer: &[Arc<Chunk>],
+    ) {
+        if outer.is_empty() {
+            self.decorate_region(worker, region, None);
         } else {
-            for (slot, p) in region.iter_mut().zip(taken) {
-                *slot = p;
-            }
+            let columns = OuterColumns(outer);
+            self.decorate_region(worker, region, Some(&columns));
         }
     }
     fn is_decorated(&self, proto: &Proto) -> bool {

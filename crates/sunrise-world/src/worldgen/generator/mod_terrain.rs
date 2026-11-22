@@ -353,11 +353,11 @@ mod tests {
             _: &mut dyn crate::worldgen::mod_features::ModFeatureRandom,
             origin: [i32; 3],
             _: &(dyn std::any::Any + Send + Sync),
-        ) -> Result<bool, String> {
+        ) -> Result<bool, mod_api::FeatureError> {
             let chest = target
                 .registry()
                 .and_then(|registry| registry.default_state("minecraft:chest"))
-                .ok_or("no chest")?;
+                .ok_or_else(|| mod_api::FeatureError::new(std::io::Error::other("no chest")))?;
             let nbt = sunrise_core::nbt::Compound::from([(
                 "id".into(),
                 sunrise_core::nbt::Tag::String("minecraft:chest".into()),
@@ -450,17 +450,19 @@ mod tests {
         data
     }
 
-    /// A mod feature's block entity is taken only where its block was placed: in an ordinary
-    /// region a chest feature queues its block entity, and in a region whose chunks are all
-    /// full (block writes there change nothing) it queues none and leaves one already there
-    /// as it was.
+    /// A chest feature stores its block entity in a writable chunk, but can't change any block
+    /// entity in a read-only full chunk, even when the block write reports success.
     #[test]
     #[ignore = "daily"]
     fn a_full_chunk_takes_no_block_entity_from_a_mod_feature() {
+        use crate::worldgen::mod_features::{ModFeatureEntry, ModFeatureTypes};
         use sunrise_core::nbt::{Compound, Tag};
-        let types: crate::worldgen::mod_features::ModFeatureTypes = [(
+        let types: ModFeatureTypes = [(
             "test:chest".to_owned(),
-            Arc::new(ChestFeature) as Arc<dyn crate::worldgen::mod_features::ModFeatureType>,
+            Arc::new(ModFeatureEntry {
+                mod_id: "test",
+                ty: Arc::new(ChestFeature),
+            }),
         )]
         .into();
         crate::worldgen::mod_features::with_test_feature_types(&types, || {

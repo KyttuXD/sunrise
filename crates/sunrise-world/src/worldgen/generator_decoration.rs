@@ -20,7 +20,8 @@ use super::{
     feature_region::{RegionError, TerrainRegion},
     feature_sort::FeatureIdentity,
     generator::{
-        DecorateStats, GenBlockStates, GeneratorData, GeneratorError, ProtoChunk, WorkerState,
+        DecorateStats, DecorationDependencies, GenBlockStates, GeneratorData, GeneratorError,
+        ProtoChunk, WorkerState,
     },
     placement::{LayerBlock, PlacementContext, PlacementQueryError},
     tags::TagDefinitions,
@@ -57,6 +58,12 @@ use {
     super::structure::start::{STEPS, place_in_chunk},
     sunrise_core::bounding_box::BoundingBox,
 };
+
+/// `ChunkPyramid.GENERATION_PYRAMID` sets the FEATURES block-state write radius to one chunk.
+const FEATURES_WRITE_RADIUS: i32 = 1;
+/// `ChunkPyramid.GENERATION_PYRAMID` gives FEATURES `STRUCTURE_STARTS` direct dependencies
+/// out to eight chunks (`directDependencies().size() == 9`).
+const FEATURES_DEPENDENCY_RADIUS: i32 = 8;
 
 pub(super) struct Decoration {
     plan: FeatureDecorationPlan,
@@ -362,6 +369,7 @@ impl Decoration {
         region: &mut [ProtoChunk; 9],
         level_random: &mut dyn super::structure::legacy::PieceRandom,
         structures: Option<&super::generator_structures::StructureState>,
+        dependencies: Option<&dyn DecorationDependencies>,
     ) -> Result<DecorateStats, GeneratorError> {
         let center = region[4].position();
         for (i, chunk) in region.iter().enumerate() {
@@ -430,7 +438,7 @@ impl Decoration {
             region: terrain,
             biomes: BiomeRegion::new(biomes, obfuscate_seed(seed))
                 .map_err(|e| resource(e.to_string()))?,
-            zone: GenerationWriteZone::new(center, 1),
+            zone: GenerationWriteZone::new(center, FEATURES_WRITE_RADIUS),
             center,
             uniform_biomes: vec![UNKNOWN_BIOME; 9 * (height / 16).max(0) as usize],
             biome_quarts: region[4].biomes().quart_range(),
@@ -444,6 +452,7 @@ impl Decoration {
             floor_bounds: [None; 9],
             shape_capture: std::cell::RefCell::new(Vec::new()),
             full,
+            dependencies,
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
@@ -683,10 +692,13 @@ impl World<'_> {
         Some(found)
     }
 }
-/// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
-/// the FEATURES step's write radius, biome lookups through the biome zoom.
+/// WorldGenRegion-style view: reads across the FEATURES `STRUCTURE_STARTS`
+/// dependency radius (8 chunks, warning outside the 3×3 write zone), writes
+/// within the FEATURES write radius (1 chunk), biome lookups through the
+/// 3×3 biome zoom.
 struct World<'a> {
     full: Vec<ChunkPos>,
+    dependencies: Option<&'a dyn DecorationDependencies>,
     block_entities: Vec<([i32; 3], sunrise_core::nbt::Compound)>,
     entities: Vec<sunrise_core::nbt::Compound>,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
@@ -729,15 +741,14 @@ impl crate::level::BlockEntityNeighbors for ShapeLevel<'_, '_> {}
 impl crate::level::LevelAccess for ShapeLevel<'_, '_> {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world
-            .region
-            .block([pos.x, pos.y, pos.z])
+            .read_block([pos.x, pos.y, pos.z])
             .unwrap_or(BlockStateId(0))
     }
     fn set_raw(&mut self, _: BlockPos, _: BlockStateId) -> Option<BlockStateId> {
         None
     }
     fn is_loaded(&self, pos: BlockPos) -> bool {
-        self.world.region.block([pos.x, pos.y, pos.z]).is_ok()
+        self.world.in_dependency_region(pos.chunk())
     }
     fn min_y(&self) -> i32 {
         self.world.build.0
@@ -797,6 +808,9 @@ impl World<'_> {
     ) -> Result<(), PlacementQueryError> {
         let result = (|| {
             for t in &ticks {
+                if !self.zone.contains_block(t.pos) {
+                    continue;
+                }
                 let at = [t.pos.x, t.pos.y, t.pos.z];
                 if t.fluid {
                     if let Some(fluid) = crate::fluid::FluidKind::from_tick_id(t.kind) {
@@ -875,6 +889,109 @@ impl DecorationWorld for World<'_> {
     }
 }
 impl World<'_> {
+    #[inline]
+    fn chunk_distance(&self, chunk: ChunkPos) -> i64 {
+        let dx = (i64::from(self.center.x) - i64::from(chunk.x)).abs();
+        let dz = (i64::from(self.center.z) - i64::from(chunk.z)).abs();
+        dx.max(dz)
+    }
+
+    #[inline]
+    fn in_dependency_region(&self, chunk: ChunkPos) -> bool {
+        self.chunk_distance(chunk) <= i64::from(FEATURES_DEPENDENCY_RADIUS)
+    }
+
+    /// `WorldGenRegion.warnIfReadOutsideWriteZone`.
+    #[cold]
+    fn warn_if_read_outside_write_zone(&self, chunk: ChunkPos) {
+        let distance = self.chunk_distance(chunk);
+        let stage = PreLightChunkStage::Features.name();
+        log::warn!(
+            "Detected unsafe terrain read during worldgen: reading from chunk [{}, {}] while generating chunk [{}, {}] (distance: {distance}, write radius: {FEATURES_WRITE_RADIUS}), step: {stage}",
+            chunk.x,
+            chunk.z,
+            self.center.x,
+            self.center.z,
+        );
+    }
+
+    /// Block state of a chunk in the `STRUCTURE_STARTS` dependency ring (distance `2..=8`):
+    /// outside build height is `minecraft:void_air`, a resident column supplies its own block,
+    /// and a `STRUCTURE_STARTS`-only holder with no resident terrain reads as `minecraft:air`.
+    fn outer_block_in_dependency(&self, position: [i32; 3]) -> BlockStateId {
+        if position[1] < self.build.0 || position[1] >= self.build.1 {
+            return self.region.void_air();
+        }
+        self.dependencies
+            .and_then(|deps| deps.resident_block(position))
+            .unwrap_or_else(|| self.region.air())
+    }
+
+    #[cold]
+    fn read_outer_block(
+        &self,
+        chunk: ChunkPos,
+        position: [i32; 3],
+    ) -> Result<BlockStateId, RegionError> {
+        self.warn_if_read_outside_write_zone(chunk);
+        if !self.in_dependency_region(chunk) {
+            return Err(RegionError::MissingChunk([chunk.x, chunk.z]));
+        }
+        Ok(self.outer_block_in_dependency(position))
+    }
+
+    #[inline]
+    fn read_block(&self, position: [i32; 3]) -> Result<BlockStateId, RegionError> {
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.block(position);
+        }
+        self.read_outer_block(chunk, position)
+    }
+
+    fn read_fluid_state(&mut self, position: [i32; 3]) -> Result<FluidState, PlacementQueryError> {
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.fluid_state(position);
+        }
+        self.warn_if_read_outside_write_zone(chunk);
+        if !self.in_dependency_region(chunk) {
+            return Err(RegionError::MissingChunk([chunk.x, chunk.z]).into());
+        }
+        if position[1] < self.build.0 || position[1] >= self.build.1 {
+            return Ok(FluidState::EMPTY);
+        }
+        match self
+            .dependencies
+            .and_then(|deps| deps.resident_block(position))
+        {
+            Some(state) => self.decoration.bindings.fluids.state(state).ok_or_else(|| {
+                PlacementQueryError::Failed("fluid state outside bound registry".into())
+            }),
+            None => Ok(FluidState::EMPTY),
+        }
+    }
+
+    /// `WorldGenRegion.ensureCanWrite`: the step's horizontal radius and, while
+    /// upgrading, the center's generation interval. Proto storage handles its
+    /// own bounds after admission.
+    fn can_write(&self, position: [i32; 3]) -> Result<bool, RegionError> {
+        let [x, y, z] = position;
+        let pos = BlockPos::new(x, y, z);
+        if !self.zone.contains_block(pos) {
+            let ChunkPos { x: cx, z: cz } = pos.chunk();
+            let stage = PreLightChunkStage::Features.name();
+            log::error!(
+                "Refused worldgen write at {position:?} in far chunk [{cx}, {cz}], stage: {stage}"
+            );
+            return Ok(false);
+        }
+        Ok(self
+            .region
+            .upgrade_write_height(self.center)?
+            .is_none_or(|height| height.contains(y)))
+    }
+
     /// Whether `position` is in one of the region's full chunks.
     fn is_full_chunk(&self, [x, _, z]: [i32; 3]) -> bool {
         self.full.iter().any(|p| p.x == x >> 4 && p.z == z >> 4)
@@ -884,16 +1001,31 @@ impl FeatureWorld for World<'_> {
     type Error = RegionError;
     #[inline]
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, RegionError> {
-        self.region.block(position)
+        self.read_block(position)
     }
     fn scan_column(
         &mut self,
         position: [i32; 3],
         step: i32,
         limit: i32,
-        keep: impl FnMut(BlockStateId) -> bool,
+        mut keep: impl FnMut(BlockStateId) -> bool,
     ) -> Result<i32, RegionError> {
-        self.region.scan_column(position, step, limit, keep)
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.scan_column(position, step, limit, keep);
+        }
+        self.warn_if_read_outside_write_zone(chunk);
+        if !self.in_dependency_region(chunk) {
+            return Err(RegionError::MissingChunk([chunk.x, chunk.z]));
+        }
+        let mut p = position;
+        for _ in 0..limit {
+            if !keep(self.outer_block_in_dependency(p)) {
+                break;
+            }
+            p[1] = p[1].wrapping_add(step);
+        }
+        Ok(p[1])
     }
     fn set_block(
         &mut self,
@@ -901,10 +1033,7 @@ impl FeatureWorld for World<'_> {
         state: BlockStateId,
         flags: i32,
     ) -> Result<bool, RegionError> {
-        if !self
-            .zone
-            .contains_block(BlockPos::new(position[0], position[1], position[2]))
-        {
+        if !self.can_write(position)? {
             return Ok(false);
         }
         // ImposterProtoChunk(chunk, false): setBlockState, setBlockEntity,
@@ -913,8 +1042,7 @@ impl FeatureWorld for World<'_> {
         if self.is_full_chunk(position) {
             return Ok(true);
         }
-        let old = self.region.block(position)?;
-        self.region.set_block_worldgen(position, state)?;
+        let old = self.region.set_block_worldgen(position, state)?;
         self.raise_floor_bound(position);
         // ProtoChunk keeps a block entity that already exists when the same kind
         // of block is set again (a chest turning waterlogged); other changes drop it.
@@ -1034,14 +1162,14 @@ impl DynamicCollisionWorld for World<'_> {
 }
 impl SurvivalWorld for World<'_> {
     fn fluid_state(&mut self, position: [i32; 3]) -> Result<FluidState, PlacementQueryError> {
-        self.region.fluid_state(position)
+        self.read_fluid_state(position)
     }
     /// Unlit generation chunks report no sky or block light.
     fn raw_brightness(&mut self, _: [i32; 3], _: i32) -> Result<i32, PlacementQueryError> {
         Ok(0)
     }
     fn block_state(&mut self, position: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
-        self.region.block_state(position)
+        self.read_block(position).map_err(Into::into)
     }
 }
 impl PlacementContext for World<'_> {
@@ -1155,7 +1283,7 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
-        let state = self.region.block_state(position)?;
+        let state = self.read_block(position)?;
         self.state_face_sturdy(state, position, direction)
     }
     fn state_face_sturdy(
@@ -1179,7 +1307,7 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         direction: Direction,
     ) -> Result<bool, PlacementQueryError> {
-        let state = self.region.block_state(position)?;
+        let state = self.read_block(position)?;
         if let (None, Some(behaviours)) = (self.blocks, self.behaviours) {
             return Ok(behaviours.is_face_sturdy_center(state, direction));
         }
@@ -1320,8 +1448,8 @@ impl PlacementContext for World<'_> {
         };
         let n = direction.normal();
         let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
-        let state = self.region.block(position).map_err(query)?;
-        let neighbor = self.region.block(neighbor_pos).map_err(query)?;
+        let state = self.read_block(position).map_err(query)?;
+        let neighbor = self.read_block(neighbor_pos).map_err(query)?;
         let (new_state, ticks) = self.shape_update(
             behaviours,
             state,
@@ -1358,7 +1486,7 @@ impl PlacementContext for World<'_> {
         let Some(behaviours) = self.behaviours else {
             return Ok(());
         };
-        let state = self.region.block(position).map_err(query)?;
+        let state = self.read_block(position).map_err(query)?;
         // Block.UPDATE_SHAPE_ORDER.
         let mut new_state = state;
         for direction in [
@@ -1371,7 +1499,7 @@ impl PlacementContext for World<'_> {
         ] {
             let n = direction.normal();
             let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
-            let neighbor = self.region.block(neighbor_pos).map_err(query)?;
+            let neighbor = self.read_block(neighbor_pos).map_err(query)?;
             let (updated, ticks) = self.shape_update(
                 behaviours,
                 new_state,
@@ -1389,9 +1517,7 @@ impl PlacementContext for World<'_> {
         Ok(())
     }
     fn ensure_can_write(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
-        Ok(self
-            .zone
-            .contains_block(BlockPos::new(position[0], position[1], position[2])))
+        self.can_write(position).map_err(Into::into)
     }
     /// ProtoChunk.setBlockState: the section and the stage's heightmaps
     /// (nothing on a full chunk: ImposterProtoChunk(chunk, false)).
@@ -1430,17 +1556,11 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         _drop_resources: bool,
     ) -> Result<bool, PlacementQueryError> {
-        let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
-        let state = chunk.block(position[0], position[1], position[2]);
-        if chunk.block_properties(state).is_air() {
+        let state = self.read_block(position)?;
+        if self.region.block_properties_table().get(state).is_air() {
             return Ok(false);
         }
-        let air = self
-            .decoration
-            .bindings
-            .registry()
-            .default_state("minecraft:air")
-            .ok_or(PlacementQueryError::Unavailable)?;
+        let air = self.region.air();
         self.set_block(position, air, 3).map_err(query)
     }
     fn biome_should_freeze(
@@ -1487,7 +1607,7 @@ impl PlacementContext for World<'_> {
         Ok(0)
     }
     fn fluid_state(&mut self, position: [i32; 3]) -> Result<FluidState, PlacementQueryError> {
-        self.region.fluid_state(position)
+        self.read_fluid_state(position)
     }
     fn sea_level(&mut self) -> Result<i32, PlacementQueryError> {
         self.region.sea_level()
@@ -1504,7 +1624,16 @@ impl PlacementContext for World<'_> {
         self.region.mark_postprocessing(position)
     }
     fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
-        self.region.water_at(position)
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.water_at(position);
+        }
+        let state = self.read_outer_block(chunk, position)?;
+        Ok(self
+            .decoration
+            .bindings
+            .fluids
+            .state_matches_tag(state, "minecraft:water"))
     }
     fn schedule_block_tick(
         &mut self,
@@ -1517,6 +1646,12 @@ impl PlacementContext for World<'_> {
     fn biome_identity(&mut self, position: [i32; 3]) -> Result<BiomeId, PlacementQueryError> {
         if let Some(biome) = self.uniform_biome(position) {
             return Ok(biome);
+        }
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if !self.zone.contains_chunk(chunk) && self.in_dependency_region(chunk) {
+            // WorldGenRegion.getChunk(cx, cz, BIOMES, false): FEATURES direct dependencies
+            // past radius 1 only reach STRUCTURE_STARTS (< BIOMES).
+            return Err(RegionError::BiomesNotGenerated([chunk.x, chunk.z]).into());
         }
         self.region
             .biome_at(
@@ -1539,7 +1674,7 @@ impl PlacementContext for World<'_> {
             .is_some_and(|w| w >> (feature.0 % 64) & 1 != 0))
     }
     fn block_state(&mut self, position: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
-        self.region.block_state(position)
+        self.read_block(position).map_err(Into::into)
     }
     /// TerrainRegion::block_matches_tag (the region holds the same tag
     /// table), with the last tag's states kept: predicates ask one tag for
@@ -1549,7 +1684,7 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         tag: &str,
     ) -> Result<bool, PlacementQueryError> {
-        let state = self.region.block(position)?;
+        let state = self.read_block(position)?;
         self.state_matches_tag(state, tag)
     }
     fn state_matches_tag(
@@ -1575,7 +1710,29 @@ impl PlacementContext for World<'_> {
         self.region.max_y()
     }
     fn layer_block(&mut self, position: [i32; 3]) -> Result<LayerBlock, PlacementQueryError> {
-        self.region.layer_block(position)
+        let chunk = ChunkPos::new(position[0] >> 4, position[2] >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.layer_block(position);
+        }
+        let state = self.read_outer_block(chunk, position)?;
+        let name = self
+            .decoration
+            .bindings
+            .registry()
+            .state(state)
+            .map_or("", |s| s.name.as_str());
+        Ok(
+            if self.region.block_properties_table().get(state).is_air()
+                || name == "minecraft:water"
+                || name == "minecraft:lava"
+            {
+                LayerBlock::Empty
+            } else if name == "minecraft:bedrock" {
+                LayerBlock::Bedrock
+            } else {
+                LayerBlock::Ground
+            },
+        )
     }
     fn generation(&self) -> WorldGenerationContext {
         self.region.generation()
@@ -1584,7 +1741,21 @@ impl PlacementContext for World<'_> {
         self.region.min_y()
     }
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError> {
-        self.region.height(kind, x, z)
+        let chunk = ChunkPos::new(x >> 4, z >> 4);
+        if self.zone.contains_chunk(chunk) {
+            return self.region.height(kind, x, z);
+        }
+        self.warn_if_read_outside_write_zone(chunk);
+        if !self.in_dependency_region(chunk) {
+            return Err(RegionError::MissingChunk([chunk.x, chunk.z]).into());
+        }
+        if let Some(y) = self.dependencies.and_then(|deps| {
+            deps.resident_height(kind, x, z, self.build, self.region.block_properties_table())
+        }) {
+            return Ok(y);
+        }
+        // Empty STRUCTURE_STARTS ProtoChunk: all-air heightmaps have first_available == min_y.
+        Ok(self.build.0)
     }
     /// OreFeature's search for a column under its blob, without a trait call
     /// per column. Defers to `height` when a heightmap still has to be primed.
@@ -1660,15 +1831,25 @@ fn set_feature_bit(bits: &mut Vec<u64>, feature: FeatureIdentity) {
 }
 #[cfg(test)]
 mod tests {
-    use super::loot_table_nbt;
-    use crate::registry::BlockRegistry;
+    use super::*;
+    use crate::{
+        chunk_status::ChunkStatus,
+        registry::BlockRegistry,
+        retrogen::BelowZeroRetrogen,
+        worldgen::{biome_chunk::BiomeChunk, generator::GenBlockState, terrain::TerrainChunk},
+    };
     use sunrise_core::random::{LegacyRandom, RandomSource};
 
-    /// Air, a chest, a dispenser and a furnace: one randomizable container the
-    /// worldgen callers place, three they do not, and one plain container.
+    /// Minimal feature blocks and the containers used in the loot table tests.
     fn registry() -> &'static BlockRegistry {
         let names = [
             "minecraft:air",
+            "minecraft:cave_air",
+            "minecraft:void_air",
+            "minecraft:stone",
+            "minecraft:cobblestone",
+            "minecraft:end_stone",
+            "minecraft:obsidian",
             "minecraft:chest",
             "minecraft:dispenser",
             "minecraft:hopper",
@@ -1696,6 +1877,330 @@ mod tests {
 
     fn state(name: &str) -> crate::registry::BlockStateId {
         registry().default_state(name).unwrap()
+    }
+
+    #[test]
+    fn features_writer_uses_resident_center_admission() {
+        let registry = registry();
+        let blocks = FeatureBlocks::from_registry(registry).unwrap();
+        let properties = GenBlockStates::new(
+            (0..registry.len())
+                .map(|id| {
+                    let name = registry
+                        .state(BlockStateId(id as u32))
+                        .unwrap()
+                        .name
+                        .as_str();
+                    let air = name.ends_with("air");
+                    GenBlockState {
+                        air,
+                        air_block: name == "minecraft:air",
+                        motion: !air,
+                        no_leaves: !air,
+                        fluid: false,
+                    }
+                })
+                .collect(),
+        );
+        let decoration = Decoration {
+            plan: FeatureDecorationPlan::new(vec![]).unwrap(),
+            names: Vec::new(),
+            features: Vec::new(),
+            biome_features: Vec::new(),
+            bindings: FeatureBlockBindings::new(registry, BTreeSet::new()).unwrap(),
+            weather: None,
+            blocks,
+            catalog: FeatureCatalog::from_resources(
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &TagDefinitions::default(),
+            )
+            .unwrap(),
+            named: Default::default(),
+            postprocess_self: Vec::new(),
+            postprocess_above: Vec::new(),
+            top_layers: Vec::new(),
+        };
+        let mut chunks = Vec::new();
+        let mut biomes = Vec::new();
+        for z in -1..=1 {
+            for x in -1..=1 {
+                let pos = ChunkPos::new(x, z);
+                let mut chunk =
+                    TerrainChunk::new(pos, -64, 128, registry, properties.clone()).unwrap();
+                chunk.set_generation_stage(PreLightChunkStage::Terrain);
+                chunks.push(chunk);
+                biomes.push(BiomeChunk::new(pos, -64, 128, BiomeId(0)).unwrap());
+            }
+        }
+        let center = ChunkPos::new(0, 0);
+        let biome_quarts = biomes[4].quart_range();
+        let mut random = LegacyRandom::new(0);
+        let mut world = World {
+            full: vec![ChunkPos::new(-1, 0)],
+            dependencies: None,
+            block_entities: Vec::new(),
+            entities: Vec::new(),
+            level_random: &mut random,
+            structure_mobs: None,
+            starts: Vec::new(),
+            biome_names: &[],
+            blocks: None,
+            region: TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 128, 0)).unwrap(),
+            biomes: BiomeRegion::new(biomes, obfuscate_seed(0)).unwrap(),
+            zone: GenerationWriteZone::new(center, FEATURES_WRITE_RADIUS),
+            center,
+            uniform_biomes: Vec::new(),
+            biome_quarts,
+            decoration: &decoration,
+            temperatures: &mut [],
+            behaviours: None,
+            build: (-64, 64),
+            shape_ticks: std::cell::RefCell::new(crate::level::Ticks::new(0)),
+            last_tag: None,
+            floor_bounds: [None; 9],
+            shape_capture: Default::default(),
+        };
+        let retrogen = BelowZeroRetrogen::new(ChunkStatus::Features, Vec::new()).unwrap();
+        world
+            .region
+            .chunk_mut(1, 0)
+            .unwrap()
+            .set_below_zero_retrogen(Some(retrogen.clone()));
+
+        // An upgrading target does not restrict the writes of a normal center.
+        let neighbor = [16, 0, 0];
+        assert!(world.ensure_can_write(neighbor).unwrap());
+        assert!(world.set_block(neighbor, blocks.stone, 2).unwrap());
+        assert_eq!(world.block(neighbor).unwrap(), blocks.stone);
+        assert!(world.set_block(neighbor, blocks.stone, 2).unwrap());
+        assert!(!world.set_block([32, 0, 0], blocks.stone, 2).unwrap());
+
+        // Imposter and out-of-storage ProtoChunk writes can be admitted no-ops.
+        let full = [-1, 0, 0];
+        assert!(world.set_block(full, blocks.stone, 2).unwrap());
+        assert_eq!(world.block(full).unwrap(), blocks.air);
+        let above_storage = [16, 64, 0];
+        assert!(world.set_block(above_storage, blocks.stone, 2).unwrap());
+        assert_eq!(
+            world.block(above_storage).unwrap(),
+            registry.default_state("minecraft:void_air").unwrap()
+        );
+
+        // The center's lower generation interval now applies even to a normal neighbor.
+        world
+            .region
+            .chunk_mut(0, 0)
+            .unwrap()
+            .set_below_zero_retrogen(Some(retrogen));
+        let too_high = [0, 0, -1];
+        assert!(!world.ensure_can_write(too_high).unwrap());
+        assert!(!world.set_block(too_high, blocks.stone, 2).unwrap());
+        assert_eq!(world.block(too_high).unwrap(), blocks.air);
+        let in_interval = [0, -1, -1];
+        assert!(world.set_block(in_interval, blocks.stone, 2).unwrap());
+        assert_eq!(world.block(in_interval).unwrap(), blocks.stone);
+    }
+
+    #[test]
+    fn features_region_lends_structure_starts_dependencies_out_to_radius_eight() {
+        struct OuterStub {
+            resident: ChunkPos,
+            stone: BlockStateId,
+            air: BlockStateId,
+        }
+        impl DecorationDependencies for OuterStub {
+            fn resident_block(&self, [x, y, z]: [i32; 3]) -> Option<BlockStateId> {
+                if x >> 4 == self.resident.x && z >> 4 == self.resident.z {
+                    Some(if (10..=11).contains(&y) {
+                        self.stone
+                    } else {
+                        self.air
+                    })
+                } else {
+                    None
+                }
+            }
+        }
+
+        let registry = registry();
+        let blocks = FeatureBlocks::from_registry(registry).unwrap();
+        let void_air = registry.default_state("minecraft:void_air").unwrap();
+        let properties = GenBlockStates::new(
+            (0..registry.len())
+                .map(|id| {
+                    let name = registry
+                        .state(BlockStateId(id as u32))
+                        .unwrap()
+                        .name
+                        .as_str();
+                    let air = name.ends_with("air");
+                    GenBlockState {
+                        air,
+                        air_block: name == "minecraft:air",
+                        motion: !air,
+                        no_leaves: !air,
+                        fluid: false,
+                    }
+                })
+                .collect(),
+        );
+        let tags = BTreeMap::from([
+            ("minecraft:air".to_owned(), vec!["minecraft:air".to_owned()]),
+            (
+                "minecraft:base_stone_overworld".to_owned(),
+                vec!["minecraft:stone".to_owned()],
+            ),
+        ]);
+        let bindings = FeatureBlockBindings::with_tags(registry, BTreeSet::new(), &tags).unwrap();
+        let decoration = Decoration {
+            plan: FeatureDecorationPlan::new(vec![]).unwrap(),
+            names: Vec::new(),
+            features: Vec::new(),
+            biome_features: Vec::new(),
+            bindings,
+            weather: None,
+            blocks,
+            catalog: FeatureCatalog::from_resources(
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &TagDefinitions::default(),
+            )
+            .unwrap(),
+            named: Default::default(),
+            postprocess_self: Vec::new(),
+            postprocess_above: Vec::new(),
+            top_layers: Vec::new(),
+        };
+        let mut chunks = Vec::new();
+        let mut biomes = Vec::new();
+        for z in -1..=1 {
+            for x in -1..=1 {
+                let pos = ChunkPos::new(x, z);
+                let mut chunk =
+                    TerrainChunk::new(pos, -64, 128, registry, properties.clone()).unwrap();
+                chunk.set_generation_stage(PreLightChunkStage::Terrain);
+                chunks.push(chunk);
+                biomes.push(BiomeChunk::new(pos, -64, 128, BiomeId(0)).unwrap());
+            }
+        }
+        let center = ChunkPos::new(0, 0);
+        let biome_quarts = biomes[4].quart_range();
+        let mut random = LegacyRandom::new(0);
+        let outer = OuterStub {
+            resident: ChunkPos::new(3, 0),
+            stone: blocks.stone,
+            air: blocks.air,
+        };
+        let region = TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 128, 0))
+            .unwrap()
+            .with_block_bindings(&decoration.bindings)
+            .unwrap();
+        let mut world = World {
+            full: Vec::new(),
+            dependencies: Some(&outer),
+            block_entities: Vec::new(),
+            entities: Vec::new(),
+            level_random: &mut random,
+            structure_mobs: None,
+            starts: Vec::new(),
+            biome_names: &[],
+            blocks: None,
+            region,
+            biomes: BiomeRegion::new(biomes, obfuscate_seed(0)).unwrap(),
+            zone: GenerationWriteZone::new(center, FEATURES_WRITE_RADIUS),
+            center,
+            uniform_biomes: Vec::new(),
+            biome_quarts,
+            decoration: &decoration,
+            temperatures: &mut [],
+            behaviours: None,
+            build: (-64, 64),
+            shape_ticks: std::cell::RefCell::new(crate::level::Ticks::new(0)),
+            last_tag: None,
+            floor_bounds: [None; 9],
+            shape_capture: Default::default(),
+        };
+
+        // Distance 2 and distance 8 with no resident proto or full column:
+        // empty STRUCTURE_STARTS proto chunks (air inside build height, void_air outside,
+        // empty fluid, height min_y, biomes unavailable, writes refused).
+        for pos in [[32, 0, 0], [128, 0, -128]] {
+            assert_eq!(world.block(pos).unwrap(), blocks.air);
+            assert_eq!(world.block([pos[0], 64, pos[2]]).unwrap(), void_air);
+            assert_eq!(world.block([pos[0], -65, pos[2]]).unwrap(), void_air);
+            assert_eq!(
+                PlacementContext::fluid_state(&mut world, pos).unwrap(),
+                FluidState::EMPTY
+            );
+            assert_eq!(
+                SurvivalWorld::fluid_state(&mut world, pos).unwrap(),
+                FluidState::EMPTY
+            );
+            assert!(!world.water_at(pos).unwrap());
+            assert_eq!(world.layer_block(pos).unwrap(), LayerBlock::Empty);
+            assert!(world.block_matches_tag(pos, "minecraft:air").unwrap());
+            assert!(
+                !world
+                    .block_matches_tag(pos, "minecraft:base_stone_overworld")
+                    .unwrap()
+            );
+            assert_eq!(
+                world
+                    .height(HeightmapType::WorldSurfaceWg, pos[0], pos[2])
+                    .unwrap(),
+                -64
+            );
+            assert_eq!(
+                world.scan_column(pos, 1, 5, |s| s == blocks.air).unwrap(),
+                5
+            );
+            assert!(world.biome_identity(pos).is_err());
+            assert!(!world.ensure_can_write(pos).unwrap());
+            assert!(!world.set_block(pos, blocks.stone, 2).unwrap());
+        }
+
+        // Distance 3 with a resident outer column: reads see its blocks and height,
+        // out-of-build-height still reads void_air, and writes remain refused.
+        let resident_stone = [48, 10, 0];
+        assert_eq!(world.block(resident_stone).unwrap(), blocks.stone);
+        assert_eq!(world.block([48, 12, 0]).unwrap(), blocks.air);
+        assert_eq!(world.block([48, 64, 0]).unwrap(), void_air);
+        assert!(
+            world
+                .block_matches_tag(resident_stone, "minecraft:base_stone_overworld")
+                .unwrap()
+        );
+        assert_eq!(
+            world.layer_block(resident_stone).unwrap(),
+            LayerBlock::Ground
+        );
+        assert_eq!(
+            world.height(HeightmapType::WorldSurfaceWg, 48, 0).unwrap(),
+            12
+        );
+        assert!(!world.ensure_can_write(resident_stone).unwrap());
+        assert!(
+            !world
+                .set_block(resident_stone, blocks.cobblestone, 2)
+                .unwrap()
+        );
+
+        // Past radius 8 (distance 9 and extreme coordinates): out of WorldGenRegion bounds.
+        for far in [[144, 0, 0], [0, 0, -144], [i32::MIN, 0, i32::MAX]] {
+            assert!(matches!(
+                world.block(far),
+                Err(RegionError::MissingChunk(_))
+            ));
+            assert!(
+                world
+                    .height(HeightmapType::WorldSurfaceWg, far[0], far[2])
+                    .is_err()
+            );
+            assert!(PlacementContext::fluid_state(&mut world, far).is_err());
+            assert!(SurvivalWorld::fluid_state(&mut world, far).is_err());
+            assert!(!world.ensure_can_write(far).unwrap());
+        }
     }
 
     /// `RandomizableContainer.setBlockEntityLootTable` hands the table to the block

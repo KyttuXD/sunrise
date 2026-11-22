@@ -1,10 +1,11 @@
 //! Native worker adapters for API-owned structure behaviours.
 use super::native_worldgen::WorkerResources;
+use mod_api::__private::game::CallbackOwner;
 use mod_api::{
-    BiomeId, ChunkPos, GenerationContext, HeightmapType, NoiseBlock, NoiseColumn, PieceContext,
-    RandomSource, StructurePiece, StructureType,
+    BiomeId, BlockKey, BlockMetadata, BlockState, ChunkPos, GenerationContext, HeightmapType,
+    NoiseBlock, NoiseColumn, PieceContext, RandomSource, StructurePiece, StructureType,
 };
-use mod_api::{BlockKey, BlockMetadata, BlockState};
+use std::error::Error;
 use std::sync::Arc;
 use sunrise_core::{
     bounding_box::BoundingBox,
@@ -52,25 +53,25 @@ impl sunrise_world::worldgen::structure::start::NoiseColumnTarget for Column {
 struct Draws<'a>(&'a mut dyn PieceRandom);
 impl RandomSource for Draws<'_> {
     fn next_int_bound(&mut self, bound: i32) -> i32 {
-        self.0.int(bound)
+        CallbackOwner::call_engine(|| self.0.int(bound))
     }
     fn next_long(&mut self) -> i64 {
-        self.0.long()
+        CallbackOwner::call_engine(|| self.0.long())
     }
     fn next_float(&mut self) -> f32 {
-        self.0.float()
+        CallbackOwner::call_engine(|| self.0.float())
     }
     fn next_double(&mut self) -> f64 {
-        self.0.double()
+        CallbackOwner::call_engine(|| self.0.double())
     }
     fn next_boolean(&mut self) -> bool {
-        self.0.boolean()
+        CallbackOwner::call_engine(|| self.0.boolean())
     }
     fn next_int(&mut self) -> i32 {
-        self.0.int_unbounded()
+        CallbackOwner::call_engine(|| self.0.int_unbounded())
     }
     fn next_gaussian(&mut self) -> f64 {
-        self.0.gaussian()
+        CallbackOwner::call_engine(|| self.0.gaussian())
     }
 }
 
@@ -91,40 +92,58 @@ impl GenerationContext for Start<'_> {
         self.chunk
     }
     fn seed(&self) -> i64 {
-        self.inner.seed()
+        CallbackOwner::call_engine(|| self.inner.seed())
     }
     fn sea_level(&self) -> i32 {
-        self.inner.sea_level()
+        CallbackOwner::call_engine(|| self.inner.sea_level())
     }
     fn min_y(&self) -> i32 {
-        self.inner.min_y()
+        CallbackOwner::call_engine(|| self.inner.min_y())
     }
     fn max_y(&self) -> i32 {
-        self.inner.max_y()
+        CallbackOwner::call_engine(|| self.inner.max_y())
     }
     fn random(&mut self) -> &mut dyn RandomSource {
         &mut self.random
     }
     fn base_height(&mut self, x: i32, z: i32, kind: HeightmapType) -> i32 {
-        self.inner.base_height(x, z, engine_heightmap(kind))
+        CallbackOwner::call_engine(|| self.inner.base_height(x, z, engine_heightmap(kind)))
     }
     fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
-        self.inner
-            .base_columns_by(x, z, kinds.len(), &|index| engine_heightmap(kinds[index]))
+        CallbackOwner::call_engine(|| {
+            self.inner
+                .base_columns_by(x, z, kinds.len(), &|index| engine_heightmap(kinds[index]))
+        })
     }
     fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn {
-        let mut column = Column(NoiseColumn::default());
-        self.inner.noise_column_into(x, z, &mut column);
-        column.0
+        CallbackOwner::call_engine(|| {
+            let mut column = Column(NoiseColumn::default());
+            self.inner.noise_column_into(x, z, &mut column);
+            column.0
+        })
     }
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId {
-        mod_api::__private::biome_id(self.inner.noise_biome(quart).0)
+        CallbackOwner::call_engine(|| mod_api::__private::biome_id(self.inner.noise_biome(quart).0))
     }
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool {
-        self.inner.column_has_valid_biome(x, z, min_y, max_y)
+        CallbackOwner::call_engine(|| self.inner.column_has_valid_biome(x, z, min_y, max_y))
     }
     fn config(&self) -> Arc<Tag> {
         self.config.clone()
+    }
+}
+
+struct ErrorCauses<'a>(&'a mod_api::StructureError);
+impl std::fmt::Display for ErrorCauses<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)?;
+        // StructureError displays its immediate cause; don't print that cause twice.
+        let mut remaining = self.0.source().and_then(Error::source);
+        while let Some(cause) = remaining {
+            write!(f, ": {cause}")?;
+            remaining = cause.source();
+        }
+        Ok(())
     }
 }
 
@@ -137,11 +156,15 @@ struct Placing<'a> {
     random: Draws<'a>,
     chunk_box: BoundingBox,
     chunk: ChunkPos,
+    mod_id: &'static str,
+    type_id: &'static str,
 }
 
 impl<'a> Placing<'a> {
     fn new<'b>(
         inner: &'a mut sunrise_world::worldgen::structure::legacy::PieceContext<'b>,
+        mod_id: &'static str,
+        type_id: &'static str,
     ) -> Result<Self, PlacementQueryError> {
         let worker = WorkerResources::get(inner.resources.registry)?;
         Ok(Self {
@@ -152,6 +175,8 @@ impl<'a> Placing<'a> {
             random: Draws(inner.random),
             chunk_box: inner.chunk_box,
             chunk: inner.chunk,
+            mod_id,
+            type_id,
         })
     }
 }
@@ -170,60 +195,124 @@ impl PieceContext for Placing<'_> {
         &mut self.random
     }
     fn state(&self, block: BlockKey) -> BlockState {
-        self.worker.state(block)
+        CallbackOwner::call_engine(|| self.worker.state(block))
     }
     fn state_with(&self, block: BlockKey, properties: &[(&str, &str)]) -> BlockState {
-        self.worker
-            .state_with(self.resources.registry, block, properties)
+        CallbackOwner::call_engine(|| {
+            self.worker
+                .state_with(self.resources.registry, block, properties)
+        })
     }
     fn is_air(&self, state: BlockState) -> bool {
-        self.worker.is_air(state)
+        CallbackOwner::call_engine(|| self.worker.is_air(state))
     }
     fn block(&mut self, pos: [i32; 3]) -> Option<BlockState> {
-        self.world
-            .block(pos)
-            .ok()
-            .and_then(|state| self.worker.index.to_api(state).ok())
+        CallbackOwner::call_engine(|| {
+            self.world
+                .block(pos)
+                .ok()
+                .and_then(|state| self.worker.index.to_api(state).ok())
+        })
     }
-    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn set_block(&mut self, pos: [i32; 3], state: BlockState) -> bool {
-        if !self.chunk_box.is_inside(pos) {
-            #[cfg(debug_assertions)]
-            log::debug!(
-                "mod structure piece write at {:?} outside the chunk box",
-                pos
-            );
-            return false;
-        }
-        let Ok(state) = self.worker.index.to_engine(state) else {
-            return false;
-        };
-        sunrise_world::worldgen::structure::legacy::write_block(
-            self.world,
-            self.resources,
-            pos,
-            state,
-        )
-        .unwrap_or(false)
+        CallbackOwner::call_engine(|| {
+            if !self.chunk_box.is_inside(pos) {
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "mod structure piece write at {:?} outside the chunk box",
+                    pos
+                );
+                return false;
+            }
+            let state = match self.worker.index.to_engine(state) {
+                Ok(state) => state,
+                Err(error) => {
+                    log::error!(
+                        "mod {}: structure piece {} set_block at {pos:?} in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    );
+                    return false;
+                }
+            };
+            match sunrise_world::worldgen::structure::legacy::write_block(
+                self.world,
+                self.resources,
+                pos,
+                state,
+            ) {
+                Ok(written) => written,
+                Err(error) => {
+                    log::error!(
+                        "mod {}: structure piece {} set_block at {pos:?} in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    );
+                    false
+                }
+            }
+        })
     }
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Option<i32> {
-        self.world.height(engine_heightmap(kind), x, z).ok()
+        CallbackOwner::call_engine(|| self.world.height(engine_heightmap(kind), x, z).ok())
     }
     fn solid_render(&self, state: BlockState) -> bool {
-        self.worker
-            .index
-            .to_engine(state)
-            .is_ok_and(|state| self.blocks.solid_render(state))
+        CallbackOwner::call_engine(|| {
+            self.worker
+                .index
+                .to_engine(state)
+                .is_ok_and(|state| self.blocks.solid_render(state))
+        })
     }
     fn entity(&mut self, nbt: Compound) {
-        if self.world.entity(nbt).is_err() {
-            log::error!("Sunrise: a mod structure piece's entity was refused");
-        }
+        CallbackOwner::call_engine(|| {
+            let pos = match nbt.get(&"Pos".into()) {
+                Some(Tag::List(coords)) if coords.len() == 3 => {
+                    match (&coords[0], &coords[1], &coords[2]) {
+                        (Tag::Double(x), Tag::Double(y), Tag::Double(z)) => {
+                            Some([f64::from_bits(*x), f64::from_bits(*y), f64::from_bits(*z)])
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Err(error) = self.world.entity(nbt) {
+                match pos {
+                    Some(pos) => log::error!(
+                        "mod {}: structure piece {} entity at {pos:?} in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    ),
+                    None => log::error!(
+                        "mod {}: structure piece {} entity in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    ),
+                }
+            }
+        })
     }
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) {
-        if self.world.block_entity(pos, nbt).is_err() {
-            log::error!("Sunrise: a mod structure piece's block entity was refused");
-        }
+        CallbackOwner::call_engine(|| {
+            if let Err(error) = self.world.block_entity(pos, nbt) {
+                log::error!(
+                    "mod {}: structure piece {} block_entity at {pos:?} in chunk ({}, {}) failed: {error}",
+                    self.mod_id,
+                    self.type_id,
+                    self.chunk.x,
+                    self.chunk.z,
+                );
+            }
+        })
     }
 }
 
@@ -237,6 +326,13 @@ pub(crate) struct Adapter {
     /// The type's namespaced id (`modid:tower`), leaked once at registration
     /// for the piece tags' `"id"`.
     id: &'static str,
+    find_generation_point: CallbackOwner,
+    load_piece: CallbackOwner,
+    bounding_box: CallbackOwner,
+    beardifier: CallbackOwner,
+    add_additional_save_data: CallbackOwner,
+    post_process: CallbackOwner,
+    after_place: CallbackOwner,
 }
 
 impl ModStructureType for Adapter {
@@ -264,20 +360,22 @@ impl ModStructureType for Adapter {
             chunk,
             config,
         };
-        let found = self.inner.find_generation_point(&mut context)?;
-        let ty = self.inner.clone();
-        let id = self.id;
+        let found = self
+            .find_generation_point
+            .call(
+                "structure type",
+                "StructureType::find_generation_point",
+                || self.inner.find_generation_point(&mut context),
+            )
+            .ok()??;
         let pieces = found
             .pieces
             .into_iter()
-            .map(|piece| {
-                Box::new(ModPiece {
-                    beardifier: piece.beardifier().and_then(engine_beardifier),
-                    piece,
-                    ty: ty.clone(),
-                    id,
+            .filter_map(|piece| {
+                ModPiece::new(self, piece).map(|piece| {
+                    Box::new(piece)
+                        as Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece>
                 })
-                    as Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece>
             })
             .collect();
         Some((found.position, pieces))
@@ -288,14 +386,27 @@ impl ModStructureType for Adapter {
         tag: &Compound,
     ) -> Option<Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece>> {
         let metadata = WorkerResources::get(registry).ok()?.metadata;
-        // Preserve the engine's existing bad-piece refusal. The API loader's diagnostic is typed.
-        let piece = self.inner.load_piece(metadata, tag).ok()?;
-        Some(Box::new(ModPiece {
-            beardifier: piece.beardifier().and_then(engine_beardifier),
-            piece,
-            ty: self.inner.clone(),
-            id: self.id,
-        }))
+        let loaded = self
+            .load_piece
+            .call("structure type", "StructureType::load_piece", || {
+                self.inner.load_piece(metadata, tag)
+            })
+            .ok()?;
+        let piece = match loaded {
+            Ok(piece) => piece,
+            Err(error) => {
+                log::error!(
+                    "mod {}: structure type {} failed to load saved piece: {}",
+                    self.load_piece.id(),
+                    self.id,
+                    ErrorCauses(&error),
+                );
+                return None;
+            }
+        };
+        let piece: Box<dyn sunrise_world::worldgen::structure::legacy::LegacyPiece> =
+            Box::new(ModPiece::new(self, piece)?);
+        Some(piece)
     }
 }
 
@@ -331,17 +442,50 @@ fn engine_beardifier(piece: mod_api::PieceBeardifier) -> Option<sunrise_core::de
 /// and the piece's box around the piece's own save data.
 struct ModPiece {
     piece: Arc<dyn StructurePiece>,
+    bounding_box: BoundingBox,
     beardifier: Option<sunrise_core::density::RigidPiece>,
     /// The type the piece belongs to, whose `after_place` runs for the start.
     ty: Arc<dyn StructureType>,
     id: &'static str,
+    add_additional_save_data: CallbackOwner,
+    post_process: CallbackOwner,
+    after_place: CallbackOwner,
+}
+impl ModPiece {
+    /// Adapt a mod piece at generation or load: obtain its immutable bounding box and
+    /// beardifier metadata under their callback owners, skipping the piece on failure.
+    fn new(adapter: &Adapter, piece: Arc<dyn StructurePiece>) -> Option<Self> {
+        let bounding_box = adapter
+            .bounding_box
+            .call("structure piece", "StructurePiece::bounding_box", || {
+                piece.bounding_box()
+            })
+            .ok()?;
+        let beardifier = adapter
+            .beardifier
+            .call("structure piece", "StructurePiece::beardifier", || {
+                piece.beardifier()
+            })
+            .ok()?
+            .and_then(engine_beardifier);
+        Some(Self {
+            piece,
+            bounding_box,
+            beardifier,
+            ty: adapter.inner.clone(),
+            id: adapter.id,
+            add_additional_save_data: adapter.add_additional_save_data.clone(),
+            post_process: adapter.post_process.clone(),
+            after_place: adapter.after_place.clone(),
+        })
+    }
 }
 impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
     fn beardifier(&self) -> Option<sunrise_core::density::RigidPiece> {
         self.beardifier
     }
     fn bounding_box(&self) -> BoundingBox {
-        self.piece.bounding_box()
+        self.bounding_box
     }
     fn type_name(&self) -> &'static str {
         self.id
@@ -349,21 +493,41 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
     fn save(&self) -> Option<Compound> {
         let mut tag = sunrise_world::worldgen::structure::legacy::piece_tag(
             self.id,
-            self.bounding_box(),
+            self.bounding_box,
             None,
             0,
         );
-        self.piece.add_additional_save_data(&mut tag);
+        self.add_additional_save_data
+            .call(
+                "structure piece",
+                "StructurePiece::add_additional_save_data",
+                || self.piece.add_additional_save_data(&mut tag),
+            )
+            .ok()?;
         Some(tag)
     }
     fn post_process(
         &self,
         context: &mut sunrise_world::worldgen::structure::legacy::PieceContext<'_>,
     ) -> std::result::Result<(), PlacementQueryError> {
-        let mut context = Placing::new(context)?;
-        self.piece
-            .post_process(&mut context)
-            .map_err(|e| PlacementQueryError::Failed(e.0))
+        let chunk = context.chunk;
+        let mut context = Placing::new(context, self.post_process.id(), self.id)?;
+        if let Ok(Err(error)) =
+            self.post_process
+                .call("structure piece", "StructurePiece::post_process", || {
+                    self.piece.post_process(&mut context)
+                })
+        {
+            log::error!(
+                "mod {}: structure piece {} failed in chunk ({}, {}): {}",
+                self.post_process.id(),
+                self.id,
+                chunk.x,
+                chunk.z,
+                ErrorCauses(&error),
+            );
+        }
+        Ok(())
     }
     /// The engine runs the first piece's `afterPlace`; it is the type's
     /// [`StructureType::after_place`] the call reaches, with every piece's
@@ -373,27 +537,48 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
         context: &mut sunrise_world::worldgen::structure::legacy::PieceContext<'_>,
         pieces: &[BoundingBox],
     ) -> std::result::Result<(), PlacementQueryError> {
-        let mut context = Placing::new(context)?;
-        self.ty
-            .after_place(&mut context, pieces)
-            .map_err(|e| PlacementQueryError::Failed(e.0))
+        let chunk = context.chunk;
+        let mut context = Placing::new(context, self.after_place.id(), self.id)?;
+        if let Ok(Err(error)) =
+            self.after_place
+                .call("structure type", "StructureType::after_place", || {
+                    self.ty.after_place(&mut context, pieces)
+                })
+        {
+            log::error!(
+                "mod {}: structure type {} after_place failed in chunk ({}, {}): {}",
+                self.after_place.id(),
+                self.id,
+                chunk.x,
+                chunk.z,
+                ErrorCauses(&error),
+            );
+        }
+        Ok(())
     }
 }
 impl std::fmt::Debug for ModPiece {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModPiece")
             .field("id", &self.id)
-            .field("piece", &self.piece)
-            .finish()
+            .field("bounding_box", &self.bounding_box)
+            .finish_non_exhaustive()
     }
 }
 
 impl Adapter {
-    /// Wrap `ty` as the engine's type, under the namespaced `id`.
-    pub(crate) fn new(id: &str, ty: Arc<dyn StructureType>) -> Self {
+    /// Wrap `ty` as the engine's type, under the namespaced `id` registered by `mod_id`.
+    pub(crate) fn new(id: &str, mod_id: &'static str, ty: Arc<dyn StructureType>) -> Self {
         Self {
             inner: ty,
             id: Box::leak(id.to_owned().into_boxed_str()),
+            find_generation_point: CallbackOwner::for_mod(mod_id),
+            load_piece: CallbackOwner::for_mod(mod_id),
+            bounding_box: CallbackOwner::for_mod(mod_id),
+            beardifier: CallbackOwner::for_mod(mod_id),
+            add_additional_save_data: CallbackOwner::for_mod(mod_id),
+            post_process: CallbackOwner::for_mod(mod_id),
+            after_place: CallbackOwner::for_mod(mod_id),
         }
     }
     /// The engine's type behind an `Arc`, for the registration table.
@@ -415,8 +600,8 @@ pub(in crate::game) fn installed_structure_types()
 -> sunrise_world::worldgen::structure::mod_types::ModStructureTypes {
     mod_api::__private::structure_type_declarations()
         .into_iter()
-        .map(|(id, ty)| {
-            let adapter = Adapter::new(&id, ty).into_engine_type();
+        .map(|(id, mod_id, ty)| {
+            let adapter = Adapter::new(&id, mod_id, ty).into_engine_type();
             (id, adapter)
         })
         .collect()

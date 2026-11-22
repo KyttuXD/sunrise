@@ -5447,6 +5447,14 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn decorate(&self, worker: &mut G::Worker, region: &mut [crate::streaming::Proto; 9]) {
         self.inner.decorate(worker, region);
     }
+    fn decorate_with_outer(
+        &self,
+        worker: &mut G::Worker,
+        region: &mut [crate::streaming::Proto; 9],
+        outer: &[Arc<Chunk>],
+    ) {
+        self.inner.decorate_with_outer(worker, region, outer);
+    }
     fn finish(&self, proto: crate::streaming::Proto) -> Chunk {
         self.inner.finish(proto)
     }

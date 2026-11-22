@@ -27,7 +27,9 @@ pub mod tests {
                 _: &mod_api::Compound,
             ) -> Result<std::sync::Arc<dyn mod_api::StructurePiece>, mod_api::StructureError>
             {
-                Err(mod_api::StructureError("fixture has no pieces".into()))
+                Err(mod_api::StructureError::new(std::io::Error::other(
+                    "fixture has no pieces",
+                )))
             }
         }
         struct Valid;
@@ -40,7 +42,11 @@ pub mod tests {
         crate::parts::tests::install_parts_fixture(&[ModEntry::new("test", Box::new(Valid))])
             .unwrap();
         let types = crate::__private::structure_type_declarations();
-        assert!(types.iter().any(|(id, _)| id == "test:tower"));
+        assert!(
+            types
+                .iter()
+                .any(|(id, mod_id, _)| id == "test:tower" && *mod_id == "test")
+        );
         assert_eq!(types.len(), 1);
 
         struct Invalid;
@@ -85,7 +91,10 @@ impl StructuresRegistrar for PartRegistrar {
             self.refused.push(refusal);
             return;
         }
-        self.structure_types
-            .push(StructureTypeInfo { id: id.into(), ty });
+        self.structure_types.push(StructureTypeInfo {
+            id: id.into(),
+            mod_id: self.mod_id,
+            ty,
+        });
     }
 }

@@ -349,7 +349,7 @@ impl GeneratorData {
             structure_resources,
             structures,
             registry,
-            states: GenBlockStates(states.into()),
+            states: GenBlockStates::new(states),
             integers,
             noises: read_bundle(dir, ov, "noises")?,
             densities: read_bundle(dir, ov, "densities")?,

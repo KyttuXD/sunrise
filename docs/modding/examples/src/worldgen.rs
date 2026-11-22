@@ -130,14 +130,10 @@ pub mod structures {
             tag: &Compound,
         ) -> Result<Arc<dyn StructurePiece>, StructureError> {
             let block = saved_text(tag, "block")?;
-            if metadata
-                .name(self.material)
-                .map_err(|error| StructureError(format!("saved material: {error:?}")))?
-                != block
-            {
-                return Err(StructureError(
-                    "saved block does not match this pillar's material".into(),
-                ));
+            if metadata.name(self.material).map_err(StructureError::new)? != block {
+                return Err(StructureError::new(std::io::Error::other(
+                    "saved block does not match this pillar's material",
+                )));
             }
             let axis = saved_text(tag, "axis")?;
             let state = BlockState::of(
@@ -145,7 +141,7 @@ pub mod structures {
                 self.material,
                 &[StateConstraint::new("axis", &axis)],
             )
-            .map_err(|error| StructureError(format!("saved block properties: {error:?}")))?;
+            .map_err(StructureError::new)?;
             Ok(Arc::new(Pillar {
                 min: saved_position(tag, "min")?,
                 max: saved_position(tag, "max")?,
@@ -173,10 +169,10 @@ pub mod structures {
     }
     fn saved_text(tag: &Compound, key: &str) -> Result<String, StructureError> {
         match tag.get(&key.into()) {
-            Some(Tag::String(value)) => value
-                .to_string()
-                .map_err(|error| StructureError(error.to_string())),
-            _ => Err(StructureError(format!("missing or invalid saved {key}"))),
+            Some(Tag::String(value)) => value.to_string().map_err(StructureError::new),
+            _ => Err(StructureError::new(std::io::Error::other(format!(
+                "missing or invalid saved {key}"
+            )))),
         }
     }
     fn saved_position(tag: &Compound, key: &str) -> Result<[i32; 3], StructureError> {
@@ -184,7 +180,9 @@ pub mod structures {
             Some(Tag::IntArray(values)) if values.len() == 3 => {
                 Ok([values[0], values[1], values[2]])
             }
-            _ => Err(StructureError(format!("missing or invalid saved {key}"))),
+            _ => Err(StructureError::new(std::io::Error::other(format!(
+                "missing or invalid saved {key}"
+            )))),
         }
     }
     #[derive(Default)]
@@ -220,7 +218,9 @@ pub mod features {
         ) -> Result<bool, FeatureError> {
             // Decoded against the schema at load: present, an integer, 1 to 32.
             let Some(DatapackValue::Int(height)) = context.config().get("height").cloned() else {
-                return Err(FeatureError("height was not decoded".into()));
+                return Err(FeatureError::new(std::io::Error::other(
+                    "height was not decoded",
+                )));
             };
             let below = [origin[0], origin[1] - 1, origin[2]];
             if context.block_in_tag(below, "minecraft:dirt") != Some(true) {
@@ -231,20 +231,25 @@ pub mod features {
                 self.log,
                 &[StateConstraint::new("axis", "y")],
             )
-            .map_err(|error| FeatureError(format!("log state: {error:?}")))?;
+            .map_err(FeatureError::new)?;
             let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
+            let mut placed = false;
             for dy in 0..height as i32 {
                 let pos = [origin[0], origin[1] + dy, origin[2]];
-                if !context
-                    .block(pos)
-                    .is_some_and(|block| context.is_air(block))
+                if !context.ensure_can_write(pos)
+                    || !context
+                        .block(pos)
+                        .is_some_and(|block| context.is_air(block))
                 {
-                    // Blocked: what is already placed stays, as vanilla keeps it.
-                    return Ok(dy > 0);
+                    // Outside the writable region or blocked: completed writes stay.
+                    return Ok(placed);
                 }
-                context.set_block(pos, state, flags);
+                if !context.set_block(pos, state, flags) {
+                    return Ok(placed);
+                }
+                placed = true;
             }
-            Ok(true)
+            Ok(placed)
         }
     }
 

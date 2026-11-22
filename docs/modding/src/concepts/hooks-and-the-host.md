@@ -258,6 +258,10 @@ Part methods run elsewhere, and each one's own documentation says where:
   worker threads, several chunks at once. Feature placement also runs on the server thread when the game places a
   feature there: a sapling growing, a command, `LevelRef::place_feature`. A query asked once at start, such as
   `BiomeSource::possible_biomes`, is not a worker call. They get a `WorldgenHost` or no host at all, never a `Host`.
+  Feature and structure placement callbacks write directly to the generation region (or live level) with no
+  staging or rollback: completed writes and random draws stay, returned `FeatureError`/`StructureError` values log
+  and end only that invocation without disabling the callback, and only a panic disables that registered callback
+  (per operation for structure types) for the session with a log and error toast naming the mod.
 - **Meshing workers.** `add_section_geometry` itself runs once at client start, to register renderers. A panic or
   phase refusal in registration discards only that callback's renderers. Each renderer's `SectionGeometry::add` then runs on the renderer's meshing workers every time a section is meshed. A
   block tint source is asked there too, and also outside meshing, for example for terrain particles and blocks a

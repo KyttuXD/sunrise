@@ -106,6 +106,18 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     }
     /// Decorate `region[4]`; the region is row-major (dz, dx) around it.
     fn decorate(&self, _worker: &mut Self::Worker, _region: &mut [Proto; 9]) {}
+    /// Decorate `region[4]` with read-only resident columns from the `FEATURES`
+    /// `STRUCTURE_STARTS` dependency ring (Chebyshev distance `2..=8`). Columns
+    /// absent from `outer` have no resident proto or full column yet and read as
+    /// empty `STRUCTURE_STARTS` proto chunks (`ChunkPyramid.GENERATION_PYRAMID`).
+    fn decorate_with_outer(
+        &self,
+        worker: &mut Self::Worker,
+        region: &mut [Proto; 9],
+        _outer: &[Arc<Chunk>],
+    ) {
+        self.decorate(worker, region);
+    }
     /// Whether a chunk next to final ones (loaded from the save, as the
     /// chunks of a world an older version made) is decorated, its features
     /// spilling into them (`proto_beside_final`, `final_writes`), as vanilla's
@@ -298,8 +310,15 @@ enum Job {
     Generate(i32, i32),
     /// A region to decorate, with the final chunks in it (region index and
     /// the chunk as it is): their slots hold nothing until the worker makes
-    /// their proto chunks.
-    Decorate(i32, i32, Box<[Proto; 9]>, Vec<(usize, Chunk)>),
+    /// their proto chunks, plus read-only resident columns in the `FEATURES`
+    /// `STRUCTURE_STARTS` dependency ring (Chebyshev distance `2..=8`).
+    Decorate(
+        i32,
+        i32,
+        Box<[Proto; 9]>,
+        Vec<(usize, Chunk)>,
+        Vec<Arc<Chunk>>,
+    ),
     Finish(Proto),
     Light(i32, i32, Box<Region>, u64, bool),
     Mesh(i32, i32, i32, Arc<Region>, u64, MeshSettings),
@@ -1092,7 +1111,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     Done::Proto(x, z, proto, decorated)
                 }
             },
-            Job::Decorate(x, z, mut region, finals) => {
+            Job::Decorate(x, z, mut region, finals, outer) => {
                 // The final chunks' proto chunks, made here: a
                 // generated proto chunk holding their blocks.
                 for (i, snapshot) in &finals {
@@ -1100,7 +1119,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                         region[*i] = proto;
                     }
                 }
-                generator.decorate(&mut *worker, &mut region);
+                generator.decorate_with_outer(&mut *worker, &mut region, &outer);
                 let mut writes = FinalWrites::default();
                 let blocks: [Vec<_>; 9] = std::array::from_fn(|n| {
                     finals.get(n).map_or_else(Vec::new, |(i, snapshot)| {
@@ -1353,6 +1372,42 @@ impl Streaming {
         }
         Self::mark_loaded_sections_dirty(world, &self.lit);
     }
+    /// Collect existing resident columns in the `FEATURES` `STRUCTURE_STARTS`
+    /// dependency ring (Chebyshev distance `2..=8` around `(center_x, center_z)`).
+    /// Columns absent from both maps have no resident proto or full column yet and
+    /// are served as empty `STRUCTURE_STARTS` holders during decoration without
+    /// allocating placeholder chunks here.
+    fn outer_decoration_columns(
+        chunks: &FxHashMap<(i32, i32), Arc<Chunk>>,
+        light_views: &FxHashMap<(i32, i32), Arc<Chunk>>,
+        center_x: i32,
+        center_z: i32,
+    ) -> Vec<Arc<Chunk>> {
+        // ChunkPyramid.GENERATION_PYRAMID: FEATURES -> STRUCTURE_STARTS radius 8.
+        const FEATURES_DEPENDENCY_RADIUS: i32 = 8;
+        if chunks.is_empty() && light_views.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for dz in -FEATURES_DEPENDENCY_RADIUS..=FEATURES_DEPENDENCY_RADIUS {
+            let Some(cz) = center_z.checked_add(dz) else {
+                continue;
+            };
+            for dx in -FEATURES_DEPENDENCY_RADIUS..=FEATURES_DEPENDENCY_RADIUS {
+                if dx.abs().max(dz.abs()) <= 1 {
+                    continue;
+                }
+                let Some(cx) = center_x.checked_add(dx) else {
+                    continue;
+                };
+                if let Some(chunk) = chunks.get(&(cx, cz)).or_else(|| light_views.get(&(cx, cz))) {
+                    out.push(Arc::clone(chunk));
+                }
+            }
+        }
+        out
+    }
+
     /// The resident sections `LevelExtractor.allChanged` queues again. An
     /// unlit column will queue itself when its light job completes.
     fn mark_loaded_sections_dirty(world: &mut World, lit: &FxHashSet<(i32, i32)>) {
@@ -2424,10 +2479,12 @@ impl Streaming {
                             .flatten()
                             .expect("present proto")
                     }));
+                    let outer =
+                        Self::outer_decoration_columns(&world.chunks, &self.light_views, x, z);
                     self.decorating += 1;
                     self.decorating_finals
                         .extend(finals.iter().map(|(i, _)| keys[*i]));
-                    self.submit(Some((x, z)), 1, Job::Decorate(x, z, region, finals));
+                    self.submit(Some((x, z)), 1, Job::Decorate(x, z, region, finals, outer));
                 }
                 if !initialized.is_empty() {
                     // These became decorated after this call's finalize pass:
@@ -5924,5 +5981,32 @@ mod reload_tests {
 
         assert_eq!(world.dirty_sections.len(), 1);
         assert!(world.dirty_sections.contains(&(4, 3, 5)));
+    }
+
+    #[test]
+    fn outer_decoration_columns_collects_distance_two_to_eight_only() {
+        let mut chunks = FxHashMap::default();
+        let mut light_views = FxHashMap::default();
+        // Inside write zone (0..=1): excluded.
+        chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        chunks.insert((1, -1), Arc::new(Chunk::empty(1, -1)));
+        // Distance 2 in both maps: world.chunks wins over light_views.
+        let mut full_c2 = Chunk::empty(2, 0);
+        full_c2.set(0, 0, 0, 7);
+        let mut view_c2 = Chunk::empty(2, 0);
+        view_c2.set(0, 0, 0, 3);
+        chunks.insert((2, 0), Arc::new(full_c2));
+        light_views.insert((2, 0), Arc::new(view_c2));
+        // Distance 8 in light_views only: included.
+        light_views.insert((-8, 8), Arc::new(Chunk::empty(-8, 8)));
+        // Distance 9: excluded.
+        chunks.insert((9, 0), Arc::new(Chunk::empty(9, 0)));
+        light_views.insert((0, -9), Arc::new(Chunk::empty(0, -9)));
+
+        let outer = Streaming::outer_decoration_columns(&chunks, &light_views, 0, 0);
+        assert_eq!(outer.len(), 2);
+        let c2 = outer.iter().find(|c| (c.x, c.z) == (2, 0)).unwrap();
+        assert_eq!(c2.get(0, 0, 0), 7);
+        assert!(outer.iter().any(|c| (c.x, c.z) == (-8, 8)));
     }
 }
