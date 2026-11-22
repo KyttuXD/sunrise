@@ -2533,6 +2533,7 @@ mod tests {
         Pass,
         SkipFinalize,
         StopSpawn,
+        StopAgeableSpawn,
         SkipAndStop,
     }
     struct FinalizeMod(FinalizeAnswer);
@@ -2547,6 +2548,12 @@ mod tests {
                 FinalizeAnswer::Pass => {}
                 FinalizeAnswer::SkipFinalize => return mod_api::Flow::Cancel,
                 FinalizeAnswer::StopSpawn => event.spawn_cancelled = true,
+                FinalizeAnswer::StopAgeableSpawn => {
+                    let mut group = mod_api::AgeableGroup::new(false, 0.0);
+                    group.size = i32::MAX;
+                    *event.group = Some(mod_api::SpawnGroup::Ageable(group));
+                    event.spawn_cancelled = true;
+                }
                 FinalizeAnswer::SkipAndStop => {
                     event.spawn_cancelled = true;
                     return mod_api::Flow::Cancel;
@@ -2565,7 +2572,7 @@ mod tests {
     #[ignore = "daily"]
     fn configured_spawner_veto_rolls_equipment_without_joining() {
         use super::super::native_entity_refs::tests::with_game;
-        use sunrise_client::chunk::block_entity::Next;
+        use sunrise_client::chunk::block_entity::{CustomSpawnRules, Next};
         use sunrise_client::mobs::spawner::{SpawnData, SpawnDataExt, Spawner};
         use sunrise_client::mobs::trial_spawner::{TrialSpawner, TrialState};
         use sunrise_client::random_sequences::RandomSequences;
@@ -2585,6 +2592,7 @@ mod tests {
             let empty_sequences = RandomSequences::default().to_nbt();
 
             let run_block = |game: &mut Game<'_>,
+                             kind: &str,
                              configured: bool,
                              with_equipment: bool,
                              answer: Option<FinalizeAnswer>| {
@@ -2593,21 +2601,26 @@ mod tests {
                 game.rand_sequences = RandomSequences::default();
                 game.world.random.set_seed(7);
                 let mut entity = Compound::default();
-                entity.insert("id".into(), Tag::String(SULFUR_CUBE.into()));
+                entity.insert("id".into(), Tag::String(kind.into()));
                 if configured {
                     entity.insert("Health".into(), Tag::Float(5.0f32.to_bits()));
                 }
+                // Custom light rules let the cow spawn without a grass floor.
+                let rules = (kind == "minecraft:cow").then_some(CustomSpawnRules {
+                    block: (0, 15),
+                    sky: (0, 15),
+                });
                 let mut spawner = Spawner {
                     spawn_delay: 0,
                     spawn_count: 1,
                     next: Some(Next::Own(SpawnData::new(
                         entity,
-                        None,
+                        rules,
                         with_equipment.then(|| equipment.clone()),
                     ))),
                     ..Default::default()
                 };
-                let go = |game: &mut Game<'_>| {
+                let mut go = |game: &mut Game<'_>| {
                     game.server_tick_spawner_of(key, &mut spawner, None)
                         .unwrap();
                 };
@@ -2632,13 +2645,19 @@ mod tests {
                 out
             };
 
-            let joined = run_block(game, true, true, None);
+            let joined = run_block(game, SULFUR_CUBE, true, true, None);
             assert_eq!(joined.0, 1, "configured block spawner spawns one mob");
             assert_ne!(
                 joined.3, empty_sequences,
                 "configured equipment table rolled its random sequence"
             );
-            let vetoed = run_block(game, true, true, Some(FinalizeAnswer::StopSpawn));
+            let vetoed = run_block(
+                game,
+                SULFUR_CUBE,
+                true,
+                true,
+                Some(FinalizeAnswer::StopSpawn),
+            );
             assert_eq!(
                 (vetoed.0, vetoed.1, vetoed.2),
                 (0, 0, 0),
@@ -2651,15 +2670,27 @@ mod tests {
 
             // Unconfigured block spawner: `spawn_cancelled` alone still runs vanilla
             // finalization before admission veto; `Flow::Cancel` skips finalization.
-            let plain_joined = run_block(game, false, false, None);
+            let plain_joined = run_block(game, SULFUR_CUBE, false, false, None);
             assert_eq!(plain_joined.0, 1);
-            let plain_vetoed = run_block(game, false, false, Some(FinalizeAnswer::StopSpawn));
+            let plain_vetoed = run_block(
+                game,
+                SULFUR_CUBE,
+                false,
+                false,
+                Some(FinalizeAnswer::StopSpawn),
+            );
             assert_eq!((plain_vetoed.0, plain_vetoed.1, plain_vetoed.2), (0, 0, 0));
             assert_eq!(
                 plain_vetoed.4, plain_joined.4,
                 "spawn_cancelled without Flow::Cancel preserves vanilla finalization draws"
             );
-            let plain_skipped = run_block(game, false, false, Some(FinalizeAnswer::SkipAndStop));
+            let plain_skipped = run_block(
+                game,
+                SULFUR_CUBE,
+                false,
+                false,
+                Some(FinalizeAnswer::SkipAndStop),
+            );
             assert_eq!(
                 (plain_skipped.0, plain_skipped.1, plain_skipped.2),
                 (0, 0, 0)
@@ -2667,6 +2698,21 @@ mod tests {
             assert_ne!(
                 plain_skipped.4, plain_joined.4,
                 "Flow::Cancel skips vanilla finalization draws"
+            );
+
+            let cow_joined = run_block(game, "minecraft:cow", false, false, None);
+            assert_eq!(cow_joined.0, 1);
+            let cow_vetoed = run_block(
+                game,
+                "minecraft:cow",
+                false,
+                false,
+                Some(FinalizeAnswer::StopAgeableSpawn),
+            );
+            assert_eq!((cow_vetoed.0, cow_vetoed.1, cow_vetoed.2), (0, 0, 0));
+            assert_eq!(
+                cow_vetoed.4, cow_joined.4,
+                "an ageable group at the Java int limit still finalizes before the veto"
             );
 
             let run_trial = |game: &mut Game<'_>, answer: Option<FinalizeAnswer>| {
@@ -2681,7 +2727,7 @@ mod tests {
                     next_spawn_data: Some(SpawnData::new(entity, None, Some(equipment.clone()))),
                     ..Default::default()
                 };
-                let go = |game: &mut Game<'_>| {
+                let mut go = |game: &mut Game<'_>| {
                     game.server_tick_trial_spawner(key, &mut spawner, TrialState::Active, false)
                         .unwrap();
                 };

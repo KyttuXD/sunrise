@@ -1649,24 +1649,30 @@ mod tests {
         let redstone_slot = catalog.slot("amod:redstone").unwrap();
         let both_slot = catalog.slot("amod:both").unwrap();
 
-        let vanilla_only = vec!["minecraft:vanilla".to_owned()];
+        let vanilla_only = mod_api::FeatureFlags::new(["minecraft:vanilla".to_owned()].into());
         assert!(catalog.is_enabled(plain_slot, &vanilla_only));
         assert!(!catalog.is_enabled(redstone_slot, &vanilla_only));
         assert!(!catalog.is_enabled(both_slot, &vanilla_only));
 
-        let with_redstone = vec![
-            "minecraft:vanilla".to_owned(),
-            "minecraft:redstone_experiments".to_owned(),
-        ];
+        let with_redstone = mod_api::FeatureFlags::new(
+            [
+                "minecraft:vanilla".to_owned(),
+                "minecraft:redstone_experiments".to_owned(),
+            ]
+            .into(),
+        );
         assert!(catalog.is_enabled(plain_slot, &with_redstone));
         assert!(catalog.is_enabled(redstone_slot, &with_redstone));
         assert!(!catalog.is_enabled(both_slot, &with_redstone));
 
-        let with_both = vec![
-            "minecraft:vanilla".to_owned(),
-            "minecraft:redstone_experiments".to_owned(),
-            "minecraft:minecart_improvements".to_owned(),
-        ];
+        let with_both = mod_api::FeatureFlags::new(
+            [
+                "minecraft:vanilla".to_owned(),
+                "minecraft:redstone_experiments".to_owned(),
+                "minecraft:minecart_improvements".to_owned(),
+            ]
+            .into(),
+        );
         assert!(catalog.is_enabled(both_slot, &with_both));
     }
 
