@@ -3472,7 +3472,7 @@ impl ParticleEngine {
             return;
         }
         let twinkle = explosions.iter().any(|e| e.twinkle);
-        let lifetime = explosions.len() as i32 * 2 - 1 + if twinkle { 15 } else { 0 };
+        let lifetime = Starter::lifetime_for(explosions.len(), twinkle);
         let far = (0..3).map(|i| (at[i] - camera[i]).powi(2)).sum::<f64>() >= 256.0;
         self.pending.push(PendingParticle::Starter(Starter {
             at,
@@ -3500,44 +3500,54 @@ impl ParticleEngine {
                 let pitch = 0.95 + self.random.next_float() * 0.1;
                 self.sounds.push((sound, s.at, 20.0, pitch, true));
             }
-            if s.life % 2 == 0 && ((s.life / 2) as usize) < s.explosions.len() {
-                let e = s.explosions[(s.life / 2) as usize].clone();
-                // DyeColor.BLACK.getFireworkColor without colours.
-                let colors = if e.colors.is_empty() {
-                    vec![0x1E1B1B]
-                } else {
-                    e.colors.clone()
+            if s.life % 2 == 0 {
+                let index = s.life / 2;
+                let Ok(index) = usize::try_from(index) else {
+                    log::error!(
+                        "Ticking firework starter failed: negative explosion index {index} (life {}, explosions {})",
+                        s.life,
+                        s.explosions.len(),
+                    );
+                    continue;
                 };
-                match e.shape {
-                    FireworkShape::SmallBall => self.spark_ball(&s, 0.25, 2, &colors, &e),
-                    FireworkShape::LargeBall => self.spark_ball(&s, 0.5, 4, &colors, &e),
-                    FireworkShape::Star => self.spark_shape(&s, 0.5, &STAR, &colors, &e, false),
-                    FireworkShape::Creeper => {
-                        self.spark_shape(&s, 0.5, &CREEPER, &colors, &e, true)
-                    }
-                    FireworkShape::Burst => {
-                        let g = |r: &mut LegacyRandom| r.next_gaussian();
-                        let (bx, bz) = (g(&mut self.random) * 0.05, g(&mut self.random) * 0.05);
-                        for _ in 0..70 {
-                            let xa = s.v[0] * 0.5 + g(&mut self.random) * 0.15 + bx;
-                            let za = s.v[2] * 0.5 + g(&mut self.random) * 0.15 + bz;
-                            let ya = s.v[1] * 0.5 + self.random.next_double() * 0.5;
-                            self.spark_from(&s, [xa, ya, za], &colors, &e);
+                if let Some(e) = s.explosions.get(index).cloned() {
+                    // DyeColor.BLACK.getFireworkColor without colours.
+                    let colors = if e.colors.is_empty() {
+                        vec![0x1E1B1B]
+                    } else {
+                        e.colors.clone()
+                    };
+                    match e.shape {
+                        FireworkShape::SmallBall => self.spark_ball(&s, 0.25, 2, &colors, &e),
+                        FireworkShape::LargeBall => self.spark_ball(&s, 0.5, 4, &colors, &e),
+                        FireworkShape::Star => self.spark_shape(&s, 0.5, &STAR, &colors, &e, false),
+                        FireworkShape::Creeper => {
+                            self.spark_shape(&s, 0.5, &CREEPER, &colors, &e, true)
+                        }
+                        FireworkShape::Burst => {
+                            let g = |r: &mut LegacyRandom| r.next_gaussian();
+                            let (bx, bz) = (g(&mut self.random) * 0.05, g(&mut self.random) * 0.05);
+                            for _ in 0..70 {
+                                let xa = s.v[0] * 0.5 + g(&mut self.random) * 0.15 + bx;
+                                let za = s.v[2] * 0.5 + g(&mut self.random) * 0.15 + bz;
+                                let ya = s.v[1] * 0.5 + self.random.next_double() * 0.5;
+                                self.spark_from(&s, [xa, ya, za], &colors, &e);
+                            }
                         }
                     }
+                    // The flash: ColorParticleOption.create(FLASH, first colour), alpha 0.
+                    let c = colors[0];
+                    let rgba = [
+                        ((c >> 16) & 255) as f32 / 255.0,
+                        ((c >> 8) & 255) as f32 / 255.0,
+                        (c & 255) as f32 / 255.0,
+                        ((c >> 24) & 255) as f32 / 255.0,
+                    ];
+                    let flash = ParticleOptions::colored(ParticleType::Flash, rgba);
+                    self.create(&flash, s.at, [0.0; 3]);
                 }
-                // The flash: ColorParticleOption.create(FLASH, first colour), alpha 0.
-                let c = colors[0];
-                let rgba = [
-                    ((c >> 16) & 255) as f32 / 255.0,
-                    ((c >> 8) & 255) as f32 / 255.0,
-                    (c & 255) as f32 / 255.0,
-                    ((c >> 24) & 255) as f32 / 255.0,
-                ];
-                let flash = ParticleOptions::colored(ParticleType::Flash, rgba);
-                self.create(&flash, s.at, [0.0; 3]);
             }
-            s.life += 1;
+            s.life = s.life.wrapping_add(1);
             if s.life > s.lifetime {
                 if s.twinkle_delay && s.sound.is_some() {
                     let sound = if s.sound == Some(true) {
@@ -5084,6 +5094,15 @@ struct Starter {
     /// it plays: `None` for a silent rocket.
     sound: Option<bool>,
 }
+impl Starter {
+    /// `FireworkParticles.Starter` uses Java's wrapping `int` for its counters.
+    fn lifetime_for(explosion_count: usize, twinkle: bool) -> i32 {
+        (explosion_count as i32)
+            .wrapping_mul(2)
+            .wrapping_sub(1)
+            .wrapping_add(if twinkle { 15 } else { 0 })
+    }
+}
 const STAR: [[f64; 2]; 6] = [
     [0.0, 1.0],
     [0.3455, 0.309],
@@ -5188,6 +5207,65 @@ mod tests {
                 .expect("a trail is made");
             assert_eq!(trail.lifetime, duration);
         }
+    }
+
+    #[test]
+    fn firework_starter_counters_wrap_like_java_ints() {
+        // Exercise the overflow counts without allocating billions of explosions.
+        assert_eq!(Starter::lifetime_for(1_073_741_817, true), i32::MIN);
+        let lifetime = Starter::lifetime_for(1_073_741_824, false);
+        assert_eq!(lifetime, i32::MAX);
+
+        let mut engine = ParticleEngine::new(
+            &ResourceSource::indexed(Default::default()),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+        engine.starters.push(Starter {
+            at: [0.0; 3],
+            v: [0.0; 3],
+            explosions: vec![FireworkExplosion::default()],
+            life: i32::MAX,
+            lifetime,
+            twinkle_delay: false,
+            sound: None,
+        });
+        engine.starters.push(Starter {
+            at: [1.0, 2.0, 3.0],
+            v: [0.0; 3],
+            explosions: vec![FireworkExplosion::default(); 2],
+            life: 0,
+            lifetime: Starter::lifetime_for(2, false),
+            twinkle_delay: false,
+            sound: None,
+        });
+        let ((), errors) = crate::test_log::capture_errors(|| engine.tick_starters());
+        assert!(
+            errors.is_empty(),
+            "no failure before wrapped lookup: {errors:?}"
+        );
+        assert_eq!(engine.starters.len(), 2);
+        assert_eq!(engine.starters[0].life, i32::MIN);
+        assert_eq!(engine.starters[1].life, 1);
+
+        // On the next tick, the wrapped even life computes a negative explosion index:
+        // report the tick failure and retire only the failing starter.
+        engine.pending.clear();
+        let ((), errors) = crate::test_log::capture_errors(|| engine.tick_starters());
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one starter tick failure: {errors:?}"
+        );
+        assert!(
+            errors[0].contains("-1073741824"),
+            "error should report the negative explosion index: {errors:?}"
+        );
+        assert_eq!(engine.starters.len(), 1);
+        assert_eq!(engine.starters[0].at, [1.0, 2.0, 3.0]);
+        assert_eq!(engine.starters[0].life, 2);
+        assert!(engine.pending.is_empty());
+        assert!(engine.sounds.is_empty());
     }
 
     #[test]

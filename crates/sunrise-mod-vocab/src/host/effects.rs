@@ -58,8 +58,8 @@ pub trait EffectsClientHost {
     /// twinkling explosion, play only when `request.audible`, as for a rocket that isn't silent.
     /// Only the picture and the sound: no entity, no damage, nothing sent to the server, and other
     /// players see nothing (a mod's server half tells each client half to draw it). True means
-    /// queued; false on a server, without a client player or world, for non-finite input or for
-    /// more than 256 explosions. API @API:client_fireworks@.
+    /// queued; false on a server, without a client player or world, or for non-finite input.
+    /// API @API:client_fireworks@.
     fn create_fireworks(&mut self, request: &FireworksRequest) -> bool;
     /// Every sound event the client's resources have (`SoundManager.getAvailableSounds`).
     fn sound_events(&self) -> Vec<Identifier>;
