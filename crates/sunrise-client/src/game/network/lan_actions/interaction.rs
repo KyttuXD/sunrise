@@ -30,7 +30,7 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_drop_carried(&mut self, gi: usize) {
-        let carried = self.with_own_record(gi, |host, _| {
+        let carried = self.with_own_record(gi, |host, _, _| {
             let conn = host.hub.guests[gi].conn;
             let mut stacks = host.hub.take_closed_menu_cursors(conn).collect::<Vec<_>>();
             host.hub

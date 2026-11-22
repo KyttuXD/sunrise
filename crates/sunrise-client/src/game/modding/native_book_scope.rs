@@ -238,7 +238,7 @@ impl Game<'_> {
         window: i32,
         size: usize,
     ) -> Result<Vec<Option<NativeMenuSlot>>, Refusal> {
-        let menu = self.menu(uuid, window).ok_or(Refusal::Changed)?;
+        let menu = self.native_menu_ref(uuid, window).ok_or(Refusal::Changed)?;
         let player = menu.fields().player;
         let places: Vec<_> = (0..size)
             .map(|slot| self.native_menu_place(conn, window, slot))

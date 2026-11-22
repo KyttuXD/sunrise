@@ -293,6 +293,18 @@ pub mod built {
 
 /// What the game reads of handles and calls on the API's own types.
 pub mod game {
+    /// Engine-side slot queries use the same handler as `ItemPlace::MenuSlot` transfers.
+    pub fn menu_slot_place_handler(
+        place: crate::MenuSlotPlace,
+        host: &mut dyn crate::ServerHost,
+        player: crate::PlayerRef,
+    ) -> Option<(
+        crate::Capability<dyn crate::ResourceHandler<crate::ItemResource>>,
+        usize,
+    )> {
+        place.handler(host, player)
+    }
+
     include!(concat!(env!("OUT_DIR"), "/mod_api_exports_private_game.rs"));
     use crate::*;
     use std::fmt::Debug;

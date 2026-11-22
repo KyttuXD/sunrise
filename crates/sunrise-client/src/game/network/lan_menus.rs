@@ -28,7 +28,7 @@ pub(in crate::game) struct GuestMenus {
     pub(in crate::game) hub: MenuOwner<()>,
     /// The successful open already announced to mods, retained through a loan of `GuestPlay`.
     pub(in crate::game) menu_heard: Option<super::native_menus::HeardMenu>,
-    /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
+    /// The storage a mod backed its open menu's slots with (`MenuRef::back_slots`);
     /// None for every menu no mod backed.
     pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
 }
@@ -117,7 +117,12 @@ impl super::Game<'_> {
                         .inventory_clicked(conn, &packet, &self.world, &changed);
                 }
             }
-            ClickReply::Resend(window) => host.hub.resend_menu(conn, window, &self.world),
+            ClickReply::Resend(window) => {
+                self.with_own_record(i, |host, _, world| {
+                    host.hub.resend_menu(conn, window, world);
+                    Some(())
+                });
+            }
             ClickReply::Inventory => host.hub.send_inventory(i),
             ClickReply::Offhand => {
                 let offhand = guest.offhand.clone();

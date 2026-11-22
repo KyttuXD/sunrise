@@ -95,6 +95,21 @@ impl MenuPart for Pot {
             event.may_place = false;
         }
         event.may_pickup &= event.slot != KEEPS;
+        if event.container == mod_api::MenuContainer::Main
+            && event.slot == 0
+            && event
+                .context
+                .slot(mod_api::MenuContainer::Grid, 0)
+                .is_some()
+        {
+            event.may_pickup &= event
+                .context
+                .slot(mod_api::MenuContainer::Result, 0)
+                .is_some_and(|stack| {
+                    mod_api::__private::item_key_id(stack.item()) == Some("minecraft:oak_planks")
+                        && stack.count() == 4
+                });
+        }
     }
 }
 /// The pot block's shift-click: usually left to the game, unless the fixture supplies a remainder.
@@ -1219,5 +1234,52 @@ fn a_drag_and_a_creative_clone_never_ask_the_pickup_rule() {
         assert_eq!(menu.carried.as_ref().map(|c| c.count), Some(64));
         assert_eq!(served(game), predicted(&menu));
         assert!(asked().is_empty());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn quick_move_and_live_rules_see_the_same_prepared_result_until_the_grid_changes() {
+    with_pot(|game, rx| {
+        let craft = ModCrafting {
+            grid: 5,
+            size: 2,
+            result: RESULT,
+        };
+        let input = stone(1);
+        let entity = game.world.block_entities.get_mut(&POS).unwrap();
+        entity.slots_mut()[0] = stone(8);
+        entity.slots_mut()[craft.grid] = input.clone();
+        game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+            let menu = guest.menu.as_mut().unwrap();
+            menu.mod_type = Some(Box::leak(Box::new(ModMenuType {
+                crafting: Some(craft),
+                ..pot_type().clone()
+            })));
+            menu.craft = Some(ModCraft {
+                grid: vec![input, None, None, None],
+                result: Some(ItemStack::new("minecraft:diamond", 1)),
+            });
+        });
+        let player = game.player(12).unwrap();
+        let menu = player.container_menu(game).unwrap();
+        let result = menu.slot(game, RESULT).unwrap().unwrap();
+        assert_eq!(
+            mod_api::__private::item_key_id(result.item()),
+            Some("minecraft:diamond")
+        );
+        assert_eq!(menu.slot_gives(game, 0), Some(false));
+        MOVED.with(|moved| moved.borrow_mut().clear());
+        click(game, rx, (0, 0, Input::QuickMove), vec![], None);
+        assert!(MOVED.with(|moved| moved.borrow().is_empty()));
+        assert_eq!(served(game)[0], Some(("minecraft:stone".to_owned(), 8)));
+
+        // Before the next sync, the live grid crafts oak planks, not the old preview.
+        game.world.block_entities.get_mut(&POS).unwrap().slots_mut()[5] =
+            Some(ItemStack::new("minecraft:oak_log", 1));
+        assert_eq!(menu.slot_gives(game, 0), Some(true));
+        click(game, rx, (0, 0, Input::QuickMove), vec![], None);
+        assert!(MOVED.with(|moved| moved.borrow().as_slice() == [0]));
+        assert_eq!(served(game)[0], None);
     });
 }

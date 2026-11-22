@@ -857,9 +857,9 @@ impl Game<'_> {
                 if let Some(key) = vehicle {
                     self.close_guest_vehicle_menu(conn, key);
                 }
-                if let Some(carried) =
-                    self.with_own_record(gi, |host, _| host.hub.container_closed(conn, p.container))
-                {
+                if let Some(carried) = self.with_own_record(gi, |host, _, _| {
+                    host.hub.container_closed(conn, p.container)
+                }) {
                     self.lan_place_back(gi, vec![carried]);
                 }
                 if closing {

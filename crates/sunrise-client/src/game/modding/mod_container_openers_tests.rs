@@ -57,14 +57,17 @@ mod tests {
                     // outer opening's window ID without reusing its menu identity.
                     for window in (2..=100).chain([1]) {
                         assert_eq!(
-                            host.open_menu(
-                                player.uuid(),
-                                1,
-                                Text::literal("replacement"),
-                                Vec::new(),
-                                MenuReplace::InPlace
-                            ),
-                            Ok(Some(window))
+                            player
+                                .open_chest_menu(
+                                    host,
+                                    1,
+                                    Text::literal("replacement"),
+                                    Vec::new(),
+                                    MenuReplace::InPlace
+                                )
+                                .unwrap()
+                                .container_id(host),
+                            Some(window)
                         );
                     }
                 }

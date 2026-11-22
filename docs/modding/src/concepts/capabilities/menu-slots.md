@@ -280,7 +280,7 @@ change slots.
 Server hooks can also read the acting player's supported menu through
 `player.container_menu(host)`. Inventory, equipment, cursor and ender contents come from
 that player's current turn state, not the temporarily swapped-out record. The unsupported
-menu kinds, permanent exclusions and stale-generation checks still apply.
+menu kinds and stale-generation checks still apply.
 
 Mutable client hooks can submit a vanilla click with
 `menu.click(host, &[mod_api::MenuClick::QuickMove { slot }])`. The slot is the same menu-order
@@ -318,11 +318,19 @@ buttons don't take; the server's menu decides what it does, and the inventory me
 and the storage's rules hold: the player's inventory, armour and off hand by their
 [`ENTITY_ITEMS`](entity-items.md) index, a chest's or a furnace's slot through its `ITEMS` handler, a chest minecart's
 or a chested mount's through its `ENTITY_ITEMS`, and the player's ender chest, inventory crafting grid and a mod's chest
-menu (`open_menu`, reached with `host.menu(uuid, window)`), kept by the game. The slot's own rules come first, as a click has them:
+menu (`PlayerRef::open_chest_menu`, reached through its returned `MenuRef` or `player.container_menu(host)`), kept by the game. The slot's own rules come first, as a click has them:
 `menu.slot_holds(host, slot, &stack)` is how many of a stack it holds (`Slot.mayPlace`, then `Slot.getMaxStackSize`: a
 furnace's fuel slot one bucket, an armour slot one piece that fits it, a shulker box's slot no shulker box, a result
 slot none), and `menu.slot_gives(host, slot)` whether it gives up what it holds (`Slot.mayPickup`: bound armour stays
-on outside creative). An insert fills that slot alone, and what doesn't fit stays out. A crafting grid a transaction
+on outside creative). Both stay read-only on `&dyn Host` and return `None` for enabled handler-backed slots
+(`MenuSlotBacking::Place`, distinguishable via `menu.slot_backing(host, slot)`). From `&mut dyn ServerHost`,
+`menu.probe_slot_holds(host, slot, &stack)` and `menu.probe_slot_gives(host, slot)` probe the live handler
+(`capacity_int` capped at `i32::MAX`, and a simulated 1-item extraction rolled back in a transaction) and delegate
+every other slot to the same live evaluator. The locked backpack hotbar slot takes no click, and backed pickup and
+quick-move clicks check `probe_slot_gives`. Explicit transfers through a slot's `ItemPlace` still use its menu rules
+and backing handler. Client screen visibility changes neither of those. `menu.slot_backing` and `ItemPlace::MenuSlot` follow bound linked
+storage rather than the opener's shadow slots and return `None` for unbound linked indices. Slot rules see live linked
+storage and only see a prepared result while its crafting grid still matches. An insert fills the named slot alone, and what doesn't fit stays out. A crafting grid a transaction
 changed has its result made again at the outermost commit, once for each player however many writes it took
 (`InventoryMenu.slotsChanged`, with `prepare_item_craft`); the result slot takes nothing and gives nothing,
 since taking it is a craft. A menu closed, replaced or reopened since the `MenuRef` was made, or one whose player left,
@@ -361,6 +369,13 @@ A panicking quick-move Part is disabled for this hook and loses its journaled wr
 handles the move, the menu resyncs instead of running ordinary routing. A panic contained in a nested hook does not
 by itself reject the move.
 
+A click action cannot replace a screen: `PlayerRef::open_chest_menu` and `PlayerRef::open_mod_menu`
+return `Err(OpenMenuError::ClickInProgress)`. The acting player can close their active `MenuRef` with
+`menu.close_container(host)`; during a click action it waits for a successful commit. `false` means the
+menu could not be closed (for example, it was replaced). An aborted click leaves the window and its items in
+place and sends no close packet. `MenuRef::set_items` sends the live owner's inventory and cursor on success;
+its changes also roll back without sending a packet if the action aborts.
+
 Inside `menu_clicked`, `ItemPlace::MenuSlot` can take from and give to the clicking
 player's inventory and hotbar slots as well as the menu's own storage. Inserts fill
 only the named slot and return the amount that fits. Abort the transaction if a
@@ -369,16 +384,17 @@ refuse writes.
 
 ## A mod's chest menu
 
-`host.open_menu(uuid, rows, title, items, replace)` opens a chest menu (`generic_9x1` to `generic_9x6`) for a player
-in place of the menu they have open and returns its window id; `menu_clicked` and `menu_closed` name it too. Its items
-change in place: `host.menu(uuid, window)` is its `MenuRef` while the player still has that window open (None for
-another window, a closed menu or a player who left), and a write to `ItemPlace::MenuSlot { menu, slot }` in a
-transaction is sent with the next tick's container sync, one `ContainerSetSlot` per changed slot, as vanilla's
-`broadcastChanges` sends a menu a mod changed. Nothing reopens and the cursor stays where it is.
+`player.open_chest_menu(host, rows, title, items, replace)` opens a chest menu (`generic_9x1` to `generic_9x6`) for a player
+in place of the menu they have open and returns `Result<MenuRef, OpenMenuError>`; `menu.container_id(host)` gives its
+window id, which `menu_clicked` and `menu_closed` name too. Its items change in place through that `MenuRef` (or
+`player.container_menu(host)` while the player still has that window open), and a write to
+`ItemPlace::MenuSlot { menu, slot }` in a transaction is sent with the next tick's container sync, one
+`ContainerSetSlot` per changed slot, as vanilla's `broadcastChanges` sends a menu a mod changed. Nothing reopens and
+the cursor stays where it is.
 
 ```rust,ignore
 // In menu_clicked: show the next page's item in slot 4 of the same menu.
-if let Some(menu) = host.menu(uuid, window) {
+if let Some(menu) = player.container_menu(host) {
     let slot = ItemPlace::MenuSlot { menu, slot: 4 };
     let _ = host.transaction(|host, tx| {
         slot.extract(host, tx, &shown, 64);
@@ -387,16 +403,16 @@ if let Some(menu) = host.menu(uuid, window) {
 }
 ```
 
-To rebuild the whole menu at once (a page turned, a list refiltered) `host.menu_set_items(uuid, window, items)`
+To rebuild the whole menu at once (a page turned, a list refiltered) `menu.set_items(host, items)`
 replaces everything it shows and sends it as one `ContainerSetContent` for that window, now rather than with the next
-tick's sync, as vanilla's `sendAllDataToRemote` does: the screen, the title and the cursor stay. Like `open_menu` it pads
+tick's sync, as vanilla's `sendAllDataToRemote` does: the screen, the title and the cursor stay. Like `open_chest_menu` it pads
 `items` with empty slots and drops the ones past the menu's last. It returns `Result<(), MenuItemsRefusal>` and each
-refusal sends and changes nothing: `Client`, `NoPlayer` (no placed player has that UUID), `NotOpen` (`window` is not
-the player's open native menu), `OwnedSlots` (the menu owns its storage; use `ItemPlace::MenuSlot`), or
+refusal sends and changes nothing: `Client`, `NoPlayer` (the player is not online and placed), `NotOpen` (the handle does not
+name the player's open native menu), `OwnedSlots` (the menu owns its storage; use `ItemPlace::MenuSlot`), or
 `Stack(StackWriteError)` (an item the world lacks, a count or damage the item does not allow). For one slot or a few,
-write them through `host.menu` as above: they cost one packet each and no replacement of the others.
+write them through `ItemPlace::MenuSlot` on the `MenuRef` as above: they cost one packet each and no replacement of the others.
 
-A title or a row count changes only with a new menu, as in vanilla: `open_menu` again, with a new window id, the
+A title or a row count changes only with a new menu, as in vanilla: call `player.open_chest_menu` again, with a new window id, the
 title and all the items. The old menu closes on the server as a close does, its cursor stack going back to the
 player's inventory, and packets for its window are ignored. `replace` is the choice a Java `MenuProvider` makes
 (`shouldTriggerClientSideContainerClosingOnOpen`): `MenuReplace::CloseFirst`, vanilla's default, first sends the
@@ -417,8 +433,8 @@ stonecutter's input. A type with `owned_slots` can only open without a block and
 
 Each window starts with empty slots. Read them with `MenuRef::slot` and edit them through
 `ItemPlace::MenuSlot` in a transaction. `MenuRef::slot_backing` reports `MenuSlotBacking::Owned`.
-Insertion respects the smaller of the slot limit and the item's limit. Neither `back_mod_menu_slots`
-nor `menu_set_items` replaces this storage. The client gets normal slot updates, with no new packet.
+Insertion respects the smaller of the slot limit and the item's limit. Neither `MenuRef::back_slots`
+nor `MenuRef::set_items` replaces this storage. The client gets normal slot updates, with no new packet.
 
 Ordinary clicks move items up to the slot cap on both sides. To make a filter slot, handle `menu_clicked`:
 read the cursor, insert a copy without extracting from it, and return `Flow::Cancel`. The server sends the
@@ -433,9 +449,9 @@ The cursor's ordinary close behavior is unchanged.
 
 ## Slots backed by a held item or an entity's handler
 
-A menu opened with no block (`player.open_mod_menu`, or `open_menu`'s chest menu) can show storage that is not a block
+A menu opened with no block (`player.open_mod_menu`, or `player.open_chest_menu`'s chest menu) can show storage that is not a block
 entity, as NeoForge's `StackCopySlot` and `ResourceHandlerSlot` do. Right after the open, back its first container
-slots with `player.back_mod_menu_slots(host, window, places)`, one `MenuSlotPlace` per slot:
+slots with `menu.back_slots(host, places)`, one `MenuSlotPlace` per slot:
 
 - `MenuSlotPlace::HeldItem { hand, slot }`: slot `slot` of the container inside the stack in the player's `hand`, through
   its `ITEM_ITEMS` handler (a backpack's contents). While the menu is open, the hotbar slot holding a main-hand stack takes
@@ -460,7 +476,7 @@ Backing the same window again replaces its places. A slot no longer backed (an e
 emptied: it never keeps the copy it showed, which stays in the storage it came from. A backing that cannot be made
 changes nothing and says why with a `MenuSlotBackRefusal`:
 
-- `NoPlayerOrWindow`: the player is not online here, or `window` is not the menu they have open.
+- `NoPlayerOrWindow`: the player is not online here, or the `MenuRef` is stale or no longer the menu they have open.
 - `UnsupportedMenu`: the open menu is not a blockless mod menu, or it declares `owned_slots`.
 - `TooManyPlaces`: more places than the menu's container slots.
 - `PlaceUnresolved { index }`: `places[index]` names no storage now.
@@ -468,10 +484,10 @@ changes nothing and says why with a `MenuSlotBackRefusal`:
 ```rust,ignore
 let mut request = ModMenuOpen::new(backpack_menu, title);
 request.opening_hand = Some(Hand::Main);
-let window = player.open_mod_menu(host, request)?;
-if let Some(window) = window {
+let menu = player.open_mod_menu(host, request)?;
+if let Some(menu) = menu {
     let places = (0..27).map(|slot| MenuSlotPlace::HeldItem { hand: Hand::Main, slot }).collect();
-    if let Err(refusal) = player.back_mod_menu_slots(host, window, places) {
+    if let Err(refusal) = menu.back_slots(host, places) {
         log::warn!("backpack menu not backed: {refusal:?}");
     }
 }

@@ -16,7 +16,7 @@ use sunrise_client::{
     items::{ItemStack, Items},
     lan::{
         guest::Guest,
-        menu::{ModCraft, Slots, linked_slot_count, read_links, write_links},
+        menu::{LinkedSlots, ModCraft, Slots, linked_slot_count, write_links},
     },
     menu::{
         Env, Input, Kind, Menu,
@@ -92,32 +92,35 @@ pub(super) fn load_player(menu: &mut Menu, g: &Guest) {
     menu.carried = g.carried.clone();
 }
 
-/// The vanilla menu engine's kind for a guest's menu over block entity `entity`, with the
-/// container's slots: a furnace's, a brewing stand's, a crafter's, or a content mod's menu type
-/// with its slots' rules. None for the others, whose clicks the hub runs.
-pub(super) fn machine_menu(
+/// The menu engine's kind for a guest's machine or block-backed mod menu.
+pub(super) fn machine_menu_kind(
     entity: &BlockEntity,
-    mod_type: Option<&'static sunrise_client::containers::ModMenuType>,
-) -> Option<(Kind, Vec<Option<ItemStack>>)> {
+    mod_type: Option<&'static ModMenuType>,
+) -> Option<Kind> {
     Some(match entity {
-        BlockEntity::Furnace(f) => {
-            let recipe = match f.kind.recipe_type() {
-                "minecraft:blasting" => "blasting",
-                "minecraft:smoking" => "smoking",
-                _ => "smelting",
-            };
-            (Kind::Furnace(recipe), f.items.to_vec())
-        }
-        BlockEntity::Brewing(b) => (Kind::Brewing, b.items.to_vec()),
-        BlockEntity::Crafter(c) => (Kind::CrafterBlock, c.items.to_vec()),
-        BlockEntity::Mod(m) => {
-            let t = mod_type?;
-            let mut items = m.items.clone();
-            items.resize(t.slots, None);
-            (Kind::Mod(t), items)
-        }
+        BlockEntity::Furnace(f) => Kind::Furnace(match f.kind.recipe_type() {
+            "minecraft:blasting" => "blasting",
+            "minecraft:smoking" => "smoking",
+            _ => "smelting",
+        }),
+        BlockEntity::Brewing(_) => Kind::Brewing,
+        BlockEntity::Crafter(_) => Kind::CrafterBlock,
+        BlockEntity::Mod(_) => Kind::Mod(mod_type?),
         _ => return None,
     })
+}
+
+/// The machine's working slot storage for an edit, including any empty mod menu slots.
+pub(super) fn machine_menu(
+    entity: &BlockEntity,
+    mod_type: Option<&'static ModMenuType>,
+) -> Option<(Kind, Vec<Option<ItemStack>>)> {
+    let kind = machine_menu_kind(entity, mod_type)?;
+    let mut items = entity.slots().to_vec();
+    if let Kind::Mod(layout) = kind {
+        items.resize(layout.slots, None);
+    }
+    Some((kind, items))
 }
 
 /// `load_player` back.
@@ -225,6 +228,27 @@ impl Game<'_> {
         }
     }
 
+    /// Slot rules use the resolved player's recipe book and equipment target in both edits and
+    /// queries. The acting player's recipe book is swapped into the game along with their items.
+    pub(super) fn guest_slot_env<'s>(
+        &'s self,
+        guest: &'s Guest,
+        parts: &'s dyn sunrise_client::mobs::equip::CanEquip,
+    ) -> Env<'s> {
+        Env {
+            player: Some(guest.uuid),
+            player_entity_id: Some(guest.entity_id),
+            limited_crafting: self.lan.as_ref().unwrap().hub.limited_crafting,
+            can_equip: Some(parts),
+            known_recipes: Some(if self.lan_acting == Some(guest.conn) {
+                &self.level.recipe_book
+            } else {
+                &guest.recipe_book
+            }),
+            ..self.menu_env()
+        }
+    }
+
     /// Runs `op` on the guest's menu with their inventory copied in and back.
     pub(super) fn guest_menu_op<R>(
         &mut self,
@@ -283,11 +307,12 @@ impl Game<'_> {
         let host = self.lan.as_ref()?;
         // `ArmorSlot.mayPlace` asks the parts with the game as `Host`: the menu is the guest's own.
         let parts = self.menu_can_equip();
+        let guest = &host.hub.guests[gi];
+        self.load_guest_menu(menu, host, gi);
         let env = Env {
             maps: maps.as_ref().map(|m| m as &dyn sunrise_client::menu::Maps),
-            can_equip: Some(&parts),
             stacked,
-            ..self.load_guest_menu(menu, host, gi)
+            ..self.guest_slot_env(guest, &parts)
         };
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
         menu.item_smelted_hook = mod_api::__private::listened(mod_api::HookId::ItemSmelted);
@@ -613,7 +638,7 @@ impl Game<'_> {
         p: &play::ContainerClick,
     ) -> Option<bool> {
         use super::lan_menus::ClickReply;
-        let host = self.lan.as_mut()?;
+        let host = self.lan.as_ref()?;
         let gi = host.hub.guests.connection_index(conn)?;
         let (pos, mod_type, menu_id) = host.hub.guests[gi]
             .menu
@@ -653,13 +678,7 @@ impl Game<'_> {
         let overlay_links = |world: &sunrise_client::world::World,
                              items: &mut [Option<ItemStack>]| {
             if let Some((l, links)) = &linked {
-                for (k, stack) in l.slots().zip(
-                    read_links(world, links, l.count)
-                        .into_iter()
-                        .chain(std::iter::repeat(None)),
-                ) {
-                    items[k] = stack;
-                }
+                LinkedSlots::new(world, *l, links).overlay(items);
             }
         };
         overlay_links(&self.world, &mut items);
@@ -1995,7 +2014,7 @@ impl Game<'_> {
     /// Retire a game-owned menu on the guest record, even when their active
     /// cursor is temporarily in `Game` during a guest turn.
     pub(super) fn close_guest_menu_cursor(&mut self, gi: usize, window: i32) -> Option<ItemStack> {
-        self.with_own_record(gi, |host, _| {
+        self.with_own_record(gi, |host, _, _| {
             host.hub.guests.update(gi, |g| g.close_menu_cursor(window))
         })
     }
@@ -2016,7 +2035,7 @@ impl Game<'_> {
         let crafting = &mut host.menus.entry(conn).or_default().crafting;
         let grid: Vec<ItemStack> = if window == Some(0) {
             *crafting.inventory = None;
-            self.with_own_record(gi, |host, _| {
+            self.with_own_record(gi, |host, _, _| {
                 Some(host.hub.guests.update(gi, |g| {
                     g.craft_result = None;
                     g.take_inventory_carried()
@@ -2057,7 +2076,7 @@ impl Game<'_> {
         if inputs.is_empty() {
             return;
         }
-        let overflow = self.with_own_record(gi, |lan, items| {
+        let overflow = self.with_own_record(gi, |lan, items, _| {
             Some(lan.hub.guests.update(gi, |guest| {
                 let mut menu = Menu::new(Kind::Inventory);
                 load_player(&mut menu, guest);

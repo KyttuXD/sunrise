@@ -808,21 +808,23 @@ impl ItemPlace {
         spills: bool,
     ) -> u32 {
         let _ = tx;
-        // A menu slot's own rules come before its storage's: `Slot.mayPlace` and
-        // `getMaxStackSize` for what goes in, `Slot.mayPickup` for what comes out.
-        let amount = match self {
-            ItemPlace::MenuSlot { menu, slot } if insert => {
-                let holds = menu.slot_holds(host, *slot, resource.as_stack());
-                let room = holds.unwrap_or(0).saturating_sub(self.amount(host));
-                amount.min(room)
-            }
-            ItemPlace::MenuSlot { menu, slot } => {
-                let gives = if matches!(
-                    menu.slot_backing(host, *slot),
-                    Some(MenuSlotBacking::Place(_))
-                ) {
-                    // The handler owns this stack. The menu's packet mirror can lag behind
-                    // writes to the backing, including earlier writes in this transaction.
+        // Resolve the menu's backing once. Transfers to a handler-owned stack ask pickup
+        // against the current handler contents, not the packet mirror.
+        let (amount, backing) = if let ItemPlace::MenuSlot { menu, slot } = self {
+            let Some(backing) = menu.slot_backing(host, *slot) else {
+                return 0;
+            };
+            let allowed = if insert {
+                let holds = if matches!(backing, MenuSlotBacking::Place(_)) {
+                    backend_of(host).and_then(|backend| {
+                        backend.menu_slot_holds_with_stack(*menu, *slot, resource.as_stack())
+                    })
+                } else {
+                    menu.slot_holds(host, *slot, resource.as_stack())
+                };
+                amount.min(holds.unwrap_or(0).saturating_sub(self.amount(host)))
+            } else {
+                let gives = if matches!(backing, MenuSlotBacking::Place(_)) {
                     self.with_stack(host, |view| view.project())
                         .flatten()
                         .and_then(|stack| {
@@ -832,8 +834,10 @@ impl ItemPlace {
                     menu.slot_gives(host, *slot)
                 };
                 if gives == Some(true) { amount } else { 0 }
-            }
-            _ => amount,
+            };
+            (allowed, Some(backing))
+        } else {
+            (amount, None)
         };
         if amount == 0 {
             return 0;
@@ -888,8 +892,8 @@ impl ItemPlace {
                 let handler = entity.capability(host, &ENTITY_ITEMS, ()).ok_or(())?;
                 through(handler, host, tx, *slot, false)
             }
-            ItemPlace::MenuSlot { menu, slot } => {
-                let (handler, index) = match menu.slot_backing(host, *slot).ok_or(())? {
+            ItemPlace::MenuSlot { menu, .. } => {
+                let (handler, index) = match backing.ok_or(())? {
                     MenuSlotBacking::Player(index) => {
                         let player = menu.player.entity();
                         (player.capability(host, &ENTITY_ITEMS, ()), index)

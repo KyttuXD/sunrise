@@ -1,0 +1,35 @@
+ids = [
+    "trait:ServerHost",
+    "trait:prelude::MenusServerHost",
+    "method:prelude::MenusServerHost::open_menu",
+    "method:prelude::MenusServerHost::menu",
+    "method:prelude::MenusServerHost::close_menu",
+    "method:prelude::MenusServerHost::menu_set_items",
+    "handle:PlayerRef::back_mod_menu_slots",
+    "handle:PlayerRef::open_mod_menu",
+    "handle:PlayerRef::open_chest_menu",
+    "handle:MenuRef::set_items",
+    "handle:MenuRef::back_slots",
+    "handle:MenuRef::close_container",
+    "handle:MenuRef::slot_holds",
+    "handle:MenuRef::slot_gives",
+    "handle:MenuRef::probe_slot_holds",
+    "handle:MenuRef::probe_slot_gives",
+    "handle:MenuRef::slot_backing",
+    "hook:menu_slot_rules",
+    "type:OpenMenuError.Stack",
+]
+why = "Vanilla 26.3 (ServerPlayer.openMenu/closeContainer, Player.containerMenu, AbstractContainerMenu.doClick/sendAllDataToRemote, CraftingMenu.slotChangedCraftingGrid/quickMoveStack, and Slot.mayPlace/mayPickup/getMaxStackSize) operates on the player's current menu. The replacement handles retain that identity through a player's own turn, including cursor return and full sync. Slot asks lend the live container and linked slots, using a prepared crafting result only with the grid it belongs to. MenuRef::slot_backing and ItemPlace::MenuSlot follow bound linked storage and return None for unbound linked slots. Following NeoForge ArmorSlot.mayPlace and ResourceHandlerSlot.mayPlace/getMaxStackSize/mayPickup, armour asks the item about the resolved player; MenuRef::slot_holds and MenuRef::slot_gives remain read-only on &dyn Host (returning None for enabled MenuSlotBacking::Place slots), while MenuRef::probe_slot_holds and MenuRef::probe_slot_gives on &mut dyn ServerHost probe the live handler (capacity_int capped at i32::MAX and simulated 1-item extraction rolled back in a transaction) and handler-backed clicks enforce probe_slot_gives. Existing menu_quick_move v6 settles only the admitted live source, with listener-owned crafting inputs and a retained remainder."
+migrate = '''
+- Remove `MenusServerHost` imports and bounds: use `ServerHost` with the `PlayerRef`/`MenuRef` methods below.
+- Handle `OpenMenuError::Stack(error)` from `PlayerRef::open_chest_menu` when a stack cannot cross the item boundary.
+- `host.open_menu(uuid, rows, title, items, replace)` -> `player.open_chest_menu(host, rows, title, items, replace)` (returns `Result<MenuRef, OpenMenuError>`; active clicks return `Err(OpenMenuError::ClickInProgress)` and invalid stacks return `Err(OpenMenuError::Stack(_))`). Resolve `player` with `host.player(uuid)` if you have a UUID.
+- `player.open_mod_menu(host, request)` now returns `Result<Option<MenuRef>, OpenMenuError>`; call `menu.container_id(host)` if a protocol window id is needed.
+- `host.menu(uuid, window)` -> `host.player(uuid)?.container_menu(host)`; compare `menu.container_id(host)` to `Some(window)` if matching a saved window id.
+- `host.close_menu(uuid)` -> obtain `menu` from the opener or `host.player(uuid).and_then(|player| player.container_menu(host))`, then call `menu.close_container(host)`. This works from the owner's action callback too. Handle `None` (no current supported menu) or `false` (the menu could not be closed, including stale handles and inventory). If a click is in progress, `true` means the close is accepted at commit; an aborted click leaves the menu open.
+- `host.menu_set_items(uuid, window, items)` -> get the opener's `MenuRef` or resolve it from the player and compare its window, then `menu.set_items(host, items)`; handle the returned `MenuItemsRefusal` as before. A full send uses that same player's live inventory and cursor, including when the edit commits during their turn.
+- `player.back_mod_menu_slots(host, window, places)` -> get that menu's `MenuRef` and call `menu.back_slots(host, places)`.
+- `menu.slot_holds(host, slot, &stack)` and `menu.slot_gives(host, slot)` stay read-only on `&dyn Host` and return `None` for enabled handler-backed slots (`MenuSlotBacking::Place`, which read-only callers can identify with `menu.slot_backing(host, slot)`). From `&mut dyn ServerHost`, call `menu.probe_slot_holds(server_host, slot, &stack)` and `menu.probe_slot_gives(server_host, slot)` (returning `Result<Option<_>, LevelReadError>`) to probe the live handler instead of a display mirror. Explicit `ItemPlace::MenuSlot` transfers keep their placement and pickup rules and use the backing handler.
+- `menu.slot_backing(host, slot)` and `ItemPlace::MenuSlot` follow bound linked storage rather than the opener's shadow slots and return `None` for unbound linked indices.
+- `menu_slot_rules` needs no callback signature change. Read linked siblings and `MenuContainer::Result` through the event context rather than the opener's own `entity.items` or a saved preview; the context now matches the click's live projection.
+'''

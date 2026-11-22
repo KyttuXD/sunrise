@@ -255,14 +255,14 @@ impl BlockEntityPart for Part {
             );
             if s.remove_and_reopen {
                 assert_eq!(
-                    host.open_menu(
-                        12,
+                    host.player(12).unwrap().open_chest_menu(
+                        host,
                         1,
                         mod_api::Text::literal("reopened by menu_quick_move"),
                         Vec::new(),
                         mod_api::MenuReplace::InPlace,
                     ),
-                    Ok(None),
+                    Err(mod_api::OpenMenuError::ClickInProgress),
                     "a tentative quick-move transaction refuses speculative screen replacement"
                 );
             }
@@ -322,12 +322,12 @@ impl mod_api::MenuPart for Part {
             return Flow::Continue;
         };
         assert_eq!(event.menu, DEPOT_MENU);
-        assert!(
-            host.menu(event.uuid, event.window).is_none(),
-            "not a native window"
-        );
         let player = host.player(event.uuid).unwrap();
-        assert!(player.container_menu(host).is_some());
+        let menu = player.container_menu(host).unwrap();
+        assert!(matches!(
+            menu.slot_backing(host, 0),
+            Some(mod_api::MenuSlotBacking::BlockEntity { .. })
+        ));
         let tx = host.transaction_current().unwrap();
         if s.write_other_block || s.write_clicked_block {
             let level = host.level("minecraft:overworld").unwrap();
@@ -422,18 +422,17 @@ impl mod_api::MenuPart for Part {
             panic!("menu button failed after editing the entity and cursor");
         }
         if script.replace_menu {
-            event
-                .subject
-                .host()
-                .open_menu(
-                    event.context.player,
+            let host = event.subject.host();
+            host.player(event.context.player)
+                .expect("the menu button's player is online")
+                .open_chest_menu(
+                    host,
                     1,
                     mod_api::Text::literal("opened by menu_button"),
                     Vec::new(),
                     mod_api::MenuReplace::InPlace,
                 )
-                .unwrap()
-                .expect("the menu button's player is online");
+                .unwrap();
         }
     }
 }
@@ -477,7 +476,11 @@ impl mod_api::MenuPart for ClickPart {
             let item =
                 mod_api::ItemStack::new(mod_api::__private::item_key("minecraft:dirt").unwrap(), 1)
                     .unwrap();
-            host.menu_set_items(event.uuid, event.window, vec![Some(item)])
+            host.player(event.uuid)
+                .unwrap()
+                .container_menu(host)
+                .unwrap()
+                .set_items(host, vec![Some(item)])
                 .unwrap();
         }
         if s.panic {
@@ -1987,7 +1990,7 @@ fn a_code_opened_menus_button_reaches_a_blocks_menu_button_only_for_its_menu_typ
                 });
                 let player = game.player(12).unwrap();
                 let key = register_test_menu(game, STATUS_MENU);
-                let window = player
+                let menu = player
                     .open_mod_menu(game, {
                         let mut request =
                             mod_api::ModMenuOpen::new(key, mod_api::Text::literal("Status"));
@@ -1997,10 +2000,8 @@ fn a_code_opened_menus_button_reaches_a_blocks_menu_button_only_for_its_menu_typ
                     })
                     .unwrap()
                     .unwrap();
-                assert_eq!(
-                    player.container_menu(game).unwrap().slot_count(game),
-                    Some(0)
-                );
+                let window = menu.container_id(game).unwrap();
+                assert_eq!(menu.slot_count(game), Some(0));
                 button(game, window, 3);
                 assert_eq!(
                     BUTTONS.get(),
