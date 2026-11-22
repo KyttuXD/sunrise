@@ -84,9 +84,10 @@ pub struct GeneralEntityTypeDeclaration {
     pub update_interval: i32,
     /// The payload schema version instances of the type carry.
     pub payload_version: u16,
-    /// The ids of loaded mods this type requires, every one of which must be
-    /// present for the declaration to stand.
-    pub required_features: Vec<String>,
+    /// The Minecraft feature flags this type requires (`EntityType.Builder.requiredFeatures`),
+    /// every one of which must be enabled in a world (`EntityType.isEnabled`) for the type to
+    /// spawn or load there.
+    pub required_features: Vec<crate::FeatureFlag>,
 }
 
 /// A placeholder to build a declaration from: empty ids, a miscellaneous type that saves, vanilla's
@@ -132,8 +133,6 @@ pub enum GeneralEntityRegistrationError {
     Duplicate,
     /// A dimension or passenger attachment component is NaN or infinite.
     NotFinite,
-    /// A required feature names no loaded mod.
-    UnknownDependency,
 }
 
 /// The general entity types mods declared.
@@ -148,9 +147,13 @@ pub trait GeneralTypesRegistrar {
     /// `EntityType` builder, NeoForge's `RegisterEvent`): give its `path`, category,
     /// finite `width` and `height` in blocks, its passenger attachment, its save and
     /// summon policy, whether it is pickable, its signed integer tracking distance and
-    /// update interval, its payload schema version and the loaded mods it requires.
+    /// update interval, its payload schema version and the Minecraft feature flags
+    /// (`FeatureFlag`) it requires (`EntityType.Builder.requiredFeatures`).
     /// A `tracking_chunks` value of zero keeps instances in server simulation
     /// without pairing them to clients.
+    ///
+    /// Returns the type's registered [`EntityTypeKey`], the same key `r.entity_type_key`
+    /// resolves for that id.
     ///
     /// Pass `false` for vanilla's plain `Entity.isPickable` default. Pass `true`
     /// to let the player's crosshair target the declared box for use and attack.
@@ -160,15 +163,19 @@ pub trait GeneralTypesRegistrar {
     /// `passenger_attachment` is the finite `[x, y, z]` passenger point in vehicle-local
     /// blocks, rotated with the vehicle's yaw. `None` uses `[0.0, height, 0.0]`.
     ///
+    /// Every flag in `required_features` must be enabled in a world (`EntityType.isEnabled`)
+    /// for instances of the type to spawn or load there. Mod dependencies belong in
+    /// `sunrise-mod.toml`, not `required_features`.
+    ///
     /// A bare `path` uses the calling mod's ID as its namespace (`robot` of `mymod` is
     /// `mymod:robot`). An explicit ID may use a namespace owned by the caller's manifest or by
     /// a content package it serves via `served_by`. Both the declaring mod and the namespace
     /// supplier must be `side = "both"`.
     ///
     /// An ID outside these namespaces, a malformed ID, a duplicate of this mod's or another's,
-    /// a non-finite dimension or attachment, a required feature naming no loaded mod, or a
-    /// declaration after the registry froze (the registration phase has ended) refuses, naming
-    /// the mod, without panicking. Invalid input is refused, never clamped.
+    /// a non-finite dimension or attachment, or a declaration after the registry froze (the
+    /// registration phase has ended) refuses, naming the mod, without panicking.
+    /// Invalid input is refused, never clamped.
     fn declare_general_entity(
         &mut self,
         path: &str,
@@ -183,6 +190,6 @@ pub trait GeneralTypesRegistrar {
         tracking_chunks: i32,
         update_interval: i32,
         payload_version: u16,
-        required_features: &[&str],
-    ) -> Result<(), GeneralEntityRegistrationError>;
+        required_features: &[crate::FeatureFlag],
+    ) -> Result<crate::EntityTypeKey, GeneralEntityRegistrationError>;
 }

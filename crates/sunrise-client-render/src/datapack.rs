@@ -80,16 +80,27 @@ impl DataPack {
         }
     }
     /// The `features.enabled` flag ids of `pack.mcmeta`
-    /// (`FeatureFlagsMetadataSection`): the flags the pack asks to turn on.
+    /// (`FeatureFlagsMetadataSection.CODEC` -> `FeatureFlagRegistry.codec` -> `Identifier.CODEC`):
+    /// the canonical feature flags the pack asks to turn on.
     pub fn features(&self) -> Vec<String> {
-        self.mcmeta()["features"]["enabled"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|f| f.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(enabled) = self.mcmeta()["features"]["enabled"].as_array() else {
+            return Vec::new();
+        };
+        let mut flags = Vec::new();
+        for entry in enabled {
+            let Some(flag) = entry.as_str().and_then(mod_api::FeatureFlag::from_id) else {
+                log::warn!(
+                    "Ignoring invalid features.enabled metadata in pack '{}'",
+                    self.id
+                );
+                return Vec::new();
+            };
+            let id = flag.id().to_owned();
+            if !flags.contains(&id) {
+                flags.push(id);
+            }
+        }
+        flags
     }
     /// The `pack.mcmeta` as JSON, empty when it is missing or unreadable.
     fn mcmeta(&self) -> serde_json::Value {

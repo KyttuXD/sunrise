@@ -6,7 +6,7 @@ Use spawn hooks to accept or reject a spawn, edit a mob before finalization, or 
 |---|---|---|
 | The spawn predicate for a type and position | `mob_spawn_placement_check` | `SpawnCheck::{Default, Succeed, Fail}` |
 | The mob's own position and obstruction checks | `mob_spawn_position_check` | `SpawnCheck::{Default, Succeed, Fail}` |
-| Just before `finalizeSpawn` | `finalize_spawn` | `Flow::Cancel`, `spawn_cancelled`, a new `difficulty`, edits to `mob`, a new `group` |
+| Before `finalizeSpawn`, or after loading a spawner's configured mob | `finalize_spawn` | `Flow::Cancel`, `spawn_cancelled`, a new `difficulty`, edits to `mob`, a new `group` |
 | Each tick, before a mob's `checkDespawn` | `mob_despawn` | `Despawn::{Default, Allow, Deny}` |
 
 ## Registering a spawn predicate
@@ -221,14 +221,13 @@ you need a list after the call, collect the handles you need in your visitor.
 ## Checking a spawn
 
 `mob_spawn_placement_check` and `mob_spawn_position_check` both get the `level` the mob would join (a `LevelRef`, so a
-listener can read the blocks around `pos` through the host) and the `spawner` that asked: `Spawner::Block { pos }` for a
-spawner block, `Spawner::Trial { pos }` for a trial spawner, and `None` when no block asked, including a spawner
-minecart. Set `*event.result` to `SpawnCheck::Succeed` or `Fail` to override that
-check; `Default` keeps the check's own answer.
+listener can read the blocks around `pos` through the host). Set `*event.result` to `SpawnCheck::Succeed` or `Fail` to
+override that check; `Default` keeps the check's own answer.
 
 In `mob_spawn_placement_check` version 2, `event.default_result` is the effective predicate result. It can differ
 from vanilla even for a vanilla type, because registrations can add to or replace its predicate. The hook fires
-after the predicates at `SpawnPlacements.checkSpawnRules`. For a probabilistic decision, draw from `event.random`,
+after the predicates at `SpawnPlacements.checkSpawnRules`. Like NeoForge's `SpawnPlacementCheck`, it has no spawner
+field; inspect `event.reason` instead. For a probabilistic decision, draw from `event.random`,
 the caller's live `&mut dyn RandomSource` lent to each listener in turn. Reassigning `event.random` only changes that
 listener's local reference; draws from the caller's stream and writes through `event.result` carry to the next
 listener. Keeping `Default` or refusing a spawn does not undo any draws, and this hook does not decide later checks.
@@ -248,11 +247,15 @@ fn mob_spawn_placement_check(&self, _: &dyn mod_api::Host, event: &mut mod_api::
 }
 ```
 
-The position check also gets `event.mob`, the mob about to spawn, as an `UnspawnedMobRef` with the same reads as
-`finalize_spawn`'s (no editor: the hook only reads). Vanilla creates the mob before this check; Sunrise creates it there
-only when the hook has a listener, the same way the spawn would, and the spawn then goes on with that very mob, so what
-the listener read is what joins the level. A refused check drops the mob: it never joins the level. Creating it draws
-nothing from the level's random, so a listener that answers `Default` changes no draw.
+In `mob_spawn_position_check` version 2 (NeoForge's `MobSpawnEvent.PositionCheck`), `event.spawner` is
+`Some(Spawner::Block { pos })` for a monster spawner block, `Some(Spawner::Minecart { entity })` for a spawner
+minecart, and `None` for natural spawning and chunk generation. A minecart's `entity.kind(host)` and
+`entity.position(host)` read the live cart at this spawn attempt. Like NeoForge, trial spawners do not fire
+`mob_spawn_position_check`. The position check also gets `event.mob`, the mob about to spawn, as an `UnspawnedMobRef`
+with the same reads as `finalize_spawn`'s (no editor: the hook only reads). Vanilla creates the mob before this check;
+Sunrise creates it there only when the hook has a listener, the same way the spawn would, and the spawn then goes on
+with that very mob, so what the listener read is what joins the level. A refused check drops the mob: it never joins
+the level. Creating it draws nothing from the level's random, so a listener that answers `Default` changes no draw.
 
 ```rust,ignore
 fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobSpawnPositionCheckEvent<'_>) {
@@ -264,11 +267,14 @@ fn mob_spawn_position_check(&self, host: &dyn mod_api::Host, event: &mut mod_api
 
 Where the game does not create the mob fresh, the handle answers only `kind` and `position` (the rest is
 `UnspawnedMobError::Unsupported`): chunk generation's packs, which the world generator creates and finalizes after the
-check, and a spawner or trial spawner whose spawn data carries entity data, which the game loads after the tick.
+check, and configured spawner NBT, whose loaded mob is available in `finalize_spawn`.
 
 ## Stopping a spawn or leaving a mob plain
 
-`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips finalization: the mob spawns, but with no equipment, attributes or class setup. Setting `event.spawn_cancelled = true` adds no mob at all.
+`finalize_spawn` has two cancels. Returning `Flow::Cancel` skips vanilla finalization (its setup and random rolls),
+not the spawn itself. Setting `event.spawn_cancelled = true` adds no mob at all. `event.spawner` carries the shared
+`Option<Spawner>` identity (`Spawner::Block { pos }`, `Spawner::Trial { pos }`, or `Spawner::Minecart { entity }`,
+matching NeoForge's `FinalizeSpawnEvent.getSpawner`). The minecart is readable through the same host as in the position check.
 
 ```rust,ignore
 fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpawnEvent<'_>) -> mod_api::Flow {
@@ -279,7 +285,12 @@ fn finalize_spawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::FinalizeSpa
 }
 ```
 
-`finalize_spawn` fires only where vanilla calls `finalizeSpawn`, so a breeding, an infested block's silverfish or a thrown egg's chick does not tell it.
+`finalize_spawn` version 2 also fires when a monster spawner block, spawner minecart, or trial spawner uses
+configured mob NBT. Its `mob` and `edits` reach the loaded mob. Vanilla finalization does not run on that mob,
+regardless of the returned `Flow`; use `spawn_cancelled` to reject the attempt. On spawners, vanilla finalization
+(when unconfigured and not cancelled with `Flow::Cancel`), trial-spawner persistence, and any configured equipment
+table roll still run before `spawn_cancelled` vetoes admission. Outside spawners, the hook fires only where
+vanilla calls `finalizeSpawn`: breeding, an infested block's silverfish and a thrown egg's chick do not fire it.
 
 For `/summon minecraft:ender_dragon` without NBT, command placement starts at zero
 rotation and consumes no random yaw draw. Skipping finalization also skips its
@@ -326,7 +337,7 @@ See [the `finalize_spawn` contract](https://github.com/sunrise-org/sunrise/blob/
 
 ## Changing how large a spawn group grows
 
-A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, why and from what it spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
+A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size` (NeoForge's `SpawnClusterSizeEvent`), which gets the read-only host, the mob just spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
 
 ```rust,ignore
 struct ZombiePacks;
@@ -336,8 +347,6 @@ impl mod_api::EntityPart for ZombiePacks {
         &self,
         _: &dyn mod_api::Host,
         _: mod_api::UnspawnedMobRef,
-        _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
         vanilla: u32,
     ) -> Option<u32> {
         Some(vanilla * 2)
@@ -393,7 +402,7 @@ Every mod is asked about every key, so a mod ignores keys it does not own. See [
 
 - `SpawnBody::Thrown { item }`: a thrown item projectile (vanilla's snowball, egg, ender pearl, experience bottle, wind charge, splash or lingering potion, or a content mod's thrown type) through `Projectile.spawnProjectile`, the route a thrown snowball takes. Its owner is set before it joins (`Projectile.setOwner`: hit credit, saved as `Owner`, and the shot keeps clear of its owner until it has left the owner's box), `projectile_launch` fires, and it carries one of `item`. With no `rotation` it faces along its velocity, as `Projectile.shoot` leaves it. Its owner is a player, a mob, a boat or a minecart: the shot needs the owner's collision identity to keep clear of it, so any other owner refuses the spawn.
 - `SpawnBody::Living { reason }`: a mob (vanilla's or a content living type) through `EntityType.spawn`, the route `/summon` takes: made as any of its type is, Parts, attachments and `entity_constructing` included, then `finalize_spawn` and `finalizeSpawn` run with `reason`, and it joins the level (`entity_join_level`), not persistent. With no `rotation` it takes `EntityType.spawn`'s yaw. Both calls refuse a type that is disallowed in Peaceful when the level is Peaceful, before the mob is built or any spawn hooks run. A mob takes no owner. `kind` resolves as `/summon`'s does (`cow` is `minecraft:cow`). The ender dragon takes its own creation, facing `rotation`'s yaw; it has no velocity or pitch here, so a dragon given either is refused.
-- `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
+- `SpawnBody::General`: a row of a general type a mod declared (`declare_general_entity`), with a fresh UUID and the type's declared payload version, through the insertion `/summon` and chunk loading share. It is admitted as one record (no `entities_load`: no save was read) and joins as a fresh spawn. Every declared `FeatureFlag` must be enabled in the world. For example, check `level.enabled_features(host).is_some_and(|flags| flags.contains_flag(FeatureFlag::RedstoneExperiments))`, or use `flags.contains_all(&required)` for a slice of requirements. Its owner is kept on the row and saved as `Owner`. Its state is its attachments: write them on the returned handle inside the same transaction, and `entity_join_level` and the row's first tracking see them.
 
 A general row can move to another position in its level through `EntityRef::teleport_to`. A row teleported on its own dismounts; a teleported vehicle takes its riders with it. Removing the vehicle dismounts its riders and leaves them in the level. `EntityRef::set_rotation` turns a general row without moving or dismounting it; the new angles reach clients through ordinary tracking.
 
@@ -409,7 +418,7 @@ row reacts to pistons: pass `None` for `PushReaction::PushPull`, or
 reaction is readable on either side.
 
 `EntityRef::owner(host)` reads the owner back (`TraceableEntity.getOwner`) for a projectile or a general row (`ProjectileRef::owner` answers the same for a projectile): a general type's own tick uses it to skip its shooter and to name the attacker of the damage it deals. A spawn is refused for a kind of another family than its body, a position, velocity or rotation that isn't finite, a position outside `Level.isInSpawnableBounds` or in an unloaded chunk, an owner that is stale, in another level, or without a collision identity for a thrown spawn, a level not in place, a client, or a mod that cancelled the spawn or kept the entity out.
-Inside a transaction the join waits for the root commit, so a spawn a mod then keeps out still returns a handle, which reads stale from the commit on. The level's spawn limits, flags and spawn rules don't apply, as they don't to `/summon`; nor does a general type's `summonable`, which is `/summon`'s alone. Items, experience and block drops have their own calls (`spawn_item`, `award_experience`, `pop_resource`), and any other entity `summon`.
+Inside a transaction the join waits for the root commit, so a spawn a mod then keeps out still returns a handle, which reads stale from the commit on. The level's natural spawning limits, spawn flags and spawn rules don't apply, as they don't to `/summon`; nor does a general type's `summonable`, which is `/summon`'s alone. A general type's required Minecraft feature flags must be enabled in the world. Items, experience and block drops have their own calls (`spawn_item`, `award_experience`, `pop_resource`), and any other entity `summon`.
 
 A level's natural spawning (`NaturalSpawner.spawnForChunk`) also has a policy a mod can change:
 
