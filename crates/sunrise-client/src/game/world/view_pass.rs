@@ -388,11 +388,18 @@ pub(in crate::game) mod tests {
         let (mut game, rx, mut all) = stream_the_nether(&mut resources, "view-pass");
         assert!(all.opened, "the Nether was opened on the client");
         assert_eq!(all.chunks, square(), "the area's chunks, wrapped");
+        let nether = game.level(Dim::Nether.id()).unwrap();
+        let chunk = game.chunk(nether, [40, 40]).unwrap();
+        assert_eq!(chunk.resend(&mut game), Ok(()));
         // Kept loaded for 40 more ticks, its clock the server's.
+        let mut resent = Vec::new();
         for _ in 0..40 {
             game.tick_server(false).unwrap();
-            all.times.extend(sent(&rx).times);
+            let updates = sent(&rx);
+            all.times.extend(updates.times);
+            resent.extend(updates.chunks);
         }
+        assert_eq!(resent, [(40, 40)], "resend goes to the viewed-level holder");
         let world = game.levels.parked_world(Dim::Nether).unwrap();
         assert!(
             square().iter().all(|c| world.chunks.contains_key(c)),

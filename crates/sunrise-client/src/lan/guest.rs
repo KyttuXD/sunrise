@@ -333,6 +333,9 @@ pub struct Guest {
     pub load_timeout: u8,
     // Chunks.
     pub center: Option<(i32, i32)>,
+    /// View distance changed since `update_view` last ran, so the next view pass
+    /// must prune/requeue even when `center` stayed the same.
+    pub(super) view_dirty: bool,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// The near chunks the mods were told this player watches
     /// (`lan::chunk_watch`); empty while no mod listens.
@@ -841,6 +844,7 @@ impl Guest {
             loading: true,
             load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
+            view_dirty: false,
             sent_chunks: Default::default(),
             watched: Default::default(),
             chunk_queue: Vec::new(),

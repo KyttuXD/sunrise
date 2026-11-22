@@ -207,7 +207,7 @@ fn custom_close_still_eligible(
 /// A level that is not in place: every per-level field of `Game`.
 pub(super) struct Parked {
     pub(super) world: World,
-    streaming: Streaming,
+    pub(super) streaming: Streaming,
     locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
@@ -1558,6 +1558,11 @@ impl Game<'_> {
         if result.is_ok() {
             result = self.run_view_passes(&order);
         }
+        // Parked levels that did not tick or run a view pass still advance any light
+        // work scheduled on them directly (for example via `LevelRef::relight_chunks`).
+        if result.is_ok() {
+            self.update_parked_light(&order);
+        }
         if let Some(&first) = order.first()
             && self.dim != first
         {
@@ -1748,6 +1753,30 @@ impl Game<'_> {
             .collect()
     }
 
+    /// Advance light jobs queued on parked levels that neither ticked nor ran a view pass
+    /// this server tick, without switching `self.dim` or running chunk generation/unloads.
+    pub(super) fn update_parked_light(&mut self, ticked: &[Dim]) {
+        let viewed_active = self.lan.as_ref().is_some_and(|h| h.hub.viewed.active());
+        let pending: Vec<Dim> = self
+            .levels
+            .parked
+            .iter()
+            .filter_map(|(&dim, parked)| {
+                (!ticked.contains(&dim)
+                    && !(viewed_active && self.needs_view_pass(dim))
+                    && !parked.streaming.paused
+                    && parked.streaming.has_pending_light(&parked.world))
+                .then_some(dim)
+            })
+            .collect();
+        for dim in pending {
+            self.ask_edited_light_emission(dim);
+            if let Some(parked) = self.levels.parked.get_mut(&dim) {
+                parked.streaming.update_light(&mut parked.world);
+            }
+        }
+    }
+
     /// Whether saving is currently disabled (`/save-off`, `ServerLevel.noSave`).
     fn saving_disabled(&self) -> bool {
         self.server_lists
@@ -1761,14 +1790,11 @@ impl Game<'_> {
         let mut active = self.levels_to_tick();
         // A level a viewed area names, ticked or not, or one a client still holds chunks of.
         active.extend(Dim::all().into_iter().filter(|d| self.needs_view_pass(*d)));
-        // A vehicle waiting there for its rider's arrival in another level.
-        active.extend(
-            self.levels
-                .parked
-                .keys()
-                .copied()
-                .filter(|d| self.vehicle_waits_in(*d)),
-        );
+        // A vehicle waiting for its rider, or light work still running on a parked level.
+        active.extend(self.levels.parked.iter().filter_map(|(&dim, parked)| {
+            (self.vehicle_waits_in(dim) || parked.streaming.has_pending_light(&parked.world))
+                .then_some(dim)
+        }));
         active
     }
 

@@ -981,7 +981,7 @@ impl Hub {
             g.view_distance = i32::from(g.info.view_distance)
                 .max(2)
                 .min(self.config.view_distance);
-            g.center = None;
+            g.view_dirty = true;
         });
     }
     /// PlayerList.setSimulationDistance.
@@ -2635,6 +2635,7 @@ impl Hub {
                 ctx.world.connection_group_log = None;
                 let _ = ctx.world.light_log.take();
                 ctx.world.bulk_log.clear();
+                ctx.world.chunk_resends.clear();
             }
             return events;
         }
@@ -3062,11 +3063,13 @@ impl Hub {
         let (cx, cz) = self.guests[i].chunk();
         let r = self.guests[i].view_distance;
         self.guests.update(i, |g| {
-            if g.center == Some((cx, cz)) {
+            if g.center == Some((cx, cz)) && !g.view_dirty {
                 return;
             }
+            let moved = g.center != Some((cx, cz));
             g.center = Some((cx, cz));
-            if g.center_sent.take() != Some((cx, cz)) {
+            g.view_dirty = false;
+            if moved && g.center_sent.take() != Some((cx, cz)) {
                 g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
                     x: cx,
                     z: cz,
@@ -4398,7 +4401,7 @@ impl Hub {
                             let new = Box::new(g.info.clone());
                             events.push(HostEvent::ClientInformation(conn, old, new));
                         }
-                        g.center = None;
+                        g.view_dirty = true;
                         let hat = g.info.model_customisation & 0x40 != 0;
                         (was_hat, hat, g.uuid)
                     });
@@ -5042,6 +5045,7 @@ impl Hub {
             // The client's new body needs the full replacement effect state.
             g.sent_effects.clear();
             g.center = None;
+            g.view_dirty = false;
             g.sent_chunks.clear();
             g.chunk_queue.clear();
             g.tracker.clear();
@@ -5080,6 +5084,7 @@ impl Hub {
                 z: cz,
             }));
             g.center = None;
+            g.view_dirty = false;
             g.center_sent = Some((cx, cz));
             // ServerPlayer.initInventoryMenu.
         });
@@ -5158,6 +5163,7 @@ impl Hub {
             // The load timer is not restarted: vanilla resets the client's loaded state on death and
             // respawn only, and covers a level change with its separate `isChangingDimension` term.
             g.center = None;
+            g.view_dirty = false;
             g.yaw = yaw;
             if let Some(pitch) = pitch {
                 g.pitch = pitch;
@@ -5525,6 +5531,111 @@ mod tests {
         };
         assert_eq!(machine.revision(), revision);
         assert_eq!(machine.nbt, Compound::from([progress]));
+    }
+
+    #[test]
+    fn has_chunk_resend_target_checks_owning_dimension_sent_chunks() {
+        let (mut hub, _rx) = hub_with_a_guest();
+        // Guest 0 is placed in overworld on loopback TCP, with no tracking view or sent chunks yet.
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (2, 3)));
+        assert!(!hub.has_chunk_resend_target("minecraft:the_nether", (2, 3)));
+
+        // A sent entry without an applied tracking view is not tracked (`Guest::tracks_chunk`).
+        hub.guests.update(0, |g| _ = g.sent_chunks.insert((2, 3)));
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (2, 3)));
+
+        // Inside the applied view, ownership belongs only to the guest's dimension.
+        hub.guests.update(0, |g| g.center = Some((2, 3)));
+        assert!(hub.has_chunk_resend_target("minecraft:overworld", (2, 3)));
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (2, 4)));
+        assert!(!hub.has_chunk_resend_target("minecraft:the_nether", (2, 3)));
+
+        // Switching the guest to the Nether moves the sent-chunk ownership to that dimension.
+        hub.guests.update(0, |g| {
+            g.dimension = "minecraft:the_nether".into();
+        });
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (2, 3)));
+        assert!(hub.has_chunk_resend_target("minecraft:the_nether", (2, 3)));
+    }
+
+    #[test]
+    fn chunk_resend_respects_reduced_view_distance_before_update_view() {
+        let (mut hub, rx) = hub_with_a_guest();
+        hub.encoder = ChunkEncoder::new(
+            [(Arc::<str>::from("minecraft:air"), false)],
+            &sunrise_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+            Default::default(),
+        );
+        hub.guests.update(0, |g| {
+            g.center = Some((0, 0));
+            g.sent_chunks.extend([(0, 0), (5, 0), (6, 0)]);
+        });
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        for key in [(0, 0), (5, 0), (6, 0)] {
+            world
+                .chunks
+                .insert(key, Arc::new(Chunk::empty(key.0, key.1)));
+        }
+        assert!(hub.has_chunk_resend_target("minecraft:overworld", (0, 0)));
+        assert!(hub.has_chunk_resend_target("minecraft:overworld", (5, 0)));
+        assert!(hub.has_chunk_resend_target("minecraft:overworld", (6, 0)));
+
+        world
+            .chunk_resends
+            .insert((0, 0), crate::world::ChunkResend::Ready);
+        world
+            .chunk_resends
+            .insert((5, 0), crate::world::ChunkResend::Ready);
+        world
+            .chunk_resends
+            .insert((6, 0), crate::world::ChunkResend::WaitingLight);
+
+        // Shrinking the radius updates the tracking view immediately without waiting for
+        // `update_view` to prune `sent_chunks`.
+        hub.set_view_distance(2);
+        while rx.try_recv().is_ok() {}
+        assert_eq!(hub.guests[0].center, Some((0, 0)));
+        assert!(hub.guests[0].sent_chunks.contains(&(5, 0)));
+        assert!(hub.has_chunk_resend_target("minecraft:overworld", (0, 0)));
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (5, 0)));
+        assert!(!hub.has_chunk_resend_target("minecraft:overworld", (6, 0)));
+
+        hub.broadcast_block_changes(&mut world);
+        let mut resent = Vec::new();
+        while let Ok(crate::lan::Out::Packet(body)) = rx.try_recv() {
+            let mut r = sunrise_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            if let Ok(C::LevelChunkWithLight(packet)) = C::decode(id, r.rest()) {
+                resent.push((packet.x, packet.z));
+            }
+        }
+        assert_eq!(resent, vec![(0, 0)]);
+        assert!(
+            world.chunk_resends.is_empty(),
+            "waiting resend outside the reduced view is dropped"
+        );
+
+        // `update_view` still prunes the columns that left the view even with the same centre.
+        hub.update_view(0);
+        let mut forgotten = Vec::new();
+        let mut saw_center = false;
+        while let Ok(crate::lan::Out::Packet(body)) = rx.try_recv() {
+            let mut r = sunrise_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            match C::decode(id, r.rest()).unwrap() {
+                C::ForgetLevelChunk(packet) => forgotten.push((packet.pos[0], packet.pos[1])),
+                C::SetChunkCacheCenter(_) => saw_center = true,
+                _ => {}
+            }
+        }
+        forgotten.sort_unstable();
+        assert_eq!(forgotten, vec![(5, 0), (6, 0)]);
+        assert!(!saw_center, "radius change at the same centre keeps centre");
+        assert!(hub.guests[0].sent_chunks.contains(&(0, 0)));
+        assert!(!hub.guests[0].sent_chunks.contains(&(5, 0)));
+        assert!(!hub.guests[0].sent_chunks.contains(&(6, 0)));
     }
 
     #[test]

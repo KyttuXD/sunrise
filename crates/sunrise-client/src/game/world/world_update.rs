@@ -135,7 +135,7 @@ impl Game<'_> {
             }
         }
         self.observe_light_edits();
-        self.ask_edited_light_emission();
+        self.ask_edited_light_emission(self.dim);
         if let (Some(map), Some(p), Some(lod)) = (&self.lod_blue_map, &self.player, &mut self.lod) {
             map.set_center(p.position.x.floor() as i32, p.position.z.floor() as i32);
             for change in map.take_changed() {

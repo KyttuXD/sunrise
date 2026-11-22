@@ -58,10 +58,12 @@ pub trait LevelChunksBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelChunksBackendMut {
     /// Side: server.
-    /// Sends the loaded chunk whole again, with its light, block entities and biomes as they are
-    /// at the end of the tick, to every player watching it (`chunk_watchers`), as a chunk
-    /// `edit_blocks` changed is sent: one packet instead of a block update per changed block.
-    /// Ok with nothing sent when no player is in the level. Each refusal queues nothing and is
-    /// named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` and `NotLoaded`.
+    /// Queues the loaded chunk of any open server level (active or parked) to go whole again
+    /// with its light, block entities and biomes when that level broadcasts changes after the
+    /// column's pending light work (`ChunkMap.waitForLightBeforeSending`). Only players who
+    /// currently hold the chunk receive it, including in a viewed level (`ChunkMap.getPlayers`,
+    /// `PlayerChunkSender`); no holders at the time of the call means `Ok(())` with nothing queued.
+    /// Each refusal queues nothing and is named by `ChunkRefusal`: `Stale` (stale handle or
+    /// unloaded level), `Client` and `NotLoaded`.
     fn chunk_resend(&mut self, chunk: ChunkRef) -> Result<(), ChunkRefusal>;
 }
