@@ -3,6 +3,16 @@ ids = [
     "type:StackList",
     "trait:ResourceHandler",
     "method:ResourceHandler::next_transfer_index",
+    "method:ResourceHandler::uniform_slots_end",
+    "method:ResourceHandler::insert_at_in_range",
+    "type:AttachmentError",
+    "type:AttachmentError.StackEncoding",
+    "capability:sunrise:storage",
+    "fn:resource_util::is_full",
+    "fn:resource_util::is_valid",
+    "fn:block::fluid_util::try_pickup_fluid",
+    "fn:block::fluid_util::try_place_fluid",
+    "fn:block::fluid_util::first_stack_contained",
     "method:ResourceHandler::extract",
     "method:ResourceHandler::insert",
     "fn:resource_util::move_resources",
@@ -27,6 +37,13 @@ an attached range that cannot accept the resource. Vanilla's ContainerHelper.loa
 indices without sizing storage by the largest index. The stock codecs keep the existing Slot and
 amount fields as signed NBT Ints, and vanilla's ListTag.write uses a signed Int for the serialized
 list length. Attachment sync keeps its existing payload limits.
+NeoForge's ResourceHandlerUtil.isFull and isValid are independent queries. Uniform attached
+ranges answer them without walking each empty slot. NeoForge's FluidUtil.tryPickupFluid,
+tryPlaceFluid and getFirstStackContained walk source tanks in order. Those walks and the
+STORAGE adapter skip known empty gaps; the adapter retains vanilla SimpleContainer.addItem's
+matching-stacks-before-empty-slots order. A refused attachment write skips only the affected
+handler's indices, including a suffix outside the existing signed NBT Int slot encoding
+(vanilla's IntTag.write).
 """
 migrate = """
 Replace `AttachedItems::new(&KEY, holder, size, capacity, valid)?` or `.unwrap()` on that
@@ -45,4 +62,13 @@ inserting)` and forward it to the wrapped handler (mapping bounds and the return
 For a custom sparse handler, implement it to return the earliest candidate in the supplied range:
 with `None`, skip slots that hold nothing; with `Some(&resource)`, skip slots that cannot insert
 that resource. Return `None` when no candidate remains.
+For delegating implementations, also forward `uniform_slots_end(host, range)` and
+`insert_at_in_range(host, tx, range, resource, amount)`, remapping the range and returned
+exclusive end or next index as needed. A custom handler can override `uniform_slots_end`
+only where `capacity` and `is_valid` agree throughout a range, and can return a next index
+past the next slot from `insert_at_in_range` only on a refusal shared by the skipped slots.
+If you match `AttachmentError::Encode` from `ITEM_STACKS` or `FLUID_STACKS`, match
+`AttachmentError::StackEncoding { index }` for stock slot or stack encoding refusals instead.
+Calls to `resource_util::is_full`, `resource_util::is_valid`, `fluid_util::try_pickup_fluid`,
+`fluid_util::try_place_fluid`, `fluid_util::first_stack_contained` and `STORAGE` stay the same.
 """

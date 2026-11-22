@@ -187,6 +187,10 @@ impl<R> ResourceHandler<R> for Capability<dyn ResourceHandler<R>> {
         self.handler.next_transfer_index(host, indices, inserting)
     }
 
+    fn uniform_slots_end(&self, host: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+        self.handler.uniform_slots_end(host, indices)
+    }
+
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         self.handler.resource(host, index)
     }
@@ -223,6 +227,22 @@ impl<R> ResourceHandler<R> for Capability<dyn ResourceHandler<R>> {
         // Keep the raw answer so the caller knows to abort; this boundary knows whom to warn about.
         let _ = self.checked(answer, amount, &index);
         answer
+    }
+
+    fn insert_at_in_range(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        indices: Range<usize>,
+        resource: &R,
+        amount: u32,
+    ) -> (u32, usize) {
+        let index = indices.start;
+        let (answer, next) = self
+            .handler
+            .insert_at_in_range(host, tx, indices, resource, amount);
+        let _ = self.checked(answer, amount, &index);
+        (answer, next)
     }
 
     fn extract_at(

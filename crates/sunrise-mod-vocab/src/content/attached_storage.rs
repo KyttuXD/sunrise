@@ -9,7 +9,10 @@ use crate::{
     FluidIdentity, FluidResource, FluidStack, Holder, Identifier, ItemResource, ItemStack,
     ResourceHandler, ServerHost, Tag, Transaction,
 };
-use std::{collections::BTreeMap, ops::Range};
+use std::{
+    collections::BTreeMap,
+    ops::{ControlFlow, Range},
+};
 use sunrise_core::nbt::JavaString;
 
 /// The contents of an [`AttachedStacks`], keyed by slot or tank index. Missing indices are
@@ -57,6 +60,11 @@ pub type AttachedItems = AttachedStacks<ItemResource>;
 /// Fluid tanks in an attachment (`FluidStacksResourceHandler`); its codec is [`FLUID_STACKS`].
 // no wire: an alias of AttachedStacks, a mod-side handler.
 pub type AttachedFluids = AttachedStacks<FluidResource>;
+
+enum StackWriteError {
+    Read,
+    Write(AttachmentError),
+}
 
 impl<R: StackedResource> AttachedStacks<R> {
     /// `size` indices of `attachment` on `holder`, each holding up to `capacity` of what `valid`
@@ -115,15 +123,17 @@ impl<R: StackedResource> AttachedStacks<R> {
         self.read_stacks(host, |list| list.get(&index).cloned())
             .flatten()
     }
-    /// Index `index` set to `now`: whether the write went through. Indices past the handler's
-    /// `size` that the holder keeps are preserved, so a write through a smaller view never
-    /// deletes them.
-    fn write(&self, host: &mut dyn ServerHost, index: usize, now: Option<(R, u32)>) -> bool {
+    /// Update just this index, preserving entries outside this view's logical size.
+    fn write(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        now: Option<(R, u32)>,
+    ) -> Result<(), StackWriteError> {
         let mut list = self
             .attachment
             .get_existing(host, self.holder)
-            .ok()
-            .flatten()
+            .map_err(|_| StackWriteError::Read)?
             .unwrap_or_default();
         if let Some(held) = now.filter(|(_, amount)| *amount > 0) {
             list.insert(index, held);
@@ -131,9 +141,50 @@ impl<R: StackedResource> AttachedStacks<R> {
             list.remove(&index);
         }
         if list.is_empty() {
-            self.attachment.remove(host, self.holder).is_ok()
+            self.attachment.remove(host, self.holder).map(|_| ())
         } else {
-            self.attachment.set(host, self.holder, list).is_ok()
+            self.attachment.set(host, self.holder, list)
+        }
+        .map_err(StackWriteError::Write)
+    }
+
+    /// A refusal to write the attachment can rule out the rest of this handler's indices.
+    fn insert_index(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: &R,
+        amount: u32,
+    ) -> ControlFlow<(), u32> {
+        if !self.is_valid(host, index, resource) {
+            return ControlFlow::Break(());
+        }
+        let room = self.capacity(host, index, Some(resource));
+        let have = match self.at(host, index) {
+            Some((held, _)) if held != *resource => return ControlFlow::Continue(0),
+            Some((_, have)) => have,
+            None => 0,
+        };
+        let went = amount.min(room.saturating_sub(have));
+        if went == 0 {
+            return ControlFlow::Continue(0);
+        }
+        match self.write(host, index, Some((resource.clone(), have + went))) {
+            Ok(()) => ControlFlow::Continue(went),
+            // A custom codec may refuse just this index. With a stock codec, an in-range
+            // top-up may be too large to encode even if the same offer fits an empty slot.
+            Err(StackWriteError::Write(AttachmentError::Encode | AttachmentError::Decode)) => {
+                ControlFlow::Continue(0)
+            }
+            Err(StackWriteError::Write(AttachmentError::StackEncoding { index: failed }))
+                if failed == index && have > 0 && i32::try_from(index).is_ok() =>
+            {
+                ControlFlow::Continue(0)
+            }
+            // A failed read or unavailable holder affects the whole attachment. The stock
+            // codec also rules out the suffix on a Slot beyond its NBT Int, an unencodable
+            // unchanged entry, or failure encoding this offer even in an empty slot.
+            Err(_) => ControlFlow::Break(()),
         }
     }
 }
@@ -160,6 +211,9 @@ impl<R: StackedResource> ResourceHandler<R> for AttachedStacks<R> {
             list.range(indices.clone()).next().map(|(&index, _)| index)
         })
         .flatten()
+    }
+    fn uniform_slots_end(&self, _: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+        indices.end.min(self.size)
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         self.at(host, index).map(|(resource, _)| resource)
@@ -189,19 +243,24 @@ impl<R: StackedResource> ResourceHandler<R> for AttachedStacks<R> {
         resource: &R,
         amount: u32,
     ) -> u32 {
-        if !self.is_valid(host, index, resource) {
-            return 0;
+        self.insert_index(host, index, resource, amount)
+            .continue_value()
+            .unwrap_or(0)
+    }
+    fn insert_at_in_range(
+        &self,
+        host: &mut dyn ServerHost,
+        _: &Transaction,
+        indices: Range<usize>,
+        resource: &R,
+        amount: u32,
+    ) -> (u32, usize) {
+        if indices.is_empty() {
+            return (0, indices.end);
         }
-        let room = self.capacity(host, index, Some(resource));
-        let have = match self.at(host, index) {
-            Some((held, _)) if held != *resource => return 0,
-            Some((_, have)) => have,
-            None => 0,
-        };
-        match amount.min(room.saturating_sub(have)) {
-            0 => 0,
-            went if self.write(host, index, Some((resource.clone(), have + went))) => went,
-            _ => 0,
+        match self.insert_index(host, indices.start, resource, amount) {
+            ControlFlow::Continue(went) => (went, indices.start + 1),
+            ControlFlow::Break(()) => (0, indices.end),
         }
     }
     fn extract_at(
@@ -217,7 +276,7 @@ impl<R: StackedResource> ResourceHandler<R> for AttachedStacks<R> {
         };
         match amount.min(have) {
             0 => 0,
-            came if self.write(host, index, Some((held, have - came))) => came,
+            came if self.write(host, index, Some((held, have - came))).is_ok() => came,
             _ => 0,
         }
     }
@@ -295,7 +354,8 @@ impl EnergyHandler for AttachedEnergy {
 /// The codec of an [`AttachedItems`] attachment: `{stacks: [{Slot, id, count, components}]}`,
 /// only occupied slots, as in vanilla's `ContainerHelper.saveAllItems`. In this format `Slot`
 /// and `count` are NBT `Int`s. An occupied index or amount above `i32::MAX` fails encoding
-/// rather than wrapping; a negative saved index fails decoding.
+/// with [`AttachmentError::StackEncoding`] rather than wrapping; a negative saved index fails
+/// decoding.
 pub const ITEM_STACKS: AttachmentCodec<StackList<ItemResource>> = AttachmentCodec {
     encode: |list| {
         encode_stacks(list, |item, amount| {
@@ -337,8 +397,8 @@ pub const ITEM_STACKS: AttachmentCodec<StackList<ItemResource>> = AttachmentCode
 
 /// The codec of an [`AttachedFluids`] attachment: `{stacks: [{Slot, id, amount, components}]}`.
 /// As with [`ITEM_STACKS`], only occupied indices are saved. `Slot` and `amount` are NBT
-/// `Int`s: an occupied index or amount above `i32::MAX` fails encoding, and a negative saved
-/// index fails decoding.
+/// `Int`s: an occupied index or amount above `i32::MAX` fails with
+/// [`AttachmentError::StackEncoding`], and a negative saved index fails decoding.
 pub const FLUID_STACKS: AttachmentCodec<StackList<FluidResource>> = AttachmentCodec {
     encode: |list| {
         encode_stacks(list, |fluid, amount| {
@@ -386,9 +446,9 @@ fn encode_stacks<R>(
     entry: impl Fn(&R, u32) -> Option<Compound>,
 ) -> Result<Compound, AttachmentError> {
     let mut stacks = Vec::new();
-    for (&slot, (resource, amount)) in list {
-        let slot = i32::try_from(slot).map_err(|_| AttachmentError::Encode)?;
-        let mut saved = entry(resource, *amount).ok_or(AttachmentError::Encode)?;
+    for (&index, (resource, amount)) in list {
+        let slot = i32::try_from(index).map_err(|_| AttachmentError::StackEncoding { index })?;
+        let mut saved = entry(resource, *amount).ok_or(AttachmentError::StackEncoding { index })?;
         saved.insert("Slot".into(), Tag::Int(slot));
         stacks.push(Tag::Compound(saved));
     }

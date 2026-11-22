@@ -255,7 +255,7 @@ fn saved_slots_use_the_nbt_int_range_without_expanding_gaps() {
     list.insert(last + 1, ((), 1));
     assert_eq!(
         encode_stacks(&list, encode_entry),
-        Err(AttachmentError::Encode)
+        Err(AttachmentError::StackEncoding { index: last + 1 })
     );
 
     saved.insert(
@@ -394,6 +394,90 @@ fn bulk_insert_skips_a_sparse_range_that_rejects_the_resource() {
 }
 
 #[test]
+fn bulk_insert_refuses_a_view_beyond_the_stock_codec() {
+    crate::testing::with_parts_registration_probe(
+        Default::default(),
+        |_| (),
+        |_, ()| {
+            resolve(&[], &["minecraft:water"]);
+            let mut host = FakeHost::new();
+            let water = fluid("minecraft:water");
+            let tanks = AttachedFluids::new(&FLUIDS, CHUNK, usize::MAX, 1000, |_| true);
+            let first_unencodable = i32::MAX as usize + 1;
+            let range = first_unencodable..usize::MAX;
+            let size = range.len();
+            let view = resource_util::RangedResourceHandler::of(&mut host, Box::new(tanks), range)
+                .unwrap();
+            assert_eq!(view.size(&mut host), size);
+            assert_eq!(view.capacity(&mut host, 0, Some(&water)), 1000);
+            assert_eq!(
+                host.transaction(|host, tx| view.insert(host, tx, &water, 1)),
+                Ok(0)
+            );
+            assert_eq!(FLUIDS.get_existing(&mut host, CHUNK), Ok(None));
+        },
+    );
+}
+
+#[test]
+fn bulk_insert_skips_a_refused_attachment_and_still_visits_the_next_handler() {
+    // A holder already storing a different type under the key refuses every write to it.
+    static WRONG_TYPE: AttachmentType<u32> = AttachmentType {
+        namespace: MEMORY.namespace,
+        name: MEMORY.name,
+        default: || 0,
+        codec: None,
+        copy_on_death: false,
+        sync: false,
+    };
+    let mut host = FakeHost::new();
+    WRONG_TYPE.set(&mut host, CHUNK, 7).unwrap();
+    let bad = AttachedStacks::new(&MEMORY, CHUNK, usize::MAX - 1, 4, |_| true);
+    let combined = resource_util::CombinedResourceHandler::new(
+        &mut host,
+        vec![
+            Box::new(bad),
+            Box::new(resource_util::VoidingResourceHandler),
+        ],
+    );
+    let view =
+        resource_util::RangedResourceHandler::of(&mut host, Box::new(combined), 0..usize::MAX)
+            .unwrap();
+    assert_eq!(
+        host.transaction(|host, tx| view.insert(host, tx, &Pebble::Slate, 1)),
+        Ok(1)
+    );
+    assert_eq!(WRONG_TYPE.get_existing(&mut host, CHUNK), Ok(Some(7)));
+}
+
+#[test]
+fn uniform_queries_keep_zero_capacity_separate_from_validity_through_wrappers() {
+    let mut host = FakeHost::new();
+    let zero = AttachedStacks::new(&MEMORY, CHUNK, usize::MAX - 1, 0, |r| *r == Pebble::Slate);
+    let tail = AttachedStacks::single(&MEMORY, CHUNK, 4, |r| *r == Pebble::Quartz);
+    let combined = resource_util::CombinedResourceHandler::new(
+        &mut host,
+        vec![Box::new(zero), Box::new(tail)],
+    );
+    let combined = Capability::<dyn ResourceHandler<Pebble>> {
+        handler: Box::new(combined),
+        owner: Some("attached_storage_test"),
+    };
+    assert!(!resource_util::is_full(&mut host, &combined));
+    assert!(resource_util::is_valid(
+        &mut host,
+        &combined,
+        &Pebble::Quartz
+    ));
+    let zero =
+        resource_util::RangedResourceHandler::of(&mut host, Box::new(combined), 1..usize::MAX - 1)
+            .unwrap();
+    assert!(resource_util::is_full(&mut host, &zero));
+    assert!(resource_util::is_valid(&mut host, &zero, &Pebble::Slate));
+    assert!(!resource_util::is_valid(&mut host, &zero, &Pebble::Quartz));
+}
+
+#[test]
 fn bulk_moves_follow_sparse_source_order_through_wrappers() {
     use resource_util::{
         CombinedResourceHandler, RangedResourceHandler, move_first, move_resources,
@@ -427,7 +511,7 @@ fn bulk_moves_follow_sparse_source_order_through_wrappers() {
         let combined = CombinedResourceHandler::new(
             &mut host,
             vec![
-                Box::new(resource_util::VoidingResourceHandler::default()),
+                Box::new(resource_util::VoidingResourceHandler),
                 Box::new(source),
             ],
         );

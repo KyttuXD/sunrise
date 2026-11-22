@@ -111,11 +111,13 @@ Each method receives the host; the handler holds no borrow of the game.
 |---|---|
 | `size` | Number of indices, numbered from 0. |
 | `next_transfer_index` | First candidate in an in-bounds range. `None` for the resource lets a sparse handler skip empty indices; `Some(&resource)` lets it skip indices that cannot accept the resource. The default visits every index. |
+| `uniform_slots_end` | Exclusive end of the first run in a range with the same capacity and validity rules at every index. The default promises only the first index. |
 | `resource` | Resource at an index, or `None`. |
 | `amount` / `amount_int` | Amount held at an index; `amount_int` caps it at `i32::MAX`. |
 | `capacity` / `capacity_int` | Limit for `Some(&resource)`, or the general limit for `None`. An unknown general limit is `u32::MAX`; `capacity_int` caps the answer at `i32::MAX`. This is not free space or permission to insert. |
 | `is_valid` | Whether the resource is allowed at an index. The default checks for nonzero capacity; override it for separate acceptance rules and enforce those rules in `insert_at`. |
 | `insert_at` / `extract_at` | Move up to the requested amount at one index, using a `&Transaction`. Return the actual amount moved. Insertion can refuse even with nonzero capacity. |
+| `insert_at_in_range` | Insert at the first index in a candidate range and return the amount moved and the next index to consider. Skip additional indices only if they share the same refusal. |
 | `insert` / `extract` | Let the handler choose where to move the resource. The default visits candidates in index order. Prefer these unless you need to target a specific index. They return `Result<u32, Overanswered>`. |
 
 Keep handler state in transaction-managed storage such as block entity slots, saved compounds or

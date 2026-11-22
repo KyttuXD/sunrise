@@ -6,7 +6,7 @@
 //! [`pickup_fluid`](LevelRef::pickup_fluid) and [`place_fluid`](LevelRef::place_fluid), and a
 //! dispenser's answer for a fluid container ([`dispense_container`]): nothing changes until a mod
 //! calls them.
-use crate::content::resource::{Ends, move_once};
+use crate::content::resource::{Ends, advance_transfer_index, move_once};
 use crate::{
     Capability, Direction, DispenseItemEvent, Dispensed, FLUIDS, FluidResource, FluidStack,
     GameEventContext, Hand, HostTransaction, ITEM_FLUIDS, ItemPlace, LevelRef, PlayerRef,
@@ -223,7 +223,8 @@ pub fn try_place_fluid(
     pos: [i32; 3],
     validate: bool,
 ) -> Option<FluidStack> {
-    for index in 0..source.size(host) {
+    let mut indices = 0..source.size(host);
+    while let Some(index) = advance_transfer_index(source, host, &mut indices, None) {
         let Some(fluid) = source.resource(host, index) else {
             continue;
         };
@@ -303,11 +304,16 @@ pub fn dispense_container(
 /// come out, and the container may hold more. None where nothing there holds a fluid.
 pub fn first_stack_contained(host: &mut dyn ServerHost, place: &ItemPlace) -> Option<FluidStack> {
     let item = place.capability(host, &ITEM_FLUIDS)?;
-    (0..item.size(host)).find_map(|index| {
-        let fluid = item.resource(host, index)?;
-        let amount = item.amount(host, index);
-        (amount > 0).then(|| fluid.to_stack(amount))
-    })
+    let mut indices = 0..item.size(host);
+    while let Some(index) = advance_transfer_index(&item, host, &mut indices, None) {
+        if let Some(fluid) = item.resource(host, index) {
+            let amount = item.amount(host, index);
+            if amount > 0 {
+                return Some(fluid.to_stack(amount));
+            }
+        }
+    }
+    None
 }
 
 /// One move of the first fluid of `from`, index by index, that `to` takes any of, as much of it
@@ -320,7 +326,8 @@ fn move_first(
     from: &Capability<dyn ResourceHandler<FluidResource>>,
     to: &Capability<dyn ResourceHandler<FluidResource>>,
 ) -> Option<FluidStack> {
-    for index in 0..from.size(host) {
+    let mut indices = 0..from.size(host);
+    while let Some(index) = advance_transfer_index(from, host, &mut indices, None) {
         let Some(fluid) = from.resource(host, index) else {
             continue;
         };

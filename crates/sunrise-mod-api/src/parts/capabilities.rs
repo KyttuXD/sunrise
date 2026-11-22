@@ -745,6 +745,173 @@ pub mod tests {
         assert_eq!(HAND.capability(host, &ITEM_ITEMS).unwrap().size(host), 1);
     }
 
+    #[cfg(test)]
+    const SPARSE_POS: [i32; 3] = [0, 64, 0];
+    #[cfg(test)]
+    const SPARSE_HOLDER: Holder = Holder::Chunk([0, 0]);
+    #[cfg(test)]
+    const SPARSE_ITEMS_SIZE: usize = usize::MAX / 2;
+
+    #[cfg(test)]
+    fn with_sparse_providers(run: impl FnOnce(&mut FakeHost, LevelRef)) {
+        static ITEMS_KEY: AttachmentType<StackList<ItemResource>> = AttachmentType {
+            namespace: "test",
+            name: "sparse_items",
+            default: StackList::new,
+            codec: None,
+            copy_on_death: false,
+            sync: false,
+        };
+        static FLUIDS_KEY: AttachmentType<StackList<FluidResource>> = AttachmentType {
+            namespace: "test",
+            name: "sparse_fluids",
+            default: StackList::new,
+            codec: Some(FLUID_STACKS),
+            copy_on_death: false,
+            sync: false,
+        };
+        struct Sparse;
+        #[mod_api::__subscriptions]
+        impl Hooks for Sparse {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                r.register_attachment_type("test:sparse_items", false)
+                    .unwrap();
+                r.register_attachment_type("test:sparse_fluids", false)
+                    .unwrap();
+                let kind = r.block_entity_type_key("test:sparse");
+                r.block_entity_capability(&ITEMS, &kind, |_, _, _, _, offer| {
+                    offer.offer(|| {
+                        Box::new(AttachedItems::new(
+                            &ITEMS_KEY,
+                            SPARSE_HOLDER,
+                            SPARSE_ITEMS_SIZE,
+                            4,
+                            |_| true,
+                        ))
+                    });
+                });
+                r.block_entity_capability_before_game(&FLUIDS, &kind, |_, _, _, _, offer| {
+                    offer.offer(|| {
+                        Box::new(AttachedFluids::new(
+                            &FLUIDS_KEY,
+                            SPARSE_HOLDER,
+                            usize::MAX,
+                            1000,
+                            |_| true,
+                        ))
+                    });
+                });
+            }
+        }
+        let mods: Mods = vec![ModEntry::new("test", Box::new(Sparse))].into();
+        crate::testing::with_mods(mods.clone(), || {
+            install_parts_fixture(&mods).unwrap();
+            let mut host = FakeHost::new();
+            let level = host.level.level();
+            host.level.block_entity(SPARSE_POS).of_type("test:sparse");
+            run(&mut host, level);
+        });
+    }
+
+    #[test]
+    fn sparse_items_provider_adapts_to_bulk_storage() {
+        use crate::prelude::ItemsHost;
+        use std::ops::ControlFlow;
+
+        with_sparse_providers(|host, level| {
+            let id = Identifier::parse("minecraft:dirt").unwrap();
+            let cobble = Identifier::parse("minecraft:cobblestone").unwrap();
+            host.registries
+                .resolve_items([id.clone(), cobble.clone()])
+                .unwrap();
+            host.registries.item_component(
+                "minecraft:dirt",
+                "minecraft:max_stack_size",
+                Tag::Int(2),
+            );
+            let dirt = ItemResource::of(&ItemStack::new(host.item_key(&id).unwrap(), 1).unwrap());
+            let cobble =
+                ItemResource::of(&ItemStack::new(host.item_key(&cobble).unwrap(), 1).unwrap());
+            let items = level.capability(host, &ITEMS, SPARSE_POS, None).unwrap();
+            let storage = level.capability(host, &STORAGE, SPARSE_POS, None).unwrap();
+            let last = SPARSE_ITEMS_SIZE - 1;
+            let total_capacity = 2 * SPARSE_ITEMS_SIZE as u64;
+            assert_eq!(storage.amount(host, &dirt), Ok(0));
+            assert_eq!(storage.space_for(host, &dirt), Ok(total_capacity));
+            assert_eq!(
+                storage.space_for(host, &cobble),
+                (SPARSE_ITEMS_SIZE as u64)
+                    .checked_mul(4)
+                    .ok_or(StorageError::Overflow)
+            );
+            host.transaction(|host, tx| {
+                assert_eq!(storage.insert(host, tx, &dirt, 1), 1);
+                assert_eq!(items.extract_at(host, tx, 0, &dirt, 1), 1);
+                assert_eq!(items.insert_at(host, tx, last, &dirt, 1), 1);
+                assert_eq!(storage.insert(host, tx, &dirt, 2), 2);
+                assert_eq!(items.amount(host, last), 2, "top up before filling a gap");
+                assert_eq!(items.amount(host, 0), 1);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(storage.amount(host, &dirt), Ok(3));
+            assert_eq!(storage.space_for(host, &dirt), Ok(total_capacity - 3));
+            let mut entries = Vec::new();
+            storage
+                .visit_entries(host, &mut |resource, amount| {
+                    entries.push((resource.clone(), amount));
+                    ControlFlow::Continue(())
+                })
+                .unwrap();
+            assert_eq!(entries, [(dirt.clone(), 1), (dirt.clone(), 2)]);
+            assert_eq!(
+                host.transaction(|host, tx| Ok::<_, ()>(storage.extract(host, tx, &dirt, 2))),
+                Ok(2)
+            );
+            assert_eq!(items.amount(host, last), 1);
+        });
+    }
+
+    #[test]
+    fn picking_up_sparse_fluids_moves_only_the_first_occupied_tank() {
+        use crate::fluid_util::try_pickup_fluid;
+        use crate::prelude::BlockStatesHost;
+        use crate::testing::FakeTank;
+
+        with_sparse_providers(|host, level| {
+            let destination = [1, 64, 0];
+            host.registries.resolve_fluids(["minecraft:water"]).unwrap();
+            let key = host.fluid_key("minecraft:water").unwrap();
+            let water = FluidResource::of(&FluidStack::new(key, 1));
+            host.level
+                .block_entity(destination)
+                .tanks
+                .push(FakeTank::new(1000));
+            let target = level.capability(host, &FLUIDS, destination, None).unwrap();
+            let tanks = level.capability(host, &FLUIDS, SPARSE_POS, None).unwrap();
+            assert_eq!(
+                try_pickup_fluid(host, &target, None, level, SPARSE_POS, None),
+                None
+            );
+            assert!(host.game_events.is_empty());
+            let high = i32::MAX as usize;
+            host.transaction(|host, tx| {
+                assert_eq!(tanks.insert_at(host, tx, high, &water, 500), 500);
+                assert_eq!(tanks.insert_at(host, tx, high - 1, &water, 250), 250);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(
+                try_pickup_fluid(host, &target, None, level, SPARSE_POS, None),
+                Some(water.to_stack(250))
+            );
+            assert_eq!(target.amount(host, 0), 250);
+            assert_eq!(tanks.amount(host, high), 500);
+            assert_eq!(host.game_events.len(), 1);
+            assert_eq!(host.game_events[0].event, "minecraft:fluid_pickup");
+        });
+    }
+
     #[test]
     fn item_capability_presence_selects_without_constructing() {
         use std::sync::{

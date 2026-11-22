@@ -31,9 +31,9 @@ attachment the mod declares, as NeoForge mods keep an `ItemStacksResourceHandler
 Both are `AttachedStacks<R>`, a `ResourceHandler<R>` over an `AttachmentType<StackList<R>>` (`single` for one
 index). `StackList<R>` maps occupied indices to `(resource, amount)`; use `StackList::new` for an empty attachment
 default. The handler's `size` defines its index range without allocating empty slots. Bulk extraction and the
-resource transfer helpers visit occupied source indices in order, skipping empty gaps. Bulk insertion doesn't
-walk the range if `valid` rejects the resource. `capacity` stays the physical limit of an in-range index, and
-`valid` checks inserts only. A write through a smaller view preserves any stored
+resource transfer helpers visit occupied source indices in order, skipping empty gaps. Bulk insertion skips a
+range that rejects the resource or cannot store the write. `capacity` stays the physical limit of an in-range
+index, and `valid` is independent of capacity. A write through a smaller view preserves any stored
 indices outside that view. A mod's own resource type implements `StackedResource` to use the same handler.
 `AttachedEnergy::new(&ENERGY, holder, capacity, max_insert, max_extract)` works over an `AttachmentType<u32>`.
 

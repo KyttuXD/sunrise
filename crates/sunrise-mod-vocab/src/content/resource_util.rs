@@ -2,7 +2,9 @@
 //! Writes and probes take `Some(tx)` for the current transaction or `None` to open a root.
 //! They refuse without calling handlers if the token does not name the current transaction,
 //! or if a transaction is open but no token was supplied. Probes always roll back.
-use crate::content::resource::{advance_transfer_index, checked_transfer, in_turn, try_in_turn};
+use crate::content::resource::{
+    advance_transfer_index, checked_transfer, in_turn, insert_candidate, uniform_slots_end,
+};
 use crate::{Capability, HostTransaction, Overanswered, ResourceHandler, ServerHost, Transaction};
 use std::ops::Range;
 
@@ -33,15 +35,27 @@ impl<R> CombinedResourceHandler<R> {
     }
 
     /// The handler `index` falls in, and the index within it.
-    fn locate(&self, mut index: usize) -> Option<(&dyn ResourceHandler<R>, usize)> {
-        if index >= self.size {
+    fn locate(&self, index: usize) -> Option<(&dyn ResourceHandler<R>, usize)> {
+        let (handler, range) = self.locate_range(index..self.size)?;
+        Some((handler, range.start))
+    }
+
+    /// The prefix of `indices` inside its first handler, in that handler's coordinates.
+    fn locate_range(
+        &self,
+        indices: Range<usize>,
+    ) -> Option<(&dyn ResourceHandler<R>, Range<usize>)> {
+        let end = indices.end.min(self.size);
+        let mut start = indices.start;
+        if start >= end {
             return None;
         }
         for (handler, size) in &self.handlers {
-            if index < *size {
-                return Some((handler.as_ref(), index));
+            if start < *size {
+                let offset = indices.start - start;
+                return Some((handler.as_ref(), start..(end - offset).min(*size)));
             }
-            index -= size;
+            start -= size;
         }
         None
     }
@@ -77,6 +91,13 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
         }
         None
     }
+    fn uniform_slots_end(&self, host: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+        let Some((handler, relative)) = self.locate_range(indices.clone()) else {
+            return indices.end;
+        };
+        let offset = indices.start - relative.start;
+        offset + uniform_slots_end(handler, host, relative)
+    }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         let (handler, at) = self.locate(index)?;
         handler.resource(host, at)
@@ -104,6 +125,21 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
         self.locate(index).map_or(0, |(handler, at)| {
             handler.insert_at(host, tx, at, resource, amount)
         })
+    }
+    fn insert_at_in_range(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        indices: Range<usize>,
+        resource: &R,
+        amount: u32,
+    ) -> (u32, usize) {
+        let Some((handler, relative)) = self.locate_range(indices.clone()) else {
+            return (0, indices.end);
+        };
+        let offset = indices.start - relative.start;
+        let (wrote, next) = insert_candidate(handler, host, tx, relative, resource, amount);
+        (wrote, offset + next)
     }
     fn extract_at(
         &self,
@@ -168,6 +204,9 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
 ///     fn next_transfer_index(&self, host: &mut dyn ServerHost, indices: Range<usize>, inserting: Option<&R>) -> Option<usize> {
 ///         self.0.next_transfer_index(host, indices, inserting)
 ///     }
+///     fn uniform_slots_end(&self, host: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+///         self.0.uniform_slots_end(host, indices)
+///     }
 ///     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
 ///         self.0.resource(host, index)
 ///     }
@@ -189,6 +228,12 @@ impl<R> ResourceHandler<R> for CombinedResourceHandler<R> {
 ///         amount: u32,
 ///     ) -> u32 {
 ///         self.0.insert_at(host, tx, index, resource, amount)
+///     }
+///     fn insert_at_in_range(
+///         &self, host: &mut dyn ServerHost, tx: &Transaction,
+///         indices: Range<usize>, resource: &R, amount: u32,
+///     ) -> (u32, usize) {
+///         self.0.insert_at_in_range(host, tx, indices, resource, amount)
 ///     }
 ///     fn extract_at(
 ///         &self,
@@ -239,6 +284,11 @@ impl<R> RangedResourceHandler<R> {
     fn inner(&self, index: usize) -> Option<usize> {
         (index < self.range.len()).then(|| self.range.start + index)
     }
+
+    fn inner_range(&self, indices: Range<usize>) -> Range<usize> {
+        let len = self.range.len();
+        (self.range.start + indices.start.min(len))..(self.range.start + indices.end.min(len))
+    }
 }
 
 impl<R> ResourceHandler<R> for RangedResourceHandler<R> {
@@ -251,11 +301,16 @@ impl<R> ResourceHandler<R> for RangedResourceHandler<R> {
         indices: Range<usize>,
         inserting: Option<&R>,
     ) -> Option<usize> {
-        let len = self.range.len();
-        let mut relative =
-            (self.range.start + indices.start.min(len))..(self.range.start + indices.end.min(len));
+        let mut relative = self.inner_range(indices);
         advance_transfer_index(self.handler.as_ref(), host, &mut relative, inserting)
             .map(|index| index - self.range.start)
+    }
+    fn uniform_slots_end(&self, host: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+        let relative = self.inner_range(indices.clone());
+        if relative.is_empty() {
+            return indices.end;
+        }
+        uniform_slots_end(self.handler.as_ref(), host, relative) - self.range.start
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R> {
         let at = self.inner(index)?;
@@ -284,6 +339,22 @@ impl<R> ResourceHandler<R> for RangedResourceHandler<R> {
         self.inner(index).map_or(0, |at| {
             self.handler.insert_at(host, tx, at, resource, amount)
         })
+    }
+    fn insert_at_in_range(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        indices: Range<usize>,
+        resource: &R,
+        amount: u32,
+    ) -> (u32, usize) {
+        let relative = self.inner_range(indices.clone());
+        if relative.is_empty() {
+            return (0, indices.end);
+        }
+        let (wrote, next) =
+            insert_candidate(self.handler.as_ref(), host, tx, relative, resource, amount);
+        (wrote, next - self.range.start)
     }
     fn extract_at(
         &self,
@@ -460,13 +531,43 @@ pub fn is_empty<R>(host: &mut dyn ServerHost, handler: &dyn ResourceHandler<R>) 
     true
 }
 
+/// Visit occupied candidates individually and known-empty gaps in runs with equal slot rules.
+pub(crate) fn visit_slots<R, E>(
+    host: &mut dyn ServerHost,
+    handler: &dyn ResourceHandler<R>,
+    mut visit: impl FnMut(&mut dyn ServerHost, Range<usize>, Option<R>) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut indices = 0..handler.size(host);
+    while !indices.is_empty() {
+        let end = uniform_slots_end(handler, host, indices.clone());
+        let mut run = indices.start..end;
+        let mut start = run.start;
+        while let Some(index) = advance_transfer_index(handler, host, &mut run, None) {
+            if start < index {
+                visit(host, start..index, None)?;
+            }
+            let resource = handler.resource(host, index);
+            visit(host, index..run.start, resource)?;
+            start = run.start;
+        }
+        if start < end {
+            visit(host, start..end, None)?;
+        }
+        indices.start = end;
+    }
+    Ok(())
+}
+
 /// Whether every index has reached capacity (`isFull`); true for no indices.
 /// An empty index uses its general capacity, so a zero-capacity index is already full.
 pub fn is_full<R>(host: &mut dyn ServerHost, handler: &dyn ResourceHandler<R>) -> bool {
-    (0..handler.size(host)).all(|index| {
-        let resource = handler.resource(host, index);
-        handler.amount(host, index) >= handler.capacity(host, index, resource.as_ref())
+    visit_slots(host, handler, |host, slots, resource| {
+        let index = slots.start;
+        (handler.amount(host, index) >= handler.capacity(host, index, resource.as_ref()))
+            .then_some(())
+            .ok_or(())
     })
+    .is_ok()
 }
 
 /// Whether any index accepts `resource` (`ResourceHandlerUtil.isValid`), regardless of space.
@@ -475,7 +576,14 @@ pub fn is_valid<R>(
     handler: &dyn ResourceHandler<R>,
     resource: &R,
 ) -> bool {
-    (0..handler.size(host)).any(|index| handler.is_valid(host, index, resource))
+    let mut indices = 0..handler.size(host);
+    while !indices.is_empty() {
+        if handler.is_valid(host, indices.start, resource) {
+            return true;
+        }
+        indices.start = uniform_slots_end(handler, host, indices.clone());
+    }
+    false
 }
 
 /// The vanilla container comparator scale (0..=15), using all indices as the denominator.
@@ -529,38 +637,29 @@ fn try_insert_stacking<R: PartialEq>(
 ) -> Result<u32, Overanswered> {
     let handler = endpoint.handler;
     let size = handler.size(host);
-    let mut indices = 0..size;
-    let mut holding = true;
-    try_in_turn(
-        host,
-        tx,
-        amount,
-        |host| {
-            if holding {
-                if let Some(index) = advance_transfer_index(handler, host, &mut indices, None) {
-                    return Some((true, index));
-                }
-                holding = false;
-                indices = 0..size;
-            }
-            advance_transfer_index(handler, host, &mut indices, Some(resource))
-                .map(|index| (false, index))
-        },
-        |host, tx, (holding, index), left| {
-            let matches = if holding {
-                handler.amount(host, index) > 0
-                    && handler.resource(host, index).as_ref() == Some(resource)
-            } else {
-                handler.amount(host, index) == 0
+    let mut done = 0;
+    for inserting in [None, Some(resource)] {
+        let mut indices = 0..size;
+        while done < amount {
+            let Some(index) = advance_transfer_index(handler, host, &mut indices, inserting) else {
+                break;
             };
-            Ok(if matches {
-                handler.insert_at(host, tx, index, resource, left)
+            let held = handler.amount(host, index);
+            let matches = if inserting.is_none() {
+                held > 0 && handler.resource(host, index).as_ref() == Some(resource)
             } else {
-                0
-            })
-        },
-    )
-    .map_err(|error| endpoint.attribute(error))
+                held == 0
+            };
+            if matches {
+                let left = amount - done;
+                let (wrote, next) =
+                    insert_candidate(handler, host, tx, index..indices.end, resource, left);
+                indices.start = next;
+                done += checked_transfer(wrote, left).map_err(|error| endpoint.attribute(error))?;
+            }
+        }
+    }
+    Ok(done)
 }
 
 /// Takes up to `amount` of the first extractable resource `filter` accepts. An overanswer

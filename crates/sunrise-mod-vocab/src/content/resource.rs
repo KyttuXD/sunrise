@@ -563,6 +563,13 @@ pub trait ResourceHandler<R> {
     ) -> Option<usize> {
         (!indices.is_empty()).then_some(indices.start)
     }
+    /// The exclusive end of a nonempty prefix of the given in-bounds range with uniform slot
+    /// rules. `capacity` (for any given resource, or no resource) and `is_valid` must return the
+    /// same answers throughout the prefix. Its contents can still differ. The default promises
+    /// just the first slot; a wrapper can forward the query with remapped indices.
+    fn uniform_slots_end(&self, _host: &mut dyn ServerHost, indices: Range<usize>) -> usize {
+        indices.start.saturating_add(1).min(indices.end)
+    }
     /// What index `index` holds, if anything.
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<R>;
     /// How much of it.
@@ -594,6 +601,26 @@ pub trait ResourceHandler<R> {
         resource: &R,
         amount: u32,
     ) -> u32;
+    /// Attempt the insertion at `indices.start` in a nonempty candidate range. Returns the
+    /// amount inserted and the next index to consider, strictly past the attempted index and
+    /// no later than `indices.end`. Advance farther only on a refusal known to apply to the
+    /// intervening slots too. The default attempts just one slot with [`Self::insert_at`].
+    fn insert_at_in_range(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        indices: Range<usize>,
+        resource: &R,
+        amount: u32,
+    ) -> (u32, usize) {
+        if indices.is_empty() {
+            return (0, indices.end);
+        }
+        (
+            self.insert_at(host, tx, indices.start, resource, amount),
+            indices.start + 1,
+        )
+    }
     /// Takes up to `amount` of `resource` out of index `index`: how much came out. None of
     /// another resource.
     fn extract_at(
@@ -615,13 +642,24 @@ pub trait ResourceHandler<R> {
         amount: u32,
     ) -> Result<u32, Overanswered> {
         let mut indices = 0..self.size(host);
-        in_turn(
-            host,
-            tx,
-            amount,
-            |host| advance_transfer_index(self, host, &mut indices, Some(resource)),
-            |host, tx, index, left| Ok(self.insert_at(host, tx, index, resource, left)),
-        )
+        if amount == 0 || host.transaction_current().as_ref() != Some(tx) {
+            return Ok(0);
+        }
+        host.transaction(|host, tx| {
+            let mut done = 0;
+            while done < amount {
+                let Some(index) = advance_transfer_index(self, host, &mut indices, Some(resource))
+                else {
+                    break;
+                };
+                let left = amount - done;
+                let (wrote, next) =
+                    insert_candidate(self, host, tx, index..indices.end, resource, left);
+                indices.start = next;
+                done += checked_transfer(wrote, left)?;
+            }
+            Ok(done)
+        })
     }
     /// Takes up to `amount` of `resource` out from wherever it is: by default index by index
     /// from 0, with empty gaps skipped by sparse handlers. Prefer this to `extract_at` unless
@@ -662,6 +700,39 @@ pub(crate) fn advance_transfer_index<R>(
     }
     indices.start = index + 1;
     Some(index)
+}
+
+/// Finish the current insertion step, skipping a refused suffix only within the walk's bounds.
+pub(crate) fn insert_candidate<R>(
+    handler: &(impl ResourceHandler<R> + ?Sized),
+    host: &mut dyn ServerHost,
+    tx: &Transaction,
+    indices: Range<usize>,
+    resource: &R,
+    amount: u32,
+) -> (u32, usize) {
+    let (wrote, next) = handler.insert_at_in_range(host, tx, indices.clone(), resource, amount);
+    if next > indices.start && next <= indices.end {
+        (wrote, next)
+    } else {
+        log::warn!("Resource handler returned insertion cursor {next} outside {indices:?}");
+        (wrote, indices.start + 1)
+    }
+}
+
+/// The end of the next run of equal slot rules, validated at the handler boundary.
+pub(crate) fn uniform_slots_end<R>(
+    handler: &(impl ResourceHandler<R> + ?Sized),
+    host: &mut dyn ServerHost,
+    indices: Range<usize>,
+) -> usize {
+    let end = handler.uniform_slots_end(host, indices.clone());
+    if end > indices.start && end <= indices.end {
+        end
+    } else {
+        log::warn!("Resource handler returned uniform slot end {end} outside {indices:?}");
+        indices.start + 1
+    }
 }
 
 /// A slot-less transfer owns its journal, so an overanswer cannot leave part of it committed.

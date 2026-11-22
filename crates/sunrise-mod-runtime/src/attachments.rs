@@ -105,6 +105,11 @@ pub enum AttachmentError {
     Decode,
     /// The value could not be encoded.
     Encode,
+    /// A stock stack codec could not encode this occupied index or its stack.
+    StackEncoding {
+        /// The index the codec could not encode.
+        index: usize,
+    },
     /// A namespace in the saved compound is not a compound.
     InvalidNamespace,
     /// Copy-on-death requires a serializer.
