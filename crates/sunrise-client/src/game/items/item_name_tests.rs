@@ -97,6 +97,14 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
             assert_eq!(base.custom_name().as_deref(), Some("Paper"));
             let other = anvil("Minutes").expect("another name is a rename");
             assert_eq!(other.custom_name().as_deref(), Some("Minutes"));
+
+            // The screen uses the same comparison before sending the rename packet.
+            let mut station = super::stations::Station::new(super::stations::Kind::Anvil, [0; 3]);
+            station.inputs[0] = Some(named);
+            station.name = KEY.into();
+            assert_eq!(game.anvil_item_name(&station), "");
+            station.name = "Paper".into();
+            assert_eq!(game.anvil_item_name(&station), "Paper");
         });
     });
 }
