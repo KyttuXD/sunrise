@@ -126,14 +126,12 @@ use crate::game::Dim::{Nether, Overworld};
 
 /// The crossings queued since the last call, as a telling takes them.
 fn told(sections: &mut EntitySections) -> Vec<Crossing> {
-    match sections.begin_telling() {
-        Some(batch) => {
-            let out = batch.clone();
-            sections.end_telling(batch);
-            out
-        }
-        None => Vec::new(),
+    if !sections.begin_telling() {
+        return Vec::new();
     }
+    let crossings = sections.queue.drain(..).collect();
+    sections.end_telling();
+    crossings
 }
 
 fn crossing(id: u32, old: [i32; 3], new: [i32; 3]) -> Crossing {
@@ -250,18 +248,21 @@ fn another_level_a_respawn_and_another_world_start_untold() {
 }
 
 #[test]
-fn what_a_listener_moves_waits_for_the_next_telling() {
+fn nested_writes_stay_queued_until_the_current_event_returns() {
     let mut s = EntitySections::default();
     let w = scope(Overworld);
     s.placed(w, 6, [0.5, 70.0, 0.5]);
     s.moved(w, 6, None, [16.5, 70.0, 0.5]);
-    let batch = s.begin_telling().unwrap();
-    assert_eq!(batch, [crossing(6, [0, 4, 0], [1, 4, 0])]);
-    // A listener moves it on while the first crossing is told: not told from inside.
+    assert!(s.begin_telling());
+    assert_eq!(s.queue.pop_front(), Some(crossing(6, [0, 4, 0], [1, 4, 0])));
+    // The listener moves two entities, then removes the second before its event runs.
     s.moved(w, 6, None, [32.5, 70.0, 0.5]);
-    assert!(s.begin_telling().is_none());
-    s.end_telling(batch);
-    assert_eq!(told(&mut s), [crossing(6, [1, 4, 0], [2, 4, 0])]);
+    s.moved(w, 7, Some([0.5, 70.0, 0.5]), [16.5, 70.0, 0.5]);
+    assert!(!s.begin_telling());
+    s.forget(7);
+    assert_eq!(s.queue.pop_front(), Some(crossing(6, [1, 4, 0], [2, 4, 0])));
+    assert!(s.queue.is_empty());
+    s.end_telling();
 }
 
 #[test]
@@ -329,6 +330,42 @@ fn floating_cow(game: &mut crate::game::Game<'_>, at: [f64; 3]) -> u32 {
     let i = game.mobs.iter().position(|m| m.id == id).unwrap();
     game.mobs.update(i, |m| m.no_gravity = true);
     id
+}
+
+fn rising_cow(game: &mut Game<'_>, at: [f64; 3], no_physics: bool) -> u32 {
+    let id = floating_cow(game, at);
+    let entity = game.entity(id).unwrap();
+    assert!(entity.set_no_physics(game, no_physics));
+    let i = game.mobs.iter().position(|m| m.id == id).unwrap();
+    game.mobs.update(i, |m| {
+        m.ai.goals.clear();
+        m.velocity = sunrise_core::geometry::Vec3::new(0.0, 0.5, 0.0);
+    });
+    id
+}
+
+#[test]
+#[ignore = "daily"]
+fn borrowed_no_physics_moves_with_a_passive_listener_keep_their_order() {
+    observe_positions(|positions| {
+        with_game(|game| {
+            let first = rising_cow(game, [4.5, 111.75, 8.5], true);
+            let same_section = rising_cow(game, [8.5, 100.0, 8.5], true);
+            let last = rising_cow(game, [12.5, 127.75, 8.5], true);
+            game.tick_creature_entities().unwrap();
+            assert_eq!(
+                positions.lock().unwrap().as_slice(),
+                &[Some([4.5, 112.25, 8.5]), Some([12.5, 128.25, 8.5])]
+            );
+            for (id, at) in [
+                (first, [4.5, 112.25, 8.5]),
+                (same_section, [8.5, 100.5, 8.5]),
+                (last, [12.5, 128.25, 8.5]),
+            ] {
+                assert_eq!(game.mob_object(id).unwrap().position.components(), at);
+            }
+        })
+    });
 }
 
 /// A goal that, when it starts, teleports its mob to each of its targets in turn, once: the
@@ -945,5 +982,223 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
         );
         assert_eq!(read(&*game, "minecraft:skeleton", "luck"), Some(1.5));
         assert_eq!(read(&*game, "minecraft:zombie", "max_health"), Some(20.0));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn ticked_live_preserves_order_removals_and_reindexed_rows() {
+    use std::sync::atomic::AtomicU32;
+    use sunrise_core::geometry::Vec3;
+
+    type Seen = Arc<Mutex<Vec<(u32, [i32; 3], [i32; 3], Option<[f64; 3]>)>>>;
+
+    struct MutatingListener {
+        mob_a: Arc<AtomicU32>,
+        mob_b: Arc<AtomicU32>,
+        seen: Seen,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for MutatingListener {
+        fn entity_entering_section(
+            &self,
+            host: HostSide<'_>,
+            event: &mut EntityEnteringSectionEvent,
+        ) {
+            let HostSide::Server(host) = host else {
+                return;
+            };
+            let id = event.entity.id();
+            let pos = event.entity.position(host);
+            self.seen
+                .lock()
+                .unwrap()
+                .push((id, event.old_section, event.new_section, pos));
+            if id == self.mob_a.load(Ordering::Relaxed) && event.new_section == [1, 4, 0] {
+                let b = self.mob_b.load(Ordering::Relaxed);
+                assert!(host.entity(b).unwrap().discard(host));
+                // This fixture has no console host; spawn directly in the level.
+                let level = host.level("minecraft:overworld").unwrap();
+                assert!(
+                    level
+                        .spawn_mob(
+                            host,
+                            "minecraft:cow",
+                            [8.5, 70.0, 8.5],
+                            mod_api::SpawnReason::Command
+                        )
+                        .is_some()
+                );
+            }
+        }
+    }
+
+    let mob_a_id = Arc::new(AtomicU32::new(0));
+    let mob_b_id = Arc::new(AtomicU32::new(0));
+    let seen = Seen::default();
+    let mods = vec![mod_api::ModEntry::new(
+        "ticked-live-order",
+        Box::new(MutatingListener {
+            mob_a: mob_a_id.clone(),
+            mob_b: mob_b_id.clone(),
+            seen: seen.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            let start = Vec3::new(8.5, 70.0, 8.5);
+            let mid = Vec3::new(24.5, 70.0, 8.5);
+            let end = Vec3::new(40.5, 70.0, 8.5);
+            let mob_a = floating_cow(game, [start.x, start.y, start.z]);
+            let mob_b = floating_cow(game, [start.x, start.y, start.z]);
+            let mob_c = floating_cow(game, [start.x, start.y, start.z]);
+            let mob_d = floating_cow(game, [start.x, start.y, start.z]);
+            mob_a_id.store(mob_a, Ordering::Relaxed);
+            mob_b_id.store(mob_b, Ordering::Relaxed);
+
+            let join_of = |game: &crate::game::Game<'_>, id: u32| {
+                game.mobs.iter().find(|m| m.id == id).unwrap().join
+            };
+            let join_a = join_of(game, mob_a);
+            let join_b = join_of(game, mob_b);
+            let join_c = join_of(game, mob_c);
+            let join_d = join_of(game, mob_d);
+
+            for (id, final_pos) in [(mob_a, end), (mob_b, mid), (mob_c, mid), (mob_d, mid)] {
+                let i = game.mobs.iter().position(|m| m.id == id).unwrap();
+                game.mobs.update(i, |m| m.position = final_pos);
+            }
+            // Reorder the list out of join-seq order and pass a stale hint so resolution must
+            // recover without rebuilding a map.
+            game.mobs.swap(0, 3);
+            game.mobs.swap(1, 2);
+
+            let mut delivered = PositionWrite::captured(mob_d, join_d, start, mid);
+            delivered.delivered = true;
+            let mut moves = vec![
+                PositionWrite::captured(mob_a, join_a, start, mid),
+                PositionWrite::captured(mob_b, join_b, start, mid),
+                PositionWrite::captured(mob_a, join_a, mid, end),
+                PositionWrite::captured(mob_c, join_c, start, mid),
+                delivered,
+            ];
+            assert!(game.entity_sections_ticked_live(&mut moves, Some(999)));
+
+            assert!(moves.is_empty());
+            assert!(
+                game.mobs
+                    .iter()
+                    .any(|m| ![mob_a, mob_b, mob_c, mob_d].contains(&m.id)),
+                "the listener must add a row during dispatch"
+            );
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                &[
+                    (mob_a, [0, 4, 0], [1, 4, 0], Some([mid.x, mid.y, mid.z])),
+                    (mob_a, [1, 4, 0], [2, 4, 0], Some([end.x, end.y, end.z])),
+                    (mob_c, [0, 4, 0], [1, 4, 0], Some([mid.x, mid.y, mid.z])),
+                ]
+            );
+            assert_eq!(
+                game.mobs.iter().find(|m| m.id == mob_a).unwrap().position,
+                end
+            );
+            assert!(
+                !game
+                    .native_lifecycle
+                    .entity_sections
+                    .filed
+                    .contains_key(&mob_b),
+                "discarded mob must stay forgotten"
+            );
+        })
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn borrowed_tick_tells_nested_passenger_and_vehicle_writes_before_resuming() {
+    use std::sync::atomic::AtomicU32;
+
+    type Seen = Arc<Mutex<Vec<(u32, [i32; 3], [i32; 3], Option<[f64; 3]>)>>>;
+
+    struct TeleportVehicleListener {
+        first: Arc<AtomicU32>,
+        vehicle: Arc<AtomicU32>,
+        teleported: Arc<AtomicBool>,
+        seen: Seen,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for TeleportVehicleListener {
+        fn entity_entering_section(
+            &self,
+            host: HostSide<'_>,
+            event: &mut EntityEnteringSectionEvent,
+        ) {
+            let HostSide::Server(host) = host else { return };
+            self.seen.lock().unwrap().push((
+                event.entity.id(),
+                event.old_section,
+                event.new_section,
+                event.entity.position(host),
+            ));
+            if event.entity.id() == self.first.load(Ordering::Relaxed) {
+                let vehicle = host.entity(self.vehicle.load(Ordering::Relaxed)).unwrap();
+                self.teleported.store(
+                    vehicle.teleport_to(host, [56.5, 100.0, 8.5], None),
+                    Ordering::Relaxed,
+                );
+            }
+        }
+    }
+
+    let first_id = Arc::new(AtomicU32::new(0));
+    let vehicle_id = Arc::new(AtomicU32::new(0));
+    let teleported = Arc::new(AtomicBool::new(false));
+    let seen = Seen::default();
+    let mods = vec![mod_api::ModEntry::new(
+        "borrowed-tick-vehicle-tp",
+        Box::new(TeleportVehicleListener {
+            first: first_id.clone(),
+            vehicle: vehicle_id.clone(),
+            teleported: teleported.clone(),
+            seen: seen.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            // The first cow yields to the owning Host. The next uses the live
+            // borrowed observer, which must not inherit that Host's crossings.
+            let first = rising_cow(game, [4.5, 111.75, 8.5], true);
+            let next = rising_cow(game, [12.5, 127.75, 8.5], false);
+            let vehicle = floating_cow(game, [8.5, 100.0, 8.5]);
+            let passenger = floating_cow(game, [8.5, 100.0, 8.5]);
+            first_id.store(first, Ordering::Relaxed);
+            vehicle_id.store(vehicle, Ordering::Relaxed);
+            assert!(game.try_mount_mob(passenger, vehicle));
+            let [passenger_x, passenger_y, passenger_z] =
+                game.mob_object(passenger).unwrap().position.components();
+
+            game.tick_creature_entities().unwrap();
+            assert!(teleported.load(Ordering::Relaxed));
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                &[
+                    (first, [0, 6, 0], [0, 7, 0], Some([4.5, 112.25, 8.5])),
+                    (
+                        passenger,
+                        [0, 6, 0],
+                        [3, 6, 0],
+                        Some([passenger_x + 48.0, passenger_y, passenger_z])
+                    ),
+                    (vehicle, [0, 6, 0], [3, 6, 0], Some([56.5, 100.0, 8.5])),
+                    (next, [0, 7, 0], [0, 8, 0], Some([12.5, 128.25, 8.5])),
+                ]
+            );
+        })
     });
 }

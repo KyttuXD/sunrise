@@ -205,7 +205,10 @@ at the end of it again, and a passenger enters after its vehicle. A vehicle
 comes before its passengers.
 
 Section entry order does not depend on a listener of `entity_entering_section`:
-the engine records each server crossing whether or not a mod hears it.
+the engine records each server crossing whether or not a mod hears it. When a mob
+write is told with the owning Host, crossings queued by those listeners (for example,
+from a vehicle teleport) are also told with the owning Host, in write order, before
+the next mob ticks.
 
 Some differences remain. Vanilla notes a section change at every position write;
 here minecarts, boats, projectiles, dropped items, primed TNT, falling blocks,

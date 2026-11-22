@@ -23,10 +23,13 @@ pub trait Hooks {
     /// moving or removing the entity until the write completes, because the write is still in
     /// progress while this hook runs.
     ///
-    /// During a borrowed mob pass, the Host answers only this entity's position. During a
-    /// borrowed player move, it also answers that player's ground flag and velocity before
-    /// the move updates them, and `local_player` on the client. Other Host operations are
-    /// refused while these views are borrowed.
+    /// A write told while the mob view is borrowed exposes only that mob's position. A write
+    /// told with the owning Host (including a mob write delivered after its row is restored)
+    /// can read the resident entities. Crossings queued during an owning callback, for example
+    /// by a vehicle teleport, are told with that Host before the pass resumes. During a
+    /// borrowed player move, the Host also answers that player's ground flag and velocity
+    /// before the move updates them, and `local_player` on the client. Other Host operations
+    /// are refused while these views are borrowed.
     #[notes = r#"## Entering a section
 
 `Hooks::entity_entering_section` (NeoForge's `EntityEvent.EnteringSection`) tells a mod each time an entity's
@@ -58,12 +61,13 @@ subscription check per position update.
 
 The hook runs at the position write: at once for a teleport (`/tp`, `teleport_to`, `random_teleport` from outside the tick,
 an enderman's or a shulker's teleport when hurt), a piston or shulker push, a server player's sent move and, on a client,
-a packet that places an entity. Mob ticks dispatch synchronously inside each position write, in write order,
-not by replaying captured moves after the tick. During a borrowed mob pass the Host answers only the current
-entity's position. During a borrowed player move it also answers that player's ground flag and velocity before
-the move updates them, and `local_player` on the client. Other Host operations are refused while these views
-are borrowed. There is no automatic mutation deferral: listeners must not move or remove the entity while its
-write is in progress."#]
+a packet that places an entity. Mob writes are told in write order. A write told while the mob view is borrowed
+exposes only the current mob's position. A write captured without a live observer is told after the owning row is
+restored, before the next mob ticks. Crossings queued while an owning event is being told are delivered in order
+with the owning Host before the pass resumes. During a borrowed player move the Host also answers that player's
+ground flag and velocity before the move updates them, and `local_player` on the client. Other Host operations are
+refused while these views are borrowed. Listeners must not move or remove the crossing entity while its write is
+in progress."#]
     #[hook(
         dispatch = "flat",
         side = "both",
