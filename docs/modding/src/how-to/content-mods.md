@@ -994,10 +994,10 @@ fields)` (NeoForge's `DataPackRegistryEvent.NewRegistry`).
 entry's record schema. Its scalar kinds are `Bool`, `Int { min, max }`, `Float { min, max }`, `Text { max_len }`,
 `Identifier` and `Reference { registry }`, and they nest, as vanilla's codecs do:
 
-- `List { of, min_len, max_len }` is a JSON array (`Codec.list`, `sizeLimitedListOf`; no cap unless `max_len` is set);
-- `Map { key, value }` is a JSON object with `Text`, `Identifier` or `Reference` keys (`Codec.unboundedMap`), its
-  pairs in the order the file wrote them (`as_map` lists them so, on the server and on clients); two keys naming the
-  same id (`zombie` and `minecraft:zombie`) are a duplicate;
+- `List { of, min_len, max_len }` is a JSON array (`Codec.list`, `sizeLimitedListOf`);
+- `Map { key, value }` is a JSON object with `Text`, `Identifier` or `Reference` keys (`Codec.unboundedMap`).
+  `as_map` returns pairs in file order, on the server and on clients. Two keys naming the same id (`zombie` and
+  `minecraft:zombie`) are a duplicate. A text map key with `max_len: 0` accepts only the empty key;
 - `Record { fields }` is a nested object with the same field rules as the entry's own (a nested
   `RecordCodecBuilder`).
 
@@ -1006,9 +1006,9 @@ no default (`DatapackField::optional`, `optionalFieldOf`), which reads as `None`
 stands only for a whole field, never inside a list, a map or another optional. Defaults are checked against their
 kinds at every depth, and an id or reference default is normalised wherever it sits (`stone` is `minecraft:stone`,
 map keys included).
-A list has no length cap unless its `max_len` sets one; what bounds it otherwise is the entry file's size and the
-JSON parser's nesting limit, and the registry snapshot's size limit for one that syncs. Read nested values with
-`as_list`, `as_map`, `get` and the scalar accessors (`as_int`, `as_text`...):
+A list has no per-list count limit unless its `max_len` sets one. The entry file and candidate input size limits
+and the JSON parser's nesting limit still apply, as do the snapshot size and Wire depth limits for registries that
+sync. Read nested values with `as_list`, `as_map`, `get` and the scalar accessors (`as_int`, `as_text`...):
 
 ```rust,ignore
 let int = |min, max| DatapackFieldKind::Int { min, max };

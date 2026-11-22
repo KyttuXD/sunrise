@@ -61,7 +61,8 @@ pub enum DatapackFieldKind {
         registry: String,
     },
     /// A JSON array of `of` values (`Codec.list`, `sizeLimitedListOf`): at least `min_len`
-    /// items, and at most `max_len` when it is set (vanilla's JSON decode has no cap of its own).
+    /// items, with a per-list count limit only when the schema sets `max_len`. The entry and
+    /// snapshot budgets still apply.
     List {
         /// What each item holds.
         of: Box<DatapackFieldKind>,
@@ -71,7 +72,7 @@ pub enum DatapackFieldKind {
         max_len: Option<u32>,
     },
     /// A JSON object whose keys are `key` and whose values are `value` (`Codec.unboundedMap`),
-    /// in key order: the same on every side and every reload, whatever the file's order.
+    /// with pairs in file order, preserved on the server and on clients.
     Map {
         /// What each key is.
         key: DatapackKeyKind,
@@ -98,7 +99,7 @@ pub enum DatapackFieldKind {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DatapackKeyKind {
-    /// A string of at most `max_len` bytes.
+    /// A string of at most `max_len` bytes. A zero limit admits only the empty key.
     Text {
         /// The most bytes accepted.
         max_len: u32,
@@ -135,7 +136,7 @@ pub enum DatapackValue {
     Text(String),
     /// A [`DatapackFieldKind::List`], in file order.
     List(Vec<DatapackValue>),
-    /// A [`DatapackFieldKind::Map`]: `(key, value)` in key order, keys normalised as their kind says.
+    /// A [`DatapackFieldKind::Map`]: `(key, value)` in file order, keys normalised as their kind says.
     Map(Vec<(String, DatapackValue)>),
     /// A [`DatapackFieldKind::Record`]: `(field name, value)` in schema order.
     Record(Vec<(String, DatapackValue)>),
@@ -152,7 +153,7 @@ impl DatapackValue {
         }
     }
 
-    /// The `(key, value)` pairs of a map, in key order.
+    /// The `(key, value)` pairs of a map, in file order.
     pub fn as_map(&self) -> Option<&[(String, DatapackValue)]> {
         match self {
             Self::Map(pairs) => Some(pairs),
@@ -220,7 +221,8 @@ pub struct DatapackField {
     pub name: String,
     /// What the field holds.
     pub kind: DatapackFieldKind,
-    /// The value of an absent field; `None` makes the field required.
+    /// The value of an absent field. With `None`, an optional kind gives [`DatapackValue::Absent`]
+    /// and any other kind requires the field.
     pub default: Option<DatapackValue>,
 }
 
@@ -270,8 +272,8 @@ pub enum DatapackRegistrationError {
     /// A field name is empty or repeated.
     InvalidFieldName,
     /// A field's kind is unusable: bounds that are not finite or `min > max`,
-    /// a `max_len` of 0, a list's `min_len` over its `max_len`, an optional kind
-    /// nested in another, or a reference to a malformed registry key, at any depth.
+    /// a scalar text field's `max_len` of 0, a list's `min_len` over its `max_len`, an
+    /// optional kind nested in another, or a reference to a malformed registry key, at any depth.
     InvalidFieldKind,
     /// A default is not a value of its field's kind, or is out of its bounds.
     InvalidDefault,
@@ -1653,12 +1655,24 @@ pub(crate) mod tests {
             Err(E::InvalidFieldKind)
         );
         // A text key of at most 0 bytes is the schema's choice: only the empty key.
-        assert_eq!(
-            check_schema(&one(DatapackFieldKind::Map {
+        let empty_key = DatapackRegistryDeclaration {
+            fields: one(DatapackFieldKind::Map {
                 key: DatapackKeyKind::Text { max_len: 0 },
-                value: int()
-            })),
-            Ok(())
+                value: int(),
+            }),
+            ..spell()
+        };
+        assert_eq!(check_schema(&empty_key.fields), Ok(()));
+        let entry = empty_key.decode_entry(r#"{"a":{"":1}}"#).unwrap();
+        assert_eq!(
+            entry.get("a").unwrap().get(""),
+            Some(&DatapackValue::Int(1))
+        );
+        assert_eq!(
+            empty_key.decode_entry(r#"{"a":{"x":1}}"#).unwrap_err(),
+            DatapackDecodeError::TooLong {
+                field: "a.x".into()
+            }
         );
         assert_eq!(
             check_schema(&one(DatapackFieldKind::Record {
