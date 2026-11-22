@@ -115,12 +115,12 @@ impl Game<'_> {
         }
         let [x, y, z] = entity.fields().position;
         if self.menu_open_waits(conn) {
-            let Some(reserved_window) = self.reserve_opaque_menu_window(conn) else {
+            let Some(reserved) = self.reserve_opaque_menu_window(conn) else {
                 return Ok(false);
             };
             self.after_commit(super::transactions::After::MenuOpen(
-                conn,
-                Some(reserved_window),
+                reserved,
+                false,
                 Box::new(move |game| {
                     if !game.level_in_place(entity.fields().level)
                         || game.native_block_entity_target(entity).is_none()
@@ -129,7 +129,7 @@ impl Game<'_> {
                             .as_ref()
                             .and_then(|host| host.hub.guest(conn))
                             .is_none_or(|g| g.dimension != entity.fields().level.dimension_id())
-                        || game.open_block_menu(conn, (x, y, z))
+                        || game.open_block_menu_with_reservation(conn, (x, y, z), Some(reserved))
                             != super::lan_actions::MenuOpen::Opened
                     {
                         log::error!(

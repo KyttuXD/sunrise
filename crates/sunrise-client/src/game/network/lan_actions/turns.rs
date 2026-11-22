@@ -1053,6 +1053,9 @@ impl Game<'_> {
             }
         }
         self.stat_criteria_changed(&name, stat_events);
+        // Reserved ender chests can now open from the restored guest record. Their ids
+        // were assigned at commit and precede any ordinary open this action now hands off.
+        self.drain_menu_opens(conn);
         if let Some(pos) = opened {
             self.lan_open_container(conn, pos);
         }

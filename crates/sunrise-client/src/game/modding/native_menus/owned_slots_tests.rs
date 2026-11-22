@@ -1580,6 +1580,114 @@ fn aborted_window_reservations_do_not_collide_at_wraparound() {
 
 #[test]
 #[ignore = "daily"]
+fn reentrant_open_follows_both_root_reservations_and_ignores_a_stale_close() {
+    with_owned_menu(false, |game, rx, key| {
+        let (old, _) = open(game, key);
+        sent(&rx);
+        REOPEN_ON_REMOVED.set(true);
+        let host: &mut dyn ServerHost = game;
+        let [first, second] = host
+            .transaction(|host, _| {
+                let first = host
+                    .open_menu(
+                        123,
+                        1,
+                        mod_api::Text::literal("First"),
+                        Vec::new(),
+                        MenuReplace::InPlace,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let second = host
+                    .open_menu(
+                        123,
+                        1,
+                        mod_api::Text::literal("Second"),
+                        Vec::new(),
+                        MenuReplace::InPlace,
+                    )
+                    .unwrap()
+                    .unwrap();
+                assert!(sent(&rx).is_empty());
+                Ok::<_, ()>([first, second])
+            })
+            .unwrap();
+        let last = second % 100 + 1;
+        assert_eq!(first, old % 100 + 1);
+        assert_eq!(second, first % 100 + 1);
+        let packets = sent(&rx);
+        let windows: Vec<_> = packets
+            .iter()
+            .filter_map(|packet| match packet {
+                C::OpenScreen(open) => Some(open.container),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(windows, [first, second, last]);
+        assert!(!packets.iter().any(|p| matches!(p, C::ContainerClose(_))));
+        let replacement = game.menu(123, last).unwrap();
+        game.lan_guest_packet(1, S::ContainerClose(ContainerClose { container: second }));
+        assert_eq!(game.menu(123, last), Some(replacement));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn disconnect_before_staged_publication_drops_a_committed_owned_stack() {
+    with_owned_menu(false, |game, rx, key| {
+        let old_window = open(game, key).0;
+        let stack = ItemStack::new("minecraft:stick", 2);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+            guest.inventory[0] = Some(stack.clone());
+        });
+        sent(&rx);
+        let player = game.player(123).unwrap();
+        let resource = ItemResource::of(&stack.try_into_api().unwrap());
+        let host: &mut dyn ServerHost = game;
+        host.transaction(|host, tx| {
+            let reserved = player
+                .open_mod_menu(
+                    host,
+                    mod_api::ModMenuOpen::new(key, mod_api::Text::literal("Staged")),
+                )
+                .unwrap()
+                .unwrap();
+            let menu = player.container_menu(host).unwrap();
+            assert_eq!(menu.container_id(host), Some(reserved));
+            let source = ItemPlace::PlayerSlot {
+                player: 123,
+                slot: 0,
+            };
+            assert_eq!(source.extract(host, tx, &resource, 2), 2);
+            assert_eq!(
+                ItemPlace::MenuSlot { menu, slot: 1 }.insert(host, tx, &resource, 2),
+                2
+            );
+            assert!(
+                player
+                    .disconnect(host, mod_api::Text::literal("Leaving before publication"))
+                    .unwrap()
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+        assert!(guest.disconnect_pending);
+        assert_eq!(guest.next_window, old_window);
+        assert_eq!(guest.inventory[0], None);
+        assert!(!sent(&rx).iter().any(|p| matches!(p, C::OpenScreen(_))));
+        assert_eq!(
+            game.dropped
+                .iter()
+                .map(|item| &item.stack)
+                .collect::<Vec<_>>(),
+            [&stack]
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn reentrant_open_during_travel_close_opens_after_change_level() {
     use crate::game::Dim;
     with_owned_menu(false, |game, rx, key| {

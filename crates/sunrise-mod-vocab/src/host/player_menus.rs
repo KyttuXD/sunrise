@@ -59,7 +59,9 @@ pub trait PlayerMenusBackendMut {
     /// does not close the old menu. In an ordinary transaction, the returned id is staged
     /// for transaction-scoped reads and slot/data writes while owner teardown, wire open and
     /// Close/Open events publish at the root commit (an abort drops the staged menu without
-    /// advancing window ids). In a closing-menu callback, publication waits until Close returns.
+    /// advancing window ids). Opens from a closing-menu callback publish after Close and any
+    /// earlier reservations for that player. If an open cannot publish after commit, the
+    /// staged owned stacks are handed back or dropped as in menu removal.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,

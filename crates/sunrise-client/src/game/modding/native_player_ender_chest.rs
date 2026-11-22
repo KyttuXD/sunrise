@@ -82,7 +82,7 @@ impl Game<'_> {
     /// `ServerPlayer.openMenu` of `ChestMenu.threeRows` over the player's
     /// `PlayerEnderChestContainer`, with no active chest. Inside the player's own turn their
     /// ender chest is in `Game` and their record holds the outer player's, so the menu waits
-    /// for the turn's end (`open_turn_ender_menus`), as a block's menu the turn opened does.
+    /// for the turn's end, as a block's menu the turn opened does.
     pub(super) fn player_open_ender_chest(
         &mut self,
         player: PlayerRef,
@@ -101,33 +101,29 @@ impl Game<'_> {
         }
         let title = component_nbt(&title.component());
         if self.menu_open_waits(conn) {
-            let reserved_window = self
+            let reserved = self
                 .reserve_opaque_menu_window(conn)
                 .ok_or(OpenMenuError::PlayerUnavailable)?;
             self.after_commit(super::transactions::After::MenuOpen(
-                conn,
-                Some(reserved_window),
+                reserved,
+                true,
                 Box::new(move |game| {
-                    if !game.request_ender_menu(conn, title) {
+                    if !game.open_ender_menu(conn, title, Some(reserved)) {
                         log::error!("Could not open the ender chest menu for connection {conn}");
                     }
                 }),
             ));
             return Ok(true);
         }
-        Ok(self.request_ender_menu(conn, title))
-    }
-
-    fn request_ender_menu(&mut self, conn: u32, title: Tag) -> bool {
         if self.lan_guest_swaps.contains(&conn) {
             self.lan_ender_menus.push((conn, title));
-            return true;
+            return Ok(true);
         }
-        self.open_ender_menu(conn, title)
+        Ok(self.open_ender_menu(conn, title, None))
     }
 
-    /// The ender chest menus `player_open_ender_chest` asked for in guest `conn`'s turn,
-    /// opened now that the turn is over, in the order asked (the last one stays open).
+    /// The ender chest menus requested during a guest turn without an existing reservation.
+    /// The turn's ordinary menu handoff happens before these are constructed.
     pub(in crate::game) fn open_turn_ender_menus(&mut self, conn: u32) {
         if !self.lan_ender_menus.iter().any(|(c, _)| *c == conn) {
             return;
@@ -137,25 +133,33 @@ impl Game<'_> {
             .partition(|(c, _)| *c == conn);
         self.lan_ender_menus = others;
         for (_, title) in mine {
-            self.open_ender_menu(conn, title);
+            self.open_ender_menu(conn, title, None);
         }
     }
 
     /// Opens the ender chest menu for guest `conn` out of every turn: the mods may cancel it,
     /// the menu they had open closes as `ServerPlayer.openMenu` closes it, and the slots are
     /// the guest's own 27 (`Slots::Ender`, no block), which the game's container clicks move.
-    fn open_ender_menu(&mut self, conn: u32, title: Tag) -> bool {
+    fn open_ender_menu(
+        &mut self,
+        conn: u32,
+        title: Tag,
+        reserved: Option<super::lan_menus::MenuReservation>,
+    ) -> bool {
         const MENU: &str = "minecraft:generic_9x3";
         if self
             .lan
             .as_ref()
             .and_then(|host| host.hub.guest(conn))
-            .is_none_or(|g| g.dead)
+            .is_none_or(|g| g.dead || g.disconnect_pending)
             || self.guest_may_open(conn, MENU, None) != Some(true)
         {
             return false;
         }
-        self.guest_replace_menu(conn, true, |game| {
+        let replacing = reserved
+            .map(|r| r.window)
+            .or_else(|| self.next_reserved_menu_window(conn));
+        self.guest_replace_menu_for_window(conn, replacing, true, |game| {
             let Some(host) = game.lan.as_mut() else {
                 return false;
             };
@@ -165,7 +169,16 @@ impl Game<'_> {
             items.resize(SLOTS, None);
             let opened = host
                 .hub
-                .open_menu_window(conn, MENU, title, None, Slots::Ender, items, None)
+                .open_prepared_menu_window(
+                    conn,
+                    reserved.map(|r| r.identity()),
+                    MENU,
+                    title,
+                    None,
+                    Slots::Ender,
+                    &mut items,
+                    None,
+                )
                 .is_some();
             if opened {
                 game.player_menu_opening(conn);

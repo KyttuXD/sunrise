@@ -88,9 +88,7 @@ pub(super) struct OpenTransactions {
     closing: Option<TransactionLifecycle>,
     /// Implicit container notices waiting for this quick move's source settlement.
     quick_move_notices: Option<Vec<QuickMoveNotice>>,
-    /// Window ids reserved by staged menus currently publishing at root commit, so
-    /// reentrant opens during commit never collide with remaining queued staged opens.
-    committing_menu_windows: Vec<(u32, i32)>,
+    pub(super) menu_publications: HashMap<u32, super::lan_menus::MenuPublications>,
     /// How many writes the journals have been asked to keep, ever: a whole-state epoch that no
     /// restore moves back. A decision that read a player's inventory or a container's slots
     /// compares it before and after its listeners ran; an equal rewrite counts as a write.
@@ -257,16 +255,11 @@ impl std::ops::DerefMut for OpenTransactions {
 struct ClosingPhase<'a, 'g> {
     game: &'a mut Game<'g>,
     outer: Option<TransactionLifecycle>,
-    keep_menu_windows: usize,
 }
 
 impl Drop for ClosingPhase<'_, '_> {
     fn drop(&mut self) {
         self.game.transactions.closing = self.outer;
-        self.game
-            .transactions
-            .committing_menu_windows
-            .truncate(self.keep_menu_windows);
     }
 }
 
@@ -275,6 +268,7 @@ impl Drop for ClosingPhase<'_, '_> {
 /// the root commit (and an abort drops it without advancing `Guest.next_window`).
 pub(in crate::game) struct StagedNativeMenu {
     pub(in crate::game) conn: u32,
+    pub(in crate::game) uuid: u128,
     pub(in crate::game) window: i32,
     pub(in crate::game) generation: u64,
     pub(in crate::game) registry_id: Box<str>,
@@ -292,6 +286,14 @@ pub(in crate::game) struct StagedNativeMenu {
 }
 
 impl StagedNativeMenu {
+    pub(super) fn reservation(&self) -> super::lan_menus::MenuReservation {
+        super::lan_menus::MenuReservation {
+            conn: self.conn,
+            window: self.window,
+            generation: self.generation,
+        }
+    }
+
     pub(in crate::game) fn player_slots(&self) -> usize {
         self.mod_type
             .map_or(36, sunrise_client::containers::ModMenuType::player_slots)
@@ -308,21 +310,14 @@ impl StagedNativeMenu {
 
 pub(in crate::game) enum StagedMenu {
     Native(Box<StagedNativeMenu>),
-    Opaque { conn: u32, window: i32 },
+    Opaque(super::lan_menus::MenuReservation),
 }
 
 impl StagedMenu {
-    pub(in crate::game) fn conn(&self) -> u32 {
+    fn reservation(&self) -> super::lan_menus::MenuReservation {
         match self {
-            Self::Native(menu) => menu.conn,
-            Self::Opaque { conn, .. } => *conn,
-        }
-    }
-
-    pub(in crate::game) fn window(&self) -> i32 {
-        match self {
-            Self::Native(menu) => menu.window,
-            Self::Opaque { window, .. } => *window,
+            Self::Native(menu) => menu.reservation(),
+            Self::Opaque(reservation) => *reservation,
         }
     }
 }
@@ -673,7 +668,11 @@ pub(super) enum After {
     QuickMoveChanged(QuickMoveNotice),
     GuestMenu(u32, Box<super::lan_crafting::GuestMenuEffects>),
     MenuClick(Box<super::lan_menus::MenuClickReply>),
-    MenuOpen(u32, Option<i32>, super::lan_menus::MenuOpen),
+    MenuOpen(
+        super::lan_menus::MenuReservation,
+        bool,
+        super::lan_menus::MenuOpen,
+    ),
     StagedMenuOpen(u64),
     MenuPlacesNotice(u32, u128, i32),
     FurnaceMenu(Box<super::lan_crafting::FurnaceMenuEffects>),
@@ -1076,12 +1075,7 @@ impl Game<'_> {
         // transactions reentered by that commit's listeners.
         let retire = !self.has_level_transaction()
             && !entities::is_committing(&self.transactions.committing, self.dim);
-        let keep_menu_windows = self.transactions.committing_menu_windows.len();
-        let guard = ClosingPhase {
-            game: self,
-            outer,
-            keep_menu_windows,
-        };
+        let guard = ClosingPhase { game: self, outer };
         #[cfg(test)]
         guard
             .game
@@ -1749,7 +1743,7 @@ impl Game<'_> {
                 (!level.native_menu_slots.contains_key(&staged.generation))
                     .then(|| (staged.generation, staged.items.clone()))
             }
-            Some(StagedMenu::Opaque { .. }) => None,
+            Some(StagedMenu::Opaque(_)) => None,
             None => (g
                 .menu
                 .as_ref()
@@ -2123,8 +2117,8 @@ impl Game<'_> {
             }
             After::GuestMenu(conn, effects) => self.publish_guest_menu_effects(conn, *effects),
             After::MenuClick(reply) => self.publish_menu_click(*reply),
-            After::MenuOpen(conn, reserved_window, open) => {
-                self.publish_menu_open(conn, reserved_window, open);
+            After::MenuOpen(reservation, after_turn, open) => {
+                self.publish_menu_open(reservation, after_turn, open);
             }
             After::StagedMenuOpen(_) => {
                 debug_assert!(false, "StagedMenuOpen only runs in root_commit");
@@ -2314,7 +2308,7 @@ impl Game<'_> {
             .iter()
             .rev()
             .flat_map(|level| level.staged_menus.iter().rev())
-            .find(|menu| menu.conn() == conn)
+            .find(|menu| menu.reservation().conn == conn)
     }
 
     pub(in crate::game) fn staged_native_menu_mut(
@@ -2328,7 +2322,7 @@ impl Game<'_> {
             .iter_mut()
             .rev()
             .flat_map(|level| level.staged_menus.iter_mut().rev())
-            .find(|menu| menu.conn() == conn)?
+            .find(|menu| menu.reservation().conn == conn)?
         {
             StagedMenu::Native(staged) if staged.generation == generation => Some(staged),
             _ => None,
@@ -2343,21 +2337,8 @@ impl Game<'_> {
         }
         let base = self
             .latest_staged_menu(conn)
-            .map(StagedMenu::window)
-            .or_else(|| {
-                host.menus
-                    .get(&conn)
-                    .and_then(|menus| menus.closing.as_ref())
-                    .and_then(|closing| closing.last_reserved_window)
-            })
-            .or_else(|| {
-                self.transactions
-                    .committing_menu_windows
-                    .iter()
-                    .rev()
-                    .find(|(c, _)| *c == conn)
-                    .map(|(_, window)| *window)
-            })
+            .map(|menu| menu.reservation().window)
+            .or_else(|| self.last_menu_reservation(conn))
             .unwrap_or(guest.next_window);
         Some(base % 100 + 1)
     }
@@ -2372,12 +2353,19 @@ impl Game<'_> {
         }
     }
 
-    pub(in crate::game) fn reserve_opaque_menu_window(&mut self, conn: u32) -> Option<i32> {
-        let window = self.next_reserved_menu_window(conn)?;
+    pub(in crate::game) fn reserve_opaque_menu_window(
+        &mut self,
+        conn: u32,
+    ) -> Option<super::lan_menus::MenuReservation> {
+        let reservation = super::lan_menus::MenuReservation {
+            conn,
+            window: self.next_reserved_menu_window(conn)?,
+            generation: sunrise_client::lan::guest::menu_generation(),
+        };
         if let Some(level) = self.transactions.last_mut() {
-            level.staged_menus.push(StagedMenu::Opaque { conn, window });
+            level.staged_menus.push(StagedMenu::Opaque(reservation));
         }
-        Some(window)
+        Some(reservation)
     }
 
     fn root_commit(&mut self, mut level: Level) {
@@ -2403,9 +2391,7 @@ impl Game<'_> {
         }
         let mut staged_native_menus: HashMap<u64, Box<StagedNativeMenu>> = HashMap::new();
         for staged in level.staged_menus {
-            self.transactions
-                .committing_menu_windows
-                .push((staged.conn(), staged.window()));
+            self.queue_menu_reservation(staged.reservation());
             if let StagedMenu::Native(mut menu) = staged {
                 let conn = menu.conn;
                 let generation = menu.generation;

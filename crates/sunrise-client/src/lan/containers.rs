@@ -373,10 +373,10 @@ impl Hub {
         title: Tag,
         pos: Option<(i32, i32, i32)>,
         slots: Slots,
-        items: Vec<Option<ItemStack>>,
+        mut items: Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
     ) -> Option<i32> {
-        self.open_prepared_menu_window(conn, None, menu_kind, title, pos, slots, items, extra)
+        self.open_prepared_menu_window(conn, None, menu_kind, title, pos, slots, &mut items, extra)
     }
 
     /// Install a menu, using its reserved id and generation if publication waited for a
@@ -390,7 +390,7 @@ impl Hub {
         title: Tag,
         pos: Option<(i32, i32, i32)>,
         slots: Slots,
-        items: Vec<Option<ItemStack>>,
+        items: &mut Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
     ) -> Option<i32> {
         let kind = self
@@ -399,6 +399,9 @@ impl Hub {
             .get("minecraft:menu")
             .and_then(|m| m.id(menu_kind))?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
+        if self.guests[i].disconnect_pending {
+            return None;
+        }
         let encoded_extra = match extra {
             Some(data) => {
                 let next_window = reserved
@@ -419,6 +422,8 @@ impl Hub {
             }
             None => None,
         };
+        // Until every publication check has passed, the caller still owns the stacks.
+        let items = std::mem::take(items);
         self.close_container_at(i);
         let window = self.guests.update(i, |g| {
             let window = if let Some((window, generation)) = reserved {
@@ -501,7 +506,7 @@ impl Hub {
             title,
             None,
             Slots::Native,
-            items,
+            &mut items,
             None,
         )
     }

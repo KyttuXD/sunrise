@@ -106,6 +106,7 @@ impl Game<'_> {
         let generation = sunrise_client::lan::guest::menu_generation();
         self.stage_native_menu(super::transactions::StagedNativeMenu {
             conn,
+            uuid,
             window,
             generation,
             registry_id,
@@ -128,81 +129,148 @@ impl Game<'_> {
         &mut self,
         staged: super::transactions::StagedNativeMenu,
     ) {
-        let conn = staged.conn;
-        let window = staged.window;
+        let reservation = staged.reservation();
         self.publish_menu_open(
-            conn,
-            Some(window),
-            Box::new(move |game| {
-                if game.install_staged_native_menu(staged).is_none() {
-                    log::error!("Could not open reserved menu {window} for connection {conn}");
-                }
-            }),
+            reservation,
+            false,
+            Box::new(move |game| game.install_staged_native_menu(staged)),
         );
     }
 
-    fn install_staged_native_menu(
-        &mut self,
-        staged: super::transactions::StagedNativeMenu,
-    ) -> Option<i32> {
+    fn install_staged_native_menu(&mut self, staged: super::transactions::StagedNativeMenu) {
+        let owned = staged.owned_slots().is_some();
         let super::transactions::StagedNativeMenu {
             conn,
+            uuid,
             window,
             generation,
             registry_id,
             title,
             pos,
-            items,
+            mut items,
             extra,
             blockless_data,
-            opening_item,
-            opener_block,
+            mut opening_item,
+            mut opener_block,
             replace,
             send_data_snapshot,
             ..
         } = staged;
-        if self.lan.as_ref()?.hub.guest(conn)?.disconnect_pending {
-            return None;
-        }
-        self.guest_replace_menu_for_window(
-            conn,
-            Some(window),
-            replace == MenuReplace::CloseFirst,
-            |game| {
-                let gi = game.guest_index(conn)?;
-                // The first contents show the player's own inventory and cursor, in their turn too.
-                let installed = game.with_own_record(gi, |lan, _| {
-                    let opened = lan.hub.open_prepared_menu_window(
-                        conn,
-                        Some((window, generation)),
-                        &registry_id,
-                        title,
-                        pos,
-                        Slots::Native,
-                        items,
-                        extra,
-                    )?;
-                    if !blockless_data.is_empty()
-                        || opening_item.is_some()
-                        || opener_block.is_some()
-                        || send_data_snapshot
-                    {
-                        lan.hub.guests.update(gi, |g| {
-                            let open = g.menu.as_mut().expect("the window was just installed");
-                            open.blockless_data = blockless_data;
-                            open.opening_item = opening_item;
-                            open.opener_block = opener_block;
-                            if send_data_snapshot {
-                                g.send_menu_data_snapshot();
-                            }
-                        });
+        let live = self
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guest(conn))
+            .is_some_and(|guest| guest.placed && !guest.disconnect_pending);
+        let installed = if live {
+            self.guest_replace_menu_for_window(
+                conn,
+                Some(window),
+                replace == MenuReplace::CloseFirst,
+                |game| {
+                    let gi = game.guest_index(conn)?;
+                    if !game.lan.as_ref()?.hub.guests[gi].placed {
+                        return None;
                     }
-                    Some(opened)
-                })?;
-                game.player_menu_opening(conn);
-                Some(installed)
-            },
-        )
+                    // The first contents show the player's own inventory and cursor, in their turn too.
+                    game.with_own_record(gi, |lan, _| {
+                        lan.hub.open_prepared_menu_window(
+                            conn,
+                            Some((window, generation)),
+                            &registry_id,
+                            title,
+                            pos,
+                            Slots::Native,
+                            &mut items,
+                            extra,
+                        )?;
+                        if !blockless_data.is_empty()
+                            || opening_item.is_some()
+                            || opener_block.is_some()
+                            || send_data_snapshot
+                        {
+                            lan.hub.guests.update(gi, |g| {
+                                let open = g.menu.as_mut().expect("the window was just installed");
+                                open.blockless_data = blockless_data;
+                                open.opening_item = opening_item.take();
+                                open.opener_block = opener_block.take();
+                                if send_data_snapshot {
+                                    g.send_menu_data_snapshot();
+                                }
+                            });
+                        }
+                        Some(())
+                    })?;
+                    game.player_menu_opening(conn);
+                    Some(())
+                },
+            )
+            .is_some()
+        } else {
+            false
+        };
+        if installed {
+            return;
+        }
+        log::error!("Could not open reserved menu {window} for connection {conn}");
+        if !owned || !items.iter().any(Option::is_some) {
+            return;
+        }
+        // `AbstractContainerMenu.clearContainer`: committed stacks cannot be discarded with an
+        // unpublished container. For a disconnect they drop in the player's level; otherwise
+        // hand them back to the inventory. An absent player leaves them with the menu owner.
+        let back = self.dim;
+        if let Some((dim, drop)) = self
+            .lan
+            .as_ref()
+            .and_then(|lan| lan.hub.guest(conn))
+            .map(|g| {
+                (
+                    super::Dim::from_id(&g.dimension),
+                    g.disconnect_pending || g.dead,
+                )
+            })
+        {
+            let entered = if dim == back {
+                true
+            } else if let Err(error) = self.enter_level(dim) {
+                log::error!(
+                    "Could not return reserved menu items in {}: {error}",
+                    dim.id()
+                );
+                false
+            } else {
+                true
+            };
+            let recipient = self.guest_index(conn);
+            if let Some(gi) = recipient {
+                let stacks = std::mem::take(&mut items).into_iter().flatten().collect();
+                if drop && entered {
+                    self.drop_guest_items(gi, stacks);
+                } else {
+                    self.lan_place_back(gi, stacks);
+                }
+            }
+            if self.dim != back
+                && let Err(error) = self.enter_level(back)
+            {
+                log::error!(
+                    "Could not restore {} after returning reserved menu items: {error}",
+                    back.id()
+                );
+            }
+            if recipient.is_some() {
+                return;
+            }
+        }
+        self.deliver_menu_removed(NativeMenuEvent::Closed {
+            uuid,
+            window,
+            generation,
+            menu: registry_id,
+            block: opener_block,
+            opening_hand: opening_item.map(|(hand, _)| hand),
+            owned_slots: items,
+        });
     }
     /// `ServerPlayer.openMenu(provider, extraDataWriter)` for a content mod menu type and no
     /// block: the type's container slots show empty and their clicks reach the mods, as
@@ -258,6 +326,7 @@ impl Game<'_> {
             return Err(OpenMenuError::PlayerUnavailable);
         }
         let conn = guest.conn;
+        let uuid = guest.uuid;
         self.lan
             .as_ref()
             .and_then(|host| host.hub.registry_id("minecraft:menu", &id))
@@ -287,6 +356,7 @@ impl Game<'_> {
         let generation = sunrise_client::lan::guest::menu_generation();
         self.stage_native_menu(super::transactions::StagedNativeMenu {
             conn,
+            uuid,
             window,
             generation,
             registry_id: id.as_str().into(),
