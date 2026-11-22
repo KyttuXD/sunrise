@@ -1121,8 +1121,6 @@ impl Game<'_> {
             self.native_panel_key(name);
         }
     }
-    /// Whether a mod listens to one of the four screen render hooks; nothing
-    /// is built to fire them otherwise.
     /// Whether any mod listens to a hook given the open screen's
     /// `ScreenView` (render, input, open and close, room, exclusion): only
     /// then are its regions collected.
@@ -1156,6 +1154,8 @@ impl Game<'_> {
         .into_iter()
         .any(mod_api::__private::listened)
     }
+    /// Whether a mod listens to one of the four screen render hooks; nothing
+    /// is built to fire them otherwise.
     pub(super) fn screen_render_listened(&self) -> bool {
         use mod_api::HookId;
         [
