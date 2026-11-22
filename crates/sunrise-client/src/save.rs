@@ -4151,13 +4151,7 @@ impl Level {
         self.recipe_book = crate::recipe_book::Settings::read(p.get("recipeBook"));
         self.inventory_components = inventory_components;
         self.xp_seed = n("XpSeed").unwrap_or(0) as i32;
-        self.active_effects = match p.get("active_effects") {
-            Some(Tag::List(list)) => list
-                .iter()
-                .filter_map(|e| Some(read_effect_details(e, &text(e.get("id"))?)))
-                .collect(),
-            _ => Vec::new(),
-        };
+        self.active_effects = read_active_effects(p.get("active_effects"));
         // ServerPlayer.saveParentVehicle: the mount the player rides, by
         // UUID; the vehicle tree stays in the raw compound until it is back.
         self.root_vehicle = p
@@ -4307,19 +4301,7 @@ impl Level {
             ("XpTotal", Tag::Int(self.xp_total)),
             ("SelectedItemSlot", Tag::Int(self.selected_slot)),
             ("XpSeed", Tag::Int(self.xp_seed)),
-            (
-                "active_effects",
-                Tag::List(
-                    self.active_effects
-                        .iter()
-                        .map(|e| {
-                            let mut effect = vec![("id", string(&e.id))];
-                            effect.extend(effect_details(e));
-                            Tag::compound(effect)
-                        })
-                        .collect(),
-                ),
-            ),
+            ("active_effects", write_active_effects(&self.active_effects)),
             ("playerGameType", Tag::Int(self.mode())),
             ("Inventory", Tag::List(inventory)),
             ("EnderItems", encode_items(&self.ender_items, items)),
@@ -5359,6 +5341,29 @@ fn record_is_old(root: &NamedTag) -> bool {
         _ => true,
     };
     before_blending || root.tag.get("blending_data").is_some()
+}
+
+pub(crate) fn read_active_effects(tag: Option<&Tag>) -> Vec<crate::effects::SavedEffect> {
+    match tag {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|e| Some(read_effect_details(e, &text(e.get("id"))?)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) fn write_active_effects(effects: &[crate::effects::SavedEffect]) -> Tag {
+    Tag::List(
+        effects
+            .iter()
+            .map(|e| {
+                let mut effect = vec![("id", string(&e.id))];
+                effect.extend(effect_details(e));
+                Tag::compound(effect)
+            })
+            .collect(),
+    )
 }
 
 /// `MobEffectInstance.Details` read under its effect's `id`, the

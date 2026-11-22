@@ -21,7 +21,8 @@ pub trait Hooks {
     /// instance of the same effect, if any; `new_effect` is the incoming instance being applied;
     /// `source` is the entity that caused the effect, when known. Fires on first insertion,
     /// reapplications and unchanged updates alike; does not fire on `forceAddEffect`, world load
-    /// or client sync, and is not cancellable. Server-side.
+    /// or client sync, and is not cancellable. If a listener writes to the observed slot or
+    /// removes the holder, that write stays and the original add does not continue. Server-side.
     #[hook(
         dispatch = "flat",
         side = "server",

@@ -186,7 +186,13 @@ impl Game<'_> {
 
     /// A projectile that hit a guest: its hit runs as theirs. False when
     /// `id` is not a guest.
-    pub(super) fn lan_projectile_hit(&mut self, p: &Projectile, id: u32, at: Vec3) -> bool {
+    pub(super) fn lan_projectile_hit(
+        &mut self,
+        p: &Projectile,
+        id: u32,
+        at: Vec3,
+        source: Option<mod_api::EntityRef>,
+    ) -> bool {
         let Some(host) = self.lan.as_ref() else {
             return false;
         };
@@ -202,7 +208,7 @@ impl Game<'_> {
                     who: Who::Player,
                     at,
                 };
-                let _ = g.projectile_hit(p, hit);
+                let _ = g.projectile_hit_from(p, hit, source);
             });
         }
         conn.is_some()

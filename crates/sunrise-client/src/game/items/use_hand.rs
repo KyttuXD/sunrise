@@ -681,51 +681,28 @@ impl Game<'_> {
             } => {
                 // ApplyStatusEffectsConsumeEffect draws from the user's random,
                 // even at probability 1. The level random stands in for a player's.
-                let draw = match mob {
+                let id = match mob {
                     Some(living) => {
                         let commands::Target::Mob(id) = self.native_living_target(living)? else {
                             return None;
                         };
-                        self.mobs
-                            .iter_mut()
-                            .find(|m| m.id == id)?
-                            .random
-                            .next_float()
+                        Some(id)
                     }
-                    None => self.world.random.next_float(),
+                    None => None,
+                };
+                let draw = if let Some(id) = id {
+                    self.mobs
+                        .iter_mut()
+                        .find(|m| m.id == id)?
+                        .random
+                        .next_float()
+                } else {
+                    self.world.random.next_float()
                 };
                 if draw >= *probability {
                     return Some(false);
                 }
-                let mut changed = false;
-                for eff in effects {
-                    let Some(def) = sunrise_client::brewing::effect(&eff.id) else {
-                        continue;
-                    };
-                    if let Some(living) = mob {
-                        let effect = mod_api::ActiveEffect::new(
-                            mod_api::__private::effect_key_by_index(def.index)
-                                .expect("effects resolved at load"),
-                            eff.duration,
-                            eff.amplifier,
-                            eff.ambient,
-                            eff.show_particles,
-                            eff.show_icon,
-                        );
-                        changed |= self.living_add_effect(living, &effect);
-                    } else {
-                        let mut instance = sunrise_client::effects::EffectInstance::new(
-                            def.id,
-                            eff.duration,
-                            eff.amplifier,
-                        );
-                        instance.ambient = eff.ambient;
-                        instance.visible = eff.show_particles;
-                        instance.show_icon = eff.show_icon;
-                        changed |= self.add_player_effect(instance);
-                    }
-                }
-                changed
+                self.apply_consumed_status_effects(effects, id)
             }
             ConsumeEffect::ClearAllEffects => match mob {
                 Some(living) => self.living_remove_all_effects(living),
@@ -774,6 +751,53 @@ impl Game<'_> {
                 self.native_consume_effect(kind, data, consumed, user)
             }),
         })
+    }
+    /// `DeathProtection.applyEffects` once the entity is back in the owning Game.
+    /// Status applications have already passed their random draw in the damage path.
+    pub(super) fn apply_mob_death_protection_effects(
+        &mut self,
+        mob: u32,
+        consumed: &ItemStack,
+        effects: &[sunrise_client::items::ConsumeEffect],
+    ) {
+        let Some(living) = self.entity(mob).and_then(|entity| self.living(entity)) else {
+            return;
+        };
+        for effect in effects {
+            if let sunrise_client::items::ConsumeEffect::ApplyEffects { effects, .. } = effect {
+                self.apply_consumed_status_effects(effects, Some(mob));
+            } else {
+                self.apply_consume_effect(consumed, effect, Some(living), living.entity());
+            }
+        }
+    }
+
+    /// ApplyStatusEffectsConsumeEffect's ordered list after its random draw has passed.
+    pub(super) fn apply_consumed_status_effects(
+        &mut self,
+        effects: &[sunrise_client::items::ConsumeEffectSpec],
+        mob: Option<u32>,
+    ) -> bool {
+        let mut changed = false;
+        for effect in effects {
+            let Some(def) = sunrise_client::brewing::effect(&effect.id) else {
+                continue;
+            };
+            let mut instance = sunrise_client::effects::EffectInstance::from_def(
+                def,
+                effect.duration,
+                effect.amplifier,
+            );
+            instance.ambient = effect.ambient;
+            instance.visible = effect.show_particles;
+            instance.show_icon = effect.show_icon;
+            changed |= if let Some(id) = mob {
+                self.add_mob_effect(id, instance, None)
+            } else {
+                self.add_player_effect(instance)
+            };
+        }
+        changed
     }
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3, as
     /// many as the weapon's `projectile_count` says, fanned by its

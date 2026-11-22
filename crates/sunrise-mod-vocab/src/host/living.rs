@@ -358,15 +358,15 @@ pub trait LivingBackendMut {
     ) -> Result<Option<bool>, StackWriteError>;
     /// Side: server.
     /// `LivingEntity.addEffect(instance)`: gives the living entity the
-    /// effect by the game's own path. A player's or a guest's goes through
-    /// `add_player_effect` and a mob's goes through `add_mob_effect`, so
-    /// `canBeAffected`, `mob_effect_applicable`, `mob_effect_added`,
-    /// `MobEffectInstance.update`, attribute modifiers, absorption and
-    /// `MobEffectPart::on_effect_added` all apply in vanilla/NeoForge order.
+    /// effect by the game's own path for players, mobs and armor stands.
+    /// `mob_effect_applicable` decides eligibility; `mob_effect_added` observes
+    /// the old and incoming instances before the game updates the active slot.
+    /// The first insertion also calls `MobEffectPart::on_effect_added`.
     /// The amplifier is cut to 0..=255 and the duration is -1 (infinite) or
-    /// ticks. False before effect resolution, for a duration below -1, an armor
-    /// stand, the dragon, a wither, a stale handle or a client, or when the
-    /// active instance did not change, as in vanilla's `addEffect`.
+    /// ticks. False for an unresolved effect, a duration below -1, the dragon,
+    /// a wither, a stale handle, a client, or an unchanged instance. If an
+    /// Added listener changes the holder or the observed slot, its write stays
+    /// and this attempt returns false.
     #[access(WorldOnly)]
     fn living_add_effect(&mut self, living: LivingRef, effect: &ActiveEffect) -> bool;
     /// Side: server.
@@ -377,14 +377,14 @@ pub trait LivingBackendMut {
     /// hidden and ambient lists drop it too, with absorption's hearts
     /// leaving the same way its expiry takes them. False (and nothing
     /// changes) when the entity has the effect not, before effect resolution, or for
-    /// an armor stand, the dragon, a stale handle or a client.
+    /// the dragon, a stale handle or a client.
     #[access(WorldOnly)]
     fn living_remove_effect(&mut self, living: LivingRef, effect: EffectKey) -> bool;
     /// Side: server.
     /// `LivingEntity.removeAllEffects()` the way their running out goes:
     /// every effect's attribute modifiers and absorption hearts leave with
-    /// them. False when the entity has none, or for an armor stand, the
-    /// dragon, a stale handle or a client.
+    /// them. False when the entity has none, or for the dragon, a stale
+    /// handle or a client.
     #[access(WorldOnly)]
     fn living_remove_all_effects(&mut self, living: LivingRef) -> bool;
     /// Side: server.

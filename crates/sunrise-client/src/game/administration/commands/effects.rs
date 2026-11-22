@@ -70,20 +70,15 @@ impl Game<'_> {
         });
         let mut tracker = Tracker::default();
         for t in self.living_targets(ctx)? {
+            // `new MobEffectInstance(effect, duration, amplifier, false, particles)`.
+            let instance =
+                EffectInstance::from_def(effect, duration, amplifier).with_flags(false, particles);
             let changed = match t {
-                Target::Player | Target::Guest(_) => {
-                    // `new MobEffectInstance(effect, duration, amplifier, false, particles)`.
-                    let instance = EffectInstance::new(effect.id, duration, amplifier)
-                        .with_flags(false, particles);
-                    self.for_player(t, |g| g.add_player_effect_from(instance, source))
-                        .unwrap_or(false)
-                }
-                Target::Mob(id) => {
-                    // `new MobEffectInstance(effect, duration, amplifier, false, particles)`.
-                    let instance = EffectInstance::new(effect.id, duration, amplifier)
-                        .with_flags(false, particles);
-                    self.add_mob_effect(id, instance, source)
-                }
+                Target::Player | Target::Guest(_) => self
+                    .for_player(t, |g| g.add_player_effect_from(instance, source))
+                    .unwrap_or(false),
+                Target::Mob(id) => self.add_mob_effect(id, instance, source),
+                Target::Stand(id) => self.add_stand_effect(id, instance, source),
                 _ => continue,
             };
             tracker.track(t, changed);
@@ -126,6 +121,7 @@ impl Game<'_> {
                 (Target::Player | Target::Guest(_), Some(e)) => self
                     .for_player(t, |g| g.remove_player_effects(Some(e.index)))
                     .unwrap_or(false),
+                (Target::Stand(id), e) => self.remove_stand_effects(id, e.map(|def| def.index)),
                 (Target::Mob(id), e) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => m.retain_effects(|x| e.is_some_and(|e| x.id != namespaced(e.id))),
                     None => false,

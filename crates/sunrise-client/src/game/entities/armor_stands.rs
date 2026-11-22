@@ -999,6 +999,7 @@ impl Game<'_> {
     }
     pub(super) fn tick_armor_stands(&mut self) -> Result<()> {
         let mut dead = Vec::new();
+        let mut with_effects = Vec::new();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         // EntityGetter.getEntityCollisions: the boxes that stop a stand's move
@@ -1016,6 +1017,9 @@ impl Game<'_> {
                 continue;
             }
             self.armor_stands[i].first_tick = false;
+            if !self.armor_stands[i].effects.list.is_empty() {
+                with_effects.push(self.armor_stands[i].id);
+            }
             // Entity.baseTick: the saved invulnerability window counts down
             // (#916).
             self.tick_saved_invulnerable_time(self.armor_stands[i].id);
@@ -1168,6 +1172,9 @@ impl Game<'_> {
             if let Some(i) = self.armor_stands.iter().position(|a| a.id == id) {
                 self.break_armor_stand_by_anything(i, damage_type, 0);
             }
+        }
+        for id in with_effects {
+            self.tick_stand_effects(id);
         }
         Ok(())
     }

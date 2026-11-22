@@ -886,6 +886,7 @@ pub fn server_ai_step(
         events.push(MobEvent::Darkness {
             at: at(m),
             radius: DARKNESS_RADIUS,
+            source: m.id,
         });
     }
     if m.age.is_multiple_of(20)

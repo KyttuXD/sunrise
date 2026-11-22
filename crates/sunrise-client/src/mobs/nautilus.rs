@@ -310,6 +310,7 @@ pub fn ai_step(
                     amplifier: 0,
                     // AbstractNautilus.applyEffects: ambient, visible, showIcon.
                     ambient: true,
+                    source: None,
                 },
             ));
         }

@@ -2078,6 +2078,7 @@ impl Game<'_> {
         let mut killed = false;
         let mut hurt = false;
         let mut infested = Vec::new();
+        let mut protections = Vec::new();
         let catch_up = self.catch_up_countdowns(source.attacker, target);
         let aim = self.attacker_aim(source.attacker);
         // So `living_knockback` sees who hit and what they hold.
@@ -2132,6 +2133,13 @@ impl Game<'_> {
                             self.audio.play(&full_id(s), Some(center), volume, pitch);
                         }
                         MobEvent::Infested { at, velocities } => infested.push((at, velocities)),
+                        MobEvent::DeathProtectionEffects {
+                            mob,
+                            consumed,
+                            effects,
+                        } => {
+                            protections.push((mob, consumed, effects));
+                        }
                         other => {
                             // Left for the end of the tick.
                             t.outbox.push(other);
@@ -2139,6 +2147,9 @@ impl Game<'_> {
                     }
                 }
             }
+        }
+        for (mob, consumed, effects) in protections {
+            self.apply_mob_death_protection_effects(mob, &consumed, &effects);
         }
         for (at, velocities) in infested {
             self.spawn_infested(at, velocities);
@@ -2603,14 +2614,25 @@ impl Game<'_> {
                 MobEvent::AttackPlayerWithEffect {
                     amount,
                     from,
+                    attacker,
                     effect,
                     ticks,
                     amplifier,
                 } => {
-                    self.combat.hit_landed =
-                        self.mob_hits_player(amount, from, "minecraft:mob_attack");
+                    self.combat.hit_landed = self.hurt_player_from(
+                        amount,
+                        Some(from),
+                        "minecraft:mob_attack",
+                        Some(Some(attacker)),
+                        false,
+                    );
                     if self.combat.hit_landed {
-                        self.give_player_effect(effect, ticks, amplifier);
+                        self.give_player_effect_from(
+                            effect,
+                            ticks,
+                            amplifier,
+                            self.entity(attacker),
+                        );
                     }
                 }
                 MobEvent::DamagePlayer { amount, from, kind } => {
@@ -2837,10 +2859,17 @@ impl Game<'_> {
                     // effect sits inside the branch where the hit landed, and
                     // `LivingEntity.addEffect` takes a mob as well as a player.
                     self.combat.hit_landed = self.mob_attacks_mob(target, amount, source);
-                    if self.combat.hit_landed
-                        && let Some(t) = self.mobs.iter_mut().find(|m| m.id == target)
-                    {
-                        t.add_effect(effect, ticks, amplifier);
+                    if self.combat.hit_landed {
+                        let cause = match source.attacker {
+                            Some(Who::Mob(id)) => self.entity(id),
+                            Some(Who::Player) => self.entity(self.own_entity_id() as u32),
+                            None => None,
+                        };
+                        self.add_mob_effect(
+                            target,
+                            sunrise_client::effects::EffectInstance::new(effect, ticks, amplifier),
+                            cause,
+                        );
                     }
                 }
                 MobEvent::CubeHurtPlayer { cube, amount, from } => {
@@ -3579,18 +3608,35 @@ impl Game<'_> {
                     ticks,
                     amplifier,
                     ambient,
+                    source,
                 } => {
-                    self.give_mob_effect(effect, ticks, amplifier, ambient);
+                    self.give_mob_effect_from(
+                        effect,
+                        ticks,
+                        amplifier,
+                        ambient,
+                        source.and_then(|id| self.entity(id)),
+                    );
                 }
                 MobEvent::EffectMob {
                     target,
+                    source,
                     effect,
                     ticks,
                     amplifier,
                 } => {
-                    if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
-                        t.add_effect(effect, ticks, amplifier);
-                    }
+                    self.add_mob_effect(
+                        target,
+                        sunrise_client::effects::EffectInstance::new(effect, ticks, amplifier),
+                        source.and_then(|id| self.entity(id)),
+                    );
+                }
+                MobEvent::DeathProtectionEffects {
+                    mob,
+                    consumed,
+                    effects,
+                } => {
+                    self.apply_mob_death_protection_effects(mob, &consumed, &effects);
                 }
                 MobEvent::Ignite(target, seconds) => self.ignite_entity(target, seconds)?,
                 MobEvent::ZombieIgnite(target, seconds) if self.combat.hit_landed => {
@@ -3665,7 +3711,9 @@ impl Game<'_> {
                     let state = self.world.block(block[0], block[1], block[2]);
                     self.level_event_at(2001, pos, state.0 as i32);
                 }
-                MobEvent::Darkness { at, radius } => self.apply_darkness(at, radius),
+                MobEvent::Darkness { at, radius, source } => {
+                    self.apply_darkness(at, radius, self.entity(source));
+                }
                 MobEvent::CreakingHurt {
                     home,
                     by_player,
@@ -5152,7 +5200,8 @@ impl Game<'_> {
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
     /// as the host's when they have left.
     fn guest_projectile_hit(&mut self, conn: u32, p: &Projectile, hit: Hit) -> Result<()> {
-        let result = self.as_guest(conn, |g| g.projectile_hit(p, hit));
+        let source = self.potion_owner_entity(p.owner, p.guest);
+        let result = self.as_guest(conn, |g| g.projectile_hit_from(p, hit, source));
         // The mob hit now answers to the guest (LivingEntity.lastHurtByPlayer).
         if result.is_some()
             && self
@@ -5170,7 +5219,7 @@ impl Game<'_> {
         }
         match result {
             Some(r) => r,
-            None => self.projectile_hit(p, hit),
+            None => self.projectile_hit_from(p, hit, source),
         }
     }
     /// `EnchantmentHelper.doPostAttackEffects` after the player's shot `p`
@@ -5624,14 +5673,29 @@ impl Game<'_> {
 
     /// A projectile's hit, landed in the attack of its owner.
     pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+        let source = self.potion_owner_entity(p.owner, p.guest);
+        self.projectile_hit_from(p, hit, source)
+    }
+    /// The owner is resolved before a LAN victim's turn replaces the acting player.
+    pub(super) fn projectile_hit_from(
+        &mut self,
+        p: &Projectile,
+        hit: Hit,
+        source: Option<mod_api::EntityRef>,
+    ) -> Result<()> {
         let attack = self.projectile_attack(p);
-        let result = self.with_attack(attack, |g| g.projectile_hit_landed(p, hit));
+        let result = self.with_attack(attack, |g| g.projectile_hit_landed(p, hit, source));
         self.settle_dealt_absorbed(p.owner == Some(Who::Player));
         result?;
         // The hit's hurt teleports an enderman or a shulker now (`hurtServer`).
         self.settle_hurt_teleports()
     }
-    fn projectile_hit_landed(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+    fn projectile_hit_landed(
+        &mut self,
+        p: &Projectile,
+        hit: Hit,
+        effect_owner: Option<mod_api::EntityRef>,
+    ) -> Result<()> {
         // Projectile.onHitBlock: BlockState.onProjectileHit, for every
         // projectile (a wind charge out of the world's top has no face).
         if let Hit::Block { pos, at, face } = hit
@@ -5665,7 +5729,7 @@ impl Game<'_> {
             who: Who::Mob(id),
             at,
         } = hit
-            && self.lan_projectile_hit(p, id, at)
+            && self.lan_projectile_hit(p, id, at, effect_owner)
         {
             return Ok(());
         }
@@ -6059,7 +6123,7 @@ impl Game<'_> {
                         "minecraft:arrow"
                     };
                     self.shot_post_attack(p, who, direct, "minecraft:arrow");
-                    self.arrow_post_hurt_effects(p, who);
+                    self.arrow_post_hurt_effects(p, who, effect_owner);
                 }
                 match (hurt, who) {
                     (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),
@@ -6521,18 +6585,21 @@ impl Game<'_> {
                     } => self.mobs.iter().find(|m| m.id == id).map(|m| m.position),
                     _ => None,
                 };
-                let owner = self.potion_owner(p.owner);
+                let mut owner = self.potion_owner(p.owner);
                 let item = stack.item.to_string();
-                self.splash(
-                    stack,
-                    at,
-                    mob,
-                    block,
-                    p.age,
-                    &owner,
-                    self.entity_silent(p.id),
-                    p.velocity,
-                );
+                self.with_effect_source(p, effect_owner, |g, source| {
+                    owner.effect_source = source;
+                    g.splash(
+                        stack,
+                        at,
+                        mob,
+                        block,
+                        p.age,
+                        &owner,
+                        g.entity_silent(p.id),
+                        p.velocity,
+                    );
+                });
                 if stack.item.as_ref() != "minecraft:experience_bottle" {
                     self.native_potion_splash(&item, [at.x, at.y, at.z]);
                 }
@@ -6575,7 +6642,9 @@ impl Game<'_> {
                         [p.previous.x, p.previous.y, p.previous.z],
                         "minecraft:mob_projectile",
                     ) {
-                        self.give_player_effect("minecraft:levitation", 200, 0);
+                        self.with_effect_source(p, effect_owner, |g, source| {
+                            g.give_player_effect_from("minecraft:levitation", 200, 0, source);
+                        });
                     }
                 }
                 Who::Mob(id) => {
@@ -6610,9 +6679,13 @@ impl Game<'_> {
                             "minecraft:shulker_bullet",
                             "minecraft:mob_projectile",
                         );
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                            m.add_effect("minecraft:levitation", 200, 0);
-                        }
+                        self.with_effect_source(p, effect_owner, |g, source| {
+                            g.add_mob_effect(
+                                id,
+                                sunrise_client::effects::EffectInstance::new("levitation", 200, 0),
+                                source,
+                            );
+                        });
                     }
                 }
             },
@@ -6624,7 +6697,10 @@ impl Game<'_> {
                     Hit::Entity { who, .. } => Some(who),
                     _ => None,
                 };
-                self.wither_skull_hit(p, who, atp)?;
+                self.with_impacting_projectile(p, |g| {
+                    let source = effect_owner.or_else(|| g.entity(p.id));
+                    g.wither_skull_hit(p, who, atp, source)
+                })?;
             }
             (ProjectileKind::ShulkerBullet { .. }, Hit::Block { .. }) => {
                 self.audio

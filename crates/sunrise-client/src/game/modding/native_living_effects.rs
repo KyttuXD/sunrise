@@ -4,8 +4,7 @@
 //! `removeAllEffects` and `hasEffect` by the game's own paths, so an effect
 //! a mod gives lands as a potion's or `/effect`'s does, through
 //! `canBeAffected` and the added-effect hooks. Reads return `None`, writes
-//! false, for a stale handle or on a client; armor stands and the dragon
-//! keep no effects, as `/effect` skips them. `effect` and `effects` also read
+//! false, for a stale handle or on a client; the dragon refuses additions. `effect` and `effects` also read
 //! on a client, for the local player, from the effects the server sent it, and
 //! `effect_blend_factor` reads only there, from the fades the client ticks.
 use super::Game;
@@ -77,11 +76,16 @@ impl Game<'_> {
     /// the acting player, and a game without a hub keeps its single
     /// player's the same way), any other guest's are their hub record's.
     /// None for another kind.
-    fn native_living_player_effects(&self, t: Target) -> Option<&PlayerEffects> {
+    fn native_living_effect_store(&self, t: Target) -> Option<&PlayerEffects> {
         match t {
             Target::Player => Some(&self.potions.effects),
             Target::Guest(conn) if self.lan_acting == Some(conn) => Some(&self.potions.effects),
             Target::Guest(conn) => Some(&self.lan.as_ref()?.hub.guest(conn)?.effects),
+            Target::Stand(id) => self
+                .armor_stands
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| &s.effects),
             _ => None,
         }
     }
@@ -93,8 +97,8 @@ impl Game<'_> {
     /// attribute modifiers, absorption and `MobEffectPart::on_effect_added`
     /// all run in vanilla/NeoForge order).
     /// The amplifier is cut to 0..=255 and the duration is -1 (infinite) or
-    /// ticks. False before effect resolution, for a duration below -1, an armor
-    /// stand, the dragon, a wither, a stale handle or a client, or when the
+    /// ticks. False before effect resolution, for a duration below -1,
+    /// the dragon, a wither, a stale handle or a client, or when the
     /// active instance did not change, as in vanilla's `addEffect`.
     pub(super) fn living_add_effect(&mut self, living: LivingRef, effect: &ActiveEffect) -> bool {
         let Some(def) = mod_api::__private::effect_index(effect.id)
@@ -105,8 +109,7 @@ impl Game<'_> {
         if effect.duration < -1 {
             return false;
         }
-        let amplifier = effect.amplifier.clamp(0, 255);
-        let mut instance = EffectInstance::from_def(def, effect.duration, amplifier);
+        let mut instance = EffectInstance::from_def(def, effect.duration, effect.amplifier);
         instance.ambient = effect.ambient;
         instance.visible = effect.visible;
         instance.show_icon = effect.show_icon;
@@ -115,6 +118,7 @@ impl Game<'_> {
                 .for_player(t, |g| g.add_player_effect(instance))
                 .unwrap_or(false),
             Some(Target::Mob(id)) => self.add_mob_effect(id, instance, None),
+            Some(Target::Stand(id)) => self.add_stand_effect(id, instance, None),
             _ => false,
         }
     }
@@ -132,8 +136,8 @@ impl Game<'_> {
         let def = mod_api::__private::effect_index(effect)
             .and_then(sunrise_client_core::potions::effect_by_index)?;
         match self.native_living_read_target(living)? {
-            t @ (Target::Player | Target::Guest(_)) => self
-                .native_living_player_effects(t)?
+            t @ (Target::Player | Target::Guest(_) | Target::Stand(_)) => self
+                .native_living_effect_store(t)?
                 .get_registered(def.index)
                 .map(active_effect),
             Target::Mob(id) => {
@@ -151,11 +155,11 @@ impl Game<'_> {
 
     /// The entity's active effects (`LivingEntity.getActiveEffects`), in the
     /// order their store keeps them, in `Some` even when it has none. None
-    /// for an armor stand, the dragon, a stale handle or a client.
+    /// for the dragon, a stale handle or a client.
     pub(super) fn living_effects(&self, living: LivingRef) -> Option<Vec<ActiveEffect>> {
         match self.native_living_read_target(living)? {
-            t @ (Target::Player | Target::Guest(_)) => self
-                .native_living_player_effects(t)
+            t @ (Target::Player | Target::Guest(_) | Target::Stand(_)) => self
+                .native_living_effect_store(t)
                 .map(|effects| effects.list.iter().map(active_effect).collect()),
             Target::Mob(id) => self
                 .mobs
@@ -167,7 +171,7 @@ impl Game<'_> {
     }
 
     /// Whether the entity has `effect` (`LivingEntity.hasEffect`), using its resolved key.
-    /// False before effect resolution, for an armor stand, the dragon or a stale handle;
+    /// False before effect resolution, for the dragon or a stale handle;
     /// on a client, for any entity but the local player, whose copy of what the server
     /// sent it is read.
     pub(super) fn living_potion_affected(&self, living: LivingRef, effect: EffectKey) -> bool {
@@ -177,8 +181,8 @@ impl Game<'_> {
             return false;
         };
         match self.native_living_read_target(living) {
-            Some(t @ (Target::Player | Target::Guest(_))) => self
-                .native_living_player_effects(t)
+            Some(t @ (Target::Player | Target::Guest(_) | Target::Stand(_))) => self
+                .native_living_effect_store(t)
                 .is_some_and(|effects| effects.get_registered(def.index).is_some()),
             Some(Target::Mob(id)) => self
                 .mobs
@@ -239,7 +243,7 @@ impl Game<'_> {
     /// hidden and ambient lists drop it too, with absorption's hearts
     /// leaving the same way its expiry takes them. False (and nothing
     /// changes) when the entity has the effect not, before effect resolution, or for
-    /// an armor stand, the dragon, a stale handle or a client.
+    /// the dragon, a stale handle or a client.
     pub(super) fn living_remove_effect(&mut self, living: LivingRef, effect: EffectKey) -> bool {
         let Some(def) = mod_api::__private::effect_index(effect)
             .and_then(sunrise_client_core::potions::effect_by_index)
@@ -250,6 +254,7 @@ impl Game<'_> {
             Some(t @ (Target::Player | Target::Guest(_))) => self
                 .for_player(t, |g| g.remove_player_effects(Some(def.index)))
                 .unwrap_or(false),
+            Some(Target::Stand(id)) => self.remove_stand_effects(id, Some(def.index)),
             Some(Target::Mob(id)) => {
                 let Some(amplifier) = self
                     .mobs
@@ -282,13 +287,14 @@ impl Game<'_> {
 
     /// `LivingEntity.removeAllEffects()` the way their running out goes:
     /// every effect's attribute modifiers and absorption hearts leave with
-    /// them. False when the entity has none, or for an armor stand, the
+    /// them. False when the entity has none, or for the
     /// dragon, a stale handle or a client.
     pub(super) fn living_remove_all_effects(&mut self, living: LivingRef) -> bool {
         match self.native_living_target(living) {
             Some(t @ (Target::Player | Target::Guest(_))) => self
                 .for_player(t, |g| g.remove_player_effects(None))
                 .unwrap_or(false),
+            Some(Target::Stand(id)) => self.remove_stand_effects(id, None),
             Some(Target::Mob(id)) => {
                 let held: Vec<(usize, i32)> = self
                     .mobs

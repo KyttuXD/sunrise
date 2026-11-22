@@ -1425,15 +1425,7 @@ impl Game<'_> {
         let mut effect =
             sunrise_client::effects::EffectInstance::new("bad_omen", 120_000, i32::from(amplifier));
         effect.visible = false;
-        let new = self.potions.effects.get("bad_omen").is_none();
-        self.potions.effects.add(effect);
-        // MobEffect.onEffectAdded: Bad Omen's sound when it is new, at the
-        // player's feet.
-        if new && let Some(p) = self.player.as_ref() {
-            let at = [p.position.x, p.position.y, p.position.z];
-            self.audio
-                .play("minecraft:event.mob_effect.bad_omen", Some(at), 1.0, 1.0);
-        }
+        self.add_player_effect(effect);
     }
 }
 

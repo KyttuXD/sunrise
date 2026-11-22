@@ -11,6 +11,8 @@ pub struct EffectInstance {
     /// Effect id: vanilla's without namespace (`speed`, `poison`, ...), a
     /// content mod's `<ns>:<path>`.
     pub id: &'static str,
+    /// Identifies live writes while a writable add-event listener is running. Not saved or synced.
+    pub write_stamp: u64,
     /// The registry index, resolved at the instance boundary; unknown internal fixtures have none.
     pub registry_index: Option<usize>,
     /// Remaining ticks; -1 is infinite.
@@ -46,6 +48,7 @@ impl EffectInstance {
     ) -> Self {
         Self {
             id,
+            write_stamp: 0,
             registry_index,
             duration,
             amplifier: amplifier.clamp(0, 255),
@@ -86,6 +89,7 @@ impl EffectInstance {
     /// `MobEffectInstance.update`.
     pub fn update(&mut self, take: &Self) -> bool {
         let mut changed = false;
+        let mut hidden_changed = false;
         if take.amplifier > self.amplifier {
             if take.shorter_than(self) {
                 let previous = self.hidden.take();
@@ -101,8 +105,10 @@ impl EffectInstance {
                 self.duration = take.duration;
                 changed = true;
             } else if let Some(h) = self.hidden.as_mut() {
-                h.update(take);
+                let previous_stamp = h.write_stamp;
+                hidden_changed = h.update(take) || h.write_stamp != previous_stamp;
             } else {
+                hidden_changed = true;
                 self.hidden = Some(Box::new(EffectInstance {
                     hidden: None,
                     ..take.clone()
@@ -120,6 +126,9 @@ impl EffectInstance {
         if take.show_icon != self.show_icon {
             self.show_icon = take.show_icon;
             changed = true;
+        }
+        if changed || hidden_changed {
+            self.write_stamp = take.write_stamp;
         }
         changed
     }

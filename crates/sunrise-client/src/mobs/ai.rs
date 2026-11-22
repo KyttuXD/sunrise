@@ -1548,7 +1548,7 @@ pub fn finish_tick(
     super::axolotl::tick_animation(m);
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
-    flower_contact_effects(m, w);
+    flower_contact_effects(m, w, events);
     // The species' own tick after the living tick, with or without AI.
     match m.species() {
         // CopperGolem.tick: updateWeathering.
@@ -4894,19 +4894,10 @@ mod poison_effect_tests {
             None,
         );
         assert_eq!(pig.health, 1.0);
-        for effect in [
-            "minecraft:regeneration",
-            "minecraft:absorption",
-            "minecraft:fire_resistance",
-        ] {
-            assert!(
-                pig.extra
-                    .effects
-                    .iter()
-                    .any(|e| e.id == effect && e.duration > 0),
-                "{effect} kept after the totem fired"
-            );
-        }
+        assert!(pig.outbox.iter().any(|e| matches!(e,
+            MobEvent::DeathProtectionEffects { mob: 1, effects, .. }
+            if effects == &crate::mobs::living::totem_death_effects()
+        )));
     }
 
     /// `WitherMobEffect.applyEffectTick` hurts with `wither`, not `magic`:
@@ -6618,14 +6609,26 @@ mod burn_and_rose_tests {
                 let mut m = golem(types);
                 m.invulnerable = 15;
                 assert_eq!(w.difficulty.base, 2);
-                flower_contact_effects(&mut m, w);
-                assert!(m.has_effect("minecraft:wither"), "normal difficulty");
+                let mut events = Vec::new();
+                flower_contact_effects(&mut m, w, &mut events);
+                assert!(
+                    matches!(
+                        events.as_slice(),
+                        [MobEvent::EffectMob {
+                            effect: "minecraft:wither",
+                            ticks: 40,
+                            ..
+                        }]
+                    ),
+                    "normal difficulty"
+                );
+                events.clear();
 
                 let mut peaceful = w.clone();
                 peaceful.difficulty = crate::mobs::spawning::LocalDifficulty::new(0, 18000, 0, 0.0);
                 let mut m = golem(types);
-                flower_contact_effects(&mut m, &peaceful);
-                assert!(!m.has_effect("minecraft:wither"), "peaceful");
+                flower_contact_effects(&mut m, &peaceful, &mut events);
+                assert!(events.is_empty(), "peaceful");
             },
         );
         assert!(ran, "vanilla data is missing");
@@ -6647,17 +6650,26 @@ mod burn_and_rose_tests {
                 let mut falling = zombie(types);
                 falling.previous = Vec3::new(0.5, 65.0, 0.5);
                 falling.position = Vec3::new(0.5, 62.0, 0.5);
-                flower_contact_effects(&mut falling, w);
+                let mut events = Vec::new();
+                flower_contact_effects(&mut falling, w, &mut events);
                 assert!(
-                    falling.has_effect("minecraft:wither"),
+                    matches!(
+                        events.as_slice(),
+                        [MobEvent::EffectMob {
+                            effect: "minecraft:wither",
+                            ticks: 40,
+                            ..
+                        }]
+                    ),
                     "inside the rose on the way past it"
                 );
 
                 let mut beside = zombie(types);
                 beside.previous = Vec3::new(3.5, 64.0, 0.5);
                 beside.position = Vec3::new(3.5, 64.0, 0.5);
-                flower_contact_effects(&mut beside, w);
-                assert!(!beside.has_effect("minecraft:wither"), "beside it");
+                events.clear();
+                flower_contact_effects(&mut beside, w, &mut events);
+                assert!(events.is_empty(), "beside it");
             },
         );
         assert!(ran, "vanilla data is missing");
@@ -8074,6 +8086,7 @@ mod hidden_speed_causal_tests {
                 m.extra.effects[0].duration = -1;
                 let h = crate::effects::EffectInstance {
                     id: "h202:cancel",
+                    write_stamp: 0,
                     registry_index: Some(0),
                     client_blend: (false, false),
                     duration: 200,

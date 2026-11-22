@@ -8,12 +8,12 @@ use super::*;
 /// the ones the mob's box passes through along this tick's move, as
 /// `Entity.checkInsideBlocks` sweeps it, so a mob falling past a flower is
 /// inside it on the way.
-pub(super) fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
+pub(super) fn flower_contact_effects(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !m.alive() {
         return;
     }
     let (from, to) = (m.previous, m.position);
-    let mut flowers = FlowerInside { m, w };
+    let mut flowers = FlowerInside { m, w, events };
     // The whole path in one pass, as this pass always swept it: no 16-iteration
     // budget, a fresh visited set, nothing queued.
     let _ = crate::block_contact::sweep_inside_blocks(
@@ -26,7 +26,7 @@ pub(super) fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
     );
 }
 
-/// The flower pass queues nothing: its effects are added at once.
+/// The walk itself advances no deferred block-contact effects.
 struct NoEffects;
 
 impl crate::block_contact::StepCollector for NoEffects {
@@ -38,6 +38,7 @@ impl crate::block_contact::StepCollector for NoEffects {
 struct FlowerInside<'a, 'w> {
     m: &'a mut Mob,
     w: &'a MobWorld<'w>,
+    events: &'a mut Vec<MobEvent>,
 }
 
 impl crate::block_contact::InsideWalk for FlowerInside<'_, '_> {
@@ -83,7 +84,13 @@ impl crate::block_contact::InsideWalk for FlowerInside<'_, '_> {
                 // timer); a wither and a wither skeleton refuse the effect in
                 // `addEffect`.
                 if w.difficulty.base != 0 && !m.invulnerable_flag {
-                    m.add_effect("minecraft:wither", 40, 0);
+                    self.events.push(MobEvent::EffectMob {
+                        target: m.id,
+                        source: None,
+                        effect: "minecraft:wither",
+                        ticks: 40,
+                        amplifier: 0,
+                    });
                 }
             }
             "minecraft:open_eyeblossom"
@@ -91,7 +98,13 @@ impl crate::block_contact::InsideWalk for FlowerInside<'_, '_> {
                     && crate::mobs::bee::attracts_bees(w, [p.x, p.y, p.z])
                     && !m.has_effect("minecraft:poison") =>
             {
-                m.add_effect("minecraft:poison", 25, 0);
+                self.events.push(MobEvent::EffectMob {
+                    target: m.id,
+                    source: None,
+                    effect: "minecraft:poison",
+                    ticks: 25,
+                    amplifier: 0,
+                });
             }
             _ => {}
         }

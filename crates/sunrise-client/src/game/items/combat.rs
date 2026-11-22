@@ -1257,6 +1257,7 @@ mod guest_hit_tests {
                 MobEvent::AttackPlayerWithEffect {
                     amount: 2.0,
                     from,
+                    attacker: 5,
                     effect: "minecraft:poison",
                     ticks: 140,
                     amplifier: 0,

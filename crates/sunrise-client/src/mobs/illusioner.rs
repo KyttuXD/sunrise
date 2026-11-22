@@ -147,10 +147,12 @@ impl Goal for Spell {
                             ticks: 400,
                             amplifier: 0,
                             ambient: false,
+                            source: Some(m.id),
                         }))
                 }
                 Some(Who::Mob(target)) => cx.events.push(MobEvent::EffectMob {
                     target,
+                    source: Some(m.id),
                     effect: BLINDNESS,
                     ticks: 400,
                     amplifier: 0,
@@ -364,6 +366,7 @@ mod tests {
                         effect,
                         ticks,
                         amplifier,
+                        ..
                     } => Some((Some(target), effect, ticks, amplifier)),
                     MobEvent::EffectPlayer {
                         effect,

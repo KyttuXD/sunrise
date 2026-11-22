@@ -3954,7 +3954,14 @@ pub fn armor_stand_tag(
         ]));
     }
     put_live_attributes(&mut out.fields, &a.live);
-    out.retain("active_effects");
+    if a.effects.list.is_empty() {
+        out.remove(&"active_effects".into());
+    } else {
+        out.insert(
+            "active_effects".into(),
+            crate::save::write_active_effects(&a.effects.saved()),
+        );
+    }
     out.retain_or("FallFlying", || Tag::Byte(0));
     out.retain("sleeping_pos");
     out.retain_or("Brain", || {
@@ -4015,6 +4022,9 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
         if list.iter().any(|attr| text(attr.get("id")).as_deref() == Some(SPEED_ATTRIBUTE)));
     a.velocity = loaded_motion(tag);
     a.health = float(tag.get("Health")).unwrap_or(20.0) as f32;
+    a.effects = crate::effects::PlayerEffects::from_saved(&crate::save::read_active_effects(
+        tag.get("active_effects"),
+    ));
     a.fire_ticks = i32::from(number(tag.get("Fire")).unwrap_or(0) as i16);
     a.custom_name = tag.get("CustomName").map(name_text);
     a.name_visible = flag(tag, "CustomNameVisible");

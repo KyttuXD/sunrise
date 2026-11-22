@@ -149,8 +149,8 @@ impl Goal for SwimWithPlayer {
         cx.w.selected_player()
             .is_some_and(|p| p.swimming && m.distance_sqr(p.position) < 256.0)
     }
-    fn start(&mut self, _: &mut Mob, cx: &mut Cx) {
-        cx.events.push(cx.w.route_player_event(grace()));
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        cx.events.push(cx.w.route_player_event(grace(m.id)));
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
         m.nav_stop();
@@ -172,17 +172,18 @@ impl Goal for SwimWithPlayer {
             );
         }
         if p.swimming && m.random.next_int_bound(6).unwrap_or(1) == 0 {
-            cx.events.push(cx.w.route_player_event(grace()));
+            cx.events.push(cx.w.route_player_event(grace(m.id)));
         }
     }
 }
 /// `MobEffectInstance(DOLPHINS_GRACE, 100)`.
-fn grace() -> MobEvent {
+fn grace(dolphin: u32) -> MobEvent {
     MobEvent::EffectPlayer {
         effect: "minecraft:dolphins_grace",
         ticks: 100,
         amplifier: 0,
         ambient: false,
+        source: Some(dolphin),
     }
 }
 

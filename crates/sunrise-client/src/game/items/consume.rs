@@ -286,11 +286,6 @@ impl Game<'_> {
         let mut can_finish = true;
         for effect in effects {
             match effect {
-                ConsumeEffect::PlaySound(_) | ConsumeEffect::Native { .. } => {
-                    can_finish &= self
-                        .apply_consume_effect(stack, effect, Some(consumer), consumer.entity())
-                        .is_some();
-                }
                 ConsumeEffect::TeleportRandomly(teleport) => {
                     let consumed = consumed.get_or_init(|| consumed_snapshot(stack));
                     let mut actor = MobTeleporter {
@@ -304,21 +299,9 @@ impl Game<'_> {
                     can_finish &= teleport.apply(&mut actor, dim).is_ok();
                 }
                 _ => {
-                    if let Some(mob) = self
-                        .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id && m.alive() && !m.removed)
-                    {
-                        mob.apply_consume_effect(
-                            crate::game::entity::damage_level_of!(
-                                self,
-                                &sunrise_client::health::NO_ATTACK,
-                                no_push,
-                                None
-                            ),
-                            effect,
-                        );
-                    }
+                    can_finish &= self
+                        .apply_consume_effect(stack, effect, Some(consumer), consumer.entity())
+                        .is_some();
                 }
             }
         }

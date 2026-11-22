@@ -49,7 +49,10 @@ To observe every effect addition across vanilla and mod effects alike, subscribe
 global `Hooks::mob_effect_added` event (NeoForge's `MobEffectEvent.Added`, version 2),
 which fires after `canBeAffected` / `mob_effect_applicable` and before active-effect
 mutation with `entity`, `old_effect`, `new_effect` and optional `source` (including
-reapplications and unchanged updates; non-cancellable).
+reapplications and unchanged updates; non-cancellable). A listener's write to the
+observed slot is kept: the engine refuses to continue the original add from a
+stale snapshot. `LivingRef::add_effect` also works on armor stands; the wither and
+ender dragon still refuse effects.
 
 ## Reading the holder
 

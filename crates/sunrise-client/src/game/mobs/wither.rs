@@ -184,6 +184,7 @@ impl Game<'_> {
         p: &Projectile,
         who: Option<Who>,
         at: [f64; 3],
+        effect_source: Option<mod_api::EntityRef>,
     ) -> sunrise_client::Result<()> {
         // Projectile.getOwner: none once the owner is gone.
         let live_owner = match p.owner {
@@ -224,7 +225,12 @@ impl Game<'_> {
                     false,
                 );
                 if hit && wither_ticks > 0 {
-                    self.give_player_effect("minecraft:wither", wither_ticks, 1);
+                    self.give_player_effect_from(
+                        "minecraft:wither",
+                        wither_ticks,
+                        1,
+                        effect_source,
+                    );
                 }
                 // A totem that fired saves the player inside hurtServer:
                 // still alive, so no heal.
@@ -284,12 +290,6 @@ impl Game<'_> {
                     );
                 }
                 if survived_hit && wither_ticks > 0 {
-                    let effect_source = match live_owner {
-                        Some(Who::Mob(owner_id)) => self.entity(owner_id),
-                        Some(Who::Player) => self.entity(self.own_entity_id() as u32),
-                        None => None,
-                    }
-                    .or_else(|| self.entity(p.id));
                     self.add_mob_effect(
                         id,
                         sunrise_client::effects::EffectInstance::new("wither", wither_ticks, 1),
@@ -315,16 +315,13 @@ impl Game<'_> {
             self.combat.blast_resistance_cap = Some(0.8);
         }
         self.combat.explosion_direct = Some(p.id);
-        let result = self.with_impacting_projectile(p, |g| {
-            g.with_hive_emptying_blast(|g| {
-                g.explode(
-                    Some(p.id),
-                    at,
-                    1.0,
-                    super::explosion::ExplosionSource::default()
-                        .with_silence(g.entity_silent(p.id)),
-                )
-            })
+        let result = self.with_hive_emptying_blast(|g| {
+            g.explode(
+                Some(p.id),
+                at,
+                1.0,
+                super::explosion::ExplosionSource::default().with_silence(g.entity_silent(p.id)),
+            )
         });
         self.combat.explosion_direct = None;
         self.combat.blast_resistance_cap = None;
@@ -333,24 +330,37 @@ impl Game<'_> {
         self.combat.explosion_in_water = false;
         result
     }
-    /// Runs `blast` with the impacting projectile `p` back among the level's
-    /// projectiles, as vanilla's skull is still in the level while it
-    /// explodes: the tick removed its row before the hit, so a part asked
-    /// during the blast (`can_entity_destroy` with the skull) could not read
-    /// it. The row returns under its own id and join (`push` keeps a numbered
-    /// join), and leaves again afterwards.
-    fn with_impacting_projectile<R>(
+    /// `Projectile.getEffectSource`: the live owner, or the impacting projectile.
+    pub(super) fn with_effect_source<R>(
         &mut self,
         p: &Projectile,
-        blast: impl FnOnce(&mut Self) -> R,
+        owner: Option<mod_api::EntityRef>,
+        apply: impl FnOnce(&mut Self, Option<mod_api::EntityRef>) -> R,
     ) -> R {
+        if owner.is_some() || !mod_api::__private::listened(mod_api::HookId::MobEffectAdded) {
+            return apply(self, owner);
+        }
+        self.with_impacting_projectile(p, |g| apply(g, g.entity(p.id)))
+    }
+
+    /// Keep the impacting projectile resolvable while its effects or explosion run, as in
+    /// vanilla. The tick removed it before handling the hit; insert it with its original join.
+    pub(super) fn with_impacting_projectile<R>(
+        &mut self,
+        p: &Projectile,
+        impact: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if p.id == 0 || self.creatures.projectiles.iter().any(|row| row.id == p.id) {
+            return impact(self);
+        }
         self.creatures.projectiles.push(p.clone());
-        let result = blast(self);
+        let join = self.creatures.projectiles.last().map(|q| q.join);
+        let result = impact(self);
         let row = self
             .creatures
             .projectiles
             .iter()
-            .position(|q| q.id == p.id && q.join == p.join);
+            .position(|q| q.id == p.id && Some(q.join) == join);
         if let Some(row) = row {
             self.creatures.projectiles.remove(row);
         }

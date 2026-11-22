@@ -86,6 +86,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
                 ticks: if cx.w.difficulty.base == 2 { 7 } else { 15 } * 20,
                 amplifier: 0,
                 ambient: false,
+                source: Some(m.id),
             })
         }
         // Husk.doHurtTarget: hunger for 140 ticks per whole point of the
@@ -98,6 +99,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
                     ticks,
                     amplifier: 0,
                     ambient: false,
+                    source: Some(m.id),
                 })
             }
         }
@@ -106,6 +108,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
             ticks: 200,
             amplifier: 0,
             ambient: false,
+            source: Some(m.id),
         }),
         _ => {}
     }
@@ -161,6 +164,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
             Some((effect, ticks, amplifier)) => MobEvent::AttackPlayerWithEffect {
                 amount,
                 from,
+                attacker: m.id,
                 effect,
                 ticks,
                 amplifier,

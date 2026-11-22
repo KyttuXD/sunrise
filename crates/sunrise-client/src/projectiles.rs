@@ -2594,6 +2594,42 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_thrown_potion_hits_its_thrower_only_after_leaving_them() {
+        let owner = Who::Player;
+        let wall = Wall(vec![(
+            owner,
+            Aabb::new(Vec3::new(0.4, 100.0, 0.0), Vec3::new(0.6, 101.0, 1.0)),
+        )]);
+        let origin = Vec3::new(0.0, 100.5, 0.5);
+        let mut potion = Projectile::new(
+            ProjectileKind::Potion(
+                Box::new(crate::items::ItemStack::new("minecraft:splash_potion", 1)),
+                false,
+            ),
+            origin,
+            Some(owner),
+        );
+        potion.velocity = Vec3::new(0.5, 0.0, 0.0);
+        assert_eq!(potion.tick(&wall), (true, Hit::None));
+        potion.position = Vec3::new(0.0, 100.5, 4.0);
+        potion.velocity = Vec3::ZERO;
+        assert_eq!(potion.tick(&wall), (true, Hit::None));
+        assert!(potion.left_owner);
+        potion.position = origin;
+        potion.velocity = Vec3::new(0.5, 0.0, 0.0);
+        assert!(matches!(
+            potion.tick(&wall),
+            (
+                false,
+                Hit::Entity {
+                    who: Who::Player,
+                    ..
+                }
+            )
+        ));
+    }
+
     /// A wall of blocks across x = 1.
     struct Wall(Vec<(Who, Aabb)>);
     impl ProjectileWorld for Wall {

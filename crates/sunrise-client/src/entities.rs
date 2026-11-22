@@ -1809,6 +1809,7 @@ pub struct ArmorStand {
     /// Unsaved fire immunity granted on this logical side.
     pub mod_fire_immune: bool,
     pub health: f32,
+    pub effects: crate::effects::PlayerEffects,
     pub id: u32,
     pub position: Vec3,
     /// `Entity.xo`, `yo`, `zo`: the position at the start of the tick, which
@@ -2104,6 +2105,7 @@ impl ArmorStand {
             fire_ticks: 0,
             mod_fire_immune: false,
             health: 20.0,
+            effects: Default::default(),
             id,
             position,
             previous: position,

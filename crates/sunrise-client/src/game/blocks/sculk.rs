@@ -1459,7 +1459,7 @@ impl Game<'_> {
         if !self.try_summon_warden(key, warning) {
             self.warden_reply_sound(key, warning);
         }
-        self.apply_darkness(center(key), 40.0);
+        self.apply_darkness(center(key), 40.0, None);
     }
     /// A `shrieker_respond` block event.
     pub(super) fn shrieker_block_event(&mut self, pos: BlockPos, state: BlockStateId) {
@@ -1638,10 +1638,20 @@ impl Game<'_> {
     }
 
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
-    pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
-        self.for_each_player(|g| g.darkness_on_player(at, radius));
+    pub(super) fn apply_darkness(
+        &mut self,
+        at: [f64; 3],
+        radius: f64,
+        source: Option<mod_api::EntityRef>,
+    ) {
+        self.for_each_player(|g| g.darkness_on_player(at, radius, source));
     }
-    fn darkness_on_player(&mut self, at: [f64; 3], radius: f64) {
+    fn darkness_on_player(
+        &mut self,
+        at: [f64; 3],
+        radius: f64,
+        source: Option<mod_api::EntityRef>,
+    ) {
         if self.creative || self.spectator() {
             return;
         }
@@ -1666,7 +1676,7 @@ impl Game<'_> {
         let effect =
             sunrise_client::effects::EffectInstance::new("darkness", warden::DARKNESS_DURATION, 0)
                 .with_flags(false, false);
-        self.potions.effects.add(effect);
+        self.add_player_effect_from(effect, source);
     }
 
     // ---- catalysts ----
