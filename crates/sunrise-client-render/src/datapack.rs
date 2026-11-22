@@ -93,7 +93,8 @@ impl DataPack {
     /// (`FeatureFlagsMetadataSection.CODEC` -> `FeatureFlagRegistry.codec` -> `Identifier.CODEC`):
     /// the canonical feature flags the pack asks to turn on.
     pub fn features(&self) -> Vec<String> {
-        let Some(enabled) = self.mcmeta()["features"]["enabled"].as_array() else {
+        let metadata = self.mcmeta();
+        let Some(enabled) = metadata["features"]["enabled"].as_array() else {
             return Vec::new();
         };
         let mut flags = Vec::new();

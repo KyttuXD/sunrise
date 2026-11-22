@@ -1570,7 +1570,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 set_age(m, start, None);
             }
             if let Some(a) = g.ageable() {
-                a.size += 1;
+                // AgeableMobGroupData.increaseGroupSizeByOne increments a Java int.
+                a.size = a.size.wrapping_add(1);
             }
         }
         self.mob(m, Some(g))
