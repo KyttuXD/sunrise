@@ -2,13 +2,7 @@
 //! live in `hud_overlays` (`Titles`, `ToolHighlight`); this feeds and draws them.
 use super::Game;
 pub(super) use sunrise_client::hud_overlays::Titles;
-use sunrise_client::{
-    hud::HudBatch,
-    hud_layout,
-    hud_overlays::HeldName,
-    item_tooltip,
-    text::{self, Text},
-};
+use sunrise_client::{hud::HudBatch, hud_layout, hud_overlays::HeldName, text::Text};
 
 impl Game<'_> {
     /// `ServerPlayer.sendOverlayMessage`: the steady player sees it on this
@@ -64,17 +58,20 @@ impl Game<'_> {
     fn held_name(&self) -> Option<HeldName> {
         let stack = self.inventory.get(self.selected)?.as_ref()?;
         let custom = stack.data().is_some_and(|data| data.custom_name.is_some());
-        let default_rarity = self.item_rarity(&stack.item);
-        let rarity = item_tooltip::rarity(stack, &default_rarity);
+        let previous = self
+            .tool_highlight
+            .last
+            .as_ref()
+            .map(|last| &last.hover_name);
         Some(HeldName {
             item: stack.item.to_string(),
-            hover_name: self.stack_hover_name_text(stack),
-            rarity_color: match rarity {
-                "uncommon" => text::YELLOW,
-                "rare" => text::AQUA,
-                "epic" => text::LIGHT_PURPLE,
-                _ => text::WHITE,
-            },
+            hover_name: sunrise_client::stations::hover_name_in_reusing(
+                &self.loop_context,
+                &self.pack.names,
+                stack,
+                previous,
+            ),
+            rarity_color: self.stack_rarity_color(stack),
             custom_name: custom,
         })
     }

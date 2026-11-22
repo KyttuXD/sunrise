@@ -440,6 +440,28 @@ impl Text {
         t.source = Some(Value::Object(c).into());
         t
     }
+    /// Render an argument-free translation, sharing its retained component with
+    /// the previous value when the key is unchanged. The rendered spans still
+    /// use the current language.
+    pub fn translate_reusing(key: &str, previous: Option<&Self>) -> Self {
+        let Some(source) = previous
+            .and_then(|text| text.source.as_ref())
+            .filter(|source| {
+                source
+                    .as_object()
+                    .filter(|component| component.len() == 1)
+                    .and_then(|component| component.get("translate"))
+                    .and_then(Value::as_str)
+                    == Some(key)
+            })
+        else {
+            return Self::translate(key, &[]);
+        };
+        let mut text = format_translatable(key, None, &[]);
+        text.source = Some(source.clone());
+        text.origins = local_origins();
+        text
+    }
     /// Component.translatableWithFallback(key, fallback, args): `translate`, with `fallback` as
     /// the template when the language has no `key`.
     pub fn translate_with_fallback(key: &str, fallback: &str, args: &[Text]) -> Self {

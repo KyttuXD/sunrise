@@ -292,7 +292,7 @@ pub fn increased_repair_cost(cost: u32) -> u32 {
 /// or the item's name. It stays translatable so each viewer renders it in their own language.
 /// The name a mod item's part gives the stack is not asked: [`hover_name_in`] asks it.
 pub fn hover_name_text(names: &crate::creative::Names, stack: &ItemStack) -> crate::text::Text {
-    hover_name_text_with(names, stack, |_| None)
+    hover_name_text_with(names, stack, |_| None, None)
 }
 /// [`hover_name_text`] with the name the parts of a mod item give the stack
 /// (`Item.getName(ItemStack)`, `ItemPart::item_name`), asked once, with the loop `context` of the
@@ -302,7 +302,22 @@ pub fn hover_name_in(
     names: &crate::creative::Names,
     stack: &ItemStack,
 ) -> crate::text::Text {
-    hover_name_text_with(names, stack, |stack| item_name_part(context, stack))
+    hover_name_in_reusing(context, names, stack, None)
+}
+/// Resolve as in [`hover_name_in`], sharing an unchanged translation's component
+/// with the previous HUD tick.
+pub fn hover_name_in_reusing(
+    context: &LoopContext,
+    names: &crate::creative::Names,
+    stack: &ItemStack,
+    previous: Option<&crate::text::Text>,
+) -> crate::text::Text {
+    hover_name_text_with(
+        names,
+        stack,
+        |stack| item_name_part(context, stack),
+        previous,
+    )
 }
 /// Whether `stack` names itself (`ItemStack.getCustomName`): a custom name, or a written book's
 /// non-blank title. `Item.getName` isn't asked then.
@@ -339,8 +354,10 @@ fn hover_name_text_with(
     names: &crate::creative::Names,
     stack: &ItemStack,
     part: impl FnOnce(&ItemStack) -> Option<crate::text::Text>,
+    previous: Option<&crate::text::Text>,
 ) -> crate::text::Text {
     use crate::text::Text;
+    let translate = |key: &str| Text::translate_reusing(key, previous);
     let data = stack.data();
     // `ItemStack.getCustomName`: the custom name, else a written book's non-blank title.
     if stack.custom_name().is_some()
@@ -362,19 +379,19 @@ fn hover_name_text_with(
     // `ItemStack.getItemName`: the item's own `getName`, which for a few items is not its
     // `item_name` component.
     if let Some(key) = crate::brewing::contents_name_key(stack) {
-        return Text::translate(&key, &[]);
+        return translate(&key);
     }
     if &*stack.item == "minecraft:shield"
         && let Some(color) = data.and_then(|d| d.base_color.as_deref())
     {
         // `ShieldItem.getName`: the banner's base colour names the shield.
-        return Text::translate(&format!("item.minecraft.shield.{color}"), &[]);
+        return translate(&format!("item.minecraft.shield.{color}"));
     }
     if &*stack.item == "minecraft:compass"
         && data.is_some_and(|d| d.other("minecraft:lodestone_tracker").is_some())
     {
         // `CompassItem.getName`: a lodestone tracker names it, over `item_name`.
-        return Text::translate("item.minecraft.lodestone_compass", &[]);
+        return translate("item.minecraft.lodestone_compass");
     }
     if let Some(head) = crate::item_tooltip::player_head_name(stack) {
         // `PlayerHeadItem.getName`: a profile's name, else the item name.
@@ -397,7 +414,7 @@ fn hover_name_text_with(
             .and_then(|component| component.get("translate"))
             .and_then(serde_json::Value::as_str)
         {
-            Some(key) => Text::translate(key, &[]),
+            Some(key) => translate(key),
             None => crate::entity_nbt::name_text(&crate::scoreboard::json_to_tag(name)),
         };
     }
@@ -412,7 +429,7 @@ fn hover_name_text_with(
     } else {
         "item"
     };
-    Text::translate(&format!("{prefix}.{namespace}.{path}"), &[])
+    translate(&format!("{prefix}.{namespace}.{path}"))
 }
 /// `ItemStack.getHoverName` as plain text in the current language: the component of
 /// [`hover_name_text`], rendered.
