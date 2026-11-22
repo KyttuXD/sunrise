@@ -207,6 +207,9 @@ pub struct ItemEntity {
     /// `Entity.tickCount`: ticks since the item entered the level, which
     /// paces `ItemEntity.mergeWithNeighbours`.
     pub ticks: u32,
+    /// `ItemEntity.setItem` replaces the stack even when its contents are equal.
+    /// Pickup captures this revision to distinguish that replacement from its original.
+    pub stack_revision: u64,
     /// `Entity.needsSync` / `syncPosition`: immediate `ServerEntity.sendChanges`
     /// after a bounce or velocity jump (`> 0.1` in `ItemEntity.tick`).
     pub needs_sync: bool,
@@ -2658,6 +2661,7 @@ mod fire_environment_tests {
             ground: Default::default(),
             vertical_collision: false,
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -2852,6 +2856,7 @@ mod destroyed_bundle_environment_tests {
             ground: Default::default(),
             vertical_collision: false,
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3066,6 +3071,7 @@ mod merge_tests {
             ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
             vertical_collision: false,
             age,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3603,6 +3609,7 @@ mod honey_slide_tests {
             ground: Default::default(),
             vertical_collision: false,
             age: 10,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -3707,6 +3714,7 @@ mod slime_bounce_tests {
             ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
             vertical_collision: false,
             age: 10,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -4615,6 +4623,7 @@ mod item_destroyed_tests {
             ground: Default::default(),
             vertical_collision: false,
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,
@@ -4888,6 +4897,7 @@ mod dropped_item_light_tests {
             ground: Default::default(),
             vertical_collision: false,
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,

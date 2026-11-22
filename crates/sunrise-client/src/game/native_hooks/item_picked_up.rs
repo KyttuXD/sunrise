@@ -25,13 +25,15 @@ impl Game<'_> {
     /// `player` touches the ground item entity `item`
     /// (`ItemEntity.playerTouch`), before its pickup delay and target are
     /// checked: it is asked on every tick the two touch, even while the item
-    /// can't be taken. Leave `can_pickup` at `Default` for vanilla's rule,
-    /// set `True` to take it despite its delay or another player's target
+    /// can't be taken. `Default` requires a live delay of exactly zero and
+    /// no target or this player as the target. Set `True` to take it despite
+    /// its delay or another player's target
     /// (a full inventory still leaves it), or `False` to veto this pickup
     /// attempt without changing the item's pickup delay (matching NeoForge
     /// `ItemEntityPickupEvent.Pre`). The last mod to set it decides. The
     /// handle reads and mutates the live ground item entity on both the host
-    /// player and guest paths. Server-side.
+    /// player and guest paths. Pickup inserts from the stack captured before
+    /// Pre, without overwriting a replacement installed by the listener. Server-side.
     pub(in crate::game) fn native_item_picked_up(
         &mut self,
         player: u128,
@@ -45,11 +47,10 @@ impl Game<'_> {
     /// `item` (`ItemEntity.playerTouch`, right after `Inventory.add` took some
     /// of it), the entity `item_picked_up` named. `original` is a copy of the
     /// stack as it lay before the pickup: changing it does nothing.
-    /// `remaining` is what the item entity still holds: `None` (empty) after a
-    /// whole pickup, the part that did not fit after a partial one. Set a
-    /// stack there to leave the entity holding it, or `None` to empty it: the
-    /// pickup then counts `original`'s count less what is left. The amount
-    /// taken is `original`'s count less `remaining`'s. A mod that removes the
+    /// `remaining` is the part of the captured stack that did not fit, or `None`
+    /// if all of it fit. An explicit Pre stack replacement stays on `item`
+    /// unless Post edits `remaining`. The amount taken is `original`'s count
+    /// less `remaining`'s. A mod that removes the
     /// item entity meanwhile keeps it removed: no take animation, the stat and
     /// criteria still run. Not called when `item_picked_up` refused the
     /// pickup or the inventory took nothing; a forced `True` from
@@ -78,8 +79,7 @@ impl Game<'_> {
 
     /// `item_picked_up_post` for the acting player, who took all or part of
     /// `original` from the item entity `item`, leaving `remaining` (`None`
-    /// when all of it went in): the stack the entity then holds, `None` when
-    /// it is empty, `remaining` when no mod listens.
+    /// when all of it went in): the remainder after listener edits.
     pub(in crate::game) fn native_pickup_post(
         &mut self,
         item: u32,
@@ -165,7 +165,7 @@ impl Game<'_> {
     ///    handling listener removal without take animation.
     fn native_touch_item_entity(&mut self, mut slot: PickupSlot<'_>, player: [i32; 4]) {
         let listens_pre = mod_api::__private::listened(mod_api::HookId::ItemPickedUp);
-        let (id, captured) = match &mut slot {
+        let (id, captured, stack_revision) = match &mut slot {
             PickupSlot::Lifted { items, index, .. } => {
                 let item = &items[**index];
                 let id = item.id;
@@ -181,7 +181,7 @@ impl Game<'_> {
                     **index += 1;
                     return;
                 }
-                (id, item.stack.clone())
+                (id, item.stack.clone(), item.stack_revision)
             }
             PickupSlot::Resident { item_id, .. } => {
                 let id = *item_id;
@@ -202,7 +202,7 @@ impl Game<'_> {
                 {
                     return;
                 }
-                (id, item.stack.clone())
+                (id, item.stack.clone(), item.stack_revision)
             }
         };
 
@@ -234,36 +234,25 @@ impl Game<'_> {
             TriState::Default
         };
 
-        let (pickup_delay, target, stack_replaced, thrower) = match &slot {
-            PickupSlot::Lifted { items, index, .. } => {
-                let live = &items[**index];
-                (
-                    live.pickup_delay,
-                    live.target,
-                    live.stack != captured,
-                    live.thrower,
-                )
-            }
+        let live = match &slot {
+            PickupSlot::Lifted { items, index, .. } => &items[**index],
             PickupSlot::Resident { .. } => {
-                let Some(at) = self.dropped.iter().position(|d| d.id == id) else {
+                let Some(live) = self.dropped.iter().find(|item| item.id == id) else {
                     return;
                 };
-                let live = &self.dropped[at];
-                (
-                    live.pickup_delay,
-                    live.target,
-                    live.stack != captured,
-                    live.thrower,
-                )
+                live
             }
         };
-        if !Self::pickup_decision(pickup_delay, target, player, answer) {
+        if !Self::pickup_decision(live.pickup_delay, live.target, player, answer) {
             if let PickupSlot::Lifted { index, .. } = &mut slot {
                 **index += 1;
             }
             return;
         }
 
+        let stack_replaced =
+            listens_pre && (live.stack_revision != stack_revision || live.stack != captured);
+        let thrower = live.thrower;
         let before = captured.count;
         let kind = captured.item.clone();
         let rest = match &slot {
@@ -335,16 +324,30 @@ impl Game<'_> {
         let remaining = remaining.filter(|s| s.count > 0 && &*s.item != "minecraft:air");
         let Some(rem) = remaining else {
             self.record_item_pickup(&slot, &kind, before, &captured, thrower);
+            // `Inventory.add` emptied the captured stack, not a live replacement
+            // installed by Pre. Only an explicit Post remainder edit overrides it.
+            let keeps_replacement = |item: &ItemEntity| {
+                stack_replaced
+                    && !post_changed
+                    && item.stack.count > 0
+                    && &*item.stack.item != "minecraft:air"
+            };
             match slot {
                 PickupSlot::Lifted { items, index, feet } => {
-                    let mut item = items.remove(*index);
-                    if item.stack.count == 0 {
-                        item.stack = captured;
-                    }
+                    let mut item = if keeps_replacement(&items[*index]) {
+                        let taken = items[*index].clone();
+                        *index += 1;
+                        taken
+                    } else {
+                        items.remove(*index)
+                    };
+                    item.stack = captured;
                     self.native_take_item(item, feet);
                 }
                 PickupSlot::Resident { taken, .. } => {
-                    if let Some(at) = self.dropped.iter().position(|d| d.id == id) {
+                    if let Some(at) = self.dropped.iter().position(|d| d.id == id)
+                        && !keeps_replacement(&self.dropped[at])
+                    {
                         self.remove_dropped(at);
                     }
                     taken.push((id, before));
@@ -463,19 +466,15 @@ impl Game<'_> {
         Some(ItemEntityRef::new(EntityRef::new(epoch, id)))
     }
 
-    /// `ItemEntity.playerTouch`'s rule for `player`: non-positive pickup delay
-    /// (`pickupDelay <= 0`), and no target or `player` as the target, unless
-    /// `answer` forces it either way. `False` vetoes only this touch without
-    /// modifying `pickup_delay`; `True` overrides the delay and target.
+    /// `ItemEntity.playerTouch`'s rule for `player`: exactly zero pickup delay
+    /// and no target or `player` as the target. NeoForge's `Pre` can veto this
+    /// touch or override both conditions, without changing the delay.
     pub(in crate::game) fn pickup_decision(
         pickup_delay: i32,
         target: Option<[i32; 4]>,
         player: [i32; 4],
         answer: TriState,
     ) -> bool {
-        if answer == TriState::False {
-            return false;
-        }
-        answer.or(pickup_delay <= 0 && target.is_none_or(|t| t == player))
+        answer.or(pickup_delay == 0 && target.is_none_or(|t| t == player))
     }
 }

@@ -74,6 +74,7 @@ pub fn main() -> sunrise_client::Result<()> {
             velocity: Vec3::ZERO,
             ground: Default::default(),
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,

@@ -2648,6 +2648,7 @@ mod item_column_tests {
             ground: sunrise_world::ground_support::GroundState::from_ground_flag(true),
             vertical_collision: false,
             age: 0,
+            stack_revision: 0,
             lifespan: ItemEntity::LIFETIME,
             pickup_delay: 0,
             bob_offset: 0.0,

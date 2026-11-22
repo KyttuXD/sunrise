@@ -1,7 +1,7 @@
 /// First writes to each field, independently: moving an item need not clone its stack.
 #[derive(Default)]
 pub(super) struct KeptItemEntity {
-    stack: Option<ItemStack>,
+    stack: Option<(ItemStack, u64)>,
     pickup_delay: Option<i32>,
     target: Option<Option<[i32; 4]>>,
     pub(super) velocity: Option<Vec3>,
@@ -16,8 +16,9 @@ impl KeptItemEntity {
     }
 
     fn restore(self, item: &mut sunrise_client::entities::ItemEntity) {
-        if let Some(stack) = self.stack {
+        if let Some((stack, revision)) = self.stack {
             item.stack = stack;
+            item.stack_revision = revision;
         }
         if let Some(delay) = self.pickup_delay {
             item.pickup_delay = delay;
@@ -59,9 +60,11 @@ impl Game<'_> {
     fn journal_replace_item_stack(&mut self, index: usize, stack: ItemStack) {
         let (item, kept) = self.journal_item_fields(index);
         if let Some(kept) = kept {
-            kept.stack.get_or_insert_with(|| item.stack.clone());
+            kept.stack
+                .get_or_insert_with(|| (item.stack.clone(), item.stack_revision));
         }
         item.stack = stack;
+        item.stack_revision = item.stack_revision.wrapping_add(1);
     }
 
     /// Lend a validated item slot and its first-write journal, if a transaction is open.

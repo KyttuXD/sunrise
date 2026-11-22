@@ -2,7 +2,10 @@
 //! paths, the host's player (`tick_dropped_items`) and a LAN guest (`guest_pickups`),
 //! with literal counts.
 use crate::game::{Game, native_entity_refs::tests::collect_all_entities};
-use mod_api::{Hooks, ItemPickedUpEvent, ItemPickedUpPostEvent, ModEntry, ServerHost, TriState};
+use mod_api::{
+    Hooks, HostTransaction, ItemPickedUpEvent, ItemPickedUpPostEvent, ModEntry, ServerHost,
+    TriState,
+};
 use mod_platform::testing::with_mods;
 use std::sync::{Arc, Mutex};
 use sunrise_client::items::ItemStack;
@@ -14,6 +17,7 @@ enum PreAction {
     #[default]
     None,
     SetStack(mod_api::ItemStack),
+    AbortStackWrite(mod_api::ItemStack),
     ClearStack,
     SetDelay(i32),
     Discard,
@@ -59,6 +63,13 @@ impl Hooks for Probe {
             PreAction::None => {}
             PreAction::SetStack(stack) => {
                 assert_eq!(event.item.set_stack(host, Some(stack)), Ok(true));
+            }
+            PreAction::AbortStackWrite(stack) => {
+                let result = host.transaction(|host, _| {
+                    assert_eq!(event.item.set_stack(host, Some(stack)), Ok(true));
+                    Err::<(), ()>(())
+                });
+                assert_eq!(result, Err(()));
             }
             PreAction::ClearStack => {
                 assert_eq!(event.item.set_stack(host, None), Ok(true));
@@ -693,9 +704,23 @@ fn pre_pickup_edits_and_removals_match_on_host_and_guest() {
                     "partial pickup preserves Pre set_stack replacement"
                 );
 
-                // 3. Pre stack replacement on whole pickup: pre-event apples all fit -> entity discarded.
-                let (_, notices, ground_after, first) =
-                    run(game, &CASE, PreAction::SetStack(replacement.clone()), true);
+                // 3. All pre-event apples fit, and the live replacement is left independently.
+                for (kind, count) in [("minecraft:emerald", 5), ("minecraft:apple", 8)] {
+                    let replacement =
+                        crate::game::api_values::test_snapshot(&ItemStack::new(kind, count));
+                    let (_, notices, ground_after, first) =
+                        run(game, &CASE, PreAction::SetStack(replacement), true);
+                    assert_eq!(notices, vec![(expected_player, 8, None)]);
+                    assert_eq!(first, 64, "the inventory took the eight captured apples");
+                    assert_eq!(ground_after, Some((kind.into(), count, 0)));
+                }
+                // An aborted setter doesn't replace the captured stack.
+                let (_, notices, ground_after, first) = run(
+                    game,
+                    &CASE,
+                    PreAction::AbortStackWrite(replacement.clone()),
+                    true,
+                );
                 assert_eq!(notices, vec![(expected_player, 8, None)]);
                 assert_eq!(first, 64);
                 assert_eq!(ground_after, None);
@@ -743,16 +768,31 @@ fn pre_pickup_edits_and_removals_match_on_host_and_guest() {
                 assert_eq!(first, 56);
                 assert_eq!(ground_after, Some(("minecraft:apple".into(), 8, 25)));
 
-                // 8. Pre clears delay to a negative signed value: live post-hook delay <= 0 allows pickup.
+                // 8. Default needs exactly zero, while True overrides a negative delay.
                 let (_, notices, ground_after, first) = run(
                     game,
                     &Case { delay: 40, ..CASE },
                     PreAction::SetDelay(-5),
                     true,
                 );
-                assert_eq!(notices, vec![(expected_player, 8, None)]);
-                assert_eq!(first, 64);
-                assert_eq!(ground_after, None);
+                assert!(notices.is_empty());
+                assert_eq!(first, 56);
+                assert_eq!(ground_after, Some(("minecraft:apple".into(), 8, -5)));
+                for (delay, answer) in [(0, TriState::Default), (-5, TriState::True)] {
+                    let (_, notices, ground_after, first) = run(
+                        game,
+                        &Case {
+                            delay: 40,
+                            answer,
+                            ..CASE
+                        },
+                        PreAction::SetDelay(delay),
+                        true,
+                    );
+                    assert_eq!(notices, vec![(expected_player, 8, None)]);
+                    assert_eq!(first, 64);
+                    assert_eq!(ground_after, None);
+                }
 
                 // 9. Pre removal via EntityRef::discard: no pickup, no Post, entity flushed away.
                 let (id, notices, _, first) = run(game, &CASE, PreAction::Discard, false);
