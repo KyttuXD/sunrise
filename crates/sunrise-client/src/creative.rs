@@ -893,7 +893,7 @@ impl Creative {
                         Some(name) => crate::scoreboard::comp_text(name.component_view().as_ref()),
                         None => crate::stations::hover_name_text(names, stack),
                     };
-                    *first = name.strip_legacy().plain();
+                    *first = crate::clipboard::strip_formatting(&name.plain());
                 }
                 lines
                     .iter()
@@ -2398,6 +2398,14 @@ mod tests {
             assert_eq!(creative.search_results("schmieden", &names), [0]);
             assert!(creative.search_results("metalworking", &names).is_empty());
         });
+    }
+
+    #[test]
+    fn search_strips_legacy_formatting_across_name_components() {
+        let mut creative = creative(0);
+        let name = crate::text::Text::literal("Ruby§").append(crate::text::Text::literal("aGem"));
+        creative.set_search_names(vec![Some(name)]);
+        assert_eq!(creative.search_results("rubygem", &Names::default()), [0]);
     }
 
     #[test]
