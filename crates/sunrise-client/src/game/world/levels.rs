@@ -2515,6 +2515,98 @@ mod tests {
         game
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn late_chunk_saves_use_their_opened_levels_disk_context() {
+        use mod_api::{
+            ChunkDataSaveEvent, ChunkDiskContext, ChunkDiskHost, ChunkDiskKind, ChunkDiskPhase,
+            Hooks, Identifier, ModEntry,
+        };
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+        use sunrise_client::chunk::Chunk;
+
+        struct ObserveSaves(Arc<Mutex<Vec<ChunkDiskContext>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for ObserveSaves {
+            fn chunk_data_save(&self, host: &dyn ChunkDiskHost, _: &mut ChunkDataSaveEvent<'_>) {
+                self.0.lock().unwrap().push(host.job().clone());
+            }
+        }
+
+        let root = PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        // Opening a world publishes the server's worldgen tables. Isolate that
+        // publication from the other tests, even though the mod list is scoped.
+        const CHILD_HOME: &str = "SUNRISE_CHUNK_DISK_CONTEXT_TEST_HOME";
+        let Some(home) = std::env::var_os(CHILD_HOME).map(PathBuf::from) else {
+            let home = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "game::levels::tests::late_chunk_saves_use_their_opened_levels_disk_context",
+                    "--nocapture",
+                ])
+                .current_dir(home.path())
+                .env(CHILD_HOME, home.path())
+                .env("SUNRISE_TEST_RESOURCES", root.canonicalize().unwrap())
+                .env("SUNRISE_HOME", home.path().join("sunrise"))
+                .env("SUNRISE_LAUNCHER_HOME", home.path().join("launcher"))
+                .env("XDG_DATA_HOME", home.path().join("data"))
+                .env("XDG_CONFIG_HOME", home.path().join("config"))
+                .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
+                .env("SUNRISE_NO_AUDIO", "1")
+                .status()
+                .unwrap();
+            assert!(status.success() && home.path().join("passed").is_file());
+            return;
+        };
+        let world = home.join("world");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![ModEntry::new(
+            "level_disk_context",
+            Box::new(ObserveSaves(seen.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            let mut resources = None;
+            let game = open_game(&mut resources, &root, &home, &world);
+            let epoch = game.native_lifecycle.epoch().unwrap();
+
+            // The streamer can send a late chunk straight to its writer, even
+            // while its level is parked and the Overworld is in place.
+            game.streaming
+                .save_finished(Chunk::with_layout(2, -3, game.world.layout()));
+            game.save.flush().unwrap();
+            let nether = &game.levels.parked[&Dim::Nether];
+            nether
+                .streaming
+                .save_finished(Chunk::with_layout(-4, 5, nether.world.layout()));
+            nether.save.flush().unwrap();
+
+            assert_eq!(
+                seen.lock().unwrap().as_slice(),
+                [
+                    ChunkDiskContext::new(
+                        epoch,
+                        Identifier::parse("minecraft:overworld").unwrap(),
+                        [2, -3],
+                        ChunkDiskKind::Full,
+                        ChunkDiskPhase::Save,
+                    ),
+                    ChunkDiskContext::new(
+                        epoch,
+                        Identifier::parse("minecraft:the_nether").unwrap(),
+                        [-4, 5],
+                        ChunkDiskKind::Full,
+                        ChunkDiskPhase::Save,
+                    ),
+                ],
+            );
+        });
+        std::fs::write(home.join("passed"), b"").unwrap();
+    }
+
     /// `MinecraftServer.prepareLevels` activates each level's saved tickets and
     /// waits for their ticking chunks without a player visiting either level.
     #[test]

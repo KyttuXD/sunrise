@@ -19,9 +19,11 @@ is reported each time without disabling it.
 The callback runs on the persistence worker after capture and before encoding.
 For example, capturing 7, writing 8 in the callback and later writing 9 in the
 live chunk produces disk value 8 without changing live value 9. The host's
-`job()` borrows a `&ChunkDiskContext` identifying the world epoch, dimension,
-coordinates, full/proto kind and phase. It grants no live chunk lookup,
-scheduling, packets or world writes.
+`job()` borrows a `&ChunkDiskContext` with the world epoch and dimension of the
+level that owns the save, even if another dimension is active when the worker
+runs. The coordinates, full/proto kind and phase describe the record being
+written. The host grants no live chunk lookup, scheduling, packets or world
+writes.
 `registry(name)` lends `Option<&[String]>` in registry ID order from the frozen generation
 retained by the worker. `None` means that generation has no such registry. Use the slice within
 the callback, or copy it if it must outlive the callback. Neither metadata getter reads files;

@@ -9150,10 +9150,10 @@ impl Game<'_> {
         self.yaw = yaw;
         self.pitch = pitch;
         self.selected = level.selected_slot.clamp(0, 8) as usize;
+        self.bind_chunk_disk_worker(&save, dim);
         self.streaming = streaming;
         self.world = world;
         self.inventory = inventory;
-        self.bind_chunk_disk_worker(&save, dim);
         self.save = self.with_profession_save_snapshot(save);
         // MinecraftServer.prepareLevels restores the saved tickets after the
         // built-in levels have been published.

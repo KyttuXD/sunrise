@@ -191,11 +191,9 @@ impl Game<'_> {
                         match self.streaming.prepare_poll_save(&mut self.world, deadline) {
                             sunrise_client::streaming::SaveStep::Pending => break,
                             sunrise_client::streaming::SaveStep::Full(chunk) => {
-                                self.native_late_full_chunk_snapshot(&chunk);
                                 self.streaming.save_finished(chunk);
                             }
                             sunrise_client::streaming::SaveStep::Protos(protos) => {
-                                self.native_proto_snapshots(&protos);
                                 if self.streaming.submit_protos(protos) {
                                     save.stage = Stage::Chunks(
                                         self.world.modified.iter().copied().collect(),
@@ -214,7 +212,6 @@ impl Game<'_> {
                         // ChunkMap.save consumes the dirty mark before capturing the snapshot.
                         self.world.modified.remove(&key);
                         let chunks = self.with_entities(self.world.chunks.get(&key));
-                        self.native_full_chunk_snapshots(&chunks);
                         self.save.save_later(
                             &chunks,
                             self.pack.assets.registry,
@@ -445,11 +442,9 @@ impl Game<'_> {
         loop {
             match self.streaming.prepare_save(&mut self.world, wait, deadline) {
                 sunrise_client::streaming::SaveStep::Full(chunk) => {
-                    self.native_late_full_chunk_snapshot(&chunk);
                     self.streaming.save_finished(chunk);
                 }
                 sunrise_client::streaming::SaveStep::Protos(protos) => {
-                    self.native_proto_snapshots(&protos);
                     self.streaming.finish_save(protos, wait);
                     break;
                 }
@@ -464,7 +459,6 @@ impl Game<'_> {
             self.world.modified.remove(key);
         }
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
-        self.native_full_chunk_snapshots(&chunks);
         self.save
             .save_later(&chunks, self.pack.assets.registry, world_biomes!(self))?;
         // Prepare entities while the chunk writer runs, then use one barrier.

@@ -176,7 +176,6 @@ impl Game<'_> {
                 match step {
                     sunrise_client::streaming::PlanStep::Ready(plan) => break plan,
                     sunrise_client::streaming::PlanStep::Save { chunk, resume } => {
-                        self.native_late_full_chunk_snapshot(&chunk);
                         self.streaming.save_finished(chunk);
                         step = self.streaming.resume_plan_update(&mut self.world, resume);
                     }
@@ -184,7 +183,6 @@ impl Game<'_> {
             }
         });
         let (commit, protos) = self.streaming.prepare_commit(&mut self.world, plan);
-        self.native_proto_snapshots(&protos);
         self.streaming.submit_protos(protos);
         let (uploads, unloaded) = sunrise_client::spans::time("streaming", || {
             self.streaming.complete_commit(&mut self.world, commit)
@@ -208,7 +206,6 @@ impl Game<'_> {
             .cloned()
             .collect();
         let modified = sunrise_client::spans::time("with_entities", || self.with_entities(&dirty));
-        self.native_full_chunk_snapshots(&modified);
         if !modified.is_empty()
             && let Err(e) = sunrise_client::spans::time("save_chunks", || {
                 self.save
