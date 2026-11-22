@@ -405,7 +405,7 @@ impl Game<'_> {
         let emissive_sprites = super::client_reload::collect_emissive_sprites();
         super::mods::register_fluid_models(self.options.execution_role);
         let stage = move |progress: &crate::game::Progress| {
-            stage_pack_with_emissive(
+            stage_pack(
                 &vanilla,
                 &selected,
                 &server,
@@ -683,37 +683,6 @@ impl Game<'_> {
 /// root, the models and sprites, the menu bundle, the pack's tables and its
 /// CPU mip chains.
 pub(super) fn stage_pack(
-    vanilla_root: &Path,
-    selected: &[String],
-    server: &[Pack],
-    mod_sources: &super::mods::ModsState,
-    client_listeners: mod_api::ClientListenerRegistry,
-    texture_atlases: &[mod_api::Answered<mod_api::TextureAtlasRegistration>],
-    assets: &Arc<Assets>,
-    res: &Resources,
-    context: &WorkerContext,
-    force_unicode: bool,
-    japanese: bool,
-    progress: &super::Progress,
-) -> sunrise_client::Result<StagedPack> {
-    stage_pack_with_emissive(
-        vanilla_root,
-        selected,
-        server,
-        mod_sources,
-        client_listeners,
-        texture_atlases,
-        &[],
-        assets,
-        res,
-        context,
-        force_unicode,
-        japanese,
-        progress,
-    )
-}
-
-pub(super) fn stage_pack_with_emissive(
     vanilla_root: &Path,
     selected: &[String],
     server: &[Pack],
