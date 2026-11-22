@@ -2198,7 +2198,9 @@ impl Game<'_> {
         if self.screen_view_listened() {
             self.screen_state
                 .drawn_book_tabs
-                .set(screen::sprite_bounds(&calls, screen::is_tab_sprite));
+                .set(screen::sprite_bounds(&calls, |_, id| {
+                    screen::is_tab_sprite(id)
+                }));
         }
         let tooltip = self.paint_book(batch, &calls);
         // The squeeze animations run down with the frames.

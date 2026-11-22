@@ -476,17 +476,16 @@ pub fn ghost(index: usize, left: i32, top: i32, big: bool, ghosts: &[GhostView])
     out
 }
 
-/// `1 + 0.1 sin(t / 15 * PI)`, the squeeze of new recipes' buttons and tabs.
 /// The box the sprites of `calls` that `wanted` picks cover, each through its pose as the painter
 /// draws it: the recipe book's tab column is its `recipe_book/tab` and `tab_selected` sprites,
 /// squeezed as they animate. None when no such sprite was drawn.
-pub fn sprite_bounds(calls: &[Drawn], wanted: impl Fn(&str) -> bool) -> Option<[f32; 4]> {
+pub fn sprite_bounds(calls: &[Drawn], wanted: impl Fn(usize, &str) -> bool) -> Option<[f32; 4]> {
     let mut bounds: Option<[f32; 4]> = None;
-    for drawn in calls {
+    for (index, drawn) in calls.iter().enumerate() {
         let Call::Sprite { id, x, y, w, h } = &drawn.call else {
             continue;
         };
-        if !wanted(id) {
+        if !wanted(index, id) {
             continue;
         }
         let m = drawn.pose;
@@ -508,6 +507,7 @@ pub fn is_tab_sprite(id: &str) -> bool {
     id == "recipe_book/tab" || id == "recipe_book/tab_selected"
 }
 
+/// `1 + 0.1 sin(t / 15 * PI)`, the squeeze of new recipes' buttons and tabs.
 fn squeeze(time: f32) -> f32 {
     1.0 + 0.1 * f64::from(time / 15.0 * std::f32::consts::PI).sin() as f32
 }
@@ -815,7 +815,7 @@ mod tab_column_tests {
 
     fn column(tabs: &[TabView]) -> Option<[f32; 4]> {
         let calls: Vec<Drawn> = draw_tabs_for_test((54, 37), tabs);
-        sprite_bounds(&calls, is_tab_sprite)
+        sprite_bounds(&calls, |_, id| is_tab_sprite(id))
     }
 
     /// `updateTabs` beside a book at (54, 37): x 24, from y 40, 35 x 27 each, 27 apart; the
@@ -851,6 +851,9 @@ mod tab_column_tests {
             },
             pose: IDENTITY,
         }];
-        assert_eq!(sprite_bounds(&lone, |_| true), Some([1.0, 2.0, 12.0, 17.0]));
+        assert_eq!(
+            sprite_bounds(&lone, |_, _| true),
+            Some([1.0, 2.0, 12.0, 17.0])
+        );
     }
 }

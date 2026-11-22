@@ -99,6 +99,12 @@ fn tab_arrows(
     .filter_map(|(show, next, rect, sprite, key)| show.then_some((next, rect, sprite, key)))
 }
 
+fn registered_book_tab_bounds(calls: &[Drawn], first_category_arrow: usize) -> Option<[f32; 4]> {
+    screen::sprite_bounds(calls, |index, id| {
+        index >= first_category_arrow || screen::is_tab_sprite(id)
+    })
+}
+
 impl Game<'_> {
     fn mod_book_panel(&self) -> Option<sunrise_client::recipe_book::ModBookPanel<'_>> {
         let key = self.native_screen_book()?;
@@ -337,7 +343,7 @@ impl Game<'_> {
         };
         let mut calls = screen::draw(&layout);
         // The tab sprites, and the category arrows painted beside them (none under an overlay).
-        let mut tab_arrow_ids = Vec::new();
+        let first_category_arrow = calls.len();
         if ui.overlay.is_none() {
             for (_, [x, y, w, h], name, key) in tab_arrows(ui, xo, yo) {
                 let hover = inside(self.cursor, x, y, w, h);
@@ -345,7 +351,6 @@ impl Game<'_> {
                     "recipe_book/{name}{}",
                     if hover { "_highlighted" } else { "" }
                 );
-                tab_arrow_ids.push(id.clone());
                 calls.push(Drawn {
                     call: Call::Sprite {
                         id,
@@ -368,9 +373,7 @@ impl Game<'_> {
         if self.screen_view_listened() {
             self.screen_state
                 .drawn_book_tabs
-                .set(screen::sprite_bounds(&calls, |id| {
-                    screen::is_tab_sprite(id) || tab_arrow_ids.iter().any(|arrow| arrow == id)
-                }));
+                .set(registered_book_tab_bounds(&calls, first_category_arrow));
         }
         self.paint_book(batch, &calls)
     }
@@ -621,6 +624,53 @@ mod tests {
         assert_eq!(ui.visible_tabs(), vec![0, 13]);
         assert!(ui.turn_categories(false));
         assert_eq!(ui.visible_tabs(), vec![0, 9, 10, 11, 12]);
+    }
+
+    #[test]
+    fn the_registered_book_region_excludes_recipe_page_arrows() {
+        let tab = TabView {
+            icons: ("minecraft:compass".into(), None),
+            selected: true,
+            anim: 0.0,
+        };
+        let layout = Layout {
+            book: BookType::Crafting,
+            origin: (54, 37),
+            mouse: (0, 0),
+            index: 0,
+            filtering: false,
+            filter_look: None,
+            search: &Search::default(),
+            tabs: &[tab],
+            buttons: &[],
+            page: 0,
+            pages: 2,
+            overlay: None,
+            ghost: None,
+            translate: &str::to_owned,
+            text_width: &|s| s.len() as i32,
+        };
+        let mut calls = screen::draw(&layout);
+        assert!(calls.iter().any(|drawn| {
+            matches!(&drawn.call, Call::Sprite { id, x: 147, .. }
+                if id == "recipe_book/page_forward")
+        }));
+        let first_category_arrow = calls.len();
+        // The category arrow shares the recipe arrow's sprite.
+        calls.push(Drawn {
+            call: Call::Sprite {
+                id: "recipe_book/page_forward".into(),
+                x: 43,
+                y: 180,
+                w: 12,
+                h: 17,
+            },
+            pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        });
+        assert_eq!(
+            registered_book_tab_bounds(&calls, first_category_arrow),
+            Some([22.0, 40.0, 35.0, 157.0])
+        );
     }
 
     #[test]
