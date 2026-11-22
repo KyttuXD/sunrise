@@ -38,8 +38,8 @@ mod tests {
         for stitched in [
             "assets/minecraft/textures/gui/title/background/panorama_0.png",
             "assets/minecraft/textures/gui/presets/isles.png",
-            "assets/mymod/textures/gui/atlases/presets/mymod/heart.png",
-            "assets/mymod/textures/gui/atlases/icons/mymod/title/background/sky.png",
+            "assets/mymod/textures/gui/atlases/xpresets/xmymod/xheart.png",
+            "assets/mymod/textures/gui/atlases/xicons/xmymod/xtitle.sbackground.ssky.png",
             "assets/minecraft/textures/gui/sprites/icon/presets.png",
         ] {
             assert!(!menu_picture_only(stitched), "{stitched}");

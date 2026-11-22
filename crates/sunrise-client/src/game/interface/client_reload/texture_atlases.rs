@@ -321,7 +321,7 @@ mod tests {
         };
         assert_eq!(
             file("icons_mod:icons/heart"),
-            "assets/icons_mod/textures/gui/atlases/icons/icons_mod/icons/heart.png"
+            "assets/icons_mod/textures/gui/atlases/xicons/xicons_mod/xicons.sheart.png"
         );
         assert_eq!(source.read(&file("icons_mod:icons/heart")).unwrap(), heart);
         assert!(source.contains(&format!("{}.mcmeta", file("icons_mod:icons/heart"))));
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(staged_names.len(), 4, "{staged_names:?}");
         assert!(
             !source
-                .contains("assets/minecraft/textures/gui/atlases/blocks/icons_mod/icons/heart.png"),
+                .contains("assets/minecraft/textures/gui/atlases/xblocks/xicons_mod/xicons.sheart.png"),
             "built-in engine atlases are refused"
         );
     }
@@ -372,23 +372,23 @@ mod tests {
         let source = staged.source();
         assert_eq!(
             source
-                .read("assets/minecraft/textures/gui/atlases/custom_icons/icons_mod/heart.png")
+                .read("assets/minecraft/textures/gui/atlases/xcustom_icons/xicons_mod/xheart.png")
                 .unwrap(),
             heart
         );
         assert_eq!(
             source
-                .read("assets/sunrise/textures/gui/atlases/custom_icons/icons_mod/heart.png")
+                .read("assets/sunrise/textures/gui/atlases/xcustom_icons/xicons_mod/xheart.png")
                 .unwrap(),
             heart
         );
         assert!(
-            !source.contains("assets/minecraft/textures/gui/atlases/blocks/icons_mod/heart.png")
+            !source.contains("assets/minecraft/textures/gui/atlases/xblocks/xicons_mod/xheart.png")
         );
-        assert!(!source.contains("assets/minecraft/textures/gui/atlases/gui/icons_mod/heart.png"));
+        assert!(!source.contains("assets/minecraft/textures/gui/atlases/xgui/xicons_mod/xheart.png"));
         assert!(
             !source
-                .contains("assets/minecraft/textures/gui/atlases/armor_trims/icons_mod/heart.png")
+                .contains("assets/minecraft/textures/gui/atlases/xarmor_trims/xicons_mod/xheart.png")
         );
     }
 
@@ -450,7 +450,7 @@ mod tests {
                 ("assets/mod_a/textures/first.png", first_png.clone()),
                 ("assets/mod_a/textures/second.png", second_png),
                 (
-                    "assets/mod_a/textures/gui/atlases/icons/mod_a/icon.png",
+                    "assets/mod_a/textures/gui/atlases/xicons/xmod_a/xicon.png",
                     old_pack,
                 ),
             ]),
@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(
             staged
                 .source()
-                .read("assets/mod_a/textures/gui/atlases/icons/mod_a/icon.png")
+                .read("assets/mod_a/textures/gui/atlases/xicons/xmod_a/xicon.png")
                 .unwrap(),
             first_png
         );
@@ -496,8 +496,8 @@ mod tests {
             ]),
             &registrations,
         );
-        let heart = "assets/icons_mod/textures/gui/atlases/icons/icons_mod/icons/heart.png";
-        let star = "assets/icons_mod/textures/gui/atlases/icons/icons_mod/star.png";
+        let heart = "assets/icons_mod/textures/gui/atlases/xicons/xicons_mod/xicons.sheart.png";
+        let star = "assets/icons_mod/textures/gui/atlases/xicons/xicons_mod/xstar.png";
         assert!(first.source().contains(heart) && !first.source().contains(star));
         assert!(second.source().contains(star) && !second.source().contains(heart));
     }
@@ -575,7 +575,7 @@ mod tests {
             )
         };
         let sprite = |name: &str| {
-            format!("assets/icons_mod/textures/gui/atlases/icons/icons_mod/{name}.png")
+            format!("assets/icons_mod/textures/gui/atlases/xicons/xicons_mod/x{name}.png")
         };
         let both = staged(&[mod_layer.clone(), stars.clone()]);
         assert_eq!(both.source().read(&sprite("heart")).unwrap(), heart);

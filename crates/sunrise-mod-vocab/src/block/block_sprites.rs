@@ -159,15 +159,16 @@ pub struct TextureAtlasRegistration {
 }
 
 impl TextureAtlasRegistration {
-    /// The GUI atlas name of this atlas's sprite `sprite` (`mymod:heart` in `mymod:icons` is
-    /// `mymod:gui/atlases/icons/mymod/heart`): what `gui_sprite` looks it up by and
-    /// `DrawContext::sprite` draws.
+    /// The GUI key of `sprite` within this atlas. Pass the returned key to `gui_sprite` and
+    /// `DrawContext::sprite`; do not build the name by joining identifier paths yourself.
     pub fn sprite_name(&self, sprite: &Identifier) -> Identifier {
+        // One escaped component per field: consecutive or nested atlas/sprite paths cannot alias.
+        let escape = |part: &str| part.replace('.', "..").replace('/', ".s");
         let path = format!(
-            "gui/atlases/{}/{}/{}",
-            self.atlas.path(),
-            sprite.namespace(),
-            sprite.path()
+            "gui/atlases/x{}/x{}/x{}",
+            escape(self.atlas.path()),
+            escape(sprite.namespace()),
+            escape(sprite.path())
         );
         Identifier::from_parts(self.atlas.namespace(), &path)
             .expect("the parts of two identifiers form a valid path")

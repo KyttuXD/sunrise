@@ -464,18 +464,18 @@ fn two_gui_ids_of_one_walked_name_and_a_model_only_id_keep_their_own_results() {
 fn a_gui_filter_never_erases_a_registered_atlas_sprite_of_its_name() {
     let root = model_atlas_root("gui-registered", r#"{"sources":[]}"#, r#"{"sources":[]}"#);
     write_pixel(
-        &root.join("assets/demo/textures/gui/atlases/icons/demo/heart.png"),
+        &root.join("assets/demo/textures/gui/atlases/xicons/xdemo/xheart.png"),
         [0, 200, 0, 255],
     );
     std::fs::write(
         root.join("assets/minecraft/atlases/gui.json"),
         r#"{"sources":[
-            {"type":"minecraft:single","resource":"demo:item/sheet","sprite":"demo:gui/atlases/icons/demo/heart"},
-            {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"gui/atlases/icons/demo/heart"}}]}"#,
+            {"type":"minecraft:single","resource":"demo:item/sheet","sprite":"demo:gui/atlases/xicons/xdemo/xheart"},
+            {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"gui/atlases/xicons/xdemo/xheart"}}]}"#,
     )
     .unwrap();
     let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
-    let name = "demo:gui/atlases/icons/demo/heart";
+    let name = "demo:gui/atlases/xicons/xdemo/xheart";
     let packed = *atlas
         .registered
         .get(name)
@@ -491,7 +491,7 @@ fn a_gui_filter_never_erases_a_registered_atlas_sprite_of_its_name() {
 /// model lookup its own.
 #[test]
 fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
-    let name = "demo:gui/atlases/icons/demo/heart";
+    let name = "demo:gui/atlases/xicons/xdemo/xheart";
     let items = format!(
         r#"{{"sources":[{{"type":"minecraft:single","resource":"demo:item/sheet","sprite":"{name}"}}]}}"#
     );
@@ -499,7 +499,7 @@ fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
     write_vanilla_gui_definition(&root);
     // The staged file of the registered atlas's sprite, as its projection lays it down: two
     // frames (green, blue), played from the second.
-    let staged = root.join("assets/demo/textures/gui/atlases/icons/demo/heart.png");
+    let staged = root.join("assets/demo/textures/gui/atlases/xicons/xdemo/xheart.png");
     std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
     let mut encoder = png::Encoder::new(std::fs::File::create(&staged).unwrap(), 1, 2);
     encoder.set_color(png::ColorType::Rgba);
@@ -514,7 +514,7 @@ fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
         r#"{"animation":{"width":1,"height":1,"frames":[1,0]}}"#,
     )
     .unwrap();
-    let raw_name = "gui/atlases/icons/demo/raw";
+    let raw_name = "gui/atlases/xicons/xdemo/xraw";
     let raw_file = root.join(format!("assets/minecraft/textures/{raw_name}.png"));
     write_pixel(&raw_file, [200, 100, 0, 255]);
     std::fs::write(
