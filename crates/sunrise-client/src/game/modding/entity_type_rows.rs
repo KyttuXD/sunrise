@@ -12,6 +12,9 @@ use std::{
 pub(in crate::game) struct EntityTypeRows {
     /// Every entity type (`minecraft:boat`), namespaced as commands name it.
     pub(in crate::game) ids: Vec<String>,
+    /// Every entity type except `minecraft:player`, sorted: what `EntityLayers::entity_types`
+    /// borrows directly without allocating on every call.
+    pub(in crate::game) non_player_ids: Vec<String>,
     /// The living ones.
     living: Vec<String>,
 }
@@ -30,6 +33,12 @@ impl EntityTypeRows {
         }
         out.ids.sort();
         out.living.sort();
+        out.non_player_ids = out
+            .ids
+            .iter()
+            .filter(|id| id.as_str() != "minecraft:player")
+            .cloned()
+            .collect();
         out
     }
 
@@ -67,11 +76,21 @@ mod tests {
     fn a_row_with_attributes_is_a_living_type() {
         let rows = EntityTypeRows::parse(
             br#"{"minecraft:oak_boat": {"width": 1.375},
+                 "minecraft:player": {"width": 0.6, "attributes": {}},
                  "minecraft:zombie": {"width": 0.6, "attributes": {"minecraft:armor": 2.0}},
                  "ruby:golem": {"template": "minecraft:zombie", "attributes": {}}}"#,
         );
         assert_eq!(
             rows.ids,
+            [
+                "minecraft:oak_boat",
+                "minecraft:player",
+                "minecraft:zombie",
+                "ruby:golem",
+            ]
+        );
+        assert_eq!(
+            rows.non_player_ids,
             ["minecraft:oak_boat", "minecraft:zombie", "ruby:golem"]
         );
         assert!(rows.contains("minecraft:oak_boat"));

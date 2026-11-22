@@ -628,12 +628,12 @@ mod tests {
             ("add_server_reload_listeners", 4, Some(PhaseContext::Reload)),
             (
                 "register_entity_layers",
-                4,
+                5,
                 Some(PhaseContext::Registration),
             ),
             (
                 "register_entity_renderers",
-                4,
+                5,
                 Some(PhaseContext::Registration),
             ),
             ("section_visibility", 2, None),

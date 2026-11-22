@@ -597,10 +597,16 @@ impl<T, K: Ord> RegistrationMap<T, K> {
     }
 
     pub(crate) fn into_values(self) -> std::collections::BTreeMap<K, T> {
-        self.0
+        self.into_owned_values()
             .into_iter()
             .map(|(key, (_, value))| (key, value))
             .collect()
+    }
+
+    pub(crate) fn into_owned_values(
+        self,
+    ) -> std::collections::BTreeMap<K, (Option<&'static str>, T)> {
+        self.0
     }
 }
 
