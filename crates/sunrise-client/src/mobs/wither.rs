@@ -450,30 +450,101 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             ];
+            // Vanilla `WitherBoss.customServerAiStep` computes bounds with Java
+            // signed-int arithmetic before passing them to `BlockPos.betweenClosed`.
+            let min_x = b[0].wrapping_sub(width);
+            let max_x = b[0].wrapping_add(width);
+            let min_y = b[1];
+            let max_y = b[1].wrapping_add(height);
+            let min_z = b[2].wrapping_sub(width);
+            let max_z = b[2].wrapping_add(width);
             let mut destroyed = false;
-            for x in b[0] - width..=b[0] + width {
-                for y in b[1]..=b[1] + height {
-                    for z in b[2] - width..=b[2] + width {
-                        let name = w.block_name(x, y, z);
-                        let immune = w
-                            .block_tags
-                            .get("minecraft:wither_immune")
-                            .is_some_and(|t| t.contains(name));
-                        // WitherBoss.canDestroy, or what the block's parts answer.
-                        if name != "minecraft:air"
-                            && !name.ends_with("_air")
-                            && w.can_entity_destroy(m.id, [x, y, z], !immune)
-                        {
-                            events.push(MobEvent::BreakBlock {
-                                pos: [x, y, z],
-                                drop: true,
-                                by: Some(m.id),
-                                breaker: None,
-                            });
-                            // destroyBlock is true when setBlock changed the
-                            // cell: a liquid is already its fluid's block.
-                            let state = w.world.block(x, y, z);
-                            destroyed |= !w.facts.get(state).has_class("LiquidBlock");
+            if min_x <= max_x && min_y <= max_y && min_z <= max_z {
+                let min_cx = min_x >> 4;
+                let max_cx = max_x >> 4;
+                let min_cz = min_z >> 4;
+                let max_cz = max_z >> 4;
+                let air = w.world.air;
+                let mut sweep_chunk = |cx: i32, cz: i32, chunk: &crate::chunk::Chunk| {
+                    let y_lo = min_y.max(chunk.min_y());
+                    let y_hi = max_y.min(chunk.max_y() - 1);
+                    if y_lo > y_hi {
+                        return;
+                    }
+                    let x_lo = min_x.max(cx << 4);
+                    let x_hi = max_x.min((cx << 4) + 15);
+                    let z_lo = min_z.max(cz << 4);
+                    let z_hi = max_z.min((cz << 4) + 15);
+                    let Some(s_lo) = chunk.section_index(y_lo) else {
+                        return;
+                    };
+                    let Some(s_hi) = chunk.section_index(y_hi) else {
+                        return;
+                    };
+                    for s in s_lo..=s_hi {
+                        if chunk.sections[s].is_uniform(air.0) {
+                            continue;
+                        }
+                        let sec_y = chunk.min_y() + (s as i32) * 16;
+                        let sy_lo = y_lo.max(sec_y);
+                        let sy_hi = y_hi.min(sec_y + 15);
+                        for x in x_lo..=x_hi {
+                            for y in sy_lo..=sy_hi {
+                                for z in z_lo..=z_hi {
+                                    let state = chunk.block(x & 15, y, z & 15);
+                                    if state == air {
+                                        continue;
+                                    }
+                                    let facts = w.facts.get(state);
+                                    let name: &str = &facts.name;
+                                    let immune = w
+                                        .block_tags
+                                        .get("minecraft:wither_immune")
+                                        .is_some_and(|t| t.contains(name));
+                                    // WitherBoss.canDestroy, or what the block's parts answer.
+                                    if name != "minecraft:air"
+                                        && !name.ends_with("_air")
+                                        && w.can_entity_destroy(m.id, [x, y, z], !immune)
+                                    {
+                                        events.push(MobEvent::BreakBlock {
+                                            pos: [x, y, z],
+                                            drop: true,
+                                            by: Some(m.id),
+                                            breaker: None,
+                                        });
+                                        // destroyBlock is true when setBlock changed the
+                                        // cell: a liquid is already its fluid's block.
+                                        destroyed |= !facts.has_class("LiquidBlock");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                let chunk_span = (i64::from(max_cx) - i64::from(min_cx) + 1)
+                    .saturating_mul(i64::from(max_cz) - i64::from(min_cz) + 1);
+                if chunk_span <= w.world.chunks.len() as i64 {
+                    for cx in min_cx..=max_cx {
+                        for cz in min_cz..=max_cz {
+                            if let Some(chunk) = w.world.chunks.get(&(cx, cz)) {
+                                sweep_chunk(cx, cz, chunk);
+                            }
+                        }
+                    }
+                } else {
+                    let mut columns: Vec<(i32, i32)> = w
+                        .world
+                        .chunks
+                        .keys()
+                        .copied()
+                        .filter(|&(cx, cz)| {
+                            (min_cx..=max_cx).contains(&cx) && (min_cz..=max_cz).contains(&cz)
+                        })
+                        .collect();
+                    columns.sort_unstable();
+                    for (cx, cz) in columns {
+                        if let Some(chunk) = w.world.chunks.get(&(cx, cz)) {
+                            sweep_chunk(cx, cz, chunk);
                         }
                     }
                 }

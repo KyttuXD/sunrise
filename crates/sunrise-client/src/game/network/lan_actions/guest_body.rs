@@ -475,6 +475,16 @@ impl Game<'_> {
             let mut w = motion_world!(game, side, player);
             if riding {
                 let _ = w.player.refresh_attributes();
+            }
+            if mod_api::__private::listened(mod_api::HookId::EntitySize) {
+                if riding {
+                    let _ = w.passenger_base_tick();
+                } else {
+                    w.player.count_down_server_spin();
+                    let _ = w.player.refresh_attributes();
+                }
+                let _ = game.update_player_pose_with_sizes(id, &[], riding);
+            } else if riding {
                 let _ = w.passenger_pose_tick();
             } else {
                 let _ = w.server_player_pose_tick();

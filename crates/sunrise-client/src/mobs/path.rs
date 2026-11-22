@@ -218,14 +218,16 @@ impl Node {
     }
     fn distance(&self, x: i32, y: i32, z: i32) -> f32 {
         let (dx, dy, dz) = (
-            (x - self.x) as f32,
-            (y - self.y) as f32,
-            (z - self.z) as f32,
+            (i64::from(x) - i64::from(self.x)) as f32,
+            (i64::from(y) - i64::from(self.y)) as f32,
+            (i64::from(z) - i64::from(self.z)) as f32,
         );
         (dx * dx + dy * dy + dz * dz).sqrt()
     }
     fn manhattan(&self, x: i32, y: i32, z: i32) -> f32 {
-        ((x - self.x).abs() + (y - self.y).abs() + (z - self.z).abs()) as f32
+        ((i64::from(x) - i64::from(self.x)).abs()
+            + (i64::from(y) - i64::from(self.y)).abs()
+            + (i64::from(z) - i64::from(self.z)).abs()) as f32
     }
 }
 
@@ -260,7 +262,9 @@ pub struct PathNode {
 impl Path {
     fn new(nodes: Vec<PathNode>, target: [i32; 3], reached: bool) -> Self {
         let dist_to_target = nodes.last().map_or(f32::MAX, |n| {
-            ((n.x - target[0]).abs() + (n.y - target[1]).abs() + (n.z - target[2]).abs()) as f32
+            ((i64::from(n.x) - i64::from(target[0])).abs()
+                + (i64::from(n.y) - i64::from(target[1])).abs()
+                + (i64::from(n.z) - i64::from(target[2])).abs()) as f32
         });
         Self {
             nodes,
@@ -593,67 +597,319 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         t
     }
-    fn within_bb(&self, x: i32, y: i32, z: i32) -> Vec<PathType> {
-        let mut out = Vec::with_capacity(4);
+    fn classify_bb_cell(&self, x: i32, y: i32, z: i32, mp: [i32; 3]) -> PathType {
+        let mut t = self.path_type(x, y, z);
+        if t == PathType::DoorWoodClosed && self.mob.can_open_doors && self.mob.can_pass_doors {
+            t = PathType::WalkableDoor;
+        }
+        if t == PathType::DoorOpen && !self.mob.can_pass_doors {
+            t = PathType::Blocked;
+        }
+        if t == PathType::Rail
+            && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
+            && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
+        {
+            t = PathType::UnpassableRail;
+        }
+        t
+    }
+    fn within_bb_mask(&self, x: i32, y: i32, z: i32) -> u32 {
+        if self.entity_width <= 0 || self.entity_height <= 0 || self.entity_depth <= 0 {
+            return 0;
+        }
+        let x1 = x.saturating_add(self.entity_width - 1);
+        let y1 = y.saturating_add(self.entity_height - 1);
+        let z1 = z.saturating_add(self.entity_depth - 1);
+        let volume = ((i64::from(x1) - i64::from(x) + 1) as u128)
+            * ((i64::from(y1) - i64::from(y) + 1) as u128)
+            * ((i64::from(z1) - i64::from(z) + 1) as u128);
+        let air = self.w.world.air;
+        let air_facts = self.w.facts.get(air);
+        let fast_air = !self
+            .w
+            .mob_hooks
+            .is_some_and(|hooks| hooks.path_type_hooked(air))
+            && self.w.data.path_type(air) == PathType::Open
+            && air_facts.fluid == Fluid::None
+            && air_facts.name.as_ref() != "minecraft:sweet_berry_bush"
+            && !data::vanilla_burning_block(
+                &air_facts.name,
+                air_facts.emission > 0,
+                self.w.state_flag(air, BlockTagFlags::FIRE),
+            );
         let mp = self.mob.block_position();
-        for dx in 0..self.entity_width {
-            for dy in 0..self.entity_height {
-                for dz in 0..self.entity_depth {
-                    let mut t = self.path_type(
-                        x.saturating_add(dx),
-                        y.saturating_add(dy),
-                        z.saturating_add(dz),
-                    );
-                    if t == PathType::DoorWoodClosed
-                        && self.mob.can_open_doors
-                        && self.mob.can_pass_doors
+        if volume <= 64 || !fast_air {
+            let mut mask = 0u32;
+            for xx in x..=x1 {
+                for yy in y..=y1 {
+                    for zz in z..=z1 {
+                        mask |= 1u32 << (self.classify_bb_cell(xx, yy, zz, mp) as u8);
+                    }
+                }
+            }
+            return mask;
+        }
+
+        // Large footprint with unhooked open air: every section that is uniform
+        // air and has no non-air neighbour section that can influence its cells
+        // classifies every cell inside it as `PathType::Open` without scanning
+        // empty space cell by cell.
+        const SELF_BIT: u32 = 1u32 << 13;
+        const BELOW_BIT: u32 = 1u32 << 10;
+        let open_bit = 1u32 << (PathType::Open as u8);
+        let sx0 = x >> 4;
+        let sx1 = x1 >> 4;
+        let sy0 = y >> 4;
+        let sy1 = y1 >> 4;
+        let sz0 = z >> 4;
+        let sz1 = z1 >> 4;
+        let total_sections = ((i64::from(sx1) - i64::from(sx0) + 1) as u128)
+            * ((i64::from(sy1) - i64::from(sy0) + 1) as u128)
+            * ((i64::from(sz1) - i64::from(sz0) + 1) as u128);
+        let is_fly = self.eval == Evaluator::Fly;
+        let (cx_lo, cx_hi, cz_lo, cz_hi, sy_lo, sy_hi) = if is_fly {
+            (
+                sx0.saturating_sub(1),
+                sx1.saturating_add(1),
+                sz0.saturating_sub(1),
+                sz1.saturating_add(1),
+                sy0.saturating_sub(1),
+                sy1.saturating_add(1),
+            )
+        } else {
+            (sx0, sx1, sz0, sz1, sy0.saturating_sub(1), sy1)
+        };
+
+        let mut affected: FxHashMap<(i32, i32, i32), u32> = FxHashMap::default();
+        let mut mark_chunk = |cx: i32, cz: i32, chunk: &crate::chunk::Chunk| {
+            let chunk_sy0 = chunk.min_y() >> 4;
+            let chunk_sy1 = chunk_sy0 + chunk.sections.len() as i32 - 1;
+            let lo = sy_lo.max(chunk_sy0);
+            let hi = sy_hi.min(chunk_sy1);
+            if lo > hi {
+                return;
+            }
+            for nsy in lo..=hi {
+                let s = (nsy - chunk_sy0) as usize;
+                if chunk.sections[s].is_uniform(air.0) {
+                    continue;
+                }
+                if is_fly {
+                    for ox in -1..=1 {
+                        let Some(tx) = cx.checked_sub(ox) else {
+                            continue;
+                        };
+                        if !(sx0..=sx1).contains(&tx) {
+                            continue;
+                        }
+                        for oy in -1..=1 {
+                            let Some(ty) = nsy.checked_sub(oy) else {
+                                continue;
+                            };
+                            if !(sy0..=sy1).contains(&ty) {
+                                continue;
+                            }
+                            for oz in -1..=1 {
+                                let Some(tz) = cz.checked_sub(oz) else {
+                                    continue;
+                                };
+                                if !(sz0..=sz1).contains(&tz) {
+                                    continue;
+                                }
+                                let bit = ((ox + 1) * 9 + (oy + 1) * 3 + (oz + 1)) as u32;
+                                *affected.entry((tx, ty, tz)).or_insert(0) |= 1u32 << bit;
+                            }
+                        }
+                    }
+                } else {
+                    if (sy0..=sy1).contains(&nsy) {
+                        *affected.entry((cx, nsy, cz)).or_insert(0) |= SELF_BIT;
+                    }
+                    if let Some(above) = nsy.checked_add(1)
+                        && (sy0..=sy1).contains(&above)
                     {
-                        t = PathType::WalkableDoor;
+                        *affected.entry((cx, above, cz)).or_insert(0) |= BELOW_BIT;
                     }
-                    if t == PathType::DoorOpen && !self.mob.can_pass_doors {
-                        t = PathType::Blocked;
+                }
+            }
+        };
+
+        let chunk_span = (i64::from(cx_hi) - i64::from(cx_lo) + 1)
+            .saturating_mul(i64::from(cz_hi) - i64::from(cz_lo) + 1);
+        if chunk_span <= self.w.world.chunks.len() as i64 {
+            for cx in cx_lo..=cx_hi {
+                for cz in cz_lo..=cz_hi {
+                    if let Some(chunk) = self.w.world.chunks.get(&(cx, cz)) {
+                        mark_chunk(cx, cz, chunk);
                     }
-                    if t == PathType::Rail
-                        && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
+                }
+            }
+        } else {
+            for (&(cx, cz), chunk) in &self.w.world.chunks {
+                if (cx_lo..=cx_hi).contains(&cx) && (cz_lo..=cz_hi).contains(&cz) {
+                    mark_chunk(cx, cz, chunk);
+                }
+            }
+        }
+
+        let mut mask = if (affected.len() as u128) < total_sections {
+            open_bit
+        } else {
+            0
+        };
+        let bottom_y = self.w.world.bottom_y();
+
+        for ((sx, sy, sz), nb_mask) in affected {
+            let bx0 = (sx << 4).max(x);
+            let bx1 = ((sx << 4) + 15).min(x1);
+            let by0 = (sy << 4).max(y);
+            let by1 = ((sy << 4) + 15).min(y1);
+            let bz0 = (sz << 4).max(z);
+            let bz1 = ((sz << 4) + 15).min(z1);
+            let lx0 = bx0 & 15;
+            let lx1 = bx1 & 15;
+            let ly0 = by0 & 15;
+            let ly1 = by1 & 15;
+            let lz0 = bz0 & 15;
+            let lz1 = bz1 & 15;
+
+            if (nb_mask & SELF_BIT) != 0 {
+                let chunk = self
+                    .w
+                    .world
+                    .chunks
+                    .get(&(sx, sz))
+                    .expect("SELF_BIT section belongs to a resident chunk");
+                let sec_idx = chunk
+                    .section_index(by0)
+                    .expect("SELF_BIT section is within chunk height");
+                let section = chunk.sections[sec_idx].as_ref();
+                if section.blocks.bits() == 0
+                    && let Some(raw_state) = section.blocks.uniform()
+                {
+                    let raw_state = sunrise_world::registry::BlockStateId(raw_state);
+                    let raw = self.w.data.path_type(raw_state);
+                    if !self
+                        .w
+                        .mob_hooks
+                        .is_some_and(|hooks| hooks.path_type_hooked(raw_state))
+                        && !matches!(raw, PathType::Open | PathType::Walkable | PathType::Water)
                     {
-                        t = PathType::UnpassableRail;
+                        mask |= 1u32 << (self.classify_bb_cell(bx0, by0, bz0, mp) as u8);
+                        continue;
                     }
-                    if !out.contains(&t) {
-                        out.push(t);
+                }
+                for lx in lx0..=lx1 {
+                    let bx = (sx << 4) + lx;
+                    for ly in ly0..=ly1 {
+                        let by = (sy << 4) + ly;
+                        for lz in lz0..=lz1 {
+                            let state = chunk.block(lx, by, lz);
+                            if !is_fly
+                                && state == air
+                                && (by <= bottom_y
+                                    || by.saturating_sub(1) < chunk.min_y()
+                                    || chunk.block(lx, by - 1, lz) == air)
+                            {
+                                mask |= open_bit;
+                                continue;
+                            }
+                            let bz = (sz << 4) + lz;
+                            mask |= 1u32 << (self.classify_bb_cell(bx, by, bz, mp) as u8);
+                        }
+                    }
+                }
+            } else if !is_fly {
+                // Uniform-air/missing section with a non-air section directly below.
+                if ly1 > 0 {
+                    mask |= open_bit;
+                }
+                if ly0 == 0 {
+                    let by = sy << 4;
+                    if by <= bottom_y {
+                        mask |= open_bit;
+                    } else {
+                        for lx in lx0..=lx1 {
+                            let bx = (sx << 4) + lx;
+                            for lz in lz0..=lz1 {
+                                let bz = (sz << 4) + lz;
+                                mask |= 1u32 << (self.classify_bb_cell(bx, by, bz, mp) as u8);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Fly evaluator in a uniform-air/missing section with non-air neighbours.
+                if lx0.max(1) <= lx1.min(14)
+                    && ly0.max(1) <= ly1.min(14)
+                    && lz0.max(1) <= lz1.min(14)
+                {
+                    mask |= open_bit;
+                }
+                for lx in lx0..=lx1 {
+                    let bx = (sx << 4) + lx;
+                    let x_edge = lx == 0 || lx == 15;
+                    for ly in ly0..=ly1 {
+                        let by = (sy << 4) + ly;
+                        let xy_edge = x_edge || ly == 0 || ly == 15;
+                        if xy_edge {
+                            for lz in lz0..=lz1 {
+                                if fly_cell_touches_neighbour(lx, ly, lz, nb_mask) {
+                                    let bz = (sz << 4) + lz;
+                                    mask |= 1u32 << (self.classify_bb_cell(bx, by, bz, mp) as u8);
+                                } else {
+                                    mask |= open_bit;
+                                }
+                            }
+                        } else {
+                            for lz in [0, 15] {
+                                if !(lz0..=lz1).contains(&lz) {
+                                    continue;
+                                }
+                                if fly_cell_touches_neighbour(lx, ly, lz, nb_mask) {
+                                    let bz = (sz << 4) + lz;
+                                    mask |= 1u32 << (self.classify_bb_cell(bx, by, bz, mp) as u8);
+                                } else {
+                                    mask |= open_bit;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        out
+        mask
     }
     /// WalkNodeEvaluator.getPathTypeOfMob.
     fn path_type_of_mob(&self, x: i32, y: i32, z: i32) -> PathType {
         if let Evaluator::Swim { .. } = self.eval {
             return self.swim_path_type(x, y, z);
         }
-        let mut types = self.within_bb(x, y, z);
-        // EnumSet iteration follows declaration order.
-        types.sort_by_key(|t| *t as u8);
-        if types.len() == 1 {
-            return types[0];
+        let mask = self.within_bb_mask(x, y, z);
+        if mask.count_ones() == 1 {
+            return PathType::ALL[mask.trailing_zeros() as usize];
         }
-        if types.contains(&PathType::Fence) {
+        if (mask & (1u32 << (PathType::Fence as u8))) != 0 {
             return PathType::Fence;
         }
-        if types.contains(&PathType::UnpassableRail) {
+        if (mask & (1u32 << (PathType::UnpassableRail as u8))) != 0 {
             return PathType::UnpassableRail;
         }
         let mut highest = PathType::Blocked;
         let mut highest_malus = self.malus(highest);
-        for t in &types {
-            let m = self.malus(*t);
+        // Bit order follows PathType declaration order (Java EnumSet iteration).
+        let mut bits = mask;
+        while bits != 0 {
+            let idx = bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            let t = PathType::ALL[idx];
+            let m = self.malus(t);
             if m < 0.0 {
-                return *t;
+                return t;
             }
             if m >= highest_malus {
                 highest_malus = m;
-                highest = *t;
+                highest = t;
             }
         }
         let current = self.path_type(x, y, z);
@@ -672,25 +928,30 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     fn swim_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut last = (x, y, z);
-        for xx in x..x.saturating_add(self.entity_width) {
-            for yy in y..y.saturating_add(self.entity_height) {
-                for zz in z..z.saturating_add(self.entity_depth) {
-                    let fluid = self.fluid(xx, yy, zz);
-                    if let Some(t) = swim_cell_type(
-                        fluid,
-                        || {
-                            self.pathfindable(
-                                xx,
-                                yy.saturating_sub(1),
-                                zz,
-                                PathComputationType::Water,
-                            )
-                        },
-                        || self.is_air(xx, yy, zz),
-                    ) {
-                        return t;
+        if self.entity_width > 0 && self.entity_height > 0 && self.entity_depth > 0 {
+            let x1 = x.saturating_add(self.entity_width - 1);
+            let y1 = y.saturating_add(self.entity_height - 1);
+            let z1 = z.saturating_add(self.entity_depth - 1);
+            for xx in x..=x1 {
+                for yy in y..=y1 {
+                    for zz in z..=z1 {
+                        let fluid = self.fluid(xx, yy, zz);
+                        if let Some(t) = swim_cell_type(
+                            fluid,
+                            || {
+                                self.pathfindable(
+                                    xx,
+                                    yy.saturating_sub(1),
+                                    zz,
+                                    PathComputationType::Water,
+                                )
+                            },
+                            || self.is_air(xx, yy, zz),
+                        ) {
+                            return t;
+                        }
+                        last = (xx, yy, zz);
                     }
-                    last = (xx, yy, zz);
                 }
             }
         }
@@ -946,7 +1207,8 @@ impl<'a, 'w> Finder<'a, 'w> {
         dir: (i32, i32),
         current: PathType,
     ) -> Option<u32> {
-        let above = self.find_accepted(x, y + 1, z, jump - 1, node_height, dir, current)?;
+        let above =
+            self.find_accepted(x, y.wrapping_add(1), z, jump - 1, node_height, dir, current)?;
         if self.mob.width >= 1.0 {
             return Some(above);
         }
@@ -957,13 +1219,13 @@ impl<'a, 'w> Finder<'a, 'w> {
         if ak != PathType::Open && ak != PathType::Walkable {
             return Some(above);
         }
-        let cx = f64::from(x - dir.0) + 0.5;
-        let cz = f64::from(z - dir.1) + 0.5;
+        let cx = f64::from(x.wrapping_sub(dir.0)) + 0.5;
+        let cz = f64::from(z.wrapping_sub(dir.1)) + 0.5;
         let half = f64::from(self.mob.width) / 2.0;
         let grow = Aabb::new(
             Vec3::new(
                 cx - half,
-                self.floor_level(cx.floor() as i32, y + 1, cz.floor() as i32) + 0.001,
+                self.floor_level(cx.floor() as i32, y.wrapping_add(1), cz.floor() as i32) + 0.001,
                 cz - half,
             ),
             Vec3::new(
@@ -985,22 +1247,22 @@ impl<'a, 'w> Finder<'a, 'w> {
         z: i32,
         mut best: Option<u32>,
     ) -> Option<u32> {
-        y -= 1;
-        while y > self.w.world.bottom_y() {
+        while y > self.w.world.bottom_y().saturating_add(1) {
+            y -= 1;
             let t = self.cached(x, y, z);
             if t != PathType::Water {
                 return best;
             }
             let m = self.malus(t);
             best = Some(self.node_update_max(x, y, z, t, m));
-            y -= 1;
         }
         best
     }
     fn first_ground_below(&mut self, x: i32, y: i32, z: i32) -> u32 {
-        let mut cy = y - 1;
-        while cy >= self.w.world.bottom_y() {
-            if y - cy > self.mob.max_fall_distance {
+        let mut cy = y;
+        while cy > self.w.world.bottom_y() {
+            cy -= 1;
+            if i64::from(y) - i64::from(cy) > i64::from(self.mob.max_fall_distance) {
                 return self.blocked_node(x, cy, z);
             }
             let t = self.cached(x, cy, z);
@@ -1011,7 +1273,6 @@ impl<'a, 'w> Finder<'a, 'w> {
                 }
                 return self.blocked_node(x, cy, z);
             }
-            cy -= 1;
         }
         self.blocked_node(x, y, z)
     }
@@ -1057,7 +1318,7 @@ impl<'a, 'w> Finder<'a, 'w> {
             let n = &self.nodes[pos as usize];
             (n.x, n.y, n.z)
         };
-        let above = self.cached(px, py + 1, pz);
+        let above = self.cached(px, py.wrapping_add(1), pz);
         let current = self.cached(px, py, pz);
         let mut jump = 0;
         if self.malus(above) >= 0.0 && current != PathType::StickyHoney {
@@ -1068,7 +1329,15 @@ impl<'a, 'w> Finder<'a, 'w> {
         const DIRS: [(i32, i32, usize); 4] = [(0, -1, 2), (1, 0, 3), (0, 1, 0), (-1, 0, 1)];
         let mut by2d: [Option<u32>; 4] = [None; 4];
         for (dx, dz, i2) in DIRS {
-            let n = self.find_accepted(px + dx, py, pz + dz, jump, height, (dx, dz), current);
+            let n = self.find_accepted(
+                px.wrapping_add(dx),
+                py,
+                pz.wrapping_add(dz),
+                jump,
+                height,
+                (dx, dz),
+                current,
+            );
             by2d[i2] = n;
             if self.neighbor_valid(n, pos) {
                 out.push(n.unwrap_or_default());
@@ -1091,9 +1360,9 @@ impl<'a, 'w> Finder<'a, 'w> {
             };
             if self.diagonal_pair_valid(pos, by2d[i2], by2d[c]) {
                 let d = self.find_accepted(
-                    px + dx + cdx,
+                    px.wrapping_add(dx).wrapping_add(cdx),
                     py,
-                    pz + dz + cdz,
+                    pz.wrapping_add(dz).wrapping_add(cdz),
                     jump,
                     height,
                     (dx, dz),
@@ -1105,8 +1374,17 @@ impl<'a, 'w> Finder<'a, 'w> {
             }
         }
         if let Evaluator::Amphibious { prefers_shallow } = self.eval {
-            let up = self.find_accepted(px, py + 1, pz, (jump - 1).max(0), height, (0, 0), current);
-            let down = self.find_accepted(px, py - 1, pz, jump, height, (0, 0), current);
+            let up = self.find_accepted(
+                px,
+                py.wrapping_add(1),
+                pz,
+                (jump - 1).max(0),
+                height,
+                (0, 0),
+                current,
+            );
+            let down =
+                self.find_accepted(px, py.wrapping_sub(1), pz, jump, height, (0, 0), current);
             if self.neighbor_valid(up, pos)
                 && up.is_some_and(|u| self.nodes[u as usize].kind == PathType::Water)
             {
@@ -1163,7 +1441,11 @@ impl<'a, 'w> Finder<'a, 'w> {
         ];
         let mut by_dir: [Option<u32>; 6] = [None; 6];
         for (slot, (dx, dy, dz)) in by_dir.iter_mut().zip(dirs) {
-            let n = self.swim_accepted(px + dx, py + dy, pz + dz);
+            let n = self.swim_accepted(
+                px.wrapping_add(dx),
+                py.wrapping_add(dy),
+                pz.wrapping_add(dz),
+            );
             *slot = n;
             if open(self, n) {
                 out.push(n.unwrap_or_default());
@@ -1176,7 +1458,11 @@ impl<'a, 'w> Finder<'a, 'w> {
             (4usize, 2usize, -1i32, 0i32, 0i32, -1i32),
         ] {
             if malus(self, by_dir[a]) && malus(self, by_dir[b]) {
-                let d = self.swim_accepted(px + dx + cx, py, pz + dz + cz);
+                let d = self.swim_accepted(
+                    px.wrapping_add(dx).wrapping_add(cx),
+                    py,
+                    pz.wrapping_add(dz).wrapping_add(cz),
+                );
                 if open(self, d) {
                     out.push(d.unwrap_or_default());
                 }
@@ -1200,7 +1486,13 @@ impl<'a, 'w> Finder<'a, 'w> {
             let n = &self.nodes[pos as usize];
             (n.x, n.y, n.z)
         };
-        let f = |s: &mut Self, dx: i32, dy: i32, dz: i32| s.fly_accepted(px + dx, py + dy, pz + dz);
+        let f = |s: &mut Self, dx: i32, dy: i32, dz: i32| {
+            s.fly_accepted(
+                px.wrapping_add(dx),
+                py.wrapping_add(dy),
+                pz.wrapping_add(dz),
+            )
+        };
         let open = |s: &Self, n: Option<u32>| n.is_some_and(|n| !s.nodes[n as usize].closed);
         let m = |s: &Self, n: Option<u32>| n.is_some_and(|n| s.nodes[n as usize].cost_malus >= 0.0);
         let south = f(self, 0, 0, 1);
@@ -1463,6 +1755,26 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
 }
 
+fn fly_cell_touches_neighbour(lx: i32, ly: i32, lz: i32, nb_mask: u32) -> bool {
+    let x_lo = if lx == 0 { -1 } else { 0 };
+    let x_hi = if lx == 15 { 1 } else { 0 };
+    let y_lo = if ly == 0 { -1 } else { 0 };
+    let y_hi = if ly == 15 { 1 } else { 0 };
+    let z_lo = if lz == 0 { -1 } else { 0 };
+    let z_hi = if lz == 15 { 1 } else { 0 };
+    for ox in x_lo..=x_hi {
+        for oy in y_lo..=y_hi {
+            for oz in z_lo..=z_hi {
+                let bit = ((ox + 1) * 9 + (oy + 1) * 3 + (oz + 1)) as u32;
+                if (nb_mask & (1u32 << bit)) != 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 // The smallest natural mob mean size (baby bee: 0.2666...) at minimum
 // minecraft:scale (0.0625) still exceeds 1/64. Preserve vanilla subdivision
 // counts above that conservative boundary, even for long airborne-start legs.
@@ -1612,5 +1924,23 @@ mod tests {
         let mut p = path(nodes.clone());
         p.raise_cauldron_nodes(|_, _, _| false);
         assert_eq!(p.nodes, nodes);
+    }
+
+    #[test]
+    fn fly_boundary_mask_matches_only_touching_neighbour_sections() {
+        let bit =
+            |ox: i32, oy: i32, oz: i32| 1u32 << (((ox + 1) * 9 + (oy + 1) * 3 + (oz + 1)) as u32);
+        // Interior cell touches no neighbour section even when all 26 are set.
+        let all_neighbours = ((1u32 << 27) - 1) & !bit(0, 0, 0);
+        assert!(!fly_cell_touches_neighbour(1, 1, 1, all_neighbours));
+        assert!(!fly_cell_touches_neighbour(14, 14, 14, all_neighbours));
+        // Face cell (15, 7, 7) touches (+1, 0, 0) and not (-1, 0, 0) or (+1, +1, 0).
+        assert!(fly_cell_touches_neighbour(15, 7, 7, bit(1, 0, 0)));
+        assert!(!fly_cell_touches_neighbour(15, 7, 7, bit(-1, 0, 0)));
+        assert!(!fly_cell_touches_neighbour(15, 7, 7, bit(1, 1, 0)));
+        // Corner cell (0, 15, 0) touches (-1, +1, -1) and (-1, 0, 0), not (+1, 0, 0).
+        assert!(fly_cell_touches_neighbour(0, 15, 0, bit(-1, 1, -1)));
+        assert!(fly_cell_touches_neighbour(0, 15, 0, bit(-1, 0, 0)));
+        assert!(!fly_cell_touches_neighbour(0, 15, 0, bit(1, 0, 0)));
     }
 }

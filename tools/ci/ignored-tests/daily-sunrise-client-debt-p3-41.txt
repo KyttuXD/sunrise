@@ -1,0 +1,3 @@
+sunrise-client game::entity_sizes::tests::guest_pose_queries_only_active_vanilla_candidates lib daily resources
+sunrise-client game::entity_sizes::tests::large_sizes_complete_navigation_and_wither_sweep lib daily resources
+sunrise-client game::entity_sizes::tests::large_player_pose_fit_covers_box_past_collision_budget lib daily resources

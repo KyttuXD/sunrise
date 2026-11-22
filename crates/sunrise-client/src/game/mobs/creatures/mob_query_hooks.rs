@@ -60,6 +60,16 @@ impl sunrise_client::mobs::MobHooks for Game<'_> {
         }
         answer
     }
+    fn path_type_hooked(&self, state: sunrise_world::registry::BlockStateId) -> bool {
+        self.is_logical_server()
+            && (crate::game::api_values::block_state::block_listens(
+                mod_api::HookId::BlockPathType,
+                state,
+            ) || crate::game::api_values::block_state::block_listens(
+                mod_api::HookId::AdjacentBlockPathType,
+                state,
+            ))
+    }
     fn living_change_target(
         &self,
         mob: &mut Mob,
