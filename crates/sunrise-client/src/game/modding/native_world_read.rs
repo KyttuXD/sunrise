@@ -369,6 +369,7 @@ fn read_block(
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
     use super::*;
+    use mod_api::HostBlockStates;
     use mod_api::LevelHost;
     use std::sync::Arc;
     use sunrise_client::chunk::{Chunk, Light};
@@ -667,17 +668,22 @@ mod tests {
 
             // A full block is one unit box, a bottom slab half of it, air none, and an id no
             // state has is unknown.
-            assert_eq!(
-                game.state_outline(stone),
-                Some(vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]])
+            let states = mod_api::HostBlockStates::block_states(&*game);
+            let invalid_state = mod_api::__private::block_state_from_ordinal(
+                stone.try_into_api().unwrap().block(),
+                u16::MAX,
             );
             assert_eq!(
-                game.state_outline(dry_slab),
-                Some(vec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]])
+                stone.try_into_api().unwrap().outline(&states),
+                Some(&[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]][..])
+            );
+            assert_eq!(
+                dry_slab.try_into_api().unwrap().outline(&states),
+                Some(&[[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]][..])
             );
             let air = registry.default_state("minecraft:air").unwrap();
-            assert_eq!(game.state_outline(air), Some(Vec::new()));
-            assert_eq!(game.state_outline(BlockStateId(u32::MAX)), None);
+            assert_eq!(air.try_into_api().unwrap().outline(&states), Some(&[][..]));
+            assert_eq!(invalid_state.outline(&states), None);
 
             let stone_key = mod_platform::__private::part_tests::block_key("minecraft:stone");
             assert_eq!(
@@ -715,32 +721,42 @@ mod tests {
             };
 
             assert_eq!(
-                game.state_fluid_state(water),
+                water.try_into_api().unwrap().fluid_state(&states),
                 api_fluid_state(EngineFluidState::WATER)
             );
             assert_eq!(
-                game.state_fluid_state(water)
+                water
+                    .try_into_api()
+                    .unwrap()
+                    .fluid_state(&states)
                     .unwrap()
                     .is_in_tag(&*game, water_tag),
                 Some(true)
             );
             assert_eq!(
-                mod_api::__private::fluid_id(game.state_fluid_state(lava).unwrap().fluid).unwrap(),
+                mod_api::__private::fluid_id(
+                    lava.try_into_api()
+                        .unwrap()
+                        .fluid_state(&states)
+                        .unwrap()
+                        .fluid
+                )
+                .unwrap(),
                 "minecraft:lava"
             );
             assert_eq!(
-                game.state_fluid_state(slab),
+                slab.try_into_api().unwrap().fluid_state(&states),
                 api_fluid_state(EngineFluidState::WATER)
             );
             assert_eq!(
-                game.state_fluid_state(dry_slab),
+                dry_slab.try_into_api().unwrap().fluid_state(&states),
                 api_fluid_state(EngineFluidState::EMPTY)
             );
             assert_eq!(
-                game.state_fluid_state(stone),
+                stone.try_into_api().unwrap().fluid_state(&states),
                 api_fluid_state(EngineFluidState::EMPTY)
             );
-            assert_eq!(game.state_fluid_state(BlockStateId(u32::MAX)), None);
+            assert_eq!(invalid_state.fluid_state(&states), None);
 
             // The world holds a chunk with water in it; a neighbour is not loaded.
             let mut chunk = Chunk::empty(0, 0);
@@ -830,7 +846,7 @@ mod tests {
                 );
                 assert_eq!(host.fluid_state([16, 64, 1]), None);
                 assert_eq!(
-                    host.state_fluid_state(slab),
+                    slab.fluid_state(&host.block_states()),
                     api_fluid_state(EngineFluidState::WATER)
                 );
                 assert_eq!(water_key.is_in_tag(host.tags(), water_tag), Some(true));
@@ -909,47 +925,51 @@ mod tests {
     fn fluid_sameness_buckets_and_bucket_sounds_follow_vanilla() {
         with_game(|game| {
             let host: &dyn mod_api::Host = game;
-            assert!(host.fluid_is_same("minecraft:water", "minecraft:flowing_water"));
-            assert!(host.fluid_is_same("flowing_lava", "lava"));
-            assert!(host.fluid_is_same("minecraft:empty", "minecraft:empty"));
-            assert!(!host.fluid_is_same("minecraft:water", "minecraft:lava"));
-            assert!(!host.fluid_is_same("minecraft:water", "minecraft:empty"));
-            assert!(!host.fluid_is_same("nope:missing", "nope:missing"));
+            let states = host.block_states();
+            let water = host.fluid_key("minecraft:water").unwrap();
+            let flowing_water = host.fluid_key("minecraft:flowing_water").unwrap();
+            let lava = host.fluid_key("lava").unwrap();
+            let flowing_lava = host.fluid_key("flowing_lava").unwrap();
+            let empty = host.fluid_key("minecraft:empty").unwrap();
+            assert_eq!(host.fluid_key("nope:missing"), None);
+            assert!(water.is_same(&states, flowing_water));
+            assert!(flowing_lava.is_same(&states, lava));
+            assert!(empty.is_same(&states, empty));
+            assert!(!water.is_same(&states, lava));
+            assert!(!water.is_same(&states, empty));
 
             assert_eq!(
-                host.fluid_bucket("minecraft:flowing_water")
+                flowing_water
+                    .bucket(&states)
                     .and_then(mod_api::__private::item_key_id),
                 Some("minecraft:water_bucket")
             );
             assert_eq!(
-                host.fluid_bucket("lava")
+                lava.bucket(&states)
                     .and_then(mod_api::__private::item_key_id),
                 Some("minecraft:lava_bucket")
             );
-            assert_eq!(host.fluid_bucket("minecraft:empty"), None);
-            assert_eq!(host.fluid_bucket("nope:missing"), None);
+            assert_eq!(empty.bucket(&states), None);
 
             assert_eq!(
-                host.fluid_pickup_sound("minecraft:water"),
+                water.pickup_sound(&states),
                 Some("minecraft:item.bucket.fill")
             );
             assert_eq!(
-                host.fluid_pickup_sound("minecraft:flowing_lava"),
+                flowing_lava.pickup_sound(&states),
                 Some("minecraft:item.bucket.fill_lava")
             );
-            assert_eq!(host.fluid_pickup_sound("minecraft:empty"), None);
-            assert_eq!(host.fluid_pickup_sound("nope:missing"), None);
+            assert_eq!(empty.pickup_sound(&states), None);
 
             assert_eq!(
-                host.fluid_empty_sound("flowing_water"),
+                flowing_water.empty_sound(&states),
                 Some("minecraft:item.bucket.empty")
             );
             assert_eq!(
-                host.fluid_empty_sound("minecraft:lava"),
+                lava.empty_sound(&states),
                 Some("minecraft:item.bucket.empty_lava")
             );
-            assert_eq!(host.fluid_empty_sound("minecraft:empty"), None);
-            assert_eq!(host.fluid_empty_sound("nope:missing"), None);
+            assert_eq!(empty.empty_sound(&states), None);
         });
     }
 }
