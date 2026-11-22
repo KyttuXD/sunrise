@@ -839,7 +839,7 @@ impl Game<'_> {
     /// Register namespaced NBT component types before content loads.
     pub(in crate::game) fn native_component_types(
         context: &mod_api::RegistrationContext,
-        types: &mut Vec<String>,
+        types: &mut Vec<mod_api::Answered<String>>,
     ) {
         Self::fire_component_types(context, types);
     }

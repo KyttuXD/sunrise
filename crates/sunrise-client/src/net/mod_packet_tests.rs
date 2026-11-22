@@ -100,6 +100,10 @@ fn generic_submission_cannot_bypass_registered_or_engine_channel_authority() {
             sunrise_protocol::payload_negotiation::CHANNEL,
             "minecraft:brand",
             "sunrise:recipe_book_settings",
+            "sunrise:recipe_check",
+            "sunrise:datapack_registries",
+            "sunrise:datapack_offer",
+            "sunrise:perf",
         ] {
             // Registration protection takes precedence over fallback byte limits.
             let result = session.prepare_mod_packet(plugin(channel, &vec![0; 1 << 20]));

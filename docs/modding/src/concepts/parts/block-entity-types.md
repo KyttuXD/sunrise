@@ -9,13 +9,14 @@ let press = r.block_entity_type("press")
 r.block_entity_part(&press, Press).expect("native block entity type");
 ```
 
-The builder qualifies the type ID and each bare block name with the registering mod's namespace, so
-`"press"` above is `mymod:press`; the blocks may be declared later in `blocks`. It owns the save ID, wire type
+The builder qualifies a bare type ID and each bare block name with the registering mod's namespace,
+so `"press"` above is `mymod:press`. Explicit identifiers keep their namespaces; the blocks may be
+declared later in `blocks`. The type defines the save ID, wire type
 and valid blocks; `block_entity` returns only initial `Compound` data (or none for an empty compound). It is fired
 inside the write that creates the entity (`LevelChunk.setBlockState`) and receives the read-only level, a `LevelSide`,
 on a server and on a client of one.
-Unknown blocks, duplicate types, overlapping membership and attempts to own a `minecraft:` block are
-refused at load. Refused native block, item or block entity declarations stop startup, as does unreadable
+Unknown blocks, duplicate types (including built-in keys), overlapping membership and attempts
+to reassign an existing vanilla block are refused at load. Refused native block, item or block entity declarations stop startup, as does unreadable
 known-components input; the game does not fall back to vanilla content. An explicitly declared mod
 template block uses its declared type; undeclared template blocks retain their vanilla behavior. Adding mod blocks to vanilla types is not supported by this builder.
 The hooks about the entity (`block_entity_tick`, `block_entity_update_tag`, `pre_remove_side_effects`,
@@ -58,10 +59,9 @@ Block entity types can only be declared by a package's code, not by content file
 A `side = "server"` package whose Part on such a type listens to a client hook is refused like any other
 client-side Part.
 
-The Part's state (`block_entity_part_with_state`) is a key the attaching package declared with
-`register_attachment_type`, which accepts any namespace that package owns (its manifest namespaces
-or a content package it serves via `served_by`). It is saved in the block entity's
-attachment compound under that package's id, not under the owner's. A Part reaches the owner's state only through an
+The Part's state (`block_entity_part_with_state`) is a key declared with
+`register_attachment_type`, saved in the block entity's attachment compound under that key's
+namespace and path. A Part reaches the owner's state only through an
 attachment the owner declared (the public attachment API); a key nobody declared is refused at load, naming the
 package. When the attaching package is removed, what it saved stays in the block entity, unread (the saved
 attachment compound keeps entries it does not know on save), and is read again if the package comes back.
@@ -141,7 +141,7 @@ let done = Press::edit_state(event.subject.host(), entity, |_, progress| {
   vanilla 26.3 reads region files with `NbtAccounter.unlimitedHeap`, an unbounded byte budget and
   depth 512. The 2 MiB quota of a chunk packet's block entity data is a network limit and does not
   cap saved state.
-- Registration refuses a declaration that syncs, copies on death, lies outside the mod's namespaces
+- Registration refuses a declaration that syncs, copies on death, is undeclared
   or reuses a key with a type of another Rust type name. The refusal names the Part, the key,
   the type and the reason.
 - Values without a codec last for the session. Part state is server-side for now. A client reads the

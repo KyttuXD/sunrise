@@ -18,7 +18,7 @@ mod tests {
     #[mod_api::__subscriptions]
     impl Hooks for Defaults {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            let machine = r.block_key("defaults:machine");
+            let machine = r.block_key("minecraft:test_machine");
             let backpack = r.item_key("defaults:backpack");
             let bucket = r.item_key("minecraft:water_bucket");
             let later = r.block_key("later:machine");
@@ -54,7 +54,7 @@ mod tests {
     #[mod_api::__subscriptions]
     impl Hooks for LaterDefaults {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            let earlier = r.block_key("defaults:machine");
+            let earlier = r.block_key("minecraft:test_machine");
             let later = r.block_key("later:machine");
             assert!(r.is_block_capability_registered(&ITEMS, &earlier));
             assert!(!r.is_block_capability_registered(&ITEMS, &later));
@@ -102,7 +102,7 @@ mod tests {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(
-            mod_vocab::__private::parts_installation::block_container("defaults:machine")
+            mod_vocab::__private::parts_installation::block_container("minecraft:test_machine")
                 .unwrap()
                 .slots,
             0
@@ -114,10 +114,12 @@ mod tests {
             9
         );
         assert!(
-            mod_vocab::__private::parts_installation::block_fluids("defaults:machine").is_some()
+            mod_vocab::__private::parts_installation::block_fluids("minecraft:test_machine")
+                .is_some()
         );
         assert!(
-            mod_vocab::__private::parts_installation::block_energy("defaults:machine").is_some()
+            mod_vocab::__private::parts_installation::block_energy("minecraft:test_machine")
+                .is_some()
         );
     }
 

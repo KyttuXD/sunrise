@@ -517,8 +517,31 @@ impl mod_api::MenuPart for ClickPart {
 }
 
 fn with_mod(test: impl FnOnce()) {
-    let mods: Mods = vec![ModEntry::new("movemod", Box::new(Mod))].into();
+    struct Presenter;
+    #[mod_api::__subscriptions]
+    impl Hooks for Presenter {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            r.register_menu_screen(
+                DEPOT_MENU,
+                std::sync::Arc::new(
+                    |_: &dyn mod_api::ClientHost, _: mod_api::MenuScreenOpen<'_>| None,
+                ),
+            )
+            .unwrap();
+        }
+    }
+    let mods: Mods = vec![
+        ModEntry::new("movemod", Box::new(Mod)),
+        ModEntry::new("presenter", Box::new(Presenter)),
+    ]
+    .into();
     mod_platform::testing::with_mods(mods.clone(), || {
+        mod_api::__private::install_content_owners(
+            [],
+            [],
+            [],
+            [(DEPOT_MENU, "movemod"), (STATUS_MENU, "movemod")],
+        );
         crate::game::api_values::install_parts(&mods).unwrap();
         test();
     });

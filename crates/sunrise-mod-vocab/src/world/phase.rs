@@ -1410,11 +1410,6 @@ pub(crate) fn test_owns_namespace(owner: &str, namespace: &str) -> Option<bool> 
 }
 
 #[cfg(test)]
-pub(crate) fn test_namespace_authority() -> Option<Arc<crate::parts::NamespaceAuthority>> {
-    TEST_PACKAGES.with_borrow(|slot| slot.as_ref().map(|(_, authority)| authority.clone()))
-}
-
-#[cfg(test)]
 pub(crate) fn with_test_package_inventory<R>(
     packages: Vec<PackageInfo>,
     f: impl FnOnce() -> R,

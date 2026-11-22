@@ -11,11 +11,12 @@ impl dyn Registrar + '_ {
     /// NeoForge's registries `STRUCTURE_TYPE` and `STRUCTURE_PIECE` register
     /// once at startup: a data pack structure with `"type": "modid:tower"`
     /// then generates by `ty`'s code — its own start and pieces, placed by the
-    /// game's own spacing, biome and terrain-adaptation checks. The type's id
-    /// is in a namespace owned by the calling mod's manifest (`mymod:tower`); another mod's
-    /// namespace, an empty name and an id registered twice refuse the mods at
-    /// startup, naming the mod. `ty`'s `load_piece` is its saved pieces'
-    /// loader: keep the type for as long as the game runs.
+    /// game's own spacing, biome and terrain-adaptation checks. A bare name uses
+    /// this mod's namespace; an explicit valid `namespace:path` keeps its
+    /// namespace. A malformed name, a built-in structure type and an id
+    /// registered twice refuse the mods at startup, naming the mod. `ty`'s
+    /// `load_piece` is its saved pieces' loader: keep the type for as long as the
+    /// game runs.
     pub fn register_structure_type<T: crate::StructureType>(&mut self, name: &str, ty: T) {
         self.add_structure_type(name, Arc::new(ty));
     }

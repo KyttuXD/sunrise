@@ -1586,6 +1586,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
     block_entity_types::install(BlockEntityTypes::new(
         [("test:machine".into(), "test:machine_entity".into())].into(),
         vec!["test:machine_entity".into()],
+        ["test:machine_entity".into()],
     ))
     .unwrap();
     const MACHINE: u32 = 3;

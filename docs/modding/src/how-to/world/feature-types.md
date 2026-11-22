@@ -11,9 +11,9 @@ Register a `FeatureType` in `Hooks::register` to place features named by a confi
 This is vanilla's feature-type registry (`minecraft:worldgen/feature_type`, NeoForge's
 `FEATURE_TYPE`); a configured feature is an entry of `minecraft:worldgen/feature`.
 
-Use an ID in your mod's namespace. These stop startup with a message naming your mod: a
-duplicate ID, an ID in another mod's namespace (vanilla's `minecraft:` included), an empty name,
-or an invalid config schema.
+A bare name uses your mod's namespace; an explicit valid `namespace:path` keeps its namespace.
+These stop startup with a message naming your mod: a duplicate ID, a built-in feature type ID,
+a malformed or empty name, or an invalid config schema.
 
 ## Config
 

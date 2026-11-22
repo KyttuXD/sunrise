@@ -61,16 +61,11 @@ impl Installed {
     pub(crate) fn synced_attachments(&self, owner: &str) -> Vec<String> {
         let mut attachments = Vec::new();
         for (namespace, types) in &self.attachment_types {
-            for (name, &sync) in types {
-                if !sync {
+            for (name, decl) in types {
+                if !decl.sync {
                     continue;
                 }
-                let declarer = self
-                    .attachment_owners
-                    .get(namespace)
-                    .and_then(|owners| owners.get(name))
-                    .copied()
-                    .unwrap_or(namespace.as_str());
+                let declarer = decl.owner;
                 if declarer == owner {
                     attachments.push(format!("{namespace}:{name}"));
                 }

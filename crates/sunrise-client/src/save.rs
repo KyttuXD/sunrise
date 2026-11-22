@@ -794,7 +794,7 @@ pub fn decode_block_entity_replacing(
     block: &str,
     previous: Option<&crate::containers::BlockEntity>,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    let decoded = decode_block_entity_with_history(tag, previous, block_mod_item_slots(block))?;
+    let decoded = decode_block_entity_with_history(tag, previous, Some(block))?;
     // Several vanilla types share a decoded representation (for example barrel
     // and chest). Membership belongs to the saved type, not that representation.
     let saved_id = text(tag.get("id"))?;
@@ -809,23 +809,34 @@ pub fn decode_block_entity_replacing(
 }
 
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
-    decode_block_entity_with_history(tag, None, COMPACT_MOD_ITEM_SLOTS)
+    decode_block_entity_with_history(tag, None, None)
 }
 
 fn decode_block_entity_with_history(
     tag: &Tag,
     previous: Option<&crate::containers::BlockEntity>,
-    mod_item_slots: usize,
+    block: Option<&str>,
 ) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| tag.get(k).and_then(crate::nbt_path::int_value); // getIntOr
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
-    if id.contains(':') && !id.starts_with("minecraft:") {
+    // A detached decode can still hold an opaque payload without a known block.
+    // At a known block, only an admitted native type gets that representation.
+    if crate::block_entity_types::declared(&id)
+        || (block.is_none() && id.contains(':') && !id.starts_with("minecraft:"))
+    {
         return Some((
             pos,
-            BlockEntity::Mod(Box::new(decode_mod_block_entity(id, tag, mod_item_slots)?)),
+            BlockEntity::Mod(Box::new(decode_mod_block_entity(
+                id,
+                tag,
+                block.map_or(COMPACT_MOD_ITEM_SLOTS, block_mod_item_slots),
+            )?)),
         ));
+    }
+    if block.is_some() && !crate::block_entity_nbt::is_known_type(&id) {
+        return None;
     }
     if id == "minecraft:end_gateway" {
         return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
@@ -7748,6 +7759,7 @@ mod tests {
                 "test:other".into(),
                 "minecraft:chest".into(),
             ],
+            ["test:machine".into(), "test:other".into()],
         );
         // Seed the same canonical pairs as production when resources are available.
         // The explicit shared-representation cases below also run without resources.

@@ -1,16 +1,30 @@
 //! Load-owned attachment identities. Owner declarations authorize cross-package use.
 use super::*;
 
+/// One declared attachment type's declaring package and sync policy.
+// hidden: engine staging; mods declare attachments through `AttachmentTypesRegistrar`.
+// exhaustive: engine-only staging carries the full owner and sync metadata.
+#[doc(hidden)]
+// no wire: process-local registration metadata with a static mod id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttachmentTypeDeclaration {
+    /// The package id that declared this attachment type.
+    pub owner: &'static str,
+    /// Whether this attachment type declares a sync codec for clients.
+    pub sync: bool,
+}
+
 /// Attachment declarations.
 pub trait AttachmentTypesRegistrar {
-    /// Declare an explicitly namespaced attachment in a namespace owned by this
-    /// package (its manifest namespaces or a content package it serves via `served_by`).
-    /// `has_sync_codec` means the type synchronizes to clients, not merely that
-    /// it has a persistence codec. At load, declaration conflicts are checked
-    /// first, then undeclared uses, then server packages (or `side = "server"`
-    /// served namespace suppliers) declaring true.
-    /// A server package may use another package's synced attachment.
-    /// A refusal fails installation even when the caller ignores this result.
+    /// Declare an explicitly namespaced attachment owned by this package.
+    /// Any valid lowercase `namespace:path` id not already declared is accepted;
+    /// the submitting package is recorded as its declaring owner regardless of
+    /// the key's namespace. `has_sync_codec` means the type synchronizes to
+    /// clients, not merely that it has a persistence codec. At load, declaration
+    /// conflicts are checked first, then undeclared uses, then server packages
+    /// or server-only served namespace suppliers declaring true. A server package may use another package's synced
+    /// attachment. A refusal fails installation even when the caller ignores
+    /// this result.
     fn register_attachment_type(&mut self, id: &str, has_sync_codec: bool) -> Result<(), String>;
 }
 
@@ -53,13 +67,13 @@ pub fn validate_attachment_use(
 // hidden: engine-owned load validation; not an authoring operation.
 #[doc(hidden)]
 pub fn validate_declared_attachment(
-    declarations: Option<&HashMap<String, HashMap<String, bool>>>,
+    declarations: Option<&HashMap<String, HashMap<String, AttachmentTypeDeclaration>>>,
     caller: &str,
     namespace: &str,
     name: &str,
     sync: bool,
 ) -> Result<(), crate::AttachmentError> {
-    let Some(declared_sync) = declarations
+    let Some(declared) = declarations
         .and_then(|types| types.get(namespace))
         .and_then(|types| types.get(name))
     else {
@@ -68,7 +82,7 @@ pub fn validate_declared_attachment(
             attachment_id: format!("{namespace}:{name}"),
         });
     };
-    if sync && !declared_sync {
+    if sync && !declared.sync {
         return Err(crate::AttachmentError::InvalidSyncPolicy);
     }
     Ok(())
@@ -79,7 +93,16 @@ mod tests {
     use super::*;
     #[test]
     fn owner_declaration_allows_b_to_use_a_mana_and_names_missing_use() {
-        let declarations = HashMap::from([("a".into(), HashMap::from([("mana".into(), false)]))]);
+        let declarations = HashMap::from([(
+            "a".into(),
+            HashMap::from([(
+                "mana".into(),
+                AttachmentTypeDeclaration {
+                    owner: "declarer",
+                    sync: false,
+                },
+            )]),
+        )]);
         assert_eq!(
             validate_declared_attachment(Some(&declarations), "b", "a", "mana", false),
             Ok(())

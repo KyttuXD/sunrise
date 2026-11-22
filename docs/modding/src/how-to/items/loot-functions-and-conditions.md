@@ -11,9 +11,10 @@ fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
 }
 ```
 
-Ids belong to the declaring manifest's namespace. Duplicates refuse registration,
-naming both owners; `minecraft:` and `neoforge:` are reserved. A built-in always
-resolves to the engine's built-in, never to a mod codec.
+Any valid namespaced identifier is accepted. Duplicates refuse registration,
+naming both owners, and built-in vanilla or NeoForge loot types cannot be
+replaced. A built-in always resolves to the engine's built-in, never to a mod
+codec.
 
 ## Entry data and validation
 

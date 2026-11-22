@@ -116,6 +116,7 @@ mod tests {
                 r.register_biome_source("stripes", Stripes);
                 r.register_biome_source("stripes", Stripes);
                 r.register_biome_source("other:stripes", Stripes);
+                r.register_biome_source("minecraft:fixed", Stripes);
                 r.register_biome_source("empty", Empty);
                 r.register_dimension(
                     "pocket",
@@ -129,7 +130,7 @@ mod tests {
         let errors = install_parts(&[ModEntry::new("test", Box::new(Invalid))]).unwrap_err();
         let expected = [
             "test registered biome source test:stripes twice",
-            "test declares \"other:stripes\" in unowned namespace \"other\"",
+            "test registered biome source minecraft:fixed, which is the game's own",
             "test registered biome source test:empty, whose possible_biomes lists no biome",
             "test registered dimension test:pocket with the unknown biome source \"test:gone\"",
         ];

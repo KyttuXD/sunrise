@@ -103,7 +103,7 @@ fn generated_chunks_survive_restart_substitution_added_regions_and_adoption() {
     let before = std::fs::read(&saved_file).unwrap();
     let mut beta = alpha.clone();
     beta.mod_id = "beta".into();
-    beta.id = "beta:desert".into();
+    beta.id = "shared:desert".into();
     beta.region.points[0].biome = "minecraft:desert".into();
     let both = [alpha, beta.clone()];
     // Installing B without opting in leaves even newly generated terrain unchanged.
@@ -129,7 +129,10 @@ fn generated_chunks_survive_restart_substitution_added_regions_and_adoption() {
     // The explicit opt-in takes B, while A's already saved column is still read verbatim.
     choose_with(world, &mods(&["beta"]), &[beta], false, true).unwrap();
     let adopted = BiomeRegions::read(world).unwrap().unwrap();
-    let terrain = make(adopted.layout("minecraft:overworld"));
+    let adopted_layout = adopted.layout("minecraft:overworld").unwrap();
+    assert_eq!(adopted_layout.regions[0].owner, "beta");
+    assert_eq!(adopted_layout.regions[0].id, "shared:desert");
+    let terrain = make(Some(adopted_layout));
     let mut worker = terrain.worker();
     let new = terrain.finish(terrain.proto(&mut worker, 0, 0));
     assert!(

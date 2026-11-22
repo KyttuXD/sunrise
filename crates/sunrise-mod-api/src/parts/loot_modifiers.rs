@@ -11,19 +11,16 @@ impl GlobalLootModifiersRegistrar for PartRegistrar {
         name: &str,
         serializer: Arc<dyn crate::GlobalLootModifierSerializer>,
     ) {
-        let id = match self.owned_declaration_id(name) {
+        let id = match self.declaration_id(name) {
             Ok(id) => id,
             Err(reason) => {
                 self.refused.push(reason);
                 return;
             }
         };
-        if ["minecraft:", "neoforge:", "sunrise:"]
-            .iter()
-            .any(|namespace| id.starts_with(namespace))
-        {
+        if id == "neoforge:add_table" {
             self.refused.push(format!(
-                "{} claimed reserved global loot modifier serializer {id}",
+                "{} claimed built-in global loot modifier serializer {id}",
                 self.mod_id
             ));
             return;

@@ -33,8 +33,9 @@ Names preserve their exact spelling and may contain any characters. Each must be
 nonempty and at most 256 UTF-8 bytes. The two names must differ, and neither may
 clash with any other book's declared field, vanilla's eight flag fields,
 `recipes`, `toBeDisplayed`, or `sunrise:book_settings`. Invalid declarations refuse
-installation even if the mod ignores the returned error. IDs still follow the
-normal namespaced-ID ownership, 256-byte, and 1024-book limits. Registration
+installation even if the mod ignores the returned error. IDs must be explicit
+valid `namespace:path` identifiers (not vanilla's four built-in book types) and
+still follow the 256-byte and 1024-book limits. Registration
 freezes before player files are loaded.
 
 The saved field names do not change the book ID used by menus or synchronization.

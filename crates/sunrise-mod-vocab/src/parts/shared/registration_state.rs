@@ -7,7 +7,6 @@ pub(crate) struct Installed {
     /// Names this installation among all of the process's; never reused, unlike an address.
     pub(crate) epoch: u64,
     pub(crate) dependencies: Arc<crate::__private::EffectiveDependencies>,
-    pub(crate) namespace_authority: Arc<crate::parts::NamespaceAuthority>,
     pub(crate) effect_ticks: crate::parts::effects::ResolvedEffectTicks,
     pub(crate) configs: Vec<crate::configs::RegisteredConfig>,
     pub(crate) menu_screen_factories: HashMap<String, crate::parts::menus::MenuScreenRegistration>,
@@ -17,8 +16,7 @@ pub(crate) struct Installed {
     pub(crate) recipe_book_filters: HashMap<String, crate::RecipeBookFilterLook>,
     pub(crate) game_rule_categories: Vec<String>,
     pub(crate) game_rules: Vec<crate::GameRuleDecl>,
-    pub(crate) attachment_types: HashMap<String, HashMap<String, bool>>,
-    pub(crate) attachment_owners: HashMap<String, HashMap<String, &'static str>>,
+    pub(crate) attachment_types: HashMap<String, HashMap<String, AttachmentTypeDeclaration>>,
     pub(crate) custom_stats: Vec<String>,
     pub(crate) custom_stat_owners: Vec<&'static str>,
     pub(crate) entity_tick_each: crate::parts::EntityTickEach,

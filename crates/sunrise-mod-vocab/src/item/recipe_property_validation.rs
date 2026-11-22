@@ -3,42 +3,19 @@ use super::RecipePropertyAddition;
 use crate::Answered;
 
 impl crate::RecipePropertySetsEvent<'_> {
-    /// Add items to an existing recipe property set or create a new custom set in one of this
-    /// mod's owned namespaces. The scoped operation follows NeoForge's
-    /// `RegisterRecipePropertiesEvent`, but Sunrise unions contributions on each recipe load.
-    ///
-    /// A bare or `minecraft:` key names a vanilla set (verified by the engine). Any other
-    /// namespaced key either extends a set registered earlier without changing who created it,
-    /// or creates a new set in a namespace owned by this listener's manifest or by a content
-    /// package it serves (`served_by`). Invalid or foreign new keys are logged and skipped
-    /// without altering earlier additions.
+    /// Add items to a recipe property set. A valid explicit key can create a custom set,
+    /// including an unused `minecraft:` key. Bare names refer to built-in sets.
+    /// Contributions are unioned without changing the first contributor's attribution.
     pub fn register(&mut self, addition: RecipePropertyAddition) {
         let mod_id = self.mod_id;
-        if addition.set.contains(':') {
-            let Some(id) = crate::Identifier::parse_namespaced(&addition.set) else {
-                log::warn!(
-                    "recipe_property_sets: {mod_id}: invalid set key {}",
-                    addition.set
-                );
-                return;
-            };
-            if id.namespace() != "minecraft"
-                && !self
-                    .additions
-                    .iter()
-                    .any(|old| old.answer.set == addition.set)
-                && !crate::parts::owns_namespace_in(
-                    &crate::LoadedMods::new(),
-                    mod_id,
-                    id.namespace(),
-                )
-            {
-                log::warn!(
-                    "recipe_property_sets: {mod_id} cannot create set {} outside its owned namespaces",
-                    addition.set
-                );
-                return;
-            }
+        if addition.set.contains(':')
+            && crate::Identifier::parse_namespaced(&addition.set).is_none()
+        {
+            log::warn!(
+                "recipe_property_sets: {mod_id}: invalid set key {}",
+                addition.set
+            );
+            return;
         }
         self.additions.push(Answered {
             answer: addition,
@@ -54,7 +31,7 @@ mod tests {
     use crate::{PackageInfo, PackageKind, Side};
 
     #[test]
-    fn owned_manifest_namespace_can_create_but_foreign_new_key_cannot() {
+    fn any_valid_namespace_can_create_sets_and_keeps_contributor_attribution() {
         let packages = vec![PackageInfo::new(
             "ported_farmersdelight".into(),
             "1".into(),
@@ -92,13 +69,14 @@ mod tests {
                 ("farmersdelight:cooking_pot_input", "ported_farmersdelight"),
                 ("ported_farmersdelight:input", "ported_farmersdelight"),
                 ("another:known", "ported_farmersdelight"),
+                ("another:new", "ported_farmersdelight"),
                 ("minecraft:furnace_input", "ported_farmersdelight"),
             ]
         );
     }
 
     #[test]
-    fn served_content_namespace_grants_recipe_property_creation_only_to_its_host() {
+    fn served_content_namespace_does_not_change_property_set_admission() {
         let packages = vec![
             PackageInfo::new(
                 "horizon_java".into(),
@@ -142,17 +120,7 @@ mod tests {
             "third:input",
         ];
         with_test_package_inventory(packages, || {
-            for (mod_id, expected) in [
-                ("third", &["third:input"][..]),
-                (
-                    "horizon_java",
-                    &[
-                        "runes:altar_input",
-                        "runes_extra:catalyst",
-                        "horizon_java:own",
-                    ][..],
-                ),
-            ] {
+            for mod_id in ["third", "horizon_java"] {
                 let mut additions = Vec::new();
                 let mut event = crate::RecipePropertySetsEvent {
                     mod_id,
@@ -166,7 +134,7 @@ mod tests {
                         .iter()
                         .map(|a| a.answer.set.as_str())
                         .collect::<Vec<_>>(),
-                    expected
+                    keys
                 );
             }
         });

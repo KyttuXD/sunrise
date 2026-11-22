@@ -3,14 +3,15 @@ use super::*;
 
 /// Registration operations for the two unsynced loot map-codec registries.
 pub trait LootTypesRegistrar {
-    /// Register one function codec in the calling manifest's namespace.
-    /// Duplicate ids and minecraft/neoforge namespaces refuse mod loading by name.
+    /// Register one function codec by its validated identifier.
+    /// Built-in loot function types and duplicate ids refuse mod loading by name.
     fn add_loot_function_type(
         &mut self,
         id: &crate::Identifier,
         codec: Arc<dyn crate::ModLootFunction>,
     );
-    /// Register one condition codec in the calling manifest's namespace.
+    /// Register one condition codec by its validated identifier.
+    /// Built-in loot condition types and duplicate ids refuse mod loading by name.
     fn add_loot_condition_type(
         &mut self,
         id: &crate::Identifier,

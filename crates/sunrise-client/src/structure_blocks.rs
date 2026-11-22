@@ -233,6 +233,7 @@ mod tests {
             ]
             .into(),
             vec!["test:machine".into()],
+            ["test:machine".into()],
         ))
         .unwrap();
         struct PressStorage;

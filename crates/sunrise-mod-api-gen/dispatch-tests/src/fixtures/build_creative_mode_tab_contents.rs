@@ -43,7 +43,7 @@ fn a_panicking_creative_editor_leaves_completed_edits_and_only_loses_its_own_cal
             HostSide::Server(&mut TestHost),
             tab,
             &[],
-            CreativeTabPermissions::Normal,
+            mod_api::mod_api::CreativeTabPermissions::Normal,
             &mut output,
         );
     }

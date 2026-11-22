@@ -8,10 +8,10 @@ pub(crate) fn installed_controllers() -> &'static [ControllerInfo] {
 pub trait TicketsRegistrar {
     /// Register ticket controller `name`, the way NeoForge's `RegisterTicketControllersEvent`
     /// does once at startup, and keep the returned [`TicketController`] handle for
-    /// `chunk.set_mod_forced` and `level.mod_forced_chunks`. `name` is `quarry` or
-    /// `mymod:quarry`; the controller's id is in a namespace owned by the calling mod's manifest
-    /// (`mymod:quarry`), and an unowned namespace refuses the mods at startup, as does an id
-    /// registered twice. Pass `Some(Arc::new(...))` to bind a
+    /// `chunk.set_mod_forced` and `level.mod_forced_chunks`. A bare name (`quarry`) uses
+    /// the mod's namespace; a valid explicit `namespace:path` is used as-is. Registration
+    /// and its validator are attributed to the caller, independently of the key. Malformed
+    /// or duplicate IDs refuse registration. Pass `Some(Arc::new(...))` to bind a
     /// [`LoadingValidationCallback`] to this controller, or `None` to restore its saved
     /// tickets without validation. The returned handle itself authorizes active chunk-ticket
     /// operations and may be shared across callers. A world's tickets of a controller no loaded

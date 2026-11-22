@@ -18,7 +18,7 @@ impl PartRegistrar {
             ));
             return None;
         };
-        if id.starts_with("minecraft:") {
+        if self.has_builtin_entry("minecraft:block", &id) {
             self.refused.push(format!(
                 "mod {} declared a mod block default provider for vanilla block {id}; use block_capability instead",
                 self.mod_id

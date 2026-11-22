@@ -243,7 +243,7 @@ impl ViewDistances {
         let mut by_block: FxHashMap<&str, f64> = FxHashMap::default();
         let mut by_state = FxHashMap::default();
         for (state, block) in states {
-            if block.starts_with("minecraft:") {
+            if !mod_api::__private::is_content_block(block) {
                 continue;
             }
             let distance = *by_block.entry(block).or_insert_with(|| {
@@ -2998,29 +2998,41 @@ mod tests {
     /// furthest.
     #[test]
     fn view_distances_are_asked_once_per_mod_block() {
-        let states = [
-            (1, "minecraft:stone"),
-            (2, "mymod:beam"),
-            (3, "mymod:beam"),
-            (4, "mymod:screw"),
-            (5, "mymod:gear"),
-        ];
-        let mut asked = Vec::new();
-        let distances = ViewDistances::of_states(states.into_iter(), |block| {
-            asked.push(block.to_owned());
-            match block {
-                "mymod:beam" => 256.0,
-                "mymod:screw" => f64::NAN,
-                _ => VIEW_DISTANCE,
-            }
+        mod_platform::testing::with_mods(Default::default(), || {
+            mod_api::__private::install_content_owners(
+                [
+                    ("minecraft:p3_beam", "mymod"),
+                    ("mymod:screw", "mymod"),
+                    ("mymod:gear", "mymod"),
+                ],
+                [],
+                [],
+                [],
+            );
+            let states = [
+                (1, "minecraft:stone"),
+                (2, "minecraft:p3_beam"),
+                (3, "minecraft:p3_beam"),
+                (4, "mymod:screw"),
+                (5, "mymod:gear"),
+            ];
+            let mut asked = Vec::new();
+            let distances = ViewDistances::of_states(states.into_iter(), |block| {
+                asked.push(block.to_owned());
+                match block {
+                    "minecraft:p3_beam" => 256.0,
+                    "mymod:screw" => f64::NAN,
+                    _ => VIEW_DISTANCE,
+                }
+            });
+            assert_eq!(asked, ["minecraft:p3_beam", "mymod:screw", "mymod:gear"]);
+            assert_eq!(distances.of(2), 256.0);
+            assert_eq!(distances.of(3), 256.0);
+            assert_eq!(distances.of(4), VIEW_DISTANCE);
+            assert_eq!(distances.of(5), VIEW_DISTANCE);
+            assert_eq!(distances.of(1), VIEW_DISTANCE);
+            assert_eq!(distances.furthest, 256.0);
         });
-        assert_eq!(asked, ["mymod:beam", "mymod:screw", "mymod:gear"]);
-        assert_eq!(distances.of(2), 256.0);
-        assert_eq!(distances.of(3), 256.0);
-        assert_eq!(distances.of(4), VIEW_DISTANCE);
-        assert_eq!(distances.of(5), VIEW_DISTANCE);
-        assert_eq!(distances.of(1), VIEW_DISTANCE);
-        assert_eq!(distances.furthest, 256.0);
         let none = ViewDistances::of_states(std::iter::empty(), |_| unreachable!());
         assert_eq!(none.furthest, VIEW_DISTANCE);
     }

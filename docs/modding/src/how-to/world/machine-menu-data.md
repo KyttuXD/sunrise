@@ -461,7 +461,9 @@ If the extra backing indices are not needed, declare only the exposed slots on t
 
 A click callback returns `None` to leave the press alone or `Some(id)` to consume it and
 send that button to the server. The active menu's server `MenuPart` handles accepted IDs
-in `menu_button` after the normal window and menu checks and `menu_button_valid`. Do not use a client hit test or
+in `menu_button` after the normal window and menu checks and `menu_button_valid`. The owner
+is the declaring package of the custom menu type or the verified opener of a stock menu, not
+the package supplying its screen or recipe book. Do not use a client hit test or
 opening data as authority. `event.subject` is a live `BlockEntityScope`: call
 `event.subject.with_view(...)` to read or edit the backing resident block entity in place
 (it returns `None` on a blockless menu, where `event.context.pos` is also `None`, or after

@@ -499,6 +499,12 @@ impl Walker<'_> {
         Ok((qualified, builtin))
     }
 }
+/// Whether `kind` is a built-in loot function (`function == true`) or built-in loot
+/// condition (`function == false`).
+pub fn is_builtin(kind: &str, function: bool) -> bool {
+    builtin(kind, function)
+}
+
 fn builtin(kind: &str, function: bool) -> bool {
     shapes::contains(kind, function)
         || (!function

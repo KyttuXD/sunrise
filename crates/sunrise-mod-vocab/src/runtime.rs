@@ -78,8 +78,7 @@ pub(crate) struct Installed {
         [crate::callback_owner::CallbackOwner; BlockScreenEffect::COUNT],
     >,
     consume_effects: Box<[Option<crate::callback_owner::CallbackOwner>]>,
-    mod_id_owners: std::collections::HashMap<&'static str, usize>,
-    content_owners: OnceLock<std::collections::HashMap<Box<str>, Option<usize>>>,
+    content_owners: OnceLock<ContentOwners>,
     disabled_count: std::sync::atomic::AtomicUsize,
     /// Per-hook sets of mods whose listener panicked and is disabled for that
     /// hook for the rest of the session. Filled only on a panic; `poison_free`
@@ -148,11 +147,6 @@ impl Installed {
                     .then(|| crate::callback_owner::CallbackOwner::for_index(entry.id, index))
             })
             .collect();
-        let mod_id_owners = mods
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (entry.id, index))
-            .collect();
         Self {
             by_id: mods
                 .iter()
@@ -166,7 +160,6 @@ impl Installed {
             typed_callback_owners: Default::default(),
             overlay_owners,
             consume_effects,
-            mod_id_owners,
             content_owners: OnceLock::new(),
             disabled_count: std::sync::atomic::AtomicUsize::new(0),
             poisons: std::sync::Mutex::new(None),
@@ -797,22 +790,36 @@ pub(crate) fn mod_index_on(index: usize) -> bool {
     })
 }
 
-/// Freeze primary IDs first, then the first admitted owner of each alias.
-/// An admitted content-only owner reserves its aliases without a dispatch slot.
-pub(crate) fn install_content_owners<'a>(owners: impl IntoIterator<Item = (&'a str, &'a str)>) {
+// no wire: dispatch indices are only valid in this process.
+struct ContentOwners {
+    blocks: std::collections::HashMap<Box<str>, Option<usize>>,
+    items: std::collections::HashSet<Box<str>>,
+    block_entities: std::collections::HashMap<Box<str>, usize>,
+    menus: std::collections::HashMap<Box<str>, usize>,
+}
+
+/// Resolve admitted identities once, regardless of the key's namespace.
+pub(crate) fn install_content_owners<'a>(
+    blocks: impl IntoIterator<Item = (&'a str, &'a str)>,
+    items: impl IntoIterator<Item = &'a str>,
+    block_entities: impl IntoIterator<Item = (&'a str, &'a str)>,
+    menus: impl IntoIterator<Item = (&'a str, &'a str)>,
+) {
     if let Some(installed) = installed() {
-        installed.content_owners.get_or_init(|| {
-            let mut by_namespace: std::collections::HashMap<Box<str>, _> = installed
-                .mod_id_owners
-                .iter()
-                .map(|(&id, &index)| (id.into(), Some(index)))
-                .collect();
-            for (namespace, owner) in owners {
-                by_namespace
-                    .entry(namespace.into())
-                    .or_insert_with(|| installed.mod_id_owners.get(owner).copied());
-            }
-            by_namespace
+        installed.content_owners.get_or_init(|| ContentOwners {
+            blocks: blocks
+                .into_iter()
+                .map(|(id, owner)| (id.into(), installed.by_id.get(owner).copied()))
+                .collect(),
+            items: items.into_iter().map(Into::into).collect(),
+            block_entities: block_entities
+                .into_iter()
+                .filter_map(|(id, owner)| Some((id.into(), *installed.by_id.get(owner)?)))
+                .collect(),
+            menus: menus
+                .into_iter()
+                .filter_map(|(id, owner)| Some((id.into(), *installed.by_id.get(owner)?)))
+                .collect(),
         });
     }
 }
@@ -821,18 +828,26 @@ pub(crate) fn content_owners_published() -> bool {
     installed().is_none_or(|installed| installed.content_owners.get().is_some())
 }
 
-/// Content ownership is resolved at startup, not by scanning mods on a tick.
-pub(crate) fn content_owner_disabled(id: &str) -> bool {
-    any_mod_disabled() && content_owner_index(id).is_some_and(|index| !mod_index_on(index))
+pub(crate) fn block_entity_owner_disabled(id: &str) -> bool {
+    any_mod_disabled()
+        && installed()
+            .and_then(|i| i.content_owners.get())
+            .and_then(|owners| owners.block_entities.get(id))
+            .is_some_and(|&index| !mod_index_on(index))
 }
 
-pub(crate) fn content_owner_index(id: &str) -> Option<usize> {
-    let (namespace, _) = id.split_once(':')?;
-    let installed = installed()?;
-    match installed.content_owners.get() {
-        Some(owners) => owners.get(namespace).copied().flatten(),
-        None => installed.mod_id_owners.get(namespace).copied(),
-    }
+pub(crate) fn content_block(id: &str) -> Option<Option<usize>> {
+    installed()?.content_owners.get()?.blocks.get(id).copied()
+}
+
+pub(crate) fn is_content_item(id: &str) -> bool {
+    installed()
+        .and_then(|i| i.content_owners.get())
+        .is_some_and(|owners| owners.items.contains(id))
+}
+
+pub(crate) fn content_menu_owner(id: &str) -> Option<usize> {
+    installed()?.content_owners.get()?.menus.get(id).copied()
 }
 
 /// `mods` in order, each marked as running `hook` until the next one is (or the loop ends), so a

@@ -420,15 +420,37 @@ fn builtin_registries(root: &Path) -> sunrise_client::Result<sunrise_protocol::r
 /// With no mod registering any, nothing is installed, which every reader
 /// treats as no custom components, and `registries.json` isn't read.
 pub(super) fn register_components(root: &std::path::Path) -> sunrise_client::Result<()> {
-    let mut names = Vec::new();
-    Game::native_component_types(&RegistrationContext::new(), &mut names);
-    if names.is_empty() {
+    let mut entries = Vec::new();
+    Game::native_component_types(&RegistrationContext::new(), &mut entries);
+    if entries.is_empty() {
         return Ok(());
     }
     let builtin = builtin_registries(root)?;
     let types = builtin
         .get("minecraft:data_component_type")
         .ok_or("missing data component registry")?;
+    let mut seen = std::collections::HashMap::<String, &'static str>::with_capacity(entries.len());
+    let mut names = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.answer;
+        let mod_id = entry.mod_id;
+        if sunrise_core::identifier::Identifier::parse_namespaced(&id).is_none() {
+            return Err(format!("mod {mod_id}: invalid native component name {id:?}").into());
+        }
+        if types.names.contains(&id) {
+            return Err(format!(
+                "mod {mod_id}: native component {id} conflicts with a built-in data component type"
+            )
+            .into());
+        }
+        if let Some(first) = seen.insert(id.clone(), mod_id) {
+            return Err(format!(
+                "mod {mod_id}: duplicate native component {id} (already registered by mod {first})"
+            )
+            .into());
+        }
+        names.push(id);
+    }
     let first = i32::try_from(types.names.len())?;
     sunrise_protocol::item::custom::install(first, names)
         .map_err(|error| format!("invalid native component registration: {error}"))?;
@@ -463,10 +485,6 @@ impl DeclarationFailures {
                 DeclarationError::InvalidId { id } => {
                     Text::translate("sunrise.mods.declaration.invalid_id", &[quoted(id)])
                 }
-                DeclarationError::UnownedNamespace { id, namespace } => Text::translate(
-                    "sunrise.mods.declaration.unowned_namespace",
-                    &[quoted(id), quoted(namespace)],
-                ),
                 DeclarationError::Rejected { id, reason } => Text::translate(
                     "sunrise.mods.declaration.rejected",
                     &[quoted(id), Text::literal(reason.clone())],
@@ -1049,24 +1067,6 @@ fn content_layer_owner<'a>(
         .unwrap_or(layer_id)
 }
 
-/// Maps each admitted content layer's namespaces to its owning package ID:
-/// the serving native host for `served_by` content packages, otherwise the layer itself.
-fn content_owner_pairs<'a>(
-    mods: &'a [sunrise_client::mod_content::ContentMod],
-    selected: &'a [sunrise_mod_package::selection::SelectedPackage],
-) -> Vec<(&'a str, &'a str)> {
-    mods.iter()
-        .flat_map(|layer| {
-            let owner = content_layer_owner(&layer.id, selected);
-            layer
-                .content
-                .namespaces
-                .iter()
-                .map(move |namespace| (namespace.as_str(), owner))
-        })
-        .collect()
-}
-
 /// Builds the content overlay: every enabled or dev content mod's files
 /// merged over `root`. Registration of what the mods declare is
 /// [`content_root`]'s step.
@@ -1172,7 +1172,7 @@ fn content_overlay_with_refusals(
         })
         .collect();
     let read = read_contents(&requests);
-    for (index, content) in order.into_iter().zip(read) {
+    for (&index, content) in order.iter().zip(read) {
         let source = &packages[index];
         let m = source.manifest;
         let content = match content {
@@ -1209,18 +1209,6 @@ fn content_overlay_with_refusals(
             jars: m.jar.clone(),
         };
         match mod_content::accept_mod(&mut mods, candidate, known) {
-            Ok(_) if source.content_only => {
-                content_mods.push(sunrise_client::save::level_mods::ModRecord {
-                    id: m.id.clone(),
-                    version: m.version.to_string(),
-                });
-                announced.push(announced_entry(
-                    &m.id,
-                    &m.version.to_string(),
-                    m.side,
-                    m.runtime.as_ref(),
-                ));
-            }
             Ok(_) => {}
             Err(e) if m.served_by.is_some() => {
                 return Err(Box::new(ServedContentLoadError {
@@ -1249,13 +1237,21 @@ fn content_overlay_with_refusals(
             return Err(DeclarationFailures::new(refusals).into());
         }
         admission?;
-        // A file item's remainder named a code-declared item that was refused: that mod
-        // alone is left out, not every content mod through the overlay's check.
-        for e in mod_content::drop_dangling_remainders(&mut mods) {
-            log::warn!("Sunrise: {e}");
-        }
     } else if !refusals.is_empty() {
         return Err(DeclarationFailures::new(refusals).into());
+    }
+    for (id, detail) in mod_content::drop_dangling_remainders(root, &mut mods, &manifests)? {
+        if manifests
+            .iter()
+            .any(|m| m.id == id && m.served_by.is_some())
+        {
+            return Err(Box::new(ServedContentLoadError {
+                mod_id: id,
+                stage: ServedContentStage::Admit,
+                detail,
+            }));
+        }
+        log::warn!("Sunrise: mod {id} content not loaded: {detail}");
     }
     for m in &manifests {
         let suppliers: Vec<&sunrise_mod_package::Manifest> = std::iter::once(*m)
@@ -1324,6 +1320,25 @@ fn content_overlay_with_refusals(
         &overrides,
     )
     .map_err(|error| error.to_string())?;
+    for &index in &order {
+        let source = &packages[index];
+        if !source.content_only || !mods.iter().any(|loaded| loaded.id == source.manifest.id) {
+            continue;
+        }
+        let m = source.manifest;
+        content_mods.push(sunrise_client::save::level_mods::ModRecord {
+            id: m.id.clone(),
+            version: m.version.to_string(),
+        });
+        if announce {
+            announced.push(announced_entry(
+                &m.id,
+                &m.version.to_string(),
+                m.side,
+                m.runtime.as_ref(),
+            ));
+        }
+    }
     let cache = sunrise_client::logging::cache_dir();
     // Content admission and the live code-dispatch boundary jointly determine
     // what loaded. Namespaces and raw startup metadata cannot answer this.
@@ -1493,10 +1508,34 @@ pub(in crate::game) fn content_root(
     sunrise_client::mod_content::set_fluid_interactions(&overlay.mods);
     // Freeze ownership with the startup registries, before preparing Parts. Pack and data
     // reloads can change layers but cannot replace the registered blocks and block entity types.
-    mod_api::__private::install_content_owners(content_owner_pairs(
-        &overlay.mods,
-        &sources.selected,
-    ));
+    mod_api::__private::install_content_owners(
+        overlay.mods.iter().flat_map(|m| {
+            let owner = content_layer_owner(&m.id, &sources.selected);
+            m.content
+                .blocks
+                .iter()
+                .map(move |block| (block.id.as_str(), owner))
+        }),
+        overlay.mods.iter().flat_map(|m| {
+            m.content.items.iter().map(|item| item.id.as_str()).chain(
+                m.content
+                    .blocks
+                    .iter()
+                    .filter(|block| block.item)
+                    .map(|block| block.id.as_str()),
+            )
+        }),
+        overlay.mods.iter().flat_map(|m| {
+            let owner = content_layer_owner(&m.id, &sources.selected);
+            m.content
+                .block_entity_types
+                .iter()
+                .map(move |kind| (kind.id.as_str(), owner))
+        }),
+        sunrise_client::containers::mod_menu_types()
+            .iter()
+            .map(|menu| (menu.id, content_layer_owner(menu.owner, &sources.selected))),
+    );
     Ok(overlay.root)
 }
 
@@ -1557,12 +1596,25 @@ fn register_block_entity_types(
                 .map(|block| (block.clone(), kind.id.clone()))
         })
         .collect();
-    let mut types = BlockEntityTypes::new(membership, names.clone());
+    let mut types = BlockEntityTypes::new(
+        membership,
+        names.clone(),
+        mods.iter().flat_map(|m| {
+            m.content
+                .block_entity_types
+                .iter()
+                .map(|kind| kind.id.clone())
+        }),
+    );
     let blocks = builtin.get("minecraft:block");
+    let content_blocks: std::collections::HashSet<&str> = mods
+        .iter()
+        .flat_map(|m| m.content.blocks.iter().map(|block| block.id.as_str()))
+        .collect();
     for block in blocks
         .into_iter()
         .flat_map(|ids| &ids.names)
-        .filter(|name| name.starts_with("minecraft:"))
+        .filter(|name| !content_blocks.contains(name.as_str()))
     {
         if let Some(kind) = sunrise_client::lan::chunks::block_entity_type(block) {
             types.template(block.clone(), block.clone(), kind.to_owned());
@@ -2579,7 +2631,7 @@ mod tests {
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for DeclaresBadContent {
             fn blocks(&self, _: &RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
-                let _ = event.register(mod_api::Block::new("foreign:lamp", "minecraft:stone"));
+                let _ = event.register(mod_api::Block::new("foreign:Bad Lamp", "minecraft:stone"));
             }
             fn items(&self, _: &RegistrationContext, event: &mut mod_api::ItemsEvent<'_>) {
                 let _ = event.register(mod_api::Item::new("Bad Key", "minecraft:stick"));
@@ -2606,9 +2658,8 @@ mod tests {
                         DeclarationRefusal::new(
                             "maker",
                             DeclarationKind::Block,
-                            DeclarationError::UnownedNamespace {
-                                id: "foreign:lamp".into(),
-                                namespace: "foreign".into(),
+                            DeclarationError::InvalidId {
+                                id: "foreign:Bad Lamp".into(),
                             }
                         ),
                         DeclarationRefusal::new(
@@ -2673,14 +2724,13 @@ mod tests {
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for Declares {
             fn blocks(&self, _: &RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
-                let _ = event.register(mod_api::Block::new("foreign:lamp", "minecraft:stone"));
                 event
-                    .register(mod_api::Block::new("tool", "minecraft:stone"))
+                    .register(mod_api::Block::new("foreign:tool", "minecraft:stone"))
                     .unwrap();
             }
             fn items(&self, _: &RegistrationContext, event: &mut mod_api::ItemsEvent<'_>) {
                 event
-                    .register(mod_api::Item::new("tool", "minecraft:stick"))
+                    .register(mod_api::Item::new("foreign:tool", "minecraft:stick"))
                     .unwrap();
                 let mut item = mod_api::Item::new("bad_component", "minecraft:stick");
                 item.components
@@ -2695,21 +2745,10 @@ mod tests {
                     .err()
                     .expect("invalid native batch must refuse startup");
                 let report = error.downcast_ref::<DeclarationFailures>().unwrap();
-                assert_eq!(report.0.len(), 3, "{:?}", report.0);
-                assert_eq!(
-                    report.0[0],
-                    DeclarationRefusal::new(
-                        "maker",
-                        DeclarationKind::Block,
-                        DeclarationError::UnownedNamespace {
-                            id: "foreign:lamp".into(),
-                            namespace: "foreign".into()
-                        }
-                    )
-                );
+                assert_eq!(report.0.len(), 2, "{:?}", report.0);
                 for (record, id, detail) in [
-                    (&report.0[1], "maker:tool", "block's item"),
-                    (&report.0[2], "maker:bad_component", "maker:unknown"),
+                    (&report.0[0], "foreign:tool", "block's item"),
+                    (&report.0[1], "maker:bad_component", "maker:unknown"),
                 ] {
                     assert_eq!(
                         (&*record.mod_id, record.kind),
@@ -2722,6 +2761,99 @@ mod tests {
                     );
                 }
             },
+        );
+    }
+
+    #[test]
+    fn native_component_registration_refuses_a_builtin_key() {
+        struct DeclaresDamage;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for DeclaresDamage {
+            fn component_types(
+                &self,
+                _: &RegistrationContext,
+                event: &mut mod_api::ComponentTypesEvent<'_>,
+            ) {
+                event.register("minecraft:damage".into());
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("sunrise-component-builtin-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("registries.json"),
+            r#"{"minecraft:data_component_type":{"entries":{"minecraft:damage":{"protocol_id":0}}}}"#,
+        )
+        .unwrap();
+        let result = mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("maker", Box::new(DeclaresDamage))].into(),
+            || {
+                let _registration = mod_api::__private::PhaseOwner::scope(
+                    mod_api::__private::ModPhase::Registration,
+                );
+                register_components(&root)
+            },
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "mod maker: native component minecraft:damage conflicts with a built-in data component type"
+        );
+    }
+
+    #[test]
+    fn native_component_registration_names_submitting_and_earlier_mods_on_duplicate() {
+        struct Declares(&'static str);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Declares {
+            fn component_types(
+                &self,
+                _: &RegistrationContext,
+                event: &mut mod_api::ComponentTypesEvent<'_>,
+            ) {
+                event.register(self.0.into());
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "sunrise-component-duplicate-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("registries.json"),
+            r#"{"minecraft:data_component_type":{"entries":{"minecraft:damage":{"protocol_id":0}}}}"#,
+        )
+        .unwrap();
+        let duplicate = mod_platform::testing::with_mods(
+            vec![
+                mod_api::ModEntry::new("first", Box::new(Declares("shared:charge"))),
+                mod_api::ModEntry::new("second", Box::new(Declares("shared:charge"))),
+            ]
+            .into(),
+            || {
+                let _registration = mod_api::__private::PhaseOwner::scope(
+                    mod_api::__private::ModPhase::Registration,
+                );
+                register_components(&root)
+            },
+        );
+        let invalid = mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("broken", Box::new(Declares("bare")))].into(),
+            || {
+                let _registration = mod_api::__private::PhaseOwner::scope(
+                    mod_api::__private::ModPhase::Registration,
+                );
+                register_components(&root)
+            },
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            duplicate.unwrap_err().to_string(),
+            "mod second: duplicate native component shared:charge (already registered by mod first)"
+        );
+        assert_eq!(
+            invalid.unwrap_err().to_string(),
+            "mod broken: invalid native component name \"bare\""
         );
     }
 
@@ -2780,7 +2912,7 @@ mod tests {
         impl mod_api::Hooks for DeclaresBlock {
             fn blocks(&self, _: &RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
                 event
-                    .register(mod_api::Block::new("test:blastproof", "minecraft:stone"))
+                    .register(mod_api::Block::new("foreign:blastproof", "minecraft:stone"))
                     .unwrap();
             }
         }
@@ -2793,7 +2925,7 @@ mod tests {
                 native_declared().batches["test"]
                     .blocks
                     .iter()
-                    .any(|b| b.get().id == "test:blastproof")
+                    .any(|b| b.get().id == "foreign:blastproof")
             );
         });
         mod_platform::testing::with_mods(Vec::new().into(), || {
@@ -2972,36 +3104,11 @@ mod tests {
         assert!(!live_ids.contains("runes"));
         assert!(live_ids.contains("plain"));
 
-        // content_owner_pairs maps served namespaces to the host and disables with the host.
-        let mut runes_content = sunrise_mod_package::Content::declared("runes");
-        runes_content.namespaces.push("runes_extra".into());
-        let layers = vec![
-            sunrise_client::mod_content::ContentMod {
-                id: "horizon_java".into(),
-                content: sunrise_mod_package::Content::declared("horizon_java"),
-                jars: Vec::new(),
-            },
-            sunrise_client::mod_content::ContentMod {
-                id: "runes".into(),
-                content: runes_content,
-                jars: Vec::new(),
-            },
-            sunrise_client::mod_content::ContentMod {
-                id: "plain".into(),
-                content: sunrise_mod_package::Content::declared("plain"),
-                jars: Vec::new(),
-            },
-        ];
-        let owners = content_owner_pairs(&layers, &valid_state.selected);
-        assert_eq!(
-            owners,
-            [
-                ("horizon_java", "horizon_java"),
-                ("runes", "horizon_java"),
-                ("runes_extra", "horizon_java"),
-                ("plain", "plain"),
-            ]
-        );
+        // Installed served content belongs to its host, not to the spelling of a registry key.
+        let hosted = content_layer_owner("runes", &valid_state.selected);
+        let plain = content_layer_owner("plain", &valid_state.selected);
+        assert_eq!(hosted, "horizon_java");
+        assert_eq!(plain, "plain");
         struct Quiet;
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for Quiet {}
@@ -3010,12 +3117,25 @@ mod tests {
             vec![mod_api::ModEntry::new("horizon_java", Box::new(Quiet))].into(),
             || {
                 assert!(mod_api::__private::set_mod_enabled("horizon_java", false));
-                mod_api::__private::install_content_owners(owners.iter().copied());
-                assert!(mod_api::__private::content_owner_disabled("runes:altar"));
-                assert!(mod_api::__private::content_owner_disabled(
+                mod_api::__private::install_content_owners(
+                    [],
+                    [],
+                    [
+                        ("runes:altar", hosted),
+                        ("runes_extra:rune", hosted),
+                        ("plain:block", plain),
+                    ],
+                    [],
+                );
+                assert!(mod_api::__private::block_entity_owner_disabled(
+                    "runes:altar"
+                ));
+                assert!(mod_api::__private::block_entity_owner_disabled(
                     "runes_extra:rune"
                 ));
-                assert!(!mod_api::__private::content_owner_disabled("plain:block"));
+                assert!(!mod_api::__private::block_entity_owner_disabled(
+                    "plain:block"
+                ));
             },
         );
 
@@ -3971,7 +4091,12 @@ mod tests {
             ]
             .into(),
             || {
-                mod_api::__private::install_content_owners([("runes", "horizon_java")]);
+                mod_api::__private::install_content_owners(
+                    [],
+                    [],
+                    [("runes:altar", "horizon_java")],
+                    [],
+                );
                 active.apply_code_switches(&wanted_disabled);
                 assert!(mod_api::__private::mod_index_on(
                     mod_api::__private::mod_index("horizon_java").unwrap()
@@ -3979,7 +4104,9 @@ mod tests {
                 assert!(!mod_api::__private::mod_index_on(
                     mod_api::__private::mod_index("plain_native").unwrap()
                 ));
-                assert!(!mod_api::__private::content_owner_disabled("runes:altar"));
+                assert!(!mod_api::__private::block_entity_owner_disabled(
+                    "runes:altar"
+                ));
             },
         );
 

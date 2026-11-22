@@ -34,6 +34,15 @@ pub(crate) const PROPERTY_SETS: &[(&str, &str, &[&str])] = &[
     ("brewing_reagent", "minecraft:brewing", &["reagent"]),
 ];
 
+/// The short internal key for an exact built-in property set on the wire.
+pub fn vanilla_property_set(id: &str) -> Option<&str> {
+    let key = id.strip_prefix("minecraft:")?;
+    PROPERTY_SETS
+        .iter()
+        .any(|(set, ..)| *set == key)
+        .then_some(key)
+}
+
 /// One ingredient projected for recipe-book wire encoding (`HolderSet` / `TagSlotDisplay`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BookIngredient {
@@ -1097,6 +1106,7 @@ mod content_tests {
                 &["minecraft:emerald", "minecraft:air"],
             ));
             event.register(add("minecraft:no_such_set", &["minecraft:dirt"]));
+            event.register(add("unknown_bare_set", &["minecraft:dirt"]));
             event.register(add("brewing_reagent", &["minecraft:diamond"]));
         }
     }
@@ -1125,6 +1135,8 @@ mod content_tests {
             assert!(!added.adds("furnace_input", "minecraft:air"));
             assert!(added.adds("brewing_reagent", "minecraft:diamond"));
             assert!(added.get("no_such_set").is_none());
+            assert!(added.adds("minecraft:no_such_set", "minecraft:dirt"));
+            assert!(added.get("unknown_bare_set").is_none());
             assert!(!added.adds("smoker_input", "minecraft:emerald"));
         });
     }
@@ -1615,4 +1627,50 @@ fn empty_ingredient_network_consumers_exclude_whole_unplaceable_recipes() {
         assert_eq!(buttons.recipe("minecraft:stone", 1), None);
         assert!(packet.properties.iter().all(|(_, ids)| ids.is_empty()));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn native_minecraft_serializer_preserves_opaque_ingredient_through_projection_and_decode() {
+    use serde_json::json;
+
+    const KIND: &str = "minecraft:grinding_opaque";
+    mod_platform::testing::with_recipe_types(&[KIND], || {
+        let recipe = json!({
+            "type": KIND,
+            "ingredient": {"opaque_step": 3, "catalyst": "powder"},
+            "result": "minecraft:iron_ingot",
+        });
+        let catalog = Items::for_tests(Default::default());
+        let overlay = sunrise_world::loot::PackOverlay::NONE;
+        let context = crate::test_resources::server_load();
+        let server = crate::crafting::Recipes::from_sources(
+            Path::new(""),
+            &catalog,
+            &overlay,
+            vec![("test:ore".into(), recipe.clone())],
+            &context,
+        )
+        .unwrap();
+        let types = [KIND.to_owned()];
+        let projected = server.recipe_content(&types);
+        assert_eq!(projected, [("test:ore".to_owned(), recipe.clone())]);
+        let payloads = encode_content(&types, &projected, false);
+        assert_eq!(payloads.len(), 1);
+        let part = ContentPart::decode(&payloads[0]).unwrap();
+        let empty = crate::crafting::Recipes::from_sources(
+            Path::new(""),
+            &catalog,
+            &overlay,
+            Vec::new(),
+            &context,
+        )
+        .unwrap();
+        let (decoded, _) = empty
+            .with_recipe_content(&catalog, part.recipes, &types)
+            .unwrap();
+        assert_eq!(decoded.mod_read_only.len(), 1);
+        assert_eq!(decoded.mod_read_only[0].1.serializer, KIND);
+        assert_eq!(&*decoded.by_type[KIND][0].json, &recipe);
+    });
 }

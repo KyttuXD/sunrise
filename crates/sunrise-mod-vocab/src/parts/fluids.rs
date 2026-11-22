@@ -37,12 +37,14 @@ pub trait FluidsRegistrar {
     /// Request a fluid by canonical registry id, checked when the registry loads.
     fn fluid_key(&mut self, id: &str) -> crate::FluidKey;
 
-    /// Declare a tank-only fluid and return its key.
+    /// Declare a tank-only fluid and return its key. A bare name uses this mod's namespace; an
+    /// explicit valid `namespace:path` keeps its namespace. Built-in and duplicate fluids refuse.
     fn declare_fluid(&mut self, path: &str) -> crate::FluidKey;
 
     /// Declare a fluid that exists in the world (NeoForge's `RegisterEvent` for a `FluidType`),
-    /// with its block and, as `fluid` says, its bucket. Its
-    /// `data/<namespace>/sunrise/fluid/<path>.json`, if any, says how it looks.
+    /// with its block and, as `fluid` says, its bucket. A bare name uses this mod's namespace;
+    /// an explicit valid `namespace:path` keeps its namespace. Built-in and duplicate fluids
+    /// refuse. Its `data/<namespace>/sunrise/fluid/<path>.json`, if any, says how it looks.
     fn declare_world_fluid(&mut self, path: &str, fluid: crate::WorldFluid) -> crate::FluidKey;
 
     /// Declare what a liquid block of `interaction.source` turns into beside another fluid or

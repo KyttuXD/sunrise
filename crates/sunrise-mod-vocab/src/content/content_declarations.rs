@@ -233,15 +233,16 @@ pub enum BlockStateProperty {
 }
 
 /// An unvalidated draft; `Content::declare` validates it at load.
-/// Refused drafts are reported by the content admission path as
-/// `native blocks and items of <namespace>: <reason>`, without admitting part of that namespace.
+/// Refused drafts are reported by the content admission path naming the submitting mod,
+/// without admitting part of its declarations.
 /// `Default` and [`Block::new`] leave out what a content file leaves out: every field is empty
 /// except `item`, true, as in a file.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct Block {
-    /// `<mod id>:<path>`.
+    /// Block identifier: a bare name uses the declaring mod's ID, and an explicit valid
+    /// `namespace:path` keeps its namespace.
     pub id: String,
     /// The vanilla block it copies, `minecraft:<path>`.
     pub template: String,
@@ -345,13 +346,14 @@ pub enum Rarity {
 }
 
 /// An unvalidated draft; `Content::declare` validates it at load.
-/// Refused drafts are reported by the content admission path as
-/// `native blocks and items of <namespace>: <reason>`, without admitting part of that namespace.
+/// Refused drafts are reported by the content admission path naming the submitting mod,
+/// without admitting part of its declarations.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct Item {
-    /// Identifier in the declaring mod's namespace.
+    /// Item identifier: a bare name uses the declaring mod's ID, and an explicit valid
+    /// `namespace:path` keeps its namespace.
     pub id: String,
     /// The vanilla item it copies, `minecraft:<path>`.
     pub template: String,

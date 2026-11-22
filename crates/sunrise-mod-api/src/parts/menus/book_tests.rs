@@ -23,12 +23,22 @@ fn registration_refuses_unknown_books_duplicate_menus_and_overlapping_roles() {
     );
     assert!(
         registrar
+            .menu_recipe_book("other:pot", &book, "demo:cooking", roles())
+            .is_ok()
+    );
+    assert!(
+        registrar
+            .menu_recipe_book("minecraft:custom_pot", &book, "demo:cooking", roles())
+            .is_ok()
+    );
+    assert!(
+        registrar
             .menu_recipe_book("demo:pot", &book, "demo:cooking", roles())
             .is_err()
     );
     assert!(
         registrar
-            .menu_recipe_book("other:pot", &book, "demo:cooking", roles())
+            .menu_recipe_book("minecraft:furnace", &book, "demo:cooking", roles())
             .is_err()
     );
     assert!(
@@ -50,13 +60,18 @@ fn registration_refuses_unknown_books_duplicate_menus_and_overlapping_roles() {
             .menu_recipe_book("demo:unknown", &unknown, "demo:cooking", roles())
             .is_err()
     );
-    assert_eq!(registrar.menu_recipe_books.len(), 1);
+    assert_eq!(registrar.menu_recipe_books.len(), 3);
     assert_eq!(registrar.refused.len(), 4);
     let binding = &registrar.menu_recipe_books["demo:pot"];
     assert_eq!(binding.owner, "demo");
     assert_eq!(binding.book, book);
     assert_eq!(binding.recipe_type, "demo:cooking");
     assert_eq!(binding.layout, roles());
+    assert_eq!(registrar.menu_recipe_books["other:pot"].owner, "demo");
+    assert_eq!(
+        registrar.menu_recipe_books["minecraft:custom_pot"].owner,
+        "demo"
+    );
 }
 
 #[test]

@@ -619,7 +619,7 @@ pub(super) fn packed_biomes(
     let overrides = sunrise_client::vanillagen::biome_modifiers_over_packs(
         &resources.join("worldgen"),
         &overrides,
-    )
+    )?
     .unwrap_or(overrides);
     let packed: Vec<(String, serde_json::Value)> = overrides
         .entries("biomes")

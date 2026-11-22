@@ -11,8 +11,9 @@ fn register(&self, registrar: &mut dyn mod_api::Registrar, _: &mod_api::Registra
 }
 ```
 
-The resulting type id belongs to the mod's manifest namespace. Duplicate ids, invalid ids and ids
-in another mod's namespace refuse registration. `minecraft:`, `sunrise:` and `neoforge:` are reserved.
+A bare name uses the declaring mod's namespace while an explicit valid `namespace:path` keeps
+its namespace. Duplicate ids, invalid ids and the built-in `neoforge:add_table` serializer refuse
+registration.
 The static serializer registry is `neoforge:global_loot_modifier_serializers`; it is not synced to clients.
 
 ## Preparing an instance

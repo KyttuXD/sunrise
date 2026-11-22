@@ -58,8 +58,8 @@ route from `client_setup` remain outside this change.
 Startup hooks such as `register`, `component_types`, `blocks`, `items` and `standalone_models`
 receive no `Host` and read startup facts through `RegistrationContext`.
 `register` receives `&mut dyn Registrar` for writing declarations. In `component_types`, call
-`event.register("mymod:charge".into())` with each owned, namespaced ID. The game checks IDs and
-duplicates before freezing the component registry.
+`event.register("mymod:charge".into())` with each explicit `namespace:path`. The game refuses
+invalid or duplicate IDs, including collisions with built-in keys, before freezing the component registry.
 
 Scoped registration events are borrowed only for the listener call. Pending entries are accepted
 in dispatch order when the callback completes. A callback panic discards its pending entries,

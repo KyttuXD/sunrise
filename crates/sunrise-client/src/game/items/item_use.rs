@@ -162,7 +162,7 @@ impl Game<'_> {
     /// a `native_use_duration` above 0. Its use is its own `Item.use`.
     pub(super) fn mod_use(&self, stack: &ItemStack) -> bool {
         let info = self.items().get(&stack.item);
-        !stack.item.starts_with("minecraft:")
+        mod_api::__private::is_content_item(&stack.item)
             && info.is_some()
             && self.consumable(stack).is_none()
             && !self.stack_carries_blocks_attacks(stack, info)
@@ -2001,5 +2001,97 @@ pub(super) mod interact_vibration_tests {
         }) else {
             panic!("prepared resources failed to load")
         };
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn admitted_minecraft_and_custom_items_start_and_complete_timed_native_use() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
+        use mod_api::{
+            Hooks, Host, HostSide, ItemPart, ItemsEvent, LivingEntityUseItemFinishEvent, ModEntry,
+            Mods, Registrar, RegistrationContext, UseDurationEvent,
+        };
+        use std::sync::{Arc, Mutex};
+
+        if run_fresh_cases(
+            "game::item_use::interact_vibration_tests::admitted_minecraft_and_custom_items_start_and_complete_timed_native_use",
+            "SUNRISE_MINECRAFT_ITEM_USE_CHILD",
+            &["valid"],
+        ) {
+            return;
+        }
+
+        const MC_ITEM: &str = "minecraft:p3_04_wand";
+        const ALT_ITEM: &str = "p3_04_use:wand";
+        const BUILTIN_ITEM: &str = "minecraft:stick";
+
+        #[derive(Clone)]
+        struct TimedUseMod(Arc<Mutex<Vec<String>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for TimedUseMod {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                for id in [MC_ITEM, ALT_ITEM, BUILTIN_ITEM] {
+                    let key = r.item_key(id);
+                    r.item_part(&key, self.clone()).unwrap();
+                }
+            }
+            fn items(&self, _: &RegistrationContext, event: &mut ItemsEvent<'_>) {
+                for id in [MC_ITEM, ALT_ITEM] {
+                    event
+                        .register(mod_api::Item::new(id, BUILTIN_ITEM))
+                        .unwrap();
+                }
+            }
+            fn living_entity_use_item_finish(
+                &self,
+                _: HostSide<'_>,
+                event: &mut LivingEntityUseItemFinishEvent<'_>,
+            ) {
+                if let Some(id) = mod_api::__private::item_key_id(event.stack.item()) {
+                    self.0.lock().unwrap().push(id.to_owned());
+                }
+            }
+        }
+        #[mod_api::sunrise_part]
+        impl ItemPart for TimedUseMod {
+            fn use_duration(&self, _: &dyn Host, event: &mut UseDurationEvent<'_>) {
+                *event.duration = 4;
+            }
+        }
+
+        let finished = Arc::new(Mutex::new(Vec::new()));
+        let mods: Mods = vec![ModEntry::new(
+            "p3_04_use",
+            Box::new(TimedUseMod(finished.clone())),
+        )]
+        .into();
+        mod_platform::__private::install(mods.clone());
+        crate::game::api_values::install_parts(&mods).unwrap();
+        let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let root = crate::game::mods::content_root(&base, &Default::default()).unwrap();
+        with_game_at(root.prepared().to_path_buf(), |game| {
+            game.options.dedicated = Some(Vec::new());
+            // Built-in vanilla items keep their normal path even when use_duration is non-zero.
+            let stick = ItemStack::new(BUILTIN_ITEM, 1);
+            game.inventory[game.selected] = Some(stick.clone());
+            assert_eq!(game.use_duration(&stick), 4);
+            assert!(!game.mod_use(&stick));
+            assert!(!game.start_mod_use(&stick));
+            assert!(game.using.is_none());
+
+            for id in [MC_ITEM, ALT_ITEM] {
+                let stack = ItemStack::new(id, 1);
+                game.inventory[game.selected] = Some(stack.clone());
+                assert!(game.mod_use(&stack), "{id}");
+                assert!(game.start_mod_use(&stack), "{id}");
+                assert_eq!(game.using, Some((game.selected, 0)), "{id}");
+                assert_eq!(game.use_duration, 4, "{id}");
+                for ticks in 0..4 {
+                    game.tick_mod_use(game.selected, ticks, &stack);
+                }
+                assert!(game.using.is_none(), "{id} should complete after 4 ticks");
+            }
+            assert_eq!(*finished.lock().unwrap(), [MC_ITEM, ALT_ITEM]);
+        });
     }
 }

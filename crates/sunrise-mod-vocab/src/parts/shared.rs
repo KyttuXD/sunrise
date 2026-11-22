@@ -137,7 +137,7 @@ pub struct HookParts {
     pub(crate) block_entity_kinds: HashMap<Box<str>, Vec<Attached<dyn BlockEntityPart>>>,
     pub(crate) items: HashMap<Box<str>, Vec<Attached<dyn ItemPart>>>,
     pub(crate) menus: HashMap<Box<str>, Vec<Attached<dyn MenuPart>>>,
-    pub(crate) menu_screens: HashMap<Box<str>, crate::parts::menus::MenuScreenIndex>,
+    pub(crate) menu_owners: HashMap<Box<str>, HashMap<usize, Attached<dyn MenuPart>>>,
     pub(crate) effects: HashMap<Box<str>, Vec<Attached<dyn MobEffectPart>>>,
     pub(crate) fluids: HashMap<Box<str>, Vec<Attached<dyn FluidPart>>>,
     pub(crate) entities: HashMap<Box<str>, Vec<Attached<dyn EntityPart>>>,
@@ -451,7 +451,7 @@ pub fn prepare_parts(
         "block",
     );
     add_tagged(&mut parts.items, &installed.tags.items, item_tags, "item");
-    parts.index_hooks(&installed.menu_recipe_books, &installed.namespace_authority);
+    parts.index_hooks();
     for table in parts.hooks.iter_mut().flatten() {
         if table.blocks.is_empty() {
             continue;
@@ -561,11 +561,7 @@ impl Parts {
     pub(crate) fn for_hook(&self, hook: HookId) -> Option<&HookParts> {
         self.hooks.get(hook as usize).and_then(Option::as_deref)
     }
-    pub(super) fn index_hooks(
-        &mut self,
-        menu_recipe_books: &HashMap<String, crate::parts::menus::MenuBookDeclaration>,
-        authority: &crate::parts::NamespaceAuthority,
-    ) {
+    pub(super) fn index_hooks(&mut self) {
         self.hooks = vec![None; HOOK_COUNT];
         macro_rules! index {
             ($field:ident, $method:ident) => {
@@ -592,12 +588,11 @@ impl Parts {
         index!(fluids, fluid_subscribed);
         index!(entities, entity_subscribed);
         for table in self.hooks.iter_mut().flatten() {
-            if !table.menus.is_empty() {
-                table.menu_screens = crate::parts::menus::index_menu_screens(
-                    &table.menus,
-                    menu_recipe_books,
-                    authority,
-                );
+            for (menu, parts) in &table.menus {
+                let owners = table.menu_owners.entry(menu.clone()).or_default();
+                for part in parts {
+                    owners.entry(part.mod_index).or_insert_with(|| part.clone());
+                }
             }
         }
     }

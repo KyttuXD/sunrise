@@ -226,7 +226,8 @@ impl<T: ?Sized + 'static> BlockProviders<T> {
 }
 
 impl dyn Registrar + '_ {
-    /// Declare a block entity type in a namespace owned by this mod's manifest.
+    /// Declare a block entity type by key. A bare name uses this mod's namespace; an explicit
+    /// valid `namespace:path` is kept. Existing type keys, including vanilla's, cannot be replaced.
     pub fn block_entity_type(&mut self, id: &str) -> crate::BlockEntityTypeBuilder<'_> {
         crate::BlockEntityTypeBuilder {
             id: id.to_owned(),
@@ -245,8 +246,8 @@ impl dyn Registrar + '_ {
     /// The Part is skipped only when the type's namespace is the id of an absent package
     /// with a surviving, applicable optional dependency row. An absent package's other
     /// namespaces are unknown; a present package must declare the type.
-    /// The Part's saved state is the key it declares (see [`Self::block_entity_part_with_state`]),
-    /// which a package declares only in its own namespace, so it is saved under this package's id; it
+    /// The Part's saved state is the key it declares (see [`Self::block_entity_part_with_state`])
+    /// and registers via [`AttachmentTypesRegistrar::register_attachment_type`]; it
     /// reaches the owner's state only through the owner's declared attachments. Declaring the type, its
     /// transform and its initial data stay with the owner. If this package is later removed, the
     /// block entities keep what it saved, unread, and a package that returns reads it again.
@@ -260,9 +261,7 @@ impl dyn Registrar + '_ {
     /// [`Self::block_entity_part`] for a Part with typed state (`BlockEntityPartState`):
     /// each block entity of type `kind` keeps one `P::Data`, under `P::DATA`. Refused, and
     /// reported as the mod's registration refusal, when `P::DATA` syncs, copies on death,
-    /// is outside the mod's namespaces (a Part on another
-    /// package's type declares its state key as its own package does), or names a key
-    /// this mod already declared with another type.
+    /// is undeclared, or names a key already declared with another type.
     pub fn block_entity_part_with_state<P: crate::BlockEntityPartState>(
         &mut self,
         kind: &crate::BlockEntityTypeKey,
@@ -347,8 +346,9 @@ pub trait BlockEntitiesRegistrar {
     /// Look up a vanilla or another mod's type. The final registry validates it at load.
     fn block_entity_type_key(&mut self, id: &str) -> crate::BlockEntityTypeKey;
 
-    /// Declare block entity type `path` in a namespace owned by this mod's manifest, held by `blocks`
-    /// (a bare name is this mod's); mods usually reach it through `block_entity_type`.
+    /// Declare a new block entity type held by `blocks`. A bare type or block name uses this mod's
+    /// namespace. Explicit keys keep their namespace. Vanilla blocks cannot be reassigned here;
+    /// mods usually reach this through `block_entity_type`.
     fn declare_block_entity_type(
         &mut self,
         path: &str,
@@ -364,9 +364,8 @@ pub trait BlockEntitiesRegistrar {
     ) -> Result<(), crate::BlockEntityPartError>;
 
     /// Record the state declaration of Part `part`, or refuse it (as the mod's registration
-    /// refusal too): see `PartStateDeclaration::check`, and a key outside this mod's
-    /// namespaces or one it declared with another type. Mods reach it through
-    /// `block_entity_part_with_state`.
+    /// refusal too): see `PartStateDeclaration::check`, or a key this mod already declared with
+    /// another type. Mods reach it through `block_entity_part_with_state`.
     fn declare_block_entity_part_state(
         &mut self,
         part: &'static str,

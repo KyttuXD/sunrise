@@ -13,8 +13,14 @@ use sunrise_world::loot::{
 pub(crate) fn capture() -> Types {
     let (functions, conditions) = mod_api::__private::loot_type_declarations();
     Types::new(Arc::new(Codecs {
-        functions: functions.into_iter().collect(),
-        conditions: conditions.into_iter().collect(),
+        functions: functions
+            .into_iter()
+            .filter(|(id, _)| !sunrise_world::loot::types::is_builtin(id, true))
+            .collect(),
+        conditions: conditions
+            .into_iter()
+            .filter(|(id, _)| !sunrise_world::loot::types::is_builtin(id, false))
+            .collect(),
     }))
 }
 struct Codecs {

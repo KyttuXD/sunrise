@@ -35,9 +35,9 @@ pub fn install_process_datapack_registry_declarations(
 /// Registration of mod-owned datapack registries
 /// ([`Registrar::declare_datapack_registry`](DatapackRegistriesRegistrar::declare_datapack_registry)).
 pub trait DatapackRegistriesRegistrar {
-    /// Declare a datapack registry of the mod's own (NeoForge's
-    /// `DataPackRegistryEvent.NewRegistry`): `path` in the mod's namespace
-    /// (`spell` of `example` is `example:spell`), the record `fields` an
+    /// Declare a datapack registry (NeoForge's `NewDatapackRegistryEvent`): a bare `path`
+    /// uses the declaring mod's namespace (`spell` of `example` is `example:spell`),
+    /// while a valid explicit `namespace:path` keeps its namespace. The record `fields` an
     /// entry has (scalars, and lists, maps, records and optional fields of them, nested as
     /// deep as the schema says), and how clients receive the entries.
     ///
@@ -49,9 +49,8 @@ pub trait DatapackRegistriesRegistrar {
     /// entry; a default never stands in for invalid data.
     ///
     /// Only both-side packages (and both-side served namespace suppliers) may declare datapack
-    /// registries. Refused, naming the mod: a key outside the mod's owned namespaces (its
-    /// manifest namespaces or a content package it serves via `served_by`, with vanilla
-    /// registries excluded), a malformed key, a duplicate (of this mod's or
+    /// registries. Refused, naming the mod: a built-in registry key, a malformed key,
+    /// a duplicate (of this mod's or
     /// another's, caught where the declarations join), an empty or repeated
     /// field name, unusable bounds, an optional kind inside a list, map or optional, or a
     /// default that is not a value of its field inside its bounds or whose map names one key

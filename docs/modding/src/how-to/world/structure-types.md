@@ -8,8 +8,9 @@ Register a `StructureType` in `Hooks::register` to generate structures named by 
 {{#include ../../../examples/src/worldgen.rs:structure}}
 ```
 
-Use an ID in your mod's namespace. A duplicate ID, an ID in another mod's namespace, or an empty
-name stops startup with a message naming your mod.
+A bare name uses your mod's namespace; an explicit valid `namespace:path` keeps its namespace.
+A duplicate ID, a built-in structure type ID, or a malformed or empty name stops startup with a
+message naming your mod.
 
 ## Generating a start
 

@@ -328,11 +328,10 @@ mod tests {
                 cx.package_files("native_demo").err(),
                 Some(PackageFilesError::NotEnabled)
             );
-            assert_eq!(
-                mod_api::__private::owned_declaration_id("native_demo", "native_extra:gem")
-                    .unwrap(),
-                "native_extra:gem"
-            );
+            assert!(mod_api::__private::owns_namespace(
+                "native_demo",
+                "native_extra"
+            ));
             assert_eq!(
                 cx.package_files("missing").err(),
                 Some(PackageFilesError::NotEnabled)

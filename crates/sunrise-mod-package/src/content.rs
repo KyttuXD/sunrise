@@ -1551,12 +1551,7 @@ impl Content {
         items: impl IntoIterator<Item = (&'a Item, Result<(), String>)>,
         admitted_items: &[&str],
     ) -> Result<(), Vec<(DeclarationKind, DeclarationError)>> {
-        let mut ids: BTreeSet<&str> = self
-            .blocks
-            .iter()
-            .map(|b| b.id.as_str())
-            .chain(self.items.iter().map(|i| i.id.as_str()))
-            .collect();
+        let mut block_ids: BTreeSet<&str> = self.blocks.iter().map(|b| b.id.as_str()).collect();
         let mut item_ids: BTreeSet<&str> = self
             .blocks
             .iter()
@@ -1578,12 +1573,13 @@ impl Content {
         for (block, fields) in blocks {
             let id = block.id.as_str();
             let result = fields.and_then(|()| {
-                if !ids.insert(id) {
+                if block_ids.contains(id) {
                     return Err("declared twice".into());
                 }
-                if block.item {
-                    item_ids.insert(id);
+                if block.item && !item_ids.insert(id) {
+                    return Err("block's item is already declared".into());
                 }
+                block_ids.insert(id);
                 Ok(())
             });
             match result {
@@ -2826,6 +2822,34 @@ capabilities = ["registries"]
             );
             assert!(content.items.is_empty());
         }
+    }
+
+    #[test]
+    fn block_without_an_item_can_share_an_existing_item_key() {
+        let mut content = Content::declared("ruby");
+        content.items.push(Item {
+            id: "ruby:lamp".into(),
+            template: "minecraft:stick".into(),
+            ..Item::default()
+        });
+        let block = Block {
+            id: "ruby:lamp".into(),
+            template: "minecraft:stone".into(),
+            item: true,
+            ..Block::default()
+        };
+        assert!(content.declare(std::slice::from_ref(&block), &[]).is_err());
+        content
+            .declare(
+                &[Block {
+                    item: false,
+                    ..block
+                }],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(content.items[0].id, "ruby:lamp");
+        assert_eq!(content.blocks[0].id, "ruby:lamp");
     }
 
     #[test]

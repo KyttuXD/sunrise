@@ -9,17 +9,15 @@ pub trait Hooks {
     /// recipes' own items stay in. Called once per load, after the recipes are
     /// resolved, with the `DataLoadContext` of the load that owns them (`origin()`
     /// `ServerDataLoad` on a server, `ClientPreload` on a client's own load),
-    /// and again after `/reload`. A new namespaced key creates a set when its
-    /// namespace belongs to the listener's manifest (its ID or `namespaces`)
-    /// or to a content package it serves (`served_by`).
-    /// Later listeners may extend existing sets without changing who created them.
-    /// Invalid or foreign new keys, unknown vanilla keys, and air are logged with
-    /// the contributing mod and skipped; unknown items are ignored. Custom sets
-    /// are synced to clients alongside vanilla sets. The answer must be the same
-    /// every time.
+    /// and again after `/reload`. Any valid namespaced key creates or extends a
+    /// custom set (including non-vanilla `minecraft:` keys); bare keys name
+    /// vanilla sets. Invalid keys, unknown bare vanilla keys, and air are logged
+    /// and skipped, naming the contributor; unknown items are ignored. Later additions
+    /// do not change the first contributor. Custom sets are synced to clients
+    /// alongside vanilla sets. The answer must be the same every time.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
-        version = 3,
+        version = 4,
         side = "both",
         contract = "collect",
         out = "additions",
