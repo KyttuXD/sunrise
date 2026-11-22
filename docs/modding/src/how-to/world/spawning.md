@@ -110,6 +110,26 @@ and markers have zero-sized boxes at their positions; interactions use their sav
 width and height. A handle expires when its entity unloads, so find it again when
 the saved entity rejoins.
 
+### Reading display settings
+
+Narrow a server entity with `host.display(entity)`. The resulting `DisplayRef` reads
+its current server settings, not the last save or the client's interpolated pose.
+`text(host)` projects just the text component of a text display; it returns `Ok(None)`
+for other display kinds. For an item display, `with_item` lends its stack only when
+nonempty. For example, read the count without copying the stack's components:
+
+```rust,ignore
+let count = host.display(entity)?.with_item(host, |stack| stack.count());
+```
+
+Use `display.with_item(host, |stack| stack.project()).flatten()` if you need an owned
+stack or need to inspect its components. `set_item(host, None)` still empties the display.
+
+`set_transformation` stores the translation, scale and two `[x, y, z, w]` quaternions
+exactly as provided. It does not normalize rotations or use their length to reject a
+write. Provide unit quaternions for ordinary rotations. Vanilla's saved transformation
+codec is separate and normalizes quaternion component lists on load.
+
 ## Visiting entities in a box
 
 `level.visit_entities_in(host, min, max, &mut visit)` visits readable `EntityRef`s

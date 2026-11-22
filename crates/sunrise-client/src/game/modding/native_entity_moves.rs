@@ -477,7 +477,7 @@ mod tests {
                 knot_check: None,
                 eye: None,
                 join: Default::default(),
-                item_transformation: None,
+                display: None,
                 interaction: None,
                 id: 14,
                 kind: "minecraft:marker".into(),

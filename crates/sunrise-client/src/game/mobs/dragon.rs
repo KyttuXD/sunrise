@@ -4146,6 +4146,7 @@ impl Game<'_> {
             minecart_steps: None,
             data: 0,
             meta,
+            display: None,
             forced_meta: [0; 4],
             // Back at their defaults the values leave `meta`, and the clients
             // still hold the old ones.

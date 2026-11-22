@@ -368,7 +368,7 @@ impl Game<'_> {
                         join: Default::default(),
                         id,
                         kind: "minecraft:area_effect_cloud".into(),
-                        item_transformation: None,
+                        display: None,
                         interaction: None,
                         knot_check: None,
                         eye: None,
@@ -454,7 +454,7 @@ impl Game<'_> {
                     position: sunrise_client::mobs::leash::knot_state(fence).position,
                     yaw: 0.0,
                     pitch: 0.0,
-                    item_transformation: None,
+                    display: None,
                     interaction: None,
                     knot_check: None,
                     eye: None,
@@ -631,18 +631,17 @@ impl Game<'_> {
                     .position(|o| o.id == id)
                     .ok_or_else(stale)?;
                 let slot = &self.others[i];
-                let mut new = Self::other_from_nbt(&tag, id, &slot.kind).ok_or_else(stale)?;
+                let mut new = self
+                    .other_from_nbt(&tag, id, &slot.kind)
+                    .ok_or_else(stale)?;
                 new.join = slot.join;
-                let is_display = matches!(
-                    slot.kind.as_str(),
-                    "minecraft:block_display" | "minecraft:item_display" | "minecraft:text_display"
-                );
+                if let Some(display) = &new.display {
+                    crate::game::persist::display::strip_display_nbt(display, &mut tag);
+                    self.persist.force_meta(id, 8);
+                }
                 self.others.update(i, |slot| *slot = new);
                 // `EntityDataAccessor.setData` keeps the entity's UUID.
                 set_key(&mut tag, "UUID", Tag::IntArray(self.uuid_for(id).to_vec()));
-                if is_display {
-                    self.persist.force_meta(id, 8);
-                }
             }
             Target::Item(id) => {
                 let mut new = entity_nbt::item_entity_from_nbt(&tag, id, 0.0).ok_or_else(stale)?;
@@ -2014,12 +2013,16 @@ mod tests {
                         .to_vec(),
                 ),
             );
-            game.persist.raw.insert(12, Tag::Compound(raw));
+            let raw = Tag::Compound(raw);
+            let display = game
+                .read_display_nbt("minecraft:block_display", &raw)
+                .map(std::sync::Arc::new);
+            game.persist.raw.insert(12, raw);
             game.persist.uuids.insert(12, [1, 2, 3, 4]);
             game.others.push(super::super::OtherEntity {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
-                item_transformation: None,
+                display,
                 knot_check: None,
                 eye: None,
                 interaction: None,
@@ -2040,10 +2043,14 @@ mod tests {
             );
             merge.insert("UUID".into(), Tag::IntArray(vec![9, 9, 9, 9]));
             merge.insert("start_interpolation".into(), Tag::Int(0));
+            merge.insert("view_range".into(), Tag::Float(2.5_f32.to_bits()));
             game.apply_entity_nbt(Target::Other(12), Tag::Compound(merge))
                 .unwrap();
             assert_eq!(game.uuid_for(12), [1, 2, 3, 4]);
             assert_eq!(game.persist.forced_meta.get(&12), Some(&[1 << 8, 0, 0, 0]));
+            let entity = game.entity(12).unwrap();
+            assert_eq!(game.display(entity).unwrap().view_range(game), Some(2.5));
+            assert!(game.persist.raw[&12].get("view_range").is_none());
             game.spend_forced_meta();
             let ctx = sunrise_command::Context {
                 root: 0,

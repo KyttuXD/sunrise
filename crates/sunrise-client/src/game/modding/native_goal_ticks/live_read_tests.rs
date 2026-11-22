@@ -199,7 +199,7 @@ fn body_yaw_is_the_raw_mob_yaw_and_none_for_others() {
             knot_check: None,
             eye: None,
             join: Default::default(),
-            item_transformation: None,
+            display: None,
             interaction: None,
             id: 41,
             kind: "minecraft:marker".into(),

@@ -789,6 +789,19 @@ impl DisplayRef {
     pub fn entity(self) -> EntityRef {
         self.0
     }
+
+    /// Lends the current `ItemDisplay.getItemStack` without copying its components.
+    /// Use [`ItemStackView::project`] if you need the components or an owned stack
+    /// that can outlive this call. Returns `None` without calling `read` when the
+    /// stack is empty, this is not a live item display, or the read is unavailable.
+    pub fn with_item<R>(
+        self,
+        host: &dyn Host,
+        read: impl for<'a> FnOnce(ItemStackView<'a>) -> R,
+    ) -> Option<R> {
+        let backend = crate::backend_of(host)?;
+        read_stack_view(read, |lend| backend.display_item_stack(self, lend))
+    }
 }
 
 /// A projectile of the open world (vanilla's `Projectile`), narrowed with

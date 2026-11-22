@@ -11,7 +11,7 @@ use super::{
     data::SyncData,
     entity::{Entities, EntityState},
     equipment_cache,
-    guest::{Guest, InboxItem, SentEffect, stack_to_network_projecting},
+    guest::{Guest, InboxItem, SentEffect, resident_stack},
 };
 use crate::{
     chunk::Chunk,
@@ -893,19 +893,13 @@ impl Hub {
                 .and_then(|i| i.id(name))
                 .unwrap_or(0)
         };
-        let mut wire = stack_to_network_projecting(
-            item_id,
-            |registry, name| sync.id(registry, name),
-            s,
-            projected,
-        )?;
-        super::guest::canonicalize_stack_patch(
-            &mut wire,
+        Some(resident_stack(
             source,
+            &item_id,
+            &sync,
             &self.encoder.items,
-            &sync.builtin,
-        );
-        Some(wire)
+            projected,
+        ))
     }
 
     /// `PlayerList.broadcastAll`: send a packet to every placed player.
@@ -3390,6 +3384,7 @@ impl Hub {
             velocity: [0.0; 3],
             data: 0,
             meta,
+            display: None,
             forced_meta: [0; 4],
             // The effect swirls go back to none.
             defaults: vec![

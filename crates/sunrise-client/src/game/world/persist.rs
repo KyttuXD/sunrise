@@ -2,7 +2,7 @@
 //! entities (`entities/*.mca`, per chunk like vanilla's `EntityStorage`) and
 //! scheduled block/fluid ticks (chunk `block_ticks`/`fluid_ticks`).
 #[path = "persist/display.rs"]
-mod display;
+pub(super) mod display;
 pub(super) use sunrise_gameplay::entity_uuids::EntityUuids;
 #[path = "persist/loaded_pass.rs"]
 mod loaded_pass;
@@ -491,75 +491,6 @@ fn section_order(tag: &Tag) -> u32 {
 
 fn chunk_of(p: Vec3) -> (i32, i32) {
     ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ItemDisplayTransformation {
-    translation: [f32; 3],
-    left_rotation: [f32; 4],
-    scale: [f32; 3],
-    right_rotation: [f32; 4],
-}
-
-impl From<mod_api::Transformation> for ItemDisplayTransformation {
-    fn from(value: mod_api::Transformation) -> Self {
-        Self {
-            translation: value.translation,
-            left_rotation: value.left_rotation,
-            scale: value.scale,
-            right_rotation: value.right_rotation,
-        }
-    }
-}
-
-impl ItemDisplayTransformation {
-    pub(super) fn from_tag(tag: Option<&Tag>) -> Option<Self> {
-        let (translation, left_rotation, scale, right_rotation) = tag
-            .and_then(sunrise_client::text_display::transformation)
-            .unwrap_or((
-                [0.0; 3],
-                [0.0, 0.0, 0.0, 1.0],
-                [1.0; 3],
-                [0.0, 0.0, 0.0, 1.0],
-            ));
-        Some(Self {
-            translation,
-            left_rotation,
-            scale,
-            right_rotation,
-        })
-    }
-
-    pub(super) fn to_tag(self) -> Tag {
-        transformation_tag(
-            self.translation,
-            self.left_rotation,
-            self.scale,
-            self.right_rotation,
-        )
-    }
-}
-
-/// The transformation-only portion of Display.addAdditionalSaveData and the native writer.
-fn transformation_tag(
-    translation: [f32; 3],
-    left_rotation: [f32; 4],
-    scale: [f32; 3],
-    right_rotation: [f32; 4],
-) -> Tag {
-    let floats = |v: &[f32]| {
-        Tag::List(
-            v.iter()
-                .map(|x| Tag::Float(if *x == 0.0 { 0 } else { x.to_bits() }))
-                .collect(),
-        )
-    };
-    let mut t = sunrise_core::nbt::Compound::new();
-    t.insert("translation".into(), floats(&translation));
-    t.insert("left_rotation".into(), floats(&left_rotation));
-    t.insert("scale".into(), floats(&scale));
-    t.insert("right_rotation".into(), floats(&right_rotation));
-    Tag::Compound(t)
 }
 
 impl Game<'_> {
@@ -1366,14 +1297,13 @@ impl Game<'_> {
 
     /// Read an unsimulated entity without assigning it a new identity.
     pub(super) fn other_from_nbt(
+        &self,
         tag: &Tag,
         id: u32,
         kind: &str,
     ) -> Option<super::commands::OtherEntity> {
         let mut position = entity_nbt::position(tag)?;
-        let item_transformation = (kind == "minecraft:item_display")
-            .then(|| ItemDisplayTransformation::from_tag(tag.get("transformation")))
-            .flatten();
+        let display = self.read_display_nbt(kind, tag).map(Arc::new);
         let knot_check = (kind == "minecraft:leash_knot").then_some(0);
         if knot_check.is_some() {
             // BlockAttachedEntity.setPos -> LeashFenceKnotEntity.recalculateBoundingBox.
@@ -1392,7 +1322,7 @@ impl Game<'_> {
             position,
             yaw: rotation[0],
             pitch: rotation[1],
-            item_transformation,
+            display,
             interaction,
             knot_check,
             eye: (kind == "minecraft:eye_of_ender")
@@ -1414,7 +1344,10 @@ impl Game<'_> {
         let quarantined = super::general::quarantined_kind(kind).then(|| tag.clone());
         strip_finalize(&mut tag);
         let id = self.next_entity + 1;
-        let other = Self::other_from_nbt(&tag, id, kind)?;
+        let other = self.other_from_nbt(&tag, id, kind)?;
+        if let Some(display) = &other.display {
+            display::strip_display_nbt(display, &mut tag);
+        }
         let riders = if quarantined.is_none() && Self::other_takes_passengers(kind) {
             self.take_passengers(&mut tag)
         } else {
@@ -1482,13 +1415,6 @@ impl Game<'_> {
             return out.finish();
         }
         if let Tag::Compound(c) = &mut tag {
-            // Display.addAdditionalSaveData omits the transient start delay.
-            if matches!(
-                o.kind.as_str(),
-                "minecraft:block_display" | "minecraft:item_display" | "minecraft:text_display"
-            ) {
-                c.remove(&"start_interpolation".into());
-            }
             if include_id {
                 c.insert("id".into(), Tag::String(o.kind.as_str().into()));
             } else {
@@ -1511,15 +1437,11 @@ impl Game<'_> {
             );
             c.insert("UUID".into(), Tag::IntArray(uuid.to_vec()));
         }
-        let display = matches!(
-            o.kind.as_str(),
-            "minecraft:text_display" | "minecraft:block_display" | "minecraft:item_display"
-        );
-        if display || super::interactions::is_interaction(&o.kind) {
+        if o.display.is_some() || super::interactions::is_interaction(&o.kind) {
             write_static_entity_fields(&mut tag);
         }
-        if display {
-            self.write_display_nbt(o, &mut tag);
+        if let Some(display) = &o.display {
+            self.write_display_nbt(display, &mut tag);
         }
         if let Some(eye) = o.eye
             && let Tag::Compound(c) = &mut tag

@@ -2589,49 +2589,56 @@ impl Game<'_> {
     /// described (their ids are above the counter the states were taken at),
     /// and nothing when the counter has not moved or no guest is in the level.
     pub(super) fn lan_note_joined(&mut self) {
-        let Some(host) = self.lan.take() else {
+        if self.lan.is_none() {
             return;
-        };
-        let mut host = self.lan_flush_tracking(host);
-        host.states_next_entity = None;
-        self.lan = Some(host);
+        }
+        self.lan_flush_tracking();
+        if let Some(host) = self.lan.as_mut() {
+            host.states_next_entity = None;
+        }
         self.flush_attachment_sync();
     }
 
     /// Deliver start/stop callbacks before sounds and attachment snapshots.
     /// A callback can spawn another entity, whose pairing is part of the same
     /// operation, as a nested ChunkMap.addEntity would be in vanilla.
-    fn lan_flush_tracking(&mut self, mut host: LanHost) -> LanHost {
+    fn lan_flush_tracking(&mut self) {
         loop {
-            self.lan_pair_joined(&mut host);
+            self.lan_pair_joined();
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
             host.hub.collect_tracking();
             if host.hub.native_tracking.is_empty() {
-                return host;
+                return;
             }
-            self.lan = Some(host);
             self.run_native_tracking();
-            host = self
-                .lan
-                .take()
-                .expect("the hub is back after the tracking events");
         }
     }
 
     /// Pair late arrivals before a sound flush as well as at the end of the
     /// tick. The counter prevents taking or draining an entity's state twice.
-    pub(super) fn lan_pair_joined(&mut self, host: &mut LanHost) {
-        if let Some(next) = host.states_next_entity
-            && host.hub.guests.iter().any(|g| host.hub.watches(g))
-        {
-            self.lan_assign_ids();
-            if self.next_entity != next {
-                let mut states = States::default();
-                self.lan_entities(&mut states, false, next, None);
-                self.lan_hook_states(&mut states);
-                self.lan_entity_uuids(&mut states);
+    pub(super) fn lan_pair_joined(&mut self) {
+        let Some(next) = self
+            .lan
+            .as_ref()
+            .filter(|host| host.hub.guests.iter().any(|g| host.hub.watches(g)))
+            .and_then(|host| host.states_next_entity)
+        else {
+            return;
+        };
+        self.lan_assign_ids();
+        if self.next_entity != next {
+            let mut states = States::default();
+            self.lan_entities(&mut states, false, next, None);
+            self.lan_hook_states(&mut states);
+            self.lan_entity_uuids(&mut states);
+            if let Some(host) = self.lan.as_mut() {
                 host.hub
                     .note_joined(states.as_slice(), Some(&*self.entity_attachments));
             }
+        }
+        if let Some(host) = self.lan.as_mut() {
             host.states_next_entity = Some(self.next_entity);
         }
     }
@@ -5117,6 +5124,143 @@ mod tests {
                 assert_eq!(sent(game), (zombie_swirls, Vec::new()));
                 assert!(asked().is_empty());
             });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn late_paired_item_display_sends_its_stack_on_pairing() {
+        use super::super::commands::OtherEntity;
+        use super::super::lan::LanSettings;
+        use mod_api::ItemDisplayContext;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicI32, AtomicUsize},
+        };
+        use sunrise_client::items::ItemStack;
+        use sunrise_client::lan::{
+            Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::HubConfig,
+        };
+        use sunrise_client::text_display::resident::{DisplayContents, DisplayState};
+        use sunrise_core::geometry::Vec3;
+        use sunrise_protocol::entity_data::{Value, serializer};
+        use sunrise_protocol::packets::{configuration::ClientInformation, play::Clientbound};
+
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let settings = LanSettings {
+                port: 0,
+                guest_commands: false,
+                force_game_mode: false,
+            };
+            let net = NetConfig {
+                listen: false,
+                announce: false,
+                lod_distance: 0,
+                ..NetConfig::lan(0, String::new(), 2)
+            };
+            let config = HubConfig {
+                default_game_mode: 0,
+                guest_commands: false,
+                force_game_mode: false,
+                hardcore: false,
+                view_distance: 2,
+                simulation_distance: 2,
+                dimension: game.dim.id().to_owned(),
+                allow_flight: true,
+                seed: 0,
+                max_players: 2,
+                integrated: true,
+                levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
+            };
+            game.lan_host(settings, net, config).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut guest = Guest::new(
+                Joined {
+                    conn: 12,
+                    uuid: 12,
+                    name: "guest12".into(),
+                    properties: Vec::new(),
+                    info: ClientInformation::new(8),
+                    brand: String::new(),
+                    sender: PlayerSender::new(tx, Arc::new(AtomicUsize::new(0))),
+                    latency: Arc::new(AtomicI32::new(0)),
+                    address: "127.0.0.1:1".parse().unwrap(),
+                    expected: false,
+                },
+                12,
+                [3.0, 64.0, 5.0],
+                10,
+            );
+            guest.placed = true;
+            guest.dimension = game.dim.id().to_owned();
+            guest.sent_chunks.insert((0, 0));
+            let diamond_id = game
+                .lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .sync
+                .builtin
+                .get("minecraft:item")
+                .unwrap()
+                .id("minecraft:diamond")
+                .unwrap();
+            {
+                let host = game.lan.as_mut().unwrap();
+                host.hub.guests.push(guest);
+                host.states_next_entity = Some(game.next_entity);
+            }
+            let display_id = game.next_entity + 1;
+            game.next_entity = display_id;
+            game.others.push(OtherEntity {
+                attachment_lifetime: Default::default(),
+                knot_check: None,
+                eye: None,
+                join: Default::default(),
+                display: Some(Arc::new(DisplayState::new(DisplayContents::Item {
+                    stack: Some(Arc::new(ItemStack::new("minecraft:diamond", 3))),
+                    context: ItemDisplayContext::Head,
+                }))),
+                interaction: None,
+                id: display_id,
+                kind: "minecraft:item_display".into(),
+                position: Vec3::new(3.0, 64.0, 5.0),
+                yaw: 0.0,
+                pitch: 0.0,
+            });
+            game.lan_note_joined();
+
+            let mut values = Vec::new();
+            for out in rx.try_iter() {
+                let bodies = match out {
+                    Out::Packet(body) => vec![body],
+                    Out::Packets(bodies) => bodies,
+                    Out::Disconnect(_) => Vec::new(),
+                };
+                for body in bodies {
+                    let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                    let id = reader.varint().unwrap();
+                    if let Clientbound::SetEntityData(data) =
+                        Clientbound::decode(id, reader.rest()).unwrap()
+                        && data.id == display_id as i32
+                    {
+                        values.extend(data.values);
+                    }
+                }
+            }
+            assert!(values.iter().any(|entry| matches!(
+                entry,
+                (23, kind, Value::Item(Some(stack)))
+                    if *kind == serializer::ITEM_STACK
+                        && stack.id == diamond_id
+                        && stack.count == 3
+            )));
+            assert!(values.contains(&(
+                24,
+                serializer::BYTE,
+                Value::Byte(ItemDisplayContext::Head as i8),
+            )));
         });
     }
 }

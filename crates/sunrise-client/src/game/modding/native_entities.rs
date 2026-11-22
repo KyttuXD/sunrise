@@ -678,8 +678,9 @@ mod tests {
                             .to_vec(),
                     ),
                 )]);
-                let opaque =
-                    Game::other_from_nbt(&record, game.next_entity, "missing:object").unwrap();
+                let opaque = game
+                    .other_from_nbt(&record, game.next_entity, "missing:object")
+                    .unwrap();
                 game.others.push(opaque);
                 game.native_joins_flush(true, 0);
                 assert_eq!(
