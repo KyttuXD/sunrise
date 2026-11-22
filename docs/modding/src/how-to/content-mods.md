@@ -800,16 +800,25 @@ under their names.
 
 A file only makes new tabs. To edit a registered tab's contents, listen to
 `build_creative_mode_tab_contents` (NeoForge's `BuildCreativeModeTabContentsEvent`). It fires for every tab on the
-logical side building its catalog. Match the tab id (for example,
-`minecraft:ingredients`) and use the event's `edit` handle with that side's
-Host. To append a count-one stack to both lists, pass
-`CreativeTabPlacement::Last` and `CreativeTabVisibility::Both` to `edit.insert`.
-You can also insert first, before or after a matching stack, read the current
-entries, remove a stack, or remove matching entries with a mod-side predicate.
+logical side building its catalog. Match `event.tab` (for example, `minecraft:ingredients`)
+and edit `event.output` directly; its methods do not take a Host. To append a count-one
+`stack` to both lists, call
+`event.output.insert(CreativeTabPlacement::Last, stack, CreativeTabVisibility::Both)`.
+You can also insert first, before or after a matching stack, or remove a matching stack.
 Matching ignores counts and uses exact item and components. Edits to both lists
 change parent first; a search error does not undo the parent edit. Feature
-filtering happens after listeners finish. An editor retained outside its active
-callback returns `CreativeTabEditError::Stale`, including during setup and reload.
+filtering happens after listeners finish.
+
+Read the current entries in order with
+`event.output.entries(CreativeTabList::Parent, &mut |entry| { /* read entry */ })`.
+Use `entry.item()`, `entry.count()` or `entry.damage()` without copying the stack;
+call `entry.project()` to copy the full stack when you need its components or want to
+keep it. `event.output.remove_if(visibility, &mut |entry| predicate)` visits each
+entry of the selected lists once and keeps survivors in their original order.
+Neither the editor nor a borrowed entry can outlive its callback. Refused edits
+return a typed error and are logged. A panic disables just that mod's creative-build
+callback for the session. Completed edits remain visible to later listeners, and
+the action that requested the catalog can continue.
 
 From either side of an open world, call
 `host.creative_tabs(CreativeTabPermissions::Normal)` to read the catalog for

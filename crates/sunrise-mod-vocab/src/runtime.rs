@@ -249,8 +249,9 @@ pub(crate) fn install(mods: Mods) -> &'static Installed {
     }
 }
 
-/// Checkpoint for an owning action around isolated dispatch. A trapped listener
+/// Checkpoint for an owning action around isolated dispatch. A trapped action listener
 /// resets its outputs, but the owner must also abort any tentative Host writes.
+/// A contained creative build failure does not affect the owning action.
 /// Unrelated threads do not affect the checkpoint.
 // hidden: the game's own decide/fire/apply actions read it; it is not a mod-facing call.
 #[doc(hidden)]
@@ -287,8 +288,15 @@ impl Callback {
 /// untouched, unlike a whole-mod disable. Returns `true` only on the first panic for
 /// `(hook, id)`, so the error log line and error toast fire once.
 fn poison(callback: Callback, id: &'static str) -> bool {
-    let (entered, trapped) = LISTENER_SERIAL.get();
-    LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    // A creative rebuild is a nested publication: its completed edits stand and a
+    // quarantined editor must not abort an action that requested the catalog.
+    if !matches!(
+        callback,
+        Callback::Hook(generated::HookId::BuildCreativeModeTabContents)
+    ) {
+        let (entered, trapped) = LISTENER_SERIAL.get();
+        LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+    }
     let Some(installed) = installed() else {
         return true;
     };
@@ -1031,7 +1039,7 @@ impl ListenerScope {
 }
 
 thread_local! {
-    /// Listener entries (including nested hooks) and poisoned traps on this thread.
+    /// Listener entries (including nested hooks) and abort-signaling isolated traps on this thread.
     static LISTENER_SERIAL: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
@@ -1125,6 +1133,57 @@ mod toggle_tests {
                 assert!(any_mod_disabled());
                 assert!(set_mod_enabled("b", true));
                 assert!(!any_mod_disabled());
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod isolated_failure_tests {
+    use super::*;
+
+    #[test]
+    fn contained_listener_panic_disables_and_reports_without_advancing_action_checkpoint() {
+        struct Quiet;
+        #[mod_api::__subscriptions]
+        impl crate::Hooks for Quiet {}
+
+        crate::testing::with_dispatch(
+            vec![ModEntry::new("broken", Box::new(Quiet))].into(),
+            || {
+                let before = isolated_failures();
+                assert_eq!(
+                    invoke::<()>(
+                        generated::HookId::BuildCreativeModeTabContents,
+                        "build_creative_mode_tab_contents",
+                        "broken",
+                        || panic!("creative editor boom"),
+                    ),
+                    None
+                );
+
+                assert_eq!(isolated_failures(), before);
+                assert!(poisoned(
+                    generated::HookId::BuildCreativeModeTabContents,
+                    "broken"
+                ));
+                assert!(!poisoned(generated::HookId::FarmlandTrample, "broken"));
+                let notices = take_hook_panics();
+                assert_eq!(notices.len(), 1);
+                assert_eq!(notices[0].mod_id, "broken");
+                assert_eq!(notices[0].hook, "build_creative_mode_tab_contents");
+
+                assert_eq!(
+                    invoke::<()>(
+                        generated::HookId::FarmlandTrample,
+                        "farmland_trample",
+                        "broken",
+                        || panic!("farmland listener boom"),
+                    ),
+                    None
+                );
+                assert_eq!(isolated_failures(), before.wrapping_add(1));
+                assert!(poisoned(generated::HookId::FarmlandTrample, "broken"));
             },
         );
     }

@@ -203,20 +203,6 @@ pub trait ItemsBackend {
     /// Side: both. Normalize a creative membership key against the game's item prototypes.
     fn creative_stack_key(&self, stack: &ItemStack) -> Option<ItemStack>;
 
-    // The editor checks the active callback on both sides; setup and reload can only return Stale.
-    /// Side: both. Read the current entries through the active creative tab editor.
-    fn creative_tab_entries(
-        &self,
-        edit: CreativeTabEdit,
-        list: CreativeTabList,
-    ) -> Result<Vec<ItemStack>, CreativeTabEditError>;
-    /// Side: both. Apply a change to the active creative tab editor.
-    fn creative_tab_change(
-        &self,
-        edit: CreativeTabEdit,
-        change: CreativeTabChange,
-    ) -> Result<(), CreativeTabEditError>;
-
     /// Side: both. Effective damageability after defaults and the stack patch.
     fn item_resource_damageable(&self, stack: &ItemStack) -> bool;
     /// Side: both. Effective glint, including overrides and item-specific foil.

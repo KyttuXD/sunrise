@@ -153,11 +153,6 @@ pub fn entity_part_hooked(hook: HookId, name: &'static str, kind: &str) -> bool 
         .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
 }
 
-/// Identity for one scoped creative tab event, constructed by the game.
-pub fn creative_tab_edit(id: u64) -> crate::CreativeTabEdit {
-    crate::CreativeTabEdit::of(id)
-}
-
 /// A read backend wrapper for a host the game builds narrowed: the mob tick's
 /// goal view hands itself out as its own backend.
 pub fn backend_ref(inner: &dyn Backend) -> crate::BackendRef<'_> {
