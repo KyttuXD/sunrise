@@ -1209,6 +1209,40 @@ fn sign_packets_match_vanilla_stream_codecs() {
 }
 
 #[test]
+fn checked_sign_encoders_enforce_java_string_length() {
+    let mut sign = SignUpdate {
+        pos: [0; 3],
+        lines: [
+            String::new(),
+            String::new(),
+            "🦀".repeat(192),
+            String::new(),
+        ],
+        front: true,
+    };
+    let at_limit = Serverbound::SignUpdate(sign.clone());
+    let full = at_limit.try_encode().unwrap();
+    let mut reader = Reader::new(&full);
+    let id = reader.varint().unwrap();
+    assert_eq!(
+        reader.rest(),
+        at_limit.try_encode_payload().unwrap().as_slice()
+    );
+    assert_eq!(Serverbound::decode(id, reader.rest()).unwrap(), at_limit);
+
+    sign.lines[2].push('a');
+    let over_limit = Serverbound::SignUpdate(sign);
+    let codecs = crate::packets::custom_payload::PayloadCodecs::default();
+    for result in [
+        over_limit.try_encode(),
+        over_limit.try_encode_with_payload_codecs(&codecs),
+        over_limit.try_encode_payload(),
+    ] {
+        assert_eq!(result.unwrap_err().sign_line_too_long_index(), Some(2));
+    }
+}
+
+#[test]
 fn book_packets_match_vanilla_stream_codecs() {
     // ClientboundOpenBookPacket: InteractionHand as a VarInt.
     let open = Clientbound::OpenBook(OpenBook { hand: 1 });

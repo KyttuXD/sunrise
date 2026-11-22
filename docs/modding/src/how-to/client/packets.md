@@ -10,8 +10,8 @@ prediction or inventory effects, and the server still checks reach, permissions 
 Build common serverbound play packets through `ClientHost::build_play_packet(&PlayPacketRequest)`
 (`NetworkClientHost::build_play_packet`), which routes through the client's vanilla protocol
 encoder and returns `Result<ServerboundPlayPacket, PacketBuildError>`. It is available in client
-host contexts including setup (`Metadata` access), reads no connection state, and applies no
-gameplay or local effects:
+host contexts in setup, reload (including the first reload before the game exists), and world.
+Building reads no connection state and applies no gameplay or local effects:
 
 ```rust,ignore
 use mod_api::PlayPacketRequest;
@@ -52,23 +52,24 @@ numbers and the corresponding client state remain the caller's responsibility.
 - **Unknown ordinals** (`UnknownAction`): `hand` outside `0..=1` (`UseItem`, `UseItemOn`,
   `Interact`), `face` or `direction` outside `0..=5` (`UseItemOn`, `PlayerAction`), and
   `action` outside `0..=8` (`PlayerAction`).
-- **Packed block positions** (`OutOfRange`, field `"position"`): `pos` outside vanilla's
-  `BlockPos.asLong` representation (signed 26-bit X/Z in `-33_554_432..=33_554_431`, signed
-  12-bit Y in `-2048..=2047`) for `UseItemOn`, `PlayerAction`, `PickItemFromBlock` and
-  `SignUpdate`.
+- **Packed block positions**: `UseItemOn`, `PlayerAction`, `PickItemFromBlock`, and
+  `SignUpdate` use `BlockPos.asLong`. The encoder writes the low 26 bits of X/Z and the
+  low 12 bits of Y, which the decoder reads as signed values. Higher bits are discarded,
+  not refused.
 - **Non-finite floats** (`NonFinite`): non-finite `cursor` coordinates in `UseItemOn`,
   non-finite `yaw` or `pitch` in `MovePlayerPosRot` and `MovePlayerRot`, and `NaN` in
   `MovePlayerPos` or `MovePlayerPosRot` `pos` (matching vanilla's
   `ServerGamePacketListenerImpl.containsInvalidValues`; infinite movement positions are written
-  unchanged and clamped by the server, and `UseItem` writes `yaw` and `pitch` as vanilla's
-  codec does).
+  unchanged and clamped by the server). `UseItem` writes `yaw` and `pitch` unchanged;
+  the server wraps both angles, leaves each non-finite axis unchanged, and clamps finite
+  pitch as in `Entity.absSnapRotationTo`.
 - **Sign lines** (`SignLineTooLong`, field `"lines[i]"`): any line exceeding 384 Java UTF-16
   code units in `SignUpdate` (`ServerboundSignUpdatePacket.MAX_STRING_LENGTH`).
 - **Entity interaction hit offsets**: `Interact.location` uses vanilla's lossy
   `Vec3.LP_STREAM_CODEC` (`LpVec3`), which maps `NaN` to `0.0` and clamps large finite or
   infinite values to `±1.717_986_918_3e10` rather than refusing them.
-- **Unavailable host** (`Unavailable`): calling `build_play_packet` outside a client host
-  context returns `PacketBuildError::Unavailable { packet: "play_packet", field: "host" }`.
+- **Unavailable phase** (`Unavailable`): if the engine client host refuses the call in
+  its current phase, it returns `PacketBuildError::Unavailable { packet: "play_packet", field: "host" }`.
 
 ### Framing limits at publication preparation
 
@@ -87,8 +88,8 @@ Exceeding either stage fails `send_packet` with `SendPacketError::FrameTooLarge 
 ## Container clicks
 
 `ClientHost::container_click(&ContainerClickRequest)` builds a container click from plain
-carried/changed-slot `ItemStack`s. It stays unchanged as a registry-backed host call because
-the packet carries hashed stacks: the host uses the connection's item/component registry and
+carried/changed-slot `ItemStack`s. It remains a registry-backed host call because the packet
+carries hashed stacks: the host uses the connection's item/component registry and
 the game's existing component codecs and hashes. Submit the returned packet with `send_packet`;
 construction applies no local menu effects. The request contains container/state IDs, slot,
 button, click type, changed slots and carried stack. Click types are 0 pickup, 1 quick move,
@@ -97,11 +98,12 @@ button, click type, changed slots and carried stack. Click types are 0 pickup, 1
 Container limits are signed 32-bit container/state IDs, signed 16-bit slots, a signed-byte
 button, at most 128 distinct changed slots, and the hashed component codec's count bounds.
 The host refuses components it cannot encode or hash rather than silently omitting them.
-No menu, reach, state or editor checks are replicated. In the World phase without a live client
-connection, construction returns
-`PacketBuildError::Unavailable { packet: "container_click", field: "connection" }`; outside the
-World phase or with no client host backend, it returns
-`PacketBuildError::Unavailable { packet: "play_packet", field: "host" }`.
+No menu, reach, state or editor checks are replicated. On the game host in World, a request that
+passes wire preflight but has no joined connection returns `PacketBuildError::Unavailable`
+with `packet == "container_click"` and `field == "connection"`. Outside World the game host
+returns `PacketBuildError::Unavailable` with `packet == "play_packet"` and `field == "host"`
+instead of unwinding. Engine client hosts without access to a connection, such as first-load
+listener registration and entity section callbacks, return that same typed host refusal.
 `ServerboundPlayPacket::validate_container_click_limits` remains available for preflighting the
 ID, slot and changed-slot-count wire limits.
 

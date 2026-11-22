@@ -200,7 +200,10 @@ struct LiveSectionHost(Option<SectionWriter>);
 
 mod_api::impl_host_areas!(LiveSectionHost);
 mod_api::impl_server_host_areas!(LiveSectionHost);
-mod_api::impl_client_host_areas!(LiveSectionHost, except(client_render, menus));
+mod_api::impl_client_host_areas!(LiveSectionHost, except(client_render, menus, network));
+impl mod_api::prelude::NetworkClientHost for LiveSectionHost {
+    super::native_packet_builders::impl_packet_builders_without_connection!();
+}
 mod_api::impl_backend_areas!(
     LiveSectionHost,
     partial(entity_position, entity_on_ground, entity_velocity)

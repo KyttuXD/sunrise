@@ -640,6 +640,11 @@ macro_rules! packet {
             fn write(v: &$name, w: &mut ::sunrise_core::vanilla_bytes::Writer) {
                 $(<$codec as $crate::buf::Codec<$ty>>::write(&v.$field, w);)*
             }
+            #[allow(unused_variables)]
+            fn validate(v: &$name) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate(&v.$field)?;)*
+                Ok(())
+            }
         }
     };
 }

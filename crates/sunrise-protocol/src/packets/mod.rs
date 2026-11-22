@@ -73,12 +73,15 @@ macro_rules! packet_enum {
                 }
                 Ok(packet)
             }
+            fn validate(&self) -> $crate::Result<()> {
+                match self {
+                    $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::validate(p),)*
+                    Self::Unknown(_, _) => Ok(()),
+                }
+            }
             /// Validate directional constraints before allocating an encoded body.
             pub fn try_encode(&self) -> $crate::Result<Vec<u8>> {
-                match self {
-                    $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::validate(p)?,)*
-                    Self::Unknown(_, _) => {}
-                }
+                self.validate()?;
                 Ok(self.encode())
             }
             /// Validate registered custom payloads in this connection's codec context.

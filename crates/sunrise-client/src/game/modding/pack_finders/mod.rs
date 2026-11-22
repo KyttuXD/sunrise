@@ -124,7 +124,10 @@ impl mod_api::prelude::TextHost for DiscoveryHost {
     }
 }
 impl ClientHost for DiscoveryHost {}
-mod_api::impl_client_host_areas!(DiscoveryHost, except(audio, client_render));
+mod_api::impl_client_host_areas!(DiscoveryHost, except(audio, client_render, network));
+impl mod_api::prelude::NetworkClientHost for DiscoveryHost {
+    super::native_packet_builders::impl_packet_builders_without_connection!();
+}
 impl mod_api::prelude::ClientRenderClientHost for DiscoveryHost {
     fn biome_tint(
         &self,

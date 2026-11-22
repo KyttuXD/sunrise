@@ -62,6 +62,7 @@ pub struct Error(pub String, Option<SizeRefusal>);
 enum SizeRefusal {
     Payload(packets::custom_payload::PayloadTooLarge),
     Frame(frame::FrameTooLarge),
+    SignLine { index: usize },
 }
 impl Error {
     const TIMED_OUT: &str = "Timed out";
@@ -99,6 +100,19 @@ impl Error {
     pub fn frame_limit(&self) -> Option<&frame::FrameTooLarge> {
         match &self.1 {
             Some(SizeRefusal::Frame(detail)) => Some(detail),
+            _ => None,
+        }
+    }
+    pub(crate) fn sign_line_too_long(index: usize, limit: usize) -> Self {
+        Self(
+            format!("Sign line {index} exceeds {limit} UTF-16 code units"),
+            Some(SizeRefusal::SignLine { index }),
+        )
+    }
+    /// Zero-based index of a sign line refused by the checked packet encoder.
+    pub fn sign_line_too_long_index(&self) -> Option<usize> {
+        match &self.1 {
+            Some(SizeRefusal::SignLine { index }) => Some(*index),
             _ => None,
         }
     }

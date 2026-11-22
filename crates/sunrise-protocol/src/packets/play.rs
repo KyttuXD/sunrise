@@ -1272,7 +1272,7 @@ pub struct SignLines;
 impl SignLines {
     /// `ServerboundSignUpdatePacket.MAX_STRING_LENGTH`: maximum UTF-16 code units per line
     /// across the four fixed sign lines.
-    pub const MAX_UTF16: usize = 384;
+    const MAX_UTF16: usize = 384;
 }
 impl Codec<[String; 4]> for SignLines {
     fn read(r: &mut Reader) -> Result<[String; 4]> {
@@ -1287,6 +1287,16 @@ impl Codec<[String; 4]> for SignLines {
         for line in v {
             w.string(line);
         }
+    }
+    fn validate(v: &[String; 4]) -> Result<()> {
+        for (index, line) in v.iter().enumerate() {
+            // Utf8String.write also bounds UTF-8 bytes by 3 per code unit;
+            // for a valid UTF-8 Rust string that follows from this check.
+            if line.encode_utf16().nth(Self::MAX_UTF16).is_some() {
+                return Err(Error::sign_line_too_long(index, Self::MAX_UTF16));
+            }
+        }
+        Ok(())
     }
 }
 packet!(
@@ -1438,11 +1448,12 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 });
 
 impl Serverbound {
-    /// The post-ID payload bytes, for already validated typed callers.
-    pub fn encode_payload(&self) -> Vec<u8> {
+    /// The post-ID payload bytes, with the same validation as `try_encode`.
+    pub fn try_encode_payload(&self) -> Result<Vec<u8>> {
+        self.validate()?;
         let mut w = Writer::new();
         self.write_payload(&mut w);
-        w.data
+        Ok(w.data)
     }
 }
 

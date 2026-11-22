@@ -35,6 +35,30 @@ impl Game<'_> {
     }
 }
 
+// These hosts can encode stateless requests even when Game or its world is not available.
+macro_rules! impl_packet_builders_without_connection {
+    () => {
+        fn build_play_packet(
+            &self,
+            request: &mod_api::PlayPacketRequest,
+        ) -> Result<mod_api::ServerboundPlayPacket, mod_api::PacketBuildError> {
+            use mod_api::__private::{LoadAccess, access_allowed};
+            if !access_allowed("build_play_packet", LoadAccess::Metadata) {
+                return Err(mod_api::AccessRefusal::unavailable());
+            }
+            sunrise_client::mod_packet_builders::encode_play_packet(request)
+        }
+
+        fn container_click(
+            &self,
+            _: &mod_api::ContainerClickRequest,
+        ) -> Result<mod_api::ServerboundPlayPacket, mod_api::PacketBuildError> {
+            Err(mod_api::NoBackend::no_backend())
+        }
+    };
+}
+pub(super) use impl_packet_builders_without_connection;
+
 #[cfg(test)]
 #[path = "native_packet_builders/tests.rs"]
 mod tests;

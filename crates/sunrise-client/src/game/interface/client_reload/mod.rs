@@ -29,7 +29,10 @@ pub(super) struct StartupClientHost;
 impl Host for StartupClientHost {}
 mod_api::impl_host_areas!(StartupClientHost);
 impl ClientHost for StartupClientHost {}
-mod_api::impl_client_host_areas!(StartupClientHost, except(audio, client_render));
+mod_api::impl_client_host_areas!(StartupClientHost, except(audio, client_render, network));
+impl mod_api::prelude::NetworkClientHost for StartupClientHost {
+    super::native_packet_builders::impl_packet_builders_without_connection!();
+}
 impl mod_api::prelude::ClientRenderClientHost for StartupClientHost {
     fn biome_tint(
         &self,

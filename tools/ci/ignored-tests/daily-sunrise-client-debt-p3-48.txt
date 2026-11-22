@@ -1,0 +1,2 @@
+sunrise-client game::lan_actions::interaction::tests::use_item_packet_applies_only_finite_rotation_axes lib daily child-process
+sunrise-client game::native_packet_builders::tests::play_packet_building_works_in_startup_reload_and_world lib daily child-process

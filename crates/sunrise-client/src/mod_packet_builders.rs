@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use sunrise_protocol::{
     ids,
     item::{Hashed, Stack},
-    packets::play::{self, ContainerClick, Serverbound, SignLines, pack_move_player_flags},
+    packets::play::{self, ContainerClick, Serverbound, pack_move_player_flags},
     registry::{Builtin, Dynamic, SyncedNames},
 };
 
@@ -15,7 +15,17 @@ fn encode_serverbound(packet: Serverbound) -> Result<ServerboundPlayPacket, Pack
         .ok_or_else(|| out_of_range(packet.name(), "id"))?;
     let id =
         mod_api::Identifier::from_parts("minecraft", name).map_err(|_| out_of_range(name, "id"))?;
-    Ok(ServerboundPlayPacket::new(id, packet.encode_payload()))
+    let body = packet.try_encode_payload().map_err(|error| {
+        if let Some(index) = error.sign_line_too_long_index() {
+            PacketBuildError::SignLineTooLong {
+                packet: name.into(),
+                field: format!("lines[{index}]"),
+            }
+        } else {
+            out_of_range(name, "body")
+        }
+    })?;
+    Ok(ServerboundPlayPacket::new(id, body))
 }
 
 fn out_of_range(packet: &str, field: impl Into<String>) -> PacketBuildError {
@@ -41,17 +51,6 @@ fn check_ordinal(packet: &str, field: &str, value: i32, max: i32) -> Result<(), 
             field: field.into(),
         })
     }
-}
-
-/// Vanilla `BlockPos.asLong`: signed 26-bit X/Z and signed 12-bit Y.
-fn check_block_pos(packet: &str, [x, y, z]: [i32; 3]) -> Result<(), PacketBuildError> {
-    if !(-33_554_432..=33_554_431).contains(&x)
-        || !(-33_554_432..=33_554_431).contains(&z)
-        || !(-2048..=2047).contains(&y)
-    {
-        return Err(out_of_range(packet, "position"));
-    }
-    Ok(())
 }
 
 /// Vanilla `ServerGamePacketListenerImpl.containsInvalidValues`: rejects NaN coordinates;
@@ -100,7 +99,6 @@ pub fn encode_play_packet(
         } => {
             let p = "use_item_on";
             check_ordinal(p, "hand", *hand, 1)?;
-            check_block_pos(p, *pos)?;
             check_ordinal(p, "face", *face, 5)?;
             if !cursor.iter().all(|v| v.is_finite()) {
                 return Err(non_finite(p, "cursor"));
@@ -123,7 +121,6 @@ pub fn encode_play_packet(
         } => {
             let p = "player_action";
             check_ordinal(p, "action", *action, 8)?;
-            check_block_pos(p, *pos)?;
             check_ordinal(p, "direction", *direction, 5)?;
             Serverbound::PlayerAction(play::PlayerAction {
                 action: *action,
@@ -148,7 +145,6 @@ pub fn encode_play_packet(
         }
         PlayPacketRequest::Attack { entity } => Serverbound::Attack(play::Attack { id: *entity }),
         PlayPacketRequest::PickItemFromBlock { pos, include_data } => {
-            check_block_pos("pick_item_from_block", *pos)?;
             Serverbound::PickItemFromBlock(play::PickItemFromBlock {
                 pos: *pos,
                 include_data: *include_data,
@@ -162,17 +158,6 @@ pub fn encode_play_packet(
             include_data: *include_data,
         }),
         PlayPacketRequest::SignUpdate { pos, front, lines } => {
-            let p = "sign_update";
-            check_block_pos(p, *pos)?;
-            for (i, line) in lines.iter().enumerate() {
-                if line.encode_utf16().take(SignLines::MAX_UTF16 + 1).count() > SignLines::MAX_UTF16
-                {
-                    return Err(PacketBuildError::SignLineTooLong {
-                        packet: p.into(),
-                        field: format!("lines[{i}]"),
-                    });
-                }
-            }
             Serverbound::SignUpdate(play::SignUpdate {
                 pos: *pos,
                 lines: lines.clone(),

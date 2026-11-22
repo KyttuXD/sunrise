@@ -391,9 +391,21 @@ impl Game<'_> {
             return Err(ActionRefused::Stale);
         };
         if let Some((yaw, pitch)) = rotation {
-            host.hub
-                .guests
-                .update(gi, |g| (g.yaw, g.pitch) = (yaw, pitch));
+            use crate::game::remote::wrap_degrees;
+            let (yaw, pitch) = (wrap_degrees(yaw), wrap_degrees(pitch));
+            host.hub.guests.update(gi, |g| {
+                if yaw == g.yaw && pitch == g.pitch {
+                    return;
+                }
+                // Entity.absSnapRotationTo: each setter leaves its axis alone on
+                // non-finite input; only finite pitch is clamped.
+                if yaw.is_finite() {
+                    g.yaw = yaw;
+                }
+                if pitch.is_finite() {
+                    g.pitch = pitch.clamp(-90.0, 90.0);
+                }
+            });
         }
         let g = &host.hub.guests[gi];
         // SpawnEggItem.use calls ServerLevel.mayInteract at its own
@@ -706,5 +718,67 @@ impl Game<'_> {
             host.hub.guests.update(gi, |guest| guest.pitch = value);
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::{
+        game_tests::tests::server_game, lan::world_spawn_sync_tests::host_for,
+        native_entity_refs::tests::run_fresh_cases,
+    };
+
+    #[test]
+    #[ignore = "daily"]
+    fn use_item_packet_applies_only_finite_rotation_axes() {
+        if run_fresh_cases(
+            "game::lan_actions::interaction::tests::use_item_packet_applies_only_finite_rotation_axes",
+            "SUNRISE_USE_ITEM_ROTATION_CHILD",
+            &["use-item"],
+        ) {
+            return;
+        }
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.build_registries();
+        let _rx = host_for(&mut game);
+        let dimension = game.dim.id();
+        game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+            guest.dimension = dimension.into();
+            guest.loaded = true;
+            guest.selected = 0;
+            guest.inventory[0] = Some(ItemStack::new("minecraft:snowball", 2));
+            (guest.yaw, guest.pitch) = (23.0, -12.0);
+        });
+
+        // Wrap 460 to 100, then clamp pitch to 90; wrap 405 to 45 for yaw.
+        for (sequence, yaw, pitch, after, remaining) in [
+            (1, f32::NAN, 460.0, (23.0, 90.0), 1),
+            (2, 405.0, f32::INFINITY, (45.0, 90.0), 0),
+        ] {
+            let packet = sunrise_client::mod_packet_builders::encode_play_packet(
+                &mod_api::PlayPacketRequest::UseItem {
+                    hand: 0,
+                    sequence,
+                    yaw,
+                    pitch,
+                },
+            )
+            .unwrap();
+            let decoded = S::decode(
+                sunrise_protocol::ids::play::serverbound::USE_ITEM,
+                &packet.body,
+            )
+            .unwrap();
+            game.lan_guest_packet(1, decoded);
+
+            let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!((guest.yaw, guest.pitch), after);
+            assert_eq!(
+                guest.inventory[0].as_ref().map_or(0, |stack| stack.count),
+                remaining
+            );
+        }
     }
 }

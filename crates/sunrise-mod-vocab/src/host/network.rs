@@ -32,9 +32,10 @@ pub trait NetworkClientHost {
     fn send_chat(&mut self, message: &str) -> Result<(), String>;
     /// Side: client.
     /// Encodes a typed serverbound play packet with the client's vanilla protocol encoder.
-    /// Available in client host contexts including setup, without reading a connection or
-    /// changing local state. Validates vanilla wire field bounds and applies no gameplay or
-    /// local effects; submit the result with `send_packet`.
+    /// Available in client host contexts in setup, reload and world, without reading a
+    /// connection or changing local state. A phase refusal returns `Unavailable` with
+    /// `packet: "play_packet"`, `field: "host"`. Applies no gameplay or local effects;
+    /// submit the result with `send_packet`.
     #[access(Metadata)]
     #[static_call]
     fn build_play_packet(
@@ -45,6 +46,10 @@ pub trait NetworkClientHost {
     /// Builds a vanilla container click; it needs the host because the packet carries hashed stacks.
     /// Uses this connection's registries and component codecs, refusing components that
     /// cannot be encoded or hashed, unrepresentable IDs/slots and more than 128 changed slots.
+    /// Outside world play, or on an engine client host that cannot access a connection,
+    /// returns `Unavailable` with `packet: "play_packet"`, `field: "host"`. On the game
+    /// host in World, a request that passes wire preflight but has no joined connection
+    /// returns `Unavailable` with `packet: "container_click"`, `field: "connection"`.
     /// Applies no menu checks or local effects; submit the result with `send_packet`.
     #[access(WorldOnly)]
     fn container_click(

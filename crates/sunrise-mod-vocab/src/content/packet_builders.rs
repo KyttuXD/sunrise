@@ -61,12 +61,16 @@ pub enum PacketBuildError {
 ///
 /// Pass a value to
 /// [`NetworkClientHost::build_play_packet`](crate::prelude::NetworkClientHost::build_play_packet)
-/// to encode it with the client's vanilla protocol encoder.
+/// to encode it with the client's vanilla protocol encoder. Block positions use
+/// vanilla `BlockPos.asLong`: the low 26 bits of X and Z and the low 12 bits of Y,
+/// interpreted as signed coordinates on decode. Higher bits are not transmitted.
 // no wire: local request for the client's vanilla encoder
 // exhaustive: these are the complete typed play-packet requests; protocol updates deliberately change this shape.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayPacketRequest {
     /// Use the main (0) or off (1) hand, with the caller's sequence and view angles.
+    /// The encoder writes both angles unchanged. The server wraps them in degrees,
+    /// ignores non-finite axes independently, and clamps finite pitch to −90°…90°.
     UseItem {
         /// Vanilla `InteractionHand` ordinal: 0 main, 1 off.
         hand: i32,
@@ -82,7 +86,7 @@ pub enum PlayPacketRequest {
     UseItemOn {
         /// Vanilla `InteractionHand` ordinal: 0 main, 1 off.
         hand: i32,
-        /// Target block coordinates representable in vanilla's packed block position.
+        /// Target block coordinates, packed with vanilla `BlockPos.asLong`.
         pos: [i32; 3],
         /// Vanilla `Direction` ordinal (0 down, 1 up, 2 north, 3 south, 4 west, 5 east).
         face: i32,
@@ -100,7 +104,7 @@ pub enum PlayPacketRequest {
     PlayerAction {
         /// Vanilla `ServerboundPlayerActionPacket.Action` ordinal (0..=8).
         action: i32,
-        /// Target block coordinates representable in vanilla's packed block position.
+        /// Target block coordinates, packed with vanilla `BlockPos.asLong`.
         pos: [i32; 3],
         /// Vanilla `Direction` ordinal (0..=5).
         direction: i32,
@@ -126,7 +130,7 @@ pub enum PlayPacketRequest {
     },
     /// Pick a block, optionally requesting its data.
     PickItemFromBlock {
-        /// Target block coordinates representable in vanilla's packed block position.
+        /// Target block coordinates, packed with vanilla `BlockPos.asLong`.
         pos: [i32; 3],
         /// Whether to request block entity data.
         include_data: bool,
@@ -141,7 +145,7 @@ pub enum PlayPacketRequest {
     /// Update four sign lines. Each line allows at most 384 UTF-16 code units,
     /// as vanilla's Java string codec does. The front/back side follows the lines.
     SignUpdate {
-        /// Target sign block coordinates representable in vanilla's packed block position.
+        /// Target sign block coordinates, packed with vanilla `BlockPos.asLong`.
         pos: [i32; 3],
         /// Whether the edit applies to the front side (`true`) or back side (`false`).
         front: bool,

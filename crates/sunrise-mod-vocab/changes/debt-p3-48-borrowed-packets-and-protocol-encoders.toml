@@ -33,6 +33,7 @@ ids = [
 
     # Host-owned protocol play packet encoder, typed request enum, and PacketBuildError AccessRefusal impl.
     "method:prelude::NetworkClientHost::build_play_packet",
+    "method:prelude::NetworkClientHost::container_click",
     "type:PlayPacketRequest",
     "type:PlayPacketRequest.UseItem",
     "type:PlayPacketRequest.UseItemOn",
@@ -70,12 +71,20 @@ Follows vanilla Minecraft 26.3 and NeoForge 26.3:
   with `Vec3.LP_STREAM_CODEC` (`LpVec3`, which maps `NaN` to `0.0` and clamps large/infinite
   values to `±1.717_986_918_3e10`), `ServerboundAttackPacket`,
   `ServerboundPickItemFromBlockPacket`, `ServerboundPickItemFromEntityPacket`,
-  `ServerboundSignUpdatePacket` (`MAX_STRING_LENGTH = 384` UTF-16 code units),
-  `ServerboundMovePlayerPacket` (`packFlags`), and `BlockPos.asLong`. Field validation matches
-  vanilla's codecs and server handlers (`ServerGamePacketListenerImpl.handleMovePlayer` /
-  `containsInvalidValues`, which refuses `NaN` positions and non-finite movement angles while
-  writing infinite positions unchanged, and `ServerGamePacketListenerImpl.handleUseItemOn`,
-  which checks finite hit cursor coordinates).
+  `ServerboundSignUpdatePacket` (`Utf8String.write` enforces `MAX_STRING_LENGTH = 384`
+  UTF-16 code units on both checked publication and builder encoding),
+  `ServerboundMovePlayerPacket` (`packFlags`), and `BlockPos.STREAM_CODEC` (`asLong` masks off
+  higher coordinate bits rather than refusing them). Field validation follows vanilla's codecs
+  and server handlers (`ServerGamePacketListenerImpl.handleMovePlayer` / `containsInvalidValues`,
+  which refuses `NaN` positions and non-finite movement angles while writing infinite positions
+  unchanged, and `ServerGamePacketListenerImpl.handleUseItemOn`, which checks finite hit cursor
+  coordinates). `ServerGamePacketListenerImpl.handleUseItem` wraps both transmitted angles before
+  use; `Entity.absSnapRotationTo`/`setYRot`/`setXRot` keep the previous rotation on each non-finite
+  axis and clamp finite pitch to ±90°. NeoForge's play listener patch leaves this handling intact.
+- Stateless construction works on the first `AddClientReloadListenersEvent` and the client hosts
+  that cannot borrow the game or its connection. Like NeoForge's client reload event, the callback
+  does not require a world. Connection-dependent container clicks return a typed refusal when the
+  phase or a restricted client host cannot offer connection access.
 - Removes the arbitrary 8 KiB builder body cap; whole-packet framing limits are enforced at
   publication preparation in `send_packet` using vanilla `Varint21LengthFieldPrepender`
   (`MAX_VARINT21_BYTES = 3`, 2,097,151-byte encoded limit) and `CompressionDecoder`
@@ -105,8 +114,8 @@ and migrate borrowed packet views and play-packet builders as follows:
 
 2. Typed play packet builders (`ServerboundPlayPacket::<name>` -> `host.build_play_packet(&PlayPacketRequest::...)`):
    Replace every portable constructor call with a named-field `PlayPacketRequest` passed to
-   `host.build_play_packet(&...)` (available on `&dyn ClientHost` in client host contexts
-   including setup):
+   `host.build_play_packet(&...)` (available on `&dyn ClientHost` in setup, reload, and world,
+   including the first reload before Game exists):
    - `ServerboundPlayPacket::use_item(hand, sequence, yaw, pitch)`
      -> `host.build_play_packet(&PlayPacketRequest::UseItem { hand, sequence, yaw, pitch })`
    - `ServerboundPlayPacket::use_item_on(hand, pos, face, cursor, inside, world_border, sequence)`
@@ -132,21 +141,28 @@ and migrate borrowed packet views and play-packet builders as follows:
    - `ServerboundPlayPacket::move_player_status_only(on_ground, horizontal_collision)`
      -> `host.build_play_packet(&PlayPacketRequest::MovePlayerStatusOnly { on_ground, horizontal_collision })`
 
-   Note the vanilla-aligned validation changes: `UseItem` no longer rejects non-finite yaw/pitch;
-   `Interact.location` uses vanilla `Vec3.LP_STREAM_CODEC` (`NaN -> 0.0`, clamping to
-   `±1.717_986_918_3e10`) instead of returning `NonFinite`; `MovePlayerPos` / `MovePlayerPosRot`
-   refuse `NaN` positions while allowing infinite positions; and framing bounds are enforced at
-   `send_packet` (`SendPacketError::FrameTooLarge`) rather than an 8 KiB builder cap.
+   Note the vanilla-aligned validation changes: `UseItem` writes yaw/pitch as supplied, including
+   non-finite values, which the server ignores independently on each axis while applying finite
+   wrapped angles and clamping pitch. `Interact.location` uses vanilla `Vec3.LP_STREAM_CODEC`
+   (`NaN -> 0.0`, clamping to `±1.717_986_918_3e10`) instead of returning `NonFinite`;
+   `MovePlayerPos` / `MovePlayerPosRot` refuse `NaN` positions while allowing infinite positions.
+   For `UseItemOn`, `PlayerAction`, `PickItemFromBlock`, and `SignUpdate`, do not rely on
+   `OutOfRange` for a block position: the wire uses signed low 26-bit X/Z and low 12-bit Y
+   coordinates (for example, X = 33_554_432 decodes as −33_554_432). Keep handling
+   `SignLineTooLong` with `field: "lines[i]"` for a sign line longer than 384 UTF-16 code units.
+   Handle framing bounds at `send_packet` (`SendPacketError::FrameTooLarge`) instead of an 8 KiB
+   builder cap.
 
 3. `container_click` wrong-phase / no-backend error:
-   - `ClientHost::container_click` and `ServerboundPlayPacket::validate_container_click_limits`
-     are unchanged in signature and live-connection behavior, including returning
-     `PacketBuildError::Unavailable { packet: "container_click", field: "connection" }` when no
-     client connection is joined in the World phase.
-   - Calling `container_click` outside the World phase or without a client host backend now
-     returns `PacketBuildError::Unavailable { packet: "play_packet", field: "host" }` (via
-     `AccessRefusal::unavailable()` / `NoBackend::no_backend()`) instead of
-     `packet: "container_click", field: "host"`. Match `PacketBuildError::Unavailable { .. }`
-     (or check `field == "host"`) instead of asserting `packet == "container_click"` on phase
-     refusals.
+   - Keep calling `host.container_click(&request)`. On the game host, a call outside World used to
+     unwind with a phase refusal. Now handle this match arm on the returned `Result`:
+     `Err(PacketBuildError::Unavailable { packet, field }) if packet == "play_packet" && field == "host"`.
+   - Engine client hosts without access to a connection (first-load reload registration, pack
+     discovery, and a borrowed entity section) explicitly return the same typed error. The
+     `NoBackend::no_backend()` constructor alone does not implement the method for custom host
+     doubles; implement `NetworkClientHost::container_click` in a double that needs to return it.
+   - On the game host in World, keep handling the connection error (`packet == "container_click"`,
+     `field == "connection"`) if a request passes wire preflight but no connection is joined.
+     The signature, live-connection behavior, and
+     `ServerboundPlayPacket::validate_container_click_limits` preflight are unchanged.
 """

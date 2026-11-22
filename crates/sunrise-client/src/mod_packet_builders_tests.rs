@@ -644,22 +644,23 @@ fn invalid_play_packet_fields_are_refused_by_packet_and_field() {
             field: "hand".into(),
         })
     );
-    for pos in [
-        [33_554_432, 64, 0],
-        [-33_554_433, 64, 0],
-        [0, 2048, 0],
-        [0, -2049, 0],
-        [0, 0, 33_554_432],
+}
+
+#[test]
+fn block_positions_use_vanillas_packed_low_bits() {
+    for (pos, packed) in [
+        ([33_554_432, 64, 0], 0x8000_0000_0000_0040_u64),
+        ([-33_554_433, 64, 0], 0x7fff_ffc0_0000_0040),
+        ([0, 2048, 0], 0x800),
+        ([0, -2049, 0], 0x7ff),
+        ([0, 0, 33_554_432], 0x0000_0020_0000_0000),
     ] {
-        assert_eq!(
-            encode_play_packet(&PlayPacketRequest::PickItemFromBlock {
-                pos,
-                include_data: false,
-            }),
-            Err(PacketBuildError::OutOfRange {
-                packet: "pick_item_from_block".into(),
-                field: "position".into(),
-            })
-        );
+        let packet = encode_play_packet(&PlayPacketRequest::PickItemFromBlock {
+            pos,
+            include_data: false,
+        })
+        .unwrap();
+        assert_eq!(packet.body[..8], packed.to_be_bytes(), "{pos:?}");
+        assert_eq!(packet.body[8..], [0]);
     }
 }
