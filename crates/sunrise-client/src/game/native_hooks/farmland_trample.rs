@@ -189,6 +189,21 @@ mod tests {
                 event.state,
                 host.block_state(at).unwrap(),
             ));
+            let dim = event.dimension.to_owned();
+            event.at_landing(move |host| {
+                let level = host.level(&dim).unwrap();
+                let key = host.block_key("minecraft:stone").unwrap();
+                let stone = BlockState::of(&host.block_states(), key, &[]).unwrap();
+                assert_eq!(
+                    level.set_block(
+                        host,
+                        at,
+                        stone,
+                        BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS
+                    ),
+                    Ok(true)
+                );
+            });
         }
     }
 
@@ -524,8 +539,13 @@ mod tests {
                     (m.position.y, m.health)
                 };
                 let floor = if converted { dirt } else { farmland };
+                let final_floor = if choice == Choice::ObserveLanding {
+                    reg.default_state("minecraft:stone").unwrap()
+                } else {
+                    floor
+                };
                 let y_after = if converted { 64.0 } else { LANDING_Y };
-                assert_eq!(game.world.block(x, y, z), floor);
+                assert_eq!(game.world.block(x, y, z), final_floor);
                 if !converted {
                     assert_eq!(game.world.block(x, y + 1, z), wheat);
                 }
@@ -597,9 +617,10 @@ mod tests {
                         api_state(farmland),
                         api_state(dirt),
                     ));
+                    expected.push(Moment::Write(api_state(final_floor)));
                 }
                 if damage != 0.0 {
-                    expected.push(Moment::Fall(damage, y_after, api_state(floor)));
+                    expected.push(Moment::Fall(damage, y_after, api_state(final_floor)));
                 }
                 assert_eq!(*trace.lock().unwrap(), expected);
             });

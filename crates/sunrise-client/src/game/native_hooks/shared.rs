@@ -1546,17 +1546,7 @@ impl Game<'_> {
     pub(super) fn drain_entity_inside(&mut self) {
         for contact in sunrise_client::block_contact::take_pending() {
             match contact {
-                Pending::LandingDeferred(action) => {
-                    if let Some(mod_id) = action.owner() {
-                        let _ = mod_api::__private::game::CallbackOwner::call_landing_callback(
-                            mod_id,
-                            self,
-                            |game| action.run(game),
-                        );
-                    } else {
-                        action.run(self);
-                    }
-                }
+                Pending::LandingDeferred(action) => self.run_landing_action(action),
                 Pending::MinecartPass(pass) => {
                     let Some(level) = self.level(self.dim.id()) else {
                         continue;

@@ -453,8 +453,8 @@ pub fn fall_listens(state: BlockStateId) -> bool {
 }
 
 /// `Block.fallOn`: lend the falling entity to the block Part and return the fall inputs
-/// after its answer. Invalid numeric answers are ignored. Any deferred callbacks queued by
-/// the Part run once the entity batch ends.
+/// after its answer. Invalid numeric answers are ignored. The level owner runs
+/// at-site actions before resuming damage and queues later actions for batch end.
 pub fn fall(
     level: &mut DamageLevel<'_>,
     entity: &mut dyn mod_api::LandingEntityAccess,
@@ -462,6 +462,7 @@ pub fn fall(
     position: BlockPos,
     distance: f64,
     multiplier: f32,
+    actions: &mut Vec<mod_api::__private::game::DeferredLandingAction>,
 ) -> (f64, f32) {
     let (Some(dimension), Some(hooks)) = (tick_level("fall"), HOOKS.get()) else {
         return (distance, multiplier);
@@ -471,7 +472,6 @@ pub fn fall(
     }
     let mut answer_distance = distance;
     let mut answer = multiplier;
-    let mut deferred = Vec::new();
     (hooks.fall_on)(
         dimension,
         level,
@@ -480,9 +480,8 @@ pub fn fall(
         position,
         &mut answer_distance,
         &mut answer,
-        &mut deferred,
+        actions,
     );
-    defer_landing(deferred);
     (
         if answer_distance.is_finite() {
             answer_distance
@@ -572,10 +571,14 @@ pub fn bounce_restitution(level: &mut DamageLevel<'_>, contact: Contact<'_>, own
 
 /// Keep deferred native landing/bounce callbacks until the entity's batch ends;
 /// nothing is kept when none were queued.
-pub fn defer_landing(actions: Vec<mod_api::__private::game::DeferredLandingAction>) {
-    if !actions.is_empty() {
+pub fn defer_landing(
+    actions: impl IntoIterator<Item = mod_api::__private::game::DeferredLandingAction>,
+) {
+    let mut actions = actions.into_iter();
+    if let Some(first) = actions.next() {
         PENDING.with_borrow_mut(|pending| {
-            pending.extend(actions.into_iter().map(Pending::LandingDeferred));
+            pending.push(Pending::LandingDeferred(first));
+            pending.extend(actions.map(Pending::LandingDeferred));
         });
     }
 }

@@ -639,11 +639,11 @@ impl Game<'_> {
                 m.client_moved_fall(&w, &mut level, delta, p.on_ground, &mut events)
             }));
             lent.give_back(&mut self.world);
-            let trample = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            let landing = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
             let (id, join) = (m.id, m.join);
             self.mobs[i] = m;
-            if let Some(trample) = trample {
-                self.trample_farmland(id, false, trample);
+            if let Some(mut landing) = landing {
+                self.apply_landing(id, false, &mut landing);
                 if let Some(i) = self
                     .mobs
                     .iter()
@@ -661,7 +661,7 @@ impl Game<'_> {
                             Some(&self.pack.block_registries),
                             &self.damage_hooks,
                         );
-                        m.finish_trample_fall(&w, &mut level, &mut events, trample);
+                        m.finish_block_fall(&w, &mut level, &mut events, landing);
                     }));
                     lent.give_back(&mut self.world);
                     if let Err(panic) = outcome {

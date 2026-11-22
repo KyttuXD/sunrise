@@ -871,8 +871,9 @@ impl Game<'_> {
                             air_answer = self.ask_mob_breath(air);
                         }
                         Pause::Trample => {
-                            let trample = trample.as_ref().expect("the trample pause was stored");
-                            self.trample_farmland(trample.mob, false, trample.decision());
+                            let trample = trample.as_mut().expect("the landing pause was stored");
+                            let id = trample.mob;
+                            self.apply_landing(id, false, trample.pending_landing());
                         }
                     }
                 }

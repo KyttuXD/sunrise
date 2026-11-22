@@ -400,8 +400,6 @@ pub struct PlayerMotion {
     pub collision: CollisionFlags,
     pub history: MovementHistory,
     pub fall_distance: f64,
-    /// The block fallOn currently running, consumed by its damage call.
-    pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
     pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
@@ -2320,7 +2318,7 @@ impl MotionWorld<'_, '_, '_> {
         grounded: bool,
         state: BlockStateId,
         position: BlockPos,
-    ) -> Result<Option<sunrise_world::block_landing::FarmlandTrample>> {
+    ) -> Result<Option<crate::landing::LandingPause>> {
         self.before_fall_check(dy, grounded, state, position);
         sunrise_world::living_landing::check_living_fall_damage_until(
             self,

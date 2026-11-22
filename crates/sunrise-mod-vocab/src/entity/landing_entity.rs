@@ -116,13 +116,23 @@ pub trait LandingEntityAccess {
 #[doc(hidden)]
 pub struct DeferredLandingAction {
     owner: Option<&'static str>,
+    at_site: bool,
     action: Box<dyn FnOnce(&mut dyn ServerHost)>,
 }
 
 impl DeferredLandingAction {
     /// Construct a deferred landing callback for a synthetic/test caller.
     pub fn new(owner: Option<&'static str>, action: Box<dyn FnOnce(&mut dyn ServerHost)>) -> Self {
-        Self { owner, action }
+        Self {
+            owner,
+            action,
+            at_site: false,
+        }
+    }
+
+    /// Whether the caller must release the level loan and run this before resuming the fall.
+    pub fn at_site(&self) -> bool {
+        self.at_site
     }
 
     /// The owning mod id attributed when the callback was queued, if any.
@@ -153,9 +163,14 @@ impl<'a> LandingDeferred<'a> {
         Self { actions }
     }
 
-    pub(crate) fn push(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
+    pub(crate) fn push(
+        &mut self,
+        at_site: bool,
+        action: impl FnOnce(&mut dyn ServerHost) + 'static,
+    ) {
         self.actions.push(DeferredLandingAction {
             owner: current_native_mod(),
+            at_site,
             action: Box::new(action),
         });
     }
@@ -277,12 +292,12 @@ mod tests {
         {
             let mut deferred = LandingDeferred::new(&mut queue);
             let r1 = Arc::clone(&ran);
-            deferred.push(move |_| {
+            deferred.push(false, move |_| {
                 r1.fetch_add(1, Ordering::Relaxed);
             });
             let mark = deferred.checkpoint();
             let r2 = Arc::clone(&ran);
-            deferred.push(move |_| {
+            deferred.push(true, move |_| {
                 r2.fetch_add(10, Ordering::Relaxed);
             });
             deferred.rollback(mark);

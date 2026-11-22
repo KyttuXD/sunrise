@@ -1126,10 +1126,10 @@ pub struct MobTrample {
 }
 
 impl MobTrample {
-    pub fn decision(&self) -> sunrise_world::block_landing::FarmlandTrample {
-        match &self.phase {
-            TramplePhase::Goal(goal) => goal.movement.decision(),
-            TramplePhase::Travel(travel) => travel.decision(),
+    pub fn pending_landing(&mut self) -> &mut crate::landing::LandingPause {
+        match &mut self.phase {
+            TramplePhase::Goal(goal) => goal.movement.pending_landing(),
+            TramplePhase::Travel(travel) => travel.pending_landing(),
         }
     }
 }

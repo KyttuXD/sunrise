@@ -23,7 +23,7 @@ impl BlockPart for Lands {
         ));
         let dim = event.dimension.to_owned();
         let at = [event.pos.x, event.pos.y, event.pos.z];
-        event.after_landing(move |host| {
+        event.at_landing(move |host| {
             if let Some(level) = host.level(&dim) {
                 let _ = level.destroy_block(host, at, false, None, false);
             }
@@ -191,8 +191,8 @@ fn item_fall_on_returns_progressed_level_loan_after_part_panic() {
 }
 
 /// A dropped item that falls onto a block with a `fall_on` part is told to it once, as
-/// `minecraft:item`, with the whole fall and no damage; the write the part asks for lands
-/// after the items' batch; and an item resting there lands no more.
+/// `minecraft:item`, with the whole fall and no damage. A later item in the same
+/// batch moves through the block that the first item's landing destroyed.
 #[test]
 #[ignore = "daily"]
 fn a_dropped_item_lands_on_a_fall_on_part() {
@@ -218,36 +218,44 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
             let item = game
                 .level_spawn_item(level, 1.5, 65.25, 1.5, stack, 10)
                 .unwrap();
-            let falling = game.dropped.iter_mut().find(|i| i.id == item.id()).unwrap();
-            falling.no_gravity = true;
-            falling.fall_distance = 4.75;
-            falling.velocity = sunrise_core::geometry::Vec3::new(0.0, -0.5, 0.0);
-            // The part's write destroys the stone after the batch; it is put back at once,
-            // so the item rests on it again and must not be heard landing twice.
-            let mut destructions = 0;
-            for _ in 0..80 {
-                game.ticked_entities_through = u32::MAX;
-                sunrise_client::block_contact::in_level(
-                    sunrise_client::parallel::TickThread::mint(),
-                    Some(game.dim.id()),
-                    || {
-                        game.tick_items();
-                    },
-                );
-                if game.world.block(1, 64, 1) == air {
-                    destructions += 1;
-                    let landed = game.dropped.iter().find(|i| i.id == item.id()).unwrap();
-                    assert_eq!(landed.fall_distance, 0.0);
-                    assert_eq!(
-                        landed.velocity.y, 0.0,
-                        "stone cancels the edited downward velocity"
-                    );
-                    game.world.set(1, 64, 1, stone).unwrap();
-                    let heard = heard.0.lock().unwrap();
-                    assert_eq!(heard.len(), 1, "the write landed after the batch");
-                }
+            let following = game
+                .level_spawn_item(
+                    level,
+                    1.5,
+                    65.25,
+                    1.5,
+                    ItemStack::new("minecraft:stick", 1),
+                    10,
+                )
+                .unwrap();
+            for falling in game.dropped.iter_mut() {
+                falling.no_gravity = true;
+                falling.fall_distance = 4.75;
+                falling.velocity = sunrise_core::geometry::Vec3::new(0.0, -0.5, 0.0);
             }
-            assert_eq!(destructions, 1, "one observed landing-write destruction");
+            game.ticked_entities_through = u32::MAX;
+            sunrise_client::block_contact::in_level(
+                sunrise_client::parallel::TickThread::mint(),
+                Some(game.dim.id()),
+                || game.tick_items(),
+            );
+            assert_eq!(game.world.block(1, 64, 1), air);
+            let landed = game.dropped.iter().find(|i| i.id == item.id()).unwrap();
+            assert_eq!(landed.fall_distance, 0.0);
+            assert_eq!(
+                landed.velocity.y, 0.0,
+                "the original collision cancels the edited velocity"
+            );
+            let following = game
+                .dropped
+                .iter()
+                .find(|i| i.id == following.id())
+                .unwrap();
+            assert_eq!(
+                following.position.y, 64.75,
+                "the next move saw the new air block"
+            );
+            assert!(!following.on_ground);
             let heard = heard.0.lock().unwrap().clone();
             assert_eq!(heard.len(), 1, "one landing: {heard:?}");
             let (entity, kind, pos, distance, damage) = &heard[0];

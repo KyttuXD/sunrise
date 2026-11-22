@@ -5,6 +5,7 @@
 use super::{Mob, MobEvent, MobWorld};
 use crate::health::DamageLevel;
 use crate::items::BlockTagFlags;
+use crate::landing::LandingPause;
 use crate::{blocks::Fluid, collisions::SceneCollisions};
 use sunrise_core::{
     geometry::{Aabb, Vec3, trig},
@@ -13,7 +14,7 @@ use sunrise_core::{
 };
 use sunrise_world::native_load_context::{LoopContext, LoopSide};
 use sunrise_world::{
-    block_landing::{FarmlandTrample, LandingEntityKind},
+    block_landing::LandingEntityKind,
     entity_fluid::{CurrentAccumulator, CurrentTarget},
     entity_move::MoverType,
     fluid::{FluidKind, FluidState},
@@ -471,14 +472,14 @@ pub struct TravelTrample {
 impl std::fmt::Debug for TravelTrample {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt.debug_tuple("TravelTrample")
-            .field(&self.decision())
+            .field(&self.movement.landing)
             .finish()
     }
 }
 
 impl TravelTrample {
-    pub fn decision(&self) -> FarmlandTrample {
-        self.movement.trample
+    pub fn pending_landing(&mut self) -> &mut LandingPause {
+        &mut self.movement.landing
     }
 
     pub(super) fn resume(
@@ -488,14 +489,14 @@ impl TravelTrample {
         level: &mut DamageLevel<'_>,
         events: &mut Vec<MobEvent>,
     ) {
-        mob.finish_trample_fall(w, level, events, self.movement.trample);
+        mob.finish_block_fall(w, level, events, *self.movement.landing);
         mob.finish_move(w, level, self.movement.wanted, self.movement.moved, events);
         self.tail.finish(mob, w, level, events);
     }
 }
 
 struct MoveTrample {
-    trample: FarmlandTrample,
+    landing: Box<LandingPause>,
     wanted: Vec3,
     moved: Vec3,
 }
@@ -992,9 +993,9 @@ impl Mob {
         // Entity.setOnGroundWithMovement's checkSupportingBlock, before
         // checkFallDamage reads the landing block (getOnPosLegacy).
         self.supporting = self.supporting_block(w, moved);
-        if let Some(trample) = self.species_check_fall_damage(w, level, moved, events, pause) {
+        if let Some(landing) = self.species_check_fall_damage(w, level, moved, events, pause) {
             return Some(MoveTrample {
-                trample,
+                landing: Box::new(landing),
                 wanted,
                 moved,
             });
@@ -1105,7 +1106,7 @@ impl Mob {
         moved: Vec3,
         events: &mut Vec<MobEvent>,
         pause: bool,
-    ) -> Option<FarmlandTrample> {
+    ) -> Option<LandingPause> {
         if self.kind.flags.lava_walker && self.fluids.in_lava {
             self.fall_distance = 0.0;
         } else if !matches!(self.kind.species, super::Species::Bat | super::Species::Bee) {
@@ -1124,7 +1125,7 @@ impl Mob {
         delta: Vec3,
         on_ground: bool,
         events: &mut Vec<MobEvent>,
-    ) -> Option<FarmlandTrample> {
+    ) -> Option<LandingPause> {
         self.on_ground = on_ground;
         self.supporting = self.supporting_block(w, delta);
         self.species_check_fall_damage(w, level, delta, events, true)
@@ -1138,7 +1139,7 @@ impl Mob {
         moved: Vec3,
         events: &mut Vec<MobEvent>,
         pause: bool,
-    ) -> Option<FarmlandTrample> {
+    ) -> Option<LandingPause> {
         if !self.fluids.in_water {
             self.update_fluids(w, events);
         }
@@ -1443,7 +1444,7 @@ impl Mob {
         level: &mut DamageLevel<'_>,
         events: &mut Vec<MobEvent>,
         pause: bool,
-    ) -> Option<FarmlandTrample> {
+    ) -> Option<LandingPause> {
         let [x, y, z] = self.block_on_legacy(w);
         let pos = BlockPos::new(x, y, z);
         let state = w.world.block(x, y, z);
@@ -1458,80 +1459,58 @@ impl Mob {
             LandingEntityKind::Living
         };
         let distance = self.fall_distance;
-        let mut mod_fall_pending = crate::block_contact::fall_listens(state);
-        let result = w.landing.fall_on_until_trample(
-            &mut super::landing::MobLanding {
-                mob: self,
-                w,
-                level,
-                events,
-                pos,
-                state,
-                mod_fall_pending: &mut mod_fall_pending,
-            },
-            state,
-            pos,
-            entity,
-            distance,
-            pause,
-        );
-        // A block outside the landing registry falls back to the plain fall.
-        match result {
-            Ok(None) => {
-                if mod_fall_pending {
-                    // Some landing rules (slime, powder snow) never call causeFallDamage.
-                    self.mod_block_fall(level, Some((w, state, pos)), distance, 0.0);
+        let mut landing = super::landing::MobLanding {
+            mob: self,
+            w,
+            level,
+            events,
+        };
+        match w
+            .landing
+            .prepare_fall(&mut landing, state, pos, entity, distance, pause)
+        {
+            Ok(fall) => {
+                if pause && (fall.trample.is_some() || crate::block_contact::fall_listens(state)) {
+                    return Some(LandingPause {
+                        state,
+                        position: pos,
+                        distance,
+                        fall,
+                    });
                 }
-                None
+                let _ = fall.finish(&mut landing);
             }
-            Ok(Some(trample)) => Some(trample),
             Err(_) => {
+                // The registry's unknown-state case retains the ordinary fall.
                 self.cause_fall_damage_at(
                     w.loop_context,
                     level,
                     distance,
                     1.0,
                     events,
-                    Some((w, state, pos)),
+                    Some(w),
                     super::DamageKind::Fall,
                 );
-                None
             }
         }
+        None
     }
 
-    /// Finish the superclass's fall damage and clear the fall distance, after
-    /// the owning level handled the trample (or refused it).
-    pub fn finish_trample_fall(
+    /// Finish the superclass's damage and reset after the owner released the level loan.
+    pub fn finish_block_fall(
         &mut self,
         w: &MobWorld,
         level: &mut DamageLevel<'_>,
         events: &mut Vec<MobEvent>,
-        trample: FarmlandTrample,
+        paused: LandingPause,
     ) {
-        let mut mod_fall_pending = crate::block_contact::fall_listens(trample.state);
-        let _ = trample.finish_fall(&mut super::landing::MobLanding {
+        let _ = paused.fall.finish(&mut super::landing::MobLanding {
             mob: self,
             w,
             level,
             events,
-            pos: trample.position,
-            state: trample.state,
-            mod_fall_pending: &mut mod_fall_pending,
         });
         self.fall_distance = 0.0;
-    }
-    fn mod_block_fall(
-        &mut self,
-        level: &mut DamageLevel<'_>,
-        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
-        distance: f64,
-        multiplier: f32,
-    ) -> (f64, f32) {
-        contact.map_or((distance, multiplier), |(_, state, position)| {
-            let mut entity = super::landing::MobLandingEntity(self);
-            crate::block_contact::fall(level, &mut entity, state, position, distance, multiplier)
-        })
     }
     /// `LivingEntity.causeFallDamage`: a fall of `distance` blocks at `modifier`
     /// (its own landing, or a vehicle's passed on by `propagateFallToPassengers`)
@@ -1570,7 +1549,7 @@ impl Mob {
         distance: f64,
         modifier: f32,
         events: &mut Vec<MobEvent>,
-        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
+        contact: Option<&MobWorld>,
         source: super::DamageKind,
     ) -> bool {
         // Breeze.causeFallDamage: a landing from higher than three blocks.
@@ -1599,8 +1578,6 @@ impl Mob {
         // AbstractHorse.causeFallDamage hurts the horse first and passes the fall
         // on to its riders only when it was hurt.
         let horse = super::equine::is_equine(self.species());
-        // `Block.fallOn` is told the fall as it was before the mods' changes.
-        let landed = distance;
         let mut distance = distance;
         let mut modifier = modifier;
         if !horse {
@@ -1614,17 +1591,14 @@ impl Mob {
                 &mut cancel,
             );
             if cancel {
-                self.mod_block_fall(level, contact, landed, 0.0);
                 return false;
             }
         }
         // Entity.causeFallDamage: nothing happens to a fall immune entity, nor
         // to those on it.
         if self.kind.flags.fall_immune {
-            self.mod_block_fall(level, contact, landed, 0.0);
             return false;
         }
-        let (distance, modifier) = self.mod_block_fall(level, contact, distance, modifier);
         let power = distance + 1.0e-6 - self.safe_fall_distance();
         let mut damage = (power * f64::from(modifier) * self.kind.fall_damage_multiplier).floor();
         // Frog.calculateFallDamage: five points less than the base damage;
@@ -1672,15 +1646,11 @@ impl Mob {
     /// `LivingEntity.playBlockFallSound`: the block 0.2 below the feet plays
     /// its fall sound at half its volume and three quarters of its pitch,
     /// unless the mob is silent or the block is air.
-    fn block_fall_sound(
-        &self,
-        contact: Option<(&MobWorld, BlockStateId, BlockPos)>,
-        events: &mut Vec<MobEvent>,
-    ) {
+    fn block_fall_sound(&self, contact: Option<&MobWorld>, events: &mut Vec<MobEvent>) {
         if self.silent {
             return;
         }
-        if let Some((w, _, _)) = contact {
+        if let Some(w) = contact {
             let pos = self.on_pos(0.2);
             let state = w.world.block(pos[0], pos[1], pos[2]);
             if !w.facts.is_air(state) {

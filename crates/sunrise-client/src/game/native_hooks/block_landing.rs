@@ -1,12 +1,71 @@
 use super::*;
+use mod_api::__private::game::{CallbackOwner, DeferredLandingAction};
+use sunrise_client::landing::{LandingPause, PlayerLandingEntity};
+
+impl Game<'_> {
+    /// The level owns `fallOn` effects before damage and after the borrowed move yielded.
+    pub(in crate::game) fn apply_landing(
+        &mut self,
+        id: u32,
+        player: bool,
+        paused: &mut LandingPause,
+    ) {
+        if let Some(trample) = paused.fall.trample {
+            self.trample_farmland(id, player, trample);
+        }
+        if !sunrise_client::block_contact::fall_listens(paused.state) {
+            return;
+        }
+        let mut actions = Vec::new();
+        let mut level = DamageLevel::of(
+            &mut self.world,
+            self.pack.assets.registry,
+            Some(world_items!(self)),
+            Some(&self.pack.block_registries),
+            &self.damage_hooks,
+        );
+        if player {
+            if let Some(p) = self.player.as_mut().filter(|p| p.entity_id as u32 == id) {
+                let immune = p.may_fly;
+                paused.dispatch(
+                    &mut level,
+                    &mut PlayerLandingEntity(p),
+                    immune,
+                    &mut actions,
+                );
+            }
+        } else if let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+            mob.dispatch_landing_part(paused, &mut level, &mut actions);
+        }
+        self.apply_fall_actions(actions);
+    }
+
+    pub(in crate::game) fn apply_fall_actions(&mut self, actions: Vec<DeferredLandingAction>) {
+        for action in actions {
+            if action.at_site() {
+                self.run_landing_action(action);
+            } else {
+                sunrise_client::block_contact::defer_landing([action]);
+            }
+        }
+    }
+
+    pub(super) fn run_landing_action(&mut self, action: DeferredLandingAction) {
+        if let Some(owner) = action.owner() {
+            let _ = CallbackOwner::call_landing_callback(owner, self, |host| action.run(host));
+        } else {
+            action.run(self);
+        }
+    }
+}
 
 impl HitLevel<'_> {
     /// `Block.fallOn`: lends a scoped `LandingEntity` on `state` at `pos` after falling
     /// `distance` blocks. Writable distance and multiplier feed `causeFallDamage` before
     /// sounds and hurt. A zero multiplier prevents both. A creative or fall-immune entity
     /// keeps its immunity. Players, mobs and dropped items land here (items with zero
-    /// multiplier). Deferred server-host work queued with `FallOnEvent::after_landing`
-    /// runs once the entity batch finishes.
+    /// multiplier). `FallOnEvent::at_landing` actions run after the loan is released
+    /// and before damage; `after_landing` actions run after the entity batch.
     pub(in crate::game) fn native_fall_on(&mut self, call: super::fire::FallOnCall<'_>) {
         self.fire_fall_on(call);
     }

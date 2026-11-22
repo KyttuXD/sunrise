@@ -61,15 +61,24 @@ impl mod_api::LandingEntityAccess for MobLandingEntity<'_> {
     }
 }
 
-/// A mob mid-landing: the block under it is at `pos`, the fall was `distance`.
+impl Mob {
+    pub fn dispatch_landing_part(
+        &mut self,
+        paused: &mut crate::landing::LandingPause,
+        level: &mut DamageLevel<'_>,
+        actions: &mut Vec<mod_api::__private::game::DeferredLandingAction>,
+    ) {
+        let immune = self.kind.flags.fall_immune;
+        paused.dispatch(level, &mut MobLandingEntity(self), immune, actions);
+    }
+}
+
+/// A mob mid-landing, with its fall's level and pending vanilla effects.
 pub(super) struct MobLanding<'a, 'w, 'l> {
     pub mob: &'a mut Mob,
     pub w: &'a MobWorld<'w>,
     pub level: &'a mut DamageLevel<'l>,
     pub events: &'a mut Vec<MobEvent>,
-    pub pos: BlockPos,
-    pub state: BlockStateId,
-    pub mod_fall_pending: &'a mut bool,
 }
 impl MobLanding<'_, '_, '_> {
     fn at(&self) -> [f64; 3] {
@@ -161,15 +170,13 @@ impl BlockLandingWorld for MobLanding<'_, '_, '_> {
         multiplier: f32,
         source: DamageKind,
     ) -> Result<bool, String> {
-        *self.mod_fall_pending = false;
-        let contact = Some((self.w, self.state, self.pos));
         Ok(self.mob.cause_fall_damage_at(
             self.w.loop_context,
             self.level,
             distance,
             multiplier,
             self.events,
-            contact,
+            Some(self.w),
             source,
         ))
     }

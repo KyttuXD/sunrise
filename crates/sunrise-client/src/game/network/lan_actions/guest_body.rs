@@ -251,9 +251,9 @@ impl Game<'_> {
                     w.check_guest_fall_damage(movement.y, accepted.on_ground, state, pos)
                 })();
                 let Ok(landed) = landed else { break };
-                if let Some(trample) = landed {
+                if let Some(mut landing) = landed {
                     let mut collected = std::mem::take(&mut w.player.events);
-                    game.trample_farmland(id, true, trample);
+                    game.apply_landing(id, true, &mut landing);
                     let Some(player) = game.player.as_mut().filter(|p| p.entity_id as u32 == id)
                     else {
                         return (collected, None, ServerTravel::Continue);
@@ -262,7 +262,7 @@ impl Game<'_> {
                     player.events = collected;
                     side = game_side!(game);
                     w = motion_world!(game, side, player);
-                    if w.finish_trample_fall(trample).is_err() {
+                    if w.finish_block_fall(landing).is_err() {
                         break;
                     }
                 }

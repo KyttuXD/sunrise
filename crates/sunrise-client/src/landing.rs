@@ -15,9 +15,8 @@ use sunrise_world::native_load_context::LoopContext;
 use sunrise_world::{
     block_entity_push::BlockPushWorld,
     block_landing::{
-        BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDefinition,
-        FarmlandTrample, LandingDamage, LandingDefinition, LandingEntityKind, LandingEvent,
-        LandingSound,
+        BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDefinition, LandingDamage,
+        LandingDefinition, LandingEntityKind, LandingEvent, LandingSound, PreparedFall,
     },
     entity_obstruction::EntityIdentity,
     fall_damage::FallDamageWorld,
@@ -28,7 +27,7 @@ use sunrise_world::{
 };
 
 /// Scoped `LandingEntityAccess` adapter over a live `PlayerMotion`.
-pub(crate) struct PlayerLandingEntity<'a>(pub(crate) &'a mut crate::motion::PlayerMotion);
+pub struct PlayerLandingEntity<'a>(pub &'a mut crate::motion::PlayerMotion);
 
 impl mod_api::LandingEntityAccess for PlayerLandingEntity<'_> {
     fn id(&self) -> i32 {
@@ -375,30 +374,44 @@ impl FallEvent {
         }
     }
 }
-impl MotionWorld<'_, '_, '_> {
-    fn mod_block_fall(
+/// A fall waiting for the level's owner to apply `Block.fallOn` effects before damage.
+#[derive(Clone, Copy, Debug)]
+pub struct LandingPause {
+    pub state: BlockStateId,
+    pub position: BlockPos,
+    pub distance: f64,
+    pub fall: PreparedFall,
+}
+
+impl LandingPause {
+    pub fn dispatch(
         &mut self,
-        state: BlockStateId,
-        position: BlockPos,
-        distance: f64,
-        multiplier: f32,
-    ) -> (f64, f32) {
-        let mut entity = PlayerLandingEntity(self.player);
-        crate::block_contact::fall(
-            &mut crate::health::DamageLevel::of(
-                &mut *self.scene,
-                self.assets.registry,
-                self.tag_items,
-                self.block_registries,
-                self.damage_hooks,
-            ),
-            &mut entity,
-            state,
-            position,
+        level: &mut crate::health::DamageLevel<'_>,
+        entity: &mut dyn mod_api::LandingEntityAccess,
+        immune: bool,
+        actions: &mut Vec<mod_api::__private::game::DeferredLandingAction>,
+    ) {
+        let (distance, multiplier) = if immune {
+            (self.distance, 0.0)
+        } else {
+            self.fall.damage_inputs().unwrap_or((self.distance, 0.0))
+        };
+        let (distance, multiplier) = crate::block_contact::fall(
+            level,
+            entity,
+            self.state,
+            self.position,
             distance,
             multiplier,
-        )
+            actions,
+        );
+        if !immune {
+            self.fall.set_damage_inputs(distance, multiplier);
+        }
     }
+}
+
+impl MotionWorld<'_, '_, '_> {
     fn fall_event(&mut self, event: FallEvent) {
         self.player.events.push(MotionEvent::Fall(event));
     }
@@ -407,14 +420,10 @@ impl MotionWorld<'_, '_, '_> {
         distance: f64,
         multiplier: f32,
         source: LandingDamage,
-        contact: Option<(BlockStateId, BlockPos, f64)>,
     ) -> Result<bool> {
         // Player.causeFallDamage exempts players with the mayfly ability,
         // including creative players who are currently walking.
         if self.player.may_fly {
-            if let Some((state, position, original_distance)) = contact {
-                self.mod_block_fall(state, position, original_distance, 0.0);
-            }
             // Only for mods' `player_flyable_fall`: without them the landing
             // stays as vanilla traces it.
             if !self.player.replaying && crate::native_client_hooks::has_mods() {
@@ -449,18 +458,13 @@ impl MotionWorld<'_, '_, '_> {
                 &mut cancel,
             );
         }
-        // A canceled fall still lands on the block (`Block.fallOn`).
         if cancel {
-            if let Some((state, position, original_distance)) = contact {
-                self.mod_block_fall(state, position, original_distance, 0.0);
-            }
             return Ok(false);
         }
         living_fall::cause_living_fall_damage(
             &mut FallCall {
                 world: self,
                 source,
-                contact,
             },
             distance,
             multiplier,
@@ -480,45 +484,35 @@ impl MotionWorld<'_, '_, '_> {
         position: BlockPos,
         distance: f64,
         pause: bool,
-    ) -> Result<Option<FarmlandTrample>> {
-        let previous = self.player.block_landing.take();
-        if crate::block_contact::fall_listens(state) {
-            self.player.block_landing = Some((state, position, distance));
+    ) -> Result<Option<LandingPause>> {
+        let fall = self
+            .resources
+            .landing
+            .prepare_fall(
+                self,
+                state,
+                position,
+                LandingEntityKind::Player,
+                distance,
+                pause,
+            )
+            .map_err(|err| err.to_string())?;
+        if pause && (fall.trample.is_some() || crate::block_contact::fall_listens(state)) {
+            return Ok(Some(LandingPause {
+                state,
+                position,
+                distance,
+                fall,
+            }));
         }
-        let result = self.resources.landing.fall_on_until_trample(
-            self,
-            state,
-            position,
-            LandingEntityKind::Player,
-            distance,
-            pause,
-        );
-        let pending = self.player.block_landing.take();
-        self.player.block_landing = previous;
-        match result {
-            Ok(None) => {
-                if let Some((state, position, distance)) = pending {
-                    // Some landing rules never call causeFallDamage.
-                    self.mod_block_fall(state, position, distance, 0.0);
-                }
-                Ok(None)
-            }
-            Ok(Some(trample)) => Ok(Some(trample)),
-            Err(err) => Err(err.to_string().into()),
-        }
+        fall.finish(self).map_err(|err| err.to_string())?;
+        Ok(None)
     }
 
-    /// Finish `Block.fallOn` and `LivingEntity.checkFallDamage` after the game's
-    /// push and write. A refusal leaves the original fall still to finish.
-    pub fn finish_trample_fall(&mut self, trample: FarmlandTrample) -> Result<()> {
-        let previous = self.player.block_landing.take();
-        if crate::block_contact::fall_listens(trample.state) {
-            self.player.block_landing = Some((trample.state, trample.position, trample.distance));
-        }
-        let result = trample.finish_fall(self);
-        self.player.block_landing = previous;
-        result.map_err(|err| err.to_string())?;
-        sunrise_world::living_landing::finish_living_landing(self, trample.state)
+    /// Finish the native damage and ground event after the owning level applied its effects.
+    pub fn finish_block_fall(&mut self, paused: LandingPause) -> Result<()> {
+        paused.fall.finish(self).map_err(|err| err.to_string())?;
+        sunrise_world::living_landing::finish_living_landing(self, paused.state)
     }
 }
 impl FallDamageWorld for MotionWorld<'_, '_, '_> {
@@ -668,8 +662,7 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
         multiplier: f32,
         source: LandingDamage,
     ) -> Result<bool> {
-        let contact = self.player.block_landing.take();
-        self.player_fall_damage(distance, multiplier, source, contact)
+        self.player_fall_damage(distance, multiplier, source)
     }
     fn known_sound(&self, s: LandingSound) -> SceneSound {
         SceneSound::Block(s)
@@ -762,7 +755,6 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
 struct FallCall<'a, 'p, 'w, 'r> {
     world: &'a mut MotionWorld<'p, 'w, 'r>,
     source: LandingDamage,
-    contact: Option<(BlockStateId, BlockPos, f64)>,
 }
 impl LivingFallWorld for FallCall<'_, '_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
@@ -794,14 +786,6 @@ impl LivingFallWorld for FallCall<'_, '_, '_, '_> {
         self.world
             .player
             .attribute("minecraft:fall_damage_multiplier")
-    }
-    fn modify_fall(&mut self, distance: f64, multiplier: f32) -> Result<(f64, f32)> {
-        Ok(self
-            .contact
-            .map_or((distance, multiplier), |(state, position, _)| {
-                self.world
-                    .mod_block_fall(state, position, distance, multiplier)
-            }))
     }
     fn fall_sound(&mut self, big: bool) -> Result<SceneSound> {
         self.world.living_fall_sound(big)

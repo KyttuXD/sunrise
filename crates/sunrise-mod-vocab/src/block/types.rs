@@ -370,6 +370,14 @@ pub struct BlockClick<'a> {
 }
 
 impl FallOnEvent<'_> {
+    /// Apply an owned native action at this landing, after releasing the entity
+    /// loan and before the engine applies fall damage or reads the ground state.
+    /// Use this for block changes and effects that belong to `Block.fallOn`.
+    /// Capture any event values the action needs by value.
+    pub fn at_landing(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
+        self.deferred.push(true, action);
+    }
+
     /// Queue an owned native callback to run with `&mut dyn ServerHost` once the current
     /// entity batch finishes (for block changes, sounds, game events or entity writes
     /// that cannot borrow the full server host mid-batch).
@@ -380,7 +388,7 @@ impl FallOnEvent<'_> {
     /// callbacks for the session; a phase refusal is reported each time without disabling
     /// them.
     pub fn after_landing(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
-        self.deferred.push(action);
+        self.deferred.push(false, action);
     }
 }
 
@@ -393,7 +401,7 @@ impl BounceOnEvent<'_> {
     /// A panic disables this mod's deferred landing callbacks for the session; a phase
     /// refusal is reported each time without disabling them.
     pub fn after_bounce(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
-        self.deferred.push(action);
+        self.deferred.push(false, action);
     }
 }
 

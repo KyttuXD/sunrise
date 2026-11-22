@@ -175,15 +175,18 @@ Creative and fall-immune entities and items keep their immunity regardless of ed
 `bounce_on` fires only when an entity bounced, just before vanilla sets its velocity,
 with writable `event.movement: &mut [f64; 3]`.
 
-For work that requires `&mut dyn ServerHost` (setting or destroying blocks such as
-farmland trampling or turtle eggs breaking, playing sounds, or firing game events),
-queue an owned native callback with `event.after_landing(move |host| { ... })` or
-`event.after_bounce(move |host| { ... })`. Queued callbacks run in FIFO order once the
-entity batch ends, with no engine-side unchanged-block replay gate: inspect
-`level.block_state(host, pos)` locally inside the callback when the action depends on
-the block still matching. A panic inside a deferred callback disables that mod's
-deferred landing callbacks for the session and reports an error notice; a phase refusal
-is reported each time without disabling the mod.
+For level operations that belong to `Block.fallOn`, such as destroying a turtle
+egg before fall damage, use `event.at_landing(move |host| { ... })`. Copy the
+position and own the dimension (for example `event.dimension.to_owned()`) before
+entering the closure. The engine releases the entity loan, applies the action
+through the usual level methods, then resumes fall damage and reads the ground
+state. The next entity to move sees the change.
+
+For work that belongs after the entity batch, use `event.after_landing` or
+`event.after_bounce`. Actions run in order at their respective sites. Inspect
+`level.block_state(host, pos)` in the action only when it depends on the block
+still matching. A panic disables that mod's landing actions for the session and
+reports an error; a phase refusal is reported each time without disabling them.
 
 ## Storage changes
 

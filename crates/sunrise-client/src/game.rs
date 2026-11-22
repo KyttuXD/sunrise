@@ -5161,6 +5161,7 @@ impl Game<'_> {
         if !sunrise_client::block_contact::fall_listens(state) {
             return;
         }
+        let mut actions = Vec::new();
         let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
         // A native fall_on Part can unwind. Keep the persistent level carrier
         // outside the callback's temporary views, and return its progressed state
@@ -5183,12 +5184,14 @@ impl Game<'_> {
                 on,
                 distance,
                 0.0,
+                &mut actions,
             );
         }));
         lent.give_back(&mut self.world);
         if let Err(payload) = result {
             std::panic::resume_unwind(payload);
         }
+        self.apply_fall_actions(actions);
     }
     /// The item entities `tick_dropped_items` took out, back in the level,
     /// before those its hooks spawned meanwhile (`addFreshEntity` appends).
