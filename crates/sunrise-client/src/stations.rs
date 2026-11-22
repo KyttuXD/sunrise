@@ -288,10 +288,9 @@ fn can_store_enchantments(stack: &ItemStack) -> bool {
 pub fn increased_repair_cost(cost: u32) -> u32 {
     (u64::from(cost) * 2 + 1).min(i32::MAX as u64) as u32
 }
-/// `ItemStack.getHoverName` as a component: the custom name as written, a potion's or tipped
-/// arrow's contents, a written book's title, the `item_name` component, else the item's or head
-/// owner's name, translatable so each viewer renders it in their own language. The name a mod
-/// item's part gives the stack is not asked: [`hover_name_in`] asks it.
+/// `ItemStack.getHoverName` as a component: the custom name, a written book's nonblank title,
+/// or the item's name. It stays translatable so each viewer renders it in their own language.
+/// The name a mod item's part gives the stack is not asked: [`hover_name_in`] asks it.
 pub fn hover_name_text(names: &crate::creative::Names, stack: &ItemStack) -> crate::text::Text {
     hover_name_text_with(names, stack, |_| None)
 }
@@ -312,7 +311,7 @@ pub fn names_itself(stack: &ItemStack) -> bool {
         || stack
             .data()
             .and_then(|d| d.written.as_ref())
-            .is_some_and(|w| !w.title.trim().is_empty())
+            .is_some_and(|w| !sunrise_core::java_character::is_blank(&w.title))
 }
 /// `Item.getName(ItemStack)` of a mod item: the name the parts of `stack`'s item give it
 /// (`ItemPart::item_name`), or None to keep the default. Asked with the loop `context` only, so a
@@ -352,7 +351,7 @@ fn hover_name_text_with(
     if let Some(title) = data
         .and_then(|d| d.written.as_ref())
         .map(|w| w.title.as_str())
-        .filter(|t| !t.trim().is_empty())
+        .filter(|t| !sunrise_core::java_character::is_blank(t))
     {
         return Text::literal(title);
     }
@@ -1859,6 +1858,8 @@ mod tests {
             };
             assert_eq!(hover_name(&names, &book("Log")), "Log");
             assert_eq!(hover_name(&names, &book(" ")), "Written Book");
+            assert_eq!(hover_name(&names, &book("\u{001c}")), "Written Book");
+            assert_eq!(hover_name(&names, &book("\u{0085}")), "\u{0085}");
             let diamond = stack(r#"{id:"minecraft:diamond",count:1}"#);
             assert_eq!(hover_name(&names, &diamond), "Diamond");
         });
