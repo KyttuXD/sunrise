@@ -99,6 +99,43 @@ fn tab_arrows(
     .filter_map(|(show, next, rect, sprite, key)| show.then_some((next, rect, sprite, key)))
 }
 
+fn draw_registered_book(
+    layout: &Layout<'_>,
+    ui: &ModRecipeUi,
+    (xo, yo): (f32, f32),
+    cursor: (f32, f32),
+) -> (Vec<Drawn>, usize) {
+    let mut calls = screen::draw(layout);
+    // The tab sprites, and the category arrows painted beside them (none under an overlay).
+    let first_category_arrow = calls.len();
+    if ui.overlay.is_none() {
+        for (_, [x, y, w, h], name, key) in tab_arrows(ui, xo, yo) {
+            let hover = inside(cursor, x, y, w, h);
+            let id = format!(
+                "recipe_book/{name}{}",
+                if hover { "_highlighted" } else { "" }
+            );
+            calls.push(Drawn {
+                call: Call::Sprite {
+                    id,
+                    x: x as i32,
+                    y: y as i32,
+                    w: w as i32,
+                    h: h as i32,
+                },
+                pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            });
+            if hover {
+                calls.push(Drawn {
+                    call: Call::Tooltip(vec![vec![screen::Run::plain((layout.translate)(key))]]),
+                    pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                });
+            }
+        }
+    }
+    (calls, first_category_arrow)
+}
+
 fn registered_book_tab_bounds(calls: &[Drawn], first_category_arrow: usize) -> Option<[f32; 4]> {
     screen::sprite_bounds(calls, |index, id| {
         index >= first_category_arrow || screen::is_tab_sprite(id)
@@ -341,34 +378,8 @@ impl Game<'_> {
             translate: &translate,
             text_width: &text_width,
         };
-        let mut calls = screen::draw(&layout);
-        // The tab sprites, and the category arrows painted beside them (none under an overlay).
-        let first_category_arrow = calls.len();
-        if ui.overlay.is_none() {
-            for (_, [x, y, w, h], name, key) in tab_arrows(ui, xo, yo) {
-                let hover = inside(self.cursor, x, y, w, h);
-                let id = format!(
-                    "recipe_book/{name}{}",
-                    if hover { "_highlighted" } else { "" }
-                );
-                calls.push(Drawn {
-                    call: Call::Sprite {
-                        id,
-                        x: x as i32,
-                        y: y as i32,
-                        w: w as i32,
-                        h: h as i32,
-                    },
-                    pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                });
-                if hover {
-                    calls.push(Drawn {
-                        call: Call::Tooltip(vec![vec![screen::Run::plain(translate(key))]]),
-                        pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                    });
-                }
-            }
-        }
+        let (calls, first_category_arrow) =
+            draw_registered_book(&layout, ui, (xo, yo), self.cursor);
         // The tabs and arrows as painted are the region `ScreenView::regions` reports.
         if self.screen_view_listened() {
             self.screen_state
@@ -650,23 +661,22 @@ mod tests {
             translate: &str::to_owned,
             text_width: &|s| s.len() as i32,
         };
-        let mut calls = screen::draw(&layout);
+        // Search plus five categories gives two category pages. Both forward
+        // arrows then use the same sprite, but only the category arrow is a tab region.
+        let ui = ModRecipeUi {
+            presentation: Some(ModPresentation {
+                tabs: vec![layout.tabs[0].clone(); 6],
+                tab_ids: (0..6).map(|i| format!("test:tab{i}")).collect(),
+                recipes: Vec::new(),
+            }),
+            ..ModRecipeUi::default()
+        };
+        let (calls, first_category_arrow) =
+            draw_registered_book(&layout, &ui, (54.0, 37.0), (0.0, 0.0));
         assert!(calls.iter().any(|drawn| {
             matches!(&drawn.call, Call::Sprite { id, x: 147, .. }
                 if id == "recipe_book/page_forward")
         }));
-        let first_category_arrow = calls.len();
-        // The category arrow shares the recipe arrow's sprite.
-        calls.push(Drawn {
-            call: Call::Sprite {
-                id: "recipe_book/page_forward".into(),
-                x: 43,
-                y: 180,
-                w: 12,
-                h: 17,
-            },
-            pose: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        });
         assert_eq!(
             registered_book_tab_bounds(&calls, first_category_arrow),
             Some([22.0, 40.0, 35.0, 157.0])
