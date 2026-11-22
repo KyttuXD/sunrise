@@ -27,6 +27,7 @@ const NOT_DECLARATIONS: &[(&str, &str)] = &[
     ("mod_vocab::wire", "typed payload codec, not Serde"),
     ("mod_surface::uses::USES_FILE", "name of native fit metadata"),
     ("mod_surface::uses::MAX_USES_BYTES", "size limit for native fit metadata"),
+    ("mod_surface::uses::MAX_MANIFEST_BYTES", "size limit for complete manifest metadata"),
     ("sunrise_mod_api_macros::Wire", "derive for the typed payload codec, not Serde"),
     ("sunrise_assets::blockstate::BlockStateFile", "asset reference check, not a declaration"),
     ("sunrise_assets::blockstate::VariantSet", "asset reference check, not a declaration"),
@@ -63,7 +64,9 @@ const REVIEWED: &[(Use<'static>, &[&str])] = &[
     (("manifest.rs", "version", "deserialize_with = \"version_from_str\""), &["manifest_full", "manifest_minimal", "refused_manifest_bad_version"]),
     (("manifest.rs", "Property", "untagged"), &["manifest_full", "refused_manifest_bad_property_type"]),
     (("manifest.rs", "Dependency", "impl Deserialize"), &["manifest_full", "refused_manifest_unknown_dependency_key"]),
+    (("manifest.rs", "url", "deserialize_with = \"DependencyDetails::deserialize_url\""), &["manifest_full", "src/dependencies.rs:policy_schema_errors_are_refused_when_the_manifest_is_parsed"]),
     (("manifest.rs", "Rule", "impl Deserialize"), &["manifest_full", "keys_manifest_forms", "refused_manifest_unknown_rule_key"]),
+    (("manifest.rs", "url", "deserialize_with = \"RuleDetails::deserialize_url\""), &["manifest_full", "refused_manifest_bad_rule_url"]),
     (("manifest/jar.rs", "JarRef", "try_from = \"Fields\""), &["manifest_full", "refused_manifest_bad_jar_id", "refused_manifest_bad_jar_hash", "refused_manifest_empty_jar_version"]),
     (("manifest/runtime_files.rs", "RuntimeTable", "try_from = \"BTreeMap<String, String>\""), &["refused_manifest_runtime_on_content", "refused_manifest_empty_runtime", "refused_manifest_bad_runtime_hash", "refused_manifest_bad_runtime_path"]),
     // Not content declarations. Name the reader's unit-test fixtures instead of

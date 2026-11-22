@@ -19,7 +19,10 @@ pub use runtime_files::{
 use mod_surface::uses::USES_FILE;
 use serde::{
     Deserialize, Deserializer, Serialize,
-    de::{self, Visitor, value::MapAccessDeserializer},
+    de::{
+        self, Visitor,
+        value::{MapAccessDeserializer, SeqAccessDeserializer},
+    },
 };
 use std::{
     fmt,
@@ -57,7 +60,7 @@ pub const RESERVED_IDS: [&str; 7] = [
 pub const STORAGE_DIR: &str = ".sunrise-mod-data";
 
 /// Maximum bytes in the complete manifest, including properties and dependency explanations.
-pub const MAX_MANIFEST: u64 = 32 << 20;
+pub const MAX_MANIFEST: u64 = mod_surface::uses::MAX_MANIFEST_BYTES;
 
 /// The most source files (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/**`, the root notices) a
 /// package selects: as many as its content files, so a port laid out one file per class fits.
@@ -201,9 +204,7 @@ pub enum Dependency {
 
 impl<'de> Deserialize<'de> for Dependency {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        version_or_details(deserializer, Self::Version, Self::Detailed, |details| {
-            details.url.as_deref()
-        })
+        version_or_details(deserializer, Self::Version, Self::Detailed)
     }
 }
 
@@ -220,11 +221,19 @@ pub struct DependencyDetails {
     #[serde(default)]
     pub reason: Option<String>,
     /// An HTTPS link with more information.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "DependencyDetails::deserialize_url")]
     pub url: Option<String>,
     /// Dispatch ordering only; `none` does not remove a code link requirement.
     #[serde(default)]
     pub order: mod_vocab::DependencyOrder,
+}
+
+impl DependencyDetails {
+    fn deserialize_url<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        deserialize_https_url(deserializer)
+    }
 }
 
 impl Dependency {
@@ -254,9 +263,7 @@ pub enum Rule {
 
 impl<'de> Deserialize<'de> for Rule {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        version_or_details(deserializer, Self::Version, Self::Detailed, |details| {
-            details.url.as_deref()
-        })
+        version_or_details(deserializer, Self::Version, Self::Detailed)
     }
 }
 
@@ -270,11 +277,70 @@ pub struct RuleDetails {
     #[serde(default)]
     pub reason: Option<String>,
     /// Where to read more, shown with the reason: an `https://` link.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "RuleDetails::deserialize_url")]
     pub url: Option<String>,
     /// Where the rule holds: both sides, or only the client or the dedicated server.
     #[serde(default = "both_sides")]
     pub side: Side,
+}
+
+impl RuleDetails {
+    fn deserialize_url<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        deserialize_https_url(deserializer)
+    }
+}
+
+fn deserialize_https_url<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    struct OptionalUrl;
+
+    impl<'de> Visitor<'de> for OptionalUrl {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an https:// URL string")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            struct HttpsUrl;
+
+            impl Visitor<'_> for HttpsUrl {
+                type Value = String;
+
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("an https:// URL string")
+                }
+
+                fn visit_str<E: de::Error>(self, value: &str) -> Result<String, E> {
+                    if !value.starts_with("https://") {
+                        return Err(E::custom("url is not https://"));
+                    }
+                    Ok(value.to_owned())
+                }
+
+                fn visit_string<E: de::Error>(self, value: String) -> Result<String, E> {
+                    if !value.starts_with("https://") {
+                        return Err(E::custom("url is not https://"));
+                    }
+                    Ok(value)
+                }
+            }
+
+            deserializer.deserialize_string(HttpsUrl).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalUrl)
 }
 
 // Choose the form by its TOML type so mistakes in a detailed table retain their own errors.
@@ -282,7 +348,6 @@ fn version_or_details<'de, D, T, V>(
     deserializer: D,
     version: fn(semver::VersionReq) -> V,
     details: fn(T) -> V,
-    url: fn(&T) -> Option<&str>,
 ) -> Result<V, D::Error>
 where
     D: Deserializer<'de>,
@@ -291,7 +356,6 @@ where
     struct VersionOrDetails<T, V> {
         version: fn(semver::VersionReq) -> V,
         details: fn(T) -> V,
-        url: fn(&T) -> Option<&str>,
     }
 
     impl<'de, T: Deserialize<'de>, V> Visitor<'de> for VersionOrDetails<T, V> {
@@ -305,20 +369,16 @@ where
             value.parse().map(self.version).map_err(E::custom)
         }
 
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<V, A::Error> {
+            T::deserialize(SeqAccessDeserializer::new(seq)).map(self.details)
+        }
+
         fn visit_map<M: de::MapAccess<'de>>(self, map: M) -> Result<V, M::Error> {
-            let details = T::deserialize(MapAccessDeserializer::new(map))?;
-            if (self.url)(&details).is_some_and(|url| !url.starts_with("https://")) {
-                return Err(de::Error::custom("url is not https://"));
-            }
-            Ok((self.details)(details))
+            T::deserialize(MapAccessDeserializer::new(map)).map(self.details)
         }
     }
 
-    deserializer.deserialize_any(VersionOrDetails {
-        version,
-        details,
-        url,
-    })
+    deserializer.deserialize_any(VersionOrDetails { version, details })
 }
 
 fn both_sides() -> Side {
@@ -505,15 +565,17 @@ fn toml_error(text: &str, e: &toml::de::Error) -> String {
         Some(rest.split('`').next()?.to_owned())
     };
     if let Some(field) = quoted("missing field `") {
-        let example = match field.as_str() {
-            "id" => "id = \"my_mod\"".to_owned(),
-            "name" => "name = \"My Mod\"".to_owned(),
-            "version" => "version = \"0.1.0\"".to_owned(),
-            "game" => "game = \"26.3\"".to_owned(),
-            "sunrise" => "sunrise = \"<the 40-character game build commit>\"".to_owned(),
-            other => format!("{other} = …"),
+        let root_table = e.span().is_none_or(|span| span.is_empty());
+        let at = if root_table { "" } else { at.as_str() };
+        let example = match (root_table, field.as_str()) {
+            (true, "id") => "id = \"my_mod\"".to_owned(),
+            (true, "name") => "name = \"My Mod\"".to_owned(),
+            (true, "version") => "version = \"0.1.0\"".to_owned(),
+            (_, "game") => "game = \"26.3\"".to_owned(),
+            (_, "sunrise") => "sunrise = \"<the 40-character game build commit>\"".to_owned(),
+            (_, other) => format!("{other} = …"),
         };
-        return format!("{MANIFEST}: the field {field} is missing; add {example}");
+        return format!("{MANIFEST}: the field {field} is missing{at}; add {example}");
     }
     if let Some(field) = quoted("unknown field `") {
         let nearest = message

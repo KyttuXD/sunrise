@@ -2905,6 +2905,9 @@ pub const USES_FILE: &str = "uses.json";
 /// The largest table [`UsesTable::read`] reads, in bytes.
 pub const MAX_USES_BYTES: usize = 4 << 20;
 
+/// The largest `sunrise-mod.toml` accepted by package readers and developer tools, in bytes.
+pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
+
 /// The list a package carries: what the mod uses, with each item's hash at the build it was made
 /// for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
