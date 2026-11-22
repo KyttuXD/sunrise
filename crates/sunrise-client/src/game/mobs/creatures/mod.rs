@@ -116,6 +116,15 @@ pub(super) enum Finalized {
     Cancelled,
 }
 
+/// Separate `finalize_spawn` outcomes matching NeoForge's `FinalizeSpawnEvent`:
+/// `skip_finalize` (`isCanceled()`) skips `Mob.finalizeSpawn`, while
+/// `spawn_cancelled` (`isSpawnCancelled()`) vetoes admission independently.
+pub(super) struct FinalizeDecision {
+    pub(super) skip_finalize: bool,
+    pub(super) spawn_cancelled: bool,
+    pub(super) difficulty: spawning::LocalDifficulty,
+}
+
 mod death_source;
 mod death_weapon;
 mod destroy_rules;
@@ -1186,7 +1195,7 @@ impl Game<'_> {
         &mut self,
         mob: &mut Mob,
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
     ) -> Finalized {
         let mut group = None;
         let (outcome, difficulty) = self.finalize_spawn_event(mob, reason, spawner, &mut group);
@@ -1194,6 +1203,30 @@ impl Game<'_> {
             self.finalize_grouped(mob, &difficulty, reason, group);
         }
         outcome
+    }
+    /// `EventHooks.finalizeMobSpawnSpawner`'s event half: returns `skip_finalize`
+    /// (`event.isCanceled()`), `spawn_cancelled` (`event.isSpawnCancelled()`),
+    /// and the listener-edited difficulty separately so spawners run vanilla
+    /// finalization (when unconfigured and not skipped), trial persistence, and
+    /// configured equipment rolls before enforcing `spawn_cancelled` at admission.
+    pub(super) fn finalize_spawn_decision(
+        &self,
+        mob: &mut Mob,
+        reason: SpawnReason,
+        spawner: Option<mod_api::Spawner>,
+        group: &mut Option<Group>,
+    ) -> FinalizeDecision {
+        let at = [mob.position.x, mob.position.y, mob.position.z];
+        let difficulty = self.local_difficulty(at);
+        if !mod_api::__private::listened(mod_api::HookId::FinalizeSpawn) {
+            return FinalizeDecision {
+                skip_finalize: false,
+                spawn_cancelled: false,
+                difficulty,
+            };
+        }
+        let kind = mob.kind.id.clone();
+        self.finalize_spawn_lent(&kind, at, reason, spawner, difficulty, Some(mob), group)
     }
     /// `Mob.finalizeSpawn`'s event, the half listeners own: they hear the
     /// spawn, cancel it, take it over, set its difficulty, edit the mob
@@ -1204,7 +1237,7 @@ impl Game<'_> {
         &self,
         mob: &mut Mob,
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
         group: &mut Option<Group>,
     ) -> (Finalized, spawning::LocalDifficulty) {
         let at = [mob.position.x, mob.position.y, mob.position.z];
@@ -1213,19 +1246,21 @@ impl Game<'_> {
             return (Finalized::Done, difficulty);
         }
         let kind = mob.kind.id.clone();
-        self.finalize_spawn_lent(&kind, at, reason, spawner, difficulty, Some(mob), group)
+        let decision =
+            self.finalize_spawn_lent(&kind, at, reason, spawner, difficulty, Some(mob), group);
+        if decision.spawn_cancelled {
+            (Finalized::Cancelled, difficulty)
+        } else if decision.skip_finalize {
+            (Finalized::Skipped, difficulty)
+        } else {
+            (Finalized::Done, decision.difficulty)
+        }
     }
     /// `Mob.getMaxSpawnClusterSize` as the entity parts of the finalized `mob`'s type answer it
-    /// (`EntityPart::spawn_cluster_size`), asked with `mob` lent as it stands before it joins the
-    /// level: the first part in dispatch order to answer wins, and none answering leaves vanilla's
-    /// `vanilla` to the spawner. A type with no part costs one table lookup. Server-side.
-    pub(super) fn spawn_cluster_size(
-        &self,
-        mob: &mut Mob,
-        reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
-        vanilla: u32,
-    ) -> Option<u32> {
+    /// (`EntityPart::spawn_cluster_size`, NeoForge's `SpawnClusterSizeEvent`), asked only
+    /// for natural spawning. The first part in dispatch order to answer wins. With no answer,
+    /// the caller uses `vanilla`. Unsubscribed types do not lend the mob. Server-side.
+    pub(super) fn spawn_cluster_size(&self, mob: &mut Mob, vanilla: u32) -> Option<u32> {
         if !mod_api::__private::has_scoped_hook(mod_api::HookId::SpawnClusterSize)
             || !mod_api::__private::entity_part_hooked(
                 mod_api::HookId::SpawnClusterSize,
@@ -1242,8 +1277,6 @@ impl Game<'_> {
             self.native_spawn_cluster_size(
                 mod_api::__private::SpawnClusterSizeCall {
                     mob: lent,
-                    reason,
-                    spawner,
                     vanilla,
                     limit: &mut limit,
                 },
@@ -1260,13 +1293,21 @@ impl Game<'_> {
         kind: &str,
         at: [f64; 3],
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
     ) -> (Finalized, spawning::LocalDifficulty) {
         let difficulty = self.local_difficulty(at);
         if !mod_api::__private::listened(mod_api::HookId::FinalizeSpawn) {
             return (Finalized::Done, difficulty);
         }
-        self.finalize_spawn_lent(kind, at, reason, spawner, difficulty, None, &mut None)
+        let decision =
+            self.finalize_spawn_lent(kind, at, reason, spawner, difficulty, None, &mut None);
+        if decision.spawn_cancelled {
+            (Finalized::Cancelled, difficulty)
+        } else if decision.skip_finalize {
+            (Finalized::Skipped, difficulty)
+        } else {
+            (Finalized::Done, decision.difficulty)
+        }
     }
     /// Fires `finalize_spawn` with `mob` lent to it and the group data as the
     /// API's; a group the listener changed comes back as the game's.
@@ -1276,13 +1317,13 @@ impl Game<'_> {
         kind: &str,
         at: [f64; 3],
         reason: SpawnReason,
-        spawner: Option<mod_api::SpawnSource>,
+        spawner: Option<mod_api::Spawner>,
         difficulty: spawning::LocalDifficulty,
         mob: Option<&mut Mob>,
         group: &mut Option<Group>,
-    ) -> (Finalized, spawning::LocalDifficulty) {
+    ) -> FinalizeDecision {
         let mut heard = mod_api::Difficulty::from(difficulty);
-        let (mut spawn_cancelled, mut skip) = (false, false);
+        let (mut spawn_cancelled, mut skip_finalize) = (false, false);
         let given = group
             .as_ref()
             .and_then(|g| super::native_unspawned_mob::native_spawn_group(g, self.lend_epoch()));
@@ -1299,7 +1340,7 @@ impl Game<'_> {
                 mob,
                 edits,
                 group: &mut native_group,
-                cancel: &mut skip,
+                cancel: &mut skip_finalize,
             });
         });
         if native_group != given {
@@ -1307,13 +1348,15 @@ impl Game<'_> {
                 .as_ref()
                 .and_then(super::native_unspawned_mob::spawn_group);
         }
-        if spawn_cancelled {
-            return (Finalized::Cancelled, difficulty);
+        FinalizeDecision {
+            skip_finalize,
+            spawn_cancelled,
+            difficulty: if skip_finalize {
+                difficulty
+            } else {
+                heard.into()
+            },
         }
-        if skip {
-            return (Finalized::Skipped, difficulty);
-        }
-        (Finalized::Done, heard.into())
     }
     /// `ServerLevel.getCurrentDifficultyAt` in the level in place.
     pub(super) fn local_difficulty(&self, at: [f64; 3]) -> spawning::LocalDifficulty {

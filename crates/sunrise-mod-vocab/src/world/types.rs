@@ -499,6 +499,60 @@ pub enum LightLayer {
     Sky,
 }
 
+/// A built-in Minecraft feature flag (`net.minecraft.world.flag.FeatureFlags.REGISTRY`).
+///
+/// Used by general entity declarations (`EntityType.Builder.requiredFeatures`) and checked
+/// against a world's [`FeatureFlags`] (`EntityType.isEnabled`) at spawn and load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum FeatureFlag {
+    /// `minecraft:vanilla` (`FeatureFlags.VANILLA`).
+    Vanilla,
+    /// `minecraft:trade_rebalance` (`FeatureFlags.TRADE_REBALANCE`).
+    TradeRebalance,
+    /// `minecraft:redstone_experiments` (`FeatureFlags.REDSTONE_EXPERIMENTS`).
+    RedstoneExperiments,
+    /// `minecraft:minecart_improvements` (`FeatureFlags.MINECART_IMPROVEMENTS`).
+    MinecartImprovements,
+}
+
+impl FeatureFlag {
+    /// Every built-in flag in vanilla `FeatureFlags.REGISTRY` order.
+    pub const ALL: [Self; 4] = [
+        Self::Vanilla,
+        Self::TradeRebalance,
+        Self::RedstoneExperiments,
+        Self::MinecartImprovements,
+    ];
+
+    /// The flag's canonical namespaced id (`minecraft:vanilla`, `minecraft:trade_rebalance`, ...).
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Vanilla => "minecraft:vanilla",
+            Self::TradeRebalance => "minecraft:trade_rebalance",
+            Self::RedstoneExperiments => "minecraft:redstone_experiments",
+            Self::MinecartImprovements => "minecraft:minecart_improvements",
+        }
+    }
+
+    /// Resolve a feature flag id as `FeatureFlags.REGISTRY` does. Like `Identifier.CODEC`,
+    /// this uses the `minecraft` namespace if the namespace is omitted or empty.
+    pub fn from_id(id: &str) -> Option<Self> {
+        let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+        if !matches!(namespace, "" | "minecraft") {
+            return None;
+        }
+        match path {
+            "vanilla" => Some(Self::Vanilla),
+            "trade_rebalance" => Some(Self::TradeRebalance),
+            "redstone_experiments" => Some(Self::RedstoneExperiments),
+            "minecart_improvements" => Some(Self::MinecartImprovements),
+            _ => None,
+        }
+    }
+}
+
 /// The effective feature flags a world enables (`FeatureFlagSet`, `LevelReader.enabledFeatures`),
 /// each as its id (`minecraft:vanilla`, `minecraft:redstone_experiments`), shared with the world.
 /// Getting and reading it allocates nothing.
@@ -519,6 +573,15 @@ impl FeatureFlags {
         let bare = !flag.contains(':');
         self.iter()
             .any(|id| id == flag || (bare && id.strip_prefix("minecraft:") == Some(flag)))
+    }
+    /// `FeatureFlagSet.contains(FeatureFlag)`: whether the typed flag `flag` is enabled.
+    pub fn contains_flag(&self, flag: FeatureFlag) -> bool {
+        self.contains(flag.id())
+    }
+    /// `FeatureFlagSet.isSubsetOf` (`FeatureElement.isEnabled`): whether every flag in `required`
+    /// is enabled in this set.
+    pub fn contains_all(&self, required: &[FeatureFlag]) -> bool {
+        required.iter().all(|&flag| self.contains_flag(flag))
     }
     /// The enabled flag ids.
     pub fn iter(&self) -> impl Iterator<Item = &str> {
@@ -918,19 +981,12 @@ impl Difficulty {
     }
 }
 
-/// What spawned a mob, where `EntitySpawnReason` alone does not say (`FinalizeSpawnEvent.getSpawner`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum SpawnSource {
-    /// A spawner or trial spawner block at this position.
-    Block(BlockPos),
-}
-
-/// The spawner block that asked for a spawn check (`MobSpawnEvent.PositionCheck.getSpawner`):
-/// what `mob_spawn_placement_check` and `mob_spawn_position_check` get when a block spawns the
-/// mob. Natural spawning, chunk generation, patrols, sieges, reinforcements and a spawner
-/// minecart have none.
+/// What spawner triggered a spawn (`FinalizeSpawnEvent.getSpawner` and
+/// `MobSpawnEvent.PositionCheck.getSpawner`).
+///
+/// Each hook supplies only the variants its NeoForge counterpart can produce:
+/// `finalize_spawn` (`Either<BlockEntity, Entity>`) supplies `Block`, `Trial` and `Minecart`,
+/// while `mob_spawn_position_check` (`BaseSpawner`) supplies `Block` and `Minecart`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -944,6 +1000,11 @@ pub enum Spawner {
     Trial {
         /// Where the block is.
         pos: BlockPos,
+    },
+    /// A spawner minecart entity (`MinecartSpawner`).
+    Minecart {
+        /// The spawner minecart entity.
+        entity: crate::EntityRef,
     },
 }
 

@@ -513,9 +513,7 @@ impl GameLevel<'_, '_> {
         }
         let bounds = mob.bounds();
         let vanilla = spawn_selection::max_cluster_size(r.species);
-        let cluster_size = self
-            .game
-            .spawn_cluster_size(&mut mob, r.reason, None, vanilla);
+        let cluster_size = self.game.spawn_cluster_size(&mut mob, vanilla);
         pending.push(mob);
         Some(Spawned {
             bounds,
@@ -642,7 +640,6 @@ impl SpawnLevel for GameLevel<'_, '_> {
                 pos: BlockPos::new(at[0], at[1], at[2]),
                 default_result,
                 level: self.level_ref(),
-                spawner: self.spawner,
                 random,
                 result: &mut result,
             },
@@ -1980,7 +1977,24 @@ mod tests {
         kind: String,
         level: mod_api::LevelRef,
         spawner: Option<mod_api::Spawner>,
+        cart: Option<CartReads>,
         mob: Option<MobReads>,
+    }
+    type CartReads = (Option<String>, Option<[f64; 3]>);
+    fn cart_reads(
+        host: &dyn mod_api::Host,
+        spawner: Option<mod_api::Spawner>,
+    ) -> Option<CartReads> {
+        let mod_api::Spawner::Minecart { entity } = spawner? else {
+            return None;
+        };
+        Some((
+            entity
+                .kind(host)
+                .and_then(|key| key.id(host))
+                .map(|id| id.as_str().to_owned()),
+            entity.position(host),
+        ))
     }
     type MobReads = (
         Result<mod_api::Identifier, mod_api::UnspawnedMobError>,
@@ -2005,7 +2019,8 @@ mod tests {
                 hook: "placement",
                 kind: event.kind.to_owned(),
                 level: event.level,
-                spawner: event.spawner,
+                spawner: None,
+                cart: None,
                 mob: None,
             });
         }
@@ -2026,9 +2041,34 @@ mod tests {
                 kind: event.kind.to_owned(),
                 level: event.level,
                 spawner: event.spawner,
+                cart: cart_reads(host, event.spawner),
                 mob: Some(reads),
             });
             *event.result = self.answer;
+        }
+        fn finalize_spawn(
+            &self,
+            host: &dyn mod_api::Host,
+            event: &mut mod_api::FinalizeSpawnEvent<'_>,
+        ) -> mod_api::Flow {
+            let level = host.level(event.dimension).unwrap();
+            let reads = (
+                event.mob.kind(host),
+                event.mob.position(host),
+                event
+                    .mob
+                    .equipment(host, mod_api::EquipmentSlot::Head)
+                    .map(|e| e.is_none()),
+            );
+            self.log.lock().unwrap().push(Heard {
+                hook: "finalize",
+                kind: event.kind.to_owned(),
+                level,
+                spawner: event.spawner,
+                cart: cart_reads(host, event.spawner),
+                mob: Some(reads),
+            });
+            mod_api::Flow::Continue
         }
     }
     /// Gives every natural monster position one entry: the sulfur cube, whose spawn predicate
@@ -2209,10 +2249,13 @@ mod tests {
         });
     }
 
-    /// A spawner block: both checks hear `Spawner::Block` at the block; a `Default` listener on
-    /// the position check leaves the draws, the real ids and the mobs that join as with none
-    /// (the lent mob is the one that joins); a `Fail` adds no mob, uses no entity id and leaves
-    /// no tracking entry. Spawn data with entity data lends the kind and position only.
+    /// A spawner block and a spawner minecart: placement checks carry no spawner (NeoForge's
+    /// `SpawnPlacementCheck`), while position checks (`PositionCheck.getSpawner`) and
+    /// `finalize_spawn` (`FinalizeSpawnEvent.getSpawner`) carry `Spawner::Block` for a block
+    /// spawner and `Spawner::Minecart` for a spawner minecart; a `Default` listener on the
+    /// position check leaves the draws, the real ids and the mobs that join as with none (the lent
+    /// mob is the one that joins); a `Fail` adds no mob, uses no entity id and leaves no tracking
+    /// entry. Spawn data with entity data lends the kind and position only.
     #[test]
     #[ignore = "daily"]
     fn spawner_checks_tell_the_block_and_keep_the_draws() {
@@ -2262,10 +2305,17 @@ mod tests {
                 with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game, None));
             assert_eq!(listened, unlistened, "same draws, ids and mobs");
             assert!(heard.iter().any(|h| h.hook == "placement"));
+            assert!(heard.iter().any(|h| h.hook == "position"));
+            assert!(heard.iter().any(|h| h.hook == "finalize"));
             for h in &heard {
+                let expected = if h.hook == "placement" {
+                    None
+                } else {
+                    Some(block)
+                };
                 assert_eq!(
                     (h.kind.as_str(), h.level, h.spawner),
-                    (SULFUR_CUBE, level, Some(block))
+                    (SULFUR_CUBE, level, expected)
                 );
                 if let Some(reads) = &h.mob {
                     assert_eq!(reads.2, Ok(true), "a fresh spawn lends the whole mob");
@@ -2286,23 +2336,110 @@ mod tests {
                 (0, 0, 0),
                 "no mob, no entity id, no tracking entry"
             );
-            // Entity data: the mob is loaded after the tick, so the lend is its kind and position.
-            let health = || Some(("Health", Tag::Float(5.0f32.to_bits())));
-            let (_, heard) =
-                with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game, health()));
-            let lent: Vec<_> = heard.iter().filter_map(|h| h.mob.clone()).collect();
-            assert!(!lent.is_empty());
-            for (kind, position, head) in lent {
-                assert_eq!(kind, Ok(mod_api::Identifier::parse(SULFUR_CUBE).unwrap()));
+            let helmet = || {
+                Some((
+                    "equipment",
+                    Tag::compound([(
+                        "head",
+                        Tag::compound([
+                            ("id", Tag::String("minecraft:iron_helmet".into())),
+                            ("count", Tag::Int(1)),
+                        ]),
+                    )]),
+                ))
+            };
+            let (configured, heard) =
+                with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game, helmet()));
+            assert!(!configured.0.is_empty());
+            for (hook, expected) in [
+                ("position", Err(mod_api::UnspawnedMobError::Unsupported)),
+                ("finalize", Ok(false)),
+            ] {
+                let event = heard.iter().find(|h| h.hook == hook).unwrap();
+                let (kind, position, head) = event.mob.as_ref().unwrap();
+                assert_eq!(*kind, Ok(mod_api::Identifier::parse(SULFUR_CUBE).unwrap()));
                 assert!(position.is_ok());
-                assert_eq!(head, Err(mod_api::UnspawnedMobError::Unsupported));
+                assert_eq!(*head, expected);
+                assert_eq!(event.spawner, Some(block));
+            }
+            let cancel = || {
+                vec![mod_api::ModEntry::new(
+                    "cancel-configured",
+                    Box::new(FinalizeMod(FinalizeAnswer::StopSpawn)),
+                )]
+            };
+            let (cancelled, heard) =
+                with_checks(Some(SpawnCheck::Default), cancel, || tick(game, helmet()));
+            assert!(heard.iter().any(|h| h.hook == "finalize"));
+            assert_eq!((cancelled.0.len(), cancelled.1, cancelled.2), (0, 0, 0));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn spawner_minecart_hooks_read_the_joined_cart_during_its_tick() {
+        use super::super::native_entity_refs::tests::with_game;
+        use sunrise_client::chunk::block_entity::Next;
+        use sunrise_client::mobs::spawner::{SpawnData, SpawnDataExt, Spawner};
+        use sunrise_client::ticket_levels::{Sources, ViewedTicket};
+        with_game(|game| {
+            spawn_check_world(game, Vec3::new(0.5, 70.0, 0.5));
+            game.tickets.update(Some(Sources {
+                viewed: vec![ViewedTicket {
+                    center: (0, 0),
+                    radius: 0,
+                    ticking: true,
+                }],
+                ..Default::default()
+            }));
+            let start = [2.5, 70.0, 2.5];
+            let cart_kind = "minecraft:spawner_minecart";
+            let Some(super::super::commands::Target::Cart(id)) =
+                game.summon_with_nbt(cart_kind, start, "{}").unwrap()
+            else {
+                panic!("spawner minecart joined");
+            };
+            let owner = game.entity(id).unwrap();
+            let entity = [
+                ("id".into(), Tag::String(SULFUR_CUBE.into())),
+                (
+                    "Pos".into(),
+                    Tag::List(
+                        [4.5f64, 70.0, 4.5]
+                            .map(|n| Tag::Double(n.to_bits()))
+                            .to_vec(),
+                    ),
+                ),
+            ]
+            .into();
+            game.carts.update(0, |cart| {
+                cart.spawner = Some(Box::new(Spawner {
+                    spawn_delay: 0,
+                    spawn_count: 1,
+                    next: Some(Next::Own(SpawnData::new(entity, None, None))),
+                    ..Default::default()
+                }));
+            });
+            game.world.random.set_seed(7);
+            let (_, heard) = with_checks(Some(SpawnCheck::Default), Vec::new, || game.tick_carts());
+            let position = game.carts[0].position.components();
+            assert_ne!(position, start, "the cart moved before its spawner ticked");
+            for hook in ["position", "finalize"] {
+                let event = heard.iter().find(|h| h.hook == hook).unwrap();
+                assert_eq!(
+                    event.spawner,
+                    Some(mod_api::Spawner::Minecart { entity: owner })
+                );
+                assert_eq!(event.cart, Some((Some(cart_kind.into()), Some(position))));
             }
         });
     }
 
-    /// A trial spawner: the position check (obstruction only) and the placement check hear
-    /// `Spawner::Trial` at the block; a `Default` listener leaves the draws, ids and mob as with
-    /// none; a `Fail` adds no mob and no tracking entry.
+    /// A trial spawner: `mob_spawn_placement_check` runs with no spawner (NeoForge's
+    /// `SpawnPlacementCheck`), `mob_spawn_position_check` does not run (NeoForge's `TrialSpawner`
+    /// is not a `BaseSpawner`), and `finalize_spawn` hears `Spawner::Trial` at the block; a
+    /// `Default` listener leaves the draws, ids and mob as with none; a `Fail` placement check
+    /// adds no mob and no tracking entry.
     #[test]
     #[ignore = "daily"]
     fn trial_spawner_checks_tell_the_block_and_keep_the_draws() {
@@ -2316,12 +2453,15 @@ mod tests {
             let trial = mod_api::Spawner::Trial {
                 pos: mod_api::BlockPos::new(2, 70, 2),
             };
-            let tick = |game: &mut Game<'_>| {
+            let tick = |game: &mut Game<'_>, configured: bool| {
                 let (mobs, entities, tracked) =
                     (game.mobs.len(), game.next_entity, game.persist.uuids.len());
                 game.world.random.set_seed(9);
                 let mut entity = Compound::default();
                 entity.insert("id".into(), Tag::String(SULFUR_CUBE.into()));
+                if configured {
+                    entity.insert("Health".into(), Tag::Float(5.0f32.to_bits()));
+                }
                 let mut spawner = TrialSpawner {
                     next_spawn_data: Some(SpawnData::new(entity, None, None)),
                     ..Default::default()
@@ -2342,31 +2482,52 @@ mod tests {
                 game.next_entity = entities;
                 out
             };
-            let (unlistened, _) = with_checks(None, Vec::new, || tick(game));
+            let (unlistened, _) = with_checks(None, Vec::new, || tick(game, false));
             assert_eq!(unlistened.0.len(), 1, "the trial spawner spawns one mob");
             assert!(unlistened.0[0].4, "a trial spawner's mob is persistent");
-            let (listened, heard) = with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game));
+            let (listened, heard) =
+                with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game, false));
             assert_eq!(listened, unlistened, "same draws, ids and mob");
-            let lent = (
-                Ok(mod_api::Identifier::parse(SULFUR_CUBE).unwrap()),
-                Ok(unlistened.0[0].2),
-                Ok(true),
-            );
-            assert!(heard.iter().any(|h| h.mob.as_ref() == Some(&lent)));
             assert!(heard.iter().any(|h| h.hook == "placement"));
+            assert!(
+                !heard.iter().any(|h| h.hook == "position"),
+                "trial spawners do not fire PositionCheck"
+            );
+            assert!(heard.iter().any(|h| h.hook == "finalize"));
             for h in &heard {
+                let expected = if h.hook == "finalize" {
+                    Some(trial)
+                } else {
+                    None
+                };
                 assert_eq!(
                     (h.kind.as_str(), h.level, h.spawner),
-                    (SULFUR_CUBE, level, Some(trial))
+                    (SULFUR_CUBE, level, expected)
                 );
             }
-            let (refused, heard) = with_checks(Some(SpawnCheck::Fail), Vec::new, || tick(game));
-            assert!(heard.iter().any(|h| h.hook == "position"));
+            let refused = mod_platform::testing::with_mods(
+                vec![mod_api::ModEntry::new(
+                    "fail-placement",
+                    Box::new(ChecksMod(SpawnCheck::Fail)),
+                )]
+                .into(),
+                || tick(game, false),
+            );
             assert_eq!(
                 (refused.0.len(), refused.1, refused.2),
                 (0, 0, 0),
                 "no mob, no entity id, no tracking entry"
             );
+            let (configured, heard) =
+                with_checks(Some(SpawnCheck::Default), Vec::new, || tick(game, true));
+            assert_eq!(configured.0.len(), 1);
+            assert!(
+                configured.0[0].4,
+                "a configured trial mob is persistent too"
+            );
+            let event = heard.iter().find(|h| h.hook == "finalize").unwrap();
+            assert_eq!(event.spawner, Some(trial));
+            assert_eq!(event.mob.as_ref().unwrap().2, Ok(true));
         });
     }
 
@@ -2376,6 +2537,7 @@ mod tests {
         Pass,
         SkipFinalize,
         StopSpawn,
+        SkipAndStop,
     }
     struct FinalizeMod(FinalizeAnswer);
     #[mod_api::__subscriptions]
@@ -2389,9 +2551,189 @@ mod tests {
                 FinalizeAnswer::Pass => {}
                 FinalizeAnswer::SkipFinalize => return mod_api::Flow::Cancel,
                 FinalizeAnswer::StopSpawn => event.spawn_cancelled = true,
+                FinalizeAnswer::SkipAndStop => {
+                    event.spawn_cancelled = true;
+                    return mod_api::Flow::Cancel;
+                }
             }
             mod_api::Flow::Continue
         }
+    }
+
+    /// On spawners, `spawn_cancelled` vetoes admission after vanilla finalization
+    /// (when unconfigured and not cancelled with `Flow::Cancel`), trial persistence,
+    /// and any configured equipment table roll (NeoForge's
+    /// `EventHooks.finalizeMobSpawnSpawner`, `BaseSpawner.serverTick`,
+    /// `TrialSpawner.spawnMob`, and `NeoForgeEventHandler.builtinMobSpawnBlocker`).
+    #[test]
+    #[ignore = "daily"]
+    fn configured_spawner_veto_rolls_equipment_without_joining() {
+        use super::super::native_entity_refs::tests::with_game;
+        use sunrise_client::chunk::block_entity::Next;
+        use sunrise_client::mobs::spawner::{SpawnData, SpawnDataExt, Spawner};
+        use sunrise_client::mobs::trial_spawner::{TrialSpawner, TrialState};
+        use sunrise_client::random_sequences::RandomSequences;
+
+        with_game(|game| {
+            spawn_check_world(game, Vec3::new(0.5, 70.0, 0.5));
+            game.load_server_loot();
+            game.level.seed = 42;
+            let key = (2, 70, 2);
+            let equipment = Tag::compound([
+                (
+                    "loot_table",
+                    Tag::String("minecraft:equipment/trial_chamber_melee".into()),
+                ),
+                ("slot_drop_chances", Tag::Float(0.0f32.to_bits())),
+            ]);
+            let empty_sequences = RandomSequences::default().to_nbt();
+
+            let run_block = |game: &mut Game<'_>,
+                             configured: bool,
+                             with_equipment: bool,
+                             answer: Option<FinalizeAnswer>| {
+                let (mobs, entities, tracked) =
+                    (game.mobs.len(), game.next_entity, game.persist.uuids.len());
+                game.rand_sequences = RandomSequences::default();
+                game.world.random.set_seed(7);
+                let mut entity = Compound::default();
+                entity.insert("id".into(), Tag::String(SULFUR_CUBE.into()));
+                if configured {
+                    entity.insert("Health".into(), Tag::Float(5.0f32.to_bits()));
+                }
+                let mut spawner = Spawner {
+                    spawn_delay: 0,
+                    spawn_count: 1,
+                    next: Some(Next::Own(SpawnData::new(
+                        entity,
+                        None,
+                        with_equipment.then(|| equipment.clone()),
+                    ))),
+                    ..Default::default()
+                };
+                let mut go = |game: &mut Game<'_>| {
+                    game.server_tick_spawner_of(key, &mut spawner, None)
+                        .unwrap();
+                };
+                match answer {
+                    None => go(game),
+                    Some(a) => mod_platform::testing::with_mods(
+                        vec![mod_api::ModEntry::new("finalize", Box::new(FinalizeMod(a)))].into(),
+                        || go(game),
+                    ),
+                }
+                let out = (
+                    game.mobs.len() - mobs,
+                    game.next_entity - entities,
+                    game.persist.uuids.len() - tracked,
+                    game.rand_sequences.to_nbt(),
+                    game.world.random.next_int(),
+                );
+                for m in game.mobs.drain(mobs..) {
+                    game.persist.uuids.remove(&m.id);
+                }
+                game.next_entity = entities;
+                out
+            };
+
+            let joined = run_block(game, true, true, None);
+            assert_eq!(joined.0, 1, "configured block spawner spawns one mob");
+            assert_ne!(
+                joined.3, empty_sequences,
+                "configured equipment table rolled its random sequence"
+            );
+            let vetoed = run_block(game, true, true, Some(FinalizeAnswer::StopSpawn));
+            assert_eq!(
+                (vetoed.0, vetoed.1, vetoed.2),
+                (0, 0, 0),
+                "spawn_cancelled vetoes admission"
+            );
+            assert_eq!(
+                vetoed.3, joined.3,
+                "spawn_cancelled preserves the configured equipment table roll"
+            );
+
+            // Unconfigured block spawner: `spawn_cancelled` alone still runs vanilla
+            // finalization before admission veto; `Flow::Cancel` skips finalization.
+            let plain_joined = run_block(game, false, false, None);
+            assert_eq!(plain_joined.0, 1);
+            let plain_vetoed = run_block(game, false, false, Some(FinalizeAnswer::StopSpawn));
+            assert_eq!((plain_vetoed.0, plain_vetoed.1, plain_vetoed.2), (0, 0, 0));
+            assert_eq!(
+                plain_vetoed.4, plain_joined.4,
+                "spawn_cancelled without Flow::Cancel preserves vanilla finalization draws"
+            );
+            let plain_skipped = run_block(game, false, false, Some(FinalizeAnswer::SkipAndStop));
+            assert_eq!(
+                (plain_skipped.0, plain_skipped.1, plain_skipped.2),
+                (0, 0, 0)
+            );
+            assert_ne!(
+                plain_skipped.4, plain_joined.4,
+                "Flow::Cancel skips vanilla finalization draws"
+            );
+
+            let run_trial = |game: &mut Game<'_>, answer: Option<FinalizeAnswer>| {
+                let (mobs, entities, tracked) =
+                    (game.mobs.len(), game.next_entity, game.persist.uuids.len());
+                game.rand_sequences = RandomSequences::default();
+                game.world.random.set_seed(9);
+                let mut entity = Compound::default();
+                entity.insert("id".into(), Tag::String(SULFUR_CUBE.into()));
+                entity.insert("Health".into(), Tag::Float(5.0f32.to_bits()));
+                let mut spawner = TrialSpawner {
+                    next_spawn_data: Some(SpawnData::new(entity, None, Some(equipment.clone()))),
+                    ..Default::default()
+                };
+                let mut go = |game: &mut Game<'_>| {
+                    game.server_tick_trial_spawner(key, &mut spawner, TrialState::Active, false)
+                        .unwrap();
+                };
+                match answer {
+                    None => go(game),
+                    Some(a) => mod_platform::testing::with_mods(
+                        vec![mod_api::ModEntry::new("finalize", Box::new(FinalizeMod(a)))].into(),
+                        || go(game),
+                    ),
+                }
+                let out = (
+                    game.mobs.len() - mobs,
+                    game.next_entity - entities,
+                    game.persist.uuids.len() - tracked,
+                    spawner.total_mobs_spawned,
+                    spawner.current_mobs.len(),
+                    game.rand_sequences.to_nbt(),
+                );
+                for m in game.mobs.drain(mobs..) {
+                    game.persist.uuids.remove(&m.id);
+                }
+                game.next_entity = entities;
+                out
+            };
+
+            let trial_joined = run_trial(game, None);
+            assert_eq!((trial_joined.0, trial_joined.3, trial_joined.4), (1, 1, 1));
+            assert_ne!(
+                trial_joined.5, empty_sequences,
+                "trial spawner equipment table rolled its random sequence"
+            );
+            let trial_vetoed = run_trial(game, Some(FinalizeAnswer::StopSpawn));
+            assert_eq!(
+                (
+                    trial_vetoed.0,
+                    trial_vetoed.1,
+                    trial_vetoed.2,
+                    trial_vetoed.3,
+                    trial_vetoed.4,
+                ),
+                (0, 0, 0, 0, 0),
+                "trial spawner spawn_cancelled vetoes admission"
+            );
+            assert_eq!(
+                trial_vetoed.5, trial_joined.5,
+                "trial spawner spawn_cancelled preserves the configured equipment table roll"
+            );
+        });
     }
 
     /// No listener and a listener that changes nothing finalize and draw as vanilla; a cancel
@@ -2688,11 +3030,7 @@ mod tests {
                 event.mob.kind(host).unwrap().to_string(),
                 "minecraft:zombie"
             );
-            Some(if event.reason == mod_api::SpawnReason::Natural {
-                event.vanilla * 2
-            } else {
-                1
-            })
+            Some(event.vanilla * 2)
         }
     }
     /// A second part on the same type: asked only when the first does not answer.
@@ -2721,66 +3059,39 @@ mod tests {
         }
     }
 
-    /// The parts of the new mob's type answer the group size limit: a part's answer replaces
-    /// vanilla's for its type and reason (the first part to answer wins), a part that does not
+    /// The parts of the new mob's type answer the natural-spawn group size limit: a part's answer
+    /// replaces vanilla's for its type (the first part to answer wins), a part that does not
     /// answer, and a type with no part, leave it to vanilla.
     #[test]
     #[ignore = "daily"]
     fn entity_parts_answer_the_spawn_cluster_size() {
-        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
-        if run_fresh_cases(
-            "game::natural_spawning::tests::entity_parts_answer_the_spawn_cluster_size",
-            "SUNRISE_SPAWN_CLUSTER_CHILD",
-            &["valid"],
-        ) {
-            return;
-        }
+        use super::super::native_entity_refs::tests::with_game;
         let entries = vec![mod_api::ModEntry::new("clusters", Box::new(ClusterMod))];
-        mod_platform::__private::install(entries.into());
-        crate::game::api_values::install_parts(&[mod_api::ModEntry::new(
-            "clusters",
-            Box::new(ClusterMod),
-        )])
-        .unwrap();
-        with_game(|game| {
-            game.resolve_parts().unwrap();
-            let mob = |id: &str| {
-                let kind = game.res.mob_types().get(id).unwrap().clone();
-                Mob::new(1, kind, Vec3::ZERO, 0.0)
-            };
-            let ask = |id: &str, reason| game.spawn_cluster_size(&mut mob(id), reason, None, 4);
-            assert_eq!(
-                ask("minecraft:zombie", mod_api::SpawnReason::Natural),
-                Some(8)
-            );
-            assert_eq!(
-                ask("minecraft:zombie", mod_api::SpawnReason::Spawner),
-                Some(1)
-            );
-            assert_eq!(
-                ask("minecraft:skeleton", mod_api::SpawnReason::Natural),
-                None
-            );
-            assert_eq!(ask("minecraft:cow", mod_api::SpawnReason::Natural), None);
-            // Unsubscribed entity types must not lend the mob or expire an open standalone lend.
-            let mut cow = mob("minecraft:cow");
-            let mut skeleton = mob("minecraft:skeleton");
-            let host: &Game<'_> = game;
-            host.lend_unspawned("minecraft:pig", [0.0; 3], None, |outer, _| {
-                assert_eq!(
-                    host.spawn_cluster_size(&mut cow, mod_api::SpawnReason::Natural, None, 4),
-                    None
-                );
-                assert_eq!(
-                    host.spawn_cluster_size(&mut skeleton, mod_api::SpawnReason::Natural, None, 4),
-                    None
-                );
-                assert_eq!(
-                    outer.kind(host).unwrap().to_string(),
-                    "minecraft:pig",
-                    "unsubscribed types must not lend or expire an outer unspawned lend"
-                );
-            });
+        mod_platform::testing::with_mods(entries.into(), || {
+            with_game(|game| {
+                game.resolve_parts().unwrap();
+                let mob = |id: &str| {
+                    let kind = game.res.mob_types().get(id).unwrap().clone();
+                    Mob::new(1, kind, Vec3::ZERO, 0.0)
+                };
+                let ask = |id: &str| game.spawn_cluster_size(&mut mob(id), 4);
+                assert_eq!(ask("minecraft:zombie"), Some(8));
+                assert_eq!(ask("minecraft:skeleton"), None);
+                assert_eq!(ask("minecraft:cow"), None);
+                // Unsubscribed entity types must not lend the mob or expire an open standalone lend.
+                let mut cow = mob("minecraft:cow");
+                let mut skeleton = mob("minecraft:skeleton");
+                let host: &Game<'_> = game;
+                host.lend_unspawned("minecraft:pig", [0.0; 3], None, |outer, _| {
+                    assert_eq!(host.spawn_cluster_size(&mut cow, 4), None);
+                    assert_eq!(host.spawn_cluster_size(&mut skeleton, 4), None);
+                    assert_eq!(
+                        outer.kind(host).unwrap().to_string(),
+                        "minecraft:pig",
+                        "unsubscribed types must not lend or expire an outer unspawned lend"
+                    );
+                });
+            })
         });
     }
 

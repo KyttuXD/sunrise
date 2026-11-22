@@ -82,15 +82,16 @@ pub trait LevelSpawningBackendMut {
     ///   pitch, which it has no state for.
     /// - [`SpawnBody::General`]: a new row of the general type, with a fresh
     ///   UUID and the type's declared payload version, through the insertion
-    ///   `/summon` and chunk loading share. The owner is kept on the row and
+    ///   `/summon` and chunk loading share. The world must enable the type's
+    ///   required Minecraft feature flags. The owner is kept on the row and
     ///   saved (`Owner`); [`EntityRef::owner`] reads it back, for the type's
     ///   own tick to skip its shooter and credit its damage. The row's state is
     ///   its attachments: write them on the returned handle in the same
     ///   transaction, and the join and the first tracking snapshot see them.
     ///
     /// Velocity is set before the entity joins (`Entity.setDeltaMovement`).
-    /// The level's spawn limits, flags and spawn rules don't apply, as they
-    /// don't to `/summon`; nor does a general type's `summonable`, which is
+    /// The level's natural spawning limits, spawn flags and spawn rules don't
+    /// apply, as they don't to `/summon`; nor does a general type's `summonable`, which is
     /// `/summon`'s alone (`EntityType.canSummon`). The new entity as a handle.
     /// None, with nothing spawned and no random drawn, for a kind that isn't
     /// of `spawn.body`'s family, a position, velocity or rotation that isn't

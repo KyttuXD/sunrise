@@ -3276,7 +3276,7 @@ mod tests {
                     1,
                     &[],
                 );
-                *self.outcome.lock().unwrap() = Some(result);
+                *self.outcome.lock().unwrap() = Some(result.map(|_| ()));
             }
         }
 
