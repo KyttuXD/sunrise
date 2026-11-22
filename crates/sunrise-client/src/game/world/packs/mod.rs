@@ -404,6 +404,12 @@ impl Game<'_> {
         let texture_atlases = super::client_reload::collect_texture_atlases();
         let emissive_sprites = super::client_reload::collect_emissive_sprites();
         super::mods::register_fluid_models(self.options.execution_role);
+        let max_side = self
+            .renderer
+            .as_ref()
+            .map_or(sunrise_client::hud::MAX_ATLAS_SIZE, |r| {
+                r.device.limits().max_texture_dimension_2d
+            });
         let stage = move |progress: &crate::game::Progress| {
             stage_pack(
                 &vanilla,
@@ -419,6 +425,7 @@ impl Game<'_> {
                 unicode,
                 japanese,
                 progress,
+                max_side,
             )
             .map_err(|e| e.to_string())
         };
@@ -696,6 +703,7 @@ pub(super) fn stage_pack(
     force_unicode: bool,
     japanese: bool,
     progress: &super::Progress,
+    max_side: u32,
 ) -> sunrise_client::Result<StagedPack> {
     let resource_root = startup_root(vanilla_root, selected, server, mod_sources)?;
     let resource_root = super::client_reload::stage_texture_atlases(resource_root, texture_atlases);
@@ -721,7 +729,7 @@ pub(super) fn stage_pack(
             let game = sunrise_assets::resource_source::ResourceSource::directory(
                 vanilla_root.to_path_buf(),
             );
-            HudAtlas::build_over_with_dynamic_textures(&source, &source, &game, pool)
+            HudAtlas::build_for_texture_limit(&source, &source, &game, pool, max_side)
                 .map_err(|e| e.to_string())
         });
         let panorama = super::resource_load::named_scope(s, "pack-assets", || {

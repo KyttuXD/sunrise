@@ -185,12 +185,20 @@ pub(in crate::game) fn dynamic_texture_pool() -> bool {
 }
 
 impl UiResources {
-    /// The resolved resource generation, including the base layer and pack filters, over the
-    /// game's own resources at `vanilla` (which tell the packs' core shaders from the game's).
-    /// Its splash pool is empty until `with_splashes`.
+    #[cfg(test)]
     pub fn load(
         root: &sunrise_assets::resource_source::ResourceSource,
         vanilla: &Path,
+    ) -> Result<Self> {
+        Self::load_for_texture_limit(root, vanilla, sunrise_client::hud::MAX_ATLAS_SIZE)
+    }
+    /// Build the resolved resource generation against the actual renderer limits, over the game's
+    /// own resources at `vanilla` (which tell core shaders apart). The splash pool is populated by
+    /// `with_splashes`.
+    pub(super) fn load_for_texture_limit(
+        root: &sunrise_assets::resource_source::ResourceSource,
+        vanilla: &Path,
+        max_side: u32,
     ) -> Result<Self> {
         // The title screen waits for both: the panorama's six faces decode
         // beside the atlas.
@@ -203,7 +211,7 @@ impl UiResources {
             let pool = dynamic_texture_pool();
             let game = sunrise_assets::resource_source::ResourceSource::directory(vanilla.into());
             let atlas = startup::time("ui.atlas", || {
-                HudAtlas::build_over_with_dynamic_textures(root, root, &game, pool)
+                HudAtlas::build_for_texture_limit(root, root, &game, pool, max_side)
             });
             let panorama = panorama
                 .join()

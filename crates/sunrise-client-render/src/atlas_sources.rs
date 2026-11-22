@@ -644,33 +644,29 @@ fn sorted_textures(source: &crate::resource_source::ResourceSource) -> Vec<Strin
     textures
 }
 
-/// The sprites of the atlases a mod registered, each atlas listed from its own definition and
-/// asked of the mods under its own id: two atlases sharing a definition get an answer each. An
-/// atlas whose definition doesn't decode is left out. Once per client prepare, by the staging of
-/// the mods' atlases; the game's atlases are [`Listing`]'s.
+/// List the registered definitions and ask custom sources under the same atlas ID.
+/// An atlas whose definition doesn't decode is left out.
 pub fn registered(
     source: &crate::resource_source::ResourceSource,
     mods: &dyn ModSources,
-    atlases: &[(&Identifier, &Identifier)],
+    atlases: &[&Identifier],
 ) -> BTreeMap<Identifier, Listed> {
     let textures = sorted_textures(source);
     atlases
         .iter()
-        .filter_map(|(atlas, definition_id)| {
-            let sources = definition(source, mods, definition_id)?;
+        .filter_map(|&atlas| {
+            let sources = definition(source, mods, atlas)?;
             Some((
-                (*atlas).clone(),
+                atlas.clone(),
                 list_atlas(source, &textures, mods, atlas, &sources),
             ))
         })
         .collect()
 }
 
-/// Built-in engine atlas paths under `minecraft:` (`AtlasManager.KNOWN_ATLASES` in vanilla 26.3).
+/// Vanilla 26.3 `AtlasManager.KNOWN_ATLASES`, in definition order under `minecraft:`.
 pub const KNOWN_ATLASES: &[&str] = &[
-    "armor_trims",
     "banner_patterns",
-    "beds",
     "blocks",
     "items",
     "chests",
@@ -681,7 +677,6 @@ pub const KNOWN_ATLASES: &[&str] = &[
     "particles",
     "shield_patterns",
     "shulker_boxes",
-    "signs",
     "celestials",
 ];
 
@@ -692,7 +687,7 @@ pub fn is_builtin_atlas(id: &Identifier) -> bool {
 
 /// Sprite listings of the engine atlases (`AtlasManager.KNOWN_ATLASES`). A definition on its own
 /// does not register an atlas. Mod-registered atlases are listed under their own IDs by
-/// [`registered`], even when several atlas IDs use the same definition.
+/// [`registered`].
 #[derive(Debug, Default)]
 pub struct Listing {
     atlases: BTreeMap<String, Listed>,
@@ -1026,9 +1021,8 @@ mod tests {
         );
         let textures = list_textures(&source);
         assert_eq!(textures, ["demo:item/x", "zzz:item/z"]);
-        let atlas = Identifier::parse("demo:atlas").unwrap();
-        let definition = Identifier::parse("demo:custom/nested").unwrap();
-        let atlases = registered(&source, &Mods::none(), &[(&atlas, &definition)]);
+        let atlas = Identifier::parse("demo:custom/nested").unwrap();
+        let atlases = registered(&source, &Mods::none(), &[&atlas]);
         assert!(
             matches!(atlases[&atlas].sprites.get("demo:renamed"), Some(SpriteOrigin::File(texture)) if texture == "demo:item/x")
         );
@@ -1377,13 +1371,12 @@ mod tests {
         assert!(kept.read(name).is_none() && kept.read_stack(name).is_empty());
     }
 
-    /// An atlas a mod registered is listed under its own id from its definition. Two atlases
-    /// sharing one definition are each asked, but the definition is not itself an engine atlas.
+    /// A registered atlas is asked under the ID of its definition, which is not an engine atlas.
     #[test]
     fn registered_atlases_are_asked_by_their_own_id() {
         use sunrise_assets::resource_source::Resource;
         let source = crate::resource_source::ResourceSource::indexed(
-            ["minecraft:pack_icons", "demo:unregistered"]
+            ["demo:first", "demo:second", "demo:unregistered"]
                 .map(|definition| {
                     let (namespace, path) = definition.split_once(':').unwrap();
                     (
@@ -1400,16 +1393,8 @@ mod tests {
             )]
         });
         let id = |text: &str| Identifier::parse(text).unwrap();
-        let (first, second, definition) = (
-            id("demo:first"),
-            id("demo:second"),
-            id("minecraft:pack_icons"),
-        );
-        let listed = registered(
-            &source,
-            &mods,
-            &[(&first, &definition), (&second, &definition)],
-        );
+        let (first, second) = (id("demo:first"), id("demo:second"));
+        let listed = registered(&source, &mods, &[&first, &second]);
         assert_eq!(
             listed[&first].sprites.keys().collect::<Vec<_>>(),
             ["demo:from_first"]

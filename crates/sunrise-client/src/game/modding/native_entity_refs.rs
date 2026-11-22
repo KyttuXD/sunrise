@@ -1628,6 +1628,19 @@ pub(super) mod tests {
         role: super::super::execution_role::ExecutionRole,
         test: impl FnOnce(&mut super::Game<'_>),
     ) {
+        with_game_resource_root(
+            sunrise_assets::resource_source::ResourceRoot::directory(root),
+            role,
+            test,
+        );
+    }
+
+    pub(in crate::game) fn with_game_resource_root(
+        resources: sunrise_assets::resource_source::ResourceRoot,
+        role: super::super::execution_role::ExecutionRole,
+        test: impl FnOnce(&mut super::Game<'_>),
+    ) {
+        let root = resources.prepared().to_path_buf();
         use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
         use mod_api::Authority;
 
@@ -1656,7 +1669,7 @@ pub(super) mod tests {
         let saves = tempfile::tempdir().unwrap();
         let settings = Settings::default();
         let loaded = load_resources(
-            sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
+            resources,
             Vec::new(),
             None,
             &root,

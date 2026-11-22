@@ -96,11 +96,20 @@ impl Resource {
     }
 }
 
+/// One registered atlas's projected textures. PNG and metadata come from the same sprite;
+/// absent metadata must not inherit a sidecar from the lower layer at the destination.
+#[derive(Clone, Debug)]
+pub struct RuntimeTextureAtlas {
+    pub id: String,
+    pub mod_id: &'static str,
+    pub textures: BTreeMap<String, (Resource, Option<Resource>)>,
+}
+
 /// A folder or an open zip/jar, with the same relative-name lookup and listing.
 /// Clones share the open archive; construct a new source for a resource reload.
 /// Equality and hashing identify that generation, rather than comparing file contents.
 #[derive(Clone)]
-pub struct ResourceSource(Arc<Storage>, Arc<Memo>);
+pub struct ResourceSource(Arc<Storage>, Arc<Memo>, Arc<[RuntimeTextureAtlas]>);
 /// What one resource generation computed for its readers, by the type of the value.
 type Memo = std::sync::Mutex<HashMap<std::any::TypeId, Arc<dyn std::any::Any + Send + Sync>>>;
 impl PartialEq for ResourceSource {
@@ -169,14 +178,28 @@ impl ResourceRoot {
     pub fn mod_layers(&self) -> &Arc<[ResourceSource]> {
         &self.0.mod_layers
     }
-    /// Add generated client textures as the highest asset layer, keeping the
-    /// prepared tables and passive server data on their original sources.
-    pub fn with_runtime_textures(mut self, textures: BTreeMap<String, Resource>) -> Self {
-        if textures.is_empty() {
+    /// Project the staged atlases at the highest asset layer and retain their stitch groups.
+    /// Prepared tables and passive server data stay on their original sources.
+    pub fn with_runtime_texture_atlases(mut self, atlases: Vec<RuntimeTextureAtlas>) -> Self {
+        if atlases.is_empty() {
             return self;
         }
+        let mut files = BTreeMap::new();
+        let mut hidden = BTreeSet::new();
+        for atlas in &atlases {
+            for (path, (texture, metadata)) in &atlas.textures {
+                let sidecar = format!("{path}.mcmeta");
+                files.insert(path.clone(), texture.clone());
+                if let Some(metadata) = metadata {
+                    files.insert(sidecar, metadata.clone());
+                } else {
+                    hidden.insert(sidecar);
+                }
+            }
+        }
         let root = Arc::make_mut(&mut self.0);
-        root.source = root.source.extended(textures);
+        root.source = root.source.extend_files(files, &hidden);
+        root.source.2 = atlases.into();
         self
     }
     pub fn data_changes(&self) -> &ResourceSource {
@@ -310,7 +333,7 @@ impl ResourceSource {
         }
     }
     fn from(storage: Storage) -> Self {
-        Self(Arc::new(storage), Arc::default())
+        Self(Arc::new(storage), Arc::default(), Arc::from([]))
     }
     pub fn indexed(files: BTreeMap<String, Resource>) -> Self {
         Self::from(Storage::Index(files, BTreeMap::new(), Arc::from([])))
@@ -360,13 +383,18 @@ impl ResourceSource {
     /// A source of the same files, `files` added over them, in the same generation: it keeps
     /// the layers and shares what [`ResourceSource::cached`] holds.
     pub fn extended(&self, files: BTreeMap<String, Resource>) -> Self {
+        self.extend_files(files, &BTreeSet::new())
+    }
+    fn extend_files(&self, files: BTreeMap<String, Resource>, hidden: &BTreeSet<String>) -> Self {
         let mut index: BTreeMap<_, _> = self
             .list("")
             .into_iter()
+            .filter(|name| !hidden.contains(name))
             .map(|name| (name.clone(), Resource::file(self.clone(), name)))
             .collect();
         index.extend(files);
-        let layers = self.layers().cloned().unwrap_or_default();
+        let mut layers = self.layers().cloned().unwrap_or_default();
+        layers.retain(|name, _| !hidden.contains(name));
         let sources = match self.0.as_ref() {
             Storage::Index(.., sources) => sources.clone(),
             _ => Arc::from([]),
@@ -374,7 +402,12 @@ impl ResourceSource {
         Self(
             Arc::new(Storage::Index(index, layers, sources)),
             self.1.clone(),
+            self.2.clone(),
         )
+    }
+    /// The staged runtime groups in registration order, independent of asset path ordering.
+    pub fn runtime_texture_atlases(&self) -> &[RuntimeTextureAtlas] {
+        &self.2
     }
     /// A value computed once for this generation and shared by every clone of the source and
     /// every source `extended` from it: the first caller makes it, the rest wait for it and take
@@ -724,9 +757,15 @@ mod tests {
         let root = ResourceRoot::new("prepared".into(), "cache".into(), source.clone())
             .with_data(data.clone(), ResourceSource::default());
         let name = "assets/demo/textures/block/generated.png";
-        let texture = |byte| BTreeMap::from([(name.into(), Resource::bytes(vec![byte]))]);
-        let first = root.clone().with_runtime_textures(texture(2));
-        let second = root.with_runtime_textures(texture(3));
+        let texture = |byte| {
+            vec![RuntimeTextureAtlas {
+                id: "demo:generated".into(),
+                mod_id: "demo",
+                textures: BTreeMap::from([(name.into(), (Resource::bytes(vec![byte]), None))]),
+            }]
+        };
+        let first = root.clone().with_runtime_texture_atlases(texture(2));
+        let second = root.with_runtime_texture_atlases(texture(3));
         assert_eq!(first.source().list("assets/").len(), 2);
         assert_eq!(first.source().read(name).unwrap(), [2]);
         assert!(!source.contains(name));

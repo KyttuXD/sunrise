@@ -142,20 +142,16 @@ pub enum TextureAtlas {
 }
 
 /// An atlas a client mod adds beside the game's (`RegisterTextureAtlasesEvent`), as
-/// `register_texture_atlases` declares it: its id and the atlas definition listing its sprites.
+/// `register_texture_atlases` declares it: one identifier for the atlas and its definition.
 /// Sunrise stitches its sprites into the GUI atlas, each under [`Self::sprite_name`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: mods submit declarations by value
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct TextureAtlasRegistration {
-    /// The atlas's id (`mymod:icons`). Any namespace is allowed except collisions with vanilla's
-    /// built-in engine atlases (`AtlasManager.KNOWN_ATLASES`, such as `minecraft:blocks` or
-    /// `minecraft:gui`).
+    /// The atlas's id; `mymod:icons` loads `assets/mymod/atlases/icons.json`. Packs can extend or
+    /// filter the definition's `sources` as they do the game's. Only IDs in
+    /// `AtlasManager.KNOWN_ATLASES` (such as `minecraft:blocks`) are already reserved.
     pub atlas: Identifier,
-    /// Its definition, `assets/<namespace>/atlases/<path>.json` (`mymod:icons`): a `sources` list
-    /// like vanilla's atlas definitions (`directory`, `single`, `filter`, `unstitch`,
-    /// `paletted_permutations`), which resource packs can change like theirs.
-    pub definition: Identifier,
 }
 
 impl TextureAtlasRegistration {

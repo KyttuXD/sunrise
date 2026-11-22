@@ -457,6 +457,58 @@ fn two_gui_ids_of_one_walked_name_and_a_model_only_id_keep_their_own_results() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn a_batch_that_cannot_stitch_leaves_the_base_and_next_atlas_intact() {
+    use crate::resource_source::RuntimeTextureAtlas;
+    let atlas = |id: &str| RuntimeTextureAtlas {
+        id: id.to_owned(),
+        mod_id: "demo",
+        textures: Default::default(),
+    };
+    let tile = |name: &str, width, height| (name.to_owned(), width, height, Vec::new());
+    let base = tile("base", 512, 16);
+    let one = tile("large_one", 800, 300);
+    let two = tile("large_two", 800, 300);
+    let small = tile("small", 64, 8);
+    let mut images = vec![base.clone()];
+    let max = 1024;
+    let layout = HudAtlas::layout(&images, max).unwrap();
+    assert!(HudAtlas::layout(&[one.clone()], max).is_ok());
+    assert!(HudAtlas::layout(&[two.clone()], max).is_ok());
+    let (width, placements, glyph_row) = HudAtlas::admit_registered(
+        &mut images,
+        [
+            (&atlas("demo:too_big"), vec![one, two]),
+            (&atlas("demo:fits"), vec![small.clone()]),
+        ]
+        .into_iter(),
+        layout,
+        max,
+    );
+    assert_eq!(images, [base, small]);
+    assert_eq!(
+        (width, placements, glyph_row),
+        (1024, vec![(0, 0), (513, 0)], 17)
+    );
+}
+
+fn source_with_registered_texture(root: &std::path::Path, path: &str) -> ResourceSource {
+    use crate::resource_source::{Resource, ResourceRoot, RuntimeTextureAtlas};
+    let source = ResourceSource::directory(root.into());
+    let metadata_path = format!("{path}.mcmeta");
+    let metadata = source
+        .contains(&metadata_path)
+        .then(|| Resource::file(source.clone(), metadata_path));
+    ResourceRoot::new(root.into(), root.into(), source.clone())
+        .with_runtime_texture_atlases(vec![RuntimeTextureAtlas {
+            id: "demo:icons".into(),
+            mod_id: "demo",
+            textures: [(path.into(), (Resource::file(source, path.into()), metadata))].into(),
+        }])
+        .source()
+        .clone()
+}
+
 /// A file another owner packed under a name that is also a GUI id (a registered atlas's
 /// projection is `mymod:gui/atlases/...`) is not erased by a GUI filter of that id: it stays
 /// in the packed table, while the GUI lane's answer for the id is its removal.
@@ -474,7 +526,11 @@ fn a_gui_filter_never_erases_a_registered_atlas_sprite_of_its_name() {
             {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"gui/atlases/xicons/xdemo/xheart"}}]}"#,
     )
     .unwrap();
-    let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+    let atlas = HudAtlas::build(&source_with_registered_texture(
+        &root,
+        "assets/demo/textures/gui/atlases/xicons/xdemo/xheart.png",
+    ))
+    .unwrap();
     let name = "demo:gui/atlases/xicons/xdemo/xheart";
     let packed = *atlas
         .registered
@@ -522,7 +578,11 @@ fn a_registered_atlas_sprite_and_a_model_of_one_name_both_survive() {
         r#"{"texture":{"blur":true,"clamp":true}}"#,
     )
     .unwrap();
-    let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+    let atlas = HudAtlas::build(&source_with_registered_texture(
+        &root,
+        "assets/demo/textures/gui/atlases/xicons/xdemo/xheart.png",
+    ))
+    .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
     let registered = *atlas.gui_rect(name).expect("the registered sprite");
     assert_eq!(

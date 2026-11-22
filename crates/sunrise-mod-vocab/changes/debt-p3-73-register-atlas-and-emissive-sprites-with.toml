@@ -1,6 +1,11 @@
 ids = [
     "hook:register_texture_atlases",
     "hook:register_texture_atlases.atlases",
+    "type:TextureAtlasRegistration",
+    "type:TextureAtlasRegistration.atlas",
+    "type:TextureAtlasRegistration.definition",
+    "handle:RegisterTextureAtlasesEvent::register",
+    "handle:TextureAtlasRegistration::sprite_name",
     "hook:emissive",
     "hook:emissive.layers",
     "method:Hooks::emissive",
@@ -11,8 +16,9 @@ ids = [
     "type:EmissiveSpriteRegistration.base",
     "type:EmissiveSpriteRegistration.overlay",
     "handle:EmissiveSpriteRegistration::new",
+    "fn:sunrise_client_render::sprites::Sprites::register",
 ]
-why = "Removed private atlas/sprite quotas (MAX_ATLASES = 32, MAX_SPRITES = 4096), minecraft/sunrise namespace bans, and silent collision drops from register_texture_atlases, aligning with NeoForge RegisterTextureAtlasesEvent and vanilla AtlasManager.KNOWN_ATLASES / TextureManager.register with mod-attributed diagnostics and real GPU atlas dimension constraints. Replaced the per-frame &'static str 32-capped emissive hook with typed EmissiveSpriteRegistration collected on startup and resource reload, resolved during bake into RenderAssets::emissive_layers without a private 32/96 split over the 128-entry Globals.emissive_layers GPU uniform table."
+why = "Register atlases by their definition ID, with exactly the built-ins from vanilla 26.3 AtlasManager.KNOWN_ATLASES and first-registration-wins for duplicate keys from NeoForge ClientHooks.gatherTextureAtlases and RegisterTextureAtlasesEvent.register. Like vanilla AtlasManager's SpriteId, each atlas/sprite pair keeps its distinct identity. TextureManager.register replaces the same output key; SpriteResourceLoader and FallbackResourceManager.createStackMetadataFinder keep metadata with the winning texture. TextureAtlas and SpriteLoader.stitch use the device's real RGBA texture side; Sunrise logs and isolates failed batches before publishing the GUI atlas. Emissive sprite keys resolve at bake and reload; only final usable overlays take texture layers and a row in the shader's Globals.emissive_layers table."
 migrate = """
 In Hooks::emissive, change the signature from
 `fn emissive(&self, host: &dyn ClientHost, event: &mut EmissiveEvent<'_>)`
@@ -24,9 +30,22 @@ and replace `event.layers.push((base, overlay))` with
 overlay textures at any `assets/<namespace>/textures/<path>.png` without the `emissive/` prefix or
 32-entry cap.
 
-In Hooks::register_texture_atlases, call `event.register(atlas)` as before; non-built-in atlases in
-`minecraft:` or `sunrise:` are now accepted, collisions with vanilla's built-in engine atlases
-(`AtlasManager.KNOWN_ATLASES`) and duplicate atlas ids are rejected with error diagnostics keeping
-the first registration, and registered atlas sprites replace raw pack files at the same staged path
-with a warning. Rebuild native mods against the updated SDK.
+In Hooks::register_texture_atlases, `event.register(atlas)` remains the registration call.
+Change `TextureAtlasRegistration { atlas, definition }` to `TextureAtlasRegistration { atlas }`.
+If the old values differed, move the definition JSON from the old `definition` path to the
+`atlas` path, or keep the JSON where it is and pass its `definition` ID as `atlas`. Do not use a
+built-in definition ID as a separate mod atlas. Distinct valid atlas definitions need distinct IDs.
+The unchanged `event.register` call now accepts non-built-in `minecraft:` and `sunrise:` IDs and
+reports duplicates by definition ID, keeping the first. A replacement raw texture's sidecar is not
+inherited by the registered sprite. A batch that exceeds the device's stitch limits is refused
+without shrinking unrelated sprites.
+
+Keep `registration.sprite_name(&sprite_id)` and use its returned value for `host.gui_sprite`
+and `DrawContext::sprite`. Replace hardcoded names such as `mymod:gui/atlases/icons/mymod/heart`
+with `registration.sprite_name(&Identifier::parse("mymod:heart")?)` for `mymod:icons`; the returned
+key is now `mymod:gui/atlases/xicons/xmymod/xheart`. Old projected names are not aliases.
+
+For a native replacement of `sunrise_client_render::sprites::Sprites::register`, accept the
+`PreparedSprite` parameter instead of `sprite_cache::Decoded`; it carries the decoded sprite and
+its already validated animation. Rebuild native mods against the updated SDK.
 """

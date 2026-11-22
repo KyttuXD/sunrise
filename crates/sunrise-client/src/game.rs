@@ -14070,51 +14070,78 @@ pub(crate) fn run_with(
             mods::content_root(&vanilla_root, &options.mods)
         })?
     };
-    let mut loaded = load_resources_for_mods(
-        selected_root,
-        pack_finders::data_packs(&options.mods),
-        launch_world(&options),
-        &vanilla_root,
-        &early_settings,
-        started,
-        false,
-        mods::LoadRole::startup(options.execution_role),
-        &Progress::new(),
-        &mut |_, _| {},
-        &options.mods,
-    )?;
-    let gui = loaded.gui.ok_or("missing menu bundle")?;
-    options.resources = loaded.root.clone();
-    let audio = if !options.execution_role.is_client() || options.headless {
-        Audio::silent(&loaded.pack.source)
-    } else {
-        Audio::with_device(&loaded.pack.source, &early_settings.sound_device)
-    };
-    let resources = loaded.resources;
-    let game = start_game(
-        &resources,
-        loaded.pack,
-        gui,
-        options,
-        loaded.pack_error.or(pack_error),
-        audio,
-        vanilla_root,
-        started,
-        loaded.rest_loader,
-        None,
-        None,
-        std::mem::take(&mut loaded.client_applies),
-        loaded.entity_models,
-    )?;
-    if let Some(mut game) = game {
-        // Minecraft.onGameLoadFinished: a start that made it this far is clean.
-        if game.options.execution_role.is_client() {
-            game.settings.file.set(
-                "startedCleanly",
-                sunrise_client::options_file::V::Bool(true),
-            );
-            game.settings.save(&Game::options_path());
+    let window = (options.execution_role.is_client()
+        && !options.headless
+        && mod_api::__private::listened(mod_api::HookId::RegisterTextureAtlases))
+    .then_some((
+        options.window_size,
+        options.fullscreen || early_settings.fullscreen,
+        options.offscreen,
+        options.control.is_some(),
+        early_settings.sunrise.api,
+    ));
+    let start = move |texture_limit| -> Result<Option<Game<'static>>> {
+        let mut loaded = load_resources_for_mods(
+            selected_root,
+            pack_finders::data_packs(&options.mods),
+            launch_world(&options),
+            &vanilla_root,
+            &early_settings,
+            started,
+            false,
+            mods::LoadRole::startup(options.execution_role),
+            &Progress::new(),
+            &mut |_, _| {},
+            &options.mods,
+            texture_limit,
+        )?;
+        let gui = loaded.gui.ok_or("missing menu bundle")?;
+        options.resources = loaded.root.clone();
+        let audio = if !options.execution_role.is_client() || options.headless {
+            Audio::silent(&loaded.pack.source)
+        } else {
+            Audio::with_device(&loaded.pack.source, &early_settings.sound_device)
+        };
+        let resources = Box::leak(Box::new(loaded.resources));
+        let game = start_game(
+            resources,
+            loaded.pack,
+            gui,
+            options,
+            loaded.pack_error.or(pack_error),
+            audio,
+            vanilla_root,
+            started,
+            loaded.rest_loader,
+            None,
+            None,
+            std::mem::take(&mut loaded.client_applies),
+            loaded.entity_models,
+        )?;
+        if let Some(mut game) = game {
+            // Minecraft.onGameLoadFinished: a start that made it this far is clean.
+            if game.options.execution_role.is_client() {
+                game.settings.file.set(
+                    "startedCleanly",
+                    sunrise_client::options_file::V::Bool(true),
+                );
+                game.settings.save(&Game::options_path());
+            }
+            return Ok(Some(game));
         }
+        Ok(None)
+    };
+    if let Some((size, fullscreen, offscreen, agent_started, api)) = window {
+        return loading_screen::run_windowed_atlas_start(
+            size,
+            fullscreen,
+            offscreen,
+            agent_started,
+            api,
+            start,
+        );
+    }
+    if let Some(game) = start(resource_load::AtlasLimit::Cpu)? {
         run_event_loop(game)?;
     }
     Ok(())

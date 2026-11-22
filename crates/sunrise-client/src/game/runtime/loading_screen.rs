@@ -33,11 +33,18 @@ pub(super) fn run_event_loop(mut game: Game<'_>) -> Result<()> {
         return result;
     }
     let result = EventLoop::new()?.run_app(&mut game);
+    finish_sync_window(&mut game, result)
+}
+
+fn finish_sync_window(
+    game: &mut Game<'_>,
+    result: std::result::Result<(), EventLoopError>,
+) -> Result<()> {
     narrator::stop();
     leave_fullscreen_after(&result, &mut game.settings);
     let result = result
         .map_err(Into::into)
-        .and_then(|()| write_report(&game))
+        .and_then(|()| write_report(game))
         .and_then(|()| game.error.take().map_or(Ok(()), Err));
     if game.options.is_client_start() {
         game.native_client_stopped();
@@ -46,10 +53,56 @@ pub(super) fn run_event_loop(mut game: Game<'_>) -> Result<()> {
     result
 }
 
+/// Scripted/synchronous clients that need a real stitch limit still prepare synchronously.
+/// Select the real window's device first, as the loading screen does, and reuse it for gameplay.
+pub(super) fn run_windowed_atlas_start(
+    size: [u32; 2],
+    fullscreen: bool,
+    offscreen: bool,
+    agent_started: bool,
+    api: sunrise_client::graphics::GraphicsApi,
+    start: impl FnOnce(super::resource_load::AtlasLimit) -> Result<Option<Game<'static>>> + 'static,
+) -> Result<()> {
+    let mut app = App::Starting(Some(Box::new(move |event_loop| {
+        let window = super::window_handler::create_game_window(
+            event_loop,
+            size,
+            fullscreen,
+            offscreen,
+            agent_started,
+        )?;
+        let mut renderer = loading_renderer(window.clone(), offscreen, None, None, None, api)?;
+        let Some(mut game) = start(super::resource_load::AtlasLimit::Device(
+            renderer.device.limits().max_texture_dimension_2d,
+        ))?
+        else {
+            return Ok(None);
+        };
+        renderer.release_surface();
+        game.renderer = Some(renderer);
+        match game.new_renderer(window.clone()) {
+            Ok(renderer) => game.attach_window(window, renderer, fullscreen),
+            Err(error) => game.error = Some(error),
+        }
+        Ok(Some(game))
+    })));
+    let result = EventLoop::new()?.run_app(&mut app);
+    match app {
+        App::Ready(mut game) => finish_sync_window(&mut game, result),
+        App::Stopped(error) => {
+            narrator::stop();
+            result?;
+            error.map_or(Ok(()), Err)
+        }
+        _ => result.map_err(Into::into),
+    }
+}
+
 /// The loading screen's state while the worker loads the resources.
 pub(super) struct Loading {
     pub(super) window: Option<Arc<Window>>,
     pub(super) renderer: Option<Renderer>,
+    pub(super) admit_texture_limit: Option<std::sync::mpsc::Sender<u32>>,
     /// The boot screen's atlas, until the pack's GUI atlas replaces it.
     pub(super) boot: sunrise_client::hud::HudAtlas,
     pub(super) gui: Option<UiResources>,
@@ -99,6 +152,8 @@ impl Loading {
         if self.window.is_some() {
             return;
         }
+        // On a failed startup the sender is dropped, releasing the resource worker too.
+        let atlas_limit = self.admit_texture_limit.take();
         // The Window constructor: created fullscreen when options.txt or --fullscreen says so.
         let fullscreen =
             self.settings.fullscreen || self.options.as_ref().is_some_and(|o| o.fullscreen);
@@ -172,7 +227,12 @@ impl Loading {
             None,
             self.settings.sunrise.api,
         ) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(r) => {
+                if let Some(tx) = atlas_limit {
+                    let _ = tx.send(r.device.limits().max_texture_dimension_2d);
+                }
+                self.renderer = Some(r);
+            }
             Err(e) => {
                 #[cfg(target_os = "windows")]
                 if let Some(stop) = &boot_paint_stop {
@@ -419,21 +479,42 @@ impl Loading {
 
 /// The application: the loading screen until the resources are ready, then
 /// the game itself, on the same event loop and window.
+type WindowStart = Box<dyn FnOnce(&ActiveEventLoop) -> Result<Option<Game<'static>>>>;
+
 pub(super) enum App {
     Loading(Box<Loading>),
+    Starting(Option<WindowStart>),
     Ready(Box<Game<'static>>),
+    Stopped(Option<Box<dyn std::error::Error>>),
 }
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         match self {
             App::Loading(loading) => loading.resumed(event_loop),
             App::Ready(game) => game.resumed(event_loop),
+            App::Starting(start) => {
+                let Some(start) = start.take() else { return };
+                match start(event_loop) {
+                    Ok(Some(game)) => {
+                        if game.error.is_some() {
+                            event_loop.exit();
+                        }
+                        *self = App::Ready(Box::new(game));
+                    }
+                    result => {
+                        *self = App::Stopped(result.err());
+                        event_loop.exit();
+                    }
+                }
+            }
+            App::Stopped(_) => {}
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         match self {
             App::Loading(loading) => loading.window_event(event_loop, id, event),
             App::Ready(game) => game.window_event(event_loop, id, event),
+            App::Starting(_) | App::Stopped(_) => {}
         }
     }
     fn device_event(&mut self, event_loop: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
@@ -449,6 +530,7 @@ impl ApplicationHandler for App {
             Failed(Box<dyn std::error::Error>),
         }
         let step = match self {
+            App::Starting(_) | App::Stopped(_) => return,
             App::Ready(game) => {
                 game.about_to_wait(event_loop);
                 return;

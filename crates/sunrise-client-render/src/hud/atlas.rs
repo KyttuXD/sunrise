@@ -23,7 +23,7 @@ pub struct HudAtlas {
     /// The packed names no GUI lookup of an id the GUI list lacks answers with: the model atlases'
     /// sprites and the walked files a GUI entry stands on.
     pub non_gui: HashSet<String>,
-    /// A registered atlas's sprites by their GUI names (`mymod:gui/atlases/icons/mymod/heart`),
+    /// A registered atlas's sprites by their GUI names (`mymod:gui/atlases/xicons/xmymod/xheart`),
     /// each packed under a key of its own so that no model or GUI sprite can take its place.
     pub registered: HashMap<String, Rect>,
     /// The live (dynamic) textures by GUI id, a lane of their own: the GUI lookup reads it first,
@@ -225,7 +225,7 @@ impl HudAtlas {
         let Some(packed) = self.packed.as_ref().filter(|_| self.pixels.is_empty()) else {
             return std::borrow::Cow::Borrowed(&self.pixels);
         };
-        let size = (self.width * self.height * 4) as usize;
+        let size = self.width as usize * self.height as usize * 4;
         std::borrow::Cow::Owned(
             lz4_flex::decompress_size_prepended(packed.wait())
                 .ok()
@@ -239,7 +239,11 @@ impl HudAtlas {
     /// API). They are compressed on a thread of their own; `pixels()` waits
     /// for it.
     pub fn pack_pixels(&mut self) {
-        if self.pixels.is_empty() || self.packed.is_some() {
+        // The size prefix used by lz4_flex is a u32; a device can hold a 32768² RGBA8 HUD.
+        if self.pixels.is_empty()
+            || self.packed.is_some()
+            || u32::try_from(self.pixels.len()).is_err()
+        {
             return;
         }
         let raw = Arc::new(std::mem::take(&mut self.pixels));
@@ -410,7 +414,17 @@ impl HudAtlas {
         game: &ResourceSource,
         pool: bool,
     ) -> Result<Self> {
-        let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
+        Self::build_for_texture_limit(root, defaults, game, pool, MAX_ATLAS_SIZE)
+    }
+    /// Build against the selected renderer's device limit, not an adapter guess.
+    pub fn build_for_texture_limit(
+        root: &ResourceSource,
+        defaults: &ResourceSource,
+        game: &ResourceSource,
+        pool: bool,
+        max_side: u32,
+    ) -> Result<Self> {
+        let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool, max_side)?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
         pack_text::load_shaders(&mut atlas, root, game);

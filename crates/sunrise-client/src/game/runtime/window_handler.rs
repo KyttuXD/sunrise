@@ -387,68 +387,90 @@ impl Game<'_> {
     }
 }
 
-impl ApplicationHandler for Game<'_> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        debug_keys::warm_debug_cpu();
-        // The Window constructor: created fullscreen when options.txt or --fullscreen says so.
-        let fullscreen = self.settings.fullscreen || self.options.fullscreen;
-        let size = self.options.window_size.map(f64::from);
-        self.fullscreen = sunrise_client::window::FullscreenState::new(fullscreen);
-        let attributes = sunrise_client::window::with_icon(
-            Window::default_attributes().with_title(super::window_title::base()),
-        );
-        // Wayland names the window by its app id, which the horizon.desktop entry matches.
-        #[cfg(target_os = "linux")]
-        let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
-            attributes, "sunrise", "sunrise",
-        );
-        // A game an agent started opens without the focus and
-        // the person keeps their keyboard and pointer until they click it (`unclaimed_window`).
-        // X11 activates it anyway, and Windows can too: the focus claims nothing.
-        let agent_started = self.options.control.is_some();
-        self.unclaimed_window = agent_started && !self.options.offscreen;
-        // `--offscreen` renders into a texture: its window would only show white.
-        let window_step = startup::step("window.create");
-        let window = match event_loop.create_window(
+/// Open the actual client window before its first renderer chooses a surface-compatible device.
+pub(super) fn create_game_window(
+    event_loop: &ActiveEventLoop,
+    size: [u32; 2],
+    fullscreen: bool,
+    offscreen: bool,
+    agent_started: bool,
+) -> Result<Arc<Window>> {
+    debug_keys::warm_debug_cpu();
+    let size = size.map(f64::from);
+    let attributes = sunrise_client::window::with_icon(
+        Window::default_attributes().with_title(super::window_title::base()),
+    );
+    #[cfg(target_os = "linux")]
+    let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+        attributes, "sunrise", "sunrise",
+    );
+    let _window_step = startup::step("window.create");
+    // An agent's window does not take focus; offscreen draws to a texture, not this window.
+    let window = Arc::new(
+        event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
                 .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None)))
-                .with_visible(!self.options.offscreen)
+                .with_visible(!offscreen)
                 .with_active(!agent_started),
-        ) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                self.error = Some(e.into());
-                event_loop.exit();
-                return;
-            }
-        };
-        sunrise_client::window::settle_created_fullscreen(&window, fullscreen);
-        #[cfg(target_os = "windows")]
-        if let Some(hwnd) = hwnd(&window) {
-            sunrise_threads::system_menu::suppress(hwnd);
-        }
-        drop(window_step);
-        match self.new_renderer(window.clone()) {
-            Ok(r) => {
-                self.renderer = Some(r);
-                self.world_renderer_ready = true;
-            }
-            Err(e) => {
-                self.error = Some(e);
-                event_loop.exit();
-                return;
-            }
-        }
+        )?,
+    );
+    sunrise_client::window::settle_created_fullscreen(&window, fullscreen);
+    #[cfg(target_os = "windows")]
+    if let Some(hwnd) = hwnd(&window) {
+        sunrise_threads::system_menu::suppress(hwnd);
+    }
+    Ok(window)
+}
+
+impl Game<'_> {
+    pub(super) fn attach_window(
+        &mut self,
+        window: Arc<Window>,
+        renderer: Renderer,
+        fullscreen: bool,
+    ) {
+        self.fullscreen = sunrise_client::window::FullscreenState::new(fullscreen);
+        self.unclaimed_window = self.options.control.is_some() && !self.options.offscreen;
+        self.renderer = Some(renderer);
+        self.world_renderer_ready = true;
         self.resize_state = Some(self.resize_state_of(window.inner_size()));
         self.window = Some(window);
         self.ime_allowed = false;
         self.ime_area = None;
         self.apply_settings();
         self.previous = Instant::now();
+    }
+}
+
+impl ApplicationHandler for Game<'_> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let fullscreen = self.settings.fullscreen || self.options.fullscreen;
+        let agent_started = self.options.control.is_some();
+        let window = match create_game_window(
+            event_loop,
+            self.options.window_size,
+            fullscreen,
+            self.options.offscreen,
+            agent_started,
+        ) {
+            Ok(window) => window,
+            Err(error) => {
+                self.error = Some(error);
+                event_loop.exit();
+                return;
+            }
+        };
+        match self.new_renderer(window.clone()) {
+            Ok(renderer) => self.attach_window(window, renderer, fullscreen),
+            Err(error) => {
+                self.error = Some(error);
+                event_loop.exit();
+            }
+        }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let key = if self.window.as_ref().is_some_and(|w| w.id() == id)

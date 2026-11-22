@@ -315,9 +315,6 @@ fn checked_paint_refuses_what_the_gui_atlas_lacks_and_atlas_sprites_use_the_bloc
         .unwrap()
         .write_image_data(&[1, 2, 3, 255])
         .unwrap();
-    let staged = root.join("assets/demo/textures/gui/atlases/icons/demo");
-    std::fs::create_dir_all(&staged).unwrap();
-    std::fs::copy(sheet.join("sheet.png"), staged.join("heart.png")).unwrap();
     std::fs::write(atlases.join("blocks.json"), r#"{"sources":[]}"#).unwrap();
     std::fs::write(
         atlases.join("items.json"),
@@ -332,10 +329,22 @@ fn checked_paint_refuses_what_the_gui_atlas_lacks_and_atlas_sprites_use_the_bloc
             {"type":"minecraft:filter","pattern":{"namespace":"demo","path":"item/modeled"}}]}"#,
     )
     .unwrap();
-    let mut atlas = HudAtlas::build(&crate::resource_source::ResourceSource::directory(
-        root.clone(),
-    ))
-    .unwrap();
+    use crate::resource_source::{Resource, ResourceRoot, ResourceSource, RuntimeTextureAtlas};
+    let source = ResourceSource::directory(root.clone());
+    let resource_root = ResourceRoot::new(root.clone(), root.clone(), source.clone())
+        .with_runtime_texture_atlases(vec![RuntimeTextureAtlas {
+            id: "demo:icons".into(),
+            mod_id: "demo",
+            textures: [(
+                "assets/demo/textures/gui/atlases/xicons/xdemo/xheart.png".into(),
+                (
+                    Resource::file(source, "assets/demo/textures/item/sheet.png".into()),
+                    None,
+                ),
+            )]
+            .into(),
+        }]);
+    let mut atlas = HudAtlas::build(resource_root.source()).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
     let refused = |name: &'static str| undrawable(&atlas, &[sprite(name, None, Blend::Textured)]);
     assert_eq!(refused("demo:kept"), None);
@@ -376,7 +385,7 @@ fn checked_paint_refuses_what_the_gui_atlas_lacks_and_atlas_sprites_use_the_bloc
     assert_eq!(batch.vertices[0].uv, [live.u0, live.v0], "the live texture");
     assert_ne!([live.u0, live.v0], [model.u0, model.v0]);
     // A registered atlas's sprite no packed sprite shares its name with draws as a `Blit`.
-    let name = "demo:gui/atlases/icons/demo/heart";
+    let name = "demo:gui/atlases/xicons/xdemo/xheart";
     let registered = atlas.registered[name];
     let heart = blit(name, Blend::Textured, [8, 8]);
     assert_eq!(undrawable(&atlas, std::slice::from_ref(&heart)), None);

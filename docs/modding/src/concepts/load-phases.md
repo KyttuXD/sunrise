@@ -69,9 +69,12 @@ invocation. See [model drawing](../how-to/client/model-drawing.md) and
 
 Not every registration-context hook runs only at startup. `register_fluid_models`,
 `register_texture_atlases` and `emissive` collect declarations again on client resource reload
-before baking or stitching, respectively. Texture atlases reject only collisions with vanilla's
-built-in engine atlases and duplicate atlas IDs, without namespace bans or private atlas/sprite
-quotas.
+before stitching or baking. Register an atlas with `event.register(TextureAtlasRegistration { atlas })`.
+The `Identifier` names both the atlas and its definition (`example:icons` reads
+`assets/example/atlases/icons.json`). A duplicate definition ID or a collision with a built-in atlas
+is refused; the first registration stands. Call `atlas_registration.sprite_name(&sprite_id)` for the
+key to pass to `gui_sprite` and `DrawContext::sprite`. A batch that cannot fit the renderer's
+texture limit is reported and skipped without dropping the base GUI atlas.
 
 The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read
 one view captured before the first of them runs, so every registration step sees the same values

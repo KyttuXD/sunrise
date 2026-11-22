@@ -285,6 +285,7 @@ pub(super) fn run_loading(
     started: Instant,
 ) -> Result<()> {
     let progress = Progress::new();
+    let (admit_texture_limit, texture_limit) = std::sync::mpsc::channel();
     let (receiver, loader) = startup_menu::spawn_loader(
         &options,
         &settings,
@@ -292,11 +293,13 @@ pub(super) fn run_loading(
         &vanilla_root,
         started,
         &progress,
+        super::resource_load::AtlasLimit::Loading(texture_limit),
     )?;
     let menu = startup_menu::StartupMenu::new(&options, pack_error.as_deref())?;
     let loading = Loading {
         window: None,
         renderer: None,
+        admit_texture_limit: Some(admit_texture_limit),
         boot: sunrise_client::hud::HudAtlas::boot(),
         gui: None,
         settings,
@@ -325,6 +328,7 @@ pub(super) fn run_loading(
     match &mut app {
         App::Ready(game) => leave_fullscreen_after(&result, &mut game.settings),
         App::Loading(loading) => leave_fullscreen_after(&result, &mut loading.settings),
+        App::Starting(_) | App::Stopped(_) => unreachable!("asynchronous startup"),
     }
     result?;
     match app {
@@ -339,6 +343,7 @@ pub(super) fn run_loading(
                 return Err(e);
             }
         }
+        App::Starting(_) | App::Stopped(_) => unreachable!("asynchronous startup"),
     }
     Ok(())
 }

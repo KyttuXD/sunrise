@@ -8,14 +8,13 @@ pub trait Hooks {
     #[notes = r#"## Texture atlases
 
 `register_texture_atlases` receives a registration context. Call `event.register(atlas)`
-with a `TextureAtlasRegistration` giving an atlas id (`mymod:icons`) and its definition
-(`mymod:icons` reads `assets/mymod/atlases/icons.json`). The definition is a `sources`
+with `TextureAtlasRegistration { atlas }`. The atlas ID also names its definition:
+`mymod:icons` reads `assets/mymod/atlases/icons.json`. The definition is a `sources`
 list like vanilla's atlas definitions, and resource packs change it the same way.
 
 Sunrise packs vanilla's atlases into two, so a registered atlas's sprites are
-stitched into the GUI atlas, each under `TextureAtlasRegistration::sprite_name`:
-sprite `mymod:heart` of `mymod:icons` is `mymod:gui/atlases/icons/mymod/heart`.
-Look it up with `gui_sprite` in `texture_atlas_stitched` for `TextureAtlas::Gui`
+stitched into the GUI atlas as a batch, each under the key returned by
+`TextureAtlasRegistration::sprite_name(&sprite_id)`. Look it up with `gui_sprite` in `texture_atlas_stitched` for `TextureAtlas::Gui`
 and draw it with `DrawContext::sprite` by that name. Every reload lists the
 sprites again from the definition as the packs now give it.
 
@@ -26,12 +25,10 @@ staging; re-submit the atlases on each call. Any namespace is allowed, including
 and duplicate atlas ids are logged as errors naming the registering mod and
 earlier owner, keeping the first registration (matching NeoForge's
 `RegisterTextureAtlasesEvent.register`). There is no synthetic atlas or sprite
-count cap; only GPU atlas texture limits apply, with per-atlas and per-sprite
-diagnostics so one bad definition or image does not discard other atlases or
-sprites. A registered atlas sprite replaces a raw pack file at the same staged
-path with a warning (matching vanilla's `TextureManager.register`); if two
-registered atlases stage the same sprite path, the first stands and a warning
-names both."#]
+count cap. If a batch does not fit the renderer's texture limit, the engine logs
+and skips that atlas without changing the previously accepted layout. A bad image
+is skipped with its own diagnostic. A registered sprite replaces a raw pack file
+at the same key with a warning and uses only its own source metadata."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",

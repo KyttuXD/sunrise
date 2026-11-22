@@ -1,4 +1,7 @@
 use super::*;
+use sunrise_assets::resource_source::RuntimeTextureAtlas;
+
+pub(super) type AtlasLayout = (u32, Vec<(u32, u32)>, u32);
 
 impl HudAtlas {
     /// Shelf placements of `images` (tallest first) in the narrowest atlas
@@ -11,23 +14,35 @@ impl HudAtlas {
     /// much unused is tried again with each image in the first shelf with
     /// room: a pack of thousands of mixed sizes (server packs with custom
     /// items) fits where the shelves' ragged ends would not.
-    pub(super) fn layout(images: &[PackedImage], max: u32) -> Result<(u32, Vec<(u32, u32)>, u32)> {
+    pub(super) fn layout(images: &[PackedImage], max: u32) -> Result<AtlasLayout> {
+        Self::layout_dimensions(images.iter().map(|i| (i.1, i.2)), max)
+    }
+    fn layout_in_order(images: &[PackedImage], order: &[usize], max: u32) -> Result<AtlasLayout> {
+        Self::layout_dimensions(order.iter().map(|&i| (images[i].1, images[i].2)), max)
+    }
+    fn layout_dimensions(
+        images: impl Iterator<Item = (u32, u32)> + Clone + ExactSizeIterator,
+        max: u32,
+    ) -> Result<AtlasLayout> {
         let mut width = 4096.min(max);
         loop {
-            let wide_enough = images.iter().all(|i| i.1 < width);
+            let wide_enough = images.clone().all(|(w, _)| w < width);
             if wide_enough {
                 for first_fit in [false, true] {
-                    let (placements, glyph_region) = Self::shelves(images, width, first_fit);
-                    if glyph_region + GLYPH_ROWS <= max {
+                    let (placements, glyph_region) =
+                        Self::shelves(images.clone(), width, first_fit);
+                    if glyph_region.saturating_add(GLYPH_ROWS) <= max {
                         return Ok((width, placements, glyph_region));
                     }
                 }
             }
             if width >= max {
-                let texels: u64 = images.iter().map(|i| u64::from(i.1) * u64::from(i.2)).sum();
+                let len = images.len();
+                let texels: u64 = images
+                    .map(|(w, h)| u64::from(w) * u64::from(h))
+                    .fold(0, u64::saturating_add);
                 return Err(format!(
-                    "the textures ({} images, {texels} texels) do not fit a {max}x{max} atlas",
-                    images.len()
+                    "the textures ({len} images, {texels} texels) do not fit a {max}x{max} atlas"
                 )
                 .into());
             }
@@ -37,28 +52,36 @@ impl HudAtlas {
     /// `layout`'s shelves at one width: the placements and the first row below
     /// them. `first_fit` puts an image in the first shelf that is tall enough
     /// and has room, instead of only the last one.
-    fn shelves(images: &[PackedImage], width: u32, first_fit: bool) -> (Vec<(u32, u32)>, u32) {
+    fn shelves(
+        images: impl ExactSizeIterator<Item = (u32, u32)>,
+        width: u32,
+        first_fit: bool,
+    ) -> (Vec<(u32, u32)>, u32) {
         // Each shelf: its top row, its height (its first image's) and the next free column.
         let mut shelves: Vec<(u32, u32, u32)> = Vec::new();
         let mut placements = Vec::with_capacity(images.len());
-        for (_, w, h, _) in images {
+        for (w, h) in images {
             let open = if first_fit {
-                shelves.iter().position(|s| s.1 >= *h && s.2 + w < width)
+                shelves.iter().position(|s| s.1 >= h && s.2 + w < width)
             } else {
                 shelves
                     .len()
                     .checked_sub(1)
-                    .filter(|&i| shelves[i].1 >= *h && shelves[i].2 + w < width)
+                    .filter(|&i| shelves[i].1 >= h && shelves[i].2 + w < width)
             };
             let i = open.unwrap_or_else(|| {
-                let top = shelves.last().map_or(0, |s| s.0 + s.1 + 1);
-                shelves.push((top, *h, 0));
+                let top = shelves
+                    .last()
+                    .map_or(0, |s| s.0.saturating_add(s.1).saturating_add(1));
+                shelves.push((top, h, 0));
                 shelves.len() - 1
             });
             placements.push((shelves[i].2, shelves[i].0));
             shelves[i].2 += w + 1;
         }
-        let glyph_region = shelves.last().map_or(1, |s| s.0 + s.1 + 1);
+        let glyph_region = shelves
+            .last()
+            .map_or(1, |s| s.0.saturating_add(s.1).saturating_add(1));
         (placements, glyph_region)
     }
     /// Pack the textures under these folders of `textures/`, and for the
@@ -69,6 +92,7 @@ impl HudAtlas {
         folders: &[&str],
         full: bool,
         pool: bool,
+        max_side: u32,
     ) -> Result<Self> {
         let textures = "assets/minecraft/textures";
         let mut files = Vec::new();
@@ -102,7 +126,25 @@ impl HudAtlas {
                 }
             }
         }
-        files.retain(|p| !menu_pictures::menu_picture_only(p));
+        let groups = root.runtime_texture_atlases();
+        let group_by_path: HashMap<_, _> = groups
+            .iter()
+            .enumerate()
+            .flat_map(|(index, group)| {
+                group
+                    .textures
+                    .keys()
+                    .map(move |path| (path.as_str(), index))
+            })
+            .collect();
+        files.retain(|p| {
+            !group_by_path.contains_key(p.as_str()) && !menu_pictures::menu_picture_only(p)
+        });
+        files.extend(
+            groups
+                .iter()
+                .flat_map(|group| group.textures.keys().cloned()),
+        );
         // OptiFine random entity variants, under the names their scan gives them (those
         // outside `textures/` are `<ns>:optifine/random/...`).
         let random_textures = if folders.contains(&"entity") {
@@ -184,8 +226,10 @@ impl HudAtlas {
             Option<(u32, u32)>,
             bool,
             Option<Box<Maps>>,
+            Option<usize>,
         );
         let decode_one = |path: &String| -> Option<Decoded> {
+            let group = group_by_path.get(path.as_str()).copied();
             let name = if let Some(name) = named.get(path) {
                 name.clone()
             } else {
@@ -199,23 +243,31 @@ impl HudAtlas {
                 }
             };
             // LabPBR's maps beside a texture are the world's (sprites.rs), not images to draw.
-            if let Some(base) = name.strip_suffix("_n").or_else(|| name.strip_suffix("_s"))
+            if group.is_none()
+                && let Some(base) = name.strip_suffix("_n").or_else(|| name.strip_suffix("_s"))
                 && root.contains(&crate::atlas_sources::texture_resource(base, "textures"))
             {
                 return None;
             }
-            let image = decode_resource(root, path)
-                .map_err(|e| log::warn!("skipped GUI texture {}: {e}", path))
-                .ok()?;
+            let warn = |e: Box<dyn std::error::Error>| {
+                if let Some(group) = group.map(|i| &groups[i]) {
+                    log::warn!(
+                        "mod '{}' atlas '{}' skipped sprite {path}: {e}",
+                        group.mod_id,
+                        group.id
+                    );
+                } else {
+                    log::warn!("skipped GUI texture {path}: {e}");
+                }
+            };
+            let image = decode_resource(root, path).map_err(warn).ok()?;
             let mcmeta = root.read_to_string(&format!("{path}.mcmeta")).ok();
             let animation = animation_of(mcmeta.as_deref());
-            // An animated strip keeps its first frame.
+            // A registered sprite is cropped only by its own animation section.
             let frames =
                 animation.is_some() || name.starts_with("block/") || name.starts_with("item/");
             let (w, h, pixels) = if frames {
-                first_frame(image, animation.as_ref())
-                    .map_err(|e| log::warn!("skipped GUI texture {}: {e}", path))
-                    .ok()?
+                first_frame(image, animation.as_ref()).map_err(warn).ok()?
             } else {
                 image
             };
@@ -231,30 +283,19 @@ impl HudAtlas {
             .filter(|&size| size != (w, h));
             let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
             let animated = frames && animation.is_some();
-            // Mod-registered atlases (`ns:gui/atlases/...`) are bounded only by the GPU atlas
-            // texture limit (`MAX_ATLAS_SIZE`, leaving room for `GLYPH_ROWS`), not the GUI widget
-            // size filter. Skip an oversized sprite with a diagnostic rather than failing other
-            // sprites.
-            let registered_atlas = name
-                .split_once(':')
-                .map_or(name.as_str(), |(_, p)| p)
-                .starts_with("gui/atlases/");
-            if registered_atlas
-                && (w >= MAX_ATLAS_SIZE || h.saturating_add(GLYPH_ROWS + 1) > MAX_ATLAS_SIZE)
-            {
-                log::warn!(
-                    "skipped registered atlas sprite {path} ({w}x{h}): exceeds GPU atlas limit {MAX_ATLAS_SIZE}x{MAX_ATLAS_SIZE}"
-                );
-                return None;
-            }
-            // Vanilla particle atlases accept sprites of any size.
+            // Sprites from a stitched atlas do not use the widget size filter.
             let particle = name.starts_with("particle/") || name.contains(":particle/");
-            let (gw, gh) = if particle || registered_atlas {
+            let (gw, gh) = if particle || group.is_some() {
                 (0, 0)
             } else {
                 gui_size.unwrap_or((w, h))
             };
-            let maps = read_maps
+            let name = if group.is_some() {
+                format!("{REGISTERED_KEY}{name}")
+            } else {
+                name
+            };
+            let maps = (read_maps && group.is_none())
                 .then(|| {
                     let stem = path.strip_suffix(".png")?;
                     let maps: Maps = ["_n", "_s"]
@@ -272,7 +313,7 @@ impl HudAtlas {
                             | "gui/presets/isles"
                     )
                     || name.starts_with("font/")))
-            .then_some(((name, w, h, pixels), flags, gui_size, animated, maps))
+            .then_some(((name, w, h, pixels), flags, gui_size, animated, maps, group))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);
@@ -293,7 +334,8 @@ impl HudAtlas {
         let mut animated: Vec<String> = Vec::new();
         let mut images: Vec<PackedImage> = Vec::with_capacity(decoded.len());
         let mut maps: HashMap<String, Box<Maps>> = HashMap::new();
-        for (image, image_flags, gui_size, is_animated, image_maps) in decoded {
+        let mut group_images = vec![Vec::<PackedImage>::new(); groups.len()];
+        for (image, image_flags, gui_size, is_animated, image_maps, group) in decoded {
             if let Some(m) = image_maps {
                 maps.insert(image.0.clone(), m);
             }
@@ -306,28 +348,10 @@ impl HudAtlas {
             if is_animated {
                 animated.push(image.0.clone());
             }
-            images.push(image);
-        }
-        // A registered atlas's sprites (`ns:gui/atlases/...`) are packed under keys of their own,
-        // so no model's or GUI entry's sprite of the same name can displace or be taken for one.
-        for image in &mut images {
-            let path = image.0.split_once(':').map_or(image.0.as_str(), |(_, p)| p);
-            if !path.starts_with("gui/atlases/") {
-                continue;
-            }
-            let key = format!("{REGISTERED_KEY}{}", image.0);
-            let old = std::mem::replace(&mut image.0, key.clone());
-            if let Some(value) = flags.remove(&old) {
-                flags.insert(key.clone(), value);
-            }
-            if let Some(value) = gui_sizes.remove(&old) {
-                gui_sizes.insert(key.clone(), value);
-            }
-            if let Some(value) = maps.remove(&old) {
-                maps.insert(key.clone(), value);
-            }
-            for name in animated.iter_mut().filter(|name| **name == old) {
-                name.clone_from(&key);
+            if let Some(group) = group {
+                group_images[group].push(image);
+            } else {
+                images.push(image);
             }
         }
         let mut cit_names = HashSet::new();
@@ -388,7 +412,7 @@ impl HudAtlas {
         // border wrapped from their own edges keeps the filter off their
         // neighbours, as repeat addressing of their own texture would.
         let mut bordered = std::collections::HashSet::new();
-        for image in &mut images {
+        for image in images.iter_mut().chain(group_images.iter_mut().flatten()) {
             if flags.get(&image.0).is_some_and(|f: &TextureFlags| f.blur) {
                 *image = wrap_border(image);
                 bordered.insert(image.0.clone());
@@ -399,26 +423,34 @@ impl HudAtlas {
                 decode_bytes(include_bytes!("../jei_recipes/config_button.png"))?;
             images.push(("sunrise/recipes/settings".to_owned(), width, height, rgba));
         }
-        images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)
-                .or_else(|error| -> Result<_> {
-                    let models = reducible_model_sprites(root, &images, &bordered);
-                    let layout = Self::layout_reducing_models(
-                        &mut images,
-                        &mut gui_sizes,
-                        &models,
-                        MAX_ATLAS_SIZE,
-                    )?;
-                    log::warn!(
-                        "reduced HUD model texture resolution to keep the resource pack: {error}"
-                    );
-                    Ok(layout)
-                })?;
-        // A multiple of 1024 rather than a power of two: the default resources
-        // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
-        let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        let sort =
+            |images: &mut [PackedImage]| images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+        sort(&mut images);
+        // Resolve the vanilla/model pack first. A registered atlas can never force downsampling
+        // of its sprites or invalidate this layout; the entire registered batch stands or falls
+        // together, as with TextureAtlas and SpriteLoader.stitch.
+        let layout = Self::layout_leaving_out(&mut images, &mut animated, &cit_names, max_side)
+            .or_else(|error| -> Result<_> {
+                let models = reducible_model_sprites(root, &images, &bordered);
+                let layout =
+                    Self::layout_reducing_models(&mut images, &mut gui_sizes, &models, max_side)?;
+                log::warn!(
+                    "reduced HUD model texture resolution to keep the resource pack: {error}"
+                );
+                Ok(layout)
+            })?;
+        let (width, placements, glyph_region) = Self::admit_registered(
+            &mut images,
+            groups.iter().zip(group_images),
+            layout,
+            max_side,
+        );
+        // Keep the existing 1024-row allocation granularity without rounding above the device.
+        let height = (glyph_region + GLYPH_ROWS)
+            .next_multiple_of(1024)
+            .min(max_side);
+        let mut pixels = image_buffer::<u8>(&[width as usize, height as usize, 4], usize::MAX)?;
+        pixels.resize(width as usize * height as usize * 4, 0);
         let mut sprites = HashMap::new();
         let mut translucent = HashSet::new();
         for ((name, w, h, data), (px, py)) in images.iter().zip(placements) {
@@ -553,6 +585,7 @@ impl HudAtlas {
                 (id, sprite)
             })
             .collect();
+        flags.retain(|name, _| !name.starts_with(REGISTERED_KEY) || sprites.contains_key(name));
         let registered: HashMap<String, Rect> = sprites
             .iter()
             .filter_map(|(key, rect)| Some((key.strip_prefix(REGISTERED_KEY)?.to_owned(), *rect)))
@@ -607,6 +640,49 @@ impl HudAtlas {
             white,
             dynamic_texture_pool: None,
         })
+    }
+    /// Try each declared atlas as a batch without changing the already accepted layout on error.
+    pub(super) fn admit_registered<'a>(
+        images: &mut Vec<PackedImage>,
+        groups: impl Iterator<Item = (&'a RuntimeTextureAtlas, Vec<PackedImage>)>,
+        mut layout: AtlasLayout,
+        max_side: u32,
+    ) -> AtlasLayout {
+        for (group, group_images) in groups {
+            if group_images.is_empty() {
+                continue;
+            }
+            // Use indices for the trial: keep the previous image order and placement untouched
+            // on refusal, and do not copy the decoded pixels while trying it.
+            let first = images.len();
+            images.extend(group_images);
+            let mut order: Vec<_> = (0..images.len()).collect();
+            order.sort_by_key(|&i| {
+                (
+                    std::cmp::Reverse(images[i].2),
+                    std::cmp::Reverse(images[i].1),
+                )
+            });
+            match Self::layout_in_order(images, &order, max_side) {
+                Ok(new_layout) => {
+                    let mut old = std::mem::take(images);
+                    *images = order
+                        .into_iter()
+                        .map(|i| std::mem::take(&mut old[i]))
+                        .collect();
+                    layout = new_layout;
+                }
+                Err(error) => {
+                    images.truncate(first);
+                    log::error!(
+                        "mod '{}' texture atlas '{}' could not be stitched: {error}",
+                        group.mod_id,
+                        group.id
+                    );
+                }
+            }
+        }
+        layout
     }
     /// `misc/<name>.png` on its own, or a transparent texel if the resource
     /// pack lacks it.

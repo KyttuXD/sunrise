@@ -543,6 +543,14 @@ pub(super) fn take_modified_attribute_rows(
     }
 }
 
+/// How the render-capable loader learns the selected device's texture limit. CPU-only runs
+/// (including test fixtures) do not create an adapter just to lay out an atlas.
+pub(super) enum AtlasLimit {
+    Cpu,
+    Device(u32),
+    Loading(std::sync::mpsc::Receiver<u32>),
+}
+
 /// Fixture helper for tests without a launch mod state.
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
@@ -570,6 +578,7 @@ pub(super) fn load_resources(
         progress,
         publish,
         &mods::ModsState::default(),
+        AtlasLimit::Cpu,
     )
 }
 
@@ -592,6 +601,7 @@ pub(super) fn load_resources_for_mods(
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
     mod_sources: &mods::ModsState,
+    texture_limit: AtlasLimit,
 ) -> Result<Loaded> {
     let load_role: mods::LoadRole = role.into();
     let role = load_role.execution;
@@ -618,12 +628,17 @@ pub(super) fn load_resources_for_mods(
     let mut pack_error = None;
     // A dedicated server builds only the font (UiResources::server), as the
     // integrated server's game does: the full atlas and panorama are 144 MB.
+    let max_side = match texture_limit {
+        AtlasLimit::Cpu => sunrise_client::hud::MAX_ATLAS_SIZE,
+        AtlasLimit::Device(side) => side,
+        AtlasLimit::Loading(limit) => limit.recv()?,
+    };
     let load_ui = |source: &sunrise_assets::resource_source::ResourceSource| {
         let _step = startup::step("ui.load");
         if headless {
             UiResources::server(source)
         } else {
-            UiResources::load(source, vanilla_root).map(|ui| {
+            UiResources::load_for_texture_limit(source, vanilla_root, max_side).map(|ui| {
                 ui.with_splashes(
                     source,
                     vanilla_root,

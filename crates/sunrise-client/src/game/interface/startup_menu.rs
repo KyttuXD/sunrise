@@ -395,6 +395,7 @@ pub(super) fn spawn_loader(
     vanilla_root: &std::path::Path,
     started: Instant,
     progress: &Progress,
+    texture_limit: super::resource_load::AtlasLimit,
 ) -> Result<(Receiver<LoaderMsg>, JoinHandle<()>)> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let settings = settings.clone();
@@ -433,6 +434,7 @@ pub(super) fn spawn_loader(
                             let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
                         },
                         &mod_sources,
+                        texture_limit,
                     )
                 })
                 .map(|mut loaded| {
@@ -1513,6 +1515,14 @@ impl Loading {
             &self.vanilla_root,
             self.started,
             &self.progress,
+            super::resource_load::AtlasLimit::Device(
+                self.renderer
+                    .as_ref()
+                    .ok_or("missing loading renderer")?
+                    .device
+                    .limits()
+                    .max_texture_dimension_2d,
+            ),
         )?;
         self.receiver = receiver;
         self.handle = Some(handle);
@@ -1567,6 +1577,7 @@ mod tests {
         Loading {
             window: None,
             renderer: None,
+            admit_texture_limit: None,
             boot: sunrise_client::hud::HudAtlas::boot(),
             gui: None,
             settings: Settings::default(),
