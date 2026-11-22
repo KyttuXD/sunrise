@@ -415,7 +415,7 @@ impl LegacyPiece for EndCityPiece {
     }
     /// `EndCityPiece`: the template piece's tag, `OW` for the pieces that
     /// overwrite air (only structure blocks ignored).
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         let mut tag = self.0.saved();
         tag.insert("GD".into(), sunrise_core::nbt::Tag::Int(self.1));
         let overwrite = self.0.ignore.len() == 1;
@@ -423,7 +423,7 @@ impl LegacyPiece for EndCityPiece {
             "OW".into(),
             sunrise_core::nbt::Tag::Byte(i8::from(overwrite)),
         );
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:ecp"

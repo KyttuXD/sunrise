@@ -512,8 +512,8 @@ impl LegacyPiece for MonumentBuilding {
     }
     /// `MonumentBuilding`: the base fields only; vanilla builds its rooms
     /// again after loading (`OceanMonumentStructure.regeneratePiecesAfterLoad`).
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
-        Some(super::legacy::piece_tag(
+    fn save(&self) -> super::legacy::PieceSave {
+        Ok(super::legacy::piece_tag(
             "minecraft:omb",
             self.frame.bounding_box,
             self.frame.orientation,

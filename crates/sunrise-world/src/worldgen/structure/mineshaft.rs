@@ -841,7 +841,7 @@ impl LegacyPiece for MineshaftPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         use sunrise_core::nbt::Tag;
         let flag = |b: bool| Tag::Byte(i8::from(b));
         let mut tag = super::legacy::piece_tag(
@@ -890,7 +890,7 @@ impl LegacyPiece for MineshaftPiece {
         for (key, value) in entries {
             tag.insert(key.into(), value);
         }
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         match self.kind {

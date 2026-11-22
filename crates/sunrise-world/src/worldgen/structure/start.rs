@@ -829,10 +829,10 @@ impl Piece {
             Self::Legacy(p) => p.type_name(),
         }
     }
-    /// `StructurePiece.createTag`; None for a type Sunrise cannot save yet.
-    pub fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    /// `StructurePiece.createTag`, or the reason a complete tag could not be produced.
+    pub fn save(&self) -> super::legacy::PieceSave {
         match self {
-            Self::Pool(p) => Some(p.save()),
+            Self::Pool(p) => Ok(p.save()),
             Self::Legacy(p) => p.save(),
         }
     }
@@ -889,7 +889,7 @@ impl StructureStart {
         let children: Option<Vec<Tag>> = self
             .pieces
             .iter()
-            .map(|p| p.save().map(Tag::Compound))
+            .map(|p| p.save().ok().map(Tag::Compound))
             .collect();
         Some(Tag::compound([
             ("id", Tag::String(self.name.as_str().into())),

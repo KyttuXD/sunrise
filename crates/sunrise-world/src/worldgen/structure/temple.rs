@@ -84,7 +84,7 @@ impl LegacyPiece for DesertPyramidPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.base.frame().bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         let mut tag = self.base.saved("minecraft:tedp");
         for (i, placed) in self.placed_chest.lock().unwrap().iter().enumerate() {
             tag.insert(
@@ -92,7 +92,7 @@ impl LegacyPiece for DesertPyramidPiece {
                 sunrise_core::nbt::Tag::Byte(i8::from(*placed)),
             );
         }
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:tedp"
@@ -460,7 +460,7 @@ impl LegacyPiece for JungleTemplePiece {
     fn bounding_box(&self) -> BoundingBox {
         self.base.frame().bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         let mut tag = self.base.saved("minecraft:tejp");
         let placed = *self.placed.lock().unwrap();
         for (key, value) in [
@@ -474,7 +474,7 @@ impl LegacyPiece for JungleTemplePiece {
         {
             tag.insert(key.into(), sunrise_core::nbt::Tag::Byte(i8::from(value)));
         }
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:tejp"

@@ -1279,8 +1279,8 @@ fn piece_metadata_and_save_panics_stay_local_and_debug_skips_mod_fmt() {
     assert_eq!(pieces.len(), 2);
     let debug = format!("{:?}", pieces[0]);
     assert!(debug.contains("ModPiece") && debug.contains("testmod:hostile"));
-    assert!(pieces[0].save().is_none());
-    assert!(pieces[1].save().is_none());
+    assert!(pieces[0].save().is_err());
+    assert!(pieces[1].save().is_err());
     assert_eq!(save_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         pieces[0].bounding_box(),
@@ -1296,7 +1296,7 @@ fn piece_metadata_and_save_panics_stay_local_and_debug_skips_mod_fmt() {
             &mut random,
         )
         .unwrap();
-    assert!(other_pieces[0].save().is_some());
+    assert!(other_pieces[0].save().is_ok());
 }
 
 struct NoSolid;

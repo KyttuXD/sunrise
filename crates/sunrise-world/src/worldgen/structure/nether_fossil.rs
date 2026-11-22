@@ -76,8 +76,8 @@ impl LegacyPiece for NetherFossilPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.0.bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
-        Some(self.0.saved())
+    fn save(&self) -> super::legacy::PieceSave {
+        Ok(self.0.saved())
     }
     fn type_name(&self) -> &'static str {
         "minecraft:nefos"

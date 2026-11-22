@@ -365,6 +365,17 @@ pub fn write_block(
     Ok(written)
 }
 
+/// The outcome of producing a complete `StructurePiece.createTag` compound.
+pub type PieceSave = std::result::Result<Compound, PieceSaveError>;
+
+#[derive(Debug)]
+pub enum PieceSaveError {
+    /// A built-in piece Sunrise cannot serialize yet.
+    Unsupported,
+    /// A native callback failed; the only safe data is its previous complete tag, if any.
+    Callback(Option<Compound>),
+}
+
 /// A placed structure piece.
 pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
     fn bounding_box(&self) -> BoundingBox;
@@ -374,10 +385,9 @@ pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
     }
     /// The vanilla StructurePieceType id, for diagnostics and comparisons.
     fn type_name(&self) -> &'static str;
-    /// `StructurePiece.createTag`; None while Sunrise cannot save this type,
-    /// and then its start is not saved.
-    fn save(&self) -> Option<Compound> {
-        None
+    /// `StructurePiece.createTag`, or the reason a complete tag could not be produced.
+    fn save(&self) -> PieceSave {
+        Err(PieceSaveError::Unsupported)
     }
     fn post_process(&self, context: &mut PieceContext<'_>) -> Result<()>;
     /// Structure.afterPlace, run on the first piece once per chunk after all

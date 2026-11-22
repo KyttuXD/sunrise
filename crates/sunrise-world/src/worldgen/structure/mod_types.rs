@@ -164,12 +164,12 @@ mod tests {
         fn type_name(&self) -> &'static str {
             Box::leak(self.id.clone().into_boxed_str())
         }
-        fn save(&self) -> Option<Compound> {
+        fn save(&self) -> super::super::legacy::PieceSave {
             use sunrise_core::nbt::Tag;
             let mut tag = super::super::legacy::piece_tag(&self.id, self.bounding_box(), None, 0);
             tag.insert("Min".into(), Tag::IntArray(self.min.to_vec()));
             tag.insert("Max".into(), Tag::IntArray(self.max.to_vec()));
-            Some(tag)
+            Ok(tag)
         }
         fn post_process(&self, _: &mut PieceContext<'_>) -> Result<()> {
             Ok(())

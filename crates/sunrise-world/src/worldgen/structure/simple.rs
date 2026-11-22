@@ -28,9 +28,9 @@ impl LegacyPiece for BuriedTreasurePiece {
     fn bounding_box(&self) -> BoundingBox {
         BoundingBox::new(self.position, self.position)
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         let at = self.found.lock().unwrap().unwrap_or(self.position);
-        Some(super::legacy::piece_tag(
+        Ok(super::legacy::piece_tag(
             "minecraft:btp",
             BoundingBox::new(at, at),
             None,
@@ -286,8 +286,8 @@ impl LegacyPiece for TemplatePiece {
     fn bounding_box(&self) -> BoundingBox {
         self.bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
-        Some(self.saved())
+    fn save(&self) -> super::legacy::PieceSave {
+        Ok(self.saved())
     }
     fn after_place(&self, c: &mut PieceContext<'_>, pieces: &[BoundingBox]) -> Result<()> {
         match self.handler {
@@ -544,12 +544,12 @@ impl LegacyPiece for SwampHutPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.base.frame().bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         let mut tag = self.base.saved("minecraft:tesh");
         let spawned = sunrise_core::nbt::Tag::Byte(i8::from(*self.spawned.lock().unwrap()));
         tag.insert("Witch".into(), spawned.clone());
         tag.insert("Cat".into(), spawned);
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:tesh"

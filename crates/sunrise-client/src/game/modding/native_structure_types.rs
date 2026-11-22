@@ -475,7 +475,7 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
     fn type_name(&self) -> &'static str {
         self.id
     }
-    fn save(&self) -> Option<Compound> {
+    fn save(&self) -> sunrise_world::worldgen::structure::legacy::PieceSave {
         let mut tag = sunrise_world::worldgen::structure::legacy::piece_tag(
             self.id,
             self.bounding_box,
@@ -488,8 +488,10 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
                 "StructurePiece::add_additional_save_data",
                 || self.piece.add_additional_save_data(&mut tag),
             )
-            .ok()?;
-        Some(tag)
+            .map_err(|_| {
+                sunrise_world::worldgen::structure::legacy::PieceSaveError::Callback(None)
+            })?;
+        Ok(tag)
     }
     fn post_process(
         &self,

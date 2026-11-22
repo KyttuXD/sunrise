@@ -977,7 +977,7 @@ impl LegacyPiece for FortressPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
-    fn save(&self) -> Option<sunrise_core::nbt::Compound> {
+    fn save(&self) -> super::legacy::PieceSave {
         use sunrise_core::nbt::Tag;
         let mut tag = super::legacy::piece_tag(
             self.type_name(),
@@ -998,7 +998,7 @@ impl LegacyPiece for FortressPiece {
             }
             _ => {}
         }
-        Some(tag)
+        Ok(tag)
     }
     fn type_name(&self) -> &'static str {
         match self.kind {
