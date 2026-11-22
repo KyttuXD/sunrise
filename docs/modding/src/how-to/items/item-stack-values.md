@@ -106,12 +106,14 @@ means none). Runtime selection is not a persistent component. Drawing receives t
 
 ## A stack's name
 
-`host.hover_name(&stack)` is `ItemStack.getHoverName()` as a component, on both sides: the custom
-name as written, else a potion's contents name, a written book's non-blank title, a player head's
-`%s's Head`, the `item_name` component, else the item's name as a translatable (`item.*` or
-`block.*`, with no fallback; a fallback written into a component is kept). It has no rarity colour or italics. Because it
-stays a component, each player renders it in their own language: put it into world text or a
-display as it is. Call `host.text_string(&name)` for a string, which is in the language of the
+`host.hover_name(&stack)` is `ItemStack.getHoverName()` as a component, on both sides. The
+custom name wins, then a written book's nonblank raw title. Otherwise the item's name is used:
+a mod item's `ItemPart::item_name` answer replaces its default; `None` keeps it. Vanilla item
+overrides (such as potion contents or a profiled player head) participate in the item-name step;
+the base item uses its `item_name` component or default prototype, and an explicitly removed
+`item_name` reads empty. Only a fallback written into a component is kept. It has no rarity
+colour or italics. Each player renders the component in their own language: put it into world
+text or a display as it is. Call `host.text_string(&name)` for a string in the language of the
 side that calls it. An invalid stack is a `TextFormError`.
 
 ## The NBT escape
