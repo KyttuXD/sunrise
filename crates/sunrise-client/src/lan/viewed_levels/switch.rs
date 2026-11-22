@@ -25,26 +25,29 @@ use sunrise_mod_runtime::attachments::Holder;
 use sunrise_protocol::viewed_levels::{self, Level};
 
 impl Hub {
-    /// Before guest `i` travels into the level in place: from revision 4, with its epochs spent,
-    /// the view of that level is closed, so that its client takes the travel as an ordinary
-    /// Respawn and nothing needs an epoch for the level left.
-    pub(in crate::lan) fn before_travel(&mut self, i: usize) {
-        let entered = self.config.dimension.clone();
+    /// Name the view of the level left, if the client will swap worlds. With the epochs spent,
+    /// close the destination view before Respawn so the client takes it as an ordinary travel.
+    pub(in crate::lan) fn before_travel(&mut self, i: usize) -> Option<Level> {
+        let entered = &self.config.dimension;
         self.guests.update(i, |g| {
-            if !g.sender.viewed_levels.bindings() || !g.viewed.epochs_spent() {
-                return;
-            }
-            if let Some(view) = g.viewed.views.remove(&entered) {
+            let answer = g.sender.viewed_levels;
+            if answer.bindings()
+                && g.viewed.epochs_spent()
+                && let Some(view) = g.viewed.views.remove(entered)
+            {
                 g.sender.send(viewed_levels::close(view.level));
             }
-        });
+            if !answer.switches() {
+                return None;
+            }
+            let destination = g.viewed.view(entered)?.level;
+            g.viewed.name_left(&g.dimension, destination, answer)
+        })
     }
 
-    /// `change_level`'s part once guest `i` was moved from level `left` into the level in place:
-    /// its views swapped with its own chunks when its client swaps worlds (revision 2) and views
-    /// the level in place, else its views dropped. Either way it leaves `left`'s queues and
-    /// entities.
-    pub(in crate::lan) fn leave_level(&mut self, i: usize, left: &str) {
+    /// Exchange the views and chunks after the player moves, or drop all views when the client
+    /// didn't swap worlds. Either way the player leaves `left`'s queues and entities.
+    pub(in crate::lan) fn leave_level(&mut self, i: usize, left: &str, swap: Option<Level>) {
         let entered = self.config.dimension.clone();
         let watching = self.chunk_watches.recording();
         let kept = self.guests.update(i, |g| {
@@ -52,28 +55,19 @@ impl Hub {
             g.chunk_queue.clear();
             // The client drops both levels' entities: the server sends them again.
             g.tracker.clear();
-            let answer = g.sender.viewed_levels;
-            // The level left is named as its client names it (`Viewed::name_left`): with no name,
-            // the client does not swap either.
-            let swap = answer
-                .switches()
-                .then(|| g.viewed.view(&entered).map(|view| view.level))
-                .flatten()
-                .and_then(|entered| g.viewed.name_left(left, entered, answer));
-            let (Some(level), Some(view)) =
-                (swap, swap.and_then(|_| g.viewed.views.remove(&entered)))
-            else {
+            let Some(level) = swap else {
                 g.viewed.forget_views();
                 return Vec::new();
             };
-            // The level left keeps what its client holds; the next pass starts its linger. From
-            // revision 4 its client learns its binding right after the Respawn.
+            let view = g
+                .viewed
+                .views
+                .remove(&entered)
+                .expect("planned destination view");
+            // The level left keeps what its client holds; the next pass starts its linger.
             let mut old = View::new(level);
             old.sent = own;
             g.viewed.views.insert(left.to_owned(), old);
-            if let Level::Bound { .. } = level {
-                g.sender.send(viewed_levels::swap(level));
-            }
             // What the view sent is the player's own now: `update_view` forgets what is past the
             // player's view and queues the rest.
             g.sent_chunks = view.sent;

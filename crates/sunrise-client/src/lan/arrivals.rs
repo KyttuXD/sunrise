@@ -986,7 +986,7 @@ mod hub_tests {
         let mut world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
         let border = crate::worldborder::WorldBorder::default();
         let mut next = 100;
-        let mut ctx = TickCtx {
+        let ctx = TickCtx {
             sea_level: 63,
             world: &mut world,
             entities: &[],
@@ -1004,7 +1004,10 @@ mod hub_tests {
             border: &border,
             streaming: None,
         };
-        hub.place_new_player(conn, &mut ctx);
+        if let Some(i) = hub.begin_player_join(conn, &ctx) {
+            hub.send_commands(i, hub.commands_packet(hub.guests[i].permission));
+            hub.finish_player_join(i, &ctx);
+        }
     }
 
     fn tick_context<'a>(

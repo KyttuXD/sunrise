@@ -1334,10 +1334,17 @@ impl Game<'_> {
 
     /// A connected player's record, including a body removed for respawn or displaced by a turn.
     pub(super) fn online_player_record(&self, player: PlayerRef) -> Option<&Guest> {
+        self.player_connection_record(player).filter(|g| g.joined())
+    }
+
+    /// Connection data is already present while the joining recipient acts, before
+    /// `PlayerList.placeNewPlayer` would add the player to its online list.
+    fn player_connection_record(&self, player: PlayerRef) -> Option<&Guest> {
         (self.native_lifecycle.epoch()? == player.entity().epoch()).then_some(())?;
         let guests = &self.lan.as_ref()?.hub.guests;
         let guest = guests.get(guests.identity_index(player.uuid(), player.entity().id())?)?;
-        (guest.joined() && guest.participates_online()).then_some(guest)
+        (guest.participates_online() && (guest.joined() || self.lan_acting == Some(guest.conn)))
+            .then_some(guest)
     }
 
     pub(super) fn cloning_guest(&self, uuid: u128) -> Option<&Guest> {
@@ -1416,7 +1423,7 @@ impl Game<'_> {
     /// players keep their address; an acting player with no known connection
     /// has an empty address. None for a stale or unavailable player.
     pub(super) fn player_address(&self, player: PlayerRef) -> Option<&str> {
-        if let Some(guest) = self.online_player_record(player) {
+        if let Some(guest) = self.player_connection_record(player) {
             return Some(guest.ip_address());
         }
         (self.native_acting_player() == Some(player)).then_some("")
@@ -1426,7 +1433,7 @@ impl Game<'_> {
     /// empty when it sent none. Displaced connected players keep theirs; an acting player with
     /// no known connection has an empty one. None for a stale or unavailable player.
     pub(super) fn player_client_brand(&self, player: PlayerRef) -> Option<&str> {
-        if let Some(guest) = self.online_player_record(player) {
+        if let Some(guest) = self.player_connection_record(player) {
             return Some(&guest.brand);
         }
         (self.native_acting_player() == Some(player)).then_some("")
@@ -1436,7 +1443,7 @@ impl Game<'_> {
     /// less `minecraft:unregister`), kept by its connection from configuration on.
     pub(super) fn player_announced_channels(&self, player: PlayerRef) -> Option<Arc<[String]>> {
         static EMPTY: LazyLock<Arc<[String]>> = LazyLock::new(Arc::default);
-        if let Some(guest) = self.online_player_record(player) {
+        if let Some(guest) = self.player_connection_record(player) {
             return Some(guest.sender.announced.list());
         }
         (self.native_acting_player() == Some(player)).then(|| Arc::clone(&EMPTY))
@@ -2170,55 +2177,97 @@ impl Game<'_> {
         self.native_commands.refresh = true;
     }
 
-    /// Asks the mods what root commands each player's tree keeps
-    /// (`native_player_commands_sent`) and stores the answer in the hub,
-    /// which sends the trees without what the mods took out: for `only`, or
-    /// for every placed player.
-    pub(super) fn native_filter_commands(&mut self, only: Option<u32>) {
+    /// Commands.sendCommands: build this recipient's tree once, let the installed
+    /// listeners select exclusions, then encode and send that same tree.
+    pub(in crate::game) fn send_player_command_tree(&mut self, conn: u32) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        let players: Vec<(u32, u128, String)> = host
-            .hub
-            .guests
-            .iter()
-            .filter(|g| only.map_or(g.placed, |conn| g.conn == conn))
-            .map(|g| (g.conn, g.uuid, g.name.clone()))
-            .collect();
-        for (conn, uuid, name) in players {
-            let Some(host) = self.lan.as_ref() else {
-                return;
+        let Some(i) = host.hub.guests.connection_index(conn) else {
+            return;
+        };
+        let guest = &host.hub.guests[i];
+        if !guest.participates_online() {
+            return;
+        }
+        let graph = host.hub.command_graph(guest.permission);
+        let mut hidden = Vec::new();
+        if mod_api::__private::listened(mod_api::HookId::PlayerCommandsSent)
+            && let Some(epoch) = self.native_lifecycle.epoch()
+        {
+            let player = mod_api::__private::game::player_ref(
+                mod_api::EntityRef::new(epoch, guest.entity_id as u32),
+                guest.uuid,
+            );
+            let roots = graph.roots();
+            let send = Arc::new(());
+            let name_at = |index: usize| roots.clone().nth(index).expect("indexed usable root");
+            let mut dispatch = |game: &Self| {
+                let mut answers = |answer: mod_api::Answered<mod_api::CommandTreeSelection>| {
+                    if let Some(indexes) =
+                        mod_api::__private::selected_command_roots(&send, answer.answer)
+                    {
+                        hidden.extend(indexes);
+                    } else {
+                        log::warn!(
+                            "mod {}: player_commands_sent returned an exclusion from a different command tree",
+                            answer.mod_id
+                        );
+                    }
+                };
+                game.native_player_commands_sent(mod_api::__private::PlayerCommandsSentCall {
+                    player,
+                    tree: mod_api::__private::command_tree_filter(roots.len(), &name_at, &send),
+                    answers: &mut answers,
+                });
             };
-            let names = host.hub.command_names(conn);
-            let mut kept = names.clone();
-            let placed = host.hub.guest(conn).is_some_and(|g| g.placed);
-            if !placed {
-                // A joining player has no world yet: nothing can be told them.
-                self.native_player_commands_sent(uuid, &name, &mut kept);
-            } else if self.lan_acting == Some(conn) {
-                self.native_player_commands_sent(uuid, &name, &mut kept);
+            if !guest.placed && self.lan_acting != Some(conn) {
+                // The joining body exists but is not in the online player list yet.
+                if let Err(error) = self.as_guest_at(i, conn, |game| dispatch(game)) {
+                    log::error!(
+                        "player_commands_sent: cannot lend the joining player for connection {conn}: {error:?}"
+                    );
+                }
             } else {
-                self.as_guest(conn, |g| {
-                    g.native_player_commands_sent(uuid, &name, &mut kept);
-                });
+                dispatch(self);
             }
-            if let Some(host) = self.lan.as_mut() {
-                let _ = host.hub.update_guest(conn, |g| {
-                    g.hidden_commands = names.into_iter().filter(|n| !kept.contains(n)).collect();
-                });
-            }
+        }
+        // A joining turn may have moved hub rows while settling callbacks.
+        if let Some(host) = self.lan.as_ref()
+            && let Some(i) = host.hub.guests.connection_index(conn)
+        {
+            let packet = host.hub.encode_command_graph(graph, &hidden);
+            host.hub.send_commands(i, packet);
         }
     }
 
-    /// `Hub::resend_commands` with the mods' say on each tree.
+    /// Refresh permissions, then send each placed player their own tree.
     pub(super) fn resend_commands_filtered(&mut self) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
         host.hub.refresh_permissions();
-        self.native_filter_commands(None);
-        if let Some(host) = self.lan.as_mut() {
-            host.hub.resend_commands();
+        self.send_placed_command_trees(true);
+    }
+
+    /// `Commands.sendCommands` sends only display data; `PlayerList.sendPlayerPermissionLevel`
+    /// also sends the permission event before that data.
+    fn send_placed_command_trees(&mut self, send_permission: bool) {
+        let Some(count) = self.lan.as_ref().map(|host| host.hub.guests.len()) else {
+            return;
+        };
+        for i in 0..count {
+            let Some(host) = self.lan.as_ref() else {
+                return;
+            };
+            let guest = &host.hub.guests[i];
+            if guest.placed && guest.participates_online() {
+                let conn = guest.conn;
+                if send_permission {
+                    host.hub.send_permission_level(i);
+                }
+                self.send_player_command_tree(conn);
+            }
         }
     }
 
@@ -3692,6 +3741,267 @@ mod tests {
         );
     }
 
+    fn command_delivery_packets(
+        receiver: &std::sync::mpsc::Receiver<sunrise_client::lan::Out>,
+    ) -> impl Iterator<Item = C> + '_ {
+        use sunrise_client::lan::Out;
+        use sunrise_protocol::{buf::Reader, ids::play::clientbound as ids};
+        receiver
+            .try_iter()
+            .flat_map(|out| match out {
+                Out::Packet(body) => vec![body],
+                Out::Packets(bodies) => bodies,
+                Out::Disconnect(_) => panic!("unexpected disconnect during command delivery"),
+            })
+            .filter_map(|body| {
+                let mut reader = Reader::new(&body);
+                let id = reader.varint().unwrap();
+                match id {
+                    ids::ENTITY_EVENT | ids::COMMANDS => {
+                        Some(C::decode(id, reader.rest()).unwrap())
+                    }
+                    _ => None,
+                }
+            })
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn outgoing_command_filter_reads_each_live_recipient_and_isolates_panics() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use sunrise_client::lan::PlayerSender;
+
+        struct Filter(Arc<Mutex<Vec<u128>>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Filter {
+            fn player_commands_sent(
+                &self,
+                host: &dyn mod_api::Host,
+                event: &mut mod_api::PlayerCommandsSentEvent<'_>,
+            ) -> Option<mod_api::CommandTreeSelection> {
+                let uuid = event.player.uuid();
+                assert_eq!(
+                    event.player.name(host),
+                    Some(if uuid == 12 { "guest12" } else { "guest13" })
+                );
+                if uuid == 12 {
+                    assert_eq!(event.player.address(host), Some("127.0.0.1"));
+                    assert_eq!(event.player.client_brand(host), Some("test-join-client"));
+                    assert_eq!(
+                        event.player.announced_channels(host).unwrap().as_ref(),
+                        ["test:join"]
+                    );
+                    assert!(!host.players().server_players().contains(&event.player));
+                }
+                self.0.lock().unwrap().push(uuid);
+                event
+                    .tree
+                    .hide_where(|name| uuid == 12 && name == "test_hide")
+            }
+        }
+
+        struct Broken(Arc<AtomicUsize>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Broken {
+            fn player_commands_sent(
+                &self,
+                _: &dyn mod_api::Host,
+                _: &mut mod_api::PlayerCommandsSentEvent<'_>,
+            ) -> Option<mod_api::CommandTreeSelection> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                panic!("test command filter panicked");
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let panics = Arc::new(AtomicUsize::new(0));
+        mod_platform::testing::with_mods(
+            vec![
+                mod_api::ModEntry::new("broken_command_filter", Box::new(Broken(panics.clone()))),
+                mod_api::ModEntry::new("command_filter", Box::new(Filter(calls.clone()))),
+            ]
+            .into(),
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    if game.native_lifecycle.epoch().is_none() {
+                        game.native_lifecycle.world_open_ready().unwrap();
+                    }
+                    let host = game.lan.as_mut().unwrap();
+                    let receivers = [12, 13].map(|conn| {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        host.hub.update_guest(conn, |g| {
+                            g.sender = PlayerSender::new(tx, Arc::default());
+                            g.placed = conn != 12;
+                            if conn == 12 {
+                                g.brand = "test-join-client".into();
+                                assert!(
+                                    g.sender.announced.apply("minecraft:register", b"test:join")
+                                );
+                            }
+                        });
+                        rx
+                    });
+                    assert!(host.hub.set_mod_commands(
+                        0,
+                        json!({"type": "root", "children": {
+                            "test_hide": {"type": "literal", "executable": true},
+                            "test_keep": {"type": "literal", "executable": true}
+                        }})
+                    ));
+                    let unchanged = host.hub.commands_packet(0);
+                    for (conn, rx) in [12, 13].into_iter().zip(receivers) {
+                        if conn == 12 {
+                            game.lan_guest_joined(conn, &[], [3.0, 64.0, 5.0]);
+                            assert!(game.lan.as_ref().unwrap().hub.guest(conn).unwrap().placed);
+                        } else {
+                            game.send_player_command_tree(conn);
+                        }
+                        let packet = command_delivery_packets(&rx)
+                            .find_map(|packet| {
+                                if let C::Commands(tree) = packet {
+                                    Some(tree)
+                                } else {
+                                    None
+                                }
+                            })
+                            .expect("expected command tree");
+                        if conn == 13 {
+                            assert_eq!(
+                                packet, unchanged,
+                                "abstaining leaves the whole wire tree unchanged"
+                            );
+                        }
+                        let names: Vec<_> = packet.nodes[packet.root as usize]
+                            .children
+                            .iter()
+                            .map(|&id| packet.nodes[id as usize].name.as_str())
+                            .filter(|name| name.starts_with("test_"))
+                            .collect();
+                        assert_eq!(
+                            names,
+                            if conn == 12 {
+                                vec!["test_keep"]
+                            } else {
+                                vec!["test_hide", "test_keep"]
+                            }
+                        );
+                    }
+                    assert_eq!(*calls.lock().unwrap(), [12, 13]);
+                    assert_eq!(panics.load(Ordering::Relaxed), 1);
+                })
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn self_deop_sends_the_tree_for_the_permission_the_listener_reads() {
+        use crate::game::{
+            dedicated::Lists, execution_role::ExecutionRole, lan_actions::GuestCommand,
+        };
+        use sunrise_client::{
+            lan::PlayerSender,
+            server::user_lists::{BanList, IpBanList, NameAndId, OpEntry, OpList, WhiteList},
+        };
+
+        type Reads = Arc<Mutex<Vec<(Option<u8>, bool)>>>;
+        struct Observe(Reads);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Observe {
+            fn player_commands_sent(
+                &self,
+                host: &dyn mod_api::Host,
+                event: &mut mod_api::PlayerCommandsSentEvent<'_>,
+            ) -> Option<mod_api::CommandTreeSelection> {
+                if event.player.uuid() == 12 {
+                    self.0.lock().unwrap().push((
+                        event.player.permission_level(host),
+                        event.tree.root_names().any(|name| name == "deop"),
+                    ));
+                }
+                None
+            }
+        }
+
+        let reads = Reads::default();
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "observe_deop",
+                Box::new(Observe(reads.clone())),
+            )]
+            .into(),
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    game.options.execution_role = ExecutionRole::DedicatedServer;
+                    game.options.dedicated = Some(Vec::new());
+                    game.build_registries();
+                    game.ui.dispatcher.0 =
+                        Arc::new(sunrise_client::command::vanilla::build_for(false, true));
+                    let files = tempfile::tempdir().unwrap();
+                    let root = files.path();
+                    let mut ops = OpList::new(root.join("ops.json"));
+                    assert!(ops.add(OpEntry {
+                        user: NameAndId {
+                            id: 12,
+                            name: "guest12".into()
+                        },
+                        level: 4,
+                        bypasses_player_limit: false,
+                    }));
+                    game.server_lists = Some(Arc::new(Mutex::new(Lists {
+                        ops,
+                        white: WhiteList::new(root.join("whitelist.json")),
+                        bans: BanList::new(root.join("banned-players.json")),
+                        ip_bans: IpBanList::new(root.join("banned-ips.json")),
+                        use_whitelist: false,
+                        enforce_whitelist: false,
+                        op_level: 4,
+                        player_idle_timeout: 0,
+                        stop: false,
+                        autosave: true,
+                    })));
+                    let (sent, received) = std::sync::mpsc::channel();
+                    let hub = &mut game.lan.as_mut().unwrap().hub;
+                    hub.config.integrated = false;
+                    hub.ops.insert(12, 4);
+                    hub.refresh_permissions();
+                    hub.update_guest(12, |g| g.sender = PlayerSender::new(sent, Arc::default()));
+                    game.send_player_command_tree(12);
+                    assert!(game.run_guest_command(GuestCommand {
+                        conn: 12,
+                        command: "deop @s".into(),
+                        permission: 4,
+                        integrated: false,
+                        quiet: false,
+                    }));
+                    assert_eq!(*reads.lock().unwrap(), [(Some(4), true), (Some(0), false)]);
+                    let delivered: Vec<_> = command_delivery_packets(&received).collect();
+                    let [
+                        C::Commands(before),
+                        C::EntityEvent(permission),
+                        C::Commands(after),
+                    ] = delivered.as_slice()
+                    else {
+                        panic!(
+                            "expected the operator tree, permission update and non-operator tree"
+                        );
+                    };
+                    assert_eq!((permission.id, permission.event), (12, 24));
+                    for (packet, operator) in [(before, true), (after, false)] {
+                        let roots = &packet.nodes[packet.root as usize].children;
+                        assert_eq!(
+                            roots
+                                .iter()
+                                .any(|&i| packet.nodes[i as usize].name == "deop"),
+                            operator
+                        );
+                        assert!(roots.iter().any(|&i| packet.nodes[i as usize].name == "me"));
+                    }
+                })
+            },
+        );
+    }
+
     #[test]
     #[ignore = "daily"]
     fn panicking_command_executors_keep_other_usages_and_only_undo_journaled_writes() {
@@ -3877,10 +4187,10 @@ mod tests {
             }
             fn player_commands_sent(
                 &self,
-                _: &mut dyn mod_api::ServerHost,
+                _: &dyn mod_api::Host,
                 event: &mut mod_api::PlayerCommandsSentEvent<'_>,
-            ) {
-                event.names.retain(|name| name != "before");
+            ) -> Option<mod_api::CommandTreeSelection> {
+                event.tree.hide_where(|name| name == "before")
             }
         }
         let changed = Arc::new(AtomicBool::new(false));
@@ -3903,7 +4213,31 @@ mod tests {
             || {
                 super::super::native_guest_turn_tests::with_guests(|game| {
                     game.build_registries();
+                    let (sent, received) = std::sync::mpsc::channel();
+                    game.lan.as_mut().unwrap().hub.update_guest(12, |g| {
+                        g.permission = 2;
+                        g.sender = sunrise_client::lan::PlayerSender::new(sent, Arc::default());
+                    });
                     game.register_native_commands();
+                    let delivered: Vec<_> = command_delivery_packets(&received).collect();
+                    let [C::Commands(tree)] = delivered.as_slice() else {
+                        panic!("installing a changed display report sends only its tree");
+                    };
+                    let roots = &tree.nodes[tree.root as usize].children;
+                    assert!(
+                        roots
+                            .iter()
+                            .any(|&i| tree.nodes[i as usize].name == "retained")
+                    );
+                    assert!(
+                        !roots
+                            .iter()
+                            .any(|&i| tree.nodes[i as usize].name == "before")
+                    );
+                    assert_eq!(
+                        game.lan.as_ref().unwrap().hub.guest(12).unwrap().permission,
+                        2
+                    );
                     assert_eq!(registrations.load(Ordering::Relaxed), 1);
                     let old_parse = game.ui.dispatcher.0.parse("retained", &game.ui.registries);
                     let old_context = old_parse.executable().unwrap().0;

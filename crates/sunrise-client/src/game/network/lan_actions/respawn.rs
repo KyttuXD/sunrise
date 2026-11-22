@@ -200,13 +200,17 @@ impl Game<'_> {
             if missing {
                 host.hub.missing_respawn_block(conn);
             }
-            host.hub.respawn(
+            host.hub.begin_respawn(
                 i,
                 [to.at.x, to.at.y, to.at.z],
                 Some([to.yaw, to.pitch]),
                 !was_death,
                 &ctx,
             );
+        }
+        self.send_player_command_tree(conn);
+        if let Some(host) = self.lan.as_mut() {
+            host.hub.finish_respawn(i);
         }
         self.bind_player_attachments(conn, false);
         if mod_api::__private::listened(mod_api::HookId::PlayerRespawned)

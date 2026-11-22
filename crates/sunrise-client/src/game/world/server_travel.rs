@@ -940,9 +940,16 @@ impl Game<'_> {
         // Through a portal: the client waits on its loading screen until
         // the exit is found (`arrive_server_trips`). The cooldown is the one
         // Entity.handlePortal set before the teleport.
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let change = host
+            .hub
+            .begin_level_change(i, at, yaw, None, PLAYER_DELAY, &ctx);
+        self.send_player_command_tree(conn);
+        let ctx = server_ctx!(self);
         if let Some(host) = self.lan.as_mut() {
-            host.hub
-                .change_level(i, at, yaw, None, true, PLAYER_DELAY, &ctx);
+            host.hub.finish_level_change(i, change, true, &ctx);
         }
         self.bind_player_attachments(conn, false);
         self.as_guest(conn, |g| {
@@ -1550,27 +1557,34 @@ impl Game<'_> {
             }
             return;
         };
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
+        let guest = &host.hub.guests[i];
+        let [yaw, pitch] = t.rotation.unwrap_or([guest.yaw, guest.pitch]);
+        let origin = guest.position;
+        let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
+        let ctx = server_ctx!(self);
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        let (yaw, pitch, origin, passenger_body) = host.hub.guests.update(i, |g| {
-            let [yaw, pitch] = t.rotation.unwrap_or([g.yaw, g.pitch]);
-            let origin = g.position;
-            // A new body there: no fall distance or motion carried over, but
-            // the player's attributes (ServerPlayer.teleport keeps the entity).
-            let passenger_body = if t.vehicle.is_some() {
-                g.motion.take()
-            } else {
-                g.new_body(true);
-                None
-            };
-            (yaw, pitch, origin, passenger_body)
-        });
-        let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
+        let change = host
+            .hub
+            .begin_level_change(i, t.at, yaw, Some(pitch), cooldown, &ctx);
+        self.send_player_command_tree(t.conn);
         let ctx = server_ctx!(self);
         if let Some(host) = self.lan.as_mut() {
-            host.hub
-                .change_level(i, t.at, yaw, Some(pitch), false, cooldown, &ctx);
+            let passenger_body = host.hub.guests.update(i, |g| {
+                // A new body there: no fall distance or motion carried over, but
+                // the player's attributes (ServerPlayer.teleport keeps the entity).
+                if t.vehicle.is_some() {
+                    g.motion.take()
+                } else {
+                    g.new_body(true);
+                    None
+                }
+            });
+            host.hub.finish_level_change(i, change, false, &ctx);
             host.hub.guests.update(i, |g| {
                 g.vehicle = t.vehicle;
                 if let Some(mut body) = passenger_body {

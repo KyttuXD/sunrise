@@ -134,8 +134,9 @@ pub(super) fn emit<'a>(
         let contract = hook.contract;
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
-        let answered_return =
-            answered && contract == Contract::Collect && matches!(name, "section_visibility");
+        let answered_return = answered
+            && contract == Contract::Collect
+            && matches!(name, "section_visibility" | "player_commands_sent");
         let output = if let Some(out) = out {
             let index = args
                 .iter()

@@ -194,7 +194,15 @@ impl Server {
         let events = self.hub.tick(&mut ctx);
         for event in events {
             match event {
-                HostEvent::Joined(conn) => self.hub.place_new_player(conn, &mut ctx),
+                HostEvent::Joined(conn) => {
+                    if let Some(i) = self.hub.begin_player_join(conn, &ctx) {
+                        self.hub.send_commands(
+                            i,
+                            self.hub.commands_packet(self.hub.guests[i].permission),
+                        );
+                        self.hub.finish_player_join(i, &ctx);
+                    }
+                }
                 HostEvent::Packet(conn, packet) => {
                     if let S::UseItemOn(p) = *packet {
                         let at = [p.pos[0], p.pos[1] + 1, p.pos[2]];
@@ -1718,14 +1726,20 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         border: &border,
         streaming: None,
     };
-    s.hub.respawn(0, at, None, false, &ctx);
+    s.hub.begin_respawn(0, at, None, false, &ctx);
+    s.hub
+        .send_commands(0, s.hub.commands_packet(s.hub.guests[0].permission));
+    s.hub.finish_respawn(0);
     assert!(
         !s.hub.guests[0].client_loaded(),
         "a respawn unloads the client"
     );
     // A level change does not clear it: vanilla resets the loaded state on death and respawn
     // only, and covers a portal with its separate `isChangingDimension` term.
-    s.hub.change_level(0, at, 0.0, None, false, 0, &ctx);
+    let change = s.hub.begin_level_change(0, at, 0.0, None, 0, &ctx);
+    s.hub
+        .send_commands(0, s.hub.commands_packet(s.hub.guests[0].permission));
+    s.hub.finish_level_change(0, change, false, &ctx);
     assert!(
         !s.hub.guests[0].client_loaded(),
         "a level change keeps the cleared state from the respawn"

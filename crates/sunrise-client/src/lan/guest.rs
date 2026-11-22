@@ -525,9 +525,6 @@ pub struct Guest {
     /// saves neither its player file nor its records, since the other server has the
     /// player now.
     pub released: bool,
-    /// Root command names the mods took out of this player's command tree
-    /// (`native_player_commands_sent`); their tree is sent without them.
-    pub hidden_commands: Vec<String>,
     /// `Player.getAbilities`: set from the game mode when it changes, and
     /// written by server mods. Saved with the player.
     pub abilities: super::abilities::PlayerAbilities,
@@ -924,7 +921,6 @@ impl Guest {
             arrival_recentered: false,
             quiet_leave: false,
             released: false,
-            hidden_commands: Vec::new(),
             abilities: Default::default(),
             dimension: "minecraft:overworld".into(),
             menu: None,

@@ -1307,7 +1307,7 @@ impl Game<'_> {
                 host.hub.config.force_game_mode = settings.force_game_mode;
                 // IntegratedServer.setGuestCommandAccess, then updatePermissions.
                 host.hub.config.guest_commands = settings.guest_commands && allow_commands;
-                host.hub.resend_commands();
+                self.resend_commands_filtered();
             }
             Publish::Close => {
                 host.hub.lan.stop_listening();
@@ -1381,7 +1381,7 @@ impl Game<'_> {
             if published {
                 host.hub.config.guest_commands = allow && host.settings.guest_commands;
             }
-            host.hub.resend_commands();
+            self.resend_commands_filtered();
         }
     }
 }

@@ -133,6 +133,7 @@ fn install_warps(game: &mut Game<'_>) {
     game.ui.dispatcher.0 = Arc::new(dispatcher);
     let host = game.lan.as_mut().unwrap();
     host.hub.set_mod_commands(0, tree);
+    game.send_player_command_tree(2);
 }
 
 /// The last command tree the guest was sent.
@@ -289,6 +290,7 @@ fn a_providers_answer_reaches_the_player_without_passing_through_the_completion_
         register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
         game.ui.dispatcher.0 = Arc::new(dispatcher);
         game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+        game.send_player_command_tree(2);
         last_tree(&rx);
 
         // The provider's argument: its matching candidate, its tooltip, and nothing the listener
@@ -339,6 +341,7 @@ fn an_identifier_listener_replies_on_the_wire_and_leaves_room_for_the_next_argum
         register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
         game.ui.dispatcher.0 = Arc::new(dispatcher);
         game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+        game.send_player_command_tree(2);
         last_tree(&rx);
 
         let typed = "probe ex";
@@ -413,7 +416,7 @@ fn a_plain_players_tree_and_completions_leave_out_the_paths_they_may_not_run() {
     {
         let host = game.lan.as_mut().unwrap();
         host.hub.ops.insert(uuid, 4);
-        host.hub.resend_commands();
+        game.resend_commands_filtered();
     }
     assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].permission, 4);
     assert_eq!(children(&last_tree(&rx), "warp"), ["admin", "go"]);

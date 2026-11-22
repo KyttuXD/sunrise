@@ -1586,27 +1586,12 @@ impl Game<'_> {
     ) {
         self.fire_player_login(player, name, cancel, reason);
     }
-    /// The command tree a server sends a player (NeoForge's and Paper's
-    /// "commands sent to a player" stage): when they join and when their
-    /// level changes (`/op`, `/deop`, the LAN settings). `names` are the
-    /// root commands their client would get, vanilla's they may use and the
-    /// mods'; take a name out and that client gets the tree without it
-    /// (and without what it leads to), so it neither completes nor
-    /// highlights it. This hides the command from the client only: the
-    /// server still runs a typed one, `native_player_command` stops it.
-    /// For a player who is already on, their state is swapped in and the
-    /// helpers (`native_tell`...) work; for one who is joining it is not, and
-    /// their client has no world to tell yet. The tree the hub sends again by
-    /// itself (after a respawn or a change of level) keeps the last answer
-    /// and does not ask again; the integrated server's owner is not asked
-    /// when the world's cheats are switched.
+    /// Commands.sendCommands: lend the live recipient and permission-filtered tree before delivery.
     pub(in crate::game) fn native_player_commands_sent(
-        &mut self,
-        player: u128,
-        name: &str,
-        names: &mut Vec<String>,
+        &self,
+        call: mod_api::__private::PlayerCommandsSentCall<'_>,
     ) {
-        self.fire_player_commands_sent(player, name, names);
+        self.fire_player_commands_sent(call);
     }
     /// A server player's sprint started or stopped: their client sent
     /// `START_SPRINTING` or `STOP_SPRINTING` (the sprint key, a double tap

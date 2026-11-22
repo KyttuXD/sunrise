@@ -192,13 +192,10 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   everyone, and for an integrated server's owner when the world saves their state into `level.dat`. `directory` is the
   world's `players/data` folder, created if missing; write your own file there, named `<uuid>.<suffix>`, and never the player's `.dat`.
   The player may be leaving, so no player's state is swapped in. It cannot change or stop anything.
-- **`player_commands_sent(player, name, names)`**: the command tree a player is sent, when they join and when
-  their level changes (`/op`, `/deop`, the LAN settings). `names` are the root commands their client would get, vanilla's
-  they may use and the mods'; remove a name and that client's tree lacks it, so its chat box neither completes nor
-  colours it. This hides the command from the client only, a typed one still runs (stop it with
-  `player_command`). For a player already on, their state is swapped in and `PlayerRef::tell` works; a joining
-  player has no world yet, so nothing can be told them. The tree the hub re-sends by itself (after a respawn or a change
-  of level) reuses the last answer.
+- **`player_commands_sent`**: before every outgoing command tree (join, permission refresh, respawn and
+  level change), the listener gets the live `PlayerRef` and a view of the roots that passed the player's permissions.
+  Return `event.tree.hide_where(...)` to omit roots in that send; aliases leading into a removed branch disappear too.
+  The server dispatcher is unchanged (stop execution with `player_command`).
 - **`player_sprint(player, name, sprinting)`**: a server player's client started or stopped sprinting (the sprint
   key, a double tap forward, letting go), once for each change, after the server's player took it. It only hears. It
   reports what the client asks, not what the server does: a sprint that ends by itself (a hit's knockback, hunger, a
@@ -2404,7 +2401,9 @@ registration path.
 
 - A server player teleported: `player_teleported(player, name, from, to, dimension)` is heard after `/tp` or `/teleport` has moved a player inside their level or into another one (NeoForge's `EntityTeleportEvent`), with their state swapped in. `from` and `to` are their feet before and after, `dimension` the level they are in now. It cannot stop the move; ender pearls, chorus fruit and a spectator's teleport menu are not heard yet, portals and respawns are not teleports here.
 
-- The command tree a server sends a player: `player_commands_sent(player, name, names)` is heard when a player joins and when their permission level changes, with the root command names their client would get. For a player already on their state is swapped in. A mod removes names and that client's tree is sent without them (its chat box neither completes nor colours them); a typed command still runs, `player_command` stops it.
+- The command tree a server sends a player: `player_commands_sent` lends the live `PlayerRef` and
+  permission-filtered outgoing roots. Use `event.tree.hide_where(...)` to select roots to omit for this send.
+  The player's client neither completes nor highlights the hidden commands, but execution is unchanged.
 
 - A joining player the mods may refuse: `player_login(player, name, cancel, reason)` is heard once for each player a server has accepted (name, whitelist, bans and player limit checked), before their saved state is loaded and before they are placed in a level (NeoForge's `PlayerNegotiationEvent`). A mod sets `cancel` to disconnect them with `reason` ("Disconnected" when it stays unset); no join message and no `player_logged_in` follow.
 
