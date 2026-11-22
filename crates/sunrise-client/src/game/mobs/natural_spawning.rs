@@ -2743,11 +2743,19 @@ mod tests {
                 ask("minecraft:zombie", mod_api::SpawnReason::Spawner),
                 Some(1)
             );
-            assert_eq!(
-                ask("minecraft:skeleton", mod_api::SpawnReason::Natural),
-                None
-            );
-            assert_eq!(ask("minecraft:cow", mod_api::SpawnReason::Natural), None);
+            game.lend_unspawned("minecraft:zombie", [0.0; 3], None, |outer, _| {
+                assert_eq!(
+                    ask("minecraft:skeleton", mod_api::SpawnReason::Natural),
+                    None,
+                    "an attached part not subscribed to this hook does not answer"
+                );
+                assert_eq!(ask("minecraft:cow", mod_api::SpawnReason::Natural), None);
+                assert_eq!(
+                    outer.kind(game).unwrap().to_string(),
+                    "minecraft:zombie",
+                    "neither unrelated kind opens a new lend or expires this one"
+                );
+            });
         });
     }
 

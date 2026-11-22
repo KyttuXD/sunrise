@@ -6,11 +6,12 @@ impl Game<'_> {
     /// answering part's registration slot alongside `shearable`. Server-side.
     pub(in crate::game) fn native_is_shearable(
         &self,
+        entity_kind: &str,
         entity: EntityRef,
         player: Option<PlayerRef>,
         shears: mod_api::ItemStackView<'_>,
         shearable: &mut Option<bool>,
     ) -> Option<(usize, usize)> {
-        mod_api::dispatch_is_shearable(self, entity, player, shears, shearable)
+        mod_api::dispatch_is_shearable(self, entity_kind, entity, player, shears, shearable)
     }
 }

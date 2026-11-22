@@ -124,9 +124,10 @@ pub fn enabled_listened(hook: HookId) -> bool {
 /// entity type `kind`, so a family's walk can resolve its rows' slots once per
 /// pass instead of naming each row's type.
 pub fn entity_part_hooked(hook: HookId, name: &'static str, kind: &str) -> bool {
-    crate::parts::parts(hook, name)
-        .for_hook(hook)
-        .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
+    crate::parts::has_part_hook(hook)
+        && crate::parts::parts(hook, name)
+            .for_hook(hook)
+            .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
 }
 
 /// Identity for one scoped creative tab event, constructed by the game.

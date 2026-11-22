@@ -175,11 +175,9 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global cancel hook, or a global collect hook answered by mod, whose dispatch runs every
-    /// listener inside `catch_unwind`: one that unwinds is switched off for this hook for the
-    /// session. A cancel hook rolls outputs back to the requested values and stops (#2414).
-    /// A collector receives at most one returned value per registration, and later listeners
-    /// still run after a failure.
+    /// Dispatch contains each listener's panic and switches that mod off for this hook only.
+    /// A global cancel hook rolls outputs back to the requested values and stops (#2414).
+    /// Otherwise unrelated listeners still run after a failure.
     pub isolate: bool,
     /// An isolated cancel hook's per-listener check of the outputs it wrote: a path to
     /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
@@ -267,7 +265,7 @@ impl fmt::Display for CatalogError {
             Self::AnsweredNeedsGlobalOutput(name) => {
                 write!(
                     f,
-                    "{name}: answered_by needs a global replace or collect hook"
+                    "{name}: answered_by needs a global replace or collect hook, or a scoped collect with owned_answer_batch"
                 )
             }
             Self::OwnerNeedsGlobalListener(name) => {
@@ -485,7 +483,9 @@ impl Hook {
         }
         let answered_by_mod = api.answered_by.is_some();
         if answered_by_mod
-            && (!matches!(api.contract, Contract::Replace | Contract::Collect) || scope.is_some())
+            && (!matches!(api.contract, Contract::Replace | Contract::Collect)
+                || scope.is_some()
+                    && !(api.contract == Contract::Collect && api.owned_answer_batch))
         {
             return Err(CatalogError::AnsweredNeedsGlobalOutput(name));
         }
@@ -512,19 +512,24 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
-        // A listener that unwinds is disabled for this hook. Cancellation rolls back and
-        // stops dispatch (#2414); an answered collector has no output until its listener returns.
+        // A listener that panics is disabled for this hook. Global cancellation rolls back and
+        // stops dispatch (#2414); scoped parts have no output until their callback returns.
         let isolate = api.isolate.unwrap_or(false);
-        if isolate
-            && (scope.is_some()
-                || !(api.contract == Contract::Cancel
-                    || api.contract == Contract::Collect && answered_by_mod))
-        {
+        let isolation_supported = match &scope {
+            None => {
+                api.contract == Contract::Cancel
+                    || api.contract == Contract::Collect && answered_by_mod
+            }
+            Some(scope) => {
+                scope.kind == PartKind::Entity
+                    && (matches!(api.contract, Contract::Listen | Contract::Replace)
+                        || api.contract == Contract::Collect && api.owned_answer_batch)
+            }
+        };
+        if isolate && !isolation_supported {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error:
-                    "isolate is for a global cancel hook or a global collect hook answered by mod"
-                        .into(),
+                error: "isolate requires a global cancel or answered collect, or an entity Part listen, replace, or private batch collect".into(),
             });
         }
         if let Some(validator) = &api.output_validator
@@ -1422,7 +1427,7 @@ mod tests {
     }
 
     #[test]
-    fn answered_by_needs_a_global_replace_or_collect_hook() {
+    fn answered_by_needs_a_global_output_or_a_scoped_private_batch() {
         let answered = |api: serde_json::Value| Hook::parse(hook("a", json!({"mod_api": api})));
         for contract in ["replace", "collect"] {
             assert!(
@@ -1431,6 +1436,11 @@ mod tests {
                     .answered_by_mod
             );
         }
+        assert!(
+            answered(json!({"contract": "collect", "out": "o", "answered_by": "mod", "scope": "entity", "key": "k", "owned_answer_batch": true}))
+                .unwrap()
+                .answered_by_mod
+        );
         for api in [
             json!({"contract": "cancel", "out": "o", "answered_by": "mod"}),
             json!({"contract": "replace", "out": "o", "answered_by": "mod", "scope": "item", "key": "k"}),

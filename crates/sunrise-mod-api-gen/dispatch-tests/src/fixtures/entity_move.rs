@@ -134,6 +134,16 @@ mod root {
             Ok(call())
         }
 
+        pub(super) fn invoke_entity_part<T>(
+            _: bool,
+            _: super::HookId,
+            _: &'static str,
+            _: &'static str,
+            call: impl FnOnce() -> T,
+        ) -> Option<T> {
+            Some(call())
+        }
+
         pub(super) fn listening_kind_owner(
             hook: super::HookId,
             kind: &str,

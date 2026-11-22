@@ -6,23 +6,13 @@ impl Game<'_> {
     /// answered `Some(true)`. Server-side.
     pub(in crate::game) fn native_on_sheared(
         &mut self,
+        entity_kind: &str,
         entity: EntityRef,
         player: Option<PlayerRef>,
         shears: mod_api::ItemStackView<'_>,
-        drops: &mut Vec<mod_api::ItemStack>,
-        validate_drops: &mut dyn FnMut(
-            &Vec<mod_api::ItemStack>,
-        ) -> Result<(), mod_api::StackWriteError>,
+        drops: &mut Vec<mod_api::Answered<mod_api::ItemStack>>,
         part_slot: (usize, usize),
     ) -> Result<(), ()> {
-        mod_api::dispatch_on_sheared(
-            self,
-            entity,
-            player,
-            shears,
-            drops,
-            validate_drops,
-            part_slot,
-        )
+        mod_api::dispatch_on_sheared(self, entity_kind, entity, player, shears, drops, part_slot)
     }
 }

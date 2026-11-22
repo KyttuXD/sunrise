@@ -154,12 +154,17 @@ The part's `spawn_cluster_size` changes how large a natural spawn group of the t
 (`Mob.getMaxSpawnClusterSize`); [controlling spawns](../../how-to/world/spawning.md#changing-how-large-a-spawn-group-grows)
 shows it.
 
-`is_shearable` and `on_sheared` make the type shearable, as NeoForge's `IShearable` does: shears in a player's
-hand and a dispenser's ask `is_shearable` first with an `IsShearableEvent` carrying `event.entity`,
-`event.player` and a lazy `event.shears: ItemStackView<'_>`, and the part that says `Some(true)` shears the
-entity in `on_sheared` by pushing drops into `event.drops: &mut Vec<ItemStack>`, which the game spawns before
-damaging the shears. `Some(false)` keeps the entity unsheared, and `None` leaves it to the species (a sheep
-keeps shearing as vanilla's does).
+`is_shearable` and `on_sheared` make the type shearable, as NeoForge's `IShearable` does. Shears in a player's
+hand or a dispenser ask `is_shearable` first. The event carries `event.entity`, `event.player` and a lazy
+`event.shears: ItemStackView<'_>` of the actual tool, including its damage. The first part to return
+`Some(true)` is the only one asked to perform the shear in `on_sheared`, which gets a view of the same tool.
+Push drops into `event.drops: &mut Vec<ItemStack>`. The game reports and skips each rejected drop and spawns
+the valid drops in order before damaging the tool. `Some(false)` keeps the entity unsheared; `None` leaves the
+answer to the next part and then to the species (a sheep keeps shearing as vanilla's does).
+
+If a goal or behavior registration, spawn-cluster, or shearing callback panics, Sunrise logs it, queues an
+error toast naming the mod, and disables that mod's callback for that hook until restart. A phase refusal
+is reported without disabling the callback.
 
 ## Equipped durability
 

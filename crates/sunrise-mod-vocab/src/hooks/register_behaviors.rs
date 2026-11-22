@@ -9,6 +9,7 @@ pub trait Hooks {
         target = "sunrise_client_lib::mobs::mod_behaviors::native_register_behaviors",
         side = "server",
         contract = "listen",
+        isolate = true,
         scope = "entity",
         key = "behaviors",
         neoforge = "none (vanilla LivingEntity.makeBrain)"

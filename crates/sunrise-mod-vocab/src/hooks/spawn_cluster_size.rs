@@ -19,9 +19,10 @@ pub trait Hooks {
         host = "read",
         contract = "replace",
         out = "limit",
+        isolate = true,
         scope = "entity",
         key = "mob",
-        neoforge = "none (vanilla Mob.getMaxSpawnClusterSize)"
+        neoforge = "SpawnClusterSizeEvent"
     )]
     fn spawn_cluster_size(
         mob: UnspawnedMobRef,

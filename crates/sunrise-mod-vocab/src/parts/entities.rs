@@ -25,19 +25,6 @@ impl HookParts {
     ) -> &[Attached<dyn EntityPart>] {
         attached(&self.entities, id)
     }
-    pub(crate) fn entity_id(
-        &self,
-        id: impl FnOnce() -> Option<crate::Identifier>,
-    ) -> &[Attached<dyn EntityPart>] {
-        if self.entities.is_empty() {
-            return &[];
-        }
-        let Some(id) = id() else {
-            return &[];
-        };
-        let text = id.to_string();
-        self.entities.get(text.as_str()).map_or(&[], Vec::as_slice)
-    }
 }
 
 /// Whether any mod registered a provider of entity capability `key`, for any entity type: one

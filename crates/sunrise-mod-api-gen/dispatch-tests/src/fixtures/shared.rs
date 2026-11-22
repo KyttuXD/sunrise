@@ -43,11 +43,6 @@ mod content {
         ) -> Option<&'static str> {
             Some("test:counter")
         }
-        pub(in crate::tests) fn entity_type_name(
-            _: super::super::EntityTypeKey,
-        ) -> Option<&'static str> {
-            Some("test:entity")
-        }
         pub(in crate::tests) fn item_id(key: super::super::ItemKey<'_>) -> Option<&str> {
             Some(key.0)
         }
@@ -236,17 +231,6 @@ impl ModEntry {
     }
 }
 trait Registrar {}
-struct EntityTypeKey;
-impl EntityRef {
-    fn kind(self, _: &dyn Host) -> Option<EntityTypeKey> {
-        Some(EntityTypeKey)
-    }
-}
-impl UnspawnedMobRef {
-    fn kind(&self, _: &dyn Host) -> Result<Identifier, ()> {
-        Ok(Identifier)
-    }
-}
 /// The goal registrar of the generated `EntityPart`, as the fixture sees it.
 struct GoalRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
@@ -278,6 +262,8 @@ struct Parts {
     menus: Vec<&'static dyn MenuPart>,
     fluids: Vec<&'static dyn FluidPart>,
     entities: Vec<&'static dyn EntityPart>,
+    entity_kind: Option<&'static str>,
+    entity_hooks: Vec<(HookId, Parts)>,
 }
 static NO_PARTS: Parts = Parts {
     blocks: Vec::new(),
@@ -287,6 +273,8 @@ static NO_PARTS: Parts = Parts {
     menus: Vec::new(),
     fluids: Vec::new(),
     entities: Vec::new(),
+    entity_kind: None,
+    entity_hooks: Vec::new(),
 };
 thread_local! {
     static PARTS: std::cell::Cell<&'static Parts> = const { std::cell::Cell::new(&NO_PARTS) };
@@ -312,8 +300,13 @@ fn parts(_: HookId, _: &'static str) -> &'static Parts {
     PARTS.get()
 }
 impl Parts {
-    fn for_hook(&self, _: HookId) -> Option<&Self> {
-        Some(self)
+    fn for_hook(&self, hook: HookId) -> Option<&Self> {
+        if self.entity_hooks.is_empty() {
+            return Some(self);
+        }
+        self.entity_hooks.iter().find_map(|(subscribed, table)| {
+            (*subscribed as usize == hook as usize).then_some(table)
+        })
     }
     fn block_value(&self, state: BlockState) -> &[&'static dyn BlockPart] {
         // Both fixture block definitions have two local state ordinals, 0 and 1.
@@ -360,10 +353,10 @@ impl Parts {
     fn fluid<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn FluidPart] {
         &self.fluids
     }
-    fn entity<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn EntityPart] {
-        &self.entities
-    }
-    fn entity_id(&self, _: impl FnOnce() -> Option<Identifier>) -> &[&'static dyn EntityPart] {
+    fn entity<'k>(&self, kind: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn EntityPart] {
+        if self.entity_kind.is_some_and(|key| kind() != Some(key)) {
+            return &[];
+        }
         &self.entities
     }
 }
@@ -409,32 +402,126 @@ fn entered_parts_with_owner<'a, P: ?Sized>(
         .filter(move |part| disabled != Some(std::ptr::from_ref(*part).cast()))
         .map(|part| ("test", "Part", part))
 }
-fn entered_parts_with_slot<'a, P: ?Sized>(
-    parts: &'a [&'a P],
-    _: &'static str,
-) -> impl Iterator<Item = ((usize, usize), &'a P)> {
-    let disabled = DISABLED_BLOCK_PART.get();
-    parts
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(move |(_, part)| disabled != Some(std::ptr::from_ref(*part).cast()))
-        .map(|(order, part)| ((0, order), part))
+fn entered_parts_with_slot<'a>(
+    parts: &'a [&'static dyn EntityPart],
+    hook: &'static str,
+) -> impl Iterator<Item = ((usize, usize), &'static str, &'a dyn EntityPart)> {
+    let installed = PARTS.get();
+    entered_parts(parts, hook).map(move |part| {
+        // Hook-specific slices are filtered, but a fixture registration keeps its original slot.
+        let order = installed
+            .entities
+            .iter()
+            .position(|candidate| std::ptr::addr_eq(*candidate, part))
+            .unwrap();
+        ((0, order), "test", part)
+    })
 }
-fn entered_part_slot<'a, P: ?Sized>(
-    parts: &'a [&'a P],
+fn entered_part_slot<'a>(
+    parts: &'a [&'static dyn EntityPart],
     slot: (usize, usize),
-    _: &'static str,
-) -> impl Iterator<Item = &'a P> {
-    let disabled = DISABLED_BLOCK_PART.get();
-    parts
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(move |(order, part)| {
-            (0, *order) == slot && disabled != Some(std::ptr::from_ref(*part).cast())
-        })
-        .map(|(_, part)| part)
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a dyn EntityPart)> {
+    entered_parts_with_slot(parts, hook).filter_map(move |(registered, mod_id, part)| {
+        (registered == slot).then_some((mod_id, part))
+    })
+}
+
+#[test]
+fn only_the_part_that_answered_performs_the_shear() {
+    struct Probe {
+        id: u32,
+        calls: Arc<Mutex<Vec<(&'static str, u32)>>>,
+    }
+    impl EntityPart for Probe {
+        fn entity_subscribed(&self) -> &'static [Option<HookId>] {
+            &[Some(HookId::IsShearable), Some(HookId::OnSheared)]
+        }
+        fn is_shearable(&self, _: &dyn Host, _: &mut IsShearableEvent<'_>) -> Option<bool> {
+            self.calls.lock().unwrap().push(("is_shearable", self.id));
+            Some(true)
+        }
+        fn on_sheared(&self, _: &mut dyn ServerHost, event: &mut OnShearedEvent<'_>) {
+            self.calls.lock().unwrap().push(("on_sheared", self.id));
+            event.drops.push(ItemStack {
+                item: "test:fleece".into(),
+                count: self.id,
+            });
+        }
+    }
+    struct PerformOnly(Probe);
+    impl EntityPart for PerformOnly {
+        fn entity_subscribed(&self) -> &'static [Option<HookId>] {
+            &[Some(HookId::OnSheared)]
+        }
+        fn on_sheared(&self, host: &mut dyn ServerHost, event: &mut OnShearedEvent<'_>) {
+            self.0.on_sheared(host, event);
+        }
+    }
+
+    const KIND: &str = "test:shearable";
+    let calls = Arc::default();
+    let probe = |id| Probe {
+        id,
+        calls: Arc::clone(&calls),
+    };
+    let parts: [&'static dyn EntityPart; 3] =
+        [leak(PerformOnly(probe(1))), leak(probe(2)), leak(probe(3))];
+    install_parts(Parts {
+        entities: parts.to_vec(),
+        entity_hooks: [HookId::IsShearable, HookId::OnSheared]
+            .into_iter()
+            .map(|hook| {
+                (
+                    hook,
+                    Parts {
+                        entity_kind: Some(KIND),
+                        entities: parts
+                            .into_iter()
+                            .filter(|part| {
+                                part.entity_subscribed()
+                                    .iter()
+                                    .flatten()
+                                    .any(|id| *id as usize == hook as usize)
+                            })
+                            .collect(),
+                        ..Parts::default()
+                    },
+                )
+            })
+            .collect(),
+        ..Parts::default()
+    });
+
+    let mut shearable = None;
+    let slot = dispatch_is_shearable(
+        &TestHost,
+        KIND,
+        EntityRef,
+        None,
+        ItemStackView(&()),
+        &mut shearable,
+    )
+    .unwrap();
+    assert_eq!(shearable, Some(true));
+    let mut drops = Vec::new();
+    dispatch_on_sheared(
+        &mut TestHost,
+        KIND,
+        EntityRef,
+        None,
+        ItemStackView(&()),
+        &mut drops,
+        slot,
+    )
+    .unwrap();
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [("is_shearable", 2), ("on_sheared", 2)]
+    );
+    assert_eq!(drops.len(), 1);
+    assert_eq!(drops[0].mod_id, "test");
+    assert_eq!(drops[0].answer.count(), 2);
 }
 
 #[test]

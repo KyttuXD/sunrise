@@ -449,6 +449,36 @@ pub(crate) fn refusable<T>(
     }
 }
 
+/// A generated EntityPart callback runs in its entered Part scope. A phase refusal affects only
+/// this invocation. A real panic disables this mod for the current hook and notifies the client.
+pub(crate) fn invoke_entity_part<T>(
+    contained: bool,
+    hook: generated::HookId,
+    name: &'static str,
+    mod_id: &'static str,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    if poisoned(hook, mod_id) {
+        return None;
+    }
+    use crate::callback_owner::{contain_unwind, record_callback_panic};
+    match contain_unwind(|| refusable(contained, call)) {
+        Ok(Ok(answer)) => Some(answer),
+        Ok(Err(refusal)) => {
+            refusal.report_each();
+            None
+        }
+        Err(message) => {
+            poison(hook, mod_id);
+            log::error!(
+                "mod {mod_id}: EntityPart callback {name} panicked and is disabled for this session: {message}"
+            );
+            record_callback_panic(mod_id, "entity part", name, message);
+            None
+        }
+    }
+}
+
 pub(crate) fn mark_mod(id: &'static str, hook: &'static str) -> crate::content::crash::ModGuard {
     crate::content::crash::enter_native_mod(crate::content::crash::ModCall {
         id,
@@ -511,7 +541,7 @@ pub(crate) fn entered_parts_with_owner<'a, P: ?Sized>(
 pub(crate) fn entered_parts_with_slot<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
-) -> impl Iterator<Item = ((usize, usize), &'a P)> {
+) -> impl Iterator<Item = ((usize, usize), &'static str, &'a P)> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -526,7 +556,11 @@ pub(crate) fn entered_parts_with_slot<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            ((attached.mod_index, attached.order), &*attached.part)
+            (
+                (attached.mod_index, attached.order),
+                attached.mod_id,
+                &*attached.part,
+            )
         })
 }
 
@@ -535,7 +569,7 @@ pub(crate) fn entered_part_slot<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     slot: (usize, usize),
     hook: &'static str,
-) -> impl Iterator<Item = &'a P> {
+) -> impl Iterator<Item = (&'static str, &'a P)> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -552,7 +586,7 @@ pub(crate) fn entered_part_slot<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            &*attached.part
+            (attached.mod_id, &*attached.part)
         })
 }
 

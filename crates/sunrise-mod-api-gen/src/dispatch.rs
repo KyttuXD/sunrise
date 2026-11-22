@@ -120,7 +120,9 @@ pub(super) fn emit<'a>(
         let contract = hook.contract;
         let out = hook.out.as_deref();
         let answered = hook.answered_by_mod;
-        let isolated_collect = answered && hook.isolate && contract == Contract::Collect;
+        let isolated_part = hook.isolate && hook.scope.is_some();
+        let isolated_collect =
+            answered && hook.isolate && !isolated_part && contract == Contract::Collect;
         let output = if let Some(out) = out {
             let index = args
                 .iter()
@@ -238,6 +240,7 @@ pub(super) fn emit<'a>(
             });
         // A scoped hook's parts: the trait its method goes on, and the lookup
         // of the parts attached to the thing its `key` argument names.
+        let mut entity_route = None;
         let scoped = match &hook.scope {
             None => None,
             Some(scope) => {
@@ -292,15 +295,13 @@ pub(super) fn emit<'a>(
                     ),
                     "& str" if opener_routed => format!("menu_for_opener({key}, block)"),
                     "& str" => format!("{table}(|| Some({key}))"),
-                    "EntityRef" if table == "entity" => {
-                        let host = &host.as_ref().ok_or("entity handle needs a Host")?.0;
-                        format!(
-                            "entity(|| {key}.kind(&*{host}).and_then(super::content::registry_keys::entity_type_name))"
-                        )
-                    }
-                    "UnspawnedMobRef" if table == "entity" => {
-                        let host = &host.as_ref().ok_or("unspawned mob handle needs a Host")?.0;
-                        format!("entity_id(|| {key}.kind(&*{host}).ok())")
+                    "EntityRef" | "UnspawnedMobRef" if table == "entity" => {
+                        // The engine already has the kind. Looking it up via the mod's
+                        // handle would invoke a phase-gated Host read before entering the Part.
+                        let route = fresh_name("entity_kind", &mut used);
+                        let lookup = format!("entity(|| Some({route}))");
+                        entity_route = Some(route);
+                        lookup
                     }
                     "& mut GoalRegistrar < '_ >" | "& mut BehaviorRegistrar < '_ >"
                         if table == "entity" =>
@@ -404,6 +405,9 @@ pub(super) fn emit<'a>(
             });
         }
 
+        if let Some(route) = &entity_route {
+            dispatch_params.push(format!("{route}: &str"));
+        }
         let mut lifetimes = EventLifetimes::default();
         let mut fields = String::new();
         let mut inits = Vec::new();
@@ -417,7 +421,13 @@ pub(super) fn emit<'a>(
         let mut surfaces: Vec<String> = Vec::new();
         let stack_outputs: Vec<_> = args
             .iter()
-            .chain(output.as_ref().filter(|_| contract == Contract::Collect))
+            // An answered collection gives the engine separate, attributed contributions,
+            // not shared edits to a resident list. The consumer admits each contribution.
+            .chain(
+                output
+                    .as_ref()
+                    .filter(|_| contract == Contract::Collect && !answered),
+            )
             .filter_map(|(name, ty)| match ty {
                 Type::Reference(reference)
                     if reference.mutability.is_some() && stack_list_output(ty) =>
@@ -518,7 +528,11 @@ pub(super) fn emit<'a>(
                 {
                     surfaces.push(name.clone());
                 }
-                if hook.isolate && batch_entry.is_none() && !rollback_pointee_is_copy(&field_ty) {
+                if hook.isolate
+                    && batch_entry.is_none()
+                    && !(isolated_part && surfaces.contains(name))
+                    && !rollback_pointee_is_copy(&field_ty)
+                {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -584,7 +598,8 @@ pub(super) fn emit<'a>(
             dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
         }
         if uses_carrier {
-            dispatch_params.truncate(usize::from(host.is_some()));
+            dispatch_params
+                .truncate(usize::from(host.is_some()) + usize::from(entity_route.is_some()));
             let (fields, generics) = carrier_fields(&carried);
             dispatch_params.push(format!(
                 "call: calls::{carrier}{}",
@@ -691,6 +706,10 @@ pub(super) fn emit<'a>(
             let mut before = String::new();
             let mut after = String::new();
             let mut passed: Vec<_> = native_host.into_iter().collect();
+            if let Some(route) = &entity_route {
+                parameter(route, "&str");
+                passed.push(route.clone());
+            }
             if uses_carrier && hook.dispatch == DispatchStyle::ApiCarrier {
                 let (_, generics) = carrier_fields(&carried);
                 parameter(
@@ -856,6 +875,9 @@ pub(super) fn emit<'a>(
             Side::Both => "both",
         };
         method_source.push_str(&format!("/// Side: {side}.\n"));
+        if isolated_part {
+            method_source.push_str("/// A panic disables this mod's callback for this hook for the session; a refused call is reported without disabling it.\n");
+        }
         // A scoped hook is its part's method alone: a global moment beside it is its own hook.
         let callee = if scoped.is_some() { "part" } else { "mod" };
         match (contract, out) {
@@ -1098,9 +1120,15 @@ pub(super) fn emit<'a>(
             } else {
                 refused_value
             };
-            format!(
-                "match super::runtime::refusable(contained, || {expression}) {{ Ok(answer) => answer, Err(refusal) => {{ {restore_statement}{clear_batch}refusal.{report}(); {on_refusal} }} }}"
-            )
+            if isolated_part {
+                format!(
+                    "match super::runtime::invoke_entity_part(contained, HookId::{hook_id}, \"{name}\", mod_id, || {expression}) {{ Some(answer) => answer, None => {{ {restore_statement}{clear_batch}{on_refusal} }} }}"
+                )
+            } else {
+                format!(
+                    "match super::runtime::refusable(contained, || {expression}) {{ Ok(answer) => answer, Err(refusal) => {{ {restore_statement}{clear_batch}refusal.{report}(); {on_refusal} }} }}"
+                )
+            }
         };
         // One callee's call: a mod's, or a scoped hook's part's.
         let call = |callee: &str, exit: &str| {
@@ -1352,18 +1380,23 @@ pub(super) fn emit<'a>(
                 } else if sets_registrar_owner {
                     let registrar = hook.scope.as_ref().unwrap().key.as_str();
                     format!(
-                        "for (__mod_id, __part_name, {part_item}) in super::entered_parts_with_owner({part_list}, \"{name}\") {{ {event}.{registrar}.set_owner(__mod_id, __part_name); {} }}",
+                        "for (mod_id, __part_name, {part_item}) in super::entered_parts_with_owner({part_list}, \"{name}\") {{ {event}.{registrar}.set_owner(mod_id, __part_name); {} }}",
                         call(&part_item, "break"),
                     )
                 } else if returns_slot {
                     let answer_call = run(&format!("{part_item}.{name}({invoke})"));
                     let o = out.unwrap();
                     format!(
-                        "let mut __winner = None; for (__slot, {part_item}) in super::entered_parts_with_slot({part_list}, \"{name}\") {{ if let Some({replacement}) = {answer_call} {{ *{o} = Some({replacement}); __winner = Some(__slot); break; }} }} __winner"
+                        "let mut __winner = None; for (__slot, mod_id, {part_item}) in super::entered_parts_with_slot({part_list}, \"{name}\") {{ if let Some({replacement}) = {answer_call} {{ *{o} = Some({replacement}); __winner = Some(__slot); break; }} }} __winner"
                     )
                 } else if single_part_slot {
                     format!(
-                        "for {part_item} in super::entered_part_slot({part_list}, __part_slot, \"{name}\") {{ {} }} Ok(())",
+                        "for (mod_id, {part_item}) in super::entered_part_slot({part_list}, __part_slot, \"{name}\") {{ {} }} Ok(())",
+                        call(&part_item, "break"),
+                    )
+                } else if answered || isolated_part {
+                    format!(
+                        "for (mod_id, _, {part_item}) in super::entered_parts_with_owner({part_list}, \"{name}\") {{ {} }}",
                         call(&part_item, "break"),
                     )
                 } else {
@@ -1409,7 +1442,7 @@ pub(super) fn emit<'a>(
             format!("if !super::listened(HookId::{hook_id}) {{ return; }}")
         };
         // One thread-local read per dispatch, not per listener.
-        let early_return = if body.contains("refusable(") {
+        let early_return = if isolated_part || body.contains("refusable(") {
             format!("{early_return} let contained = super::runtime::outside_world();")
         } else {
             early_return

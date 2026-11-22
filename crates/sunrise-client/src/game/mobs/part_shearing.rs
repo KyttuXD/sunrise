@@ -20,17 +20,23 @@ impl Game<'_> {
         player: Option<PlayerRef>,
         shears: &ItemStack,
     ) -> Option<((usize, usize), bool)> {
-        if !mod_api::__private::has_scoped_hook(mod_api::HookId::IsShearable)
-            || !self.mobs[index].alive()
+        let mob = &self.mobs[index];
+        let kind = &mob.kind.id;
+        if !mob.alive()
+            || !mod_api::__private::entity_part_hooked(
+                mod_api::HookId::IsShearable,
+                "is_shearable",
+                kind,
+            )
         {
             return None;
         }
-        let entity = self.entity(self.mobs[index].id)?;
+        let entity = self.entity(mob.id)?;
         let metadata = super::api_values::stack_read_metadata(shears).ok()?;
         let project = |metadata| super::api_values::project_stack(shears, metadata).ok();
         let shears_view = mod_api::ItemStackView::resident(metadata, &project);
         let mut shearable = None;
-        let slot = self.native_is_shearable(entity, player, shears_view, &mut shearable)?;
+        let slot = self.native_is_shearable(kind, entity, player, shears_view, &mut shearable)?;
         shearable.map(|answer| (slot, answer))
     }
 
@@ -46,7 +52,15 @@ impl Game<'_> {
         player: Option<PlayerRef>,
         shears: &ItemStack,
     ) -> Result<(), ()> {
-        let (id, at) = (self.mobs[index].id, self.mobs[index].position);
+        let mob = &self.mobs[index];
+        if !mod_api::__private::entity_part_hooked(
+            mod_api::HookId::OnSheared,
+            "on_sheared",
+            &mob.kind.id,
+        ) {
+            return Ok(());
+        }
+        let (id, at, kind) = (mob.id, mob.position, mob.kind.clone());
         let (Some(entity), Ok(metadata)) = (
             self.entity(id),
             super::api_values::stack_read_metadata(shears),
@@ -55,22 +69,22 @@ impl Game<'_> {
         };
         let project = |metadata| super::api_values::project_stack(shears, metadata).ok();
         let shears_view = mod_api::ItemStackView::resident(metadata, &project);
-        let boundary_items = self.stack_boundary_items();
-        let mut accepted: Option<Vec<ItemStack>> = None;
-        let mut validate =
-            |value: &Vec<mod_api::ItemStack>| -> Result<(), mod_api::StackWriteError> {
-                let items = boundary_items
-                    .as_ref()
-                    .ok_or(mod_api::StackWriteError::Unavailable)?;
-                accepted = Some(value.try_into_engine(&**items)?);
-                Ok(())
-            };
         let mut drops = Vec::new();
-        self.native_on_sheared(entity, player, shears_view, &mut drops, &mut validate, part)?;
+        self.native_on_sheared(&kind.id, entity, player, shears_view, &mut drops, part)?;
         // The part may have moved or removed the mob: its drops fall where it is now.
         let index = self.mobs.iter().position(|m| m.id == id && !m.removed);
         let at = index.map_or(at, |i| self.mobs[i].position);
-        for stack in accepted.unwrap_or_default() {
+        for (drop_index, drop) in drops.into_iter().enumerate() {
+            let stack = match drop.answer.try_into_engine(self.items()) {
+                Ok(stack) => stack,
+                Err(error) => {
+                    log::warn!(
+                        "mod {} hook on_sheared drop {drop_index} refused: {error:?}",
+                        drop.mod_id
+                    );
+                    continue;
+                }
+            };
             self.spawn_at_location(at, 1.0, stack);
             let Some(i) = index else { continue };
             let r = &mut self.mobs[i].random;
@@ -148,7 +162,7 @@ mod tests {
     use super::*;
     use sunrise_client::mobs::Mob;
 
-    /// A cow that shears into one leather.
+    /// A cow that shears into leather and a feather, with one invalid drop between them.
     struct LeatherCow;
     #[mod_api::sunrise_part]
     impl mod_api::EntityPart for LeatherCow {
@@ -158,7 +172,7 @@ mod tests {
             event: &mut mod_api::IsShearableEvent<'_>,
         ) -> Option<bool> {
             assert!(event.player.is_none(), "a dispenser has no player");
-            assert_eq!(event.shears.count(), 1);
+            assert_eq!(event.shears.damage(), 7);
             Some(true)
         }
         fn on_sheared(
@@ -166,10 +180,18 @@ mod tests {
             _: &mut dyn mod_api::ServerHost,
             event: &mut mod_api::OnShearedEvent<'_>,
         ) {
-            let leather = mod_api::__private::item_key("minecraft:leather").unwrap();
-            event
-                .drops
-                .push(mod_api::ItemStack::new(leather, 1).unwrap());
+            assert!(event.player.is_none(), "a dispenser has no player");
+            assert_eq!(event.shears.damage(), 7);
+            for (item, count) in [
+                ("minecraft:leather", 1),
+                ("minecraft:iron_sword", 2), // vanilla swords stack to one
+                ("minecraft:feather", 3),
+            ] {
+                let key = mod_api::__private::item_key(item).unwrap();
+                event
+                    .drops
+                    .push(mod_api::ItemStack::new(key, count).unwrap());
+            }
         }
     }
     /// A sheep that refuses the shears.
@@ -193,8 +215,8 @@ mod tests {
         }
     }
 
-    /// A dispenser's shears ask the mob's entity parts: a cow whose part says yes drops what
-    /// the part returns, and a woolly sheep whose part says no keeps its wool.
+    /// Both cow callbacks see the actual dispensed stack. Valid drops stand on either side of a
+    /// rejected output. A woolly sheep whose part says no keeps its wool and doesn't wear the tool.
     #[test]
     #[ignore = "daily"]
     fn entity_parts_decide_and_perform_a_dispensers_shearing() {
@@ -225,26 +247,91 @@ mod tests {
             };
             add(1, "minecraft:cow", 0);
             add(2, "minecraft:sheep", 4);
-            let shears = ItemStack::new("minecraft:shears", 1);
-
-            assert!(
-                game.shear_entity((0, 64, 0), &shears).unwrap(),
-                "the cow is sheared"
-            );
-            let leather: Vec<_> = game
-                .dropped
-                .iter()
-                .filter(|d| &*d.stack.item == "minecraft:leather")
-                .map(|d| d.stack.count)
-                .collect();
-            assert_eq!(leather, [1]);
-
-            assert!(
-                !game.shear_entity((4, 64, 0), &shears).unwrap(),
-                "the sheep refuses"
+            use sunrise_core::geometry::Direction;
+            let mut shears = ItemStack::new("minecraft:shears", 1);
+            shears.damage = 7;
+            let worn = game
+                .dispense_item((-1, 64, 0), Direction::East, shears)
+                .unwrap()
+                .unwrap();
+            assert_eq!(worn.damage, 8, "the successful shear damages the tool");
+            let before = game.dropped.len();
+            let unchanged = game
+                .dispense_item((3, 64, 0), Direction::East, worn)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                unchanged.damage, 8,
+                "the refused shear doesn't damage the tool"
             );
             assert!(!game.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
-            assert!(!game.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
+            assert_eq!(game.dropped.len(), before);
+            let drops: Vec<_> = game
+                .dropped
+                .iter()
+                .map(|d| (d.stack.item.as_ref(), d.stack.count))
+                .collect();
+            assert_eq!(drops, [("minecraft:leather", 1), ("minecraft:feather", 3)]);
+        });
+    }
+
+    struct PanickingCow;
+    #[mod_api::sunrise_part]
+    impl mod_api::EntityPart for PanickingCow {
+        fn is_shearable(
+            &self,
+            _: &dyn mod_api::Host,
+            _: &mut mod_api::IsShearableEvent<'_>,
+        ) -> Option<bool> {
+            panic!("faulty shear probe");
+        }
+    }
+    struct PanickingMod;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PanickingMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_part("minecraft:cow", PanickingCow);
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_panicking_shear_callback_is_disabled_for_the_session() {
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
+        if run_fresh_cases(
+            "game::part_shearing::tests::a_panicking_shear_callback_is_disabled_for_the_session",
+            "SUNRISE_PART_SHEARING_PANIC_CHILD",
+            &["valid"],
+        ) {
+            return;
+        }
+        let entries = || {
+            vec![
+                mod_api::ModEntry::new("faulty", Box::new(PanickingMod)),
+                mod_api::ModEntry::new("shearing", Box::new(ShearMod)),
+            ]
+        };
+        mod_platform::__private::install(entries().into());
+        crate::game::api_values::install_parts(&entries()).unwrap();
+        with_game(|game| {
+            game.resolve_parts().unwrap();
+            let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+            game.mobs
+                .push(Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
+            let mut shears = ItemStack::new("minecraft:shears", 1);
+            shears.damage = 7;
+            for _ in 0..2 {
+                assert_eq!(
+                    game.part_shearable(0, None, &shears)
+                        .map(|(_, answer)| answer),
+                    Some(true),
+                    "the other mod's answer still stands"
+                );
+            }
+            let notices = mod_api::__private::game::take_callback_panic_notices();
+            assert_eq!(notices.len(), 1, "the panicking callback is not run again");
+            assert_eq!(notices[0].mod_id, "faulty");
+            assert_eq!(notices[0].operation, "is_shearable");
         });
     }
 

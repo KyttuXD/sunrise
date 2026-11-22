@@ -8,6 +8,7 @@ pub trait Hooks {
         target = "sunrise_client_lib::mobs::part_goals::native_register_goals",
         side = "server",
         contract = "listen",
+        isolate = true,
         scope = "entity",
         key = "goals",
         neoforge = "none (vanilla Mob.registerGoals)"
