@@ -105,9 +105,10 @@ layer can be any string. An exact collision with a vanilla layer key in
 When multiple registrations share an ID, the last registration wins and overwritten
 suppliers never run. The game calls each winning supplier once when it freezes the
 layer table, in registration order. The frozen table retains the definitions, not the
-suppliers. Call `ClientHost::bake_layer("mymod:golem#main")` during renderer setup,
-then keep the resulting `ModelPart` tree for posing and drawing. Baking again and
-reloading resources reuse the definition.
+suppliers. `ClientHost::bake_layer` looks up mod-registered layers (`"mymod:golem#main"`)
+or prepared vanilla layers (`"minecraft:zombie#main"`, `"minecraft:player#main"`)
+without reading from disk. Bake each layer once during renderer setup and keep the
+owned `ModelPart` tree for posing and drawing.
 
 ## Worn humanoid equipment
 
@@ -131,33 +132,72 @@ event.extensions.client_item_extensions(item, Arc::new(ChestLayers {
 }))?;
 ```
 
+Implement `ClientItemExtensions` using the borrowed draw inputs and the
+reload-bound references. If the equipment asset's `humanoid` layers specify
+`mymod:chest_inner` and `mymod:chest_outer`, the renderer expands them to the
+sprite names used in this match:
+
+```rust,ignore
+impl ClientItemExtensions for ChestLayers {
+    fn armor_texture(
+        &self,
+        _host: &dyn ClientHost,
+        _stack: &ItemStackView<'_>,
+        _layer_type: EquipmentLayerType,
+        layer: &EquipmentLayer<'_>,
+        _default_texture: &str,
+    ) -> ArmorTextureRef {
+        match layer.texture {
+            "mymod:entity/equipment/humanoid/chest_inner" => self.textures[0],
+            "mymod:entity/equipment/humanoid/chest_outer" => self.textures[1],
+            _ => ArmorTextureRef::DEFAULT,
+        }
+    }
+
+    fn armor_layer_model(
+        &self,
+        _host: &dyn ClientHost,
+        _stack: &ItemStackView<'_>,
+        _layer_type: EquipmentLayerType,
+        _layer: &EquipmentLayer<'_>,
+        index: u32,
+    ) -> ArmorModelRef {
+        self.models.get(index as usize).copied().unwrap_or(ArmorModelRef::VANILLA)
+    }
+}
+```
+
 Trees are API-owned `ModelPart` trees, built directly or baked from a
 `LayerDefinition`. Register them once per resource load, never during a frame.
-Model names belong to a namespace owned by the registering mod (its manifest
-namespaces or a content package it serves via `served_by`). Duplicate model names,
-non-finite geometry or poses, an unknown texture, an unknown item and two
-providers for one item refuse the resource-load registration by name. A duplicate
-item diagnostic names both providers. A completed callback's registration error
-still refuses preparation even if it ignored the returned error. A
-[failed registration callback](../../concepts/load-phases.md#registration-and-setup)
-loses only its own models, textures and providers;
-other callbacks can still register. Do not keep model or texture references
-from a discarded registration. Disabling the owning mod stops its Part.
+Register only sprites the provider may select as overrides: `register_texture`
+binds each requested sprite and its UVs for the current load. Vanilla/pack/CIT
+selection requires no registration. Model names may use any valid namespace.
+Duplicate model names, non-finite geometry or poses, unknown textures or items,
+and a second provider for an item return an error from that registrar call.
+Other successful registrations still install. A duplicate item error names both
+providers and leaves the first in place. Disabling the owning mod stops its provider.
 A server-only package cannot declare this client registration hook.
 
 The worn stack must first pass the equippable component's asset and matching-slot
 checks, and the asset must have layers. Only the visible equipped item's provider
 is queried; random-texture inventory enumeration does not run frame callbacks.
-Every callback takes `&dyn ClientHost` and `&ItemStack`:
+Every callback takes `&dyn ClientHost` and a live `&ItemStackView<'_>`. Read a
+single stored component override with `stack.get(&descriptor)` or explicitly
+call `stack.project()` if you need an owned stack. Callbacks for individual
+layers also borrow `&EquipmentLayer<'_>`; its `texture` is the asset's texture
+name before any renderer override.
 
-1. `default_dye_color` runs once and returns packed ARGB, or zero when undyed.
+1. `default_dye_color` runs once. By default it reads the stack's dyed colour
+   override and returns packed ARGB, or zero when undyed.
 2. `armor_layer_tint_color` runs in asset layer order, with the layer and its index.
    Exactly zero skips the layer, without calling its texture or model method.
    The default is white for a nondyeable layer, or its dye/optional undyed colour
    for a dyeable layer. Without either colour, a dyeable layer is skipped.
-3. `armor_texture` receives the layer type, layer and the resolved default texture
-   reference, including pack/CIT selection. A returned override is final for that
-   layer; it is not replaced by another random-texture or custom-model texture.
+3. `armor_texture` receives the layer type, layer and `default_texture: &str`:
+   the renderer's texture name after pack/CIT selection, or the asset's name if
+   the renderer could not bind it. Return `ArmorTextureRef::DEFAULT` to keep that
+   selection. Returning a registered sprite is final for that layer; it is not
+   replaced by another random-texture or custom-model texture.
 4. `armor_layer_model` chooses the registered tree for that layer. Returning
    `ArmorModelRef::VANILLA` keeps the original model. The humanoid pose is copied
    onto the chosen tree, with only the current slot's parts visible.
@@ -172,11 +212,15 @@ again. Babies do not draw trims. Foil goes on the first drawn material when ther
 is no trim, and on the trim otherwise.
 
 Model and texture references are scoped to the resource load. A stale reference
-returned during drawing uses vanilla's model or the supplied default texture,
-with one diagnostic per provider until reload, never a panic. A failed callback
-discards all of the piece's custom layers, draws the piece with vanilla behaviour,
-and disables that provider until reload, with one diagnostic. A failure discards the custom drawing even if an earlier layer succeeded.
-Callbacks work with references and layer values, not geometry or rebakes.
+uses vanilla's model or the supplied default texture and is logged each time
+without disabling the provider. If a callback is refused or the equipped stack
+is invalid, the refusal is reported each time and the whole piece draws as
+vanilla for that draw (even if an earlier layer succeeded), without disabling
+subsequent valid draws. A panic also discards that piece's custom layers, logs
+and shows an error toast naming the mod, and disables that mod's provider for
+that item for the rest of the session, including across resource reloads.
+Callbacks work with borrowed draw inputs and select reload-bound references,
+not geometry or rebakes.
 
 ## Standalone model bakers
 
@@ -248,10 +292,11 @@ instead of drawn as GPU instances; the 16,384-copy budget bounds that cost.
 opaque faces it holds. `color` (the whole baked block model, multiplied at draw time) and `hidden_faces` (a
 cull mask the caller supplies) are Sunrise's options for mod copies.
 
-`block_state_model(state)` (on `RenderAssets`) resolves a block state as one model: the parts
+`block_state_model(state)` (on `RenderAssets`) resolves a `BlockState` as one model: the parts
 its blockstate file selects for its properties, weighted alternatives at the fixed seed
-`BlockEntityDrawContext::block` uses, each tinted face in the block's default tint. It draws
-through `draw_model_instances`, instance groups and `draw.terrain_model`, not `draw.model`.
+`BlockEntityDrawContext::block(state)` uses (which likewise takes a resolved `BlockState`),
+each tinted face in the block's default tint. It draws through `draw_model_instances`,
+instance groups and `draw.terrain_model`, not `draw.model`.
 Resolve it once per state in `client_setup` and `client_resources_reloaded`.
 
 ## Terrain materials in a block entity

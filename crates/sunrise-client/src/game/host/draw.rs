@@ -352,12 +352,11 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         self.game
             .native_draw_cube(&mut *self.surface, from, to, faces, tint)
     }
-    fn block(&mut self, block: BlockKey, properties: &[(&str, &str)]) -> bool {
-        let Some(block) = mod_api::__private::block_key_id(block) else {
+    fn block(&mut self, state: BlockState) -> bool {
+        let Ok(id) = state.try_into_engine(&()) else {
             return false;
         };
-        self.game
-            .native_draw_block(&mut *self.surface, block, properties)
+        self.game.native_draw_block(&mut *self.surface, id)
     }
     fn item(
         &mut self,

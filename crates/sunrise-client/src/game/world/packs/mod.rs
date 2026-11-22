@@ -528,15 +528,17 @@ impl Game<'_> {
             block_entity_shapes,
             waypoint_styles,
             armor_stand_assets,
+            entity_models,
             frame_models,
             sounds,
             language,
         } = staged;
         // All fallible preflight finishes before any listener or the game
-        // publishes the candidate. In particular, registration can refuse it.
+        // publishes the candidate.
         let loop_context = self.prepare_loop_context(&root)?;
         let professions = self.prepare_client_professions()?;
-        let item_extensions = Self::prepare_client_item_extensions(&gui)?;
+        let item_extensions =
+            Self::prepare_client_item_extensions(&gui, &mut self.client_item_extension_owners);
         // A reload from the title can apply before the start's world-rest worker is done.
         self.join_world_rest()?;
         let tab_modifiers = sunrise_client::polytone_creative_tabs::TabModifier::read_all(&root);
@@ -612,6 +614,7 @@ impl Game<'_> {
             game.waypoint_styles = waypoint_styles;
             game.armor_stand_assets.apply_resources(armor_stand_assets);
             game.armor_stand_assets.extensions = item_extensions;
+            game.entity_models = entity_models;
             game.random_tick_sections.clear();
             game.portals.sections.clear();
             game.options.resources = root.clone();
@@ -738,6 +741,9 @@ pub(super) fn stage_pack(
     japanese: bool,
     progress: &super::Progress,
 ) -> sunrise_client::Result<StagedPack> {
+    // EntityModelSet.vanilla builds these definitions from the base game, not packs.
+    let entity_models_doc = sunrise_client::mobs::EntityModelDocument::load(vanilla_root)
+        .map_err(|e| format!("loading vanilla entity model definitions: {e}"))?;
     let resource_root = startup_root(vanilla_root, selected, server, mod_sources)?.selected?;
     let resource_root = super::client_reload::stage_texture_atlases(resource_root, texture_atlases);
     let root = resource_root.prepared().to_path_buf();
@@ -808,6 +814,7 @@ pub(super) fn stage_pack(
             let block_entity_shapes = res.block_entity_render().shapes_for(&source);
             let waypoint_styles = sunrise_client::locator_bar::WaypointStyles::load(&source);
             let armor_stand_assets = super::armor_stands::ArmorStandAssets::load(&source, None);
+            let entity_models = super::EntityModels::load(Some(&entity_models_doc));
             let frame_models =
                 super::frames::bake_frames(pack.render.model_library.as_deref().ok());
             progress.set(3);
@@ -821,6 +828,7 @@ pub(super) fn stage_pack(
                 block_entity_shapes,
                 waypoint_styles,
                 armor_stand_assets,
+                entity_models,
                 frame_models,
                 sounds,
                 language,
@@ -841,6 +849,7 @@ pub(super) struct StagedPack {
     pub root: PathBuf,
     pub waypoint_styles: sunrise_client::locator_bar::WaypointStyles,
     pub armor_stand_assets: super::armor_stands::ArmorStandAssets,
+    pub entity_models: super::EntityModels,
     pub frame_models: [super::frames::FrameModel; 4],
     /// The mod reload listeners' prepared applies, ordered around publication
     /// of the staged models.

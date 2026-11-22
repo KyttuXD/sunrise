@@ -1076,8 +1076,8 @@ more of it draws this frame: model, layers, name tag, shadow, flames, leash, out
   `age` (ticks lived plus the partial tick), `body_yaw`, `head_yaw` (from the body) and `pitch` in degrees, the walk cycle
   (`walk_position`, `walk_speed`: a vanilla quadruped's legs swing `cos(walk_position * 0.6662) * 1.4 * walk_speed` radians), `hurt_time`,
   `death_time` and `on_ground`.
-- `draw` is a block entity's frame (`block_entity_submit`): draw with `native_draw_cube`, `native_draw_quad`,
-  `native_draw_block` and `native_draw_item` under its pose stack, which starts at the mob's feet turned with its body: +z
+- `draw` is a block entity's frame (`block_entity_submit`): draw with `BlockEntityDrawContext::cube`, `quad`,
+  `block` (taking a resolved `BlockState`) and `item` under its pose stack, which starts at the mob's feet turned with its body: +z
   is the way it faces, +x its left, +y up, in blocks. Turn a head or swing a leg with `rotate_about` and a pivot. It holds
   the mob's light.
 - A mod's own creature is an ordinary mob (`native_spawn_mob`) drawn this way: a quiet villager, an allay or a bat
@@ -1706,7 +1706,7 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
 
 - `create_skull_models`, `map_decoration_types`, `register_entity_spectator_shaders`, `register_fluid_models`, `register_render_pipelines` and `register_texture_atlases` take one entry per `event.register(entry)` call. `block_entity_type_add_blocks` adds memberships with `event.modify(kind, blocks)` or `event.modify_matching(predicate, blocks)`; `event.types` lists registered types, not additions. These registration methods stage entries in listener order. A listener cannot read, edit or remove earlier registrations; a phase refusal discards only that listener's additions. `register_render_pipelines` (version 4) accepts any valid pipeline `Identifier` without a namespace ownership gate. Mod pipeline IDs are unique across required and optional registrations; collisions with vanilla are checked in the matching registry as in NeoForge `RegisterRenderPipelinesEvent`. Fluid models and texture atlases are collected again on resource reload. Atlas timing and duplicate handling are unchanged.
 
-- `register_layer_definitions(context, event)` (version 4, matching NeoForge `ClientHooks.registerLayerDefinition` and vanilla `LayerDefinitions.createRoots`) binds each `<namespace>:<path>#<layer>` ID to an owned `Send + Sync + 'static` supplier with `event.register(id, supplier)`. Both delimiters are required; the namespace and path follow vanilla `Identifier` rules and may be empty, and the layer can be any string. Duplicate mod registrations keep the last supplier per ID before invoking suppliers, and an exact collision with a vanilla layer key in `entity-models.json` fails client startup. Each winning supplier runs once in registration order at client startup when the layer table freezes. The game keeps their definitions, not the suppliers. Baking through `ClientHost::bake_layer` and reloading resources reuse the definitions.
+- `register_layer_definitions(context, event)` (version 4, matching NeoForge `ClientHooks.registerLayerDefinition` and vanilla `LayerDefinitions.createRoots`) binds each `<namespace>:<path>#<layer>` ID to an owned `Send + Sync + 'static` supplier with `event.register(id, supplier)`. Both delimiters are required; the namespace and path follow vanilla `Identifier` rules and may be empty, and the layer can be any string. Duplicate mod registrations keep the last supplier per ID before invoking suppliers, and an exact collision with a vanilla layer key in `entity-models.json` fails client startup. Each winning supplier runs once in registration order at client startup when the layer table freezes. The game keeps their definitions, not the suppliers. Baking through `ClientHost::bake_layer` and reloading resources reuse the mod definitions. Vanilla definitions are indexed once per client resource load and reload; neither lookup reads from disk.
 
 - [explosions](#explosions) for server mods: `LevelRef::explode(host, source, center, radius, fire, interaction, settings)`
   sets one off as `Level.explode` does, with an optional source entity, `ExplosionInteraction::None`, `Block`, `Mob`, `Tnt`
@@ -1744,8 +1744,7 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
   its chunk faded in), with the copy the server sent (`block_entity_update_tag`). It draws into the entity batch
   under `draw`'s pose stack (`push`, `pop`, `translate`, `rotate_about`, `scale`, in blocks from the block's corner, as
   vanilla's `PoseStack`): `native_draw_quad` (four corners and a sprite's UVs), `native_draw_cube` (a model element's box,
-  its faces baked as a model's are, each a `CubeFace::new(sprite)`, `.with_uv(uv)` for UVs of its own), `native_draw_block` (a block
-  state's model, as `submitBlockModel`: a moving part is often a block of the mod's own) and `native_draw_text`
+  its faces baked as a model's are, each a `CubeFace::new(sprite)`, `.with_uv(uv)` for UVs of its own), `BlockEntityDrawContext::block(state)` (a resolved `BlockState`'s model, as `submitBlockModel`: a moving part is often a block of the mod's own; resolve static states once through `host.block_states()` rather than parsing property slices each frame) and `native_draw_text`
   (`BlockEntityDrawContext::text(text, at, rgb, glowing, outline)`: a component in the game's font, as a sign's line or a
   text display's, in font pixels with y down as `Font.drawInBatch` lays it out under the pose, with its styles   (bold, italic, underline, strikethrough, obfuscated, fonts, `§` codes), opaque `0xRRGGBB`, in the frame's light or full bright when
   `glowing` (a nixie tube), ringed with `outline` when given; `text_width` measures it, styles included, to centre it).   Parts drawn after `spin` turn on the client's animation clock (`animation_time`) and are lit where they turn to. Sprites are the atlas's:
@@ -1837,7 +1836,9 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
 
 - Using an item over time, as vanilla's `Item.getUseDuration`, `getUseAnimation` and `finishUsingItem` and NeoForge's `LivingEntityUseItemEvent.Start` and `.Finish`. `use_duration` answers a stack's use time: a mod's own item with no use of vanilla's that answers above 0 is used over time on a right click, until it is let go or the time runs out, on single player and LAN alike. `use_animation` changes the item's vanilla use animation, including specialised item poses, each first-person frame and each local or remote player model tick; a spear override without kinetic data is refused. `can_eat` decides whether a food can be eaten now. `living_entity_use_item_start` may change a use's duration or refuse it, on the server and where the window's client predicts the use, and `living_entity_use_item_finish` may replace what the hand holds once the time ran out (consumables, potions and mods' items), on the server and on the client that predicts it. Both take the using entity, None for a player, so mobs can fire them later, and the hand in use. Change the world only where this game runs the world, not on a server's client.
 
-- Items and block state properties for drawing mod block entities: in `block_entity_submit`, `native_draw_item(draw,
+- Items and block states for drawing mod block entities: in `block_entity_submit`, `BlockEntityDrawContext::block(state)`
+  draws an already-resolved `BlockState` (`event.state` or a state resolved once through `host.block_states()`), and
+  `native_draw_item(draw,
   stack, display, owner_yaw, seed)` draws an item stack under `draw`'s pose as a campfire's or a shelf's
   (`ItemModelResolver.updateForTopItem` and `ItemStackRenderState.submit`, in the model's `display` transform; with `owner_yaw`, the block
   entity is the item's owner, as a shelf is, so a compass on it points from there). The client's copy of a block entity has

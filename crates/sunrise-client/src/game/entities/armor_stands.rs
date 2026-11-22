@@ -12,7 +12,13 @@ use sunrise_client::{
     entities::ArmorStand,
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Mob, Part, Who, anim::Poses},
+    mobs::{
+        Mob, Part, Who,
+        anim::Poses,
+        finalize::{self, EquipmentRead},
+        render::{WornLayer, WornModel},
+        skin::Paint,
+    },
     trims::{TrimOverride, TrimRegistry, TrimTexture},
 };
 use sunrise_core::{
@@ -164,7 +170,7 @@ pub(super) struct ArmorStandAssets {
     /// (slot model suffix, small) -> model.
     pub layers: HashMap<(&'static str, bool), Arc<Part>>,
     /// The player's armour models by slot (helmet, chestplate, leggings, boots).
-    pub player: HashMap<&'static str, Part>,
+    pub player: HashMap<&'static str, Arc<Part>>,
     /// Asset id -> layer kind -> ordered textures with dyeability and optional undyed colour.
     pub equipment: super::equipment_piece::EquipmentAssets,
     pub extensions: super::client_item_extensions::ArmorExtensions,
@@ -184,7 +190,7 @@ impl ArmorStandAssets {
         let mut player = HashMap::new();
         for slot in ["helmet", "chestplate", "leggings", "boots"] {
             if let Some(part) = load(&format!("minecraft:player#{slot}")) {
-                player.insert(slot, part);
+                player.insert(slot, Arc::new(part));
             }
             for (small, model) in [(false, "armor_stand"), (true, "armor_stand_small")] {
                 if let Some(part) = load(&format!("minecraft:{model}#{slot}")) {
@@ -197,7 +203,7 @@ impl ArmorStandAssets {
             ("minecraft:elytra_baby#main", "elytra_baby"),
         ] {
             if let Some(part) = load(key) {
-                player.insert(name, part);
+                player.insert(name, Arc::new(part));
             }
         }
         let mut equipment = HashMap::new();
@@ -279,16 +285,14 @@ impl ArmorStandAssets {
         self.trims = fresh.trims;
         self.root = fresh.root;
     }
-    /// `TrimTextureKey`: the trim texture of `stack` on its humanoid
-    /// layer (`humanoid` or `humanoid_leggings`), if it has a trim.
+    /// `TrimTextureKey`: the trim texture on the given humanoid layer.
     pub(super) fn trim_texture(
         &self,
         asset: &str,
         kind: &str,
-        stack: &ItemStack,
+        trim: &sunrise_client::item_data::Trim,
     ) -> Option<TrimTexture> {
-        let (material, pattern) =
-            sunrise_client::item_data::trim::named(stack.extra.as_ref()?.trim.as_ref()?)?;
+        let (material, pattern) = sunrise_client::item_data::trim::named(trim)?;
         let overrides = self
             .trim_overrides
             .get(asset)
@@ -307,35 +311,25 @@ impl Game<'_> {
     }
     /// `HumanoidArmorLayer` for the player: (model, texture rect, colour,
     /// overlay) of each worn piece, head to feet.
-    pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
+    pub(super) fn player_armor_layers(&self) -> Vec<WornLayer<'_>> {
         self.stack_armor_layers(&self.armor)
     }
     /// `HumanoidArmorLayer` for worn stacks (head to feet), trims included.
-    pub(super) fn stack_armor_layers(
-        &self,
-        armor: &[Option<ItemStack>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
+    pub(super) fn stack_armor_layers(&self, armor: &[Option<ItemStack>; 4]) -> Vec<WornLayer<'_>> {
         self.armor_layers(
             armor
                 .each_ref()
-                .map(|s| s.as_ref().map(|s| (&*s.item, Some(s)))),
+                .map(|s| s.as_ref().map(EquipmentRead::resident)),
         )
     }
     /// `HumanoidArmorLayer` for another player's model: the armour it wears
     /// (`extra.equipment`, head to feet).
-    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
-        let e = &m.extra;
-        self.armor_layers(
-            sunrise_items::equipment::ARMOR
-                .map(|slot| e.slot_stack(slot).map(|stack| (&*stack.item, Some(stack)))),
-        )
+    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<WornLayer<'_>> {
+        use sunrise_core::equipment_slot::EquipmentSlot::{Chest, Feet, Head, Legs};
+        self.armor_layers([Head, Chest, Legs, Feet].map(|slot| finalize::equipment_slot(m, slot)))
     }
-    /// The layers of the armour items `worn` (with their stacks when known,
-    /// for trims and CIT armour rules), head to feet.
-    fn armor_layers(
-        &self,
-        worn: [Option<(&str, Option<&ItemStack>)>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
+    /// The layers of the armour items `worn`, head to feet.
+    fn armor_layers(&self, worn: [Option<EquipmentRead<'_>>; 4]) -> Vec<WornLayer<'_>> {
         let assets = &self.armor_stand_assets;
         let mut out = Vec::new();
         for (item, (layer, slot)) in worn.into_iter().zip([
@@ -344,21 +338,24 @@ impl Game<'_> {
             ("leggings", "legs"),
             ("boots", "feet"),
         ]) {
-            let Some((item, stack)) = item else {
+            let Some(stack) = item else {
                 continue;
             };
-            let Some(piece) = self.equipment_piece(item, stack, slot, layer == "leggings", false)
-            else {
+            let Some(piece) = self.equipment_piece(&stack, slot, layer == "leggings", false) else {
                 continue;
             };
             let Some(part) = assets.player.get(layer) else {
                 continue;
             };
-            for material in
-                self.equipment_materials(&piece, stack, super::equipment_piece::EquipmentPass::Draw)
-            {
+            for material in self.equipment_materials(
+                &piece,
+                &stack,
+                super::equipment_piece::EquipmentPass::Draw,
+            ) {
                 out.push((
-                    material.model.map_or(part, |model| &**model),
+                    material.model.map_or(WornModel::Vanilla(part), |model| {
+                        WornModel::Override(model, piece.slot)
+                    }),
                     material.binding.uv,
                     material.color,
                     material.overlay,
@@ -377,24 +374,26 @@ impl Game<'_> {
         let items = self.items();
         let mut wanted: Vec<TrimTexture> = Vec::new();
         let guests = self.lan.iter().flat_map(|host| host.hub.guests.iter());
-        let stacks =
-            self.armor
-                .iter()
-                .chain(guests.flat_map(|g| g.armor.iter()))
-                .chain(self.mobs.iter().flat_map(|m| {
-                    sunrise_items::equipment::ARMOR.map(|slot| &m.extra.equipment[slot])
-                }))
-                .zip(
-                    ["helmet", "chestplate", "leggings", "boots"]
-                        .into_iter()
-                        .cycle(),
-                )
-                .chain(self.armor_stands.iter().flat_map(|a| {
-                    [5usize, 4, 3, 2]
-                        .map(|slot| &a.equipment[slot])
-                        .into_iter()
-                        .zip(["helmet", "chestplate", "leggings", "boots"])
-                }));
+        use sunrise_core::equipment_slot::EquipmentSlot::{Chest, Feet, Head, Legs};
+        let layers = ["helmet", "chestplate", "leggings", "boots"];
+        let stacks = self
+            .armor
+            .iter()
+            .chain(guests.flat_map(|g| g.armor.iter()))
+            .map(|s| s.as_ref().map(EquipmentRead::resident))
+            .zip(layers.into_iter().cycle())
+            .chain(self.mobs.iter().flat_map(|m| {
+                [Head, Chest, Legs, Feet]
+                    .map(|slot| finalize::equipment_slot(m, slot))
+                    .into_iter()
+                    .zip(layers)
+            }))
+            .chain(self.armor_stands.iter().flat_map(|a| {
+                [5usize, 4, 3, 2]
+                    .map(|slot| a.equipment[slot].as_ref().map(EquipmentRead::resident))
+                    .into_iter()
+                    .zip(layers)
+            }));
         // The smithing screen's preview stand wears the result slot's item.
         let preview = self
             .station
@@ -410,15 +409,17 @@ impl Game<'_> {
                     5 => "helmet",
                     _ => "",
                 };
-                (Some(stack), layer)
+                (Some(EquipmentRead::resident(stack)), layer)
             });
-        let stacks = stacks.map(|(s, l)| (s.as_ref(), l)).chain(preview);
-        for (stack, layer) in stacks {
-            let Some(stack) = stack.filter(|s| s.extra.is_some()) else {
+        for (stack, layer) in stacks.chain(preview) {
+            let Some(stack) = stack else {
+                continue;
+            };
+            let Some(trim) = stack.trim() else {
                 continue;
             };
             let Some(asset) =
-                sunrise_client::item_sync::equippable(stack, items).and_then(|e| e.asset_id)
+                sunrise_client::item_sync::equippable(stack.base(), items).and_then(|e| e.asset_id)
             else {
                 continue;
             };
@@ -427,7 +428,7 @@ impl Game<'_> {
             } else {
                 "humanoid"
             };
-            if let Some(t) = assets.trim_texture(&asset, kind, stack)
+            if let Some(t) = assets.trim_texture(&asset, kind, trim)
                 && !wanted.contains(&t)
             {
                 wanted.push(t);
@@ -1890,9 +1891,8 @@ impl Game<'_> {
             let Some(stack) = &a.equipment[slot] else {
                 continue;
             };
-            let Some(piece) =
-                self.equipment_piece(&stack.item, Some(stack), worn, layer == "leggings", false)
-            else {
+            let stack = EquipmentRead::resident(stack);
+            let Some(piece) = self.equipment_piece(&stack, worn, layer == "leggings", false) else {
                 continue;
             };
             let Some(part) = assets.layers.get(&(layer, a.small)) else {
@@ -1903,23 +1903,27 @@ impl Game<'_> {
             self.setup_armor_stand_pose(a, partial, &mut layer_poses);
             for material in self.equipment_materials(
                 &piece,
-                Some(stack),
+                &stack,
                 super::equipment_piece::EquipmentPass::Draw,
             ) {
-                put(
+                let model = material.model.map_or(WornModel::Vanilla(part), |model| {
+                    WornModel::Override(model, piece.slot)
+                });
+                model.submit(
                     &mut skin,
-                    material.model.unwrap_or(part),
                     base,
                     &layer_poses,
-                    material.binding.uv,
-                    0.0,
-                    material.color,
-                    if material.glows {
-                        sunrise_client::mobs::render::FULL_BRIGHT
-                    } else {
-                        packed
+                    Paint {
+                        uv: material.binding.uv,
+                        scroll: 0.0,
+                        color: material.color,
+                        light: if material.glows {
+                            sunrise_client::mobs::render::FULL_BRIGHT
+                        } else {
+                            packed
+                        },
+                        overlay: material.overlay,
                     },
-                    material.overlay,
                     out,
                 );
             }

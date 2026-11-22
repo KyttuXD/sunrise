@@ -11,13 +11,13 @@ pub trait DrawClientHost {
     /// Side: client.
     /// Entity model layer `layer` baked into its `ModelPart` tree, each part
     /// at its pose, as `EntityModelSet.bakeLayer` bakes it: one a native mod
-    /// registered (`register_layer_definitions`), or vanilla's, by the name
-    /// `entity-models.json` gives it (`minecraft:zombie#main`,
-    /// `minecraft:player#main`). The tree is the caller's own copy: bake it
-    /// once, as a renderer does, and set its parts' poses each frame. None
-    /// for a layer neither has. A vanilla layer no mob has (a player's, a
-    /// chest's) is read from the resources each call, so slow. API
-    /// @API:model_layers@.
+    /// registered (`register_layer_definitions`), or a prepared vanilla definition by its
+    /// `entity-models.json` name (`minecraft:zombie#main`,
+    /// `minecraft:player#main`). Layers are indexed once per client resource
+    /// load and reload rather than read from disk on each call. The tree is
+    /// the caller's own copy: bake it once, as a renderer does, and reuse it
+    /// while setting its parts' poses each frame. None for a layer neither
+    /// has. API @API:model_layers@.
     fn bake_layer(&self, layer: &str) -> Option<ModelPart>;
 }
 /// What the HUD, screen and tooltip hooks draw with, in GUI pixels: one per hook call.
@@ -395,13 +395,14 @@ pub trait BlockEntityDrawContext {
     ) -> bool {
         unimplemented!("BlockEntityDrawContext::draw_cube")
     }
-    /// Draws block `block`'s model (`mymod:cog`, any block with a model) in
-    /// the state with `properties` (`[("axis", "x")]`, the rest default)
-    /// under `draw`'s pose, as vanilla's `submitBlockModel` draws a block in
-    /// an entity's place: a block's baked model, with its default tints. A
-    /// moving part that is no block is a standalone model
-    /// (`native_draw_model`). False for an unknown block or property.
-    fn block(&mut self, block: BlockKey, properties: &[(&str, &str)]) -> bool {
+    /// Draws `state`'s baked block model under the current draw pose with its
+    /// default tints, matching vanilla's `SubmitNodeCollector.submitBlockModel`.
+    /// Resolve states once through `host.block_states()` (or pass an event's
+    /// resolved `BlockState`) rather than parsing properties each frame. A
+    /// moving part that is not a block is a standalone model ([`Self::model`]).
+    /// The state's selected model parts, atlas coordinates and tints are bound to the active
+    /// resources. Returns `false` for an unknown state; a valid empty model draws nothing.
+    fn block(&mut self, state: BlockState) -> bool {
         unimplemented!("BlockEntityDrawContext::draw_block")
     }
     /// Draws `stack` under `draw`'s pose as an item is drawn in the world

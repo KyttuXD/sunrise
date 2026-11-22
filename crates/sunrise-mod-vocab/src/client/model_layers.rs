@@ -608,8 +608,22 @@ pub struct ModelPart {
     pub skip_draw: bool,
     /// Its boxes' faces.
     pub polygons: Vec<ModelPolygon>,
-    children: Vec<(String, ModelPart)>,
+    children: ModelChildren,
     initial_pose: PartPose,
+}
+
+// Keep the owned ModelPart API and serialized shape; only child destruction needs a worklist.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(transparent)]
+struct ModelChildren(Vec<(String, ModelPart)>);
+
+impl Drop for ModelChildren {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.0);
+        while let Some((_, mut child)) = pending.pop() {
+            pending.append(&mut child.children.0);
+        }
+    }
 }
 
 impl ModelPart {
@@ -632,7 +646,7 @@ impl ModelPart {
             visible: true,
             skip_draw: false,
             polygons,
-            children,
+            children: ModelChildren(children),
             initial_pose: pose,
         };
         part.load_pose(pose);
@@ -642,6 +656,7 @@ impl ModelPart {
     /// Its part `name` (`getChild`).
     pub fn get_child(&self, name: &str) -> Option<&ModelPart> {
         self.children
+            .0
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, c)| c)
@@ -650,6 +665,7 @@ impl ModelPart {
     /// Its mutable child by name.
     pub fn get_child_mut(&mut self, name: &str) -> Option<&mut ModelPart> {
         self.children
+            .0
             .iter_mut()
             .find(|(n, _)| n == name)
             .map(|(_, c)| c)
@@ -657,12 +673,12 @@ impl ModelPart {
 
     /// Its parts by name, in the order they draw.
     pub fn children(&self) -> impl Iterator<Item = (&str, &ModelPart)> {
-        self.children.iter().map(|(n, c)| (n.as_str(), c))
+        self.children.0.iter().map(|(n, c)| (n.as_str(), c))
     }
 
     /// Its mutable children in drawing order.
     pub fn children_mut(&mut self) -> impl Iterator<Item = (&str, &mut ModelPart)> {
-        self.children.iter_mut().map(|(n, c)| (n.as_str(), c))
+        self.children.0.iter_mut().map(|(n, c)| (n.as_str(), c))
     }
 
     /// Whether it has no faces of its own (`isEmpty`).
@@ -720,10 +736,11 @@ impl ModelPart {
         if name == "root" {
             return Some(Vec::new());
         }
-        if let Some(index) = self.children.iter().position(|(child, _)| child == name) {
+        if let Some(index) = self.children.0.iter().position(|(child, _)| child == name) {
             return Some(vec![index as u32]);
         }
         self.children
+            .0
             .iter()
             .enumerate()
             .find_map(|(index, (_, child))| {
@@ -736,7 +753,7 @@ impl ModelPart {
     pub(crate) fn descendant_mut(&mut self, path: &[u32]) -> Option<&mut ModelPart> {
         let mut part = self;
         for &index in path {
-            part = &mut part.children.get_mut(index as usize)?.1;
+            part = &mut part.children.0.get_mut(index as usize)?.1;
         }
         Some(part)
     }
@@ -744,7 +761,7 @@ impl ModelPart {
     /// `Model.resetPose` does before each frame's `setupAnim`.
     pub fn reset_all_poses(&mut self) {
         self.reset_pose();
-        for (_, child) in &mut self.children {
+        for (_, child) in &mut self.children.0 {
             child.reset_all_poses();
         }
     }

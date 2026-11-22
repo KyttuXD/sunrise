@@ -72,11 +72,13 @@ pub struct ItemStack {
 
 type StackMetadata = (ItemKey, NonZeroU32, Option<u32>);
 type StackProjector<'a> = dyn Fn(StackMetadata) -> Option<ItemStack> + 'a;
+type StackComponentReader<'a> = dyn Fn(&str) -> Option<Tag> + 'a;
 type SlotMetadata<'a> = dyn Fn(u32) -> Option<StackMetadata> + 'a;
 type SlotProjector<'a> = dyn Fn(u32, StackMetadata) -> Option<ItemStack> + 'a;
 
 /// A read-only loan of a nonempty stack. Reading its scalars does not copy the stack or
-/// encode its components. Use [`Self::project`] to retain an owned value or read its patch.
+/// encode its components. Use [`Self::get`] to read one override and [`Self::project`]
+/// to retain an owned value or read the whole patch.
 // no wire: borrows a call-scoped stack or projection callable.
 #[non_exhaustive]
 pub struct ItemStackView<'a> {
@@ -87,6 +89,7 @@ pub struct ItemStackView<'a> {
 enum StackProjection<'a> {
     Borrowed(&'a ItemStack),
     Resident(&'a StackProjector<'a>),
+    ResidentComponents(&'a StackProjector<'a>, &'a StackComponentReader<'a>),
     Slot(u32, &'a SlotProjector<'a>),
     PreparedDrop(
         usize,
@@ -111,6 +114,20 @@ impl<'a> ItemStackView<'a> {
         Self {
             metadata,
             projection: StackProjection::Resident(project),
+        }
+    }
+
+    /// Lend a resident stack with direct access to individual component overrides.
+    // hidden: the engine lends resident storage and lazy single-component lookup using metadata it has checked.
+    #[doc(hidden)]
+    pub fn resident_with_components(
+        metadata: StackMetadata,
+        project: &'a StackProjector<'a>,
+        read_override: &'a StackComponentReader<'a>,
+    ) -> Self {
+        Self {
+            metadata,
+            projection: StackProjection::ResidentComponents(project, read_override),
         }
     }
 
@@ -152,12 +169,30 @@ impl<'a> ItemStackView<'a> {
         self.metadata.2
     }
 
+    /// Read a stored component override with its typed descriptor, without consulting item
+    /// defaults. An inherited or removed component has no value to decode. If the source
+    /// cannot read individual overrides, this may project an owned stack.
+    pub fn get<C: Component>(&self, component: &C) -> Option<C::Value> {
+        let id = component.id();
+        if id == "minecraft:damage" {
+            return component.decode(&unsigned_tag(self.damage_component()?));
+        }
+        match self.projection {
+            StackProjection::Borrowed(stack) => stack.get(component),
+            StackProjection::ResidentComponents(_, read) => component.decode(&read(id)?),
+            StackProjection::Resident(_)
+            | StackProjection::Slot(..)
+            | StackProjection::PreparedDrop(..) => self.project()?.get(component),
+        }
+    }
+
     /// Copy this stack into an owned API value, including its normalized component patch.
     /// Returns `None` if the source cannot be represented as an owned [`ItemStack`].
     pub fn project(&self) -> Option<ItemStack> {
         let mut stack = match self.projection {
             StackProjection::Borrowed(stack) => stack.clone(),
-            StackProjection::Resident(project) => project(self.metadata)?,
+            StackProjection::Resident(project)
+            | StackProjection::ResidentComponents(project, _) => project(self.metadata)?,
             StackProjection::Slot(slot, project) => project(slot, self.metadata)?,
             StackProjection::PreparedDrop(index, access) => {
                 access.project_stack(index, self.metadata)?
@@ -1005,6 +1040,17 @@ mod tests {
         fn encode(&self, value: i32) -> Tag {
             Tag::Int(value)
         }
+    }
+
+    #[test]
+    fn resident_stack_view_reads_one_override_without_projecting() {
+        let view = ItemStackView::resident_with_components(
+            (ItemKey(3), NonZeroU32::MIN, None),
+            &|_| panic!("component reads must not project the stack"),
+            &|id| (id == "test:number").then_some(Tag::Int(42)),
+        );
+        assert_eq!(view.get(&Number), Some(42));
+        assert_eq!(view.get(&Other), None);
     }
 
     #[test]

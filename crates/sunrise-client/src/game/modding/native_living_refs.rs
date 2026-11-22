@@ -7,7 +7,7 @@
 //! `attributes` and `attribute_modifiers`), which on a client answer for the
 //! local player from the client's own copy; and `effect`/`effects`.
 use super::Game;
-use super::api_values::{StackReadMetadata, project_stack, stack_read_metadata};
+use super::api_values::{StackReadMetadata, projected_stack, stack_read_metadata};
 use super::commands::{Target, items::Owner};
 use super::living_attributes::AttributeWrite;
 use crate::mobs::Who;
@@ -57,7 +57,7 @@ pub(super) fn lend_equipment(
     read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
 ) -> Option<()> {
     let metadata = stack_read_metadata(stack.base()).ok()?;
-    with_equipment_view(&stack, metadata, read);
+    with_equipment_view(&stack, metadata, |view, _| read(view));
     Some(())
 }
 
@@ -65,10 +65,22 @@ pub(super) fn lend_equipment(
 pub(super) fn with_equipment_view<R>(
     stack: &EquipmentRead<'_>,
     metadata: StackReadMetadata,
-    read: impl for<'a> FnOnce(ItemStackView<'a>) -> R,
+    read: impl for<'a> FnOnce(ItemStackView<'a>, &'a dyn Fn(&str) -> Option<mod_api::Tag>) -> R,
 ) -> R {
-    let project = |metadata| project_stack(&stack.project(), metadata).ok();
-    read(ItemStackView::resident(metadata, &project))
+    use sunrise_core::nbt::{JavaString, Tag};
+    let read_override = |id: &str| {
+        let bare = id.strip_prefix('!').unwrap_or(id);
+        let Tag::Compound(mut patch) = stack.extra_components_matching(|name| name == bare)? else {
+            return None;
+        };
+        patch.remove(&JavaString::from(id))
+    };
+    let project =
+        |metadata| projected_stack(metadata, stack.extra_components_matching(|_| true)).ok();
+    read(
+        ItemStackView::resident_with_components(metadata, &project, &read_override),
+        &read_override,
+    )
 }
 
 /// The equipment slot of a hand (`LivingEntity.getItemInHand`/`setItemInHand`).

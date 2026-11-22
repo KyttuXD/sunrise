@@ -193,12 +193,12 @@ Resolve item and block keys during load and keep them for tick and menu calls.
 `item_burn_time`, `item_compost_chance`, `give`, `enchantment_supports`'s item,
 and GUI `item` / `item_model` take `ItemKey`. `block_item`, `fluid_bucket` and
 `screen_hovered_item` return item keys. `level.block`, `BlockState::block` and
-`Hit.block` return block keys; `BlockEntityDrawContext::block` takes one.
+`Hit.block` return block keys.
 `ItemStack::item()` returns an `ItemKey`, not a name. Request that same key in `Hooks::register`
 when binding a [`ClientItemUseBehavior`](parts/item-and-tag-parts.md#intercept-main-hand-client-input).
 The callback receives the live typed stack (or the last valid stack of that item kind if the slot was emptied or replaced) and a separate hotbar slot.
 Unknown incoming slots are refused at the boundary.
-`block_sprites` takes API-owned `BlockState` values, preserving properties without
+`block_sprites` and `BlockEntityDrawContext::block` take API-owned `BlockState` values, preserving properties without
 parsing state strings or exposing numeric engine state IDs. The pre-change block event carries resolved `from` / `to`
 states and does not allocate their names. Property names and values in
 `set_block_property` are not block identifiers and use strings.
@@ -393,8 +393,9 @@ read and write an optional owned NBT patch; a plain stack has no patch allocatio
 
 `ItemStackView` lends a nonempty stack for read-only inspection. Read `item()`, `count()`,
 `damage()` or `damage_component()` without copying the stack or encoding its components.
-Use `project()` to read the component patch or keep an owned `ItemStack` after the loan ends;
-projection returns `None` if the source cannot be represented as an owned stack.
+Use `get(&component)` to decode one stored component override; it does not consult item
+defaults. Use `project()` to read the whole patch or keep an owned `ItemStack` after the loan
+ends. Projection returns `None` if the source cannot be represented as an owned stack.
 `InventoryView::get(slot)` reads just that slot. `iter()` visits readable nonempty slots lazily,
 in ascending order, and yields each original slot number with its stack view. Neither operation
 projects a stack.

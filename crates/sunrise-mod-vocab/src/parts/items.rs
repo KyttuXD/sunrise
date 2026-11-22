@@ -140,29 +140,6 @@ pub struct ItemKeyError {
     pub id: String,
 }
 
-impl Attached<dyn crate::ClientItemExtensions> {
-    /// Bind a reload-owned item provider to the currently registering mod.
-    // hidden: the engine's reload registrar uses the same ownership and enablement as item Parts.
-    #[doc(hidden)]
-    pub fn __client_item_extensions(
-        provider: Arc<dyn crate::ClientItemExtensions>,
-    ) -> Option<Self> {
-        let mod_id = crate::content::crash::current_native_mod()?;
-        let mod_index = crate::__private::mod_index(mod_id)?;
-        Some(Self {
-            mod_id,
-            mod_index,
-            order: 0,
-            type_name: "ClientItemExtensions",
-            part: provider,
-        })
-    }
-    /// Whether the owning mod is currently enabled.
-    pub fn enabled(&self) -> bool {
-        crate::mod_index_on(self.mod_index)
-    }
-}
-
 impl HookParts {
     pub(crate) fn item<'k>(
         &self,

@@ -5155,9 +5155,8 @@ pub struct EntityModelDocument(Arc<Value>);
 
 impl EntityModelDocument {
     pub fn load(root: &Path) -> crate::Result<Self> {
-        Ok(Self(Arc::new(serde_json::from_slice(&fs::read(
-            root.join("entity-models.json"),
-        )?)?)))
+        let layers = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
+        Ok(Self(Arc::new(Value::Object(layers))))
     }
 
     pub fn model(&self, key: &str) -> Option<Part> {

@@ -852,7 +852,7 @@ pub(in crate::game) fn project_stack(
 }
 
 /// Build either a full or filtered projection with the same checked damage normalization.
-fn projected_stack(
+pub(super) fn projected_stack(
     (key, count, damage): StackReadMetadata,
     patch: Option<Tag>,
 ) -> Result<ApiStack, StackReadError> {

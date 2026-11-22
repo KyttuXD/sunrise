@@ -1386,6 +1386,11 @@ impl ItemStack {
     /// `Item.isFoil` (enchantments, or a compass carrying a lodestone tracker).
     /// Stored book enchantments do not count.
     pub fn has_foil(&self, item_glint: Option<bool>) -> bool {
+        self.has_foil_with_enchantments(item_glint, !self.enchantments().is_empty())
+    }
+
+    /// Use the enchantments of a borrowed equipment stack, which can carry a gear overlay.
+    pub fn has_foil_with_enchantments(&self, item_glint: Option<bool>, enchanted: bool) -> bool {
         let own = self
             .data()
             .and_then(|data| data.other("minecraft:enchantment_glint_override"))
@@ -1399,7 +1404,7 @@ impl ItemStack {
             &self.item,
             self.data()
                 .is_some_and(|data| data.other("minecraft:lodestone_tracker").is_some()),
-            !self.enchantments().is_empty(),
+            enchanted,
         );
         crate::properties::foil(override_glint, item_foil)
     }
