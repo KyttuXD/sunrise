@@ -145,8 +145,8 @@ fn client_level_transitions_stop_streams_opened_during_unload() {
         native_entity_refs::tests::with_client_game, remote::RemoteDimensionEntry,
     };
     use mod_api::{
-        AudioStream, AudioStreamRef, AudioStreamState, ClientDisconnectingEvent, ClientHost,
-        ClientLevelUnloadEvent, Hooks, ModEntry, SoundSource, StreamSpec,
+        AudioStream, AudioStreamRef, AudioStreamState, ClientHost, ClientLevelUnloadEvent,
+        ClientPlayerLoggingOutEvent, Hooks, ModEntry, SoundSource, StreamSpec,
     };
     use std::sync::{Arc, Mutex};
     use sunrise_client::level_loading::Reason;
@@ -183,7 +183,11 @@ fn client_level_transitions_stop_streams_opened_during_unload() {
             self.open(host);
         }
 
-        fn client_disconnecting(&self, host: &dyn ClientHost, _: &mut ClientDisconnectingEvent) {
+        fn client_player_logging_out(
+            &self,
+            host: &mut dyn ClientHost,
+            _: &mut ClientPlayerLoggingOutEvent,
+        ) {
             self.open(host);
         }
     }

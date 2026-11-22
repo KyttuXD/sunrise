@@ -165,12 +165,16 @@ pub enum Event {
     ServerLinks(Vec<cfg::ServerLink>),
     /// The connection ended. `from_server`: the server gave the reason (or
     /// the connection was refused for good), rather than the connection
-    /// failing.
+    /// failing. `after_login`: the protocol already left handshake/login for
+    /// configuration or play (`ClientCommonPacketListenerImpl.onDisconnect`,
+    /// which calls `Minecraft.disconnect`), rather than failing in
+    /// `ConnectScreen` or `ClientHandshakePacketListenerImpl`.
     Disconnected {
         reason: String,
         /// The reason's translation key, when it had one.
         key: Option<String>,
         from_server: bool,
+        after_login: bool,
     },
 }
 
@@ -272,6 +276,7 @@ impl Event {
                 reason,
                 key,
                 from_server: _,
+                after_login: _,
             } => reason.capacity().saturating_add(key.owned_heap_bytes()),
         };
         owned.saturating_add(Self::INGRESS_RECORD_OVERHEAD)
@@ -458,6 +463,7 @@ impl Session {
             .name("sunrise-net".into())
             .spawn(move || {
                 sunrise_threads::favour_current();
+                let mut after_login = false;
                 let result = captured_payloads.map_err(Reason::plain).and_then(|_| {
                     run(
                         local,
@@ -479,12 +485,13 @@ impl Session {
                         &thread_payloads,
                         &thread_pings,
                         &reports,
+                        &mut after_login,
                     )
                 });
                 // The physical close is immediate. Session::disconnect retires
                 // the payload epoch when main drops the listener, so a bundle
                 // already in its member loop still has its handler table.
-                report_connection_end(result, &thread_writer, &send);
+                report_connection_end(result, &thread_writer, &send, after_login);
                 thread_far.cancel();
             })
             .inspect_err(|error| {
@@ -493,6 +500,7 @@ impl Session {
                     reason: format!("network thread: {error}"),
                     key: None,
                     from_server: false,
+                    after_login: false,
                 });
             })
             .ok();
@@ -891,11 +899,12 @@ pub struct Reason {
     from_server: bool,
 }
 impl Reason {
-    fn ended(self, from_server: bool) -> Event {
+    fn ended(self, from_server: bool, after_login: bool) -> Event {
         Event::Disconnected {
             reason: self.text,
             key: self.key,
             from_server,
+            after_login,
         }
     }
     fn plain(text: impl Into<String>) -> Self {
@@ -1039,6 +1048,7 @@ fn run(
     payloads: &Arc<crate::raw_payloads::Transport>,
     pings: &PingSamples,
     reports: &Arc<crate::chunk_io::Reports>,
+    after_login: &mut bool,
 ) -> Result<Reason, Reason> {
     let singleplayer = local.is_some();
     let (host, port, mut c) = if let Some(pipe) = local {
@@ -1108,6 +1118,10 @@ fn run(
         match login::Clientbound::decode(id, &payload).map_err(e)? {
             login::Clientbound::Compression(p) => c.set_compression(p.threshold),
             login::Clientbound::LoginFinished(p) => {
+                // ClientHandshakePacketListenerImpl.handleLoginFinished installs
+                // ClientConfigurationPacketListenerImpl (a ClientCommonPacketListenerImpl)
+                // before sending LoginAcknowledged.
+                *after_login = true;
                 c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
                     .map_err(e)?;
                 break p.profile;
@@ -1247,6 +1261,7 @@ fn report_connection_end(
     result: Result<Reason, Reason>,
     writer: &Mutex<Option<QueuedWriter>>,
     events: &ingress::Producer<Event>,
+    after_login: bool,
 ) {
     let (why, from_server) = match result {
         Ok(why) => (why, true),
@@ -1260,7 +1275,7 @@ fn report_connection_end(
     {
         w.shutdown();
     }
-    let _ = events.send_terminal(why.ended(from_server));
+    let _ = events.send_terminal(why.ended(from_server, after_login));
 }
 
 /// `Connection.setupOutboundProtocol`, run by the ordered main phase task.
@@ -3707,7 +3722,7 @@ mod tests {
                 &Arc::default(),
                 &Arc::default(),
             );
-            report_connection_end(result, &writer, &send);
+            report_connection_end(result, &writer, &send, true);
         });
         let server = Connection::local(server);
         server

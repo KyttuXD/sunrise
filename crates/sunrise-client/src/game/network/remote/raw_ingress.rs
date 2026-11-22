@@ -6,6 +6,7 @@ fn local_transfer_notice() -> Event {
         reason: sunrise_client::lang::get("disconnect.transfer"),
         key: Some("disconnect.transfer".into()),
         from_server: true,
+        after_login: true,
     }
 }
 
@@ -536,6 +537,7 @@ impl Game<'_> {
             reason,
             key,
             from_server,
+            after_login,
         } = event
         else {
             unreachable!("listener only retains the disconnect notice");
@@ -548,7 +550,14 @@ impl Game<'_> {
             sunrise_hooks::connection::By::Connection
         };
         self.connection_ended(&reason, key.as_deref(), by);
-        self.leave_server(Some(Text::literal(reason)))
+        // Only the common listener calls Minecraft.disconnect; a failed
+        // ConnectScreen or login handshake just changes screens.
+        let reason = Some(Text::literal(reason));
+        if after_login {
+            self.leave_server(reason)
+        } else {
+            self.finish_leave_server(reason)
+        }
     }
 }
 

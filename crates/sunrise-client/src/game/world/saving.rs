@@ -53,8 +53,24 @@ impl Game<'_> {
             save.quit |= quit;
             return Ok(());
         }
-        if self.title.is_some() || self.saved_for_exit {
-            // A quit from the title still needs the event loop to finish.
+        if self.saved_for_exit {
+            // A quit after exit saving has already run still needs the event loop to finish.
+            self.pending_save = Some(ClosingSave {
+                quit,
+                close: true,
+                reply: None,
+                started: Instant::now(),
+                stage: Stage::Quit,
+            });
+            return Ok(());
+        }
+        if self.title.is_some() {
+            // A quit from the title still needs the event loop to finish, and
+            // reaches Minecraft.exitWorldAndClose's disconnect boundary once.
+            if quit {
+                self.client_logging_out();
+                self.saved_for_exit = true;
+            }
             self.pending_save = Some(ClosingSave {
                 quit,
                 close: true,
@@ -99,6 +115,7 @@ impl Game<'_> {
                 stage: Stage::Quit,
             });
         } else {
+            self.client_logging_out();
             self.close_container();
             self.award_custom_stat("leave_game", 1);
             self.lan_close(false);
@@ -164,7 +181,12 @@ impl Game<'_> {
         };
         let result = (|| -> Result<bool> {
             match &mut save.stage {
-                Stage::Quit => Ok(true),
+                Stage::Quit => {
+                    if save.quit && !self.saved_for_exit {
+                        self.client_logging_out();
+                    }
+                    Ok(true)
+                }
                 Stage::Server => {
                     let server = self
                         .integrated
@@ -173,12 +195,13 @@ impl Game<'_> {
                     if !server.stopped() {
                         return Ok(false);
                     }
-                    // Drop/join only after completion; leave_server's teardown
-                    // can then run without blocking on the server's writes.
+                    // Drop/join only after completion; finish_leave_server's teardown
+                    // can then run without blocking on the server's writes or firing
+                    // client_logging_out a second time.
                     if save.quit {
                         self.integrated.take().unwrap().stop()?;
                     } else {
-                        self.leave_server(None)?;
+                        self.finish_leave_server(None)?;
                     }
                     Ok(true)
                 }
