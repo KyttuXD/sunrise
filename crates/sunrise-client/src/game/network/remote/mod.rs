@@ -2504,17 +2504,13 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn named_remote_players_are_told_one_by_one() {
         use mod_api::{
-            EntityTickListenedEvent, EntityTickPostEvent, EntityTickPreEvent, Hooks, HostSide,
-            ModEntry, Mods, Registrar,
+            EntityTickPostEvent, EntityTickPreEvent, Hooks, HostSide, ModEntry, Mods, Registrar,
         };
         use std::sync::{Arc, Mutex};
         type Calls = Arc<Mutex<Vec<(bool, Vec<u32>)>>>;
         struct Named(Calls);
         #[mod_api::__subscriptions]
         impl Hooks for Named {
-            fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-                event.listened = true;
-            }
             fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
                 r.entity_tick_each("minecraft:player");
             }

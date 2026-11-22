@@ -3622,14 +3622,6 @@ impl Game<'_> {
     ) {
         self.fire_player_stop_tracking(player, name, entity, uuid, kind);
     }
-    /// Whether a mod listens to `native_living_equipment_change` for mobs and
-    /// connected players: a mod that hooks it hooks this one too and sets
-    /// `listened` (HEAD, `*listened = true`). Without it the game does not read
-    /// their equipment each tick and only armor stands are told. A mob or player
-    /// counts from empty once it is set. Asked once a tick. Server-side.
-    pub(in crate::game) fn native_living_equipment_listened(&mut self, listened: &mut bool) {
-        self.fire_living_equipment_listened(listened);
-    }
     /// A mob's, an armor stand's or a connected player's equipment slot took a
     /// different stack (NeoForge's `LivingEquipmentChangeEvent`,
     /// `LivingEntity.collectEquipmentChanges`): `entity` its ID, `kind` its type
@@ -3735,13 +3727,6 @@ impl Game<'_> {
         call: mod_api::__private::EntityMountCall<'_>,
     ) {
         self.fire_entity_mount(call);
-    }
-    /// Whether a mod listens to `native_entity_tick_pre` and `native_entity_tick_post`: a mod
-    /// that hooks them hooks this one too and sets `listened` (HEAD, `*listened = true`).
-    /// Without it the game tells no entity's tick, and keeps no list of them. Asked once for
-    /// each family each tick, on the server and on a client.
-    pub(in crate::game) fn native_entity_tick_listened(&mut self, listened: &mut bool) {
-        self.fire_entity_tick_listened(listened);
     }
     /// The entities `entities` are about to tick in the level `dimension`, and `kinds` holds
     /// the type of each, in the same order (NeoForge's `EntityTickEvent.Pre`, right before each
@@ -3957,21 +3942,7 @@ impl Game<'_> {
     ) {
         self.fire_mob_effect_added(effect, entity, amplifier);
     }
-    /// LivingEntity.knockback before resistance and motion, after the unchanged v1 hook.
-    /// Cancellation from either hook wins. Attacker is the attacking entity's network id,
-    /// falling back to the victim's last hurt-by mob, or 0 when unknown; `attacker_main` and
-    /// `attacker_off` are what it holds (a player's selected and off-hand stacks, a mob's main hand), none when unknown. Player attackers
-    /// include the guest whose action runs. Includes mob melee and armor-stand sweeps, not
-    /// direct velocity pushes (explosions, Punch arrows, hoglin throws). Non-finite changes
-    /// are restored before resistance. Server-side, without self: damage borrows the victim.
-    /// Whether a mod hears projectiles' impacts (`native_projectile_impact`):
-    /// set `hears`. Asked once a server tick before the projectiles fly; only
-    /// then does the tick keep the copy of each flying projectile that a
-    /// canceled impact flies on from, so a game without such a mod pays
-    /// nothing. Server-side.
-    pub(in crate::game) fn native_hears_projectile_impacts(&self, hears: &mut bool) {
-        self.fire_hears_projectile_impacts(hears);
-    }
+
     /// A projectile hit something (NeoForge's `ProjectileImpactEvent`, posted
     /// where vanilla's projectile has found what it meets, before the hit
     /// acts): `projectile` (its entity id) of type `kind` (`minecraft:arrow`),
@@ -3992,8 +3963,7 @@ impl Game<'_> {
     /// Covers arrows, tridents, thrown items, fireballs, wither skulls, wind
     /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
     /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
-    /// dragon or crystal. Heard only when a mod also sets
-    /// `native_hears_projectile_impacts`. Server-side.
+    /// dragon or crystal. Server-side.
     pub(in crate::game) fn native_projectile_impact(
         &mut self,
         call: mod_api::__private::ProjectileImpactCall<'_>,

@@ -2,6 +2,11 @@
 //! chunk-generation spawning (`NaturalSpawner`), mob events (attacks,
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
+#[cfg(test)]
+thread_local! {
+    static PROJECTILE_HANDBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[path = "../../creatures/biome_facts.rs"]
 pub(super) mod biome_facts;
 #[cfg(test)]
@@ -1424,7 +1429,8 @@ impl Game<'_> {
             while let Some(m) = self.mobs.get(i) {
                 let (x, z) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
                 if !blocked.contains(&m.id) && self.world.loaded(x, z) && ticking(x, z) {
-                    // A mob told alone is told, and checks its sleep, at its own turn.
+                    // A mob told alone is told, and checks its sleep, at its own turn; when
+                    // only Post is subscribed, its sleep still runs here without a Pre yield.
                     if !round.alone_mob(&m.kind) {
                         if round.listening() {
                             let kind = super::native_ticks::TickKind::Mob(m.kind.clone());
@@ -1432,6 +1438,8 @@ impl Game<'_> {
                         } else {
                             self.sync_sleeping_mob(i);
                         }
+                    } else if !round.pre() && sleeping {
+                        self.sync_sleeping_mob(i);
                     }
                 }
                 i += 1;
@@ -4710,6 +4718,8 @@ impl Game<'_> {
         projectiles: sunrise_client::join_seq::JoinList<Projectile, false>,
         tell: impl FnOnce(&mut Self),
     ) -> (sunrise_client::join_seq::JoinList<Projectile, false>, bool) {
+        #[cfg(test)]
+        PROJECTILE_HANDBACKS.with(|count| count.set(count.get() + 1));
         let no_spawns = self.creatures.projectiles.is_empty();
         self.creatures.projectiles.restore(
             projectiles,
@@ -4765,7 +4775,7 @@ impl Game<'_> {
         let mut keep_flags = vec![true; projectiles.len()];
         let mut winds = std::mem::take(&mut self.creatures.pickable_projectile_targets);
         // The impacts the mods may cancel (`native_projectile_impact`), on a server.
-        let hear = self.native_hears_impacts();
+        let mut hear = self.native_hears_impacts();
         let mut impacts: Vec<Impact> = Vec::new();
         let mut vehicle_winds = self.vehicle_winds();
         // What the ticks read of the other entities (the mobs, the guests, the breezes), built
@@ -4809,6 +4819,11 @@ impl Game<'_> {
                     let (id, kind) = (projectiles[i].id, projectiles[i].entity_type());
                     if !round.alone_kind(kind) {
                         i
+                    } else if !round.pre() {
+                        if round.post() {
+                            back.told = Some((id, kind));
+                        }
+                        i
                     } else {
                         let mut ticks = true;
                         let same;
@@ -4816,6 +4831,7 @@ impl Game<'_> {
                         (projectiles, same) = self.projectiles_told(projectiles, |game| {
                             ticks = game.native_tick_pre_one(&mut round, id, kind);
                         });
+                        hear = self.native_hears_impacts();
                         // A hook that wrote what the hit tests read: the next projectile sees
                         // its writes.
                         if self.projectile_targets_changed(&read, &seen) {
@@ -4826,7 +4842,9 @@ impl Game<'_> {
                         }
                         match back.place(slot) {
                             Some(at) if ticks => {
-                                back.told = Some((id, kind));
+                                if round.post() {
+                                    back.told = Some((id, kind));
+                                }
                                 at
                             }
                             _ => continue,
@@ -5090,6 +5108,7 @@ impl Game<'_> {
                 (projectiles, same) = self.projectiles_told(projectiles, |game| {
                     game.native_tick_post_one(&round, id, kind);
                 });
+                hear = self.native_hears_impacts();
                 if self.projectile_targets_changed(&read, &seen) {
                     seen = self.projectile_tick_targets();
                 }

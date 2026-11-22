@@ -1380,13 +1380,6 @@ mod nested_vehicle_discard_tests {
     struct CancelPassengerTick(Arc<AtomicBool>);
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for CancelPassengerTick {
-        fn entity_tick_listened(
-            &self,
-            _: mod_api::HostSide<'_>,
-            event: &mut mod_api::EntityTickListenedEvent,
-        ) {
-            event.listened = true;
-        }
         fn entity_tick_pre(
             &self,
             _: mod_api::HostSide<'_>,

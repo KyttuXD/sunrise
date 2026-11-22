@@ -205,7 +205,6 @@ impl Game<'_> {
         if !self.entity_attachments.is_empty() {
             self.prune_entity_attachments();
         }
-        self.native_mobs_equipment();
         self.tick_equipment_attributes();
         self.position_rider();
         self.tick_player_stat_counters();

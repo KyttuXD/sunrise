@@ -9,7 +9,8 @@ pub trait Hooks {
     /// `EquipmentSlot` (`mainhand`, `offhand`, `feet`, `legs`, `chest`, `head`,
     /// `body`, `saddle`), `from` what the slot held when this was last heard
     /// (none for empty) and `to` what it holds now. Once for each slot that
-    /// changed, in that order, after the mobs' tick, so a mob that joins the
+    /// changed, in that order, during the entity's tick (before `aiStep` and
+    /// `entity_tick_post`, never for a canceled tick), so a mob that joins the
     /// level wearing something counts from empty on its first tick. It only
     /// hears: change the entity with its own helpers.
     ///
@@ -19,14 +20,16 @@ pub trait Hooks {
     /// selected hotbar slot, so a hotbar selection or a pickup into the
     /// selected slot is a `mainhand` change. Only their six slots `mainhand`,
     /// `offhand`, `feet`, `legs`, `chest` and `head` are told: a player's
-    /// `body` and `saddle` slots are never told. Mobs and players are told
-    /// only while a mod sets `living_equipment_listened`. The world
-    /// host's own player, in single player or hosting a LAN world, isn't told
-    /// here: `on_equip` hears it. Server-side.
+    /// `body` and `saddle` slots are never told. The world host's own player, in
+    /// single player or hosting a LAN world, isn't told here: `on_equip` hears
+    /// it. Server-side. Version 2 fires whenever a mod subscribes to
+    /// `living_equipment_change` directly (the separate
+    /// `living_equipment_listened` opt-in poll hook is removed).
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_equipment_change",
         dispatch = "flat",
         side = "server",
+        version = 2,
         contract = "listen",
         neoforge = "LivingEquipmentChangeEvent",
         cancellable = false

@@ -3,9 +3,7 @@
 use super::*;
 use crate::game::Dim;
 use crate::game::native_entity_refs::tests::with_game;
-use mod_api::{
-    Despawn, EntityTickListenedEvent, EntityTickPreEvent, HostSide, ModEntry, ServerHost,
-};
+use mod_api::{Despawn, EntityTickPreEvent, HostSide, ModEntry, ServerHost};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU32, Ordering},
@@ -46,9 +44,6 @@ struct MoveOnPre {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for MoveOnPre {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
@@ -435,9 +430,6 @@ struct DiscardOnPre {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for DiscardOnPre {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
@@ -536,9 +528,6 @@ type TickCalls = Vec<(&'static str, Vec<u32>, Option<[f64; 3]>)>;
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for TickTiming {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
         let mut heard = self.heard.lock().unwrap();
         heard.push(("pre", event.entities.to_vec(), None));
@@ -703,9 +692,6 @@ struct MoveOnArrowPost {
 
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for MoveOnArrowPost {
-    fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-        event.listened = true;
-    }
     fn entity_tick_post(&self, host: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
         let HostSide::Server(host) = host else {
             panic!("server fixture");
@@ -756,6 +742,246 @@ fn a_mob_moved_in_one_arrows_post_is_hit_by_the_next_arrow() {
                 "the second arrow hit the pig where the Post moved it: {} of {health}",
                 pig.health
             );
+        });
+    });
+}
+
+/// A server mod naming pigs and arrows with only `entity_tick_pre` or only `entity_tick_post`
+/// yields the borrowed mob list and hands the projectile list back only for the subscribed phase.
+#[test]
+#[ignore = "daily"]
+fn named_mobs_and_projectiles_yield_only_for_subscribed_phase() {
+    type Recorded = Arc<Mutex<Vec<(&'static str, Vec<u32>, Option<[f64; 3]>)>>>;
+
+    fn record(heard: &Recorded, host: &HostSide<'_>, phase: &'static str, entities: &[u32]) {
+        let HostSide::Server(host) = host else {
+            panic!("server fixture");
+        };
+        let pos = entities
+            .first()
+            .and_then(|&id| host.entity(id))
+            .and_then(|entity| entity.position(*host));
+        heard.lock().unwrap().push((phase, entities.to_vec(), pos));
+    }
+
+    struct PreOnly(Recorded);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PreOnly {
+        fn entity_tick_pre(&self, host: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+            record(&self.0, &host, "pre", event.entities);
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_tick_each("minecraft:pig");
+            r.entity_tick_each("minecraft:arrow");
+        }
+    }
+
+    struct PostOnly(Recorded);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PostOnly {
+        fn entity_tick_post(
+            &self,
+            host: HostSide<'_>,
+            event: &mut mod_api::EntityTickPostEvent<'_>,
+        ) {
+            record(&self.0, &host, "post", event.entities);
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_tick_each("minecraft:pig");
+            r.entity_tick_each("minecraft:arrow");
+        }
+    }
+
+    for pre_only in [true, false] {
+        let heard: Recorded = Arc::default();
+        let entry = if pre_only {
+            ModEntry::new("server-pre-only", Box::new(PreOnly(heard.clone())))
+        } else {
+            ModEntry::new("server-post-only", Box::new(PostOnly(heard.clone())))
+        };
+        let mods: mod_api::Mods = vec![entry].into();
+        let mut arrow_id = 0;
+        let mut mob_yields = 0;
+        let mut projectile_handbacks = 0;
+        mod_platform::testing::with_mods(mods, || {
+            with_two_pigs(|game| {
+                game.build_registries();
+                game.set_allow_commands(true);
+                assert!(game.run_command(
+                    "summon minecraft:arrow 1.5 80.5 5.5 {NoGravity:1b,Motion:[1.0d,0.0d,0.0d]}"
+                ));
+                arrow_id = game.creatures.projectiles[0].id;
+                game.ticked_entities_through = u32::MAX;
+                BORROWED_MOB_YIELDS.with(|count| count.set(0));
+                super::super::PROJECTILE_HANDBACKS.with(|count| count.set(0));
+                game.tick_mobs().unwrap();
+                game.tick_projectiles().unwrap();
+                mob_yields = BORROWED_MOB_YIELDS.with(std::cell::Cell::get);
+                projectile_handbacks =
+                    super::super::PROJECTILE_HANDBACKS.with(std::cell::Cell::get);
+            });
+        });
+        assert_eq!(
+            mob_yields, 2,
+            "one yield per named pig, none for the absent phase"
+        );
+        assert_eq!(
+            projectile_handbacks, 1,
+            "one handback for the named arrow, none for the absent phase"
+        );
+        let heard = heard.lock().unwrap();
+        let phase = if pre_only { "pre" } else { "post" };
+        let phases: Vec<_> = heard
+            .iter()
+            .map(|(p, entities, _)| (*p, entities.clone()))
+            .collect();
+        assert_eq!(
+            phases,
+            [
+                (phase, vec![71]),
+                (phase, vec![72]),
+                (phase, vec![arrow_id]),
+            ]
+        );
+        let arrow_pos = heard[2].2.expect("arrow handle resolves during its hook");
+        if pre_only {
+            assert_eq!(arrow_pos, [1.5, 80.5, 5.5]);
+        } else {
+            assert!(arrow_pos[0] > 1.5);
+        }
+    }
+}
+
+/// Mob `living_equipment_change` runs inside the mob's own tick before `entity_tick_post`, skips
+/// mobs whose tick was canceled in `entity_tick_pre`, and prepares nothing when unsubscribed.
+#[test]
+#[ignore = "daily"]
+fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
+    use std::sync::atomic::AtomicBool;
+
+    type Log = Arc<
+        Mutex<
+            Vec<(
+                &'static str,
+                u32,
+                Option<String>,
+                Option<mod_api::ItemStack>,
+            )>,
+        >,
+    >;
+
+    struct OrderProbe {
+        cancel_72: Arc<AtomicBool>,
+        log: Log,
+    }
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for OrderProbe {
+        fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {
+            for &id in event.entities {
+                self.log.lock().unwrap().push(("pre", id, None, None));
+                if id == 72 && self.cancel_72.load(Ordering::Relaxed) {
+                    event.canceled.push(72);
+                }
+            }
+        }
+        fn living_equipment_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut mod_api::LivingEquipmentChangeEvent<'_>,
+        ) {
+            self.log.lock().unwrap().push((
+                "equip",
+                event.entity,
+                Some(event.slot.to_owned()),
+                event.to.cloned(),
+            ));
+        }
+        fn entity_tick_post(&self, _: HostSide<'_>, event: &mut mod_api::EntityTickPostEvent<'_>) {
+            for &id in event.entities {
+                self.log.lock().unwrap().push(("post", id, None, None));
+            }
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.entity_tick_each("minecraft:pig");
+        }
+    }
+
+    let helmet = sunrise_client::items::ItemStack::new("minecraft:iron_helmet", 1);
+    let cancel_72 = Arc::new(AtomicBool::new(true));
+    let log: Log = Arc::default();
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-equip-order",
+        Box::new(OrderProbe {
+            cancel_72: cancel_72.clone(),
+            log: log.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            let api_helmet = Some(helmet.try_into_api().unwrap());
+            for mob in game.mobs.iter_mut() {
+                assert!(
+                    mob.set_equipment_stack(sunrise_items::equipment::HEAD, Some(helmet.clone()),)
+                );
+            }
+            game.tick_mobs().unwrap();
+            assert_eq!(
+                std::mem::take(&mut *log.lock().unwrap()),
+                [
+                    ("pre", 71, None, None),
+                    ("equip", 71, Some("head".into()), api_helmet.clone()),
+                    ("post", 71, None, None),
+                    ("pre", 72, None, None),
+                ]
+            );
+            assert!(
+                game.mobs
+                    .iter()
+                    .find(|m| m.id == 71)
+                    .unwrap()
+                    .extra
+                    .equipment_heard
+                    .is_some()
+            );
+            assert!(
+                game.mobs
+                    .iter()
+                    .find(|m| m.id == 72)
+                    .unwrap()
+                    .extra
+                    .equipment_heard
+                    .is_none(),
+                "a canceled mob tick must not prepare or fire living_equipment_change"
+            );
+
+            // Once pig 72 is allowed to tick, it fires its own equipment change before its Post,
+            // while pig 71 does not re-fire an unchanged slot.
+            cancel_72.store(false, Ordering::Relaxed);
+            game.tick_mobs().unwrap();
+            assert_eq!(
+                std::mem::take(&mut *log.lock().unwrap()),
+                [
+                    ("pre", 71, None, None),
+                    ("post", 71, None, None),
+                    ("pre", 72, None, None),
+                    ("equip", 72, Some("head".into()), api_helmet.clone()),
+                    ("post", 72, None, None),
+                ]
+            );
+        });
+    });
+
+    // With no listener subscribed, mob equipment changes prepare nothing.
+    mod_platform::testing::with_mods(mod_api::Mods::default(), || {
+        with_two_pigs(|game| {
+            assert!(
+                game.mobs[0]
+                    .set_equipment_stack(sunrise_items::equipment::HEAD, Some(helmet.clone()),)
+            );
+            game.tick_mobs().unwrap();
+            assert!(game.mobs[0].extra.equipment_heard.is_none());
         });
     });
 }

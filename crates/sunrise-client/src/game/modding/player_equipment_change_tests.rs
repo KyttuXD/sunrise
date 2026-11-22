@@ -1,9 +1,9 @@
 //! `living_equipment_change` for a server's players (#3417): a hotbar selection, a pickup into
 //! the selected slot and a helmet put on are each one change on the next tick, and nothing is
-//! told while no mod sets `living_equipment_listened`.
+//! prepared or told while no enabled mod subscribes to `living_equipment_change`.
 use std::sync::{Arc, Mutex};
 
-use mod_api::{self, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent, ServerHost};
+use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ServerHost};
 use sunrise_client::items::ItemStack;
 
 use super::api_values::TryIntoApi;
@@ -20,17 +20,9 @@ type Heard = Vec<(
 
 struct Counter {
     heard: Arc<Mutex<Heard>>,
-    listens: bool,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Counter {
-    fn living_equipment_listened(
-        &self,
-        _: &mut dyn ServerHost,
-        event: &mut LivingEquipmentListenedEvent,
-    ) {
-        event.listened |= self.listens;
-    }
     fn living_equipment_change(
         &self,
         _: &mut dyn ServerHost,
@@ -46,13 +38,23 @@ impl Hooks for Counter {
     }
 }
 
+struct Quiet;
+#[mod_api::__subscriptions]
+impl Hooks for Quiet {}
+
 fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>)) {
     let heard = Arc::new(Mutex::new(Heard::new()));
-    let counter = Counter {
-        heard: heard.clone(),
-        listens,
+    let entry = if listens {
+        mod_api::ModEntry::new(
+            "counter",
+            Box::new(Counter {
+                heard: heard.clone(),
+            }),
+        )
+    } else {
+        mod_api::ModEntry::new("quiet", Box::new(Quiet))
     };
-    let mods: mod_api::Mods = vec![mod_api::ModEntry::new("counter", Box::new(counter))].into();
+    let mods: mod_api::Mods = vec![entry].into();
     mod_platform::testing::with_mods(mods, || {
         with_guests(|game| {
             // A joined guest has its play state from the login on.
@@ -131,5 +133,15 @@ fn players_are_not_told_without_the_listened_opt_in() {
         });
         game.native_players_equipment();
         assert_eq!(take(heard), Heard::new());
+        assert!(
+            game.lan
+                .as_ref()
+                .unwrap()
+                .play
+                .get(&12)
+                .unwrap()
+                .equipment_heard
+                .is_none()
+        );
     });
 }

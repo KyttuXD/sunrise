@@ -79,6 +79,8 @@ impl Game<'_> {
         // their Post right after it, each alone, with the list given back for the call; their
         // part (`on_entity_item_update`) follows their Pre.
         let alone = round.alone_kind(native_ticks::ITEM);
+        let alone_pre = round.alone_kind_pre(native_ticks::ITEM);
+        let alone_post = round.alone_kind_post(native_ticks::ITEM);
         let update_hook =
             merging && mod_api::__private::has_part_hook(mod_api::HookId::OnEntityItemUpdate);
         let leave_hook = merging && mod_api::__private::listened(mod_api::HookId::EntityLeaveLevel);
@@ -103,11 +105,11 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            if alone {
+            if alone_pre || (alone && update_hook) {
                 let id = items[i].id;
                 let given = self.give_items_back(items, &mut pass, i, round, |game, round| {
                     if native_ticks::place(&game.dropped, i, |item| item.id == id).is_some()
-                        && game.native_tick_pre_one(round, id, native_ticks::ITEM)
+                        && (!alone_pre || game.native_tick_pre_one(round, id, native_ticks::ITEM))
                         && update_hook
                         && let Some(k) = native_ticks::place(&game.dropped, i, |item| item.id == id)
                         && game.item_update_halts(k)
@@ -366,10 +368,10 @@ impl Game<'_> {
             }
             // `Entity.discard` calls `ServerLevel.EntityCallbacks.onTrackingEnd` within
             // this turn. Restore surviving drops for the leave hook even without a Post.
-            if alone || (expiry_discarded && leave_hook && !self.persist.live.is_empty()) {
+            if alone_post || (expiry_discarded && leave_hook && !self.persist.live.is_empty()) {
                 let id = items[i].id;
                 let given = self.give_items_back(items, &mut pass, i, round, |game, round| {
-                    if alone {
+                    if alone_post {
                         game.native_tick_post_one(round, id, native_ticks::ITEM);
                     }
                 });
@@ -1231,9 +1233,9 @@ mod expire_tests {
     use crate::game::native_entity_refs::tests::{prepare_entity_ticking_neighborhood, with_game};
     use crate::game::{Dim, Game};
     use mod_api::{
-        Compound, EntityLeaveLevelEvent, EntityTickListenedEvent, EntityTickPostEvent,
-        EntityTickPreEvent, HostSide, HostTransaction, ItemExpireEvent, ModEntry, Registrar,
-        RegistrationContext, ServerHost, Tag,
+        Compound, EntityLeaveLevelEvent, EntityTickPostEvent, EntityTickPreEvent, HostSide,
+        HostTransaction, ItemExpireEvent, ModEntry, Registrar, RegistrationContext, ServerHost,
+        Tag,
     };
     use std::sync::{
         Arc, Mutex,
@@ -1601,10 +1603,6 @@ mod expire_tests {
     impl mod_api::Hooks for AloneDiscardListener {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
             r.entity_tick_each("minecraft:item");
-        }
-
-        fn entity_tick_listened(&self, _: HostSide<'_>, event: &mut EntityTickListenedEvent) {
-            event.listened = true;
         }
 
         fn entity_tick_pre(&self, _: HostSide<'_>, event: &mut EntityTickPreEvent<'_>) {

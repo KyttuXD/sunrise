@@ -71,7 +71,7 @@ impl Game<'_> {
             else {
                 continue;
             };
-            if !canceled && round.alone_kind(crate::game::native_ticks::PLAYER) {
+            if !canceled && round.alone_kind_post(crate::game::native_ticks::PLAYER) {
                 told = Some(host.hub.guests[gi].entity_id as u32);
             }
             // A player waiting for a teleport destination cannot dig there yet.

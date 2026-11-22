@@ -213,7 +213,8 @@ impl Game<'_> {
         for i in 0..self.mobs.len() {
             let mob = &self.mobs[i];
             let id = mob.id;
-            let told_alone = alone_any
+            let told_alone = round.pre()
+                && alone_any
                 && if self
                     .remote
                     .as_ref()
@@ -366,7 +367,9 @@ impl Game<'_> {
                 (alone_any && round.alone_mob(&self.mobs[i].kind))
                     .then(|| TickKind::Mob(self.mobs[i].kind.clone()))
             };
-            if let Some(kind) = &alone {
+            if let Some(kind) = &alone
+                && round.pre()
+            {
                 let stamp = self.mobs.stamp();
                 let ticks = self.native_tick_pre_one(&mut round, id, kind.id());
                 if self.mobs.stamp() != stamp {
@@ -638,7 +641,9 @@ impl Game<'_> {
                 self.remote_entity_section_step(section_id, section_from, section_to);
             }
             // Its own Post, right after its turn.
-            if let Some(kind) = &alone {
+            if let Some(kind) = &alone
+                && round.post()
+            {
                 let stamp = self.mobs.stamp();
                 self.native_tick_post_one(&round, id, kind.id());
                 if self.mobs.stamp() != stamp {
