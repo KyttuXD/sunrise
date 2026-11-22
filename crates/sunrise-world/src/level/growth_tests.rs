@@ -992,3 +992,90 @@ fn the_crop_hook_decides_growth_and_keeps_vanillas_rolls() {
     assert_eq!(w.level.crop_asked, [(origin.offset(0, 1, 0), true)]);
     assert_eq!(w.level.block_state(origin), w.id("cactus", &[("age", "0")]));
 }
+
+#[test]
+#[ignore = "daily"]
+fn live_feature_and_frogspawn_on_place_share_level_random_even_on_error() {
+    use crate::worldgen::{
+        feature_graph::FeatureDefinition,
+        mod_features::{
+            ModFeature, ModFeatureConfig, ModFeatureEntry, ModFeatureRandom, ModFeatureTarget,
+            ModFeatureType,
+        },
+    };
+    use std::{
+        any::Any,
+        sync::{Arc, Mutex},
+    };
+
+    struct PlaceFrogspawn {
+        state: BlockStateId,
+        fail: bool,
+        draws: Mutex<Vec<i32>>,
+    }
+    impl ModFeatureType for PlaceFrogspawn {
+        fn prepare_config(&self, _: &serde_json::Value) -> Result<ModFeatureConfig, String> {
+            Ok(Arc::new(()))
+        }
+        fn place(
+            &self,
+            world: &mut dyn ModFeatureTarget,
+            random: &mut dyn ModFeatureRandom,
+            origin: [i32; 3],
+            _: &(dyn Any + Send + Sync),
+        ) -> Result<bool, String> {
+            let before = random.int_unbounded();
+            assert!(world.set_block(origin, self.state, flags::UPDATE_CLIENTS));
+            self.draws
+                .lock()
+                .unwrap()
+                .extend([before, random.int_unbounded()]);
+            if self.fail {
+                Err("failed after placement".into())
+            } else {
+                Ok(true)
+            }
+        }
+    }
+
+    let f = fixture().expect("prepared worldgen resources");
+    for fail in [false, true] {
+        let mut world = World::new(f, 736);
+        let state = world.id("frogspawn", &[]);
+        let place = Arc::new(PlaceFrogspawn {
+            state,
+            fail,
+            draws: Mutex::default(),
+        });
+        let feature = FeatureDefinition::Mod(Box::new(ModFeature {
+            id: "test:place_frogspawn".into(),
+            entry: Arc::new(ModFeatureEntry {
+                mod_id: "test",
+                ty: place.clone(),
+            }),
+            config: Arc::new(()),
+        }));
+        let pos = BlockPos::new(0, 65, 0);
+        let mut expected = LegacyRandom::new(736);
+        let first = expected.next_int();
+        let delay = expected.next_int_bound(8400).unwrap() + 3600;
+        let after = expected.next_int();
+        assert_eq!(
+            f.behaviours
+                .sim(&mut world.level, &mut world.ticks)
+                .place_inline_feature(&feature, pos),
+            !fail
+        );
+        assert_eq!(world.level.block_state(pos), state);
+        assert_eq!(*place.draws.lock().unwrap(), [first, after]);
+        let tick = world
+            .ticks
+            .blocks
+            .chunk(ChunkPos::new(0, 0))
+            .unwrap()
+            .peek()
+            .unwrap();
+        assert_eq!((tick.pos, tick.trigger_tick), (pos, i64::from(delay)));
+        assert_eq!(world.level.random.next_int(), expected.next_int());
+    }
+}

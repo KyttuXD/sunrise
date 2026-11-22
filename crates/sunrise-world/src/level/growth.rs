@@ -4,7 +4,11 @@
 use super::{Behaviours, LevelAccess, LevelEvent, Sim, feature_world::LevelFeatureWorld, flags};
 use crate::{registry::BlockStateId, worldgen::live::LiveFeatures};
 use std::sync::{Arc, RwLock};
-use sunrise_core::{position::BlockPos, random::RandomSource};
+use sunrise_core::{
+    nbt::Compound,
+    position::BlockPos,
+    random::{LegacyRandom, RandomSource},
+};
 
 /// Runtime extensions of [`Behaviours`] that depend on the worldgen bundle.
 #[derive(Default)]
@@ -64,13 +68,7 @@ impl Behaviours {
             return (false, Vec::new());
         };
         let mut sim = self.sim(level, ticks);
-        let mut random = sim.random().clone();
-        let entities = {
-            let mut world = LevelFeatureWorld {
-                sim: &mut sim,
-                features: &features,
-                entities: Vec::new(),
-            };
+        let ((), entities) = sim.with_live_feature_world(&features, |world, random| {
             let unbounded =
                 sunrise_core::bounding_box::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
             for piece in &jigsaw.pieces {
@@ -81,9 +79,9 @@ impl Behaviours {
                     Ok(features.place_placed(name, w, r, p).unwrap_or(false))
                 };
                 if let Err(e) = piece.place(
-                    &mut world,
+                    world,
                     &jigsaw.resources,
-                    &mut random,
+                    random,
                     unbounded,
                     reference,
                     keep_jigsaws,
@@ -92,9 +90,7 @@ impl Behaviours {
                     eprintln!("Sunrise: placing a jigsaw piece failed: {e}");
                 }
             }
-            world.entities
-        };
-        *sim.random() = random;
+        });
         (true, entities)
     }
     /// `/place structure`: `PlaceCommand.placeStructure` after the start is
@@ -125,14 +121,8 @@ impl Behaviours {
         // maxX, getMaxY() + 1, maxZ), the level's whole height of the chunk
         // (`max_y` is exclusive here, so the top layer is `max_y - 1`).
         let (low_y, high_y) = (sim.level.min_y(), sim.level.max_y() - 1);
-        let mut random = sim.random().clone();
-        let mut placed = true;
-        let entities = {
-            let mut world = LevelFeatureWorld {
-                sim: &mut sim,
-                features: &features,
-                entities: Vec::new(),
-            };
+        sim.with_live_feature_world(&features, |world, random| {
+            let mut placed = true;
             let mut place_feature = |w: &mut LevelFeatureWorld<'_, '_, L>,
                                      r: &mut sunrise_core::random::LegacyRandom,
                                      name: &str,
@@ -147,10 +137,10 @@ impl Behaviours {
                     );
                     if crate::worldgen::structure::start::place_in_chunk(
                         start,
-                        &mut world,
+                        world,
                         resources,
                         &blocks,
-                        &mut random,
+                        random,
                         chunk_box,
                         &mut place_feature,
                     )
@@ -160,10 +150,8 @@ impl Behaviours {
                     }
                 }
             }
-            world.entities
-        };
-        *sim.random() = random;
-        (placed, entities)
+            placed
+        })
     }
 }
 
@@ -290,24 +278,35 @@ fn weighted<R: RandomSource>(
 }
 
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
-    /// `ConfiguredFeature.place(level, generator, level.random, pos)`. The
-    /// feature draws from a copy of the level random that replaces it after.
+    /// `PlaceCommand.placeFeature` lends the level random itself. Block side effects (e.g.
+    /// `FrogspawnBlock.onPlace`) draw from that same stream in between the feature's draws.
+    fn with_live_feature_world<T>(
+        &mut self,
+        features: &LiveFeatures,
+        place: impl FnOnce(&mut LevelFeatureWorld<'_, '_, L>, &mut LegacyRandom) -> T,
+    ) -> (T, Vec<Compound>) {
+        let mut random = self.random().share();
+        let mut world = LevelFeatureWorld {
+            sim: self,
+            features,
+            entities: Vec::new(),
+        };
+        let result = place(&mut world, &mut random);
+        let entities = world.entities;
+        drop(random);
+        self.random().reclaim();
+        (result, entities)
+    }
+
+    /// `ConfiguredFeature.place(level, generator, level.random, pos)`.
     pub(crate) fn place_configured_feature(&mut self, name: &str, pos: BlockPos) -> bool {
-        let b = self.b;
-        let Some(features) = b.live_features() else {
+        let Some(features) = self.b.live_features() else {
             return false;
         };
-        let mut random = self.random().clone();
-        let placed = {
-            let mut world = LevelFeatureWorld {
-                sim: self,
-                features: &features,
-                entities: Vec::new(),
-            };
-            features.place_configured(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
-        };
-        *self.random() = random;
-        placed
+        self.with_live_feature_world(&features, |world, random| {
+            features.place_configured(name, world, random, [pos.x, pos.y, pos.z])
+        })
+        .0
     }
     /// `Feature.place(level, generator, level.random, pos)` for an inline
     /// feature already decoded, with the same level random as a named one.
@@ -316,27 +315,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         feature: &crate::worldgen::feature_graph::FeatureDefinition,
         pos: BlockPos,
     ) -> bool {
-        let b = self.b;
-        let Some(features) = b.live_features() else {
+        let Some(features) = self.b.live_features() else {
             return false;
         };
-        let mut random = self.random().clone();
-        let placed = {
-            let mut world = LevelFeatureWorld {
-                sim: self,
-                features: &features,
-                entities: Vec::new(),
-            };
+        self.with_live_feature_world(&features, |world, random| {
             features.place_definition(
                 feature,
                 "an inline feature",
-                &mut world,
-                &mut random,
+                world,
+                random,
                 [pos.x, pos.y, pos.z],
             )
-        };
-        *self.random() = random;
-        placed
+        })
+        .0
     }
     /// `PlacedFeature.place(level, generator, level.random, pos)`.
     pub(crate) fn place_placed_feature(
@@ -344,21 +335,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         name: &str,
         pos: BlockPos,
     ) -> Result<bool, crate::worldgen::placement::PlacementQueryError> {
-        let b = self.b;
-        let Some(features) = b.live_features() else {
+        let Some(features) = self.b.live_features() else {
             return Ok(false);
         };
-        let mut random = self.random().clone();
-        let placed = {
-            let mut world = LevelFeatureWorld {
-                sim: self,
-                features: &features,
-                entities: Vec::new(),
-            };
-            features.place_placed(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
-        };
-        *self.random() = random;
-        placed
+        self.with_live_feature_world(&features, |world, random| {
+            features.place_placed(name, world, random, [pos.x, pos.y, pos.z])
+        })
+        .0
     }
     pub(crate) fn feature_exists(&self, name: &str) -> bool {
         self.b
