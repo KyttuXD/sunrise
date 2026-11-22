@@ -23,6 +23,7 @@ fn installed_biome_sources() -> ModBiomeSources {
     mod_api::__private::biome_source_declarations()
         .into_iter()
         .map(|(id, biomes, source)| {
+            let biomes = biomes.into_iter().map(|biome| biome.to_string()).collect();
             (
                 id,
                 Arc::new(Adapter { biomes, source }) as Arc<dyn ModBiomeSource>,
@@ -42,13 +43,16 @@ pub(in crate::game) fn install() {
 mod tests {
     use super::*;
     use crate::game::api_values::install_parts;
-    use mod_api::{DimensionSettings, Hooks, ModEntry, Registrar, RegistrationContext};
+    use mod_api::{BiomeKey, DimensionSettings, Hooks, ModEntry, Registrar, RegistrationContext};
 
     /// Plains and desert in stripes one quart cell wide, shifted by the seed.
     struct Stripes;
     impl BiomeSource for Stripes {
-        fn possible_biomes(&self) -> Vec<String> {
-            vec!["minecraft:plains".into(), "minecraft:desert".into()]
+        fn possible_biomes(&self) -> Vec<BiomeKey> {
+            vec![
+                BiomeKey::parse("minecraft:plains").unwrap(),
+                BiomeKey::parse("minecraft:desert").unwrap(),
+            ]
         }
         fn noise_biome(&self, [x, _, _]: [i32; 3], seed: i64) -> u16 {
             ((i64::from(x) + seed) & 1) as u16
@@ -63,7 +67,7 @@ mod tests {
         static LISTED: AtomicUsize = AtomicUsize::new(0);
         struct Counted;
         impl BiomeSource for Counted {
-            fn possible_biomes(&self) -> Vec<String> {
+            fn possible_biomes(&self) -> Vec<BiomeKey> {
                 LISTED.fetch_add(1, Ordering::Relaxed);
                 Stripes.possible_biomes()
             }
@@ -98,7 +102,7 @@ mod tests {
     fn invalid_biome_sources_refuse_registration() {
         struct Empty;
         impl BiomeSource for Empty {
-            fn possible_biomes(&self) -> Vec<String> {
+            fn possible_biomes(&self) -> Vec<BiomeKey> {
                 Vec::new()
             }
             fn noise_biome(&self, _: [i32; 3], _: i64) -> u16 {

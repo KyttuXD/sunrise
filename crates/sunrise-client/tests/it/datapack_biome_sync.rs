@@ -51,7 +51,7 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let _scratch = Scratch(root.clone());
     let base = write_base(&root);
     let pack: Value = serde_json::from_str(r##"{"effects":{"grass_color":"#123456"}}"##).unwrap();
-    let world = base.with_packs([("minecraft:tundra_x", &pack)]);
+    let world = base.with_packs([("minecraft:tundra_x", &pack)]).unwrap();
     let defaults = sunrise_world::item_defaults::read(&root).unwrap();
     let items = sunrise_client::items::Items::catalog(
         &root,
@@ -97,7 +97,9 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         .iter()
         .map(|e| (e.id.clone(), e.data.clone()))
         .collect();
-    let client = client_biomes(&base, &received).expect("the pack's biome is new to the client");
+    let client = client_biomes(&base, &received)
+        .unwrap()
+        .expect("the pack's biome is new to the client");
     let id = client.id("minecraft:tundra_x");
     assert_eq!(id, world.id("minecraft:tundra_x"));
     assert_eq!(client.get(id).grass, 0x123456);
@@ -113,7 +115,7 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         .filter(|(n, _)| base.contains(n))
         .map(|(n, _)| (n.clone(), Some(own.clone())))
         .collect();
-    assert!(client_biomes(&base, &same).is_none());
+    assert!(client_biomes(&base, &same).unwrap().is_none());
 
     // Server data overrides even a locally known biome.
     let other: Value = serde_json::from_str(r##"{"temperature":1.75,"downfall":0.125,"has_precipitation":false,"effects":{"grass_color":"#654321"}}"##).unwrap();
@@ -123,7 +125,7 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         .filter(|(n, _)| base.contains(n))
         .map(|(n, _)| (n.clone(), Some(other.clone())))
         .collect();
-    let replaced = client_biomes(&base, &known).unwrap();
+    let replaced = client_biomes(&base, &known).unwrap().unwrap();
     let climate = replaced.properties("minecraft:plains").unwrap();
     assert_eq!(climate.temperature, 1.75);
     assert_eq!(climate.downfall, 0.125);
@@ -132,7 +134,7 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     // Replacements also survive alongside newly added biomes.
     let mut mixed = known.clone();
     mixed.extend(received.iter().filter(|(n, _)| !base.contains(n)).cloned());
-    let client = client_biomes(&base, &mixed).unwrap();
+    let client = client_biomes(&base, &mixed).unwrap().unwrap();
     let plains = base.get(base.id("minecraft:plains")).grass;
     assert_ne!(plains, 0x654321);
     assert_eq!(client.get(client.id("minecraft:plains")).grass, 0x654321);
@@ -152,7 +154,9 @@ fn a_server_replacement_of_a_known_biome_keeps_its_id_and_changes_its_data() {
         ("minecraft:plains".to_owned(), Some(json_to_tag(&replaced))),
         ("minecraft:river".to_owned(), None),
     ];
-    let client = client_biomes(&base, &received).expect("plains differs from the client's file");
+    let client = client_biomes(&base, &received)
+        .unwrap()
+        .expect("plains differs from the client's file");
     assert_eq!(client.id("minecraft:plains"), base.id("minecraft:plains"));
     let plains = client.get(client.id("minecraft:plains"));
     assert_eq!(plains.water, 0x112233);
@@ -217,7 +221,9 @@ fn a_biome_the_mods_modifiers_changed_is_sent_to_a_client_that_knows_the_vanilla
         .iter()
         .map(|e| (e.id.clone(), e.data.clone()))
         .collect();
-    let client = client_biomes(&base, &received).expect("plains differs");
+    let client = client_biomes(&base, &received)
+        .unwrap()
+        .expect("plains differs");
     assert_eq!(client.get(client.id("minecraft:plains")).grass, 0x112233);
 }
 

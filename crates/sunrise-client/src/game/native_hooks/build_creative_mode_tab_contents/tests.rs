@@ -267,7 +267,7 @@ fn replace_client_definition(game: &mut Game<'_>, max_level: i32) {
             ))),
         )],
     );
-    game.set_registries(Arc::new(registries));
+    game.set_registries(Arc::new(registries)).unwrap();
 }
 
 fn book_level(snapshot: &CreativeModeTabs) -> i32 {

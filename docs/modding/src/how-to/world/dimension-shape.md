@@ -320,8 +320,9 @@ startup, and name it from a dimension's `mod_biome_source`, or from a data pack'
 {{#include ../../../examples/src/worldgen.rs:biome_source}}
 ```
 
-`possible_biomes` lists the biome ids the source places, vanilla's, a data pack's or the mod's own;
-it is asked once, at registration. `noise_biome` answers for one quart cell (a block position >> 2,
+`possible_biomes` lists the registered `BiomeKey`s the source places, vanilla's, a data pack's
+or the mod's own; it is asked once, at registration. `noise_biome` answers for one quart cell
+(a block position >> 2,
 `[x, y, z]`) of a world with `seed`, with an index into that list; an index past the end wraps
 around it. It runs on the worldgen worker threads for every 4x4x4 cell of every chunk generated, with
 no `Host`, so it is `Send + Sync`, keeps no mutable state and does not allocate. The same seed and

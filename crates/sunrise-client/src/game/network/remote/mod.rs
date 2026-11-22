@@ -1131,7 +1131,7 @@ impl Game<'_> {
             }
             // Per-position connected-texture groups synced for the window's chunks.
             C::CustomPayload(p) if p.channel == sunrise_protocol::connection_groups::CHANNEL => {
-                self.refuse_play_payload("connection groups: payload outside its bundle")?;
+                self.refuse_remote_input("connection groups: payload outside its bundle")?;
             }
             // Full-width data slots for the open blockless mod menu.
             C::CustomPayload(p) if p.channel == sunrise_protocol::menu_extra::DATA_CHANNEL => {

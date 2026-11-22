@@ -12,12 +12,15 @@ Request existing entries inside `Hooks::register` with `r.block_key(id)`,
 - Block, item, effect, fluid, block-entity-type and dimension keys return a borrowed canonical
   name (`Option<&str>`) from `key.id(host)`. Compare with `Some("minecraft:stone")`; `None`
   means the host cannot name the slot. Use `.map(str::to_owned)` only to keep the text after
-  the host borrow. Biome keys [borrow from the current world registry](../how-to/items/data-maps.md)
-  and return a `Result` instead.
+  the host borrow.
 
-Keys identify entries for the running mod load, not persistent data. Persist canonical identifiers
+Slot keys identify entries for the running mod load, not persistent data. Persist canonical identifiers
 and property strings rather than registration slots or state ordinals. Reload preserves key identity;
 world numeric mappings and tag membership are separate reloadable data.
+
+`BiomeKey` instead wraps a persistent `Identifier` (`ResourceKey<Biome>`). Borrow it or clone it to
+keep it; it is not `Copy`. Resolve it to a scoped, generation-bound `BiomeView<'_>` (`Holder<Biome>`)
+through [`host.biome(id)` or `key.view(host)`](../how-to/items/data-maps.md).
 
 ## Item registry numbers
 

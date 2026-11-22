@@ -636,7 +636,7 @@ mod tests {
                 4,
                 Some(PhaseContext::Registration),
             ),
-            ("section_visibility", 2, None),
+            ("section_visibility", 3, None),
             ("movement_input_update", 1, None),
         ] {
             let hook = points.iter().find(|hook| hook.name == name).unwrap();

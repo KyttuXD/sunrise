@@ -422,6 +422,12 @@ impl Game<'_> {
         } else {
             received.as_deref()
         };
+        let biomes = self
+            .world_biomes
+            .as_ref()
+            .unwrap_or_else(|| self.res.biomes());
+        // Data maps must resolve against the same loaded biome keys as the world's
+        // registered keys, including when that table is empty, not the command export.
         let registries = native_data_maps::WorldRegistries::new(
             self.ui
                 .registries
@@ -432,7 +438,8 @@ impl Game<'_> {
             &items,
             root,
             &overlay,
-        );
+        )
+        .with_biome_keys(biomes.registered_keys());
         let causes_suffocation = items
             .block_tags
             .get("minecraft:causes_suffocation")
@@ -485,11 +492,7 @@ impl Game<'_> {
             |registry, id| match registry {
                 "minecraft:item" => items.items.contains_key(id),
                 "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
-                "minecraft:worldgen/biome" => self
-                    .world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .contains(id),
+                "minecraft:worldgen/biome" => biomes.contains(id),
                 "minecraft:entity_type" => {
                     self.res.mob_types().contains_key(id)
                         || items
@@ -509,10 +512,7 @@ impl Game<'_> {
             .with_builtins(builtin)
             .with_biome_keys(mod_api::__private::BiomeKeys::new(
                 next_biome_keys_session(),
-                self.world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .registry_order(),
+                biomes.registered_keys().iter().cloned(),
             ));
         drop(registries);
         // The API's key order is live state as well: do not change it for a

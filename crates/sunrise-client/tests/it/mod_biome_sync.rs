@@ -123,7 +123,9 @@ fn mod_biomes_follow_the_builtin_ones_and_leave_their_ids_alone() {
     assert!(with.pack_file("minecraft:plains").is_none());
     // A world's packs go over the same table: a new pack biome joins after the mods'.
     let pack: serde_json::Value = serde_json::from_str("{}").unwrap();
-    let world = with.with_packs([("pack:late", &pack), ("zinc:foo", &pack)]);
+    let world = with
+        .with_packs([("pack:late", &pack), ("zinc:foo", &pack)])
+        .unwrap();
     assert_eq!(world.id("zinc:foo"), 2);
     assert!(world.get(2).ambient_particles.is_empty());
     assert_eq!(world.id("pack:late"), 4);
@@ -160,7 +162,9 @@ fn a_server_sends_mod_biomes_with_data_to_a_client_that_has_the_vanilla_pack() {
         .iter()
         .map(|e| (e.id.clone(), e.data.clone()))
         .collect();
-    let table = client_biomes(&load(&client), &received).expect("the mods' biomes are new");
+    let table = client_biomes(&load(&client), &received)
+        .unwrap()
+        .expect("the mods' biomes are new");
     assert_eq!(table.id("minecraft:plains"), 0);
     assert_eq!(table.id("zinc:foo"), 2);
     assert_eq!(table.get(2).grass, 0x445566);
@@ -174,7 +178,7 @@ fn a_server_sends_mod_biomes_with_data_to_a_client_that_has_the_vanilla_pack() {
     let modded = std::env::temp_dir().join(format!("sunrise-mod-sync-m-{}", std::process::id()));
     let _scratch = Scratch(modded.clone());
     write_root(&modded, Some(BUNDLE));
-    assert!(client_biomes(&load(&modded), &received).is_none());
+    assert!(client_biomes(&load(&modded), &received).unwrap().is_none());
 }
 
 #[test]

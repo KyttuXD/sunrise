@@ -80,7 +80,7 @@ pub const BIOME_REGISTRY: &str = "minecraft:worldgen/biome";
 pub fn client_biomes(
     known: &crate::biome::Biomes,
     registry: &[(String, Option<Tag>)],
-) -> Option<crate::biome::Biomes> {
+) -> crate::Result<Option<crate::biome::Biomes>> {
     let files: Vec<(&str, Value)> = registry
         .iter()
         .filter_map(|(name, data)| {
@@ -93,13 +93,14 @@ pub fn client_biomes(
         })
         .collect();
     if files.is_empty() {
-        return None;
+        return Ok(None);
     }
+    let table = known.with_packs(files.iter().map(|(n, v)| (*n, v)))?;
     log::info!(
         "Sunrise: the server has {} biomes the game lacks or changes",
         files.len()
     );
-    Some(known.with_packs(files.iter().map(|(n, v)| (*n, v))))
+    Ok(Some(table))
 }
 /// KnownPack.vanilla("core") for this version.
 pub const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", sunrise_protocol::GAME_VERSION);

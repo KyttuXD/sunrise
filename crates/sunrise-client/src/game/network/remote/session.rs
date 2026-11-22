@@ -676,8 +676,8 @@ impl Game<'_> {
         self.stats = Default::default();
         Ok(())
     }
-    /// Refuse a bad Play payload with the normal connection-error screen.
-    pub(in crate::game) fn refuse_play_payload(
+    /// Refuse invalid server data with the normal connection-error screen.
+    pub(in crate::game) fn refuse_remote_input(
         &mut self,
         error: impl std::fmt::Display,
     ) -> Result<()> {

@@ -26,7 +26,7 @@ same pieces, even when workers generate neighbouring chunks concurrently.
 | `seed`, `chunk`, `sea_level`, `min_y`, `max_y` | World and chunk coordinates and bounds |
 | `random` | `&mut dyn RandomSource` ([Randomness](../../concepts/randomness.md)) seeded with vanilla's `setLargeFeatureSeed` for the chunk |
 | `base_height`, `base_columns`, `noise_column` | Height and base-column queries |
-| `noise_biome`, `column_has_valid_biome` | Opaque biome identities and the structure's valid-biome test |
+| `noise_biome`, `column_has_valid_biome` | Registered `BiomeKey` identities and the structure's valid-biome test |
 | `metadata` | Borrowed immutable block metadata |
 | `config` | The structure JSON converted to a shared `Arc<Tag>` |
 

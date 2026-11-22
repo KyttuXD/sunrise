@@ -211,8 +211,9 @@ pub trait ReloadContext:
     fn enchantment_key_id(&self, _key: crate::EnchantmentKey) -> Option<crate::RegistryName> {
         None
     }
-    /// Borrow the canonical biome id for `key`.
-    fn biome_key_id(&self, _key: crate::BiomeKey) -> Result<&str, crate::BiomeKeyError> {
+    /// Borrow the canonical biome id for `key` from the published biome registry.
+    /// Returns [`crate::BiomeKeyError::UnknownBiome`] if the key is not registered there.
+    fn biome_key_id(&self, _key: &crate::BiomeKey) -> Result<&str, crate::BiomeKeyError> {
         Err(crate::BiomeKeyError::Unavailable)
     }
     /// Borrow the canonical dimension id for `key`.

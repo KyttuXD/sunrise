@@ -32,7 +32,7 @@ fn client_handles_reach_a_custom_level() {
                 Some(sunrise_client::scoreboard::json_to_tag(&json)),
             )],
         );
-        game.set_registries(Arc::new(registries));
+        game.set_registries(Arc::new(registries)).unwrap();
         let spawn = SpawnInfo {
             dimension_type: 0,
             dimension: "test:pocket".into(),
@@ -68,7 +68,7 @@ fn client_handles_reach_a_custom_level() {
             .get_mut("minecraft:dimension_type")
             .unwrap()[0]
             .0 = "test:renamed".into();
-        game.set_registries(Arc::new(renamed));
+        game.set_registries(Arc::new(renamed)).unwrap();
         game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
         assert_eq!(game.dimension_type().id, "test:renamed");
         // Reject invalid server numbers and enums without failing the join.
@@ -92,7 +92,7 @@ fn client_handles_reach_a_custom_level() {
                     Some(sunrise_client::scoreboard::json_to_tag(&invalid)),
                 )],
             );
-            game.set_registries(Arc::new(registries));
+            game.set_registries(Arc::new(registries)).unwrap();
             game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(game.dimension_type().coordinate_scale, 8.0, "{field}");
             assert!(game.dimension_type().fast_lava);
@@ -120,7 +120,7 @@ fn client_handles_reach_a_custom_level() {
                     Some(sunrise_client::scoreboard::json_to_tag(&boundary)),
                 )],
             );
-            game.set_registries(Arc::new(registries));
+            game.set_registries(Arc::new(registries)).unwrap();
             game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(
                 game.dimension_type().coordinate_scale,
@@ -143,7 +143,7 @@ fn client_handles_reach_a_custom_level() {
                     Some(sunrise_client::scoreboard::json_to_tag(&legal)),
                 )],
             );
-            game.set_registries(Arc::new(registries));
+            game.set_registries(Arc::new(registries)).unwrap();
             game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             assert_eq!(game.dimension_type().coordinate_scale, 4.0);
             assert_eq!(game.dimension_type().ambient_light, ambient);
@@ -328,7 +328,8 @@ fn client_handle_reads_answer_from_the_clients_copy() {
                 vec![("minecraft:overworld".into(), None)],
             );
             Arc::new(registries)
-        });
+        })
+        .unwrap();
         game.handle_packet(C::SetTime(play::SetTime {
             game_time: 100,
             clocks: vec![play::ClockState {

@@ -45,6 +45,8 @@ pub struct GeneratorData {
     pub(super) conditions: MaterialConditionRegistry,
     pub(super) source_catalog: BiomeSourceCatalog,
     pub(super) biome_names: Vec<Arc<str>>,
+    /// The validated registry key at each resolver slot, in the same order as `biome_names`.
+    pub(super) biome_keys: Vec<mod_api::BiomeKey>,
     pub(super) biome_ids: BTreeMap<String, BiomeId>,
     pub(super) biome_json: Vec<String>,
     pub(super) temperatures: Vec<BiomeTemperatureSettings>,
@@ -176,6 +178,14 @@ impl GeneratorData {
         ov: &WorldgenOverrides,
     ) -> Result<Arc<Self>, GeneratorError> {
         let mut warnings = Vec::new();
+        let biomes = read_bundle(dir, ov, "biomes")?;
+        let biome_keys = biomes
+            .keys()
+            .map(|name| {
+                mod_api::__private::parse_registered_biome_key(name)
+                    .map_err(|error| resource(format!("biome registry entry {name:?}: {error}")))
+            })
+            .collect::<Result<_, _>>()?;
         let flags: Vec<(bool, bool)> =
             serde_json::from_str(&fs::read_to_string(dir.join("block_flags.json"))?)?;
         if flags.len() != registry.len() {
@@ -260,7 +270,6 @@ impl GeneratorData {
             })
             .collect::<Vec<_>>();
         let integers = super::super::block_feature::integer_properties(registry);
-        let biomes = read_bundle(dir, ov, "biomes")?;
         let biome_tags = build_tags(
             &read_bundle(dir, ov, "biome_tags")?,
             ov,
@@ -363,6 +372,7 @@ impl GeneratorData {
             conditions,
             source_catalog,
             biome_names,
+            biome_keys,
             biome_ids,
             biome_json,
             temperatures,

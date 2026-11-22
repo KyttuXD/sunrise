@@ -113,8 +113,8 @@ impl ReloadContext for Game<'_> {
     fn enchantment_key_id(&self, key: EnchantmentKey) -> Option<RegistryName> {
         <Self as prelude::KeysBackend>::enchantment_key_id(self, key)
     }
-    fn biome_key_id(&self, key: BiomeKey) -> Result<&str, BiomeKeyError> {
-        <Self as prelude::KeysBackend>::biome_key_id(self, key)
+    fn biome_key_id(&self, key: &BiomeKey) -> Result<&str, BiomeKeyError> {
+        <Self as prelude::KeysBackend>::biome_view(self, key).map(|view| view.id())
     }
     fn dimension_key_id(&self, key: DimensionKey) -> Option<&str> {
         <Self as prelude::LevelDimensionBackend>::dimension_key_id(self, key)

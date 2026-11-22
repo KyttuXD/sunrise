@@ -13,7 +13,7 @@
 //! game's own: the set's spacing, the structure's biomes and its
 //! `terrain_adaptation`, and the pieces ride the one piece mechanism the game
 //! has, next to a fortress piece's.
-use crate::{BlockKey, BlockMetadata, BlockState, RandomSource};
+use crate::{BiomeKey, BlockKey, BlockMetadata, BlockState, RandomSource};
 use std::sync::Arc;
 pub use sunrise_core::position::ChunkPos;
 use sunrise_core::{
@@ -212,20 +212,6 @@ pub enum HeightmapType {
     MotionBlockingNoLeaves,
 }
 
-/// An opaque, process-local biome identity. Do not persist it or perform arithmetic on it.
-#[derive(
-    sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
-#[non_exhaustive]
-pub struct BiomeId(pub(crate) u32);
-
-/// Construct the game's biome identity at the hidden integration boundary.
-// hidden: only the game's adapter builds a biome identity; mods receive one from the context.
-#[doc(hidden)]
-pub fn biome_id(index: u32) -> BiomeId {
-    BiomeId(index)
-}
-
 /// The start context a type's
 /// [`find_generation_point`](StructureType::find_generation_point) sees:
 /// vanilla's `GenerationContext` over one chunk, on the worker thread;
@@ -254,8 +240,9 @@ pub trait GenerationContext {
     fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>>;
     /// `ChunkGenerator.getBaseColumn`'s blocks: the noise column at (x, z).
     fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn;
-    /// Noise biome at a quart position (the resolver's, no zoom).
-    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
+    /// Noise biome at a quart position (no zoom), as the registered [`BiomeKey`] from the
+    /// same resolver used by the structure's valid-biome checks.
+    fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeKey;
     /// `GenerationContext.validBiome` over inclusive block Y bounds of the
     /// column at (x, z): whether any biome the structure names occurs there.
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool;

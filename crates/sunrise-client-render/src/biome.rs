@@ -2,6 +2,7 @@
 //! (`Biome.getGrassColor`/`getFoliageColor`/..., `BlockTintSources`).
 use crate::Result;
 pub use mod_api::world::biome::{BiomeColors, SpawnEntry};
+use mod_api::{__private::parse_registered_biome_key, BiomeKey};
 use serde_json::Value;
 use std::{
     borrow::Cow,
@@ -163,6 +164,9 @@ impl BiomeInfo {
 pub struct Biomes {
     pub list: Vec<BiomeInfo>,
     pub index: HashMap<String, u16>,
+    /// The registered keys in slot order, excluding save placeholders. The mesher shares this
+    /// immutable table with section-visibility snapshots, which keep only the slots they read.
+    registered_keys: Arc<[BiomeKey]>,
     info_noise: SimplexNoise,
     colormaps: Arc<Colormaps>,
     /// The built-in biomes, the first of `list` unless packs replaced them.
@@ -390,10 +394,18 @@ impl Biomes {
             .enumerate()
             .map(|(i, b)| (b.name.clone(), i as u16))
             .collect();
+        let registered_keys = list
+            .iter()
+            .map(|biome| {
+                parse_registered_biome_key(&biome.name)
+                    .map_err(|error| format!("biome registry entry {:?}: {error}", biome.name))
+            })
+            .collect::<std::result::Result<_, _>>()?;
         Ok(Self {
             builtin: Arc::new(list.clone()),
             list,
             index,
+            registered_keys,
             colormaps: Arc::new(maps),
             packs: BTreeMap::new(),
             files: Arc::new(files_by_name),
@@ -407,25 +419,34 @@ impl Biomes {
     /// for a built-in biome replaces it, keeping its id, and new biomes join
     /// after the built-in ones, in registry order. Starts from the built-in
     /// table whatever packs `self` has.
-    pub fn with_packs<'a>(&self, files: impl IntoIterator<Item = (&'a str, &'a Value)>) -> Self {
+    pub fn with_packs<'a>(
+        &self,
+        files: impl IntoIterator<Item = (&'a str, &'a Value)>,
+    ) -> Result<Self> {
         let mut out = self.builtin_only();
         out.placeholders = Arc::default();
         out.exhausted = Arc::default();
+        let mut keys = out.registered_keys.to_vec();
         let mut files: Vec<(&str, &Value)> = files.into_iter().collect();
         files.sort_by(|a, b| identifier_order(a.0, b.0));
         for (name, json) in files {
             let info = BiomeInfo::from_json(name.to_owned(), json, &out.colormaps);
-            match out.index.get(name) {
-                Some(&id) => out.list[usize::from(id)] = info,
-                None if out.list.len() < usize::from(u16::MAX) => {
-                    out.index.insert(name.to_owned(), out.list.len() as u16);
-                    out.list.push(info);
+            if let Some(&id) = out.index.get(name) {
+                out.list[usize::from(id)] = info;
+            } else {
+                let key = parse_registered_biome_key(name)
+                    .map_err(|error| format!("biome registry entry {name:?}: {error}"))?;
+                if out.list.len() >= usize::from(u16::MAX) {
+                    continue;
                 }
-                None => continue,
+                out.index.insert(name.to_owned(), out.list.len() as u16);
+                out.list.push(info);
+                keys.push(key);
             }
             out.packs.insert(name.to_owned(), Arc::new(json.clone()));
         }
-        out
+        out.registered_keys = keys.into();
+        Ok(out)
     }
     /// The built-in biomes alone: this table without what packs gave it.
     pub fn builtin_only(&self) -> Self {
@@ -436,8 +457,13 @@ impl Biomes {
         out.list = self.builtin.to_vec();
         let builtin = out.list.len();
         out.index.retain(|_, id| usize::from(*id) < builtin);
+        out.registered_keys = Arc::from(&self.registered_keys[..builtin]);
         out.packs.clear();
         out
+    }
+    /// Registered biome identities by local slot, with no entry for a save placeholder.
+    pub fn registered_keys(&self) -> &Arc<[BiomeKey]> {
+        &self.registered_keys
     }
     /// The file a world's biome `name` came from, if a pack added or replaced it or a content
     /// mod added it (a mod's biome is no built-in: no client has its file).
@@ -748,30 +774,8 @@ mod pack_tests {
 
     /// A built-in table of `names` (no colormaps: sampled colours fall back).
     fn builtin(names: &[&str]) -> Biomes {
-        let maps = Colormaps {
-            grass: Vec::new(),
-            foliage: Vec::new(),
-            dry: Vec::new(),
-        };
-        let list: Vec<BiomeInfo> = names
-            .iter()
-            .map(|n| BiomeInfo::from_json((*n).to_owned(), &json!({}), &maps))
-            .collect();
-        Biomes {
-            builtin: Arc::new(list.clone()),
-            index: list
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (b.name.clone(), i as u16))
-                .collect(),
-            list,
-            info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
-            placeholders: Default::default(),
-            exhausted: Default::default(),
-            colormaps: Arc::new(maps),
-            packs: BTreeMap::new(),
-            files: Arc::default(),
-        }
+        let entries: Vec<_> = names.iter().map(|&name| (name, json!({}))).collect();
+        Biomes::from_jsons(&entries)
     }
 
     #[test]
@@ -796,7 +800,7 @@ mod pack_tests {
             ("minecraft:molten_peaks", &hot),
             ("minecraft:river", &red),
         ];
-        let world = base.with_packs(files);
+        let world = base.with_packs(files).unwrap();
         // The built-in ids stay; the river takes the pack's values.
         assert_eq!(world.id("minecraft:plains"), 1);
         assert_eq!(world.id("minecraft:river"), 2);
@@ -823,11 +827,23 @@ mod pack_tests {
             ]
         );
         // Another world starts again from the built-in biomes.
-        let other = world.with_packs([]);
+        let other = world.with_packs([]).unwrap();
         assert_eq!(other.list.len(), 3);
         assert!(!other.contains("minecraft:molten_peaks"));
         assert_eq!(other.get(2).water, 0x3F76E4);
         assert!(!other.has_packs());
+    }
+
+    #[test]
+    fn invalid_biome_identifier_refuses_a_pack_table() {
+        let base = builtin(&["minecraft:plains"]);
+        let biome = json!({});
+        let result = base.with_packs([("example:marsh", &biome), ("example:zEbra", &biome)]);
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "biome registry entry \"example:zEbra\": invalid biome identifier"
+        );
+        assert_eq!(base.registry_order(), ["minecraft:plains"]);
     }
 
     /// A column keeps the ids of the table it was decoded with. When a
@@ -837,7 +853,7 @@ mod pack_tests {
     #[test]
     fn an_id_past_the_table_names_plains() {
         let next = builtin(&["minecraft:meadow", "minecraft:plains", "minecraft:river"]);
-        let last = next.with_packs([("limbo:void", &json!({}))]);
+        let last = next.with_packs([("limbo:void", &json!({}))]).unwrap();
         let stale = last.id("limbo:void");
         assert_eq!((stale, last.name(stale)), (3, "limbo:void"));
         assert_eq!(next.name(stale), "minecraft:plains");
@@ -866,6 +882,10 @@ impl Biomes {
                 .enumerate()
                 .map(|(i, b)| (b.name.clone(), i as u16))
                 .collect(),
+            registered_keys: list
+                .iter()
+                .map(|b| parse_registered_biome_key(&b.name).unwrap())
+                .collect(),
             list,
             info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
             placeholders: Default::default(),
@@ -888,39 +908,15 @@ mod color_tests {
     use serde_json::json;
 
     fn biomes() -> Biomes {
-        let maps = Colormaps {
-            grass: Vec::new(),
-            foliage: Vec::new(),
-            dry: Vec::new(),
-        };
-        let effects = |grass: u32, modifier: &str| {
-            json!({"effects": {"grass_color": grass, "foliage_color": 0x112233,
+        let effects = |modifier: &str| {
+            json!({"effects": {"grass_color": 0x91BD59, "foliage_color": 0x112233,
                 "dry_foliage_color": 0x445566, "water_color": 0x3F76E4,
                 "grass_color_modifier": modifier}})
         };
-        let list = vec![
-            BiomeInfo::from_json("minecraft:plains".into(), &effects(0x91BD59, "none"), &maps),
-            BiomeInfo::from_json(
-                "minecraft:dark_forest".into(),
-                &effects(0x91BD59, "dark_forest"),
-                &maps,
-            ),
-        ];
-        Biomes {
-            builtin: Arc::new(list.clone()),
-            index: list
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (b.name.clone(), i as u16))
-                .collect(),
-            list,
-            info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
-            placeholders: Default::default(),
-            exhausted: Default::default(),
-            colormaps: Arc::new(maps),
-            packs: BTreeMap::new(),
-            files: Arc::default(),
-        }
+        Biomes::from_jsons(&[
+            ("minecraft:plains", effects("none")),
+            ("minecraft:dark_forest", effects("dark_forest")),
+        ])
     }
 
     #[test]
@@ -997,23 +993,7 @@ mod blend_tests {
     /// panic on `get`: before the fix, `list.len() - 1` underflowed.
     #[test]
     fn get_on_empty_biome_table_returns_default_instead_of_panicking() {
-        use std::sync::Arc;
-
-        let empty = Biomes {
-            builtin: Arc::new(Vec::new()),
-            files: Arc::default(),
-            index: HashMap::new(),
-            list: Vec::new(),
-            info_noise: SimplexNoise::with_skipped_offsets(&mut LegacyRandom::new(2345), true),
-            colormaps: Arc::new(Colormaps {
-                grass: Vec::new(),
-                foliage: Vec::new(),
-                dry: Vec::new(),
-            }),
-            packs: BTreeMap::new(),
-            placeholders: Default::default(),
-            exhausted: Default::default(),
-        };
+        let empty = Biomes::from_jsons(&[]);
         // Any id returns the shared default plains biome, no panic.
         let b = empty.get(0);
         assert_eq!(b.name, "minecraft:plains");
@@ -1306,7 +1286,7 @@ mod placeholder_tests {
         // A recoloured copy keeps the ids; a table rebuilt from packs does not share them.
         let recolored = biomes.with_colors(|_, c| c.water = 3).unwrap();
         assert_eq!(recolored.saved_name(gone), "gone_mod:highland");
-        let rebuilt = biomes.with_packs([]);
+        let rebuilt = biomes.with_packs([]).unwrap();
         assert_eq!(rebuilt.saved_name(gone), "minecraft:plains");
     }
 }

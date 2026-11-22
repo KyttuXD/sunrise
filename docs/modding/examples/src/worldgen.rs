@@ -42,16 +42,18 @@ pub mod terrain {
 
 pub mod biome_source {
     // ANCHOR: biome_source
-    use mod_api::{BiomeSource, DimensionSettings, Hooks, Registrar, RegistrationContext};
+    use mod_api::{
+        BiomeKey, BiomeSource, DimensionSettings, Hooks, Registrar, RegistrationContext,
+    };
 
     /// A random biome in each 5x5 square of quart cells (20 blocks wide).
     struct Chaos;
     impl BiomeSource for Chaos {
-        fn possible_biomes(&self) -> Vec<String> {
+        fn possible_biomes(&self) -> Vec<BiomeKey> {
             vec![
-                "minecraft:desert".into(),
-                "minecraft:jungle".into(),
-                "minecraft:snowy_plains".into(),
+                BiomeKey::parse("minecraft:desert").unwrap(),
+                BiomeKey::parse("minecraft:jungle").unwrap(),
+                BiomeKey::parse("minecraft:snowy_plains").unwrap(),
             ]
         }
         fn noise_biome(&self, [x, _, z]: [i32; 3], seed: i64) -> u16 {

@@ -190,7 +190,7 @@ impl Game<'_> {
         self.to_network_projecting(s, &|_| ())
     }
     // handle_command_suggestions: remote/commands.rs
-    pub(in crate::game) fn set_registries(&mut self, registries: Arc<Dynamic>) {
+    pub(in crate::game) fn set_registries(&mut self, registries: Arc<Dynamic>) -> Result<()> {
         let entries: Vec<(&str, serde_json::Value)> = registries
             .registries
             .get("minecraft:enchantment")
@@ -203,17 +203,12 @@ impl Game<'_> {
                 ))
             })
             .collect();
-        let enchantments = match self
+        let enchantments = self
             .stations()
             .enchantments
             .with_entries(entries.iter().map(|(n, v)| (*n, v)))
-        {
-            Ok(table) => table.map(Arc::new),
-            Err(error) => {
-                log::warn!("Sunrise: refused enchantment registry: {error}");
-                return;
-            }
-        };
+            .map_err(|error| format!("refused enchantment registry: {error}"))?
+            .map(Arc::new);
         // The server's biomes the game lacks (a world data pack's) join the
         // game's table, from the data it sent: colours, meshing and the
         // chunk format all go through that table. The window's own server
@@ -222,7 +217,10 @@ impl Game<'_> {
             let table = registries
                 .registries
                 .get(BIOME_REGISTRY)
-                .and_then(|list| client_biomes(self.res.biomes(), list))
+                .map(|list| client_biomes(self.res.biomes(), list))
+                .transpose()
+                .map_err(|error| format!("refused biome registry: {error}"))?
+                .flatten()
                 .map(Arc::new);
             if table.is_some() || self.world_biomes.is_some() {
                 self.world_biomes_base = table.clone();
@@ -252,6 +250,7 @@ impl Game<'_> {
             self.reset_creative_contents();
             self.refresh_creative_search_tags();
         }
+        Ok(())
     }
     /// Another player of this level, whose copy passes every click (`Player.interactOn`).
     pub(in crate::game) fn is_level_player(&self, id: i32) -> bool {

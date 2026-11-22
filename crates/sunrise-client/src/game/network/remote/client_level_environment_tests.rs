@@ -61,7 +61,7 @@ fn send_types(game: &mut Game<'_>, types: &[(&str, serde_json::Value)]) {
             })
             .collect(),
     );
-    game.set_registries(Arc::new(registries));
+    game.set_registries(Arc::new(registries)).unwrap();
 }
 
 /// The `Login` packet a server sends, into `entered`.

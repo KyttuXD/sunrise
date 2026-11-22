@@ -1495,6 +1495,9 @@ where
         self.worker.structure_biomes.insert(quart, id);
         id
     }
+    fn biome_key(&self, biome: BiomeId) -> mod_api::BiomeKey {
+        self.pipeline.data.biome_keys[biome.0 as usize].clone()
+    }
     fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId> {
         let mut resolver = self.pipeline.source.resolver(
             &self.pipeline.climate,
@@ -3186,6 +3189,26 @@ mod tests {
         let none = WorldgenOverrides::default();
         assert!(build_tags(&broken, &none, "biome_tags", &mut dropped, known).is_err());
     }
+    #[test]
+    fn invalid_biome_identifier_refuses_worldgen_data() {
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-invalid-worldgen-biome-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("biomes.json"), r#"{"test:Bad_Biome":"{}"}"#).unwrap();
+        let (registry, _) = BlockRegistry::from_facts_json_bytes(
+            br#"{"states":[["minecraft:air",true,false,"x","minecraft:air"]],"defaults":{"minecraft:air":0}}"#,
+        )
+        .unwrap();
+        let loaded = GeneratorData::load(&dir, Box::leak(Box::new(registry)));
+        fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            loaded.err().unwrap().to_string(),
+            "invalid generator resources: biome registry entry \"test:Bad_Biome\": invalid biome identifier"
+        );
+    }
+
     /// A pack's level on a generator nobody registered: opening it is an
     /// error for the caller to report, and the noise levels still build.
     #[test]
