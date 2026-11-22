@@ -65,12 +65,12 @@ pub trait ClientSession {
         unimplemented!("ClientSession::client_latency")
     }
     /// Side: client.
-    /// The player list as the Tab overlay draws it: each listed player's drawn name, profile
-    /// name, UUID, game mode and latency in drawn order, at most the 80 it draws, with the
-    /// header and footer. What this client has been sent; None outside a logged-in client
-    /// world. Sends nothing.
-    fn client_tab_list(&self) -> Option<ClientTabList> {
-        unimplemented!("ClientSession::client_tab_list")
+    /// Borrow the live Tab overlay view, without copying rows or text. `Ok(None)` means
+    /// no logged-in client world; an empty list in a logged-in world still has a view.
+    /// An unavailable session service returns [`ClientSessionReadError::Unavailable`].
+    /// Sends nothing.
+    fn client_tab_list(&self) -> Result<Option<&dyn ClientTabList>, ClientSessionReadError> {
+        Err(ClientSessionReadError::Unavailable)
     }
     /// Side: client.
     /// Existing local frame counters; None outside a logged-in client world.
@@ -136,9 +136,14 @@ pub trait Commands {
 /// The levels service, reached through its host.
 pub trait Levels {
     /// Side: server.
-    /// Loaded server levels, in vanilla dimension order. Empty without a server world.
-    fn list_levels(&self) -> Vec<LevelRef> {
-        unimplemented!("Levels::list_levels")
+    /// Visit loaded server levels: Overworld, Nether and End first, then the active extra level
+    /// and the parked extra levels in server order. Return `Break(())` to stop. Without an open
+    /// world, the visit completes without a call. An unavailable service returns `Unavailable`.
+    fn visit_levels(
+        &self,
+        visit: &mut dyn FnMut(LevelRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, ServerReadError> {
+        Err(ServerReadError::Unavailable)
     }
 }
 /// The messages service, reached through its host.

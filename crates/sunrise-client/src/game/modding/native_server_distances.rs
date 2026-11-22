@@ -1,10 +1,15 @@
 //! What a server mod reads of the tick times and sets of the view and simulation distance.
 use super::Game;
+use core::ops::ControlFlow;
+use mod_api::ServerReadError;
 
 impl Game<'_> {
     /// `MinecraftServer.getTickTimesNanos`.
-    pub(super) fn tick_times(&self) -> Vec<u64> {
-        self.clock.tick_times()
+    pub(super) fn visit_tick_times(
+        &self,
+        visit: &mut dyn FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, ServerReadError> {
+        Ok(self.clock.tick_times().try_for_each(visit))
     }
     /// `PlayerList.getViewDistance`.
     pub(super) fn server_view_distance(&self) -> Option<i32> {
@@ -37,6 +42,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_guest_turn_tests::with_guests;
+    use core::ops::ControlFlow;
 
     /// The tick times are the clock's 100; the distances are the hub's, set live on a dedicated
     /// server only, within 2 to 32.
@@ -49,9 +55,25 @@ mod tests {
                 game.clock.record(std::time::Duration::from_nanos(took));
             }
             let host: &dyn mod_api::ServerHost = game;
-            let times = host.tick_times();
+            let mut times = Vec::new();
+            assert_eq!(
+                host.visit_tick_times(&mut |took| {
+                    times.push(took);
+                    ControlFlow::Continue(())
+                }),
+                Ok(ControlFlow::Continue(()))
+            );
             assert_eq!(times.len(), 100);
             assert_eq!(times[..4], [40_000_000, 51_000_000, 62_000_000, 0]);
+            times.clear();
+            assert_eq!(
+                host.visit_tick_times(&mut |took| {
+                    times.push(took);
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(times, [40_000_000]);
             assert_eq!(game.server_view_distance(), Some(2));
             assert_eq!(game.server_simulation_distance(), Some(2));
             assert!(!game.server_set_view_distance(6), "an integrated server");

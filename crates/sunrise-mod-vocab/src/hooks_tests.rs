@@ -2,6 +2,53 @@ use super::*;
 use crate::testing::FakeHost;
 
 #[test]
+fn resident_visitors_refuse_without_calling_a_listener_when_the_backend_is_absent() {
+    struct NoWorld;
+    impl Host for NoWorld {}
+    mod_api::impl_host_areas!(NoWorld);
+
+    let epoch = WorldEpoch::new(1);
+    let level = LevelRef::new(epoch, DimensionKey::OVERWORLD);
+    let raid = RaidRef::new(level, 1);
+    assert_eq!(
+        level.visit_map_data(&NoWorld, 0, &mut |_| panic!("no map data")),
+        Err(LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        level.visit_datapack_entries(&NoWorld, "test:entries", &mut |_| panic!("no registry")),
+        Err(DatapackReadError::Unavailable)
+    );
+    assert_eq!(
+        level.datapack_read(&NoWorld, "test:entries", "test:entry", &mut |_| panic!(
+            "no entry"
+        )),
+        Err(DatapackReadError::Unavailable)
+    );
+    assert_eq!(
+        level.visit_game_rules(&NoWorld, &mut |_, _| panic!("no rules")),
+        Err(LevelReadError::Unavailable)
+    );
+    let objective = crate::__private::game::objective_ref(epoch, 1);
+    let player = crate::__private::game::player_ref(EntityRef::new(epoch, 1), 1);
+    assert_eq!(
+        level.visit_raids(&NoWorld, &mut |_| panic!("no raid map")),
+        Err(LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        raid.visit_raiders(&NoWorld, &mut |_| panic!("no raid")),
+        Err(RaidReadError::Unavailable)
+    );
+    assert_eq!(
+        player.visit_discovered_recipes(&NoWorld, &mut |_| panic!("no recipe book")),
+        Err(EntityReadError::Unavailable)
+    );
+    assert_eq!(
+        objective.visit_scores(&NoWorld, &mut |_| panic!("no scoreboard")),
+        Err(ObjectiveReadError::Unavailable)
+    );
+}
+
+#[test]
 fn chat_line_exposes_text_conversion_failure() {
     // This function must type-check for every client host, so callers can
     // propagate a refused text conversion instead of losing the error.
@@ -664,7 +711,7 @@ fn dimension_types_take_a_host(
     host: &dyn Host,
     level: LevelRef,
 ) -> Option<(f64, bool, DimensionSettings)> {
-    let ty = level.dimension_type(host)?;
+    let ty: LevelDimensionType<'_> = level.dimension_type(host)?;
     let nether_like = DimensionSettings {
         coordinate_scale: 8.0,
         has_fixed_time: true,
@@ -729,7 +776,11 @@ fn world_data_and_tick_queries_take_their_hosts(
     level: LevelRef,
 ) {
     let _: Option<RespawnData> = level.respawn_data(read);
-    let _: Option<MapState> = level.map_data(read, 0);
+    let _: Result<Option<()>, LevelReadError> =
+        level.visit_map_data(read, 0, &mut |map: MapState<'_>| {
+            let _: &str = map.dimension;
+            let _: &[u8] = map.colors;
+        });
     let _: Option<bool> = level.can_see_sky(read, [0, 64, 0]);
     let _: Option<bool> = level.line_of_sight(read, [0.0, 65.0, 0.0], [8.0, 65.0, 0.0]);
     let _: bool = level.set_respawn_data(server, [0, 64, 0], 90.0, 0.0);
@@ -753,10 +804,35 @@ fn level_queries_take_their_hosts(
     chunk: ChunkRef,
     shooter: EntityRef,
     tool: &ItemStack,
+    controller: TicketController,
 ) {
-    let _: Result<core::ops::ControlFlow<()>, LevelReadError> =
-        level.visit_online_players(read, &mut |_: PlayerRef| core::ops::ControlFlow::Break(()));
-    let _: Option<Vec<PlayerRef>> = chunk.watchers(read);
+    use core::ops::ControlFlow;
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_online_players(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        chunk.visit_watchers(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_loaded_chunks(read, &mut |_: ChunkRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_forced_chunks(read, &mut |_: [i32; 2]| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> = level.visit_mod_forced_chunks(
+        read,
+        controller,
+        &mut |_: TicketOwner, _: [i32; 2], _: bool| ControlFlow::Break(()),
+    );
+    let _: Result<ControlFlow<()>, LevelReadError> = level.visit_game_rules(
+        read,
+        &mut |_: &str, _: GameRuleValue| ControlFlow::Break(()),
+    );
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        shooter.visit_trackers(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> =
+        server.visit_tick_times(&mut |_: u64| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> =
+        server.visit_game_rules(&mut |_: &str, _: GameRuleValue| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> = server
+        .levels()
+        .visit_levels(&mut |_: LevelRef| ControlFlow::Break(()));
     let _: Option<StructureSearchResult> = level.find_nearest_structure(
         read,
         "#minecraft:village",
@@ -799,7 +875,13 @@ fn entity_queries_take_a_shared_host(read: &dyn Host, entity: EntityRef) {
     let _: Option<[i32; 3]> = entity.on_block(read);
     let _: Option<ClipHit> = entity.pick(read, 4.5);
     let _: Option<bool> = entity.is_multipart(read);
-    let _: Option<Vec<EntityRef>> = entity.parts(read);
+    use core::ops::ControlFlow;
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_parts(read, &mut |_: EntityRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_passengers(read, &mut |_: EntityRef| ControlFlow::Continue(()));
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_indirect_passengers(read, &mut |_: EntityRef| ControlFlow::Continue(()));
 }
 
 /// Compile-only: an entity is sent to another dimension from a server host.

@@ -51,7 +51,7 @@ impl Game<'_> {
         let dims = if s.world_limited() {
             vec![source_dim]
         } else {
-            self.loaded_dims()
+            self.loaded_dims().collect()
         };
         let mut out: Vec<(Target, f64)> = Vec::new();
         for dim in dims {

@@ -267,6 +267,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::game::native_entity_refs::tests::collect_entity_visit;
     use mod_api::RidePlayerRefusal as Refusal;
     use mod_api::{EntityMountEvent, Flow, Hooks, ServerHost};
     use std::sync::{Arc, Mutex};
@@ -466,7 +467,10 @@ mod tests {
             assert_eq!(game.entity_ride_player(first, player, false), Ok(()));
             assert_eq!(game.mobs[0].extra.mount, Some(player.id()));
             assert_eq!(game.entity_vehicle(first), Some(player));
-            assert_eq!(game.entity_passengers(player), Some(vec![first]));
+            assert_eq!(
+                collect_entity_visit(|visit| game.entity_visit_passengers(player, visit)),
+                Ok(vec![first])
+            );
             assert_eq!(
                 game.entity_ride_player(first, player, false),
                 Err(Refusal::AlreadyRiding)

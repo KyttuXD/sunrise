@@ -11,8 +11,9 @@ before reading or writing a far position, rather than learning it from a failed 
 
 `LevelRef::biome_at(host, pos)` reads an active or parked server level's biome;
 `client_biome(host, pos)` reads the client's current copy. Both use the level's biome zoom,
-including its hashed seed, and return `None` when the selected noise column is not loaded.
-They do not generate or load chunks. A biome read may select a neighbouring column.
+including its hashed seed, and borrow the selected biome ID from the host. They return `None`
+when the selected noise column is not loaded, and do not generate or load chunks. A biome read
+may select a neighbouring column.
 
 `find_closest_biome(host, biome, BiomeSearch::new(origin, radius, horizontal_step, vertical_step))`
 uses the server generator's sampled search, as `/locate biome` does. `biome` is an id or `#tag`.
@@ -36,11 +37,14 @@ is `/setworldspawn`'s own write in the handle's level: the yaw wraps and the pit
 `spawn_change` fires. The world has one world spawn, so any level's handle reads the same one,
 and writing through a level moves it there.
 
-`map_data(host, id)` is a map's saved data (`MapItemSavedData`): centre, scale, dimension, the
-locked, tracking and unlimited flags and its 128 by 128 colour ids, from memory or from its
-`.dat` without loading it for good. `set_map_data(host, id, colors)` repaints it pixel by pixel as
-`setColor` does, so the map saves, redraws and reaches the players carrying or framing it. Maps
-belong to the world: any current level handle reaches them. Markers are not part of either.
+`level.visit_map_data(host, id, &mut visit)` lends a map's saved data (`MapItemSavedData`):
+centre, scale, dimension, locked, tracking and unlimited flags, and its 128 by 128 colour IDs.
+It reads from memory or opens the saved data for the visit. Copy the dimension or pixels only
+to retain them. A found map calls the visitor once and returns `Ok(Some(()))`; a missing map
+returns `Ok(None)`. A stale level or unavailable world access gives `LevelReadError`. Maps are
+world-wide: any current server level handle reaches them. `set_map_data(host, id, colors)`
+repaints it pixel by pixel as `setColor` does, so the map saves, redraws and reaches players
+carrying or framing it. Markers are not part of either call.
 
 `block_tick(host, pos)` runs the block's scheduled tick now through the path a due tick from the
 queue takes (the block's part first, then `BlockState.tick`), and `block_random_tick(host, pos)`
@@ -146,8 +150,9 @@ are all checked whatever it is. The search builds structure starts but neither l
 chunks; a world without structures, a structure this level cannot generate, an origin past the
 world's 30,000,000-block edge and a radius out of range give `None`.
 
-`ChunkRef::watchers(host)` is `ChunkMap.getPlayers(pos, false)`: the players the chunk was sent to
-and is inside the view of, from their `chunk_watch` until they move away from it. Fake players
-watch nothing."#]
+`chunk.visit_watchers(host, &mut visit)` visits `ChunkMap.getPlayers(pos, false)`: the players
+the chunk was sent to and is inside the view of, from their `chunk_watch` until they move away.
+Fake players watch nothing. Return `ControlFlow::Break(())` to stop. An empty walk completes
+without a callback; a stale level or unavailable side or phase returns `LevelReadError`."#]
     fn level_reads_note5();
 }

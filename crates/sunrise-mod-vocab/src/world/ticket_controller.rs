@@ -14,7 +14,7 @@ pub(crate) struct ControllerInfo {
 
 /// A ticket controller a mod registered with
 /// [`Registrar::register_ticket_controller`](crate::TicketsRegistrar::register_ticket_controller): the
-/// handle `chunk.set_mod_forced` and `level.mod_forced_chunks` take. Only the registrar makes
+/// handle `chunk.set_mod_forced` and `level.visit_mod_forced_chunks` take. Only the registrar makes
 /// one, resolved once there, and it is `Copy`: keep it from `register`, for example in a
 /// `OnceLock`. Another mod's controller does not work. Use its namespaced `id()` when
 /// you need to store a controller name; its slot is local to this game's registry.

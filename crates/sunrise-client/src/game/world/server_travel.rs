@@ -13,6 +13,7 @@ use super::persist::OffLevel;
 use super::respawn_anchor::RespawnConfig;
 use super::respawn_position::Respawn;
 use super::{Dim, Game, Mob, boats, lan::LanHost, minecarts};
+use std::ops::ControlFlow;
 use sunrise_client::{lan::hub::TickCtx, world_spawn::PlayerSpawnFinder};
 use sunrise_core::{geometry::Vec3, position::BlockPos};
 use sunrise_protocol::packets::play::{self, Clientbound as C};
@@ -599,7 +600,11 @@ impl Game<'_> {
         // A callback can reparent a participant into a later subtree.
         // Keep the whole transition's visited set, not only its active path.
         visited.push(id);
-        let riders = self.entity_passengers(entity).unwrap_or_default();
+        let mut riders = Vec::new();
+        let _ = self.entity_visit_passengers(entity, &mut |rider| {
+            riders.push(rider);
+            ControlFlow::Continue(())
+        });
         let mut cancel = false;
         self.native_entity_travel_to_dimension(
             mod_api::EntityRef::new(epoch, id),

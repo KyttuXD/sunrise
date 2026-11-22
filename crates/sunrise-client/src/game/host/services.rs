@@ -1,5 +1,6 @@
 //! The game's implementations of the mod API's service traits.
 use crate::game::{Game, api_values::TryIntoEngine};
+use core::ops::ControlFlow;
 use mod_api::*;
 use std::sync::Arc;
 
@@ -13,8 +14,8 @@ impl ClientSession for Game<'_> {
     fn client_latency(&self) -> Option<u32> {
         self.native_client_latency()
     }
-    fn client_tab_list(&self) -> Option<ClientTabList> {
-        self.native_client_tab_list()
+    fn client_tab_list(&self) -> Result<Option<&dyn ClientTabList>, ClientSessionReadError> {
+        Ok(self.native_session().map(|_| self as &dyn ClientTabList))
     }
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {
         self.native_client_frame_stats()
@@ -36,8 +37,11 @@ impl Commands for Game<'_> {
     }
 }
 impl Levels for Game<'_> {
-    fn list_levels(&self) -> Vec<LevelRef> {
-        self.native_list_levels()
+    fn visit_levels(
+        &self,
+        visit: &mut dyn FnMut(LevelRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, ServerReadError> {
+        Ok(self.native_visit_levels(visit))
     }
 }
 impl Messages for Game<'_> {

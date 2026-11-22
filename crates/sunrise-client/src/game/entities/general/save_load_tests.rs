@@ -6,7 +6,7 @@
 //! fault, structural fault or a UUID a live entity already owns — with zero
 //! published rows.
 use super::*;
-use crate::game::native_entity_refs::tests::with_game;
+use crate::game::native_entity_refs::tests::{collect_entity_visit, with_game};
 use std::collections::HashMap;
 
 /// Declares the fixture's two types: `mymod:robot`, which saves, and
@@ -246,7 +246,10 @@ fn minecart_keeps_its_general_passenger_after_the_rider_tick() {
         let cart = game.entity(cart_id).unwrap();
         let rider = game.entity(rider_id).unwrap();
         assert_eq!(game.entity_start_riding(rider, cart, false), Ok(()));
-        assert_eq!(game.entity_passengers(cart), Some(vec![rider]));
+        assert_eq!(
+            collect_entity_visit(|visit| game.entity_visit_passengers(cart, visit)),
+            Ok(vec![rider])
+        );
 
         // Keep the chunk loaded but outside simulation range so the pass refreshes
         // the adjacency without rider movement invalidating it again.
@@ -261,7 +264,10 @@ fn minecart_keeps_its_general_passenger_after_the_rider_tick() {
         }));
         game.begin_ordered_ticks();
         game.tick_general().unwrap();
-        assert_eq!(game.entity_passengers(cart), Some(vec![rider]));
+        assert_eq!(
+            collect_entity_visit(|visit| game.entity_visit_passengers(cart, visit)),
+            Ok(vec![rider])
+        );
         assert_eq!(game.entity_is_vehicle(cart), Some(true));
         assert_eq!(game.boarding_order(cart_id, u32::MAX, false), 1);
         let saved = saved_chunk(game, (0, 0));
@@ -1562,7 +1568,10 @@ fn a_general_rider_keeps_minecart_drag_and_pickup_occupied() {
         // Exercise the maintained index, not the scan while it is stale after mounting.
         game.tick_general().unwrap();
         assert_eq!(cart.is_vehicle(game), Some(true));
-        assert_eq!(cart.passengers(game), Some(vec![rider]));
+        assert_eq!(
+            collect_entity_visit(|visit| cart.visit_passengers(game, visit)),
+            Ok(vec![rider])
+        );
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         // The pig touches the moving cart, but the coincident starting positions
         // mean it applies no initial push to the cart.
@@ -1608,7 +1617,10 @@ fn a_general_rider_fills_a_chest_boat_and_keeps_it_from_being_pushed() {
         game.entity_start_riding(rider, boat, false).unwrap();
         game.tick_general().unwrap();
         assert_eq!(boat.is_vehicle(game), Some(true));
-        assert_eq!(boat.passengers(game), Some(vec![rider]));
+        assert_eq!(
+            collect_entity_visit(|visit| boat.visit_passengers(game, visit)),
+            Ok(vec![rider])
+        );
 
         let pig_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         game.mobs.push(Mob::new(

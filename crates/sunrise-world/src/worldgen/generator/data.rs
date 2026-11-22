@@ -762,19 +762,29 @@ impl GeneratorData {
         })
     }
 
-    /// `HolderLookup.listElementIds` from the same table used by `registry_contains`.
-    pub fn registry_ids(&self, registry: &str) -> Option<Vec<&str>> {
+    /// Visit `HolderLookup.listElementIds` from the same table used by `registry_contains`.
+    pub fn visit_registry_ids(
+        &self,
+        registry: &str,
+        visit: &mut dyn FnMut(&str) -> std::ops::ControlFlow<()>,
+    ) -> Option<std::ops::ControlFlow<()>> {
         Some(match registry {
-            "minecraft:worldgen/biome" => self.biome_names.iter().map(AsRef::as_ref).collect(),
-            "minecraft:worldgen/carver" => self.carvers.names().collect(),
-            "minecraft:worldgen/material_condition" => {
-                self.conditions.entries().map(|(id, _)| id).collect()
-            }
+            "minecraft:worldgen/biome" => self
+                .biome_names
+                .iter()
+                .map(AsRef::as_ref)
+                .try_for_each(visit),
+            "minecraft:worldgen/carver" => self.carvers.names().try_for_each(visit),
+            "minecraft:worldgen/material_condition" => self
+                .conditions
+                .entries()
+                .map(|(id, _)| id)
+                .try_for_each(visit),
             _ => self
                 .named_registry(registry)?
                 .iter()
                 .map(String::as_str)
-                .collect(),
+                .try_for_each(visit),
         })
     }
 

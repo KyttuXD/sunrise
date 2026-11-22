@@ -474,10 +474,12 @@ pub(super) fn load_files(
             Err(error) => return Err(error),
         };
         for file in &folder.files {
-            files.insert(
-                format!("{namespace}:{}", file.name),
-                file.bytes().map(<[u8]>::to_vec),
-            );
+            if crate::json_folder::valid_resource_path(&namespace, &file.name) {
+                files.insert(
+                    format!("{namespace}:{}", file.name),
+                    file.bytes().map(<[u8]>::to_vec),
+                );
+            }
         }
     }
     for (id, layers) in overlay.kind(kind) {

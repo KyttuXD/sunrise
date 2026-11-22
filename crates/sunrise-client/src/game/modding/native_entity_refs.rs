@@ -27,7 +27,7 @@ use super::{
 use core::ops::ControlFlow;
 use mod_api::{
     BlockFace, BlockShapeKind, BlockUpdateFlags, ClipBlock, ClipFluid, ClipHit, DimensionKey,
-    EntityRayHit, EntityRef, LevelReadError, LevelRef, NeighbourUpdate,
+    EntityRayHit, EntityReadError, EntityRef, LevelReadError, LevelRef, NeighbourUpdate,
 };
 use sunrise_client::join_seq::residency::table::{EntityLookup, Location};
 use sunrise_core::geometry::{Aabb, Vec3};
@@ -76,16 +76,30 @@ fn clip_entity_ray(
 }
 
 impl Game<'_> {
-    /// The logged-in window and network id for an entity handle in its current world.
-    pub(super) fn native_client_entity_context(&self, entity: EntityRef) -> Option<(&Remote, i32)> {
-        let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
-        (self.native_lifecycle.epoch() == Some(entity.epoch())).then_some(())?;
-        Some((remote, i32::try_from(entity.id()).ok()?))
+    /// The window's live level and network id for a handle in its current world generation.
+    pub(super) fn native_client_entity_context(
+        &self,
+        entity: EntityRef,
+    ) -> Result<(&Remote, i32), EntityReadError> {
+        let remote = self
+            .remote
+            .as_ref()
+            .filter(|remote| remote.has_level())
+            .ok_or(EntityReadError::Unavailable)?;
+        let epoch = self
+            .native_lifecycle
+            .epoch()
+            .ok_or(EntityReadError::Unavailable)?;
+        if epoch != entity.epoch() {
+            return Err(EntityReadError::Stale);
+        }
+        let id = i32::try_from(entity.id()).map_err(|_| EntityReadError::Stale)?;
+        Ok((remote, id))
     }
 
     /// An entity tracked by the remote client but absent from local entity lists.
     pub(super) fn native_client_tracked(&self, entity: EntityRef) -> Option<(&str, [f64; 3])> {
-        let (remote, id) = self.native_client_entity_context(entity)?;
+        let (remote, id) = self.native_client_entity_context(entity).ok()?;
         remote.tracked_entity(id)
     }
 
@@ -95,16 +109,33 @@ impl Game<'_> {
             .map(|(target, _)| target)
     }
 
+    /// The server entity read boundary, distinguishing absent handles from parked bodies.
+    pub(super) fn native_server_entity_target(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Target, EntityReadError> {
+        self.resolve_server_entity(entity).map(|(target, _)| target)
+    }
+
     /// Resolve the handle and return its resident location, if admitted to the level.
     pub(super) fn native_entity_target_with_location(
         &self,
         entity: EntityRef,
     ) -> Option<(Target, Option<Location>)> {
-        if self.held_out.contains(&entity.id())
-            || !self.is_logical_server()
-            || self.native_lifecycle.epoch() != Some(entity.epoch())
+        self.resolve_server_entity(entity).ok()
+    }
+
+    fn resolve_server_entity(
+        &self,
+        entity: EntityRef,
+    ) -> Result<(Target, Option<Location>), EntityReadError> {
+        if !self.is_logical_server() {
+            return Err(EntityReadError::Unavailable);
+        }
+        if self.native_lifecycle.epoch() != Some(entity.epoch())
+            || self.held_out.contains(&entity.id())
         {
-            return None;
+            return Err(EntityReadError::Stale);
         }
         let EntityLookup::Found { location, value } = self.server_resident_entity(entity.id())
         else {
@@ -114,47 +145,73 @@ impl Game<'_> {
                 .cloning_players
                 .iter()
                 .rev()
-                .find(|&&(_, _, id)| id == entity.id())?;
+                .find(|&&(_, _, id)| id == entity.id())
+                .ok_or(EntityReadError::Stale)?;
             return if self.lan_acting == Some(conn) {
-                Some((Target::Player, None))
+                Ok((Target::Player, None))
             } else if self.lan_guest_swaps.contains(&conn) {
-                None
+                Err(EntityReadError::Unavailable)
             } else {
-                Some((Target::Guest(conn), None))
+                Ok((Target::Guest(conn), None))
             };
         };
         // Players are server-wide records. Ordinary body operations retain
         // their existing current-level domain; source membership is global.
-        (matches!(value, Target::Player | Target::Guest(_))
-            || location.owner.dimension == self.dim.key())
-        .then_some((value, Some(location)))
+        if !matches!(value, Target::Player | Target::Guest(_))
+            && location.owner.dimension != self.dim.key()
+        {
+            return Err(EntityReadError::Unavailable);
+        }
+        Ok((value, Some(location)))
     }
     /// What a handle names on a client: the local player, or an entity the
     /// server told this client of (`ClientLevel.getEntity`, whose entities are
     /// the ones the server tracks to it). None for a stale handle, with no
     /// login, or for an entity the client doesn't have.
     pub(super) fn native_client_entity_target(&self, entity: EntityRef) -> Option<Target> {
+        self.native_client_entity_body_target(entity).ok()
+    }
+
+    /// Resolve a projected body without mistaking packet-only tracking for a retired handle.
+    fn native_client_entity_body_target(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Target, EntityReadError> {
         let (remote, id) = self.native_client_entity_context(entity)?;
         if id == remote.entity_id {
-            return self.player.as_ref().map(|_| Target::Player);
+            return self
+                .player
+                .as_ref()
+                .map(|_| Target::Player)
+                .ok_or(EntityReadError::Unavailable);
         }
         // The server tracks the dragon alone; its parts are the client's own copies of it.
         if let Some(part) = self.level_dragon_part(entity.id()) {
-            return Some(part);
+            return Ok(part);
         }
-        remote.tracked(id)?;
-        match self.level_entity(id)? {
-            Target::Mob(mob) if !self.mobs.iter().any(|m| m.id == mob && !m.removed) => None,
-            target => Some(target),
+        remote.tracked_entity(id).ok_or(EntityReadError::Stale)?;
+        match self.level_entity(id) {
+            Some(Target::Mob(mob)) if !self.mobs.iter().any(|m| m.id == mob && !m.removed) => {
+                Err(EntityReadError::Unavailable)
+            }
+            Some(target) => Ok(target),
+            None => Err(EntityReadError::Unavailable),
         }
     }
-    /// What a handle names for a read that works on both sides: the server's
-    /// entity (`native_entity_target`) or, on a client, its own copy of it.
+    /// What a handle names for an optional body read that works on both sides.
     pub(super) fn native_entity_read_target(&self, entity: EntityRef) -> Option<Target> {
+        self.native_entity_visit_target(entity).ok()
+    }
+    /// Resolve the resident server body or the client projection, separating a stale
+    /// handle from a body or world that the current view cannot read.
+    pub(super) fn native_entity_visit_target(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Target, EntityReadError> {
         if self.is_logical_server() {
-            self.native_entity_target(entity)
+            self.native_server_entity_target(entity)
         } else {
-            self.native_client_entity_target(entity)
+            self.native_client_entity_body_target(entity)
         }
     }
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
@@ -201,16 +258,24 @@ impl Game<'_> {
             Target::Dragon(_)
         ))
     }
-    /// The entities a multipart entity is made of (`Entity.getParts`), in
-    /// `getSubEntities` order, each resolved as any handle is (`entity`): the dragon's
-    /// parts have the eight ids after its own. Empty for any other entity.
-    pub(super) fn entity_parts(&self, entity: EntityRef) -> Option<Vec<EntityRef>> {
-        let Target::Dragon(id) = self.native_entity_read_target(entity)? else {
-            return Some(Vec::new());
+    /// `IEntityExtension.getParts` in `EnderDragon.getSubEntities` order.
+    pub(super) fn entity_visit_parts(
+        &self,
+        entity: EntityRef,
+        visit: &mut dyn FnMut(EntityRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        let Target::Dragon(id) = self.native_entity_visit_target(entity)? else {
+            return Ok(ControlFlow::Continue(()));
         };
-        (1..=8)
-            .map(|offset| self.entity(id.checked_add(offset)?))
-            .collect()
+        // Project the eight part handles together before calling the visitor on any of them.
+        let mut parts = [entity; 8];
+        for (offset, part) in (1..).zip(&mut parts) {
+            *part = id
+                .checked_add(offset)
+                .and_then(|id| self.entity(id))
+                .ok_or(EntityReadError::Unavailable)?;
+        }
+        Ok(parts.into_iter().try_for_each(visit))
     }
     /// The level `dimension` (`minecraft:the_nether`) as a handle: on a client,
     /// the level it shows, whatever the server calls it, or one the server opened
@@ -251,15 +316,21 @@ impl Game<'_> {
             .as_ref()
             .map_or_else(|| self.dim.key(), |r| r.level_key)
     }
-    /// Loaded server levels, in vanilla dimension order. Empty without a server world.
-    pub(super) fn native_list_levels(&self) -> Vec<LevelRef> {
-        if !self.is_logical_server() || self.native_lifecycle.epoch().is_none() {
-            return Vec::new();
-        }
+    /// Loaded server levels in `MinecraftServer.getAllLevels` dimension order.
+    pub(super) fn native_visit_levels(
+        &self,
+        visit: &mut dyn FnMut(LevelRef) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
+        let Some(epoch) = self
+            .native_lifecycle
+            .epoch()
+            .filter(|_| self.is_logical_server())
+        else {
+            return ControlFlow::Continue(());
+        };
         self.loaded_dims()
-            .into_iter()
-            .filter_map(|dim| self.level(dim.id()))
-            .collect()
+            .map(|dim| self.level_ref(epoch, dim.key()))
+            .try_for_each(visit)
     }
     fn level_entity_candidates(&self, level: LevelRef) -> impl Iterator<Item = EntityRef> + '_ {
         let mut after = None;
@@ -1010,7 +1081,7 @@ impl Game<'_> {
         &self,
         entity: EntityRef,
     ) -> Option<&super::remote::RemoteGeneral> {
-        let (remote, id) = self.native_client_entity_context(entity)?;
+        let (remote, id) = self.native_client_entity_context(entity).ok()?;
         remote.general.rows.get(&id)
     }
     /// The entity's type (`Entity.getType`): `minecraft:zombie`. API
@@ -1337,6 +1408,21 @@ pub(super) mod tests {
     use core::ops::ControlFlow;
     use mod_api::__private::game::*;
     use mod_api::{EntityRef, LevelReadError, LevelRef};
+
+    /// Collect only in fixtures that compare the whole result of an entity visit.
+    pub(in crate::game) fn collect_entity_visit(
+        enumerate: impl FnOnce(
+            &mut dyn FnMut(EntityRef) -> ControlFlow<()>,
+        ) -> Result<ControlFlow<()>, mod_api::EntityReadError>,
+    ) -> Result<Vec<EntityRef>, mod_api::EntityReadError> {
+        let mut entities = Vec::new();
+        let complete = enumerate(&mut |entity| {
+            entities.push(entity);
+            ControlFlow::Continue(())
+        })?;
+        assert_eq!(complete, ControlFlow::Continue(()));
+        Ok(entities)
+    }
 
     // Keep the handle and direct Game routes separate when collecting for assertions.
     pub(in crate::game) fn collect_all_entities(
@@ -4521,6 +4607,14 @@ pub(super) mod tests {
         game.world
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        {
+            let host: &dyn mod_api::ServerHost = &game;
+            assert_eq!(
+                host.levels()
+                    .visit_levels(&mut |_| panic!("level before world open")),
+                Ok(ControlFlow::Continue(()))
+            );
+        }
         game.native_lifecycle
             .begin_open(Authority::IntegratedServer);
 
@@ -4539,13 +4633,32 @@ pub(super) mod tests {
             .default_state("minecraft:stone")
             .unwrap();
         game.world.set(0, 64, 0, stone).unwrap();
+        let nether = game.level("minecraft:the_nether").unwrap();
+        let host: &dyn mod_api::ServerHost = &game;
+        let levels = host.levels();
+        let mut visited = Vec::new();
+        assert_eq!(
+            levels.visit_levels(&mut |level| {
+                visited.push(level);
+                ControlFlow::Continue(())
+            }),
+            Ok(ControlFlow::Continue(()))
+        );
+        // The parked Overworld precedes the active Nether.
+        assert_eq!(visited, [level, nether]);
+        visited.clear();
+        assert_eq!(
+            levels.visit_levels(&mut |level| {
+                visited.push(level);
+                ControlFlow::Break(())
+            }),
+            Ok(ControlFlow::Break(()))
+        );
+        assert_eq!(visited, [level]);
         assert!(
             game.enter_command_level(super::super::Dim::Overworld)
                 .is_some()
         );
-        let nether = game.level("minecraft:the_nether").unwrap();
-        let host: &dyn mod_api::ServerHost = &game;
-        assert_eq!(host.levels().list_levels(), vec![level, nether]);
         let cube = vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
         assert_eq!(
             game.level_block_shape(nether, stone, [0, 64, 0], BlockShapeKind::Outline),

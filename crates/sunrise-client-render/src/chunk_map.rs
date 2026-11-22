@@ -5,7 +5,7 @@ use crate::{
 };
 use std::{
     collections::{
-        VecDeque,
+        BTreeSet, VecDeque,
         hash_map::{Iter, ValuesMut},
     },
     ops::Deref,
@@ -85,6 +85,8 @@ pub enum ChunkMembershipDelta {
 /// Tokens are process-wide: replacing the entire map also invalidates caches.
 pub struct ChunkMap {
     columns: Columns,
+    // The x-then-z projection of membership; gameplay still iterates the hash map.
+    ordered: BTreeSet<Key>,
     revision: u64,
     /// The oldest revision `recent_deltas` still answers for: the revision of
     /// the change it last dropped, or the revision that cleared them. A
@@ -109,6 +111,7 @@ impl Default for ChunkMap {
         let revision = next_revision();
         Self {
             columns: Columns::default(),
+            ordered: BTreeSet::new(),
             revision,
             min_valid_revision: revision,
             recent_deltas: VecDeque::new(),
@@ -301,6 +304,7 @@ impl ChunkMap {
             );
         }
         if previous.is_none() {
+            self.ordered.insert(key);
             for z in key.1 - 1..=key.1 + 1 {
                 for x in key.0 - 1..=key.0 + 1 {
                     *self.near.entry((x, z)).or_insert(0) += 1;
@@ -318,6 +322,9 @@ impl ChunkMap {
             if let Some(residency) = &mut self.group_residency {
                 residency.replace(chunk.connection_groups.len(), 0);
             }
+        }
+        if previous.is_some() {
+            self.ordered.remove(key);
             if let Some(observer) = &self.attachment_observer {
                 observer.unload(Holder::Chunk([key.0, key.1]));
             }
@@ -343,6 +350,7 @@ impl ChunkMap {
             if let Some(residency) = &mut self.group_residency {
                 residency.replace(residency.occupied, 0);
             }
+            self.ordered.clear();
             self.fresh.clear();
             self.near.clear();
             self.revision = next_revision();
@@ -352,6 +360,11 @@ impl ChunkMap {
             self.min_valid_revision = self.revision;
         }
     }
+    /// Resident columns in lexical (x, z) order, independently of hash iteration.
+    pub fn ordered_keys(&self) -> impl ExactSizeIterator<Item = Key> + '_ {
+        self.ordered.iter().copied()
+    }
+
     /// Whether the column at `key` and its eight neighbours are all resident.
     #[inline]
     pub fn surrounded(&self, key: Key) -> bool {
@@ -704,7 +717,7 @@ mod tests {
         map.insert((0, 0), chunk.clone());
         let inserted = map.membership_revision();
         assert_ne!(empty, inserted);
-        map.insert((0, 0), chunk.clone());
+        map.insert((0, 0), chunk);
         Arc::make_mut(map.get_mut(&(0, 0)).unwrap()).lit = true;
         for column in map.values_mut() {
             Arc::make_mut(column).light_loaded = true;
@@ -718,15 +731,20 @@ mod tests {
             &mut crate::light::LightChanges::default(),
         );
         assert_eq!(inserted, map.membership_revision());
+        assert!(map.ordered_keys().eq([(0, 0)]), "replacement keeps one key");
         map.remove(&(0, 0));
-        map.insert((1, 0), chunk);
-        assert_eq!(map.len(), 1);
+        for (x, z) in [(1, -3), (-2, 4), (-2, -1)] {
+            map.insert((x, z), Arc::new(Chunk::empty(x, z)));
+        }
+        assert!(map.ordered_keys().eq([(-2, -1), (-2, 4), (1, -3)]));
         assert_ne!(inserted, map.membership_revision());
         let replaced = map.membership_revision();
         map.clear();
+        assert!(map.ordered_keys().next().is_none());
         assert_ne!(replaced, map.membership_revision());
         let cleared = map.membership_revision();
         map = ChunkMap::default();
+        assert!(map.ordered_keys().next().is_none());
         assert_ne!(cleared, map.membership_revision());
     }
 

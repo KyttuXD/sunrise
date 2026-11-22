@@ -255,13 +255,13 @@ impl Default for DimensionSettings {
 
 /// A level's dimension type as the game uses it (`Level.dimensionType()` and the gameplay attributes
 /// of its environment), as `level.dimension_type(host)` reads it: the fields of
-/// [`DimensionSettings`] that apply, plus the type's id.
+/// [`DimensionSettings`] that apply, plus the type's id. The ids and timelines borrow the host.
+// no wire: borrows the level's dimension type metadata.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct LevelDimensionType {
+pub struct LevelDimensionType<'a> {
     /// The dimension type's id (`minecraft:the_nether`, or a mod's or pack's).
-    pub id: String,
+    pub id: &'a str,
     /// The lowest buildable block Y.
     pub min_y: i32,
     /// The build height in blocks.
@@ -281,15 +281,15 @@ pub struct LevelDimensionType {
     /// The light every block gets, 0 to 1.
     pub ambient_light: f32,
     /// The block tag whose blocks burn forever.
-    pub infiniburn: String,
+    pub infiniburn: &'a str,
     /// The range monsters' spawn light is drawn from, when it is a constant or a uniform range.
     pub monster_spawn_light_level: Option<(i32, i32)>,
     /// The block light above which monsters do not spawn.
     pub monster_spawn_block_light_limit: i32,
     /// `overworld`, `end` or `none`.
-    pub skybox: String,
+    pub skybox: &'static str,
     /// `default` or `nether`.
-    pub cardinal_light: String,
+    pub cardinal_light: &'static str,
     /// Whether water placed here boils away.
     pub water_evaporates: bool,
     /// Whether lava flows at the Nether's speed.
@@ -307,21 +307,21 @@ pub struct LevelDimensionType {
     /// The sky light that daylight is measured against, 0 to 15.
     pub sky_light_level: f32,
     /// The timelines the dimension type names, as ids (`minecraft:day`).
-    pub timelines: Vec<String>,
+    pub timelines: &'a [String],
     /// The clock `/time` reads here, if the dimension type has a default one.
-    pub default_clock: Option<String>,
+    pub default_clock: Option<&'a str>,
     /// When a player can sleep in a bed: `always`, `when_dark` or `never`.
-    pub bed_can_sleep: String,
+    pub bed_can_sleep: &'static str,
     /// When a bed sets the respawn point: `always`, `when_dark` or `never`.
-    pub bed_can_set_spawn: String,
+    pub bed_can_set_spawn: &'static str,
     /// Whether a bed explodes when a player tries to use it.
     pub bed_destroy_on_use: bool,
     /// Whether a bed is destroyed when the player leaves it.
     pub bed_destroy_on_leave: bool,
     /// When a player can sleep in a straw bed: `always`, `when_dark` or `never`.
-    pub straw_bed_can_sleep: String,
+    pub straw_bed_can_sleep: &'static str,
     /// When a straw bed sets the respawn point: `always`, `when_dark` or `never`.
-    pub straw_bed_can_set_spawn: String,
+    pub straw_bed_can_set_spawn: &'static str,
     /// Whether a straw bed explodes when a player tries to use it.
     pub straw_bed_destroy_on_use: bool,
     /// Whether a straw bed is destroyed when the player leaves it.

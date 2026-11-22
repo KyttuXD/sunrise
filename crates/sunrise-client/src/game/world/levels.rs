@@ -860,6 +860,20 @@ impl Levels {
 }
 
 impl Game<'_> {
+    /// Loaded dimensions in `MinecraftServer.getAllLevels` order: built-ins first, then
+    /// any active extra dimension followed by the parked extras in their existing order.
+    pub(super) fn loaded_dims(&self) -> impl Iterator<Item = Dim> + '_ {
+        let active = self.dim;
+        let parked = &self.levels.parked;
+        let builtins = [Dim::Overworld, Dim::Nether, Dim::End]
+            .into_iter()
+            .filter(move |dim| *dim == active || parked.contains_key(dim));
+        let extras = std::iter::once(active)
+            .chain(parked.keys().copied())
+            .filter(|dim| matches!(dim, Dim::Extra(_)));
+        builtins.chain(extras)
+    }
+
     /// A new level for `dim`, opened from the save (`MinecraftServer.createLevels`).
     fn open_level(&self, dim: Dim) -> Result<Parked> {
         // A level a mod opened has the seed and generator it asked for.

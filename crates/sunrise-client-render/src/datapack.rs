@@ -922,6 +922,14 @@ impl DataStore {
                 if !seen.insert(f.clone()) {
                     continue;
                 }
+                let Some((namespace, path)) =
+                    f.strip_prefix("data/").and_then(|f| f.split_once('/'))
+                else {
+                    continue;
+                };
+                if !sunrise_world::json_folder::valid_resource_path(namespace, path) {
+                    continue;
+                }
                 // Preserve JSON stacks independently of the command views
                 // below. World-table readers evaluate the winning resource's
                 // conditions using their captured server inventory.
@@ -1696,6 +1704,27 @@ mod tests {
         );
         assert_eq!(DataPack::builtin(&resources).id, "vanilla");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn data_store_admits_only_valid_content_resource_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("data/example/recipe/sub");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("value.json"), "{}").unwrap();
+        std::fs::write(folder.join("Invalid_Name.json"), "{}").unwrap();
+        let folder = root.path().join("data/bad namespace/recipe/sub");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("other.json"), "{}").unwrap();
+        let pack = DataPack::from_source(
+            "file/registry-fixture".into(),
+            ResourceSource::directory(root.path().to_owned()),
+        );
+        let store = DataStore::load(&[&pack]);
+        assert_eq!(
+            store.files.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["recipe/example:sub/value"]
+        );
     }
 
     #[test]

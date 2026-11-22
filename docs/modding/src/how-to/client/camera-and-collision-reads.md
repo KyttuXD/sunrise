@@ -215,14 +215,18 @@ These read the local player as the client sees it. They take no mod-controlled n
   tab list draws it (`PlayerInfo.getLatency`): the server's smoothed keep-alive average, refreshed by
   the server's own broadcast. It reads 0 before the server's first measurement, as vanilla does, and
   `None` outside a world.
-- `ClientHost::client_session().client_tab_list()` is the player list as the Tab overlay draws it:
-  `ClientTabList { entries, header, footer }`. Each `ClientTabListEntry` has the profile `name`,
-  `uuid`, `game_mode`, `latency` and the `display` text as drawn (`getNameForDisplay`: the display
-  name the server set, else the name with its team's prefix, suffix and colour; italic for a
-  spectator). Entries come in the overlay's order (`getPlayerInfos`: higher list order first,
-  then, among equal list orders, spectators last, team name and name) and stop at the 80 it draws. Header and footer are `None` when empty. It is what
-  this client has been sent and changes as the server updates the list; `None` outside a world.
-  There is no NeoForge call for this: it is Sunrise's own read.
+- `host.client_session().client_tab_list()` borrows the live Tab overlay view.
+  `Ok(None)` means no logged-in client world; `Err(ClientSessionReadError::Unavailable)`
+  means the phase or backend cannot supply it. A logged-in world can have an empty list.
+  `list.visit_entries(&mut visit)` lends one row at a time in overlay order
+  (`PlayerTabOverlay.getPlayerInfos`), only up to the 80 listed players it draws.
+  Use `row.name()` for the borrowed profile name, and `row.uuid()`, `row.game_mode()` and
+  `row.latency()` for values. Return `ControlFlow::Break(())` to stop or `Continue(())` to
+  keep visiting. For display text, call `row.copy_display()`: the name the server sent or,
+  otherwise, the profile name with team decoration; spectators are italic. Use
+  `list.copy_header()` and `list.copy_footer()` for the optional header and footer.
+  A missing or cleared header or footer is `Ok(None)`; a text conversion error is returned
+  only by the copy you request, not by the view or visit. No plaintext is substituted.
 - `ClientHost::local_item_use()` reports ordinary item use: `ItemUse { hand, ticks_used, ticks_remaining }`
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world

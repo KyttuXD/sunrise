@@ -592,16 +592,8 @@ impl LivingAttributes {
         entity: &str,
         name: &str,
         seed: impl FnOnce() -> Vec<Tag>,
-    ) -> Option<Vec<Modifier>> {
-        let map = self.built_or_build(catalog, entity, seed)?;
-        let key = map.key(name)?;
-        map.value(Some(key.clone()), ValueKind::Base).ok()?;
-        Some(
-            map.lookup(Some(&key))
-                .and_then(|handle| map.instance(&handle).ok())
-                .map(|instance| instance.modifiers().to_vec())
-                .unwrap_or_default(),
-        )
+    ) -> Option<&[Modifier]> {
+        self.built_or_build(catalog, entity, seed)?.modifiers(name)
     }
 
     /// The map, built from `seed` if this is its first use.

@@ -30,6 +30,8 @@ and chunks still being generated may finish with it. See [biome regions](../cont
 
 ## Read and write limits
 
-- `biome_at` never loads or generates a chunk: an unloaded column answers `None`.
+- `biome_at` and `client_biome` borrow the biome ID as `Option<&str>`. Use
+  `.map(str::to_owned)` only if retaining it. Neither read loads or generates a chunk;
+  an unloaded column answers `None`.
 - `find_closest_biome` follows vanilla's sampled spiral, so it is not a search through cells a mod edited, and it refuses a search whose sample count passes `BiomeSearch::MAX_SAMPLES`.
 - `set_biome` refuses a client, an unknown biome and an unchanged cell, and returns false rather than an error.

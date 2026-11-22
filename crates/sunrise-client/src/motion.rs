@@ -6183,7 +6183,7 @@ mod tests {
         }
     }
 
-    /// The player's fluid heights, which `entity_fluid_heights` reads: lava sources at x 20 and
+    /// The player's fluid heights, which `EntityRef::visit_fluid_heights` reads: lava sources at x 20 and
     /// water sources at x 21, y 4..=5 (each surface at 5 + 8/9). Standing at y 4 the player is
     /// that surface less 4 deep in each fluid it touches, from its own bottom, as a mob is
     /// (`mobs::living::fluid_heights`): lava, water, both where they meet (a tie), or neither.

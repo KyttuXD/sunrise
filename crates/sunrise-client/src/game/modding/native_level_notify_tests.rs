@@ -212,7 +212,7 @@ fn biome_writes_roll_back_and_only_the_root_commit_notifies_clients() {
                 Err(())
             });
             assert!(inner.is_err());
-            assert_eq!(level.biome_at(host, probe).as_deref(), Some(name.as_str()));
+            assert_eq!(level.biome_at(host, probe), Some(name.as_str()));
             host.transaction(|host, _| {
                 assert!(level.set_biome(host, pos, &old_name));
                 assert!(level.set_biome(host, [3, 67, 3], &name));
@@ -278,10 +278,7 @@ fn biome_negative_min_y_and_unwind_restore_without_publication() {
                 assert!(!level.set_biome(host, [-1, -65, -1], &name));
                 assert!(!level.set_biome(host, [-1, 320, -1], &name));
                 assert!(level.set_biome(host, [-1, -64, -1], &name));
-                assert_eq!(
-                    level.biome_at(host, [-4, -61, -4]).as_deref(),
-                    Some(name.as_str())
-                );
+                assert_eq!(level.biome_at(host, [-4, -61, -4]), Some(name.as_str()));
                 assert!(rx.try_recv().is_err());
                 panic!("abort biome transaction");
             });

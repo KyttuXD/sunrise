@@ -172,10 +172,7 @@ impl Game<'_> {
         self.publish_tab_object_skins();
         let mut players: Vec<_> = {
             let r = self.remote.as_ref()?;
-            r.listed
-                .iter()
-                .filter_map(|u| r.tab_players.get(u).cloned())
-                .collect()
+            r.listed_tab_player_refs().cloned().collect()
         };
         for p in &mut players {
             p.skin = self

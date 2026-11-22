@@ -267,9 +267,13 @@ impl WorldgenOverrides {
         file: &str,
         read: impl FnOnce() -> Option<String>,
     ) -> PackFile {
-        let Some((_, rest)) = file.strip_prefix("data/").and_then(|r| r.split_once('/')) else {
+        let Some((namespace, rest)) = file.strip_prefix("data/").and_then(|r| r.split_once('/'))
+        else {
             return PackFile::Other;
         };
+        if !crate::json_folder::valid_resource_path(namespace, rest) {
+            return PackFile::Other;
+        }
         if let Some((bundle, id)) = KINDS
             .iter()
             .find_map(|(kind, bundle)| Some((bundle, resource_id(file, kind)?)))

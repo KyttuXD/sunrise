@@ -27,11 +27,17 @@ pub trait LivingBackend {
     /// local player, whose copy of what the server sent it is read.
     fn living_effect(&self, living: LivingRef, effect: EffectKey) -> Option<ActiveEffect>;
     /// Side: both.
-    /// The entity's active effects (`LivingEntity.getActiveEffects`), in the
-    /// order their store keeps them, in `Some` even when it has none. None
-    /// for an armor stand, the dragon or a stale handle; on a client, for any
-    /// entity but the local player (its copy of what the server sent it).
-    fn living_effects(&self, living: LivingRef) -> Option<Vec<ActiveEffect>>;
+    /// Visits the entity's active effects (`LivingEntity.getActiveEffects`) in their store's
+    /// order, passing one owned effect value at a time. `Break(())` stops the visit and is
+    /// returned; `Continue(())` means it completed, with no calls when there are no effects.
+    /// A stale handle returns [`EntityReadError::Stale`]. Armor stands, the dragon and other
+    /// bodies without readable effects return [`EntityReadError::Unavailable`]. On a client,
+    /// only the local player's server-synced effects can be read.
+    fn living_visit_effects(
+        &self,
+        living: LivingRef,
+        visit: &mut dyn FnMut(ActiveEffect) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, EntityReadError>;
     /// Side: both.
     /// Whether the entity has `effect` (`LivingEntity.hasEffect`), using its resolved key.
     /// False before effect resolution, for an armor stand, the dragon or a stale handle;
@@ -143,26 +149,31 @@ pub trait LivingBackend {
     /// (`AttributeMap.getBaseValue`), read as the effective value is.
     fn living_attribute_base(&self, living: LivingRef, id: &str) -> Option<f64>;
     /// Side: both.
-    /// The ids of the attributes the entity's type has
-    /// (`AttributeMap`'s holder's attribute set), in registry order: the same
-    /// set the value and base reads answer for. None for a stale handle or an
-    /// unavailable entity; on a client, for any entity but the local player
-    /// (the client keeps no attribute map of another entity's, only the few
-    /// fields it draws).
-    fn living_attributes(&self, living: LivingRef) -> Option<Vec<Identifier>>;
+    /// Lends the ids of the attributes the entity's type has (`LivingEntity.getAttributes`),
+    /// one per call in registry order. These are the same attributes the value and base reads
+    /// answer for. Copy an id in the visitor if it must outlive the call.
+    /// `Break(())` stops the visit and is returned; `Continue(())` means it completed.
+    /// A stale handle returns [`EntityReadError::Stale`]; an unreadable entity returns
+    /// [`EntityReadError::Unavailable`]. On a client, only the local player is readable.
+    fn living_visit_attributes(
+        &self,
+        living: LivingRef,
+        visit: &mut dyn for<'a> FnMut(&'a str) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, EntityReadError>;
     /// Side: both.
-    /// The modifiers on the entity's attribute `id`
-    /// (`AttributeInstance.getModifiers`), in the order they were added: a
-    /// mod's transient and permanent ones, the saved list's, and what the
-    /// worn and held items grant. An attribute no modifier is on answers an
-    /// empty list; None for an attribute the entity type does not have, a
-    /// stale handle, or on a client for any entity but the local player,
-    /// whose copy of the synced instances it reads.
-    fn living_attribute_modifiers(
+    /// Lends the modifiers on the entity's attribute `id` (`AttributeInstance.getModifiers`)
+    /// in the order they were added, including transient, permanent, saved and equipment
+    /// modifiers. Copy any borrowed id needed after the visit. `Break(())` stops the visit
+    /// and is returned; `Continue(())` means it completed, with no calls for an attribute
+    /// that has no modifiers. An unknown or unsupported attribute or an unreadable entity
+    /// returns [`EntityReadError::Unavailable`]; a stale handle returns [`EntityReadError::Stale`].
+    /// On a client, only the local player's server-synced instances can be read.
+    fn living_visit_attribute_modifiers(
         &self,
         living: LivingRef,
         id: &str,
-    ) -> Option<Vec<AttributeModifier>>;
+        visit: &mut dyn for<'a> FnMut(AttributeModifierView<'a>) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, EntityReadError>;
     /// Side: both.
     /// Lend the stack in `slot` once, as in [`LivingRef::with_equipment`].
     #[manual_handle]

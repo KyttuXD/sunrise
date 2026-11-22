@@ -7,7 +7,9 @@ use sunrise_client::{
     text::Text,
     worldborder::{MAX_CENTER, MAX_SIZE},
 };
-use sunrise_core::{position::ChunkPos, random::RandomSource};
+#[cfg(test)]
+use sunrise_core::position::ChunkPos;
+use sunrise_core::random::RandomSource;
 
 /// `LocationCheck.test` / `BlockPredicate`: the measured loaded block-state subset.
 fn loot_location_block(
@@ -99,20 +101,18 @@ impl Game<'_> {
         let dim = Text::literal(self.dim.id());
         match id {
             "forceload.query" if ctx.get("pos").is_none() => {
-                let mut forced: Vec<(i32, i32)> =
-                    self.streaming.commanded().iter().copied().collect();
-                // ForceLoadCommand sorts its LongStream before formatting chunks.
-                forced.sort_unstable_by_key(|&(x, z)| ChunkPos::new(x, z).pack());
-                if forced.is_empty() {
+                let count = self.streaming.commanded().len();
+                if count == 0 {
                     self.command_failure(Text::translate("commands.forceload.added.none", &[dim]));
                     return Ok(0);
                 }
-                let list = forced
-                    .iter()
+                let list = self
+                    .streaming
+                    .commanded_in_order()
                     .map(|(x, z)| format!("[{x}, {z}]"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let message = if forced.len() == 1 {
+                let message = if count == 1 {
                     Text::translate(
                         "commands.forceload.list.single",
                         &[dim, Text::literal(list)],
@@ -120,11 +120,11 @@ impl Game<'_> {
                 } else {
                     Text::translate(
                         "commands.forceload.list.multiple",
-                        &[num(forced.len()), dim, Text::literal(list)],
+                        &[num(count), dim, Text::literal(list)],
                     )
                 };
                 self.feedback(message);
-                Ok(forced.len() as i32)
+                Ok(count as i32)
             }
             "forceload.query" => {
                 let [x, z] = self.column_arg(ctx, "pos")?;

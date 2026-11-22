@@ -88,7 +88,8 @@ pub trait LevelBlocksBackend {
     /// Property `key` of the block state at `pos` (`BlockState.getValue`):
     /// `east` for `facing`. None for a block without it, or as for
     /// `block_state`. API 381.
-    fn level_block_property(&self, level: LevelRef, pos: [i32; 3], key: &str) -> Option<String>;
+    #[manual_handle]
+    fn level_block_property(&self, level: LevelRef, pos: [i32; 3], key: &str) -> Option<&str>;
     /// Side: both.
     /// The mod-published connection group at `pos`, or `Ok(None)` when unset, unloaded, or out
     /// of height. Returns `Err(LevelReadError::Stale)` for a stale handle or closed level, and

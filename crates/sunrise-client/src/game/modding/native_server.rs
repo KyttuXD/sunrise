@@ -5129,7 +5129,7 @@ pub(super) mod fake_action_tests {
             );
             let level = game.level(game.dim.id()).unwrap();
             let log = game.level_block_property(level, [1, 64, 0], "axis");
-            assert_eq!(log.as_deref(), Some("y"), "placed on a top face, standing");
+            assert_eq!(log, Some("y"), "placed on a top face, standing");
             assert_eq!(held(game, 2), None);
         });
         // A bucket clicked on a block passes, as vanilla's does (BucketItem has no useOn), and

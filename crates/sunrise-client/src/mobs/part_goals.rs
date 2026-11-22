@@ -34,8 +34,16 @@ pub trait GoalHost {
     fn merchant_trading_player_lent(&self, mob: &Mob) -> Option<mod_api::PlayerRef>;
     /// Current XP and level, including an open guest's trading session.
     fn merchant_trade_state_lent(&self, mob: &Mob) -> (i32, i32);
-    /// Live player passengers of a vehicle, with their boarding order.
-    fn player_passenger_seats(&self, vehicle: u32) -> Vec<(i64, u32)>;
+    /// Lend a vehicle's player seats in source order. True if the visitor stopped the visit.
+    fn visit_player_passenger_seats(
+        &self,
+        vehicle: u32,
+        visit: &mut dyn FnMut(i64, u32) -> bool,
+    ) -> bool;
+    /// The next rider of an object that was not lent to the mob tick, including retained riders.
+    fn next_passenger_seat(&self, vehicle: u32, after: Option<u32>) -> Option<u32>;
+    /// The actual parent of an object that was not lent, even if it has no handle.
+    fn passenger_vehicle(&self, rider: u32) -> Option<u32>;
     /// Whether this player steers the lent mob.
     fn mob_player_controls(&self, mob: &Mob, player: u32) -> bool;
     /// Dismount location using a mob lent out of the game list.

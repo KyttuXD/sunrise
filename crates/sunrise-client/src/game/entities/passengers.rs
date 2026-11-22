@@ -1549,7 +1549,12 @@ mod nested_vehicle_discard_tests {
                     assert_eq!(game.riding, Some(71));
                     assert!(game.persist.removed_vehicles.contains_key(&71));
                     assert!(game.native_entity_target(vehicle).is_none());
-                    assert!(game.entity_passengers(vehicle).is_none());
+                    assert_eq!(
+                        game.entity_visit_passengers(vehicle, &mut |_| panic!(
+                            "stale vehicle was visited"
+                        )),
+                        Err(mod_api::EntityReadError::Stale)
+                    );
                     game.stop_riding();
                     assert_eq!(calls.load(Ordering::Relaxed), 2);
                     assert_eq!(game.riding, Some(71));
@@ -1873,7 +1878,12 @@ mod nested_vehicle_discard_tests {
                     }
                     assert_vehicle_queries_hidden(game, kind);
                     assert!(game.entity_position(vehicle).is_none());
-                    assert!(game.entity_passengers(vehicle).is_none());
+                    assert_eq!(
+                        game.entity_visit_passengers(vehicle, &mut |_| panic!(
+                            "stale vehicle was visited"
+                        )),
+                        Err(mod_api::EntityReadError::Stale)
+                    );
                     assert!(game.vehicle_by_uuid(uuid).is_none());
                     if !cart {
                         assert!(game.boat_by_uuid(uuid).is_none());
@@ -2182,7 +2192,12 @@ mod nested_vehicle_discard_tests {
                     assert!(game.persist.removed_vehicles.contains_key(&71));
                     assert!(game.entity(71).is_none());
                     assert!(game.native_entity_target(vehicle).is_none());
-                    assert!(game.entity_passengers(vehicle).is_none());
+                    assert_eq!(
+                        game.entity_visit_passengers(vehicle, &mut |_| panic!(
+                            "stale vehicle was visited"
+                        )),
+                        Err(mod_api::EntityReadError::Stale)
+                    );
                     assert!(!game.run_command(&command));
                     assert_eq!(vehicle_attachment_count(game), 0);
                 });

@@ -161,11 +161,14 @@ resource generation retained by their worker.
 
 ### Ordinary Host reads
 
-Both client and server hosts expose `registry_entry(registry, id)`,
-`registry_entries(registry)` and `registry_entry_in_tag(&entry, tag)`. These read the
-current side's live registry and merged tags, not pending reload data. Unknown or
-unavailable registries and entries return `None`; an absent tag or a tag that does
-not contain the entry returns `Some(false)`. Enumeration yields each identity once.
+In World, both client and server hosts expose `registry_entry(registry, id)`,
+`visit_registry_entries(registry, &mut visit)` and `registry_entry_in_tag(&entry, tag)`.
+These read the current side's live registry and merged tags, not pending reload data.
+Individual lookups return `None` for an unknown or unavailable registry or entry; an
+absent tag or a tag that does not contain the entry returns `Some(false)`. The registry
+visitor borrows each canonical ID once. It gives `RegistryReadError::UnknownRegistry`
+for an unknown or unexposed registry and `Unavailable` without World access or a live
+backend. An available, empty registry completes without a callback.
 
 `ConfigHost::setting` still returns `Option<String>` on an ordinary `Host`; it is not the
 captured `Option<&str>` read on a load, loop or worldgen context.

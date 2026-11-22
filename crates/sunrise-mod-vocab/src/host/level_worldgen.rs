@@ -42,11 +42,11 @@ pub trait LevelWorldgenBackend {
     /// The biome id selected by `LevelReader.getBiome` and this level's biome zoom.
     /// Reads an active or parked server level. None for a
     /// stale handle or an unloaded selected noise column. Never generates or loads chunks.
-    fn level_biome_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<String>;
+    fn level_biome_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<&str>;
     /// Side: client.
     /// The biome in the client's current level (`LevelReader.getBiome`). None before
     /// login, for a stale or foreign dimension, or an unloaded selected column. Never loads chunks.
-    fn level_client_biome(&self, level: LevelRef, pos: [i32; 3]) -> Option<String>;
+    fn level_client_biome(&self, level: LevelRef, pos: [i32; 3]) -> Option<&str>;
     /// Side: both.
     /// A biome's natural spawners by category (`MobSpawnSettings.getMobs`), from the level's
     /// biome table, data packs and biome modifiers included, categories sorted by name. None for a
