@@ -3913,6 +3913,8 @@ struct Game<'a> {
     creaking: creaking::CreakingState,
     /// Monster spawners' display mobs (`game/mobs/spawner.rs`).
     spawners: spawner::SpawnerState,
+    /// The active level's stored `ServerChunkCache.spawnEnemies` setting.
+    chunk_spawn_enemies: bool,
     /// Reused candidate buffers for natural spawning.
     spawn_scratch: natural_spawning::SpawnScratch,
     trident_model: Option<sunrise_client::mobs::Part>,
@@ -9152,6 +9154,7 @@ impl Game<'_> {
         self.selected = level.selected_slot.clamp(0, 8) as usize;
         self.streaming = streaming;
         self.world = world;
+        self.chunk_spawn_enemies = true;
         self.inventory = inventory;
         self.bind_chunk_disk_worker(&save, dim);
         self.save = self.with_profession_save_snapshot(save);
@@ -13868,6 +13871,7 @@ impl<'a> Game<'a> {
             ominous_spawners: Default::default(),
             creaking: Default::default(),
             spawners: Default::default(),
+            chunk_spawn_enemies: true,
             spawn_scratch: Default::default(),
             trident_model: prepared.trident_model,
             arrow_model: prepared.arrow_model,

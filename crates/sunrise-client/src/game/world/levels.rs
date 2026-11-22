@@ -260,6 +260,7 @@ pub(super) struct Parked {
     pub(super) raiding: Raiding,
     sculk: SculkState,
     creaking: CreakingState,
+    chunk_spawn_enemies: bool,
     /// Natural spawning's candidate cache: each level keeps its own players' squares.
     spawn_scratch: super::natural_spawning::SpawnScratch,
     /// Server ticks since a player was last in the level.
@@ -944,6 +945,7 @@ impl Game<'_> {
             raiding: Default::default(),
             sculk: Default::default(),
             creaking: Default::default(),
+            chunk_spawn_enemies: true,
             spawn_scratch: Default::default(),
             idle: 0,
             border: self.load_border(dim),
@@ -1023,7 +1025,22 @@ impl Game<'_> {
             self.enter_level(dim)?;
             self.wait_for_ticket_chunks(deadline);
         }
-        self.enter_level(back)
+        self.enter_level(back)?;
+        self.update_mob_spawning_flags();
+        Ok(())
+    }
+
+    /// `MinecraftServer.updateMobSpawningFlags`: refresh each open chunk source.
+    /// Sunrise's levels share one rule set, so the updated value is the same for all.
+    pub(super) fn update_mob_spawning_flags(&mut self) {
+        use sunrise_client::gamerules::vanilla::{SPAWN_MOBS, SPAWN_MONSTERS};
+
+        let rules = &self.ui.rules;
+        let spawn_enemies = rules.bool_at(SPAWN_MOBS) && rules.bool_at(SPAWN_MONSTERS);
+        self.chunk_spawn_enemies = spawn_enemies;
+        for level in self.levels.parked.values_mut() {
+            level.chunk_spawn_enemies = spawn_enemies;
+        }
     }
 
     /// `TicketStorage.activateAllDeactivatedTickets`: restore portal and
@@ -1155,6 +1172,7 @@ impl Game<'_> {
         self.raiding.swap_level(&mut p.raiding);
         self.sculk.swap_level(&mut p.sculk);
         self.creaking.swap_level(&mut p.creaking);
+        swap(&mut self.chunk_spawn_enemies, &mut p.chunk_spawn_enemies);
         swap(&mut self.spawn_scratch, &mut p.spawn_scratch);
         swap(&mut self.border, &mut p.border);
         // What only the client draws starts over.

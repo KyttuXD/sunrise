@@ -2662,6 +2662,11 @@ impl Game<'_> {
         value: GameRuleValue,
         actor: Option<&GameRuleActor<'_>>,
     ) {
+        // MinecraftServer.onGameRuleChanged refreshes the chunk source for this
+        // rule, but not when spawn_mobs itself changes.
+        if name == "minecraft:spawn_monsters" {
+            self.update_mob_spawning_flags();
+        }
         if mod_api::__private::listened(mod_api::HookId::GameRuleChanged) {
             self.native_game_rule_changed(name, value, actor);
         }

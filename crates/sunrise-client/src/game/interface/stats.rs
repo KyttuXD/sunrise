@@ -281,11 +281,9 @@ impl Game<'_> {
         }
     }
     /// `PhantomSpawner.tick` (`ServerLevel.tickCustomSpawners`): tired players
-    /// under an open night sky draw phantoms. `spawn_enemies` is the level's
-    /// `ServerLevel.isSpawningMonsters()` flag (`spawn_mobs` and `spawn_monsters`
-    /// game rules, independent of Peaceful difficulty). Every player of the
-    /// level counts: the game's own and the hosted ones (a server thread's
-    /// players are all hosted).
+    /// under an open night sky draw phantoms. `spawn_enemies` is the chunk
+    /// source's stored setting, independent of Peaceful difficulty. The game's
+    /// own and hosted players count (a server thread's players are all hosted).
     pub(super) fn tick_phantom_spawner(&mut self, spawn_enemies: bool) {
         if !spawn_enemies
             || !self
@@ -338,17 +336,17 @@ impl Game<'_> {
             self.spawn_phantoms_near(target);
         }
     }
-    /// Direct test entry for `PhantomSpawner.tick`, applying `ServerChunkCache.tickChunks`'s
-    /// debug-world and `spawn_mobs` / `spawn_monsters` checks.
+    /// Direct test entry for `PhantomSpawner.tick` with the chunk pass's eligibility check.
     #[cfg(test)]
     pub(super) fn spawn_phantoms(&mut self) {
-        if self.world_debug {
-            return;
+        if !self.world_debug
+            && self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
+        {
+            self.tick_phantom_spawner(self.chunk_spawn_enemies);
         }
-        let rules = &self.ui.rules;
-        let spawn_enemies = rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
-            && rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MONSTERS);
-        self.tick_phantom_spawner(spawn_enemies);
     }
     /// One player's turn of `PhantomSpawner.tick`.
     fn spawn_phantoms_near(&mut self, target: PhantomTarget) {

@@ -30,9 +30,8 @@ impl Game<'_> {
     /// `ServerLevel.tickCustomSpawners`: every spawner in the list, in order, including
     /// `Phantom` before any mod-appended spawners. Skips logical clients, debug worlds
     /// (`ServerChunkCache.tickChunks`), and ticks where `spawn_mobs` is disabled. Passes
-    /// `ServerLevel.isSpawningMonsters()` (`spawn_mobs && spawn_monsters`, independent of
-    /// Peaceful difficulty) as `spawn_enemies`, and runs each mod-registered `CustomSpawner`
-    /// directly under its registering mod inside a server transaction.
+    /// the chunk source's stored `spawn_enemies` setting to Phantom and each registered
+    /// `CustomSpawner`, which runs directly under its registering mod in a transaction.
     pub(super) fn tick_custom_spawners(&mut self) {
         if self.remote.is_some()
             || !self.is_logical_server()
@@ -46,14 +45,7 @@ impl Game<'_> {
         }
         let dim = self.dim;
         self.init_custom_spawners(dim);
-        // `ServerChunkCache.tickChunks` passes its `spawnEnemies` setting, which
-        // `MinecraftServer.updateMobSpawningFlags` derives from `ServerLevel.isSpawningMonsters()`
-        // (`SPAWN_MOBS && SPAWN_MONSTERS`, independent of Peaceful difficulty). `SPAWN_MOBS` was
-        // checked above.
-        let spawn_enemies = self
-            .ui
-            .rules
-            .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MONSTERS);
+        let spawn_enemies = self.chunk_spawn_enemies;
         let level = self.level_ref(self.lend_epoch(), dim.key());
         let mut at = 0;
         loop {
@@ -109,6 +101,11 @@ mod tests {
 
     type Log = Arc<Mutex<Vec<String>>>;
 
+    fn set_spawn_rule(game: &mut Game<'_>, name: &str, value: bool) {
+        let rule = game.ui.rules.rule(name).unwrap().clone();
+        game.set_game_rule(&rule, sunrise_client::gamerules::Value::Bool(value), None);
+    }
+
     struct StatefulSpawner {
         name: &'static str,
         ticks: u32,
@@ -156,13 +153,10 @@ mod tests {
     /// spawner counts its clock down. With two mods, `modify_custom_spawners`
     /// fires once per level, the cat spawner never ticks, and each mod's owned
     /// spawner ticks directly in list order with its own retained state and the
-    /// live `spawn_enemies` flag (`SPAWN_MOBS && SPAWN_MONSTERS`, independent of
-    /// Peaceful difficulty; not broadcast to other mods).
+    /// chunk source's stored `spawn_enemies` flag, not broadcast to other mods.
     #[test]
     #[ignore = "daily"]
     fn custom_spawners_tick_in_list_order_and_a_removed_one_never_ticks() {
-        use sunrise_client::gamerules::Value as RuleValue;
-
         with_game(|game| {
             game.creatures.cat.next_tick = 5;
             game.tick_spawners();
@@ -199,14 +193,11 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 game.creatures.cat.next_tick = 5;
-                // Vanilla `ServerLevel.isSpawningMonsters()` depends on the
-                // `spawn_mobs` and `spawn_monsters` game rules, not Peaceful difficulty.
-                game.ui.difficulty = 0;
+                game.set_difficulty_forced(0);
                 game.tick_spawners();
-                game.ui.difficulty = 2;
-                assert!(game.ui.rules.set("spawn_monsters", RuleValue::Bool(false)));
+                set_spawn_rule(game, "spawn_monsters", false);
                 game.tick_spawners();
-                assert!(game.ui.rules.set("spawn_monsters", RuleValue::Bool(true)));
+                set_spawn_rule(game, "spawn_monsters", true);
                 game.tick_spawners();
                 assert_eq!(
                     game.creatures.cat.next_tick, 5,
@@ -448,14 +439,14 @@ mod tests {
                     event.spawners.remove(SpawnerKind::Phantom);
                 }
                 let log = self.log.clone();
-                event
-                    .spawners
-                    .add(move |host: &mut dyn ServerHost, _: LevelRef, _: bool| {
+                event.spawners.add(
+                    move |host: &mut dyn ServerHost, _: LevelRef, spawn_enemies: bool| {
                         let saw_phantom = host.objective("phantom_pass_ran").is_some();
-                        log.lock()
-                            .unwrap()
-                            .push(format!("appended_spawner saw_phantom={saw_phantom}"));
-                    });
+                        log.lock().unwrap().push(format!(
+                            "appended_spawner enemies={spawn_enemies} saw_phantom={saw_phantom}"
+                        ));
+                    },
+                );
             }
 
             fn player_spawn_phantoms(
@@ -479,11 +470,15 @@ mod tests {
             (
                 false,
                 vec![
+                    "appended_spawner enemies=false saw_phantom=false".to_owned(),
                     "phantom_spawner".to_owned(),
-                    "appended_spawner saw_phantom=true".to_owned(),
+                    "appended_spawner enemies=true saw_phantom=true".to_owned(),
                 ],
             ),
-            (true, vec!["appended_spawner saw_phantom=false".to_owned()]),
+            (
+                true,
+                vec!["appended_spawner enemies=true saw_phantom=false".to_owned()],
+            ),
         ] {
             let log = Log::default();
             let mods = vec![mod_api::ModEntry::new(
@@ -498,6 +493,19 @@ mod tests {
                     super::super::bossbars::audience_tests::add_real_and_fake(game);
                     game.world.day_time = 18000;
                     game.stats.set_phantom_tick(0);
+                    if !remove_phantom {
+                        game.set_difficulty_forced(2);
+                        set_spawn_rule(game, "spawn_mobs", false);
+                        set_spawn_rule(game, "spawn_monsters", false);
+                        set_spawn_rule(game, "spawn_monsters", true);
+                        game.tick_mobs().unwrap(); // No custom spawner ticks while spawn_mobs is off.
+                        set_spawn_rule(game, "spawn_mobs", true);
+                        // The pass is now eligible, but its setting was last refreshed
+                        // with spawn_mobs off: Phantom is skipped and the mod sees false.
+                        game.tick_mobs().unwrap();
+                        // A difficulty update refreshes the setting even in Peaceful.
+                        game.set_difficulty_forced(0);
+                    }
                     game.tick_mobs().unwrap();
                 });
             });

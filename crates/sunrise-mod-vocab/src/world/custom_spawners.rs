@@ -41,10 +41,11 @@ pub enum SpawnerKind {
 pub trait CustomSpawner: Send + 'static {
     /// Vanilla `CustomSpawner#tick(ServerLevel, boolean)`: run one custom-spawner tick on
     /// `level` outside debug worlds while the `spawn_mobs` game rule is enabled
-    /// (`ServerChunkCache#tickChunks`). `spawn_enemies` matches
-    /// `ServerLevel#isSpawningMonsters()` (`spawn_mobs` and `spawn_monsters` game rules
-    /// enabled, independent of Peaceful difficulty; entity- and spawner-specific difficulty
-    /// checks run separately).
+    /// (`ServerChunkCache#tickChunks`). `spawn_enemies` is the chunk source's stored
+    /// setting. The server samples `spawn_mobs && spawn_monsters` at startup, on difficulty
+    /// updates, and when `spawn_monsters` is set (`MinecraftServer#updateMobSpawningFlags`).
+    /// Changing only `spawn_mobs` changes tick eligibility, not the stored setting.
+    /// Peaceful is not a separate filter on that setting.
     fn tick(&mut self, host: &mut dyn ServerHost, level: LevelRef, spawn_enemies: bool);
 }
 
