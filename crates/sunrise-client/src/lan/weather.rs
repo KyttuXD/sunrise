@@ -4,9 +4,11 @@ use super::hub::game_event;
 use crate::world::{World, weather_flags};
 use sunrise_protocol::packets::play::{self, Clientbound as C};
 
+pub(super) type State = (bool, f32, f32);
+
 /// `Level.isRaining` and the level's current raw interpolants. The server-wide
 /// WeatherData flags only drive the interpolants; they aren't the level's state.
-pub(super) fn state(world: &World, dimension: &str) -> (bool, f32, f32) {
+pub(super) fn state(world: &World, dimension: &str) -> State {
     let weather = &world.weather;
     let raining = world
         .shape
@@ -20,8 +22,8 @@ pub(super) fn state(world: &World, dimension: &str) -> (bool, f32, f32) {
 /// strengths even if one has not changed. NeoForge scopes the whole sequence
 /// to that level. With no previous state this initializes a new client world.
 pub(super) fn send_updates(
-    previous: Option<(bool, f32, f32)>,
-    (raining, rain, thunder): (bool, f32, f32),
+    previous: Option<State>,
+    (raining, rain, thunder): State,
     mut send: impl FnMut(&C),
 ) {
     let mut event = |event, param| send(&C::GameEvent(play::GameEvent { event, param }));

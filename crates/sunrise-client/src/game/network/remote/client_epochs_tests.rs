@@ -201,15 +201,10 @@ fn a_dimension_change_uses_the_destination_weather_strengths() {
                                     server: &mut Game<'_>,
                                     dimension: &str| {
                         hub.set_dimension(dimension);
-                        hub.change_level(
-                            0,
-                            [0.5, 64.0, 0.5],
-                            0.0,
-                            None,
-                            false,
-                            0,
-                            &server.server_ctx(),
-                        );
+                        let ctx = server.server_ctx();
+                        let change =
+                            hub.begin_level_change(0, [0.5, 64.0, 0.5], 0.0, None, 0, &ctx);
+                        hub.finish_level_change(0, change, false, &ctx);
                         for out in rx.try_iter() {
                             let bodies = match out {
                                 Out::Packet(body) => vec![body],

@@ -473,17 +473,31 @@ pub(in crate::game) mod tests {
 
         const OVERWORLD: &str = "minecraft:overworld";
         const VIEWED: &str = "test:viewed_overworld";
+        const CLEARED: &str = "test:cleared_overworld";
         crate::game::in_own_process(
             "game::viewed_worlds::tests::a_dry_view_stays_dry_after_shared_weather_changes_and_promotion",
             || {
                 with_guests(|server| {
                     let mut host = server.lan.take().unwrap();
                     let hub = &mut host.hub;
-                    hub.config.levels.extra = &[ExtraLevel {
-                        id: VIEWED,
-                        dimension_type: OVERWORLD,
-                        shape: LevelShape::OVERWORLD,
-                    }];
+                    hub.config.levels.extra = &[
+                        ExtraLevel {
+                            id: VIEWED,
+                            dimension_type: OVERWORLD,
+                            shape: LevelShape::OVERWORLD,
+                        },
+                        ExtraLevel {
+                            id: CLEARED,
+                            dimension_type: OVERWORLD,
+                            shape: LevelShape::OVERWORLD,
+                        },
+                    ];
+                    let area = |level: &str| ChunkArea {
+                        level: level.into(),
+                        center: (0, 0),
+                        radius: 0,
+                        mode: ChunkAreaMode::Loaded,
+                    };
                     let (view_tx, view_rx) = channel();
                     let (plain_tx, plain_rx) = channel();
                     hub.guests.update(0, |guest| {
@@ -499,17 +513,8 @@ pub(in crate::game) mod tests {
                         guest.sender = PlayerSender::new(plain_tx, Arc::default());
                     });
                     hub.set_dimension(VIEWED);
-                    hub.set_viewed_areas(
-                        12,
-                        "test:portal",
-                        vec![ChunkArea {
-                            level: VIEWED.into(),
-                            center: (0, 0),
-                            radius: 0,
-                            mode: ChunkAreaMode::Loaded,
-                        }],
-                    )
-                    .unwrap();
+                    hub.set_viewed_areas(12, "test:portal", vec![area(VIEWED)])
+                        .unwrap();
 
                     let packets = |rx: &Receiver<Out>| {
                         rx.try_iter()
@@ -590,20 +595,53 @@ pub(in crate::game) mod tests {
                             assert_eq!(plain_weather().as_slice(), expected);
                         }
 
-                        hub.change_level(
-                            0,
-                            [0.5, 64.0, 0.5],
-                            0.0,
-                            None,
-                            false,
-                            0,
-                            &server.server_ctx(),
-                        );
+                        let ctx = server.server_ctx();
+                        let change =
+                            hub.begin_level_change(0, [0.5, 64.0, 0.5], 0.0, None, 0, &ctx);
+                        hub.finish_level_change(0, change, false, &ctx);
                         deliver_viewer_packets(game);
                         assert_eq!(game.remote.as_ref().unwrap().level, VIEWED);
                         assert_eq!(game.world.weather.rain_level, (0.0, 0.0));
                         // A plain Respawn would have dropped the viewed level's raw thunder.
                         assert_eq!(game.world.weather.thunder_level, (0.5, 0.5));
+
+                        // Only the viewer is told it is wet; the ordinary send cache never saw it.
+                        hub.set_dimension(CLEARED);
+                        assert!(hub.guests.iter().all(|guest| guest.dimension != CLEARED));
+                        hub.set_viewed_areas(12, "test:portal", vec![area(CLEARED)])
+                            .unwrap();
+                        server.world.weather.raining = true;
+                        let level = server.level(server.dim.id()).unwrap();
+                        assert!(level.set_weather_levels(server, 0.75, 0.5));
+                        assert!(hub.viewed_pass(&mut server.server_ctx()));
+                        deliver_viewer_packets(game);
+                        let slot = game
+                            .remote
+                            .as_ref()
+                            .unwrap()
+                            .viewed
+                            .slot_of(CLEARED)
+                            .unwrap();
+                        let wet = &viewed(game, slot).unwrap().weather;
+                        assert_eq!(wet.rain_level.1, 0.75);
+                        assert_eq!(wet.thunder_level.1, 0.5);
+
+                        // Clear the destination with the shared flag still set, then travel
+                        // without another viewed pass or an ordinary level sync.
+                        assert!(level.set_weather_levels(server, 0.0, 0.0));
+                        assert!(server.world.weather.raining);
+                        let ctx = server.server_ctx();
+                        let change =
+                            hub.begin_level_change(0, [0.5, 64.0, 0.5], 0.0, None, 0, &ctx);
+                        hub.finish_level_change(0, change, false, &ctx);
+                        deliver_viewer_packets(game);
+                        let remote = game.remote.as_ref().unwrap();
+                        assert_eq!(remote.level, CLEARED);
+                        assert_eq!(remote.viewed.slot_of(VIEWED), Some(slot));
+                        let dry = &game.world.weather;
+                        assert!(!dry.raining);
+                        assert_eq!(dry.rain_level, (0.0, 0.0));
+                        assert_eq!(dry.thunder_level, (0.0, 0.0));
                     });
                 });
             },
