@@ -11,7 +11,6 @@ use sunrise_client::{
     items::ItemStack,
     keybinds,
     menu::Input,
-    stations::hover_name,
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -142,7 +141,7 @@ impl Game<'_> {
         let clicks = {
             let rank = |s: &ItemStack| {
                 let order = Creative::order_of(&order, s).unwrap_or(usize::MAX);
-                (order, hover_name(&self.pack.names, s))
+                (order, self.stack_hover_name(s))
             };
             let max = |s: &ItemStack| self.max_stack(s);
             inv_sort::plan(&views, &rank, &max)

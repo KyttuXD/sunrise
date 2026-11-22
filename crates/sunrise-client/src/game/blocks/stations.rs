@@ -1536,33 +1536,9 @@ impl Game<'_> {
             _ => u32::MAX,
         }
     }
-    /// `ItemStack.getHoverName`: the custom name, a potion's or tipped
-    /// arrow's contents, a written book's title, the item name component,
-    /// else the item's name.
+    /// The resolved `ItemStack.getHoverName` rendered as plain text.
     pub(in crate::game) fn stack_hover_name(&self, stack: &ItemStack) -> String {
-        if let Some(n) = stack.custom_name() {
-            n.to_owned()
-        } else if let Some(key) = brewing::contents_name_key(stack) {
-            self.pack
-                .names
-                .display_get(&key)
-                .unwrap_or_else(|| self.pack.names.display_item(&stack.item))
-        } else if let Some(title) = stack
-            .data()
-            .and_then(|d| d.written.as_ref())
-            .map(|w| w.title.as_str())
-            .filter(|t| !t.trim().is_empty())
-        {
-            title.to_owned()
-        } else if let Some(n) = stack.item_name() {
-            n
-        } else if stack.data().is_some_and(|d| d.ominous_banner) {
-            self.translate_with_fallback("block.minecraft.ominous_banner", "Ominous Banner")
-        } else if let Some(head) = sunrise_client::item_tooltip::player_head_name(stack) {
-            head.title(&|key| self.pack.names.display_get(key))
-        } else {
-            self.pack.names.display_item(&stack.item)
-        }
+        self.stack_hover_name_text(stack).plain()
     }
     /// `ItemStack.getTooltipLines`. A `nested` stack is a crossbow's
     /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
@@ -1730,15 +1706,12 @@ impl Game<'_> {
         }
         details.start("minecraft:container", lines.len());
         // ItemContainerContents.addToTooltip.
-        let hover_name = |s: &ItemStack| {
-            s.custom_name()
-                .or_else(|| s.item_name())
-                .unwrap_or_else(|| self.pack.names.display_item(&s.item))
-        };
         if display.shows("minecraft:container") {
-            for text in
-                sunrise_client::item_tooltip::container_lines(stack, &hover_name, &translate)
-            {
+            for text in sunrise_client::item_tooltip::container_lines(
+                stack,
+                &|s| self.stack_hover_name(s),
+                &translate,
+            ) {
                 push(&mut lines, text, u32::MAX);
             }
         }
@@ -1766,20 +1739,13 @@ impl Game<'_> {
             let charged = stack.data().map_or(&[][..], |d| &d.charged[..]);
             for run in charged.chunk_by(|a, b| a.same_item_same_components(b)) {
                 let projectile = &run[0];
-                let name = self.stack_hover_name(projectile);
                 let line = if run.len() == 1 {
-                    // `getDisplayName`: `[name]` in the rarity colour.
-                    let mut shown = sunrise_client::text::Text::literal(format!("[{name}]"))
-                        .with_color(rgb_of(self.rarity_color(projectile)));
-                    if projectile.custom_name().is_some() {
-                        shown = shown.italic();
-                    }
                     sunrise_client::text::format_translation(
                         &self.translate_with_fallback(
                             "item.minecraft.crossbow.projectile.single",
                             "Projectile: %s",
                         ),
-                        &[shown],
+                        &[self.stack_display_name(projectile)],
                     )
                 } else {
                     sunrise_client::text::format_translation(
@@ -1789,7 +1755,7 @@ impl Game<'_> {
                         ),
                         &[
                             sunrise_client::text::Text::literal(run.len().to_string()),
-                            sunrise_client::text::Text::literal(name),
+                            self.stack_hover_name_text(projectile),
                         ],
                     )
                 };

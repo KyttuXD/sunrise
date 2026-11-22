@@ -15,7 +15,6 @@ use sunrise_client::{
     hud::{HudAtlas, HudBatch, rgba},
     items::ItemStack,
     menu::Input,
-    stations::hover_name,
 };
 use sunrise_hooks::{
     containers::{self as api, Button, Click, Container, Panel, Role, Slot, SlotId, Stack},
@@ -180,7 +179,7 @@ impl Container for Open<'_, '_> {
     fn name(&self, slot: SlotId) -> Option<String> {
         let game = self.game();
         let stack = game.slot_view(self.slot(slot)?)?;
-        Some(hover_name(&game.pack.names, &stack))
+        Some(game.stack_hover_name(&stack))
     }
     fn takes_one(&mut self, slot: SlotId, of: &Stack) -> bool {
         let Some(slot) = self.slot(slot) else {
