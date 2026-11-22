@@ -1766,6 +1766,14 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
     fn remove_block(&mut self, _pos: [i32; 3], _moved: bool) -> bool {
         unimplemented!("LevelWriteHost::remove_block")
     }
+    /// Destroy a block through `Level.destroyBlock(pos, drop)`: emit destroy particles (2001),
+    /// optional drops, and replace the block with its fluid's legacy state (`minecraft:air` when
+    /// dry). Returns false off an authoritative server, for an unloaded or out-of-height position,
+    /// for air, or inside an open journalled transaction where loot and break effects cannot roll
+    /// back.
+    fn destroy_block(&mut self, _pos: [i32; 3], _drop: bool) -> bool {
+        unimplemented!("LevelWriteHost::destroy_block")
+    }
     /// Change a block property through `native_set_block_property`.
     fn set_block_property(
         &mut self,

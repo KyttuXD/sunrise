@@ -29,7 +29,7 @@ impl PlayerMotion {
             collision: CollisionFlags::default(),
             history: MovementHistory::default(),
             fall_distance: 0.0,
-            block_landing: None,
+            pending_bounce: None,
             stuck_multiplier: Vec3::ZERO,
             piston: Default::default(),
             yaw: 0.0,

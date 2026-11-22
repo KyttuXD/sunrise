@@ -98,8 +98,80 @@ impl FarmlandTrample {
         self,
         world: &mut W,
     ) -> Result<(), LandingError<W::Error>> {
-        ordinary_fall(world, self.damage_distance)
+        self.finish_fall_with(world, self.damage_distance, 1.0)
     }
+    /// Complete the superclass fall after both the trample and any `fall_on`
+    /// block part have run on the owning level with the mod-edited fall inputs.
+    pub fn finish_fall_with<W: BlockLandingWorld>(
+        self,
+        world: &mut W,
+        distance: f64,
+        multiplier: f32,
+    ) -> Result<(), LandingError<W::Error>> {
+        cause(
+            world,
+            DamageSourceOwner::Entity,
+            LandingDamage::Fall,
+            distance,
+            multiplier,
+        )?;
+        Ok(())
+    }
+}
+
+/// A landing paused at `Block.fallOn` so the owning level can lend
+/// `&mut dyn LevelWriteHost` to a block part before `causeFallDamage` and
+/// `HIT_GROUND` run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingModFall {
+    pub state: BlockStateId,
+    pub position: BlockPos,
+    pub distance: f64,
+    pub multiplier: f32,
+    pub owner: DamageSourceOwner,
+    pub damage: LandingDamage,
+    pub calls_cause_fall_damage: bool,
+    pub honey_fall: Option<(f32, f32)>,
+}
+
+impl PendingModFall {
+    /// Complete the landing after the owning level ran `fall_on`, passing the
+    /// mod-edited fall distance and multiplier into `causeFallDamage`.
+    pub fn finish_fall<W: BlockLandingWorld>(
+        self,
+        world: &mut W,
+        distance: f64,
+        multiplier: f32,
+    ) -> Result<(), LandingError<W::Error>> {
+        if !self.calls_cause_fall_damage {
+            return Ok(());
+        }
+        if cause(world, self.owner, self.damage, distance, multiplier)?
+            && let Some((volume, pitch)) = self.honey_fall
+        {
+            let sound = world.known_sound(LandingSound::HoneyFall);
+            world
+                .entity_sound(sound, volume * 0.5, pitch * 0.75)
+                .map_err(LandingError::World)?;
+        }
+        Ok(())
+    }
+}
+
+/// Which authoritative pause points `BlockLandingRegistry::fall_on_until_pause`
+/// should stop at so the owning level can run them with full level write access.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FallPauseOptions {
+    pub trample: bool,
+    pub mod_fall: bool,
+}
+
+/// Why `BlockLandingRegistry::fall_on_until_pause` suspended before
+/// `causeFallDamage` and `HIT_GROUND`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FallPause {
+    Trample(FarmlandTrample),
+    ModFall(PendingModFall),
 }
 
 pub trait BlockLandingWorld: BlockPushWorld {
@@ -369,10 +441,52 @@ impl BlockLandingRegistry {
         distance: f64,
         pause: bool,
     ) -> Result<Option<FarmlandTrample>, LandingError<W::Error>> {
+        match self.fall_on_until_pause(
+            world,
+            state,
+            position,
+            entity,
+            distance,
+            FallPauseOptions {
+                trample: pause,
+                mod_fall: false,
+            },
+        )? {
+            Some(FallPause::Trample(trample)) => Ok(Some(trample)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Run `fallOn`, stopping before a farmland trample (`pause.trample`) or
+    /// before `causeFallDamage` when a block part listens (`pause.mod_fall`) so
+    /// the owning level can lend `&mut dyn LevelWriteHost` at the landing site.
+    pub fn fall_on_until_pause<W: BlockLandingWorld>(
+        &self,
+        world: &mut W,
+        state: BlockStateId,
+        position: BlockPos,
+        entity: LandingEntityKind,
+        distance: f64,
+        pause: FallPauseOptions,
+    ) -> Result<Option<FallPause>, LandingError<W::Error>> {
+        let pause_trample = pause.trample;
+        let pause_mod_fall = pause.mod_fall;
         let data = self.state(state)?;
         match data.rule {
             Rule::Default => {}
             Rule::Hay => {
+                if pause_mod_fall {
+                    return Ok(Some(FallPause::ModFall(PendingModFall {
+                        state,
+                        position,
+                        distance,
+                        multiplier: 0.2,
+                        owner: DamageSourceOwner::Level,
+                        damage: LandingDamage::Fall,
+                        calls_cause_fall_damage: true,
+                        honey_fall: None,
+                    })));
+                }
                 cause(
                     world,
                     DamageSourceOwner::Level,
@@ -392,6 +506,18 @@ impl BlockLandingRegistry {
                         .broadcast_entity_event(54)
                         .map_err(LandingError::World)?;
                 }
+                if pause_mod_fall {
+                    return Ok(Some(FallPause::ModFall(PendingModFall {
+                        state,
+                        position,
+                        distance,
+                        multiplier: 0.2,
+                        owner: DamageSourceOwner::Level,
+                        damage: LandingDamage::Fall,
+                        calls_cause_fall_damage: true,
+                        honey_fall: Some((volume, pitch)),
+                    })));
+                }
                 if cause(
                     world,
                     DamageSourceOwner::Level,
@@ -407,7 +533,20 @@ impl BlockLandingRegistry {
                 return Ok(None);
             }
             Rule::Slime => {
-                if !world.suppressing_bounce().map_err(LandingError::World)? {
+                let calls_cause = !world.suppressing_bounce().map_err(LandingError::World)?;
+                if pause_mod_fall {
+                    return Ok(Some(FallPause::ModFall(PendingModFall {
+                        state,
+                        position,
+                        distance,
+                        multiplier: 0.0,
+                        owner: DamageSourceOwner::Level,
+                        damage: LandingDamage::Fall,
+                        calls_cause_fall_damage: calls_cause,
+                        honey_fall: None,
+                    })));
+                }
+                if calls_cause {
                     cause(
                         world,
                         DamageSourceOwner::Level,
@@ -427,9 +566,33 @@ impl BlockLandingRegistry {
                         .entity_sound(sound, 1.0, 1.0)
                         .map_err(LandingError::World)?;
                 }
+                if pause_mod_fall {
+                    return Ok(Some(FallPause::ModFall(PendingModFall {
+                        state,
+                        position,
+                        distance,
+                        multiplier: 0.0,
+                        owner: DamageSourceOwner::Entity,
+                        damage: LandingDamage::Fall,
+                        calls_cause_fall_damage: false,
+                        honey_fall: None,
+                    })));
+                }
                 return Ok(None);
             }
             Rule::DripstoneTip => {
+                if pause_mod_fall {
+                    return Ok(Some(FallPause::ModFall(PendingModFall {
+                        state,
+                        position,
+                        distance: distance + 2.5,
+                        multiplier: 2.0,
+                        owner: DamageSourceOwner::Level,
+                        damage: LandingDamage::Stalagmite,
+                        calls_cause_fall_damage: true,
+                        honey_fall: None,
+                    })));
+                }
                 cause(
                     world,
                     DamageSourceOwner::Level,
@@ -455,14 +618,14 @@ impl BlockLandingRegistry {
                     if allowed {
                         let (width, height) = world.entity_dimensions();
                         if width * width * height > 0.512f32 {
-                            if pause {
-                                return Ok(Some(FarmlandTrample {
+                            if pause_trample {
+                                return Ok(Some(FallPause::Trample(FarmlandTrample {
                                     position,
                                     state,
                                     base,
                                     distance,
                                     damage_distance: distance * f64::from(1.0f32 - data.reduction),
-                                }));
+                                })));
                             }
                             let next = push_entities_up(world, state, base, position)
                                 .map_err(LandingError::Push)?;
@@ -482,7 +645,20 @@ impl BlockLandingRegistry {
                 }
             }
         }
-        ordinary_fall(world, distance * f64::from(1.0f32 - data.reduction))?;
+        let damage_distance = distance * f64::from(1.0f32 - data.reduction);
+        if pause_mod_fall {
+            return Ok(Some(FallPause::ModFall(PendingModFall {
+                state,
+                position,
+                distance: damage_distance,
+                multiplier: 1.0,
+                owner: DamageSourceOwner::Entity,
+                damage: LandingDamage::Fall,
+                calls_cause_fall_damage: true,
+                honey_fall: None,
+            })));
+        }
+        ordinary_fall(world, damage_distance)?;
         Ok(None)
     }
 }

@@ -639,35 +639,100 @@ impl Game<'_> {
                 m.client_moved_fall(&w, &mut level, delta, p.on_ground, &mut events)
             }));
             lent.give_back(&mut self.world);
-            let trample = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            let paused = outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
             let (id, join) = (m.id, m.join);
             self.mobs[i] = m;
-            if let Some(trample) = trample {
-                self.trample_farmland(id, false, trample);
-                if let Some(i) = self
-                    .mobs
-                    .iter()
-                    .position(|mob| mob.id == id && mob.join == join && !mob.removed)
-                {
-                    let mut m = self.mobs[i].clone();
-                    let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let w = self.mob_world_base(&[]);
-                        let mut level = sunrise_client::health::DamageLevel::lent(
-                            &self.world,
-                            self.pack.assets.registry,
-                            &mut lent,
-                            Some(self.items()),
-                            Some(&self.pack.block_registries),
-                            &self.damage_hooks,
-                        );
-                        m.finish_trample_fall(&w, &mut level, &mut events, trample);
-                    }));
-                    lent.give_back(&mut self.world);
-                    if let Err(panic) = outcome {
-                        std::panic::resume_unwind(panic);
+            if let Some(paused) = paused {
+                match paused {
+                    sunrise_world::block_landing::FallPause::Trample(trample) => {
+                        self.trample_farmland(id, false, trample);
+                        let answer = sunrise_client::block_contact::fall_listens(trample.state)
+                            .then(|| {
+                                self.mod_fall_on_mob(
+                                    id,
+                                    join,
+                                    trample.state,
+                                    trample.position,
+                                    trample.damage_distance,
+                                    1.0,
+                                )
+                            });
+                        if let Some(i) = self
+                            .mobs
+                            .iter()
+                            .position(|mob| mob.id == id && mob.join == join && !mob.removed)
+                        {
+                            let mut m = self.mobs[i].clone();
+                            let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
+                            let outcome =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let w = self.mob_world_base(&[]);
+                                    let mut level = sunrise_client::health::DamageLevel::lent(
+                                        &self.world,
+                                        self.pack.assets.registry,
+                                        &mut lent,
+                                        Some(self.items()),
+                                        Some(&self.pack.block_registries),
+                                        &self.damage_hooks,
+                                    );
+                                    m.finish_trample_fall(
+                                        &w,
+                                        &mut level,
+                                        &mut events,
+                                        trample,
+                                        answer,
+                                    );
+                                }));
+                            lent.give_back(&mut self.world);
+                            if let Err(panic) = outcome {
+                                std::panic::resume_unwind(panic);
+                            }
+                            self.mobs[i] = m;
+                        }
                     }
-                    self.mobs[i] = m;
+                    sunrise_world::block_landing::FallPause::ModFall(pending) => {
+                        let (distance, multiplier) = self.mod_fall_on_mob(
+                            id,
+                            join,
+                            pending.state,
+                            pending.position,
+                            pending.distance,
+                            pending.multiplier,
+                        );
+                        if let Some(i) = self
+                            .mobs
+                            .iter()
+                            .position(|mob| mob.id == id && mob.join == join && !mob.removed)
+                        {
+                            let mut m = self.mobs[i].clone();
+                            let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
+                            let outcome =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let w = self.mob_world_base(&[]);
+                                    let mut level = sunrise_client::health::DamageLevel::lent(
+                                        &self.world,
+                                        self.pack.assets.registry,
+                                        &mut lent,
+                                        Some(self.items()),
+                                        Some(&self.pack.block_registries),
+                                        &self.damage_hooks,
+                                    );
+                                    m.finish_mod_fall(
+                                        &w,
+                                        &mut level,
+                                        &mut events,
+                                        pending,
+                                        distance,
+                                        multiplier,
+                                    );
+                                }));
+                            lent.give_back(&mut self.world);
+                            if let Err(panic) = outcome {
+                                std::panic::resume_unwind(panic);
+                            }
+                            self.mobs[i] = m;
+                        }
+                    }
                 }
             }
             // propagateFallToPassengers reaches the guests through `host`: it is out

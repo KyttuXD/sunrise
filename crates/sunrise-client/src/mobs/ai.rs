@@ -99,8 +99,6 @@ mod inside_walk_tests {
             pass_listens: |_| false,
             fall_listens: |_| false,
             bounce_listens: |_| false,
-            fall_on: |_, _, _, _, _, _, _, _| {},
-            bounce_on: |_, _, _, _, _, _, _, _| {},
             // The production binding's own shape: the whole callback staged,
             // a panic contained with it.
             inside_fire: |_level,
@@ -1116,20 +1114,20 @@ enum TramplePhase {
     Travel(super::living::TravelTrample),
 }
 
-/// A suspended mob's landing and the exact remainder of its tick.
+/// A suspended mob's landing or bounce and the exact remainder of its tick.
 #[derive(Debug)]
 pub struct MobTrample {
     phase: TramplePhase,
     was_on_fire: bool,
-    join: crate::join_seq::JoinSeq,
+    pub join: crate::join_seq::JoinSeq,
     pub mob: u32,
 }
 
 impl MobTrample {
-    pub fn decision(&self) -> sunrise_world::block_landing::FarmlandTrample {
-        match &self.phase {
-            TramplePhase::Goal(goal) => goal.movement.decision(),
-            TramplePhase::Travel(travel) => travel.decision(),
+    pub fn pause_mut(&mut self) -> &mut super::living::MovePause {
+        match &mut self.phase {
+            TramplePhase::Goal(goal) => goal.movement.pause_mut(),
+            TramplePhase::Travel(travel) => travel.pause_mut(),
         }
     }
 }
@@ -1483,10 +1481,13 @@ pub(super) fn resume_after_trample(
     }
     let progress = match paused.phase {
         TramplePhase::Travel(travel) => {
-            travel.resume(m, w, level, events);
-            hurt_teleports(m, w, events);
-            finish_ai_step(m, w, level, events);
-            None
+            if let Some(travel) = travel.resume(m, w, level, events) {
+                Some(TramplePhase::Travel(travel))
+            } else {
+                hurt_teleports(m, w, events);
+                finish_ai_step(m, w, level, events);
+                None
+            }
         }
         TramplePhase::Goal(goal) => {
             let paused = {

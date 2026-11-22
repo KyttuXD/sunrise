@@ -203,6 +203,13 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             };
         self.write_block(pos, replacement, flags)
     }
+    fn destroy_block(&mut self, pos: [i32; 3], drop: bool) -> bool {
+        // Loot and break effects cannot roll back through the level journal;
+        // `level_destroy_block` refuses while a transaction is open.
+        self.game
+            .level_destroy_block(self.level, pos, drop, None, false)
+            .is_some()
+    }
     fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
         let [x, y, z] = pos;
         super::native_hooks::with_property(

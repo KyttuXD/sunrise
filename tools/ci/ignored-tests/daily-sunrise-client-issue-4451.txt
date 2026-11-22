@@ -1458,6 +1458,8 @@ sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_enti
 sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_entity_on_load_saved_data_placement_rewrite_and_reload lib daily child-process
 sunrise-client game::native_hooks::block_entity_on_load_tests::tests::block_entity_on_load_without_listener_preserves_data_and_never_queues lib daily resources
 sunrise-client game::native_hooks::block_landing::landing_tests::fall_on_and_bounce_on_lend_entity_and_contain_deferred_panics lib daily resources
+sunrise-client game::native_hooks::block_landing::landing_tests::fall_on_and_bounce_on_write_level_before_fall_damage_hit_ground_and_bounce_event lib daily resources
+sunrise-client game::native_hooks::block_landing::landing_tests::mob_farmland_trample_lends_farmland_state_to_fall_on_while_sound_reads_dirt lib daily resources
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen lib daily resources
 sunrise-client game::native_hooks::book_screen::lifecycle_tests::entering_inventory_requests_catalogue_for_preinstalled_bound_screen lib daily resources
 sunrise-client game::native_hooks::camera_type::camera_type_tests::a_client_mod_picks_the_camera_type_f5_cycles_to lib daily resources

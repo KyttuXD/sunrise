@@ -273,7 +273,9 @@ impl GoalSelector {
         cx: &mut Cx,
         paused: GoalTrample,
     ) -> Option<GoalTrample> {
-        paused.movement.resume(m, cx.w, cx.level, cx.events);
+        if let Some(movement) = paused.movement.resume(m, cx.w, cx.level, cx.events) {
+            return Some(GoalTrample { movement, ..paused });
+        }
         // An owning-host listener can remove or shift the running goal. Only
         // the still-resident goal holding this pause can finish its path update.
         let next = self

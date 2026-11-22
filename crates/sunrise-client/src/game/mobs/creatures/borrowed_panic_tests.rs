@@ -48,7 +48,12 @@ impl Probe {
     }
 }
 impl Probe {
-    fn progress(&self, family: Family, target: bool, host: &mut dyn mod_api::LevelRandomHost) {
+    fn progress(
+        &self,
+        family: Family,
+        target: bool,
+        host: &mut (impl mod_api::LevelRandomHost + ?Sized),
+    ) {
         if self.family == family && target && self.armed.load(Ordering::SeqCst) {
             // The fixture's pre-hook vanilla rolls (ambient, egg cooldown and knockback)
             // use each mob's own stream. This is the first draw from the seeded level.
@@ -128,7 +133,7 @@ impl mod_api::MobEffectPart for GoalPart {
 impl mod_api::BlockPart for GoalPart {
     fn fall_on(
         &self,
-        host: &mut dyn mod_api::LevelRandomHost,
+        host: &mut dyn mod_api::LevelWriteHost,
         event: &mut mod_api::FallOnEvent<'_>,
     ) {
         self.0

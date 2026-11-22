@@ -1938,34 +1938,6 @@ pub(super) const BLOCK_CONTACT_HOOKS: sunrise_client::block_contact::Hooks =
                 }
             }
         },
-        fall_on: |dimension, level, entity, state, pos, distance, damage_multiplier, deferred| {
-            HitLevel(level.reborrow()).native_fall_on(
-                crate::game::native_hooks::fire::FallOnCall {
-                    dimension,
-                    entity: mod_api::LandingEntity::new(entity),
-                    state,
-                    pos,
-                    distance,
-                    damage_multiplier,
-                    deferred: mod_api::__private::LandingDeferred::new(deferred),
-                },
-            );
-        },
-        bounce_on: |dimension, level, entity, state, pos, fall_distance, movement, deferred| {
-            let mut answer = [movement.x, movement.y, movement.z];
-            HitLevel(level.reborrow()).native_bounce_on(
-                crate::game::native_hooks::fire::BounceOnCall {
-                    dimension,
-                    entity: mod_api::LandingEntity::new(entity),
-                    state,
-                    pos,
-                    fall_distance,
-                    movement: &mut answer,
-                    deferred: mod_api::__private::LandingDeferred::new(deferred),
-                },
-            );
-            *movement = sunrise_core::geometry::Vec3::new(answer[0], answer[1], answer[2]);
-        },
     };
 pub(super) use living_death::hurt_server_args;
 pub(super) use sunrise_client::health::mob_source;

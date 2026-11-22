@@ -871,8 +871,56 @@ impl Game<'_> {
                             air_answer = self.ask_mob_breath(air);
                         }
                         Pause::Trample => {
-                            let trample = trample.as_ref().expect("the trample pause was stored");
-                            self.trample_farmland(trample.mob, false, trample.decision());
+                            let trample = trample.as_mut().expect("the trample pause was stored");
+                            let (mob_id, join) = (trample.mob, trample.join);
+                            match trample.pause_mut() {
+                                sunrise_client::mobs::living::MovePause::Trample {
+                                    trample: decision,
+                                    fall_answer,
+                                } => {
+                                    let decision = *decision;
+                                    self.trample_farmland(mob_id, false, decision);
+                                    if sunrise_client::block_contact::fall_listens(decision.state) {
+                                        *fall_answer = Some(self.mod_fall_on_mob(
+                                            mob_id,
+                                            join,
+                                            decision.state,
+                                            decision.position,
+                                            decision.damage_distance,
+                                            1.0,
+                                        ));
+                                    }
+                                }
+                                sunrise_client::mobs::living::MovePause::ModFall {
+                                    pending,
+                                    fall_answer,
+                                } => {
+                                    let pending = *pending;
+                                    *fall_answer = Some(self.mod_fall_on_mob(
+                                        mob_id,
+                                        join,
+                                        pending.state,
+                                        pending.position,
+                                        pending.distance,
+                                        pending.multiplier,
+                                    ));
+                                }
+                                sunrise_client::mobs::living::MovePause::ModBounce {
+                                    pending,
+                                    movement,
+                                } => {
+                                    let pending = *pending;
+                                    *movement = Some(self.mod_bounce_on_mob(
+                                        mob_id,
+                                        join,
+                                        pending.block,
+                                        pending.position,
+                                        pending.fall_distance,
+                                        pending.movement,
+                                    ));
+                                    self.post_entity_event("minecraft:bounce", Who::Mob(mob_id));
+                                }
+                            }
                         }
                     }
                 }

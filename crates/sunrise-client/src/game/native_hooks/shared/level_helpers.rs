@@ -159,6 +159,20 @@ impl GameLevel<'_> {
         self.behaviours
             .remove_block(self, ticks, BlockPos::new(pos[0], pos[1], pos[2]), moved)
     }
+    /// `Level.destroyBlock(pos, drop)`: emit destroy particles (2001), optional drops,
+    /// and replace the block with its fluid's legacy state.
+    pub(in crate::game) fn destroy_block_write(
+        &mut self,
+        ticks: &mut Ticks,
+        pos: [i32; 3],
+        drop: bool,
+    ) -> bool {
+        if !self.native_authoritative || !self.world.is_loaded_at(pos[0], pos[1], pos[2]) {
+            return false;
+        }
+        self.behaviours
+            .destroy_block(self, ticks, BlockPos::new(pos[0], pos[1], pos[2]), drop)
+    }
     /// Schedules a tick of `block` (a block name) at `pos` in `delay` game
     /// ticks, as a falling block's shape update schedules its fall
     /// (`ScheduledTickAccess.scheduleTick(pos, block, delay)`, normal

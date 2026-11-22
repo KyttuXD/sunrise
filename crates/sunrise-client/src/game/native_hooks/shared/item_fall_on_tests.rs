@@ -1,15 +1,15 @@
 use super::*;
-use mod_api::{BlockPart, FallOnEvent, Hooks, LevelRandomHost, ModEntry, Registrar};
+use mod_api::{BlockPart, FallOnEvent, Hooks, LevelWriteHost, ModEntry, Registrar};
 use mod_platform::testing::with_mods;
 use std::sync::{Arc, Mutex};
 
 /// What the part on stone heard of a landing: entity, kind, block, fall and damage. It
-/// asks for the block to be destroyed.
+/// destroys the block immediately at the landing site.
 #[derive(Clone, Default)]
 struct Lands(Arc<Mutex<Vec<(i32, String, BlockPos, f64, f32)>>>);
 #[mod_api::sunrise_part]
 impl BlockPart for Lands {
-    fn fall_on(&self, _: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+    fn fall_on(&self, host: &mut dyn LevelWriteHost, event: &mut FallOnEvent<'_>) {
         self.0.lock().unwrap().push((
             event.entity.id(),
             event.entity.kind().to_owned(),
@@ -17,13 +17,8 @@ impl BlockPart for Lands {
             event.distance,
             event.damage_multiplier,
         ));
-        let dim = event.dimension.to_owned();
         let at = [event.pos.x, event.pos.y, event.pos.z];
-        event.after_landing(move |host| {
-            if let Some(level) = host.level(&dim) {
-                let _ = level.destroy_block(host, at, false, None, false);
-            }
-        });
+        let _ = host.destroy_block(at, false);
     }
 }
 struct Mod(Lands);
@@ -49,7 +44,7 @@ use sunrise_core::random::RandomSource as _;
 struct LoanPart(std::sync::Arc<()>);
 #[mod_api::sunrise_part]
 impl BlockPart for LoanPart {
-    fn fall_on(&self, host: &mut dyn LevelRandomHost, event: &mut FallOnEvent<'_>) {
+    fn fall_on(&self, host: &mut dyn LevelWriteHost, event: &mut FallOnEvent<'_>) {
         let draw = host
             .with_random(|random| random.next_int())
             .expect("authoritative landing random");
@@ -187,8 +182,9 @@ fn item_fall_on_returns_progressed_level_loan_after_part_panic() {
 }
 
 /// A dropped item that falls onto a block with a `fall_on` part is told to it once, as
-/// `minecraft:item`, with the whole fall and no damage; the write the part asks for lands
-/// after the items' batch; and an item resting there lands no more.
+/// `minecraft:item`, with the whole fall and no damage; `host.destroy_block` runs
+/// immediately at the landing site so a second item landing in the same batch sees air,
+/// and an item resting on restored stone lands no more.
 #[test]
 #[ignore = "daily"]
 fn a_dropped_item_lands_on_a_fall_on_part() {
@@ -210,15 +206,35 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
             }
             game.world.set(1, 64, 1, stone).unwrap();
             let level = game.level(game.dim.id()).unwrap();
-            let stack = ItemStack::new("minecraft:apple", 1);
-            let item = game
-                .level_spawn_item(level, 1.5, 70.0, 1.5, stack, 10)
+            let first = game
+                .level_spawn_item(
+                    level,
+                    1.5,
+                    70.0,
+                    1.5,
+                    ItemStack::new("minecraft:apple", 1),
+                    10,
+                )
                 .unwrap();
-            if let Some(i) = game.dropped.iter_mut().find(|i| i.id == item.id()) {
-                i.velocity = sunrise_core::geometry::Vec3::ZERO;
+            // A second item in the same batch falls onto the same cell; the first item's
+            // immediate `host.destroy_block` must remove the stone before this item lands.
+            let second = game
+                .level_spawn_item(
+                    level,
+                    1.5,
+                    70.0,
+                    1.5,
+                    ItemStack::new("minecraft:stick", 1),
+                    10,
+                )
+                .unwrap();
+            for item in &mut game.dropped {
+                if item.id == first.id() || item.id == second.id() {
+                    item.velocity = sunrise_core::geometry::Vec3::ZERO;
+                }
             }
-            // The part's write destroys the stone after the batch; it is put back at once,
-            // so the item rests on it again and must not be heard landing twice.
+            // The part destroys the stone immediately at the landing site; put it back once
+            // observed so the resting item must not be heard landing twice.
             let mut destructions = 0;
             for _ in 0..80 {
                 game.ticked_entities_through = u32::MAX;
@@ -233,14 +249,21 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
                     destructions += 1;
                     game.world.set(1, 64, 1, stone).unwrap();
                     let heard = heard.0.lock().unwrap();
-                    assert_eq!(heard.len(), 1, "the write landed after the batch");
+                    assert_eq!(
+                        heard.len(),
+                        1,
+                        "immediate destroy_block hid the stone from the second item in the same batch"
+                    );
                 }
             }
-            assert_eq!(destructions, 1, "one observed landing-write destruction");
+            assert_eq!(
+                destructions, 1,
+                "one observed immediate landing destruction"
+            );
             let heard = heard.0.lock().unwrap().clone();
             assert_eq!(heard.len(), 1, "one landing: {heard:?}");
             let (entity, kind, pos, distance, damage) = &heard[0];
-            assert_eq!(*entity, item.id() as i32);
+            assert_eq!(*entity, first.id() as i32);
             assert_eq!(kind, "minecraft:item");
             assert_eq!(*pos, BlockPos::new(1, 64, 1));
             // From rest at y 70 onto the stone's top at 65.

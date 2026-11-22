@@ -152,9 +152,14 @@ template block writes still call the rotation Part at their placed world positio
 ## Landing and bounce callbacks
 
 `BlockPart::fall_on` (hook version 3, `Block.fallOn`) and `BlockPart::bounce_on`
-(hook version 2, `Block.bounceOn`) run synchronously inside the entity's move on a
-read-only `LevelRandomHost` (reads blocks, draws the level's live random stream in
-vanilla's order, and accesses attachments).
+(hook version 2, `Block.bounceOn`) run synchronously at the landing or bounce site on
+`&mut dyn LevelWriteHost` (reads blocks, draws the level's live random stream in vanilla's
+order, accesses attachments, sets or destroys blocks via `set_block` / `destroy_block`,
+schedules ticks, plays sounds, emits particles, and triggers level events). Level events
+are flushed before vanilla continues to `causeFallDamage`, `GameEvent.HIT_GROUND`,
+`GameEvent.BOUNCE`, or any later entity landing in the same batch. When a mob or player
+tramples farmland to dirt, `fall_on` still dispatches to the captured landed farmland
+state while the live level cell, fall sound, and `HIT_GROUND` observe the replacement block.
 
 Both events lend the falling or bouncing entity directly as `event.entity: LandingEntity<'_>`,
 exposing its id, type kind, position, block position, velocity, fall distance, ground state,
@@ -169,12 +174,12 @@ The engine applies `floor((distance + 1e-6 - safe_fall_distance) * damage_multip
 The safe fall distance attribute defaults to 3: halving distance is not halving damage.
 A zero multiplier or distance within the safe fall means no damage or generic fall sounds.
 Creative and fall-immune entities and items keep their immunity regardless of edits.
-`bounce_on` fires only when an entity bounced, just before vanilla sets its velocity,
-with writable `event.movement: &mut [f64; 3]`.
+`bounce_on` fires only when an entity bounced, just before `GameEvent.BOUNCE` and
+velocity assignment, with writable `event.movement: &mut [f64; 3]`.
 
-For work that requires `&mut dyn ServerHost` (setting or destroying blocks such as
-farmland trampling or turtle eggs breaking, playing sounds, or firing game events),
-queue an owned native callback with `event.after_landing(move |host| { ... })` or
+For work that still needs full `&mut dyn ServerHost` access outside the level-write
+surface (spawning entities, cross-level queries, player messaging), queue an owned native
+callback with `event.after_landing(move |host| { ... })` or
 `event.after_bounce(move |host| { ... })`. Queued callbacks run in FIFO order once the
 entity batch ends, with no engine-side unchanged-block replay gate: inspect
 `level.block_state(host, pos)` locally inside the callback when the action depends on

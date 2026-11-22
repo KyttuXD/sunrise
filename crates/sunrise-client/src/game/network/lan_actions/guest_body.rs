@@ -251,19 +251,53 @@ impl Game<'_> {
                     w.check_guest_fall_damage(movement.y, accepted.on_ground, state, pos)
                 })();
                 let Ok(landed) = landed else { break };
-                if let Some(trample) = landed {
+                if let Some(paused) = landed {
                     let mut collected = std::mem::take(&mut w.player.events);
-                    game.trample_farmland(id, true, trample);
-                    let Some(player) = game.player.as_mut().filter(|p| p.entity_id as u32 == id)
-                    else {
-                        return (collected, None, ServerTravel::Continue);
-                    };
-                    collected.append(&mut player.events);
-                    player.events = collected;
-                    side = game_side!(game);
-                    w = motion_world!(game, side, player);
-                    if w.finish_trample_fall(trample).is_err() {
-                        break;
+                    match paused {
+                        sunrise_world::block_landing::FallPause::Trample(trample) => {
+                            game.trample_farmland(id, true, trample);
+                            let answer = sunrise_client::block_contact::fall_listens(trample.state)
+                                .then(|| {
+                                    game.mod_fall_on_player(
+                                        trample.state,
+                                        trample.position,
+                                        trample.damage_distance,
+                                        1.0,
+                                    )
+                                });
+                            let Some(player) =
+                                game.player.as_mut().filter(|p| p.entity_id as u32 == id)
+                            else {
+                                return (collected, None, ServerTravel::Continue);
+                            };
+                            collected.append(&mut player.events);
+                            player.events = collected;
+                            side = game_side!(game);
+                            w = motion_world!(game, side, player);
+                            if w.finish_trample_fall(trample, answer).is_err() {
+                                break;
+                            }
+                        }
+                        sunrise_world::block_landing::FallPause::ModFall(pending) => {
+                            let (distance, multiplier) = game.mod_fall_on_player(
+                                pending.state,
+                                pending.position,
+                                pending.distance,
+                                pending.multiplier,
+                            );
+                            let Some(player) =
+                                game.player.as_mut().filter(|p| p.entity_id as u32 == id)
+                            else {
+                                return (collected, None, ServerTravel::Continue);
+                            };
+                            collected.append(&mut player.events);
+                            player.events = collected;
+                            side = game_side!(game);
+                            w = motion_world!(game, side, player);
+                            if w.finish_mod_fall(pending, distance, multiplier).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
                 // handlePlayerPositionChange: an upward move resets the fall distance
@@ -399,6 +433,23 @@ impl Game<'_> {
             let travel = motion_world!(game, side, player)
                 .server_travel()
                 .unwrap_or(ServerTravel::Continue);
+            let pending_bounce = player.pending_bounce.take();
+            if let Some(pending) = pending_bounce {
+                let movement = game.mod_bounce_on_player(
+                    pending.block,
+                    pending.position,
+                    pending.fall_distance,
+                    pending.movement,
+                );
+                if let Some(player) = game.player.as_mut() {
+                    player.velocity = movement;
+                    player.events.push(MotionEvent::Bounce {
+                        state: pending.block,
+                        position: pending.position,
+                        fall_distance: pending.fall_distance,
+                    });
+                }
+            }
             // Player.aiStep's entity contacts run with the player's body,
             // even when the level and its mobs are frozen. Flush their damage
             // events and marked velocity through the existing guest path.

@@ -400,8 +400,9 @@ pub struct PlayerMotion {
     pub collision: CollisionFlags,
     pub history: MovementHistory,
     pub fall_distance: f64,
-    /// The block fallOn currently running, consumed by its damage call.
-    pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
+    /// A server-side bounce waiting for the owning level to lend `&mut dyn LevelWriteHost`
+    /// to `BlockPart::bounce_on` before `GameEvent.BOUNCE`.
+    pub pending_bounce: Option<sunrise_world::movement_restitution::PendingBounce>,
     pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
@@ -1441,6 +1442,7 @@ impl MotionWorld<'_, '_, '_> {
         let (history, fall_distance, steps) = (p.history.clone(), p.fall_distance, p.steps);
         let events = p.events.len();
         p.drop_tiny_velocity();
+        p.pending_bounce = None;
         p.server_copy = true;
         let travelled = self.player_travel(Vec3::ZERO);
         let p = &mut *self.player;
@@ -2283,7 +2285,23 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
             resolved_movement: resolved,
             fall_distance: self.player.fall_distance,
         };
-        movement_restitution::restitute_movement(self, input)
+        let pause = !self.player.client_side && crate::block_contact::bounce_listens(state);
+        if let Some(pending) =
+            movement_restitution::restitute_movement_until_bounce(self, input, pause)?
+        {
+            self.resources
+                .landing
+                .bounce_on(
+                    self,
+                    pending.block,
+                    pending.position,
+                    sunrise_world::block_landing::LandingEntityKind::Player,
+                )
+                .map_err(|e| e.to_string())?;
+            self.player.pending_bounce = Some(pending);
+            self.player.velocity = pending.movement;
+        }
+        Ok(())
     }
     fn client_side(&mut self) -> Result<bool> {
         Ok(false)
@@ -2320,7 +2338,7 @@ impl MotionWorld<'_, '_, '_> {
         grounded: bool,
         state: BlockStateId,
         position: BlockPos,
-    ) -> Result<Option<sunrise_world::block_landing::FarmlandTrample>> {
+    ) -> Result<Option<sunrise_world::block_landing::FallPause>> {
         self.before_fall_check(dy, grounded, state, position);
         sunrise_world::living_landing::check_living_fall_damage_until(
             self,
@@ -2592,21 +2610,7 @@ impl RestitutionWorld for MotionWorld<'_, '_, '_> {
                 sunrise_world::block_landing::LandingEntityKind::Player,
             )
             .map_err(|e| e.to_string())?;
-        let mut entity = crate::landing::PlayerLandingEntity(self.player);
-        Ok(crate::block_contact::bounce(
-            &mut crate::health::DamageLevel::of(
-                &mut *self.scene,
-                self.assets.registry,
-                self.tag_items,
-                self.block_registries,
-                self.damage_hooks,
-            ),
-            &mut entity,
-            state,
-            position,
-            fall_distance,
-            movement,
-        ))
+        Ok(movement)
     }
     fn bounce_event(&mut self) -> Result<()> {
         Ok(())

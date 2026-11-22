@@ -306,30 +306,6 @@ pub struct Hooks {
     pub pass_listens: fn(BlockStateId) -> bool,
     pub fall_listens: fn(BlockStateId) -> bool,
     pub bounce_listens: fn(BlockStateId) -> bool,
-    /// `Block.fallOn`: lend the falling entity, adjust distance and multiplier before
-    /// calculating damage, and collect any owned deferred callbacks for batch end.
-    pub fall_on: fn(
-        &str,
-        &mut DamageLevel<'_>,
-        &mut dyn mod_api::LandingEntityAccess,
-        BlockStateId,
-        BlockPos,
-        &mut f64,
-        &mut f32,
-        &mut Vec<mod_api::__private::game::DeferredLandingAction>,
-    ),
-    /// `Block.bounceOn`: lend the bouncing entity, change `movement`, and collect any
-    /// owned deferred callbacks for batch end.
-    pub bounce_on: fn(
-        &str,
-        &mut DamageLevel<'_>,
-        &mut dyn mod_api::LandingEntityAccess,
-        BlockStateId,
-        BlockPos,
-        f64,
-        &mut sunrise_core::geometry::Vec3,
-        &mut Vec<mod_api::__private::game::DeferredLandingAction>,
-    ),
     /// `Block.entityInside` told mid-walk: the part's own contact on the level
     /// host, its whole callback staged into the fresh collector and write list,
     /// so only an answering callback's writes reach the walk.
@@ -452,99 +428,11 @@ pub fn fall_listens(state: BlockStateId) -> bool {
     HOOKS.get().is_some_and(|hooks| (hooks.fall_listens)(state))
 }
 
-/// `Block.fallOn`: lend the falling entity to the block Part and return the fall inputs
-/// after its answer. Invalid numeric answers are ignored. Any deferred callbacks queued by
-/// the Part run once the entity batch ends.
-pub fn fall(
-    level: &mut DamageLevel<'_>,
-    entity: &mut dyn mod_api::LandingEntityAccess,
-    state: BlockStateId,
-    position: BlockPos,
-    distance: f64,
-    multiplier: f32,
-) -> (f64, f32) {
-    let (Some(dimension), Some(hooks)) = (tick_level("fall"), HOOKS.get()) else {
-        return (distance, multiplier);
-    };
-    if !(hooks.fall_listens)(state) {
-        return (distance, multiplier);
-    }
-    let mut answer_distance = distance;
-    let mut answer = multiplier;
-    let mut deferred = Vec::new();
-    (hooks.fall_on)(
-        dimension,
-        level,
-        entity,
-        state,
-        position,
-        &mut answer_distance,
-        &mut answer,
-        &mut deferred,
-    );
-    defer_landing(deferred);
-    (
-        if answer_distance.is_finite() {
-            answer_distance
-        } else {
-            distance
-        },
-        accepted_damage(answer, multiplier),
-    )
-}
-
-/// A part's multiplier answer: negative is zero, and a non-finite one is ignored.
-fn accepted_damage(answer: f32, kept: f32) -> f32 {
-    if answer.is_finite() {
-        answer.max(0.0)
-    } else {
-        kept
-    }
-}
-
-/// A part's bounce answer, ignored unless every component is finite.
-fn accepted_movement(
-    answer: sunrise_core::geometry::Vec3,
-    kept: sunrise_core::geometry::Vec3,
-) -> sunrise_core::geometry::Vec3 {
-    if answer.x.is_finite() && answer.y.is_finite() && answer.z.is_finite() {
-        answer
-    } else {
-        kept
-    }
-}
-
-/// `Block.bounceOn`: lend the bouncing entity to any part of `state` and return the
-/// movement the bounce leaves. A non-finite answer is ignored. Deferred callbacks run once
-/// the entity batch ends.
-pub fn bounce(
-    level: &mut DamageLevel<'_>,
-    entity: &mut dyn mod_api::LandingEntityAccess,
-    state: BlockStateId,
-    position: BlockPos,
-    fall_distance: f64,
-    movement: sunrise_core::geometry::Vec3,
-) -> sunrise_core::geometry::Vec3 {
-    let (Some(dimension), Some(hooks)) = (tick_level("bounce"), HOOKS.get()) else {
-        return movement;
-    };
-    if !(hooks.bounce_listens)(state) {
-        return movement;
-    }
-    let mut answer = movement;
-    let mut deferred = Vec::new();
-    (hooks.bounce_on)(
-        dimension,
-        level,
-        entity,
-        state,
-        position,
-        fall_distance,
-        &mut answer,
-        &mut deferred,
-    );
-    defer_landing(deferred);
-    accepted_movement(answer, movement)
+/// Whether a part of the block `state` answers `bounce_on`.
+pub fn bounce_listens(state: BlockStateId) -> bool {
+    HOOKS
+        .get()
+        .is_some_and(|hooks| (hooks.bounce_listens)(state))
 }
 
 /// Whether a part of the block `state` answers `bounce_restitution`.

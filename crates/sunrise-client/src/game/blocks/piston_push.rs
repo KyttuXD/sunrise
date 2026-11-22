@@ -676,7 +676,29 @@ impl Game<'_> {
             block_registries: Some(&self.pack.block_registries),
         }
         .move_with_cause(mover, movement)?;
-        Ok(Some(player.position.subtract(before)))
+        let moved = player.position.subtract(before);
+        let pending_bounce = player.pending_bounce.take();
+        drop(_sections);
+        if let Some(pending) = pending_bounce {
+            let velocity = self.mod_bounce_on_player(
+                pending.block,
+                pending.position,
+                pending.fall_distance,
+                pending.movement,
+            );
+            if let Some(player) = self.player.as_mut() {
+                player.velocity = velocity;
+                player
+                    .events
+                    .push(sunrise_client::motion::MotionEvent::Bounce {
+                        state: pending.block,
+                        position: pending.position,
+                        fall_distance: pending.fall_distance,
+                    });
+            }
+            self.post_entity_event("minecraft:bounce", sunrise_client::mobs::Who::Player);
+        }
+        Ok(Some(moved))
     }
 
     fn push_for_piston(
@@ -1287,6 +1309,7 @@ impl Game<'_> {
         }
         // Restitution reads the new landing block even when the push was blocked.
         if let Some(i) = mob {
+            let (mob_id, join) = (self.mobs[i].id, self.mobs[i].join);
             let mut mobs = self.mobs.lift();
             let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
             // Restitution may call a block Part. Return both loans, including
@@ -1301,13 +1324,35 @@ impl Game<'_> {
                     Some(&self.pack.block_registries),
                     &self.damage_hooks,
                 );
-                mobs[i].restitute_movement(&world, &mut level, limited, resolved);
+                mobs[i].restitute_movement_until_bounce(&world, &mut level, limited, resolved, true)
             }));
             lent.give_back(&mut self.world);
             self.mobs
                 .restore(mobs, sunrise_client::join_seq::RestoreOrder::SurvivorsFirst);
-            if let Err(payload) = result {
-                std::panic::resume_unwind(payload);
+            let pending = match result {
+                Ok(pending) => pending,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+            if let Some(pending) = pending {
+                let movement = self.mod_bounce_on_mob(
+                    mob_id,
+                    join,
+                    pending.block,
+                    pending.position,
+                    pending.fall_distance,
+                    pending.movement,
+                );
+                self.post_entity_event("minecraft:bounce", sunrise_client::mobs::Who::Mob(mob_id));
+                if let Some(idx) = self
+                    .mobs
+                    .iter()
+                    .position(|m| m.id == mob_id && m.join == join && !m.removed)
+                {
+                    self.mobs.update(idx, |m| {
+                        m.sync_position = true;
+                        m.velocity = movement;
+                    });
+                }
             }
         } else if tnt_after_move {
             self.restitute_piston(target, limited, resolved);

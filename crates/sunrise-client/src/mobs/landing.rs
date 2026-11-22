@@ -21,49 +21,6 @@ use sunrise_world::{
     registry::BlockStateId,
 };
 
-/// Scoped `LandingEntityAccess` adapter over a live `Mob`.
-pub(super) struct MobLandingEntity<'a>(pub(super) &'a mut Mob);
-
-impl mod_api::LandingEntityAccess for MobLandingEntity<'_> {
-    fn id(&self) -> i32 {
-        self.0.id as i32
-    }
-    fn kind(&self) -> &str {
-        &self.0.kind.id
-    }
-    fn position(&self) -> [f64; 3] {
-        [self.0.position.x, self.0.position.y, self.0.position.z]
-    }
-    fn velocity(&self) -> [f64; 3] {
-        [self.0.velocity.x, self.0.velocity.y, self.0.velocity.z]
-    }
-    fn fall_distance(&self) -> f64 {
-        self.0.fall_distance
-    }
-    fn on_ground(&self) -> bool {
-        self.0.on_ground
-    }
-    fn is_crouching(&self) -> bool {
-        self.0.crouching || self.0.avatar_pose == crate::pose::Pose::Crouching
-    }
-    fn is_suppressing_bounce(&self) -> bool {
-        false
-    }
-    fn dimensions(&self) -> [f32; 2] {
-        [self.0.width(), self.0.height()]
-    }
-    fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
-        if !velocity.iter().all(|v| v.is_finite()) {
-            return false;
-        }
-        self.0.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
-        true
-    }
-    fn reset_fall_distance(&mut self) {
-        self.0.fall_distance = 0.0;
-    }
-}
-
 /// A mob mid-landing: the block under it is at `pos`, the fall was `distance`.
 pub(super) struct MobLanding<'a, 'w, 'l> {
     pub mob: &'a mut Mob,
@@ -71,7 +28,6 @@ pub(super) struct MobLanding<'a, 'w, 'l> {
     pub level: &'a mut DamageLevel<'l>,
     pub events: &'a mut Vec<MobEvent>,
     pub pos: [i32; 3],
-    pub mod_fall_pending: &'a mut bool,
 }
 impl MobLanding<'_, '_, '_> {
     fn at(&self) -> [f64; 3] {
@@ -163,15 +119,13 @@ impl BlockLandingWorld for MobLanding<'_, '_, '_> {
         multiplier: f32,
         source: DamageKind,
     ) -> Result<bool, String> {
-        *self.mod_fall_pending = false;
-        let contact = Some((self.w, self.pos));
         Ok(self.mob.cause_fall_damage_at(
             self.w.loop_context,
             self.level,
             distance,
             multiplier,
             self.events,
-            contact,
+            Some(self.w),
             source,
         ))
     }

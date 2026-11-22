@@ -371,14 +371,16 @@ pub struct BlockClick<'a> {
 
 impl FallOnEvent<'_> {
     /// Queue an owned native callback to run with `&mut dyn ServerHost` once the current
-    /// entity batch finishes (for block changes, sounds, game events or entity writes
-    /// that cannot borrow the full server host mid-batch).
+    /// entity batch finishes (for cross-entity or full-server-host work that does not belong
+    /// on the synchronous [`LevelWriteHost`](crate::LevelWriteHost)).
     ///
-    /// Callbacks run in the order queued with no engine-side unchanged-block replay gate:
-    /// inspect `level.block_state(host, pos)` inside the callback if the action depends on
-    /// the landed block still matching. A panic disables this mod's deferred landing
-    /// callbacks for the session; a phase refusal is reported each time without disabling
-    /// them.
+    /// Level writes, block destruction, sounds, particles, level events and scheduled ticks
+    /// that must take effect before `causeFallDamage` and `HIT_GROUND` run directly on the
+    /// lent `&mut dyn LevelWriteHost` during `fall_on`. Callbacks queued here run in queue
+    /// order once the batch ends with no engine-side unchanged-block replay gate: inspect
+    /// `level.block_state(host, pos)` inside the callback if the action depends on the landed
+    /// block still matching. A panic disables this mod's deferred landing callbacks for the
+    /// session; a phase refusal is reported each time without disabling them.
     pub fn after_landing(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
         self.deferred.push(action);
     }
@@ -386,12 +388,15 @@ impl FallOnEvent<'_> {
 
 impl BounceOnEvent<'_> {
     /// Queue an owned native callback to run with `&mut dyn ServerHost` once the current
-    /// entity batch finishes (for sounds, block changes or entity writes that cannot
-    /// borrow the full server host mid-batch).
+    /// entity batch finishes (for cross-entity or full-server-host work that does not belong
+    /// on the synchronous [`LevelWriteHost`](crate::LevelWriteHost)).
     ///
-    /// Callbacks run in the order queued with no engine-side unchanged-block replay gate.
-    /// A panic disables this mod's deferred landing callbacks for the session; a phase
-    /// refusal is reported each time without disabling them.
+    /// Level writes, block destruction, sounds, particles, level events and scheduled ticks
+    /// that must take effect before `GameEvent.BOUNCE` run directly on the lent
+    /// `&mut dyn LevelWriteHost` during `bounce_on`. Callbacks queued here run in queue order
+    /// once the batch ends with no engine-side unchanged-block replay gate. A panic disables
+    /// this mod's deferred landing callbacks for the session; a phase refusal is reported each
+    /// time without disabling them.
     pub fn after_bounce(&mut self, action: impl FnOnce(&mut dyn ServerHost) + 'static) {
         self.deferred.push(action);
     }

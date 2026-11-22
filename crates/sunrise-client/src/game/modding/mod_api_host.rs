@@ -1348,6 +1348,10 @@ impl<'a: 'b, 'b, T: std::ops::DerefMut<Target = Ticks>> mod_api::LevelWriteHost
         self.level.remove_block_write(&mut self.ticks, pos, moved)
     }
 
+    fn destroy_block(&mut self, pos: [i32; 3], drop: bool) -> bool {
+        self.level.destroy_block_write(&mut self.ticks, pos, drop)
+    }
+
     fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
         self.level
             .native_set_block_property(&mut self.ticks, pos, key, value, flags)

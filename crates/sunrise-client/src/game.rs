@@ -5152,9 +5152,8 @@ impl Game<'_> {
     }
     /// `Block.fallOn` for dropped `item`, which fell `distance` onto the block at `on`
     /// (`Entity.checkFallDamage`): a mod block's `fall_on` Part hears it with a scoped
-    /// `LandingEntity`, through the same `block_contact::fall` as a player's and a mob's
-    /// landing. An item takes no fall damage. Nothing is lent or built unless a Part of
-    /// that block listens.
+    /// `LandingEntity` and `&mut dyn LevelWriteHost` at the landing site. An item takes
+    /// no fall damage. Nothing is built unless a Part of that block listens.
     fn item_fall_on(
         &mut self,
         item: &mut ItemEntity,
@@ -5165,34 +5164,8 @@ impl Game<'_> {
         if !sunrise_client::block_contact::fall_listens(state) {
             return;
         }
-        let mut lent = sunrise_client::health::LentLevel::take(&mut self.world);
-        // A native fall_on Part can unwind. Keep the persistent level carrier
-        // outside the callback's temporary views, and return its progressed state
-        // before propagating the original panic. This does not restore the item batch.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut level = sunrise_client::health::DamageLevel::lent(
-                &self.world,
-                self.pack.assets.registry,
-                &mut lent,
-                Some(world_items!(self)),
-                Some(&self.pack.block_registries),
-                &self.damage_hooks,
-            )
-            .with_effects(crate::game::entity::hit_effects_of!(self, None));
-            let mut entity = sunrise_client::landing::ItemLandingEntity(item);
-            let _ = sunrise_client::block_contact::fall(
-                &mut level,
-                &mut entity,
-                state,
-                on,
-                distance,
-                0.0,
-            );
-        }));
-        lent.give_back(&mut self.world);
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
+        let mut entity = sunrise_client::landing::ItemLandingEntity(item);
+        let _ = self.run_fall_on(&mut entity, state, on, distance, 0.0);
     }
     /// The item entities `tick_dropped_items` took out, back in the level,
     /// before those its hooks spawned meanwhile (`addFreshEntity` appends).
