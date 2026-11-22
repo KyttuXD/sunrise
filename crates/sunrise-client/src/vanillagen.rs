@@ -1010,24 +1010,31 @@ pub fn shared_data_from(
     source: &sunrise_assets::resource_source::ResourceSource,
 ) -> crate::Result<Arc<GeneratorData>> {
     let mut resolved = overrides.clone();
-    {
-        for name in source.list_under("data", &["structure"]) {
-            if let Some((namespace, path)) = name
-                .strip_prefix("data/")
-                .and_then(|rest| rest.split_once("/structure/"))
-                .and_then(|(ns, path)| Some((ns, path.strip_suffix(".nbt")?)))
-            {
-                let id = format!("{namespace}:{path}");
-                if !resolved.templates().contains_key(&id) {
-                    resolved.set_template(
-                        id,
-                        sunrise_assets::resource_source::Resource::file(source.clone(), name),
-                    );
-                }
+    add_passive_structure_templates(&mut resolved, source);
+    shared_data_with(dir, &resolved, registry)
+}
+
+/// Passive templates sit below selected packs; admission and generation use
+/// the same template lookup when decoding configured features.
+pub fn add_passive_structure_templates(
+    overrides: &mut WorldgenOverrides,
+    source: &sunrise_assets::resource_source::ResourceSource,
+) {
+    for name in source.list_under("data", &["structure"]) {
+        if let Some((namespace, path)) = name
+            .strip_prefix("data/")
+            .and_then(|rest| rest.split_once("/structure/"))
+            .and_then(|(ns, path)| Some((ns, path.strip_suffix(".nbt")?)))
+        {
+            let id = format!("{namespace}:{path}");
+            if !overrides.templates().contains_key(&id) {
+                overrides.set_template(
+                    id,
+                    sunrise_assets::resource_source::Resource::file(source.clone(), name),
+                );
             }
         }
     }
-    shared_data_with(dir, &resolved, registry)
 }
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
 /// and by live feature placement (sapling growth, bone meal).
@@ -1052,7 +1059,11 @@ pub fn shared_data_with(
         return Ok(data.clone());
     }
     let started = std::time::Instant::now();
-    let modified = biome_modifiers_over_packs(dir, overrides);
+    let modified = if overrides.has_admitted_biome_generation() {
+        None
+    } else {
+        biome_modifiers_over_packs(dir, overrides)
+    };
     let data = GeneratorData::load_with(dir, registry, modified.as_ref().unwrap_or(overrides))?;
     log::info!("Sunrise: worldgen data loaded in {:?}", started.elapsed());
     for warning in data.warnings() {

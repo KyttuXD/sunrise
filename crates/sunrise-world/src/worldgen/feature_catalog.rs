@@ -10,7 +10,10 @@ use super::{
     tags::TagDefinitions,
 };
 use serde_json::value::RawValue;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 pub struct FeatureCatalog {
     features: BTreeMap<String, Box<RawValue>>,
@@ -20,10 +23,16 @@ pub struct FeatureCatalog {
 }
 /// A placed-feature holder in a biome decoration step. Direct holders keep
 /// their own identity, unlike references to a named registry entry.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum BiomePlacedFeature {
     Named(String),
     Direct(String),
 }
+
+/// A biome can point at already-admitted holders, or at prepared biome data
+/// whose roots the generator resolves on demand.
+pub(super) type BiomeFeatureSteps =
+    Vec<Vec<(BiomePlacedFeature, Option<Arc<PlacedFeatureDefinition>>)>>;
 
 struct Expansion {
     remaining: usize,
@@ -109,36 +118,26 @@ impl FeatureCatalog {
     pub(super) fn biome_steps(
         &self,
         value: &serde_json::Value,
+        bind: &dyn Fn(&BiomePlacedFeature) -> Result<(), DecodeError>,
     ) -> Result<Vec<Vec<BiomePlacedFeature>>, DecodeError> {
         value
             .as_array()
             .ok_or(DecodeError::Field("features"))?
             .iter()
             .map(|step| {
-                if let Some(tag) = step.as_str().and_then(|name| name.strip_prefix('#')) {
-                    let tag = super::tags::identifier(tag)?;
-                    let names = self.tags.get(&tag).ok_or_else(|| {
-                        DecodeError::Registry(format!("unknown placed-feature tag {tag}"))
-                    })?;
-                    return Ok(names
-                        .iter()
-                        .cloned()
-                        .map(BiomePlacedFeature::Named)
-                        .collect());
-                }
-                step.as_array()
-                    .ok_or(DecodeError::Field("biome feature step"))?
-                    .iter()
-                    .map(|holder| {
-                        if let Some(name) = holder.as_str() {
-                            let name = identifier(name)?;
-                            self.placed_source(&name)?;
-                            Ok(BiomePlacedFeature::Named(name))
-                        } else {
-                            Ok(BiomePlacedFeature::Direct(holder.to_string()))
-                        }
-                    })
-                    .collect()
+                crate::holder_set::resolve_with_inline(
+                    step,
+                    &PlacedFeatureHolders {
+                        catalog: self,
+                        bind,
+                    },
+                    true,
+                    &|holder| {
+                        let holder = BiomePlacedFeature::Direct(holder.to_string());
+                        bind(&holder)?;
+                        Ok(holder)
+                    },
+                )
             })
             .collect()
     }
@@ -361,5 +360,45 @@ impl FeatureCatalog {
             _ => {}
         }
         Ok(serde_json::to_string(&object)?)
+    }
+}
+
+struct PlacedFeatureHolders<'a> {
+    catalog: &'a FeatureCatalog,
+    bind: &'a dyn Fn(&BiomePlacedFeature) -> Result<(), DecodeError>,
+}
+impl PlacedFeatureHolders<'_> {
+    fn named(&self, id: String) -> Result<BiomePlacedFeature, DecodeError> {
+        let holder = BiomePlacedFeature::Named(id);
+        (self.bind)(&holder)?;
+        Ok(holder)
+    }
+}
+impl crate::holder_set::HolderLookup<DecodeError> for PlacedFeatureHolders<'_> {
+    type Id = BiomePlacedFeature;
+    fn what(&self) -> &str {
+        "placed feature"
+    }
+    fn entry(&self, id: &str) -> Result<Vec<Self::Id>, DecodeError> {
+        let id = identifier(id)?;
+        self.catalog.placed_source(&id)?;
+        Ok(vec![self.named(id)?])
+    }
+    fn tag(&self, tag: &str) -> Result<Vec<Self::Id>, DecodeError> {
+        let tag = super::tags::identifier(tag)?;
+        self.catalog
+            .tags
+            .get(&tag)
+            .ok_or_else(|| DecodeError::Registry(format!("unknown placed-feature tag {tag}")))?
+            .iter()
+            .cloned()
+            .map(|id| self.named(id))
+            .collect()
+    }
+    fn all(&self) -> Result<Vec<Self::Id>, DecodeError> {
+        self.catalog
+            .placed_names()
+            .map(|id| self.named(id.to_owned()))
+            .collect()
     }
 }

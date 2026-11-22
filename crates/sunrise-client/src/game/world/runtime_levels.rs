@@ -7,10 +7,7 @@
 //! the generation each open of an id was given: a `LevelRef` from before an unload never names a
 //! later open of the same id. A delete is an unload and then the removal of the level's files, on
 //! the server thread in the same pass, so a reopen is applied only after the files are gone.
-use super::{
-    Dim, Game,
-    world_loading::{ModStem, world_worldgen_overrides},
-};
+use super::{Dim, Game, world_loading::ModStem};
 use mod_api::{LevelRef, RuntimeBiomeSource, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -719,13 +716,12 @@ impl Game<'_> {
                 )?;
                 let resources = &self.options.resources;
                 let dir = resources.join("worldgen");
+                let empty = Default::default();
                 let overrides = self
                     .world_tables
                     .as_ref()
-                    .map_or_else(Default::default, |tables| {
-                        world_worldgen_overrides(self.fns.enabled_packs(), &tables.biomes)
-                    });
-                let biome_data = shared_biome_source_data(&dir, &overrides).map_err(|e| {
+                    .map_or(&empty, |tables| &tables.biomes.overrides);
+                let biome_data = shared_biome_source_data(&dir, overrides).map_err(|e| {
                     log::warn!("runtime level biome registries are unavailable: {e}");
                     RuntimeLevelError::Unavailable
                 })?;
@@ -753,7 +749,7 @@ impl Game<'_> {
                             biomes,
                             item_data: &self.res.core.item_data,
                         },
-                        &overrides,
+                        overrides,
                     )
                     .map_err(|e| {
                         log::warn!("runtime level worldgen registries are unavailable: {e}");

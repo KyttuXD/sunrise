@@ -335,7 +335,7 @@ fn as_number(value: &Value) -> f64 {
         Value::Argb([r, g, b, a]) => {
             f64::from((byte(*a) << 24 | byte(*r) << 16 | byte(*g) << 8 | byte(*b)) as i32)
         }
-        Value::Other(_) => 0.0,
+        Value::AmbientParticles(_) | Value::Other(_) => 0.0,
     }
 }
 

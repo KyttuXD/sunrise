@@ -79,9 +79,10 @@ fn sync_of(root: &std::path::Path) -> SyncData {
         &defaults,
     )
     .unwrap();
-    SyncData::load(
+    SyncData::load_with(
         root,
         &sunrise_world::loot::PackOverlay::NONE,
+        Some(&load(root)),
         &defaults,
         &sunrise_client::crafting::ResolvedSources::load(
             root,

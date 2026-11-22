@@ -10,7 +10,7 @@ mod normalize;
 mod parameters;
 #[path = "loot_types/shapes/mod.rs"]
 mod shapes;
-pub(crate) use shapes::validate_environment_value;
+pub(crate) use shapes::{validate_environment_value, validate_particle_options};
 #[cfg(test)]
 #[path = "loot_types/tests.rs"]
 mod tests;

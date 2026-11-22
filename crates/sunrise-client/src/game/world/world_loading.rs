@@ -340,12 +340,11 @@ impl PreparedWorld {
         pack: &PackResources,
         options: &Options,
         settings: &Settings,
-        stack: &super::functions::PackStack,
         biomes: &WorldBiomeRegistry,
     ) -> Result<PreparedTerrain> {
         let save_root = &self.save_root;
         let level = &mut self.level;
-        let mut overrides = world_worldgen_overrides(stack.enabled_packs(), biomes);
+        let mut overrides = biomes.overrides.clone();
         if self.created {
             level.generator = sunrise_client::save::WorldGenerator::read_new(save_root);
         } else if options.execution_role.is_dedicated_server() {
@@ -608,15 +607,15 @@ pub(super) fn world_data_used() {
 /// these winners without running their conditions in a different load context.
 pub(super) struct WorldBiomeRegistry {
     pub(super) table: Arc<Biomes>,
-    files: std::collections::BTreeMap<String, String>,
-    omitted: std::collections::BTreeSet<String>,
+    pub(super) overrides: sunrise_world::worldgen::overrides::WorldgenOverrides,
+    differs_from_preload: bool,
 }
 
 impl WorldBiomeRegistry {
     pub(super) fn load(
         base: &Arc<Biomes>,
         root: &std::path::Path,
-        blocks: &sunrise_world::registry::BlockRegistry,
+        blocks: &'static sunrise_world::registry::BlockRegistry,
         stack: &super::functions::PackStack,
         overlay: &sunrise_world::loot::PackOverlay<'_>,
         read_errors: &std::collections::BTreeMap<String, String>,
@@ -626,7 +625,9 @@ impl WorldBiomeRegistry {
             borrow::Cow,
             collections::{BTreeMap, BTreeSet},
         };
-        use sunrise_world::worldgen::biome::{BiomeDefinition, BiomeGenerationRegistries};
+        use sunrise_world::worldgen::biome::{
+            AdmittedBiomeGeneration, BiomeDefinition, BiomeGenerationRegistries,
+        };
         const KIND: &str = "worldgen/biome";
         if let Some((file, error)) = read_errors
             .iter()
@@ -634,78 +635,155 @@ impl WorldBiomeRegistry {
         {
             return Err(format!("{file}: {error}").into());
         }
+        // Only vanilla holders come from the boot table. Passive mod biomes
+        // come from the prepared root selected for this world, not the previous mod inventory.
         let mut winners: BTreeMap<_, _> = base
             .registry_order()
             .into_iter()
-            .filter_map(|id| base.builtin_file(id).map(|file| (id, Cow::Borrowed(file))))
+            .filter(|id| id.starts_with("minecraft:"))
+            .filter_map(|id| {
+                base.builtin_file(id)
+                    .map(|file| (id.to_owned(), Cow::Borrowed(file)))
+            })
             .collect();
+        let prepared_mods = sunrise_client::biome::mod_biome_files(root);
+        let mut prepared_only: BTreeSet<_> =
+            prepared_mods.iter().map(|(id, _)| id.clone()).collect();
+        winners.extend(
+            prepared_mods
+                .into_iter()
+                .map(|(id, file)| (id, Cow::Owned(file))),
+        );
         for (id, files) in overlay.kind(KIND) {
             let value: Value = serde_json::from_slice(sunrise_world::loot::PackOverlay::top(files))
                 .map_err(|error| format!("biome {id}: {error}"))?;
-            winners.insert(id, Cow::Owned(value));
+            prepared_only.remove(id);
+            winners.insert(id.to_owned(), Cow::Owned(value));
         }
+        let modified = sunrise_client::mod_content::biomes::modified(root);
         let mut payloads = BTreeMap::new();
-        let mut omitted = BTreeSet::new();
+        let mut omitted: BTreeSet<_> = base
+            .registry_order()
+            .into_iter()
+            .filter(|id| !winners.contains_key(*id))
+            .map(str::to_owned)
+            .collect();
+        let mut candidates = BTreeSet::new();
         for (id, winner) in winners {
-            if !overlay.conditions.allows_id(&winner, KIND, id) {
-                omitted.insert(id.to_owned());
+            if !overlay.conditions.allows_id(&winner, KIND, &id) {
+                omitted.insert(id);
                 continue;
             }
+            candidates.insert(id.clone());
             let payload = match winner {
-                Cow::Borrowed(winner) if winner.get("neoforge:conditions").is_none() => {
-                    // The unchanged prepared definition is already in both base readers.
+                Cow::Borrowed(winner)
+                    if !modified.contains(&id) && winner.get("neoforge:conditions").is_none() =>
+                {
+                    // Unchanged prepared vanilla definitions are already in both base readers.
                     continue;
                 }
                 winner => sunrise_world::conditions::into_payload(winner.into_owned()),
             };
-            payloads.insert(id.to_owned(), payload);
+            payloads.insert(id, payload);
         }
         let enabled: Vec<_> = stack.enabled_packs().collect();
-        let (mut overrides, _) = sunrise_client::datapack::worldgen_overrides(&enabled, |_| true);
-        let mut files = BTreeMap::new();
-        if !payloads.is_empty() {
-            let dir = root.join("worldgen");
-            let mut generation = BiomeGenerationRegistries::load(&dir, &overrides, blocks)?;
-            for (id, payload) in payloads {
-                let admitted = BiomeDefinition::decode(payload, &mut generation)
-                    .map_err(|error| format!("biome {id}: {error}"))?;
-                files.insert(id, admitted.into_json().to_string());
-            }
+        let (mut inputs, warnings) =
+            sunrise_client::datapack::worldgen_overrides(&enabled, |_| true);
+        for warning in warnings {
+            log::warn!("Sunrise: data pack worldgen: {warning}");
         }
-        overrides.set_biome_winners(files.clone(), omitted.clone());
-        let overrides = sunrise_client::vanillagen::biome_modifiers_over_packs(
-            &root.join("worldgen"),
-            &overrides,
-        )
-        .unwrap_or(overrides);
-        let packed = overrides
-            .entries("biomes")
-            .map(|(id, file)| {
-                serde_json::from_str::<Value>(file)
-                    .map(|file| (id, file))
-                    .map_err(|error| format!("biome {id}: {error}"))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let table = if packed.is_empty() && omitted.is_empty() {
-            base.clone()
+        sunrise_client::vanillagen::add_passive_structure_templates(
+            &mut inputs,
+            stack.content.source(),
+        );
+        let dir = root.join("worldgen");
+        let mut resolved = BTreeMap::new();
+        let mut overrides = inputs.clone();
+        let mut generation = None;
+        let mut files = BTreeMap::new();
+        for (id, payload) in payloads {
+            let generation = match &mut generation {
+                Some(generation) => generation,
+                slot @ None => slot.insert(BiomeGenerationRegistries::load(
+                    &dir,
+                    &inputs,
+                    blocks,
+                    candidates.clone(),
+                )?),
+            };
+            let (file, decoded) = BiomeDefinition::decode(payload, generation)
+                .map_err(|error| format!("biome {id}: {error}"))?
+                .into_parts();
+            files.insert(id.clone(), file.to_string());
+            resolved.insert(id, decoded);
+        }
+        // Prepared-only mod files can already contain modifier output. Let the
+        // modifier pass recover their original inputs from the prepared metadata.
+        overrides.set_biome_winners(
+            files
+                .iter()
+                .filter(|(id, _)| !prepared_only.contains(*id))
+                .map(|(id, file)| (id.clone(), file.clone()))
+                .collect(),
+            omitted.clone(),
+        );
+        let modified = sunrise_client::vanillagen::biome_modifiers_over_packs(&dir, &overrides);
+        let mut overrides = modified.unwrap_or(overrides);
+        let mut final_files = files.clone();
+        final_files.extend(
+            overrides
+                .entries("biomes")
+                .map(|(id, json)| (id.to_owned(), json.to_owned())),
+        );
+        let mut packed = Vec::new();
+        for (id, json) in &final_files {
+            let file = serde_json::from_str::<Value>(json)
+                .map_err(|error| format!("biome {id}: {error}"))?;
+            if files.get(id).is_some_and(|original| original == json) {
+                packed.push((id.to_owned(), file));
+                continue;
+            }
+            let generation = match &mut generation {
+                Some(generation) => generation,
+                slot @ None => slot.insert(BiomeGenerationRegistries::load(
+                    &dir,
+                    &inputs,
+                    blocks,
+                    candidates.clone(),
+                )?),
+            };
+            let (file, decoded) = BiomeDefinition::decode(file, generation)
+                .map_err(|error| format!("biome {id}: {error}"))?
+                .into_parts();
+            packed.push((id.to_owned(), file));
+            resolved.insert(id.to_owned(), decoded);
+        }
+        let differs_from_preload = !packed.is_empty() || !omitted.is_empty();
+        let table = if differs_from_preload {
+            overrides.set_biome_winners(
+                packed
+                    .iter()
+                    .map(|(id, file)| (id.clone(), file.to_string()))
+                    .collect(),
+                omitted.clone(),
+            );
+            overrides.bind_biome_generation(AdmittedBiomeGeneration::new(resolved));
+            Arc::new(base.with_admitted_packs(
+                packed.iter().map(|(id, file)| (id.as_str(), file)),
+                &omitted,
+            )?)
         } else {
-            Arc::new(
-                base.with_admitted_packs(packed.iter().map(|(id, file)| (*id, file)), &omitted)?,
-            )
+            base.clone()
         };
         Ok(Self {
             table,
-            files,
-            omitted,
+            overrides,
+            differs_from_preload,
         })
     }
 
-    fn apply(&self, overrides: &mut sunrise_world::worldgen::overrides::WorldgenOverrides) {
-        overrides.set_biome_winners(self.files.clone(), self.omitted.clone());
-    }
-
     pub(super) fn differs_from_preload(&self) -> bool {
-        self.table.has_packs() || !self.omitted.is_empty()
+        self.differs_from_preload
     }
 }
 
@@ -731,23 +809,9 @@ pub(super) fn creation_worldgen_overrides(
         sunrise_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b));
     overrides
 }
-/// Project the world's admitted biome holders over the other worldgen resources.
-pub(super) fn world_worldgen_overrides<'a>(
-    packs: impl Iterator<Item = &'a sunrise_client::datapack::DataPack>,
-    biomes: &WorldBiomeRegistry,
-) -> sunrise_world::worldgen::overrides::WorldgenOverrides {
-    let (mut overrides, warnings) =
-        sunrise_client::datapack::worldgen_overrides(&packs.collect::<Vec<_>>(), |_| true);
-    biomes.apply(&mut overrides);
-    for warning in warnings {
-        log::warn!("Sunrise: data pack worldgen: {warning}");
-    }
-    overrides
-}
-
 /// The worldgen entries of the world's enabled data packs, and what the
 /// generator leaves out of them.
-pub(super) fn worldgen_overrides_of(
+fn worldgen_overrides_of(
     world_root: &std::path::Path,
     resources: &std::path::Path,
     biomes: &sunrise_client::biome::Biomes,
@@ -1719,24 +1783,26 @@ mod tests {
     /// A minimal direct-codec biome used by the world loader fixtures.
     const PACK_BIOME: &str = r##"{"temperature":0.8,"downfall":0.4,"has_precipitation":true,"effects":{"water_color":"#2301ef"},"carvers":[],"features":[]}"##;
 
-    #[test]
-    fn biome_loader_checks_winning_conditions_and_decodes_passing_payloads() {
-        use serde_json::{Value, json};
+    fn biome_registry_fixture() -> (
+        tempfile::TempDir,
+        Arc<Biomes>,
+        &'static sunrise_world::registry::BlockRegistry,
+        crate::game::functions::PackStack,
+    ) {
         use sunrise_assets::resource_source::ResourceRoot;
         use sunrise_client::datapack::DataPack;
-        use sunrise_world::{conditions::LoadConditions, loot::PackOverlay};
-
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("data/minecraft/worldgen/biome");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("fixture.json"), PACK_BIOME).unwrap();
+        std::fs::create_dir_all(root.path().join("worldgen")).unwrap();
+        for name in ["fixture", "plains"] {
+            std::fs::write(dir.join(format!("{name}.json")), PACK_BIOME).unwrap();
+        }
         let resources = ResourceRoot::directory(root.path().to_owned());
         let base = Arc::new(Biomes::load_for_server(&resources).unwrap());
-        let blocks = sunrise_world::registry::BlockRegistry::from_facts_json(
-            br#"{"defaults":{"minecraft:air":0},"states":[["a",true,false,"","minecraft:air"]]}"#
-                .as_slice(),
-        )
-        .unwrap();
+        let blocks: &'static _ = Box::leak(Box::new(sunrise_world::registry::BlockRegistry::from_facts_json(
+            br#"{"defaults":{"minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2},"states":[["a",true,false,"","minecraft:air"],["c",true,false,"","minecraft:cave_air"],["v",true,false,"","minecraft:void_air"]]}"#,
+        ).unwrap()));
         let stack = crate::game::functions::PackStack {
             builtin: None,
             content: DataPack::from_source("sunrise-content".into(), resources.data().clone()),
@@ -1744,6 +1810,25 @@ mod tests {
             enabled: Vec::new(),
             features: Vec::new(),
         };
+        (root, base, blocks, stack)
+    }
+
+    #[test]
+    fn biome_loader_checks_winning_conditions_and_decodes_passing_payloads() {
+        use serde_json::{Value, json};
+        use sunrise_world::{conditions::LoadConditions, loot::PackOverlay};
+        let (root, base, blocks, stack) = biome_registry_fixture();
+        std::fs::write(
+            root.path().join("worldgen/placed_features.json"),
+            json!({"demo:malformed": "{}", "demo:dangling": r#"{"feature":"demo:missing","placement":[]}"#}).to_string(),
+        ).unwrap();
+        let tags = root.path().join("data/demo/tags/worldgen/placed_feature");
+        std::fs::create_dir_all(&tags).unwrap();
+        std::fs::write(
+            tags.join("malformed.json"),
+            r#"{"values":["demo:malformed"]}"#,
+        )
+        .unwrap();
         let unknown = |condition| json!({"neoforge:conditions":[{"type":condition}]});
         let load = |winner: Value, conditions: &LoadConditions| {
             let files = [(
@@ -1756,7 +1841,7 @@ mod tests {
             WorldBiomeRegistry::load(
                 &base,
                 root.path(),
-                &blocks,
+                blocks,
                 &stack,
                 &PackOverlay {
                     files: &files,
@@ -1788,9 +1873,39 @@ mod tests {
             ),
             ("carvers", json!({}), "carvers:"),
             (
+                "carvers",
+                json!({"type":"neoforge:and","values":[[{"type":"minecraft:missing"}],[]]}),
+                "world carver type",
+            ),
+            (
                 "features",
                 json!([["demo:unknown"]]),
                 "unknown placed feature demo:unknown",
+            ),
+            (
+                "features",
+                json!([["demo:malformed"]]),
+                "placed feature demo:malformed",
+            ),
+            (
+                "features",
+                json!(["#demo:malformed"]),
+                "placed feature demo:malformed",
+            ),
+            (
+                "features",
+                json!([["demo:dangling"]]),
+                "unknown feature reference demo:missing",
+            ),
+            (
+                "features",
+                json!([{"type":"neoforge:any"}]),
+                "placed feature demo:dangling",
+            ),
+            (
+                "features",
+                json!([{"type":"neoforge:and","values":[["demo:malformed"],[]]}]),
+                "placed feature demo:malformed",
             ),
         ] {
             let mut payload: Value = serde_json::from_str(PACK_BIOME).unwrap();
@@ -1807,6 +1922,65 @@ mod tests {
             assert!(error.contains(diagnostic), "{error}");
             assert_eq!(conditions.check_errors(), Ok(()));
         }
+    }
+
+    #[test]
+    fn wrapped_biome_resolves_custom_holder_sets_and_inline_registry_predicates() {
+        use serde_json::{Value, json};
+        use sunrise_world::{conditions::LoadConditions, loot::PackOverlay};
+
+        let (root, base, blocks, stack) = biome_registry_fixture();
+        std::fs::write(
+            root.path().join("worldgen/fluid_tags.json"),
+            json!({"demo:wet": r#"{"values":["minecraft:water"]}"#}).to_string(),
+        )
+        .unwrap();
+        let feature = json!({"type":"minecraft:no_op", "config": {}});
+        std::fs::write(
+            root.path().join("worldgen/placed_features.json"),
+            json!({"demo:no_op": json!({"feature":feature.clone(), "placement":[]}).to_string()})
+                .to_string(),
+        )
+        .unwrap();
+        let mut payload: Value = serde_json::from_str(PACK_BIOME).unwrap();
+        payload["features"] = json!([
+            {"type":"neoforge:any"},
+            [{"feature":feature,"placement":[
+                {"type":"minecraft:block_predicate_filter", "predicate": {
+                    "type":"minecraft:matching_biomes", "biomes":["minecraft:plains", "demo:incoming"]
+                }},
+                {"type":"minecraft:block_predicate_filter", "predicate": {
+                    "type":"minecraft:matching_fluids", "fluids":"#demo:wet"
+                }}
+            ]}]
+        ]);
+        payload["carvers"] = json!({"type":"neoforge:any"});
+        let files = [(
+            "worldgen/biome/demo:incoming".into(),
+            vec![
+                json!({
+                    "neoforge:conditions":[{"type":"neoforge:always"}], "neoforge:value":payload
+                })
+                .to_string()
+                .into_bytes(),
+            ],
+        )];
+        let conditions = LoadConditions::new([]);
+        let admitted = WorldBiomeRegistry::load(
+            &base,
+            root.path(),
+            blocks,
+            &stack,
+            &PackOverlay {
+                files: &files,
+                conditions: &conditions,
+                ..PackOverlay::default()
+            },
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(admitted.table.contains("demo:incoming"));
+        assert_eq!(conditions.check_errors(), Ok(()));
     }
 
     #[test]

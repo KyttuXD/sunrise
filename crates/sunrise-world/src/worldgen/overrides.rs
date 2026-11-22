@@ -216,6 +216,7 @@ pub struct WorldgenOverrides {
     entries: BTreeMap<String, BTreeMap<String, String>>,
     /// The winning file failed a world registry condition, including replaced base entries.
     omitted_biomes: std::collections::BTreeSet<String>,
+    pub(super) admitted_biome_generation: Option<super::biome::AdmittedBiomeGeneration>,
     /// Tag bundle name → (tag id, pack id, tag file text), lowest pack first.
     tags: BTreeMap<String, Vec<(String, String, String)>>,
 }
@@ -251,6 +252,15 @@ impl WorldgenOverrides {
         }
         self.omitted_biomes = omitted;
     }
+    /// The owning world's final, bound biome generation data (after modifiers).
+    pub fn bind_biome_generation(&mut self, generation: super::biome::AdmittedBiomeGeneration) {
+        self.admitted_biome_generation = Some(generation);
+    }
+
+    pub fn has_admitted_biome_generation(&self) -> bool {
+        self.admitted_biome_generation.is_some()
+    }
+
     /// A pack's file for `id` in `bundle`: called for packs from the lowest
     /// to the highest, so the last call for an id wins.
     pub fn set(&mut self, bundle: &str, id: &str, json: String) {

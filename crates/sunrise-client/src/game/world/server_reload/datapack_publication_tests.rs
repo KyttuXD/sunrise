@@ -345,10 +345,14 @@ fn world_open_and_wire_use_the_pack_biome_instead_of_the_bundled_file() {
             .into_iter()
             .find(|entry| entry.id == id)
             .unwrap();
+        use sunrise_core::nbt::Tag;
+        let data = biome.data.expect("missing encoded biome winner");
         assert_eq!(
-            biome.data,
-            Some(sunrise_client::lan::data::json_to_nbt(&winner))
+            data.get("temperature"),
+            Some(&Tag::Float(0.125_f32.to_bits()))
         );
+        assert!(data.get("carvers").is_none());
+        assert!(data.get("features").is_none());
     });
 }
 

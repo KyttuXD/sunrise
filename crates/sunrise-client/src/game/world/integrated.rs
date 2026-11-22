@@ -1420,7 +1420,7 @@ fn serve(
     });
     let opening = Opening {
         world,
-        sync: preload_sync_data(&res.core.item_data, res.shared_items()),
+        sync: preload_sync_data(&res.core.item_data, res.shared_items(), res.biomes()),
     };
     let mut server = match startup::time("server.game_new", || {
         server_game(res, pack, options, settings)

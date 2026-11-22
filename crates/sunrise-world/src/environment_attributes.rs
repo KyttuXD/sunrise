@@ -25,7 +25,55 @@ pub enum Value {
     Float(f32),
     Rgb([f32; 3]),
     Argb([f32; 4]),
+    AmbientParticles(Vec<AmbientParticle>),
     Other(Json),
+}
+
+/// A value of `AmbientParticle.CODEC` (particle options and a float probability).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct AmbientParticle {
+    particle: Json,
+    probability: f32,
+}
+
+impl AmbientParticle {
+    fn decode_list(value: &Json) -> Result<Vec<Self>, String> {
+        value
+            .as_array()
+            .ok_or("ambient particles must be a list")?
+            .iter()
+            .map(|entry| {
+                let particle = entry.get("particle").ok_or("no particle")?;
+                crate::loot::types::validate_particle_options(particle)
+                    .map_err(|error| error.to_string())?;
+                let probability = unit(
+                    entry.get("probability").ok_or("no probability")?,
+                    "probability",
+                )?;
+                Ok(Self {
+                    particle: particle.clone(),
+                    probability,
+                })
+            })
+            .collect()
+    }
+
+    fn encode_list(particles: Vec<Self>) -> Result<sunrise_core::nbt::Tag, String> {
+        use sunrise_core::{json_nbt::json_to_tag, nbt::Tag};
+        particles
+            .into_iter()
+            .map(|entry| {
+                Ok(Tag::compound([
+                    (
+                        "particle",
+                        json_to_tag(&entry.particle).map_err(|error| error.to_string())?,
+                    ),
+                    ("probability", Tag::Float(entry.probability.to_bits())),
+                ]))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Tag::List)
+    }
 }
 
 enum Default {
@@ -343,6 +391,9 @@ impl Attribute {
             Kind::Float | Kind::AngleDegrees => Value::Float(float(json)?),
             Kind::RgbColor => Value::Rgb(rgb(json)?),
             Kind::ArgbColor => Value::Argb(argb(json)?),
+            Kind::Other if self.id == "visual/ambient_particles" => {
+                Value::AmbientParticles(AmbientParticle::decode_list(json)?)
+            }
             Kind::Other => {
                 crate::loot::types::validate_environment_value(self, json)
                     .map_err(|error| error.to_string())?;
@@ -468,8 +519,9 @@ pub enum Entry {
         factor: f32,
     },
     Boolean(BoolOp, bool),
-    /// A modifier of a type not ported yet (`ListModifier.append`, `MobSpawnSettingsModifier`
-    /// `overlay`): kept, and applying it leaves the value as it was.
+    /// `ListModifier.append` for the ambient-particle list.
+    AppendAmbientParticles(Vec<AmbientParticle>),
+    /// `MobSpawnSettingsModifier.overlay`: kept, and applying it leaves the value as it was.
     Unported(Json),
     /// An entry computed when it applies, from the value so far (not vanilla: a resource pack's
     /// expression). `None` leaves the value as it was.
@@ -558,9 +610,7 @@ impl Entry {
             // The argument codecs of ListModifier.append and
             // MobSpawnSettingsModifier.overlay are their attribute's value codec.
             "append" if attribute.id == "visual/ambient_particles" => {
-                crate::loot::types::validate_environment_value(attribute, argument)
-                    .map_err(|error| error.to_string())?;
-                Self::Unported(serde_json::json!({"modifier": op, "argument": argument}))
+                Self::AppendAmbientParticles(AmbientParticle::decode_list(argument)?)
             }
             "overlay" if attribute.id == "gameplay/natural_mob_spawns" => {
                 crate::loot::types::validate_environment_value(attribute, argument)
@@ -839,6 +889,7 @@ impl AttributeMap {
                 Value::Float(v) => Tag::Float(v.to_bits()),
                 Value::Rgb(v) => color(v),
                 Value::Argb(v) => color(v),
+                Value::AmbientParticles(v) => AmbientParticle::encode_list(v)?,
                 Value::Other(v) => json_nbt::json_to_tag(&v).map_err(|e| e.to_string())?,
             })
         }
@@ -890,6 +941,9 @@ impl AttributeMap {
                         },
                         Tag::Byte(i8::from(v)),
                     ),
+                    Entry::AppendAmbientParticles(v) => {
+                        modified("append", AmbientParticle::encode_list(v)?)
+                    }
                     Entry::Unported(v) => json_nbt::json_to_tag(&v).map_err(|e| e.to_string())?,
                     Entry::Dynamic(_) => {
                         return Err(format!("{} is a computed attribute", attribute.id));

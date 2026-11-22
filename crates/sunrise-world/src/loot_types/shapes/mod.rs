@@ -332,6 +332,18 @@ pub(crate) fn validate_environment_value(
     validate_shape(value, shape, attribute.id, "value", Purpose::Validate).map(|_| ())
 }
 
+/// `ParticleTypes.CODEC` used by `AmbientParticle.CODEC`.
+pub(crate) fn validate_particle_options(value: &Value) -> io::Result<()> {
+    validate_shape(
+        value,
+        Kind::Named("particle"),
+        "ambient particle",
+        "particle",
+        Purpose::Validate,
+    )
+    .map(|_| ())
+}
+
 pub(super) fn children<'v>(value: &'v Value, function: bool, kind: &str) -> Vec<Child<'v>> {
     let Some(shape) = builtin(kind, function) else {
         return Vec::new();

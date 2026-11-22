@@ -5,17 +5,14 @@
 //! worldgen bundle as decoration and cached.
 use super::{
     biome::BiomeId,
-    biome_predicate::BiomePredicateBindings,
     block_feature::FeatureBlockBindings,
     feature::{FeatureBlocks, FeatureWorld},
     feature_catalog::{BiomePlacedFeature, FeatureCatalog},
     feature_graph::{FeatureDefinition, PlacedFeatureDefinition},
     generator::{GeneratorData, GeneratorError},
     placement::PlacementContext,
-    state_provider::{StateProviderBindings, StateProviderCatalog},
     tags::TagDefinitions,
 };
-use crate::block_placement::BlockPlacementBindings;
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap},
@@ -97,43 +94,7 @@ impl LiveFeatures {
             &resources.placed,
             &resources.placed_tags,
         )?;
-        let biomes = Arc::new(BiomePredicateBindings::new(
-            &data
-                .biome_names()
-                .iter()
-                .enumerate()
-                .map(|(i, name)| (name.to_string(), BiomeId(i as u32)))
-                .collect(),
-            &data.biome_tags,
-        )?);
-        let mut bindings = data
-            .feature_block_bindings()?
-            .with_fluid_tags(&resources.fluid_tags)?
-            .with_biomes(biomes.clone());
-        if let Some(structures) = &data.structures {
-            bindings = bindings.with_structures(structures.clone());
-        }
-        if let Some(blocks) = &resources.blocks {
-            bindings = bindings
-                .with_block_properties(&blocks.properties)?
-                .with_state_providers(
-                    StateProviderBindings::new(
-                        registry,
-                        data.integers().clone(),
-                        &data.block_tags,
-                    )?
-                    .with_block_properties(&blocks.properties)?
-                    .with_fluid_tags(&resources.fluid_tags)?
-                    .with_biomes(biomes),
-                    StateProviderCatalog::from_resources(&resources.state_providers)?,
-                    BlockPlacementBindings::new(
-                        registry,
-                        &blocks.properties,
-                        &blocks.double_plants,
-                        &blocks.mossy_carpets,
-                    )?,
-                )?;
-        }
+        let bindings = data.geometry_feature_bindings(resources)?;
         // Configured-feature tag membership (feature_tags names configured features).
         let mut bone_meal_tag = BTreeSet::new();
         if let Some(json) = resources
@@ -148,16 +109,19 @@ impl LiveFeatures {
             }
         }
         let mut bone_meal = Vec::with_capacity(data.biome_names().len());
+        let mut placed_cache = HashMap::new();
         for i in 0..data.biome_names().len() {
-            let biome: Value = serde_json::from_str(data.biome_json(BiomeId(i as u32)))?;
             let mut list = Vec::new();
-            for holder in catalog
-                .biome_steps(&biome["features"])?
+            for (holder, decoded) in data
+                .biome_feature_steps(BiomeId(i as u32), &catalog)?
                 .into_iter()
                 .flatten()
             {
                 let placed: Value = match holder {
                     BiomePlacedFeature::Named(name) => {
+                        if let Some(decoded) = decoded {
+                            placed_cache.insert(name.clone(), Some(decoded));
+                        }
                         serde_json::from_str(catalog.placed_source(&name)?)?
                     }
                     BiomePlacedFeature::Direct(json) => serde_json::from_str(&json)?,
@@ -196,7 +160,7 @@ impl LiveFeatures {
             bindings,
             blocks: FeatureBlocks::from_registry(registry)?,
             configured: Mutex::new(HashMap::new()),
-            placed: Mutex::new(HashMap::new()),
+            placed: Mutex::new(placed_cache),
             configured_ids: OnceLock::new(),
             placed_ids: OnceLock::new(),
             provider_ids: OnceLock::new(),

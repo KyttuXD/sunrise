@@ -351,7 +351,7 @@ impl Biomes {
             foliage: colormap(root.source(), "foliage")?,
             dry: colormap(root.source(), "dry_foliage")?,
         };
-        Self::load_with_colormaps(root, maps)
+        Self::load_with_colormaps(root, maps, true)
     }
     /// Loads biome definitions for a logical server without opening the client
     /// `textures/colormap/{grass,foliage,dry_foliage}.png` textures (`GrassColorReloadListener`,
@@ -359,24 +359,44 @@ impl Biomes {
     /// Server-side biome JSON data (water colour, climate, spawns, features and attributes) is
     /// loaded identically to [`Self::load`].
     pub fn load_for_server(root: &ResourceRoot) -> Result<Self> {
-        Self::load_with_colormaps(root, Colormaps::default())
+        Self::load_with_colormaps(root, Colormaps::default(), true)
     }
-    fn load_with_colormaps(root: &ResourceRoot, maps: Colormaps) -> Result<Self> {
+    /// The prepared base biome snapshot, before any world registry admits mod or pack entries.
+    pub fn load_vanilla_for_server(root: &ResourceRoot) -> Result<Self> {
+        Self::load_with_colormaps(root, Colormaps::default(), false)
+    }
+
+    fn load_with_colormaps(
+        root: &ResourceRoot,
+        maps: Colormaps,
+        include_mods: bool,
+    ) -> Result<Self> {
         let mut list = Vec::new();
         let mut files_by_name = BTreeMap::new();
         // The folder's own files (not its subfolders'), by file name: through `json_folder`,
         // from the prepared data file when there is one.
-        let folder = sunrise_world::json_folder::read(
+        let folder = match sunrise_world::json_folder::read(
             &root.prepared().join("data/minecraft/worldgen/biome"),
-        )?;
+        ) {
+            Ok(folder) => Some(folder),
+            Err(error) if !include_mods && error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
         let mut files: Vec<_> = folder
-            .files
             .iter()
+            .flat_map(|folder| &folder.files)
             .filter(|f| !f.name.contains('/'))
             .collect();
         files.sort_by_cached_key(|f| format!("{}.json", f.name));
         for file in files {
             let v: Value = sunrise_world::json_file::parse(&file.path, file.bytes()?)?;
+            if !include_mods && v.get("neoforge:conditions").is_some() {
+                return Err(std::io::Error::other(format!(
+                    "biome minecraft:{} requires the world's admitted biome table",
+                    file.name
+                ))
+                .into());
+            }
             list.push(BiomeInfo::from_json(
                 format!("minecraft:{}", file.name),
                 &v,
@@ -385,9 +405,11 @@ impl Biomes {
             files_by_name.insert(format!("minecraft:{}", file.name), v);
         }
         // Content mods' own biomes follow the built-in ones, so the built-in ids never move.
-        for (name, v) in mod_biome_files(root.prepared()) {
-            list.push(BiomeInfo::from_json(name.clone(), &v, &maps));
-            files_by_name.insert(name, v);
+        if include_mods {
+            for (name, v) in mod_biome_files(root.prepared()) {
+                list.push(BiomeInfo::from_json(name.clone(), &v, &maps));
+                files_by_name.insert(name, v);
+            }
         }
         let index = list
             .iter()

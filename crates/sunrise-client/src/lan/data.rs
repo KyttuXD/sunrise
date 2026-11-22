@@ -280,16 +280,7 @@ fn synchronized_entries(
             &mut entries,
         );
     }
-    if key == BIOME_REGISTRY {
-        // A content mod's own biomes are always sent to clients.
-        for (id, value) in crate::biome::mod_biome_files(resources) {
-            let (ns, path) = id.split_once(':').unwrap_or(("minecraft", &id));
-            entries.push(((ns.to_owned(), path.to_owned()), value, true));
-        }
-        // Use the world's winner in both staging and eager decoding, even
-        // before a hub supplies the world's biome table with modifiers applied.
-        pack_entries(path, overlay, &mut entries);
-    }
+
     // The gameplay table already selects the pack's song. Validate that
     // winner, not a losing bootstrap definition.
     if path == "jukebox_song" {
@@ -670,11 +661,27 @@ impl SyncData {
                 registries.push(((*key).into(), damage.0.clone()));
                 continue;
             }
-            if *key == BIOME_REGISTRY
-                && let Some(table) = biomes
-            {
-                let names = table.registry_order();
+            if *key == BIOME_REGISTRY {
+                let prepared;
                 let modified = crate::mod_content::biomes::modified(resources);
+                let table = match biomes {
+                    Some(table) => table,
+                    None => {
+                        if !modified.is_empty() {
+                            return Err(
+                                "modified biomes require the world's admitted biome table".into()
+                            );
+                        }
+                        prepared = crate::biome::Biomes::load_vanilla_for_server(
+                            &sunrise_assets::resource_source::ResourceRoot::directory(
+                                resources.to_owned(),
+                            ),
+                        )
+                        .map_err(|error| error.to_string())?;
+                        &prepared
+                    }
+                };
+                let names = table.registry_order();
                 let entries = Entries {
                     data: names
                         .iter()
@@ -753,15 +760,6 @@ impl SyncData {
             if let Some(packed) = &packed {
                 packed.discard_replaced(key, &mut entries);
             }
-            // A biome the mods' modifiers changed is not the client's own file any more:
-            // its data is sent, as a pack's biome is.
-            let modified = match *key == BIOME_REGISTRY {
-                true => crate::mod_content::biomes::modified(resources),
-                false => Default::default(),
-            };
-            for ((ns, p), _, from_pack) in entries.iter_mut() {
-                *from_pack |= modified.contains(&format!("{ns}:{p}"));
-            }
             condition_filter::filter(
                 &mut entries,
                 damage_entries.is_some(),
@@ -770,16 +768,6 @@ impl SyncData {
             );
             let mut entries = if let Some(damage_entries) = damage_entries {
                 damage_entries
-            } else if *key == BIOME_REGISTRY {
-                entries
-                    .into_iter()
-                    .map(|((ns, path), value, packed)| {
-                        let payload = sunrise_world::conditions::into_payload(value);
-                        let data = BiomeDefinition::encode_network(&payload)
-                            .map_err(|error| format!("biome {ns}:{path}: {error}"))?;
-                        Ok::<_, String>(((ns, path), data, packed))
-                    })
-                    .collect::<Result<_, _>>()?
             } else {
                 entries
                     .into_iter()
