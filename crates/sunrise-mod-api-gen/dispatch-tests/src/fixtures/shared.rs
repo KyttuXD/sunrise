@@ -181,8 +181,8 @@ mod generated {
         // Generated registration dispatch builds the stub `Answered` through this path.
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
-            Command, CommandRegistration, Config, Dispensed, InteractionResult, MapDecoration,
-            MapInfo,
+            ClientCommandRegistration, Command, CommandRegistration, Config, Dispensed,
+            InteractionResult, MapDecoration, MapInfo,
         };
         #[derive(Clone)]
         pub struct FluidModel;

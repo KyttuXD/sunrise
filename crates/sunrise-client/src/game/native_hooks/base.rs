@@ -731,20 +731,15 @@ impl Game<'_> {
     ) {
         self.fire_mouse_scrolling(scroll, accumulated, buttons, cursor, modifiers, canceled);
     }
-    /// A command typed or clicked in chat, without its slash, before the
-    /// server and Sunrise's commands see it: set `ran` when the mod ran it.
-    pub(in crate::game) fn native_command(&mut self, command: &str, ran: &mut bool) {
-        self.fire_command(command, ran);
-    }
-    /// The client's own commands (`RegisterClientCommandsEvent`), which
-    /// `native_command` runs: push a `mod_api::Command` per usage. Asked when a
-    /// connection starts and again when the server sends its own tree, so the
-    /// chat box colours, completes and lists them as the game's own; a name
-    /// the game already has keeps that command's behaviour. A client command
-    /// has no operator level: one with a nonzero level is left out.
+    /// The client's own commands (`RegisterClientCommandsEvent`): push each
+    /// usage with its executor attached by `Command::executes_client`. Asked
+    /// when a connection starts and again when the server sends its own tree,
+    /// so chat can display the branches from both trees. Only a command or
+    /// argument unknown to the client dispatcher proceeds to the server.
+    /// A client command has no operator level: one with a nonzero level is left out.
     pub(in crate::game) fn native_register_client_commands(
         &mut self,
-        commands: &mut Vec<mod_api::Command>,
+        commands: &mut Vec<mod_api::Answered<mod_api::ClientCommandRegistration>>,
     ) {
         self.fire_register_client_commands(commands);
     }

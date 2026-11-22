@@ -453,7 +453,7 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     self.native_net.holds.borrow_mut().clear();
                     r.reconfiguring = Some(ticks);
-                    r.chat_tree_received = false;
+                    r.server_chat_tree = None;
                 }
                 resume.acknowledge();
             }

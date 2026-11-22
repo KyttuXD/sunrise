@@ -883,6 +883,24 @@ fn a_registered_token_reads_as_a_whole_word_before_the_vanilla_letter() {
     assert_eq!(error.key, "argument.entity.selector.unknown");
 }
 #[test]
+fn a_registered_token_accepts_brigadier_unquoted_characters() {
+    let mut reg = reg();
+    reg.selector_tokens
+        .push(sunrise_client_core::registries::SelectorToken {
+            name: "Allies_1.0+team-a".into(),
+            tooltip: "test.selector.allies_v1".into(),
+            players_only: false,
+            limit: 4,
+            sort: "furthest",
+        });
+    let mut r = Reader::new("@Allies_1.0+team-a[limit=2]");
+    let s = selector::parse(&mut r, &reg, true).unwrap();
+    assert_eq!(s.token.as_deref(), Some("Allies_1.0+team-a"));
+    assert_eq!((s.limit, s.sort), (2, Sort::Furthest));
+    assert!(s.include_entities);
+    assert!(!r.can_read());
+}
+#[test]
 fn a_uuid_selects_by_entity_uuid() {
     // EntitySelectorParser.parseNameOrUUID: a UUID sets entityUUID and
     // includesEntities, never playerName (which findEntities checks first).

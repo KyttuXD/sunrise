@@ -165,32 +165,60 @@ impl Game<'_> {
             Some(tree) => tree,
             None => sunrise_client::command::vanilla::game_dispatcher(),
         };
-        let mut commands = Vec::new();
-        self.native_register_client_commands(&mut commands);
-        commands.retain(|command| {
-            let keep = command.level == 0;
-            if !keep {
+        let mut registrations = Vec::new();
+        self.native_register_client_commands(&mut registrations);
+        let mut usages = Vec::with_capacity(registrations.len());
+        let mut executors = Vec::with_capacity(registrations.len());
+        for registration in registrations {
+            let owner = registration.mod_id;
+            let (command, call) =
+                mod_api::__private::split_client_command_registration(registration.answer);
+            let index = mod_api::__private::mod_index(owner)
+                .expect("client command registrations come from installed listeners");
+            let executor = super::native_server::RegisteredClientExecutor::new(
+                owner,
+                index,
+                &command.usage,
+                call,
+            );
+            if command.level != 0 {
                 log::warn!(
-                    "Sunrise: a client command was left out: `{}` has an operator level",
+                    "Sunrise: mod {owner} client command `{}` was left out: it has an operator level",
                     command.usage
                 );
+                continue;
             }
-            keep
-        });
+            usages.push(command);
+            executors.push(Some(executor));
+        }
         let arguments = super::native_server::command_arguments();
-        let (tree, _, problems) = super::native_server::client_command_tree(
-            &commands,
-            |name| base.find(name).is_some(),
-            &arguments,
-        );
+        let mut slots = super::native_server::CommandExecutorSlots::new();
+        let (tree, _, problems) =
+            super::native_server::client_command_tree(&usages, &arguments, Some(&mut slots));
         for problem in problems {
             log::warn!("Sunrise: a client command was left out: {problem}");
         }
-        let mut tree_with_mods = base.clone();
+        let mut client_dispatcher = Dispatcher::new();
+        super::native_server::register_command_nodes(
+            &mut client_dispatcher,
+            &tree,
+            MOD_COMMAND,
+            &arguments,
+            Some(&slots),
+        );
+        let retained: std::collections::HashSet<_> = slots.values().copied().collect();
+        for (slot, executor) in executors.iter_mut().enumerate() {
+            if !retained.contains(&slot) {
+                *executor = None;
+            }
+        }
+        self.native_client_commands
+            .install(client_dispatcher, executors);
+        let mut tree_with_mods = base.clone_with_unmerged_redirects();
         super::native_server::register_dispatcher(
             &mut tree_with_mods,
             &tree,
-            sunrise_client::command::MOD_COMMAND,
+            MOD_COMMAND,
             &arguments,
         );
         with_studio_commands(&with_native_commands(&tree_with_mods, &["studio"])).with_profiler()
@@ -914,9 +942,6 @@ impl Game<'_> {
             .map(|(k, _)| k.clone())
             .collect();
         self.sync_enchantment_registries();
-        if self.remote.is_none() {
-            self.ui.registries.selector_tokens = super::native_entity_selectors::selector_tokens();
-        }
         // After the export, which keys the registry with vanilla's tags.
         self.sync_stat_registries();
         self.sync_pack_tag_ids();
@@ -1362,17 +1387,12 @@ impl Game<'_> {
         // On a server (single player's own included) the server runs it,
         // unless a client mod owns the command.
         if self.remote.is_some() {
-            if let Some(command) = message.strip_prefix('/')
-                && self.client_mod_command(command)
-            {
-                return;
-            }
             self.send_chat_from_screen(&message);
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
             // A native mod's command first.
-            if !self.client_mod_command(command) {
+            if self.run_client_native_command(command).is_none() {
                 self.run_command(command);
             }
         } else {
@@ -1632,14 +1652,13 @@ impl Game<'_> {
     /// first, as `ClientPacketListener.sendUnattendedCommand` lets client
     /// commands take it.
     pub(super) fn click_command(&mut self, command: &str) {
-        let command = command.strip_prefix('/').unwrap_or(command);
-        if self.client_mod_command(command) {
-            return;
-        }
         if self.remote.is_some() {
             self.send_unattended_command(command);
         } else {
-            self.run_command(command);
+            let command = command.strip_prefix('/').unwrap_or(command);
+            if self.run_client_native_command(command).is_none() {
+                self.run_command(command);
+            }
         }
     }
     /// PvP & HUD's chat search on or off. The box holds the query: what was typed is put aside
@@ -2652,33 +2671,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A client command's usage becomes real nodes in the chat tree: its
-    /// argument is parsed (a wrong shape is red, as a vanilla command's would
-    /// be) and a run goes to `native_command` with the line as typed.
+    /// A client command's usage becomes real nodes in the chat tree and binds
+    /// its executor slot to the client dispatcher generation while preserving
+    /// server redirects and permissions in `base`.
     #[test]
     fn a_client_commands_usage_is_parsed_by_the_chat_tree() {
         let reg = Registries::default();
         let vanilla = sunrise_client::command::vanilla::game_dispatcher();
         let commands = [mod_api::Command::new("xmode <mode:word>")];
         let arguments = super::super::native_server::command_arguments();
+        let mut slots = super::super::native_server::CommandExecutorSlots::new();
         let (tree, _, problems) = super::super::native_server::client_command_tree(
             &commands,
-            |name| vanilla.find(name).is_some(),
             &arguments,
+            Some(&mut slots),
         );
         assert!(problems.is_empty(), "{problems:?}");
-        let mut chat = vanilla.clone();
-        super::super::native_server::register_dispatcher(
-            &mut chat,
+        let mut client_dispatcher = Dispatcher::new();
+        super::super::native_server::register_command_nodes(
+            &mut client_dispatcher,
             &tree,
-            sunrise_client::command::MOD_COMMAND,
+            MOD_COMMAND,
             &arguments,
+            Some(&slots),
         );
+        let parsed = client_dispatcher.parse("xmode fast", &reg);
+        let (ctx, handler) = parsed.executable().unwrap();
+        assert_eq!(handler, MOD_COMMAND);
+        let key = ctx.executor.expect("client node binds an executor key");
+        assert_eq!(key.slot(), 0);
+        assert!(client_dispatcher.owns_executor(key));
+
+        // Rebuilding the client dispatcher mints a fresh generation; stale keys are rejected.
+        let mut rebuilt = Dispatcher::new();
+        super::super::native_server::register_command_nodes(
+            &mut rebuilt,
+            &tree,
+            MOD_COMMAND,
+            &arguments,
+            Some(&slots),
+        );
+        assert!(!rebuilt.owns_executor(key));
+
+        let mut chat = vanilla.clone_with_unmerged_redirects();
+        super::super::native_server::register_dispatcher(&mut chat, &tree, MOD_COMMAND, &arguments);
         let parse = chat.parse("xmode fast", &reg);
-        assert_eq!(
-            parse.executable().unwrap().1,
-            sunrise_client::command::MOD_COMMAND
-        );
+        assert_eq!(parse.executable().unwrap().1, MOD_COMMAND);
         assert!(
             chat.parse("xmode", &reg).executable().is_err(),
             "needs its mode"
@@ -2687,13 +2725,112 @@ mod tests {
             chat.parse("xmode fast extra", &reg).executable().is_err(),
             "one word, not two"
         );
-        // A name the game has is not taken over.
-        let (_, _, problems) = super::super::native_server::command_tree(
-            &[mod_api::Command::new("help <x:word>")],
-            |name| vanilla.find(name).is_some(),
+        // Server redirects and permissions in `base` remain intact after merging client commands.
+        let tp = chat.find("tp").expect("tp alias remains");
+        let tp_target = chat.nodes[tp].redirect.expect("tp redirect remains");
+        assert_eq!(chat.nodes[tp_target].name(), "teleport");
+        assert_eq!(chat.nodes[tp].permission, 2);
+        let op_reg = Registries {
+            permission: 2,
+            ..Registries::default()
+        };
+        assert!(chat.parse("tp 0 64 0", &reg).executable().is_err());
+        assert_eq!(
+            chat.parse("tp 0 64 0", &op_reg).executable().unwrap().1,
+            "teleport.location"
+        );
+    }
+
+    #[test]
+    fn display_merge_keeps_server_redirects_on_unmerged_server_targets() {
+        let mut server = Dispatcher::new();
+        let shared = server.literal(0, "shared");
+        let remote = server.literal(shared, "server");
+        server.executes(remote, "remote");
+        let alias = server.literal(0, "alias");
+        server.redirect(alias, shared);
+        let run = server.literal(0, "run");
+        server.redirect(run, 0);
+
+        let arguments = super::super::native_server::command_arguments();
+        let client_cmds = [
+            mod_api::Command::new("shared local <value:integer>"),
+            mod_api::Command::new("clientonly"),
+        ];
+        let (tree, _, problems) =
+            super::super::native_server::client_command_tree(&client_cmds, &arguments, None);
+        assert!(problems.is_empty(), "{problems:?}");
+
+        let mut display = server.clone_with_unmerged_redirects();
+        super::super::native_server::register_dispatcher(
+            &mut display,
+            &tree,
+            MOD_COMMAND,
             &arguments,
         );
-        assert_eq!(problems.len(), 1);
+        let reg = Registries::default();
+
+        // Direct path displays both server and client branches.
+        assert_eq!(
+            display.parse("shared server", &reg).executable().unwrap().1,
+            "remote"
+        );
+        assert_eq!(
+            display
+                .parse("shared local 7", &reg)
+                .executable()
+                .unwrap()
+                .1,
+            MOD_COMMAND
+        );
+        let direct_suggestions: Vec<String> = display
+            .client_suggestions(&display.parse("shared ", &reg), 7, &reg)
+            .1
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert_eq!(direct_suggestions, ["local", "server"]);
+
+        // Server alias to the shared root keeps the server branch and never exposes the client branch.
+        assert_eq!(
+            display.parse("alias server", &reg).executable().unwrap().1,
+            "remote"
+        );
+        assert!(display.parse("alias local 7", &reg).executable().is_err());
+        let alias_suggestions: Vec<String> = display
+            .client_suggestions(&display.parse("alias ", &reg), 6, &reg)
+            .1
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert_eq!(alias_suggestions, ["server"]);
+
+        // A server redirect to the dispatcher root traverses only the unmerged server tree
+        // and preserves Brigadier's `...` smart-usage marker.
+        assert_eq!(
+            display
+                .parse("run shared server", &reg)
+                .executable()
+                .unwrap()
+                .1,
+            "remote"
+        );
+        assert!(
+            display
+                .parse("run shared local 7", &reg)
+                .executable()
+                .is_err()
+        );
+        assert!(display.parse("run clientonly", &reg).executable().is_err());
+        let run_suggestions: Vec<String> = display
+            .client_suggestions(&display.parse("run ", &reg), 4, &reg)
+            .1
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert!(!run_suggestions.iter().any(|s| s == "clientonly"));
+        let usage = display.smart_usage(0, 0);
+        assert!(usage.iter().any(|(_, line)| line == "run ..."), "{usage:?}");
     }
 
     #[test]
@@ -2725,7 +2862,7 @@ mod tests {
         assert!(plain.find("flyspeed").is_none());
         let tree = with_native_commands(vanilla, &["flyspeed"]);
         assert!(tree.find("flyspeed").is_some());
-        // The rest of the line goes to the mod, as `native_command` gets it.
+        // The rest of the line is parsed as a greedy argument in the chat tree.
         let parse = tree.parse("flyspeed 4", &reg);
         assert_eq!(
             parse.executable().unwrap().1,

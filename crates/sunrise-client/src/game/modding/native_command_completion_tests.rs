@@ -301,6 +301,91 @@ fn a_providers_answer_reaches_the_player_without_passing_through_the_completion_
     });
 }
 
+struct OversizedAndMany {
+    provider: bool,
+}
+
+impl mod_api::CommandArgumentType for OversizedAndMany {
+    fn kind(&self) -> mod_api::CommandArgumentKind {
+        mod_api::CommandArgumentKind::Word
+    }
+
+    fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+        Ok(input.to_owned())
+    }
+
+    fn suggest(
+        &self,
+        _: Option<&mod_api::CommandSender>,
+        _: &str,
+    ) -> Vec<mod_api::CommandSuggestion> {
+        // Ordinary completions sort the whole result before the server's packet cap.
+        (0..1050)
+            .rev()
+            .map(|i| mod_api::CommandSuggestion::new(format!("cand_{i:04}")))
+            .collect()
+    }
+
+    fn suggestion_provider(&self) -> Option<Arc<dyn mod_api::SuggestionProvider>> {
+        self.provider.then(|| Arc::new(OversizedProvider) as _)
+    }
+}
+
+struct OversizedProvider;
+
+impl mod_api::SuggestionProvider for OversizedProvider {
+    fn suggest(&self, _: &mod_api::SuggestionRequest) -> mod_api::SuggestionReply {
+        use mod_api::CommandSuggestion as S;
+        mod_api::SuggestionReply::new([
+            S::new("a".repeat(32768)),
+            S::with_tooltip("bad_tip", "b".repeat(65536)),
+            S::with_tooltip("bad_nul", "\0".repeat(32768)),
+            S::with_tooltip("ok_sibling", "valid tooltip"),
+            S::with_tooltip("z".repeat(32767), "y".repeat(65535)),
+        ])
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn oversized_provider_entries_drop_individually_and_large_regular_replies_sort_before_truncation() {
+    let mut resources = None;
+    let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+    let arguments: CommandArguments = std::collections::HashMap::from([
+        (
+            "test:mixed".to_owned(),
+            Arc::new(OversizedAndMany { provider: true }) as Arc<dyn mod_api::CommandArgumentType>,
+        ),
+        (
+            "test:many".to_owned(),
+            Arc::new(OversizedAndMany { provider: false }) as Arc<dyn mod_api::CommandArgumentType>,
+        ),
+    ]);
+    let (tree, _, problems) = command_tree(
+        &[
+            mod_api::Command::new("mixed <value:test:mixed>"),
+            mod_api::Command::new("probe <value:test:many>"),
+        ],
+        |_| false,
+        &arguments,
+    );
+    assert!(problems.is_empty(), "{problems:?}");
+    let mut dispatcher = (*game.ui.dispatcher.0).clone();
+    register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
+    game.ui.dispatcher.0 = Arc::new(dispatcher);
+    game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+    last_tree(&rx);
+
+    assert_eq!(
+        suggestions(&mut game, &rx, "mixed "),
+        ["ok_sibling".to_owned(), "z".repeat(32767)]
+    );
+    let truncated = suggestions(&mut game, &rx, "probe ");
+    assert_eq!(truncated.len(), 1000);
+    assert_eq!(truncated[0], "cand_0000");
+    assert_eq!(truncated[999], "cand_0999");
+}
+
 struct IdentifierCompletion;
 
 #[mod_api::__subscriptions]

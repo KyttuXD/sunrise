@@ -3283,15 +3283,6 @@ impl Game<'_> {
             page.settings = settings;
         }
     }
-    /// A client mod's command (the `command` hook); a server never asks.
-    pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
-        if self.lan_acting.is_some() {
-            return false;
-        }
-        let mut ran = false;
-        self.native_command(command, &mut ran);
-        ran
-    }
     /// The presentation-only view transform native mods compose at vanilla's
     /// `GameRenderer.bobHurt` / `bobView` stage (`render_view_transform`).
     pub(super) fn native_render_view_transform_matrix(&self, partial: f32) -> glam::Mat4 {

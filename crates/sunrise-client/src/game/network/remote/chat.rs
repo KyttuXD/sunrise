@@ -315,19 +315,19 @@ impl Game<'_> {
     /// ClientPacketListener.sendChat / sendCommand, signed with a chat
     /// session (game/network/remote_chat.rs). The Chat option's Hidden and System
     /// levels keep chat out and Hidden keeps the commands out (ChatAbilities).
-    pub(in crate::game) fn send_signed_chat_input(&mut self, message: &str) {
+    pub(in crate::game) fn send_signed_chat_input(
+        &mut self,
+        message: &str,
+    ) -> Option<crate::game::native_server::ClientCommandOutcome> {
         let message = message.trim();
         if message.is_empty() || !self.chat_abilities().allows(message) {
-            return;
+            return None;
         }
         if let Some(command) = message.strip_prefix('/') {
-            if self.studio_command(command) {
-                return;
-            }
-            self.send_command(command);
-        } else {
-            self.send_signed_chat(message);
+            return self.send_command(command);
         }
+        self.send_signed_chat(message);
+        None
     }
     /// ChatScreen.handleChatInput fires the client event for chat, not commands.
     pub(in crate::game) fn send_chat_from_screen(&mut self, message: &str) {

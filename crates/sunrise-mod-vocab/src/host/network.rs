@@ -23,9 +23,10 @@ pub trait NetworkClientHost {
     /// A mod's chat line or command (`/` first), sent as `send_chat` sends
     /// it (ClientPacketListener.sendChat / sendCommand), to any server: no
     /// chat history, and no client chat event (vanilla's `ClientChatEvent`
-    /// comes only from ChatScreen). An error when the player isn't in a
-    /// server's play state or the Chat option blocks the message. API
-    /// 404.
+    /// comes only from ChatScreen). Slash commands the client dispatcher handles
+    /// stay local; the return value reports input admission, not a command result.
+    /// An error when the player isn't in a server's play state or the Chat option
+    /// blocks the message. API 404.
     fn send_chat(&mut self, message: &str) -> Result<(), String>;
     /// Side: client.
     /// Encodes a typed serverbound play packet with the client's vanilla protocol encoder.

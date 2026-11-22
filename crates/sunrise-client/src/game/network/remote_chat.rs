@@ -5,7 +5,12 @@
 //! markMessageAsProcessed). Without a signed-in
 //! account, or on a server that plays the account under another profile
 //! (offline mode), there is no session and everything goes unsigned.
-use super::{Game, Screen, books::BookScreen, dialogs::ClosedDialog};
+use super::{
+    Game, Screen,
+    books::BookScreen,
+    dialogs::ClosedDialog,
+    native_server::{ClientCommandOutcome, PendingClientCommand, PendingClientCommandKind},
+};
 use std::sync::Arc;
 use sunrise_client::{
     auth::{self, ChatKeyPair},
@@ -281,17 +286,36 @@ impl Game<'_> {
     /// all with the same time, salt and last seen (without a chat session the
     /// signature list is empty, as in vanilla); any other command goes as the
     /// unsigned packet.
-    pub(super) fn send_command(&mut self, command: &str) {
+    pub(super) fn send_command(&mut self, command: &str) -> Option<ClientCommandOutcome> {
+        self.remote.as_ref()?;
+        if self.native_client_commands.executing {
+            self.native_client_commands
+                .pending_commands
+                .push(PendingClientCommand {
+                    command: command.to_owned(),
+                    kind: PendingClientCommandKind::Signed,
+                });
+            return None;
+        }
+        if let Some(outcome) = self.run_client_native_command(command) {
+            return Some(outcome);
+        }
+        if !self.studio_command(command) {
+            self.send_server_command(command);
+        }
+        None
+    }
+
+    /// Send a command already offered to the local dispatcher. Sign against the server tree
+    /// alone: client-only display branches cannot decide what remote text is signed.
+    pub(super) fn send_server_command(&mut self, command: &str) {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        let arguments: Vec<(String, String)> = if r.chat_tree_received {
-            r.chat_tree
-                .parse(command, &self.ui.registries)
-                .signable_arguments(&r.chat_tree)
-        } else {
-            Vec::new()
-        };
+        let arguments = r.server_chat_tree.as_ref().map_or_else(Vec::new, |tree| {
+            tree.parse(command, &self.ui.registries)
+                .signable_arguments(tree)
+        });
         if arguments.is_empty() {
             self.send(S::ChatCommand(play::ChatCommand {
                 command: command.to_owned(),
@@ -336,22 +360,36 @@ impl Game<'_> {
         if command.is_empty() || !self.chat_abilities().allows(&format!("/{command}")) {
             return;
         }
-        let Some(r) = self.remote.as_ref() else {
+        if self.remote.is_none() {
             return;
-        };
+        }
+        if self.native_client_commands.executing {
+            self.native_client_commands
+                .pending_commands
+                .push(PendingClientCommand {
+                    command: format!("/{command}"),
+                    kind: PendingClientCommandKind::Unattended,
+                });
+            return;
+        }
+        if self.run_client_native_command(command).is_some() {
+            return;
+        }
         // Vanilla's dispatcher is empty until the server sends its tree.
-        let check = if r.chat_tree_received {
-            verify_command(&r.chat_tree, &self.ui.registries, command)
-        } else {
-            CommandCheck::ParseErrors
-        };
+        let check = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.server_chat_tree.as_ref())
+            .map_or(CommandCheck::ParseErrors, |tree| {
+                verify_command(tree, &self.ui.registries, command)
+            });
         // screenAfterCommand: what stays once it has run, a dialog included.
         let over_screen = self.screen != Screen::Playing || self.dialog_open();
         let (message, accept) = match check {
             CommandCheck::NoIssues => {
                 // Verification above excludes message arguments. Use the ordinary sender so
                 // releases without an unsigned command packet still acknowledge seen chat.
-                self.send_command(command);
+                self.send_server_command(command);
                 return;
             }
             CommandCheck::ParseErrors => (

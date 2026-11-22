@@ -34,6 +34,11 @@ use std::{
 };
 use sunrise_client_core::text::Text;
 
+/// Brigadier `StringReader.isAllowedInUnquotedString` on an ASCII byte.
+pub fn is_unquoted(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'+')
+}
+
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).
 pub const MOD_COMMAND: &str = "mod";
 /// The command id of the client's own `/profiler` (`Dispatcher::with_profiler`).
@@ -231,7 +236,7 @@ impl<'a> Reader<'a> {
         c.is_ascii_digit() || c == '.' || c == '-'
     }
     pub fn is_allowed_in_unquoted(c: char) -> bool {
-        c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+')
+        c.is_ascii() && is_unquoted(c as u8)
     }
     fn read_number_text(&mut self) -> &'a str {
         let start = self.cursor;
@@ -917,6 +922,38 @@ impl Dispatcher {
             node.children.retain(|&child| !self.nodes[child].restricted);
         }
         tree
+    }
+    /// Clone this tree for a display merge (`ClientCommandHandler.copy`): direct paths start
+    /// at root `0` and may gain client-only children, while every server redirect targets an
+    /// unmerged copy of the original tree so aliases and root redirects never expose
+    /// client-only branches.
+    pub fn clone_with_unmerged_redirects(&self) -> Self {
+        let mut copy = self.clone();
+        if !copy.nodes.iter().any(|node| node.redirect.is_some()) {
+            return copy;
+        }
+        let offset = copy.nodes.len();
+        let unmerged: Vec<Node> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                let mut node = node.clone();
+                for child in &mut node.children {
+                    *child += offset;
+                }
+                if let Some(target) = &mut node.redirect {
+                    *target += offset;
+                }
+                node
+            })
+            .collect();
+        for node in &mut copy.nodes {
+            if let Some(target) = &mut node.redirect {
+                *target += offset;
+            }
+        }
+        copy.nodes.extend(unmerged);
+        copy
     }
     fn add(&mut self, parent: usize, kind: NodeKind) -> usize {
         let name = match &kind {

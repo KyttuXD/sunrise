@@ -210,7 +210,7 @@ fn a_client_command_refuses_an_argument_type_that_declares_a_provider_by_name() 
     ];
 
     // The client's own tree: the usage that would run the provider is left out, named.
-    let (tree, _, problems) = super::client_command_tree(&commands, |_| false, &arguments);
+    let (tree, _, problems) = super::client_command_tree(&commands, &arguments, None);
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("test:warp"), "{}", problems[0]);
     assert!(

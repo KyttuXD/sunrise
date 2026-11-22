@@ -239,20 +239,33 @@ pub fn command_argument_types() -> Vec<(String, std::sync::Arc<dyn crate::Comman
 
 /// The selector tokens mods registered at startup, by name, for the game's command
 /// registries. Not part of the mod surface.
-pub fn entity_selector_types() -> impl Iterator<Item = (&'static str, &'static crate::SelectorBase)>
-{
+pub fn entity_selector_types() -> impl Iterator<
+    Item = (
+        &'static str,
+        &'static crate::callback_owner::CallbackOwner,
+        &'static dyn crate::EntitySelectorType,
+    ),
+> {
     crate::parts::installed_entity_selectors()
         .iter()
-        .map(|info| (info.name.as_ref(), &info.base))
+        .map(|info| (info.name.as_ref(), &info.owner, info.selector.as_ref()))
 }
 
-/// Resolve an installed selector's handler by reference, without allocating or cloning a resource.
-pub fn entity_selector_type(name: &str) -> Option<&'static dyn crate::EntitySelectorType> {
+/// Resolve an installed selector's owner and handler by reference, without allocating or cloning a resource.
+pub fn entity_selector_type(
+    name: &str,
+) -> Option<(
+    &'static crate::callback_owner::CallbackOwner,
+    &'static dyn crate::EntitySelectorType,
+)> {
     let selectors = crate::parts::installed_entity_selectors();
     selectors
         .binary_search_by(|info| info.name.as_ref().cmp(name))
         .ok()
-        .map(|index| selectors[index].selector.as_ref())
+        .map(|index| {
+            let info = &selectors[index];
+            (&info.owner, info.selector.as_ref())
+        })
 }
 
 /// The startup package inventory at an owning engine load boundary.

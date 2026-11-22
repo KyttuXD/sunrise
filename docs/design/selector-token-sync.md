@@ -14,26 +14,25 @@ integers are big-endian. A string is a VarInt UTF-8 byte length followed by thos
 | --- | --- |
 | Revision | One unsigned byte, exactly `1` |
 | Token count | Nonnegative VarInt |
-| Name, for each token | String, lowercase ASCII letters, digits and underscore |
+| Name, for each token | String, Brigadier unquoted-string characters (`[0-9A-Za-z_.+-]`) |
 | Tooltip translation key | String |
 | Players only | Boolean byte |
 | Has limit | Boolean byte |
-| Limit, if present | Unsigned 32-bit integer, nonzero |
+| Limit, if present | Unsigned 32-bit integer |
 | Sort | One byte: `0` arbitrary, `1` nearest, `2` furthest, `3` random |
 
 Names are unique and cannot replace vanilla's `p`, `a`, `r`, `s`, `e` or `n`. An absent
-limit means unbounded. Names fit 32767 ASCII bytes; tooltip keys fit 32767 UTF-16 units,
-using the protocol string limit. No trailing bytes are accepted.
+limit means unbounded. Names and tooltip keys follow vanilla's `STRING_UTF8` bound (32,767
+UTF-16 code units). No trailing bytes are accepted.
 
 ## Bounds and publication
 
-The **256 KiB total encoded metadata limit is Sunrise's bound**, not a vanilla selector
-limit. It includes the revision, count prefix, every string prefix and byte, flags, limits
-and sort bytes. Registration accounts for the exact revision 1 encoding before insertion.
-The token that would exceed the total is refused with its name and the limit; earlier
-records and their budget remain unchanged. This bound is below the 1,048,576-byte
-clientbound custom-payload fallback cap. The receiver also refuses an oversized revision 1
-snapshot before allocating token records.
+Framing follows vanilla's `ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE` (1,048,576
+bytes, 1 MiB) and `STRING_UTF8` (32,767 UTF-16 code units) at the network boundary, with
+no separate registration-time metadata budget. When encoding a snapshot, any token whose
+name or tooltip exceeds 32,767 UTF-16 code units or would push the encoded payload past
+1,048,576 bytes is logged and skipped while valid tokens that fit are kept. The receiver
+enforces the same 1,048,576-byte payload bound before decoding.
 
 The receiver validates a complete snapshot before replacing its command registry metadata.
 Starting another connection clears the previous server's tokens. A client registry rebuild

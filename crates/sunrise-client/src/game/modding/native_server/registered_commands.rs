@@ -8,10 +8,93 @@ use super::{
     register_command_nodes,
 };
 use mod_api::__private::{
-    CommandExecutor, RetainedCallback, mod_index, split_command_registration,
+    ClientCommandExecutor, CommandExecutor, RetainedCallback, RetainedFailure, mod_index,
+    split_command_registration,
 };
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
+
+pub(in crate::game) struct RegisteredClientExecutor {
+    pub(super) callback: RetainedCallback,
+    call: Option<Arc<ClientCommandExecutor>>,
+}
+
+impl RegisteredClientExecutor {
+    pub(in crate::game) fn new(
+        owner: &'static str,
+        index: usize,
+        usage: &str,
+        call: Arc<ClientCommandExecutor>,
+    ) -> Self {
+        Self {
+            callback: RetainedCallback::new(owner, index, "client_command.execute", usage),
+            call: Some(call),
+        }
+    }
+
+    pub(super) fn execute(
+        &self,
+        host: &mut dyn mod_api::ClientHost,
+        invocation: &mod_api::CommandInvocation,
+    ) -> Result<Option<i32>, RetainedFailure> {
+        let call = self.call.as_ref().expect("live client executor");
+        self.callback.call(|| call(host, invocation))
+    }
+}
+
+impl Drop for RegisteredClientExecutor {
+    fn drop(&mut self) {
+        self.callback
+            .dispose("client_command.drop", self.call.take());
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::game) enum PendingClientCommandKind {
+    Signed,
+    Unattended,
+}
+
+pub(in crate::game) struct PendingClientCommand {
+    pub(in crate::game) command: String,
+    pub(in crate::game) kind: PendingClientCommandKind,
+}
+
+/// The client's own native mod commands, bound to the current client dispatcher generation.
+pub(in crate::game) struct NativeClientCommandState {
+    pub(in crate::game) dispatcher: sunrise_client::command::Dispatcher,
+    pub(super) executors: Vec<Option<Arc<RegisteredClientExecutor>>>,
+    /// True while a client command executor is on the call stack. Slash submissions made
+    /// inside an executor wait for the client event loop instead of re-entering synchronously.
+    pub(in crate::game) executing: bool,
+    pub(in crate::game) pending_commands: Vec<PendingClientCommand>,
+}
+
+impl Default for NativeClientCommandState {
+    fn default() -> Self {
+        Self {
+            dispatcher: sunrise_client::command::Dispatcher::new(),
+            executors: Vec::new(),
+            executing: false,
+            pending_commands: Vec::new(),
+        }
+    }
+}
+
+impl NativeClientCommandState {
+    pub(in crate::game) fn install(
+        &mut self,
+        dispatcher: sunrise_client::command::Dispatcher,
+        executors: Vec<Option<RegisteredClientExecutor>>,
+    ) {
+        self.dispatcher = dispatcher;
+        // A panicking retired callable may disable its replacement in the shared quarantine.
+        self.executors = executors
+            .into_iter()
+            .map(|entry| entry.map(Arc::new))
+            .collect();
+    }
+}
 
 pub(super) struct RegisteredExecutor {
     pub(super) callback: RetainedCallback,
@@ -102,6 +185,8 @@ impl Game<'_> {
         });
         state.display_revision = state.display_revision.wrapping_add(1);
         self.ui.dispatcher.0 = Arc::new(vanilla);
+        self.ui.registries.selector_tokens =
+            super::super::native_entity_selectors::selector_tokens();
         self.rebind_native_commands();
     }
 
@@ -137,7 +222,7 @@ impl Game<'_> {
             let tree = without_reserved_roots(&state.report, |name| host.hub.vanilla_command(name));
             host.native_commands_sent = revision;
             host.hub
-                .set_selector_tokens(super::super::native_entity_selectors::selector_tokens());
+                .set_selector_tokens(self.ui.registries.selector_tokens.clone());
             let changed = host.hub.set_mod_commands(0, tree);
             if !force_resend && !replacing && !changed {
                 return;

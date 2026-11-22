@@ -2,11 +2,10 @@
 //! with prepared resources and a disposable game directory. In an owned single-player save,
 //! use `/waypoint_set` to place a cyan marker. The most recent death appears in red after respawn.
 use mod_api::{
-    ClientHost, ClientTickPostEvent, CommandEvent, ConfigFileError, ConfigPath, Flow, Hooks,
-    ModEntry, RegisterClientCommandsEvent, RenderLevelStage, RenderLevelStageEvent, WorldDepth,
-    WorldLine,
+    ClientHost, ClientTickPostEvent, ConfigFileError, ConfigPath, Hooks, ModEntry,
+    RegisterClientCommandsEvent, RenderLevelStage, RenderLevelStageEvent, WorldDepth, WorldLine,
 };
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct Markers {
@@ -16,7 +15,7 @@ struct Markers {
 }
 
 #[derive(Default)]
-struct Waypoints(Mutex<Markers>);
+struct Waypoints(Arc<Mutex<Markers>>);
 
 /// `ConfigPath` rejects `:` and `\`, which an imported save folder can hold on Unix.
 fn escape(part: &str) -> String {
@@ -49,35 +48,37 @@ impl Hooks for Waypoints {
         _: &mut dyn ClientHost,
         event: &mut RegisterClientCommandsEvent<'_>,
     ) {
-        event.commands.push(mod_api::Command::new("waypoint_set"));
-    }
-
-    fn command(&self, host: &mut dyn ClientHost, event: &mut CommandEvent<'_>) -> Flow {
-        if event.command != "waypoint_set" {
-            return Flow::Continue;
-        }
-        if let Some((path, position)) = host
-            .client_session()
-            .client_server()
-            .and_then(|server| waypoint_path(server.save_folder?, host.dimension()))
-            .zip(host.local_player().and_then(|player| {
-                player
-                    .entity()
-                    .position(host)
-                    .map(|pos| pos.map(|axis| axis.floor() as i32))
-            }))
-        {
-            let bytes = serde_json::to_vec(&position).expect("integer coordinates serialize");
-            match host.data_files().write(&path, &bytes) {
-                Ok(()) => {
-                    let mut markers = self.0.lock().unwrap();
-                    markers.path = Some(path);
-                    markers.manual = Some(position);
-                }
-                Err(error) => log::warn!("Could not save the waypoint: {error}"),
-            }
-        }
-        Flow::Cancel
+        let state = Arc::clone(&self.0);
+        event
+            .commands
+            .push(
+                mod_api::Command::new("waypoint_set").executes_client(move |host, _| {
+                    if let Some((path, position)) = host
+                        .client_session()
+                        .client_server()
+                        .and_then(|server| waypoint_path(server.save_folder?, host.dimension()))
+                        .zip(host.local_player().and_then(|player| {
+                            player
+                                .entity()
+                                .position(host)
+                                .map(|pos| pos.map(|axis| axis.floor() as i32))
+                        }))
+                    {
+                        let bytes =
+                            serde_json::to_vec(&position).expect("integer coordinates serialize");
+                        match host.data_files().write(&path, &bytes) {
+                            Ok(()) => {
+                                let mut markers = state.lock().unwrap();
+                                markers.path = Some(path);
+                                markers.manual = Some(position);
+                                return Some(1);
+                            }
+                            Err(error) => log::warn!("Could not save the waypoint: {error}"),
+                        }
+                    }
+                    None
+                }),
+            );
     }
 
     fn client_tick_post(&self, host: &mut dyn ClientHost, _: &mut ClientTickPostEvent) {
