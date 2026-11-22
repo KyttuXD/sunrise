@@ -14,9 +14,9 @@ pub trait WorldEditServerHost {
     /// At positions also written with `LevelRef::set_block`, strict and ordinary edits commit in
     /// call order; the strict edit never spills a container or requests neighbor updates.
     /// Runs in chunks not loaded, and the parts of runs outside the column, are left out. The blocks changed, or
-    /// why the edit was left out, with nothing changed: another dimension, a client of a server, a palette entry
-    /// or predicate that fails typed validation, a run naming a palette entry or filter past the end,
-    /// or more than 65536 filters.
+    /// why the edit was left out, with nothing changed: another dimension, a client of a server,
+    /// a palette state or filter name that could not be resolved, or an out-of-bounds run index.
+    /// Filter properties are validated when the predicate is constructed.
     fn edit_blocks(&mut self, dimension: &str, edit: &BlockEdit) -> Result<u64, String>;
     /// Side: server.
     /// A block entity's data saved at `data_version` (a schematic's, a structure file's, an older world's), upgraded

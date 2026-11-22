@@ -2544,10 +2544,12 @@ impl Game<'_> {
     }
     /// The state part of `block_matches`: name or tag, then properties.
     fn command_block_state_matches(&self, b: &BlockInput, state: BlockStateId) -> bool {
-        block_input_matches(
+        block_predicate_matches_state(
             self.pack.assets.registry,
             [&self.res.items().block_tags, &self.items().block_tags],
-            b,
+            &b.id,
+            b.tag,
+            b.properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
             state,
         )
     }
@@ -4211,30 +4213,29 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
 /// BlockPredicateArgument test, against the registry and the block tags:
 /// a `#tag` is looked up by its path in `tags[0]`, then by its whole id in
 /// `tags[1]` (as `Game::block_matches` reads them).
-pub(super) fn block_input_matches(
+pub(super) fn block_predicate_matches_state<'p>(
     registry: &sunrise_world::registry::BlockRegistry,
     tags: [&std::collections::HashMap<String, std::collections::HashSet<String>>; 2],
-    b: &BlockInput,
+    id: &str,
+    tag: bool,
+    mut properties: impl Iterator<Item = (&'p str, &'p str)>,
     state: BlockStateId,
 ) -> bool {
     let Some(s) = registry.state(state) else {
         return false;
     };
-    let name_ok = if b.tag {
-        let tag = b.id.trim_start_matches("minecraft:");
+    let name_ok = if tag {
+        let path = id.trim_start_matches("minecraft:");
         tags[0]
-            .get(tag)
-            .or_else(|| tags[1].get(&b.id))
+            .get(path)
+            .or_else(|| tags[1].get(id))
             .is_some_and(|set| {
                 set.contains(&s.name) || set.contains(s.name.trim_start_matches("minecraft:"))
             })
     } else {
-        s.name == b.id
+        s.name == id
     };
-    name_ok
-        && b.properties
-            .iter()
-            .all(|(k, v)| s.properties.get(k) == Some(v))
+    name_ok && properties.all(|(k, v)| s.properties.get(k).map(String::as_str) == Some(v))
 }
 
 /// The names `native_difficulty_changed` hears for a change from `from` to

@@ -2292,26 +2292,25 @@ pub(in crate::game) fn collect_poi_extensions(
     let mut additions = Vec::new();
     let mut refusals = Vec::new();
     for (poi, predicate) in extensions.into_entries() {
-        let record = mod_api::StatePredicateRecord::from(&predicate);
-        let block = match record.target {
-            mod_api::StatePredicateTarget::Block(block) => block,
-            mod_api::StatePredicateTarget::Tag(_) => {
-                refusals.push(format!(
-                    "{poi} asked for a block tag's states; an addition names a block"
-                ));
+        let Some(block) = predicate.block_key() else {
+            refusals.push(format!(
+                "{poi} asked for a block tag's states; an addition names a block"
+            ));
+            continue;
+        };
+        let name = match mod_api::BlockMetadata::name(metadata, block) {
+            Ok(name) => name,
+            Err(error) => {
+                refusals.push(format!("{poi} could not resolve its block: {error:?}"));
                 continue;
             }
-        };
-        // The predicate was built on this metadata, so its block is known.
-        let Ok(name) = mod_api::BlockMetadata::name(metadata, block) else {
-            continue;
         };
         for index in 0..registry.len() {
             let state = registry
                 .state(sunrise_world::registry::BlockStateId(index as u32))
                 .expect("registry index is in bounds");
             if state.name == name
-                && record.constraints.iter().all(|constraint| {
+                && predicate.constraints().iter().all(|constraint| {
                     state.properties.get(constraint.name.as_str()) == Some(&constraint.value)
                 })
             {

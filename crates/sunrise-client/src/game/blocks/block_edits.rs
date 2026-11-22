@@ -26,11 +26,8 @@ pub(super) type Tracked = ((i32, i32, i32), u32, u32);
 
 impl Game<'_> {
     /// Make a mod's block edit; how many blocks changed, or why none did.
-    /// Every palette entry, filter and run is checked before anything
-    /// changes: an invalid typed state or predicate (NBT cannot be represented),
-    /// a run naming a palette entry
-    /// or filter past the end, or more than 65536 filters, and nothing is
-    /// made.
+    /// Palette states, filter names and run indices are resolved before any changes.
+    /// A failed resolution leaves the world unchanged.
     pub(super) fn apply_block_edit(&mut self, edit: &BlockEdit) -> Result<u64, String> {
         let super::api_values::block_edit::PreparedBlockEdit { palette, filters } =
             super::api_values::block_edit::prepare(edit)?;
@@ -52,14 +49,7 @@ impl Game<'_> {
             .transactions
             .journaled_connection_group_positions(self.dim);
         let watched = std::mem::take(&mut self.world.watched);
-        let matches = |f, s| {
-            super::commands::block_input_matches(
-                registry,
-                tags,
-                &filters[f as usize],
-                BlockStateId(s),
-            )
-        };
+        let matches = |f: usize, s| filters[f].matches(registry, tags, BlockStateId(s));
         let track = |s| {
             let f = facts.get(BlockStateId(s));
             watched.get(s as usize).copied().unwrap_or(false)
@@ -366,17 +356,13 @@ fn column_blocks(
 /// `edit`'s runs as `World::edit_runs` takes them: each palette entry `block`
 /// as its state in `palette`, each `y` counted from `height(surface, x, z)`
 /// when the run names a heightmap (read before any change, once a column).
-/// Err, with nothing resolved, for a run naming a palette entry or a filter
-/// past the end, or for more filters than a run can name (65536).
+/// Err, with nothing resolved, for a run naming a palette entry or a filter past the end.
 fn resolve_runs(
     edit: &BlockEdit,
     palette: &[u32],
     filters: usize,
     mut height: impl FnMut(Heightmap, i32, i32) -> i32,
 ) -> Result<Vec<Run>, String> {
-    if filters > usize::from(u16::MAX) + 1 {
-        return Err(format!("{filters} filters: 65536 at most"));
-    }
     let mut heights: FxHashMap<(i32, i32, u8), i32> = FxHashMap::default();
     let mut runs = Vec::with_capacity(edit.runs.len());
     for (i, r) in edit.runs.iter().enumerate() {
@@ -387,10 +373,14 @@ fn resolve_runs(
                 palette.len()
             ));
         };
-        let only = match r.only {
-            None => None,
-            Some(f) if (f as usize) < filters => Some(f as u16),
-            Some(f) => return Err(format!("run {i}: filter {f} of {filters}")),
+        let only = if let Some(f) = r.only {
+            let index = usize::try_from(f)
+                .ok()
+                .filter(|&index| index < filters)
+                .ok_or_else(|| format!("run {i}: filter {f} of {filters}"))?;
+            Some(index)
+        } else {
+            None
         };
         if r.height == 0 {
             continue;
@@ -506,13 +496,8 @@ mod tests {
     #[ignore = "daily"]
     fn typed_bulk_late_refusals_preserve_the_world_and_emit_no_changes() {
         use crate::game::api_values::TryIntoApi;
-        use mod_api::{
-            StateConstraint, StatePredicate, StatePredicateRecord, StatePredicateTarget,
-        };
+        use mod_api::StatePredicate;
         crate::game::native_entity_refs::tests::with_game(|game| {
-            // The shared fixture is unticked; expose the dedicated-server bulk surface.
-            game.options.dedicated = Some(Vec::new());
-            let dimension = game.dim.id().to_owned();
             game.world
                 .chunks
                 .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
@@ -521,15 +506,13 @@ mod tests {
             let stone = registry.default_state("minecraft:stone").unwrap();
             let api_air = air.try_into_api().unwrap();
             let api_stone = stone.try_into_api().unwrap();
-            let metadata = mod_api::__private::block_definitions().unwrap();
-            let good = StatePredicate::block(metadata, api_air.block(), &[]).unwrap();
-            let bad = StatePredicate::from(StatePredicateRecord::new(
-                StatePredicateTarget::Block(api_air.block()),
-                vec![StateConstraint::new("unknown", "true")],
-            ));
+            let air_filter = StatePredicate::block(api_air.block(), &[]).unwrap();
+            let stone_filter = StatePredicate::block(api_stone.block(), &[]).unwrap();
             let mut edit = BlockEdit {
                 palette: vec![api_stone],
-                filters: vec![good, bad],
+                // Start with the last index just out of bounds. If that index is narrowed to
+                // u16 when the filter is present, it would select the stone filter at index 0.
+                filters: vec![stone_filter; 65_536],
                 runs: vec![BlockRun {
                     x: 0,
                     z: 0,
@@ -537,27 +520,27 @@ mod tests {
                     height: 1,
                     surface: None,
                     block: 0,
-                    only: Some(0),
+                    only: Some(65_536),
                 }],
             };
             game.world.block_log = Some(Vec::new());
             assert_eq!(game.world.block(0, 64, 0), air);
-            let refused = game.edit_blocks(&dimension, &edit);
+            let refused = game.apply_block_edit(&edit);
             assert_eq!(
                 game.world.block(0, 64, 0),
                 air,
-                "late filter refusal must preserve the world"
+                "an out-of-bounds filter index must preserve the world"
             );
             assert!(game.world.block_log.as_ref().unwrap().is_empty());
             assert!(refused.is_err());
 
-            edit.filters.pop();
+            edit.filters.push(air_filter);
             edit.palette
                 .push(mod_api::__private::block_state_from_ordinal(
                     api_stone.block(),
                     u16::MAX,
                 ));
-            let refused = game.edit_blocks(&dimension, &edit);
+            let refused = game.apply_block_edit(&edit);
             assert_eq!(
                 game.world.block(0, 64, 0),
                 air,
@@ -567,11 +550,11 @@ mod tests {
             assert!(refused.is_err());
 
             edit.palette.pop();
-            assert_eq!(game.edit_blocks(&dimension, &edit), Ok(1));
+            assert_eq!(game.apply_block_edit(&edit), Ok(1));
             assert_eq!(
                 game.world.block(0, 64, 0),
                 stone,
-                "the same valid run must actually mutate"
+                "the run must match filter 65,536, not filter 0"
             );
             game.world.block_log = None;
         });
@@ -624,9 +607,6 @@ mod tests {
         assert!(bad(vec![run(0, Some(1))]).is_err());
         assert!(bad(vec![run(0, Some(u32::MAX))]).is_err());
         assert_eq!(asked, 0);
-        // more filters than a run's u16 names
-        assert!(resolve_runs(&edit(vec![]), &palette, 65_537, |_, _, _| 0).is_err());
-        assert!(resolve_runs(&edit(vec![]), &palette, 65_536, |_, _, _| 0).is_ok());
     }
 
     #[test]

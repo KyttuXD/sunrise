@@ -2,19 +2,26 @@
 
 Use complete `BlockState` values in `BlockEdit.palette`. Construct them with
 `BlockState::of(&host.block_states(), block, constraints)` (or change an existing state
-with `with`). `filters` contains owned `StatePredicate` values. `StatePredicate::block`
-validates property names and values strictly; `StatePredicate::tag` retains arbitrary
-property requirements, including for an empty tag, and rejects duplicate properties.
+with `with`). `filters` contains owned `StatePredicate` values. Use
+`StatePredicate::block(block, constraints)` once the block registry has resolved. It checks
+property names and values against the game's block definition, not a caller's metadata.
+`StatePredicate::tag(tag, constraints)` retains arbitrary property requirements, including
+for an empty tag. Both constructors reject duplicate properties.
 
 A predicate requires block identity or tag membership and every supplied property.
 Omitted properties are wildcards, never default-state requirements. An unknown or
 missing property on a tag member never matches. Sparse, non-Cartesian state tables
 are supported: a partial predicate does not need to form a complete state with defaults.
 
-All palette entries, predicates and run indices are prepared before any mutation.
-NBT is not representable. At most 65,536 filters are allowed. Unloaded chunks and
-out-of-height portions of runs are skipped. Edits preserve strict block-entity behavior,
-drop no contents from replaced block entities, notify no neighbors and send whole changed chunks.
+Construct predicates once and pass them directly. To inspect a predicate, use
+`block_key()` or `tag_key()` and borrow `constraints()`. Predicates and edits are
+native values, not Wire payloads.
+
+Before any mutation, the game resolves palette states and filter names and checks
+run indices. `BlockRun.only` can refer to any existing filter at that index. NBT
+is not representable. Unloaded chunks and out-of-height portions of runs are skipped.
+Edits preserve strict block-entity behavior, drop no contents from replaced block
+entities, notify no neighbors and send whole changed chunks.
 Inside a transaction in the level in place, the new states and entities are visible immediately.
 Abort restores both; only the outermost commit in that level publishes the changed chunks.
 When a bulk edit and a `LevelRef::set_block` write touch the same position, they replay in

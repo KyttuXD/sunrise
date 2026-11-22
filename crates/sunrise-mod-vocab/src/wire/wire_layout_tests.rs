@@ -247,18 +247,6 @@ impl Drop for Keys {
 
 #[test]
 fn snapshot_records_have_declared_field_bytes() {
-    let _keys = Keys::new();
-    let block = BlockKey::from_slot(0).unwrap();
-    fields(
-        StatePredicate::from(StatePredicateRecord::new(
-            StatePredicateTarget::Block(block),
-            vec![],
-        )),
-        (
-            StatePredicateTarget::Block(block),
-            Vec::<StateConstraint>::new(),
-        ),
-    );
     let revision = crate::item::containers::ModRevision::from_snapshot(31, 47);
     fields(revision, (31u64, 47u64));
 }
