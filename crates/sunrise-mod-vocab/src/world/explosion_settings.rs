@@ -112,12 +112,10 @@ impl Default for ExplosionBlockParticle {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ExplodeError {
-    /// A client, a parked level or a stale handle, a `source` that is stale,
-    /// names no entity or is in another level, or a centre in a chunk that
-    /// isn't loaded.
+    /// A client, a parked level or a stale handle, or a `source` that is stale,
+    /// names no entity or is in another level.
     Unavailable,
-    /// The centre is outside the world or not finite, or the radius or the
-    /// knockback multiplier is not finite.
+    /// The centre, the radius or the knockback multiplier is not finite.
     InvalidBlast,
     /// The damage type is not registered.
     UnknownDamageType,

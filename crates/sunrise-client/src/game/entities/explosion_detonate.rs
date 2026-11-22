@@ -760,4 +760,49 @@ mod tests {
             );
         }
     }
+
+    /// A position a listener adds to `blocks` is destroyed, and an extreme Y
+    /// coordinate added with fire enabled does not panic.
+    #[test]
+    #[ignore = "daily"]
+    fn a_position_added_by_a_listener_is_destroyed() {
+        struct AddBlocks;
+        #[mod_api::__subscriptions]
+        impl Hooks for AddBlocks {
+            fn explosion_detonate(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut ExplosionDetonateEvent<'_>,
+            ) {
+                event.blocks.push([12, 80, 12]);
+                event.blocks.push([0, i32::MIN, 0]);
+            }
+        }
+        let mods: mod_api::Mods =
+            vec![mod_api::ModEntry::new("add_blocks", Box::new(AddBlocks))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.set(12, 80, 12, stone).unwrap();
+                game.server_explode_as(
+                    [0.0, 1.0, 0.0],
+                    3.0,
+                    super::super::explosion::BlockInteraction::Destroy,
+                    true,
+                    "minecraft:explosion",
+                    None,
+                )
+                .unwrap();
+                assert_eq!(game.world.block(12, 80, 12), game.world.air);
+            });
+        });
+    }
 }

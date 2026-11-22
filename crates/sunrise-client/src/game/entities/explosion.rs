@@ -1760,7 +1760,7 @@ impl Game<'_> {
         source: ExplosionSource,
     ) -> Result<()> {
         let start = self.explosion_start(center, radius, interaction, fire, damage_type);
-        if self.serving.is_some() || self.options.dedicated.is_some() {
+        if self.is_logical_server() {
             if self.explosion_start_cancelled(&start) {
                 return Ok(());
             }
@@ -1891,11 +1891,12 @@ impl Game<'_> {
                         .res
                         .facts()
                         .is_air(self.world.block(pos[0], pos[1], pos[2]))
-                    && self
-                        .res
-                        .facts()
-                        .get(self.world.block(pos[0], pos[1] - 1, pos[2]))
-                        .solid_render
+                    && pos[1].checked_sub(1).is_some_and(|below| {
+                        self.res
+                            .facts()
+                            .get(self.world.block(pos[0], below, pos[2]))
+                            .solid_render
+                    })
                 {
                     // BaseFireBlock.getState: soul fire on its base blocks,
                     // fire shaped by its neighbours elsewhere.
