@@ -988,10 +988,11 @@ impl Game<'_> {
             return false;
         }
         self.transition_screen(Screen::Chat, true, |game, accepted| {
-            game.remove_chat_screen(reason);
             if accepted != Some(Screen::Chat) {
+                game.remove_chat_screen(ChatExit::Interrupted);
                 return;
             }
+            game.remove_chat_screen(reason);
             game.refresh_dynamic_registries();
             let size = game
                 .renderer
@@ -1052,14 +1053,10 @@ impl Game<'_> {
     fn keep_chat_draft(&mut self, text: &str, is_draft: bool, reason: ChatExit) {
         // During PvP & HUD's chat search the box holds the query: the draft is the text the
         // search put aside, whichever way the chat closed.
-        let aside;
-        let (text, is_draft) = if self.pvp.chat_search {
-            self.pvp.chat_search = false;
-            aside = std::mem::take(&mut self.pvp.chat_search_aside);
-            (aside.as_str(), false)
-        } else {
-            (text, is_draft)
-        };
+        let aside = self.pvp.chat_search_aside.take();
+        let (text, is_draft) = aside.as_ref().map_or((text, is_draft), |(text, is_draft)| {
+            (text.as_str(), *is_draft)
+        });
         if should_discard_draft(reason, self.settings.file.bool("saveChatDrafts"))
             || text.trim().is_empty()
         {
@@ -1084,12 +1081,16 @@ impl Game<'_> {
             // outgoing draft only when non-draft typed text transfers into
             // ordinary chat; empty or untouched-draft wake dismisses via
             // `Gui.setScreen(null)` (Closing without a vetoable Opening).
-            let typed = self
-                .ui
-                .chat_screen
-                .as_ref()
-                .filter(|screen| !screen.is_draft() && !screen.value().is_empty())
-                .map(|screen| screen.value().to_owned());
+            let typed = self.ui.chat_screen.as_ref().and_then(|screen| {
+                let (text, is_draft) = self
+                    .pvp
+                    .chat_search_aside
+                    .as_ref()
+                    .map_or((screen.value(), screen.is_draft()), |(text, is_draft)| {
+                        (text.as_str(), *is_draft)
+                    });
+                (!is_draft && !text.is_empty()).then(|| text.to_owned())
+            });
             if let Some(text) = typed {
                 self.replace_chat_screen(&text, false, ChatExit::Done);
             } else {
@@ -1233,7 +1234,7 @@ impl Game<'_> {
         if self.pvp_chat().search
             && match key {
                 KeyCode::KeyF => ctrl,
-                KeyCode::Enter | KeyCode::NumpadEnter => self.pvp.chat_search,
+                KeyCode::Enter | KeyCode::NumpadEnter => self.pvp.chat_search_aside.is_some(),
                 _ => false,
             }
         {
@@ -1636,22 +1637,21 @@ impl Game<'_> {
     /// PvP & HUD's chat search on or off. The box holds the query: what was typed is put aside
     /// when the search starts and comes back when it stops.
     fn toggle_chat_search(&mut self) {
-        let typed = self.ui.chat_screen.as_ref().map(|s| s.value().to_owned());
-        let next = if self.pvp.chat_search {
-            std::mem::take(&mut self.pvp.chat_search_aside)
+        let Some(screen) = self.ui.chat_screen.as_mut() else {
+            return;
+        };
+        let next = if let Some((text, _)) = self.pvp.chat_search_aside.take() {
+            text
         } else {
-            self.pvp.chat_search_aside = typed.unwrap_or_default();
+            self.pvp.chat_search_aside = Some((screen.value().to_owned(), screen.is_draft()));
             String::new()
         };
-        self.pvp.chat_search = !self.pvp.chat_search;
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
-        if let Some(screen) = self.ui.chat_screen.as_mut() {
-            screen.suggest_command(&m, &c, &next);
-        }
+        screen.suggest_command(&m, &c, &next);
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
     pub(super) fn draw_chat(&mut self, batch: &mut HudBatch) {
@@ -1659,21 +1659,21 @@ impl Game<'_> {
         let options = self.pvp_chat();
         self.ui.chat.set_qol(&self.gui.atlas, options.qol());
         // A search ends with its option; a chat closed some other way ends it in keep_chat_draft.
-        if self.pvp.chat_search && self.ui.chat_screen.is_none() {
+        if self.ui.chat_screen.is_none() {
             // The chat went without closing (leaving the world): nothing to give back.
-            self.pvp.chat_search = false;
-            self.pvp.chat_search_aside.clear();
-        } else if self.pvp.chat_search && !options.search {
+            self.pvp.chat_search_aside = None;
+        } else if self.pvp.chat_search_aside.is_some() && !options.search {
             self.toggle_chat_search();
         }
+        let searching = focused && self.pvp.chat_search_aside.is_some();
         let query = self
             .ui
             .chat_screen
             .as_ref()
-            .filter(|_| focused && self.pvp.chat_search)
+            .filter(|_| searching)
             .map(|s| s.value());
         self.ui.chat.set_search(&self.gui.atlas, query);
-        self.ui.chat.search_prompt = focused && self.pvp.chat_search;
+        self.ui.chat.search_prompt = searching;
         // `ChatComponent`'s queue row: the messages Chat Delay holds back.
         self.ui.chat.queue = self.chat_queue_len();
         if self.ui.hide_gui && !focused {
