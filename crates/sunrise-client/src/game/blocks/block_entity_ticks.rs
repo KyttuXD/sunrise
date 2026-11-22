@@ -1467,17 +1467,22 @@ mod slot_mutation_tests {
     #[test]
     #[ignore = "daily"]
     fn an_added_entity_ticks_from_the_next_pass() {
-        with_blocks(
-            &[(A, "minecraft:spawner"), (B, "minecraft:spawner")],
-            |game| {
-                let mut slot = Mutate::new(|tick| place(tick.game, C, "minecraft:hopper"));
-                game.tick_block_entities_with(&mut slot).unwrap();
-                assert_eq!(slot.before, [A, B]);
-                assert_eq!(slot.after, [A, B]);
-                let mut next = Mutate::new(|_| {});
-                game.tick_block_entities_with(&mut next).unwrap();
-                assert_eq!(next.before, [A, B, C]);
-                assert_eq!(next.after, [A, B, C]);
+        crate::game::in_own_process(
+            "game::block_entity_ticks::slot_mutation_tests::an_added_entity_ticks_from_the_next_pass",
+            || {
+                with_blocks(
+                    &[(A, "minecraft:spawner"), (B, "minecraft:spawner")],
+                    |game| {
+                        let mut slot = Mutate::new(|tick| place(tick.game, C, "minecraft:hopper"));
+                        game.tick_block_entities_with(&mut slot).unwrap();
+                        assert_eq!(slot.before, [A, B]);
+                        assert_eq!(slot.after, [A, B]);
+                        let mut next = Mutate::new(|_| {});
+                        game.tick_block_entities_with(&mut next).unwrap();
+                        assert_eq!(next.before, [A, B, C]);
+                        assert_eq!(next.after, [A, B, C]);
+                    },
+                );
             },
         );
     }
