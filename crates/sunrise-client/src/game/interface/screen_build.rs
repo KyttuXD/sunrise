@@ -1577,6 +1577,18 @@ mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             crate::game::native_entity_refs::tests::with_client_game(|game| {
+                // The inventory and creative screen belong to a client in a world. An
+                // in-memory connection supplies the client registry holder for creative tabs.
+                let _server = crate::game::native_client_session::tests::logged_client(game);
+                game.native_lifecycle
+                    .begin_open(mod_api::Authority::RemoteClient);
+                game.player = Some(
+                    sunrise_client::motion::PlayerMotion::new(
+                        game.motion,
+                        sunrise_core::geometry::Vec3::ZERO,
+                    )
+                    .unwrap(),
+                );
                 game.title = None;
                 game.container = None;
                 game.craft_size = 2;
@@ -1643,7 +1655,7 @@ mod tests {
                 // Vanilla's painted 26 x 32 tabs are in two rows. The player
                 // can use the operator utilities, including the tab in column five.
                 game.potions.effects.list.clear();
-                game.creative = true;
+                game.set_mode_id(1);
                 game.ui.registries.permission = 2;
                 game.settings.operator_items_tab = true;
                 game.screen = Screen::Creative;
