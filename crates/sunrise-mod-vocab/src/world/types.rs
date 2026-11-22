@@ -361,8 +361,8 @@ impl LevelRef {
 }
 
 /// A live watered area in one server level. Created by [`LevelRef::add_water_ticket`].
-/// Any holder with this handle can remove it via [`WaterTicket::remove`]; level unload and,
-/// when attributed to an enabled mod at creation, that mod's disable also invalidate it.
+/// Any holder can remove it via [`WaterTicket::remove`]. The box's master chunk or level
+/// unloading also invalidates it, as does disabling the installed mod that added it, if any.
 /// Stays in-process (never serialized or saved): re-add in `level_load` or a block entity's
 /// load listener.
 // no wire: a live ticket identity can only be issued by its level

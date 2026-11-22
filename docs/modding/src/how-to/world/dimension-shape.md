@@ -229,6 +229,7 @@ handle (for example in a `OnceLock`) and pass it to `chunk.set_mod_forced` and
 `level.mod_forced_chunks`. Active reads and writes authorize by the registry-issued handle
 itself rather than the current caller, so helpers or shared subsystems that hold the handle
 can manage that controller's tickets directly while separate controllers stay isolated.
+A controller name identifies rows in a save; knowing the name does not give you a handle.
 
 Pass `Some(Arc::new(...))` to bind a `LoadingValidationCallback` that prunes stale saved
 tickets when a level opens, or `None` to restore saved tickets without validation:
@@ -256,7 +257,9 @@ impl Hooks for MyMod {
                         .block_tickets()
                         .keys()
                         .copied()
-                        .filter(|&pos| level.block(host, pos) != Some(quarry_block))
+                        .filter(|&pos| {
+                            level.block(host, pos).is_some_and(|block| block != quarry_block)
+                        })
                         .collect();
                     for pos in stale {
                         tickets.remove_block_tickets(pos);
@@ -279,6 +282,11 @@ pub fn hold_quarry_chunk(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 
 }
 ```
 
+An unloaded owner position is not evidence that the owner was removed. Saved holds
+are still staged during validation, so an owner chunk may not be resident yet. Prune only
+when a loaded block is confirmed not to be a quarry, or when authoritative persisted
+ownership data says the owner is gone.
+
 `tickets.block_tickets()` and `tickets.entity_tickets()` borrow read-only `BTreeMap` views
 of the controller's original saved tickets for the whole callback even after removals, while
 `remove_block_tickets`, `remove_block_ticket`, `remove_entity_tickets` and
@@ -293,7 +301,7 @@ On the server, `level.add_water_ticket(host, min, max)` returns an `Option<Water
 for a sprinkler's watered area. Bounds are integer and half-open on **all three axes**:
 `min` is included, `max` is excluded. For 5×1×5 farmland beginning at `[4, 64, 4]`,
 use `[4, 64, 4]` and `[9, 65, 9]`; `[8, 64, 8]` is inside, `[9, 64, 4]` is outside.
-Empty or reversed boxes are refused; any nonempty box is accepted without a column cap.
+Boxes must be nonempty and are not subject to a column cap.
 
 `WaterTicket` is an in-process handle and does not implement `Wire` — never serialize or
 persist it. Retain the handle in memory, then call `ticket.remove(host)` when the sprinkler
@@ -304,11 +312,13 @@ Both calls reach active or parked server levels without loading chunks; unavaila
 handles and clients answer `false` (adding answers `None`).
 
 Tickets are indexed by enclosing x/z chunk tile in memory only, never force chunks to load,
-and queries test matching tiles without calling mod predicates. They are removed
-on explicit removal or level unload; when added during an enabled mod call, the ticket is
-also attributed to that mod and cleared if that mod is disabled (re-enabling does not
-restore it). A reopened world starts empty: re-add from `level_load` or a block entity's
-load listener. Several boxes can describe a shape without a per-position mod predicate.
+and queries test matching tiles without calling mod predicates. A ticket is invalidated on
+explicit removal, level unload, or unload of the box's master chunk (the chunk nearest its
+center). Unloading another chunk covered by the box does not remove the ticket. A ticket
+added by an enabled installed mod is also cleared when that mod is disabled (re-enabling
+does not restore it); a disabled installed mod cannot add a ticket. Reissue transient
+tickets from `level_load` or a block entity's load listener when the source loads again.
+Several boxes can describe a shape without a per-position mod predicate.
 Farmland checks the ticket before its vanilla water scan, so dry farmland inside moistens
 to 7. Removing the last covering ticket restores normal drying, while nearby water and
 rain continue working normally and the moisture-change veto still applies. Empty levels

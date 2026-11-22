@@ -80,8 +80,8 @@ impl Game<'_> {
         };
         world
             .water_tickets
-            .add(min, max, || {
-                owner.and_then(|(id, index)| mod_api::__private::mod_index_on(index).then_some(id))
+            .add(min, max, owner.map(|(id, _)| id), || {
+                owner.is_none_or(|(_, index)| mod_api::__private::mod_index_on(index))
             })
             .map(|id| mod_api::__private::game::water_ticket(level, id))
     }
@@ -2354,16 +2354,16 @@ mod tests {
             assert!(overworld.has_water_ticket(game, [0, 64, 0]));
             assert!(!nether.has_water_ticket(game, [0, 64, 0]));
             assert!(nether.has_water_ticket(game, [3, 64, 3]));
-            // Observing a disabled mod still admits a fresh unattributed ticket without reviving old ones.
+            // Disabled installed callers cannot acquire anonymous tickets past disable cleanup.
             let guard = in_mod("machines");
-            let during_disable = nether
-                .add_water_ticket(game, [6, 64, 6], [7, 65, 7])
-                .unwrap();
+            assert!(
+                nether
+                    .add_water_ticket(game, [6, 64, 6], [7, 65, 7])
+                    .is_none()
+            );
             drop(guard);
-            assert!(nether.has_water_ticket(game, [6, 64, 6]));
-            assert!(!nether.has_water_ticket(game, [0, 64, 0]));
-            assert!(during_disable.remove(game));
             assert!(!nether.has_water_ticket(game, [6, 64, 6]));
+            assert!(!nether.has_water_ticket(game, [0, 64, 0]));
             assert!(mod_api::__private::set_mod_enabled("machines", true));
             assert!(
                 !overworld.has_water_ticket(game, [10, 64, 0]),
@@ -2391,6 +2391,49 @@ mod tests {
                     .is_none()
             );
             assert!(!b.remove(game));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn water_tickets_expire_only_when_their_master_chunk_unloads() {
+        use sunrise_client::chunk::Chunk;
+
+        with_machines(|game| {
+            let level = game.level(game.dim.id()).unwrap();
+            for x in [-1, 0] {
+                game.world
+                    .chunks
+                    .insert((x, 0), Arc::new(Chunk::empty(x, 0)));
+            }
+            // This cross-border box has center x = -8.5, so its master is (-1, 0).
+            let (min, max) = ([-20, 64, 0], [3, 65, 4]);
+            let ticket = level.add_water_ticket(game, min, max).unwrap();
+            let secondary = game.world.unload_chunk((0, 0)).unwrap();
+            game.native_chunks_unloaded(&[secondary]);
+            assert!(level.has_water_ticket(game, [0, 64, 0]));
+
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let overlap = level
+                .add_water_ticket(game, [1, 64, 0], [6, 65, 4])
+                .unwrap();
+            let master = game.world.unload_chunk((-1, 0)).unwrap();
+            game.native_chunks_unloaded(&[master]);
+            assert!(!level.has_water_ticket(game, [0, 64, 0]));
+            assert!(level.has_water_ticket(game, [1, 64, 0]));
+            assert!(!ticket.remove(game));
+
+            game.world
+                .chunks
+                .insert((-1, 0), Arc::new(Chunk::empty(-1, 0)));
+            let reissued = level.add_water_ticket(game, min, max).unwrap();
+            assert!(!ticket.remove(game));
+            assert!(level.has_water_ticket(game, [0, 64, 0]));
+            assert!(reissued.remove(game));
+            assert!(!level.has_water_ticket(game, [0, 64, 0]));
+            assert!(overlap.remove(game));
         });
     }
 

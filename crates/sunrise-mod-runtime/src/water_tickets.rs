@@ -1,6 +1,7 @@
-//! Session-only, spatially indexed watered areas. Mod switches eagerly release attributed boxes.
+//! Session-only, spatially indexed watered areas, invalidated on master-chunk unload or mod disable.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
+    hash::Hash,
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,7 +12,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static LEVELS: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
 
 /// Opaque, non-reused identity for one watered-area ticket, issued only by [`WaterTickets::add`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WaterTicketId(u64);
 
 #[derive(Clone, Copy)]
@@ -25,15 +26,56 @@ struct Ticket {
     min: [i32; 3],
     max: [i32; 3],
     tile: TileKey,
+    master: (i32, i32),
 }
 #[derive(Default)]
 struct Index {
     tickets: HashMap<WaterTicketId, Ticket>,
-    depths: BTreeMap<u8, HashMap<[u32; 2], Vec<WaterTicketId>>>,
+    depths: BTreeMap<u8, HashMap<[u32; 2], BTreeSet<WaterTicketId>>>,
+    masters: HashMap<(i32, i32), BTreeSet<WaterTicketId>>,
 }
+
+impl Index {
+    fn remove(&mut self, id: WaterTicketId) -> bool {
+        let Some(ticket) = self.tickets.remove(&id) else {
+            return false;
+        };
+        remove_from_bucket(&mut self.masters, ticket.master, id);
+        if let std::collections::btree_map::Entry::Occupied(mut tiles) =
+            self.depths.entry(ticket.tile.depth)
+        {
+            remove_from_bucket(tiles.get_mut(), ticket.tile.coords, id);
+            if tiles.get().is_empty() {
+                tiles.remove();
+            }
+        }
+        true
+    }
+}
+
+fn remove_from_bucket<K: Eq + Hash>(
+    buckets: &mut HashMap<K, BTreeSet<WaterTicketId>>,
+    key: K,
+    id: WaterTicketId,
+) {
+    if let Entry::Occupied(mut bucket) = buckets.entry(key) {
+        bucket.get_mut().remove(&id);
+        if bucket.get().is_empty() {
+            bucket.remove();
+        }
+    }
+}
+
 struct Shared {
     nonempty: AtomicBool,
     index: Mutex<Index>,
+}
+
+impl Shared {
+    fn update_nonempty(&self, index: &Index) {
+        self.nonempty
+            .store(!index.tickets.is_empty(), Ordering::Release);
+    }
 }
 
 /// Bias a signed chunk coordinate (`block >> 4`, in `-2^27..2^27`) into `0..2^28`.
@@ -51,14 +93,14 @@ pub struct WaterTickets {
 impl WaterTickets {
     /// Add a half-open integer box (`min <= pos < max`) and issue its opaque [`WaterTicketId`].
     /// Empty or reversed boxes are refused.
-    /// `owner` is evaluated under the lock shared with owner-disable cleanup to capture optional
-    /// cleanup attribution (`Some(id)` for an enabled installed mod, `None` otherwise); it never
-    /// denies admission.
+    /// Attribute the ticket to `owner` for disable cleanup, if supplied. Check `may_register`
+    /// under the same lock as disable cleanup so a disabled owner cannot leave a ticket behind.
     pub fn add(
         &mut self,
         min: [i32; 3],
         max: [i32; 3],
-        owner: impl FnOnce() -> Option<&'static str>,
+        owner: Option<&'static str>,
+        may_register: impl FnOnce() -> bool,
     ) -> Option<WaterTicketId> {
         if (0..3).any(|axis| min[axis] >= max[axis]) {
             return None;
@@ -72,10 +114,15 @@ impl WaterTickets {
             depth,
             coords: [min_x >> depth, min_z >> depth],
         };
-        // Serialize optional cleanup attribution with owner-disable cleanup so a concurrent
-        // disable cannot leave an attributed ticket behind without removing it.
+        // FarmlandWaterManager.addAABBTicket picks the chunk whose center is closest to the
+        // box center. The chunk containing the center is nearest, including at an exact tie.
+        let center_chunk =
+            |axis: usize| ((i64::from(min[axis]) + i64::from(max[axis])) >> 5) as i32;
+        let master = (center_chunk(0), center_chunk(2));
         let mut levels = LEVELS.lock().unwrap();
-        let owner = owner();
+        if !may_register() {
+            return None;
+        }
         let id = NEXT_ID
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .ok()
@@ -97,6 +144,7 @@ impl WaterTickets {
                 min,
                 max,
                 tile,
+                master,
             },
         );
         index
@@ -105,7 +153,8 @@ impl WaterTickets {
             .or_default()
             .entry(tile.coords)
             .or_default()
-            .push(id);
+            .insert(id);
+        index.masters.entry(master).or_default().insert(id);
         shared.nonempty.store(true, Ordering::Release);
         Some(id)
     }
@@ -116,24 +165,28 @@ impl WaterTickets {
             return false;
         };
         let mut index = shared.index.lock().unwrap();
-        let Some(ticket) = index.tickets.remove(&id) else {
-            return false;
+        let removed = index.remove(id);
+        shared.update_nonempty(&index);
+        removed
+    }
+
+    /// Invalidate tickets whose master chunk left the level (`SimpleTicket.unload`). Merely
+    /// overlapping the unloading chunk does not invalidate a ticket.
+    pub fn unload_chunk(&mut self, chunk: (i32, i32)) {
+        let Some(shared) = self
+            .shared
+            .as_ref()
+            .filter(|shared| shared.nonempty.load(Ordering::Acquire))
+        else {
+            return;
         };
-        if let Some(tiles) = index.depths.get_mut(&ticket.tile.depth) {
-            if let Some(ids) = tiles.get_mut(&ticket.tile.coords) {
-                ids.retain(|other| *other != id);
-                if ids.is_empty() {
-                    tiles.remove(&ticket.tile.coords);
-                }
+        let mut index = shared.index.lock().unwrap();
+        if let Some(ids) = index.masters.remove(&chunk) {
+            for id in ids {
+                index.remove(id);
             }
-            if tiles.is_empty() {
-                index.depths.remove(&ticket.tile.depth);
-            }
+            shared.update_nonempty(&index);
         }
-        shared
-            .nonempty
-            .store(!index.tickets.is_empty(), Ordering::Release);
-        true
     }
 
     /// Test only the position's tile buckets at populated depths, without allocating or invoking a
@@ -174,18 +227,15 @@ pub fn remove_owner(owner: &str) {
             return false;
         };
         let mut index = shared.index.lock().unwrap();
-        let Index { tickets, depths } = &mut *index;
-        tickets.retain(|_, ticket| ticket.owner != Some(owner));
-        depths.retain(|_, tiles| {
-            tiles.retain(|_, ids| {
-                ids.retain(|id| tickets.contains_key(id));
-                !ids.is_empty()
-            });
-            !tiles.is_empty()
-        });
-        shared
-            .nonempty
-            .store(!tickets.is_empty(), Ordering::Release);
+        let owned: Vec<_> = index
+            .tickets
+            .iter()
+            .filter_map(|(&id, ticket)| (ticket.owner == Some(owner)).then_some(id))
+            .collect();
+        for id in owned {
+            index.remove(id);
+        }
+        shared.update_nonempty(&index);
         true
     });
 }
@@ -199,7 +249,7 @@ mod tests {
         let mut level = WaterTickets::default();
         assert!(!level.contains([0, 64, 0]));
         let a = level
-            .add([-17, 64, -1], [18, 65, 2], || Some("irrigator"))
+            .add([-17, 64, -1], [18, 65, 2], Some("irrigator"), || true)
             .unwrap();
         for pos in [[-17, 64, -1], [-16, 64, 0], [0, 64, 0], [17, 64, 1]] {
             assert!(level.contains(pos), "{pos:?}");
@@ -214,9 +264,9 @@ mod tests {
         ] {
             assert!(!level.contains(pos), "{pos:?}");
         }
-        let anon = level.add([0, 64, 0], [5, 65, 5], || None).unwrap();
+        let anon = level.add([0, 64, 0], [5, 65, 5], None, || true).unwrap();
         let b = level
-            .add([2, 64, 2], [6, 65, 6], || Some("neighbor"))
+            .add([2, 64, 2], [6, 65, 6], Some("neighbor"), || true)
             .unwrap();
         assert!(level.remove(a));
         assert!(!level.remove(a));
@@ -241,15 +291,17 @@ mod tests {
         let mut overworld = WaterTickets::default();
         let mut nether = WaterTickets::default();
         let old = overworld
-            .add([0, 64, 0], [5, 65, 5], || Some("water_test_owner"))
+            .add([0, 64, 0], [5, 65, 5], Some("water_test_owner"), || true)
             .unwrap();
-        let anon = overworld.add([1, 64, 1], [2, 65, 2], || None).unwrap();
+        let anon = overworld
+            .add([1, 64, 1], [2, 65, 2], None, || true)
+            .unwrap();
         assert!(!nether.contains([0, 64, 0]));
         let nether_owned = nether
-            .add([0, 64, 0], [5, 65, 5], || Some("water_test_owner"))
+            .add([0, 64, 0], [5, 65, 5], Some("water_test_owner"), || true)
             .unwrap();
         let nether_other = nether
-            .add([3, 64, 3], [4, 65, 4], || Some("water_test_other"))
+            .add([3, 64, 3], [4, 65, 4], Some("water_test_other"), || true)
             .unwrap();
         remove_owner("water_test_owner");
         assert!(!overworld.contains([0, 64, 0]));
@@ -258,14 +310,16 @@ mod tests {
         assert!(nether.contains([3, 64, 3]));
         assert!(!overworld.remove(old));
         assert!(!nether.remove(nether_owned));
-        // A disabled-state observation admits an unattributed ticket without reviving old keys.
-        let unattributed = overworld.add([4, 64, 4], [5, 65, 5], || None).unwrap();
+        // A genuinely unattributed call can add a ticket without reviving old keys.
+        let unattributed = overworld
+            .add([4, 64, 4], [5, 65, 5], None, || true)
+            .unwrap();
         assert_ne!(old, unattributed);
         assert!(overworld.contains([4, 64, 4]));
         assert!(!overworld.contains([0, 64, 0]));
         assert!(!overworld.remove(old));
         let new = overworld
-            .add([0, 64, 0], [5, 65, 5], || Some("water_test_owner"))
+            .add([0, 64, 0], [5, 65, 5], Some("water_test_owner"), || true)
             .unwrap();
         assert_ne!(old, new);
         assert!(!overworld.remove(old));
@@ -286,7 +340,7 @@ mod tests {
         let mut level = WaterTickets::default();
         // 257 x 256 chunk columns: past the old 65,536-column threshold.
         let past_old_cap = level
-            .add([0, 64, 0], [4097, 65, 4096], || Some("wide"))
+            .add([0, 64, 0], [4097, 65, 4096], Some("wide"), || true)
             .unwrap();
         assert!(level.contains([0, 64, 0]));
         assert!(level.contains([4096, 64, 4095]));
@@ -295,12 +349,15 @@ mod tests {
         assert!(!level.contains([-1, 64, 0]));
 
         let narrow = level
-            .add([10, 64, 10], [15, 65, 15], || Some("sprinkler"))
+            .add([10, 64, 10], [15, 65, 15], Some("sprinkler"), || true)
             .unwrap();
         let near_full = level
-            .add([i32::MIN, 64, i32::MIN], [i32::MAX, 65, i32::MAX], || {
-                Some("wide")
-            })
+            .add(
+                [i32::MIN, 64, i32::MIN],
+                [i32::MAX, 65, i32::MAX],
+                Some("wide"),
+                || true,
+            )
             .unwrap();
         for pos in [
             [i32::MIN, 64, i32::MIN],
@@ -354,7 +411,7 @@ mod tests {
             ([0, 0, 0], [i32::MIN, 1, 1]),
         ] {
             assert!(
-                level.add(min, max, || Some("invalid")).is_none(),
+                level.add(min, max, Some("invalid"), || true).is_none(),
                 "{min:?}..{max:?}"
             );
         }

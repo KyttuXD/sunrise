@@ -46,11 +46,13 @@ pub trait LevelTicketsBackendMut {
     /// For 5x1x5 farmland starting at [0, 64, 0], use min [0, 64, 0], max [5, 65, 5].
     /// Farmland checks tickets before its vanilla water scan; rain and water still hydrate it.
     /// Any holder of the returned [`WaterTicket`] can remove it; overlaps are independent.
-    /// Remove it when the sprinkler stops. When added during an enabled mod call, the ticket
-    /// is also attributed to that mod for cleanup on disable; level unload invalidates all
-    /// tickets in the level. Never saved: re-add in `level_load` or the block entity's load
-    /// listener. Reads/writes reach parked server levels.
-    /// None on clients, for stale/unavailable levels, or for empty or reversed bounds.
+    /// Remove it when the sprinkler stops. Unloading the master chunk (the chunk nearest
+    /// the box's center) invalidates the whole ticket, even in its other chunks. Unloading
+    /// the level invalidates all its tickets. A ticket added by an enabled installed mod
+    /// also expires when that mod is disabled. Never saved: re-add in `level_load` or a block
+    /// entity's load listener. Reads/writes reach parked server levels.
+    /// None on clients, for stale/unavailable levels, for empty or reversed bounds, or when
+    /// called on behalf of a disabled installed mod.
     /// Queries test indexed tiles without loading chunks or calling mod predicates.
     #[access(WorldOnly)]
     fn level_add_water_ticket(
