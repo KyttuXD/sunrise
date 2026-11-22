@@ -884,7 +884,6 @@ sunrise-client game::lan_crafting::lending_tests::inventory_menu_does_not_ask_re
 sunrise-client game::lan_crafting::lending_tests::lent_chest_supplies_transfer_and_placement_and_is_written_back lib daily resources
 sunrise-client game::lan_crafting::lending_tests::menu_links_expose_chest_contents_in_the_answering_tick lib daily resources
 sunrise-client game::lan_crafting::lending_tests::menu_links_skip_a_furnace_the_mod_names lib daily resources
-sunrise-client game::lan_crafting::lending_tests::sources_skip_invalid_answers_and_keep_exactly_first_sixty_four lib daily resources
 sunrise-client game::lan_crafting::machine_recipe_placement_tests::h234_registered_place_recipe_reaches_actual_furnace_and_preserves_controls lib daily resources
 sunrise-client game::lan_crafting::recipe_check_tests::a_check_answers_and_leaves_the_world_and_the_guest_alone lib daily resources
 sunrise-client game::lan_crafting::recipe_check_tests::checks_past_the_limit_go_unanswered lib daily resources
@@ -1118,7 +1117,6 @@ sunrise-client game::native_block_use_criteria_tests::block_use_refusals_grant_n
 sunrise-client game::native_block_use_criteria_tests::default_block_use_awards_only_default lib daily resources
 sunrise-client game::native_block_use_criteria_tests::item_block_use_distinguishes_snapshots lib daily resources
 sunrise-client game::native_block_use_criteria_tests::remote_block_use_refuses lib daily resources
-sunrise-client game::native_book_apply::tests::actual_game_stage_refuses_nested_frame_and_mutated_actor lib daily resources
 sunrise-client game::native_boss_bar_refs::tests::generated_text_crossings_refuse_too_deep_before_boss_bar_writes lib daily resources
 sunrise-client game::native_boss_bar_refs::tests::handles_create_update_list_and_go_stale_like_bossbar_commands lib daily resources
 sunrise-client game::native_boss_bar_refs::tests::saved_bars_are_found_before_any_tick lib daily resources
@@ -2219,7 +2217,7 @@ sunrise-client game::raids::entity_ticking_tests::a_wave_spawns_only_where_entit
 sunrise-client game::rail_parts_tests::rail_parts_decide_the_track_carts_and_connections_follow lib daily resources
 sunrise-client game::random_order_tests::chunks_random_tick_in_the_same_order_however_they_loaded lib daily resources
 sunrise-client game::recipe_book_variants_tests::a_recipe_with_eight_displays_sends_eight_entries lib daily resources
-sunrise-client game::recipe_book_variants_tests::control_a_multi_display_recipe_still_has_no_ghost lib daily resources
+sunrise-client game::recipe_book_variants_tests::clicked_multi_display_recipe_sends_exact_ghost_and_ordinary_placement_sends_none lib daily resources
 sunrise-client game::recipe_properties_tests::tests::disconnect_discards_properties_before_reconnect lib daily resources
 sunrise-client game::remote::attachment_query_tests::synced_client_queries_follow_replacement_retirement_and_level_changes lib daily resources
 sunrise-client game::remote::block_entity_data_tests::block_entity_data_received_after_merge lib daily resources

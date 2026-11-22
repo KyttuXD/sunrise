@@ -81,9 +81,9 @@ impl MenusRegistrar for PartRegistrar {
             if mod_vocab::__private::parts_installation::parts_installed() {
                 return Err("registry is frozen".into());
             }
-            let menu_id =
-                crate::Identifier::parse(menu).map_err(|e| format!("invalid menu: {e:?}"))?;
-            if !menu.contains(':') || !owns_namespace(self.mod_id, menu_id.namespace()) {
+            let menu_id = crate::Identifier::parse_namespaced(menu)
+                .ok_or("menu must be a namespaced identifier")?;
+            if !owns_namespace(self.mod_id, menu_id.namespace()) {
                 return Err(
                     "menu namespace must be explicit and owned by the registering mod".into(),
                 );
@@ -94,11 +94,8 @@ impl MenusRegistrar for PartRegistrar {
             if self.menu_recipe_books.contains_key(menu) {
                 return Err("duplicate menu recipe book".into());
             }
-            crate::Identifier::parse(recipe_type)
-                .map_err(|e| format!("invalid recipe type: {e:?}"))?;
-            if !recipe_type.contains(':') {
-                return Err("explicit recipe type namespace required".into());
-            }
+            crate::Identifier::parse_namespaced(recipe_type)
+                .ok_or("recipe type must be a namespaced identifier")?;
             layout.validate(i16::MAX as u16 + 1)?;
             self.menu_recipe_books.insert(
                 menu.into(),

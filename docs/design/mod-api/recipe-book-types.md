@@ -24,10 +24,10 @@ The values explicitly derive `Wire`.
 A client mod reads `PlayerRef::synced_recipe_book_settings` and submits intent
 with `PlayerRef::request_recipe_book_settings` through a `ClientHost`. Engine
 menu panels use the same view through `Game::custom_book_settings` and
-`Game::request_custom_book_settings`. Until a negotiated snapshot arrives, or
-while a revision gap needs a replacement snapshot, reads return `None` and
-the panel must stay disabled. Requesting never changes saved flags. Disconnecting
-with pending intent restores the server's last accepted pair on the next join.
+`Game::request_custom_book_settings`. Until a negotiated snapshot arrives, reads
+return `None` and the panel stays disabled. Requesting never changes saved flags.
+Disconnecting with pending intent restores the server's last accepted pair on the
+next join.
 
 ## Registration and ownership
 
@@ -35,7 +35,7 @@ Add an API-owned `RecipeBookTypeKey`, a validated namespaced resource id, and
 register declarations in the existing mod registration phase. Registration
 returns a typed key; it does not extend `BookType` or its ordinals. Require an
 explicit namespace owned by the registering mod, lowercase resource-id syntax,
-a nonempty namespace and path, and at most 256 UTF-8 bytes. Reject `minecraft:`.
+and a nonempty namespace and path. Reject `minecraft:`.
 Duplicate keys fail registration with the key and both declaring mod identities;
 invalid ids report the mod, supplied id and violated rule. Never silently select
 a winner. Freeze the registry when registration finishes, before loading player
@@ -70,8 +70,8 @@ constructor exists. The key explicitly derives `Wire`.
 For Java-compatible flat persistence, call
 `r.recipe_book_type_with_fields(id, open_field, filtering_field)` instead. Both
 methods return the same key and enforce the same ID rules. The explicit field
-names are case-sensitive nonempty strings of at most 256 UTF-8 bytes, with no
-character-set restriction. Reject equal names and collisions with vanilla's eight
+names are case-sensitive nonempty strings with no character-set restriction.
+The ordinary NBT writer encodes them as modified UTF-8. Reject equal names and collisions with vanilla's
 flag fields, `recipes`, `toBeDisplayed`, `sunrise:book_settings`, or another book's
 fields. Invalid field declarations refuse installation even if ignored.
 
@@ -103,15 +103,11 @@ extension and do not fall back to extension entries for them. Like existing cust
 flags, read the flat fields independently of recipe-list validation. In-memory
 state and synchronization continue to use the book ID, not its saved field names.
 
-Bound the extension to 1024 entries, 256 bytes per key and 512 KiB encoded data.
-Check lengths before allocating or iterating nested values. Accept only a
-compound of compounds with both flags byte 0 or 1; skip malformed individual
-entries with a diagnostic. Reject a duplicate key or an over-limit extension
-as a whole, leaving the custom map empty and vanilla settings intact. The NBT
-reader must enforce the byte/depth budget before materializing this subtree.
-Registration also caps custom types at 1024, reporting overflow at registration.
-Do not evict absent-mod entries to make room: a write exceeding the cap fails
-without changing state. This bounds retention as well as network input.
+Use the ordinary saved NBT reader, including its compound duplicate handling
+and file-level bounds. Accept only a compound of compounds with both flags
+byte 0 or 1; skip malformed individual entries with a diagnostic and keep the
+rest, including books from absent mods. Registration and flag storage impose
+no separate entry or size ceiling.
 
 Copy is an independent value copy of all four vanilla pairs and every custom
 entry, including absent-mod entries. Mutating either player afterward cannot
@@ -131,8 +127,8 @@ local registration indices, identify entries on the wire. Vanilla settings and
 seen/add/remove packets retain their current fields, ordinals and meaning;
 a vanilla client receives exactly the existing four-book traffic.
 
-After player load and ordinary initial recipe-book packets, send one bounded
-custom snapshot on the negotiated mod payload channel, before enabling custom
+After player load and ordinary initial recipe-book packets, send a custom
+snapshot on the negotiated mod payload channel, before enabling custom
 book UI. Snapshot includes every negotiated key, explicitly `(false,false)` when
 absent from storage. Applying it replaces the client's custom view. Retained
 unregistered or unnegotiated keys never leave the server. Snapshot delivery is
@@ -143,22 +139,26 @@ replacement for server state.
 Use reliable ordered delivery on the connection. A snapshot starts a fresh
 connection epoch at revision 0; each accepted server change increments the
 revision. Updates contain epoch, revision, key and both flags. Clients apply
-only the current epoch in revision order; a gap disables the custom UI until
-a fresh snapshot arrives. Client requests carry the current epoch and a
-monotonic request number; the server validates ownership of the connection's
-player, capability, negotiated key, booleans and bounds before applying once.
-Reject stale/duplicate requests without mutation; answer with authoritative
-state so the UI can settle. Later valid requests are processed in arrival order.
-Server writes use the same apply path, then send the resulting update. Notify
-gameplay once after an accepted change, never for rejection or an unchanged
-pair, through the existing settings-change moment extended to typed identity.
+only the current epoch in revision order; an out-of-order or stale update is
+reported and ignored without erasing the established view. Client requests carry
+the current epoch and a monotonic request number; the server validates ownership
+of the connection's player, capability, negotiated key, booleans and bounds
+before applying once. Reject stale/duplicate requests without mutation; answer
+with authoritative state so the UI can settle. Later valid requests are
+processed in arrival order. Server writes use the same apply path, then send the
+resulting update. Notify gameplay once after an accepted change, never for
+rejection or an unchanged pair, through the existing settings-change moment
+extended to typed identity.
 
-Cap payloads at 512 KiB and snapshots at 1024 distinct entries; updates contain
-exactly one entry. Reject malformed/oversized payloads before allocation or
-mutation, including duplicate snapshot keys. Rate-limit requests to 20 per
-second per player; excess requests are rejected and cannot alter flags. Client
+Offers and snapshots encode entry counts as VarInts checked against the bytes
+available. Updates contain exactly one entry. The codec refuses duplicate keys
+and validates each Identifier at decode; the connection frames the complete
+registered packet. Settings apply directly on the ordered play stream with no
+artificial per-second request budget, busy control reply or retry timer. Client
 UI may show pending intent but only authoritative replies enter saved state.
-The design called for single-player to use the same server apply operation without serialization; this build instead preserves the existing integrated server's byte-pipe connection and identical negotiated, rate-limited authority semantics, because a typed local route needs per-connection ordered queues bound to integrated player ownership and reconnect lifetime.
+Single-player uses the integrated server's byte-pipe connection with the same
+negotiated authority semantics, keeping per-connection ordered queues bound to
+integrated player ownership and reconnect lifetime.
 
 ## Worked book and acceptance cases
 
@@ -275,21 +275,24 @@ The dedicated `sunrise:recipe_book_settings` channel is used only after the
 server announces mod transport and the client offers its frozen registered
 keys. The server intersects those keys with its own registry before replying
 with the initial snapshot. Vanilla clients never send the offer and receive no
-custom settings. The bounded binary codec refuses oversized payloads, invalid
-flags, trailing bytes and duplicate snapshot keys before applying anything.
+custom settings. The binary codec refuses inconsistent lengths, invalid flags,
+trailing bytes and duplicate keys before applying anything. Placement catalogue
+parts fit individual frames; a catalogue can span multiple frames.
 
 Negotiation, snapshots and requests do work only on connection or a settings
-change. There is no per-tick mod scan or new tick allocation. A connection's
-request replay guard and rate allowance survive rejected requests and repeat
-offers. Disconnect removes the connection authority and clears pending client
+change. There is no per-tick mod scan, timer polling or new tick allocation.
+Admission uses the actual placed connection, negotiated book-channel capability
+and placement schema, never the client brand. A connection's request replay
+guard survives rejected requests and repeat offers. Disconnect and
+reconfiguration remove the connection authority and clear pending client
 intent; the saved server map remains independent of the client view.
 
-The response budget covers every payload, including malformed input and
-snapshot requests. Once exhausted, a negotiated peer receives a one-byte busy
-control reply instead of another large snapshot. The client disables the custom
-view and coalesces a retry after one second; a busy response schedules the next
-retry, and a successful authoritative snapshot cancels it. This bounds response
-amplification without leaving a lost resnapshot or pending UI intent unresolved.
+Settings apply directly on the ordered play stream with no per-second request
+budget, busy control reply or resnapshot retry protocol. Invalid or stale
+frames report once per actual input, leave established good authority and
+presentation untouched, and never latch later valid intent out. Genuine new
+menu openings, reconfigurations, reloads and authoritative knowledge changes
+drive catalogue refreshes.
 
 ## Toggle layout and large books
 
@@ -332,8 +335,11 @@ the other registrations; `RecipeBookLayout` derives `Wire`.
 - `Furnace { input, fuel, result }` supports cooking displays.
 - `Stonecutter { input, result }` supports stonecutting displays.
 - `Smithing { template, base, addition, result }` supports smithing displays.
-- `Mod` declares no roles: the menu's `MenuPart` answers a click with `recipe_book_place` and places with
-  `ServerHost::place_recipe_in_grid`, vanilla's `ServerPlaceRecipe.placeRecipe` with the mod's own grid.
+- `Mod` declares no roles: the menu's `MenuPart` answers a click with `recipe_book_place` by writing
+  `event.placement = RecipeBookPlacement::Grid { width, height, slots, clear }` (to run vanilla's
+  `ServerPlaceRecipe.placeRecipe` on the active menu's physical slots with the click's Shift and
+  creative flags), `RecipeBookPlacement::Ghost` (to ask the server to send a ghost for the clicked
+  alternative), or leaving `RecipeBookPlacement::Nothing`.
 
 These are container slots, not the appended player inventory. Overlapping roles,
 invalid dimensions and indices outside the 256-slot menu bound refuse registration.
@@ -388,10 +394,12 @@ The server tests the recipe type's authoritative predicates against exact
 component-aware stack classes and rechecks its live context after callbacks.
 It commits placement atomically, or refuses without publishing a partial plan.
 Persistent machines retain their real fuel and cooked output; placement does not
-craft their output. Only a current server missing-ingredients response installs
-ghost hints. Every new click, window change, disconnect or declaration reload
-revokes pending hints. Ghosts use the shared vanilla painter and the active
-screen's native slot geometry, never built-in slot coordinates.
+craft their output. Ordinary placement relies on normal menu/slot sync with no
+separate acknowledgement; only a server ghost for the current catalogue and
+opening installs ghost hints. Clicking a recipe or menu slot, replacing or
+closing the window, disconnecting or reloading declarations clears ghosts. Ghosts
+use the shared vanilla painter and the active screen's native slot geometry,
+never built-in slot coordinates.
 
 Displays are pictures, not ingredient predicates; declaring a result ghost never
 grants a real stack. NeoForge 26.3 public documentation names no registration

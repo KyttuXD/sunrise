@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn custom_book_capability_requires_exact_version_in_configuration() {
-        for bytes in [vec![], vec![0], vec![2], vec![1, 0], vec![1; 1_048_577]] {
+        for bytes in [vec![], vec![0], vec![1], vec![2, 0], vec![2; 1_048_577]] {
             let payload = CustomPayload {
                 channel: crate::custom_book::CHANNEL.into(),
                 data: bytes,

@@ -116,6 +116,9 @@ impl Game<'_> {
     pub(in crate::game) fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
         let (recipes, custom_count) = self.change_mod_crafting_recipes(give, recipes);
         if give {
+            if custom_count != 0 {
+                self.invalidate_mod_book_placement_knowledge();
+            }
             return custom_count + self.award_recipes(&recipes) as i32;
         }
         let index = &world_stations!(self).recipe_index;

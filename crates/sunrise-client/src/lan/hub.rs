@@ -2396,10 +2396,10 @@ impl Hub {
     }
 
     /// ServerPlayer.initInventoryMenu / sendAllDataToRemote for the inventory menu.
-    /// ClientboundPlaceGhostRecipePacket: the recipe `id` faded into the
-    /// guest's menu `container`, whose items were missing.
-    pub fn send_ghost_recipe(&mut self, conn: u32, container: i32, id: &str) {
-        let Some(display) = self.sync.advancements.ghost_display(id, &self.sync) else {
+    /// ClientboundPlaceGhostRecipePacket: the clicked display `display` faded
+    /// into the guest's menu `container`, whose items were missing.
+    pub fn send_ghost_recipe(&mut self, conn: u32, container: i32, display: i32) {
+        let Some(display) = self.sync.advancements.ghost_display(display, &self.sync) else {
             return;
         };
         self.send_to(
@@ -6399,7 +6399,10 @@ mod tests {
             filtering: true,
         };
         hub.guests.update(0, |g| {
-            g.recipe_book.custom.set("test:cooking", flags).unwrap();
+            let book =
+                crate::recipe_book::placement_sync::ResourceId::try_from("test:cooking".to_owned())
+                    .unwrap();
+            g.recipe_book.custom.set(&book, flags);
         });
         open(&mut hub);
         hub.change_level(0, [100.5, 49.0, 0.5], 0.0, None, false, 0, &ctx);

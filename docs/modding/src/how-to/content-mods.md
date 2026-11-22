@@ -1218,16 +1218,16 @@ impl mod_api::Hooks for Machine {
 `player` is the requesting player's UUID; their state is not swapped in. The
 engine uses the player's inventory first, then answered containers in mod/push
 order. It silently skips the open machine itself, duplicate positions (first
-wins), missing or non-lendable containers, and anything after 64 accepted
-containers. Chest-like block entities (including barrels, shulkers, hoppers,
+wins), and missing or non-lendable containers. There is no container-count cap.
+Chest-like block entities (including barrels, shulkers, hoppers,
 dispensers and droppers) and mod containers' declared slots can lend. No answer
 keeps vanilla placement. The engine owns ingredient removal, container
 write-back and `container_changed` notifications, not the listener.
 
 `menu_links` has the same input fields and an append-only `links` output for menu
-types declaring linked slots. It silently skips `pos`, duplicate positions, missing
-or non-lendable containers, and positions after 64 accepted containers
-(`MAX_MENU_LINKS`), preserving first-accepted answer order. It refreshes the named containers' displayed items
+types declaring linked slots. It silently skips `pos`, duplicate positions, and missing
+or non-lendable containers, preserving first-accepted answer order with no container-count
+cap. It resolves distinct live lendable storage and refreshes the named containers' displayed items
 in the same server tick. `recipe_sources` is asked per player action, never per
 tick; `menu_links` is asked per open linked mod menu each tick, only when a mod
 subscribes. With no listener its tick path does no work or allocation. Both hooks

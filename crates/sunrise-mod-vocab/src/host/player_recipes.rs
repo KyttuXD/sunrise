@@ -30,9 +30,10 @@ pub trait PlayerRecipesBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait PlayerRecipesBackendMut {
     /// Side: server.
-    /// Set a registered custom book's authoritative pair and synchronize an
-    /// accepted change. Returns false for an unavailable player, unknown key
-    /// or exhausted storage. An unchanged pair succeeds without notification.
+    /// Set a registered custom book's authoritative pair. Inside a transaction the write is
+    /// rolled back on abort; synchronization and the settings-change hook wait for the
+    /// outermost commit. Returns false for an unavailable player or unknown key.
+    /// An unchanged pair succeeds without notification.
     fn player_set_recipe_book_settings(
         &mut self,
         player: PlayerRef,

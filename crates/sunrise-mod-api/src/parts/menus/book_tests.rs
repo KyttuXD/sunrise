@@ -50,8 +50,22 @@ fn registration_refuses_unknown_books_duplicate_menus_and_overlapping_roles() {
             .menu_recipe_book("demo:unknown", &unknown, "demo:cooking", roles())
             .is_err()
     );
+    for id in ["pot", ":pot", "demo:", "..:pot"] {
+        assert!(
+            registrar
+                .menu_recipe_book(id, &book, "demo:cooking", roles())
+                .is_err(),
+            "{id:?}"
+        );
+        assert!(
+            registrar
+                .menu_recipe_book("demo:other", &book, id, roles())
+                .is_err(),
+            "{id:?}"
+        );
+    }
     assert_eq!(registrar.menu_recipe_books.len(), 1);
-    assert_eq!(registrar.refused.len(), 4);
+    assert_eq!(registrar.refused.len(), 12);
     let binding = &registrar.menu_recipe_books["demo:pot"];
     assert_eq!(binding.owner, "demo");
     assert_eq!(binding.book, book);

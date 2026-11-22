@@ -475,6 +475,7 @@ impl Game<'_> {
                 }
                 self.ui.registries.custom_completions.clear();
                 self.set_registries(registries);
+                self.begin_book_negotiation();
             }
             Event::Transfer(task) => {
                 if let Some(packet) = task.into_eligible_packet() {

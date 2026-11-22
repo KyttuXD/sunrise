@@ -875,6 +875,38 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
         })
 }
 
+/// Publish a part's output only when its callback and nested Host transaction complete.
+/// The retained callback boundary quarantines only the attachment that panicked.
+pub(crate) fn run_isolated_part_output<P: ?Sized, H: crate::ServerHost + ?Sized, O: Clone>(
+    parts: &[Attached<P>],
+    host: &mut H,
+    output: &mut O,
+    kind: &'static str,
+    operation: &'static str,
+    mut invoke: impl FnMut(&P, &mut H, &mut O),
+) {
+    for attached in parts {
+        let result = crate::callback_owner::call(
+            attached.mod_id,
+            attached.mod_index,
+            &attached.panicked,
+            kind,
+            operation,
+            || {
+                let mut candidate = output.clone();
+                crate::run_transaction(&mut *host, |host, _| {
+                    invoke(&*attached.part, host, &mut candidate);
+                    Ok::<_, std::convert::Infallible>(candidate)
+                })
+                .unwrap_or_else(|never| match never {})
+            },
+        );
+        if let Ok(candidate) = result {
+            *output = candidate;
+        }
+    }
+}
+
 pub(crate) struct Entered<'a> {
     pub(crate) mods: std::slice::Iter<'a, ModEntry>,
     pub(crate) hook: &'static str,

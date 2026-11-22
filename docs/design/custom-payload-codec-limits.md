@@ -44,7 +44,7 @@ Existing codec constraints remain with their owners:
 | --- | --- |
 | `minecraft:brand` | UTF string codec, 32,767 UTF-16 code units, not 32,767 bytes |
 | `sunrise:quiet_commands` | `quiet`, 32,767 body bytes, 256 lines with 256 characters each |
-| `sunrise:recipe_book_settings` (configuration) | exact private capability version byte `[1]` |
+| `sunrise:recipe_book_settings` (configuration) | exact private version from `custom_book::CAPABILITY` |
 | `sunrise:mod_list` | `mod_list`, 128 entries, 64-character id and version fields on decode |
 | `sunrise:attachment_sync` | `attachment_sync`, 1,048,576 body bytes |
 | `sunrise:menu_extra` | `menu_extra`, up to 1,048,555 extra-data bytes plus up to 21 bytes of window/position/length framing (1,048,576 bytes total, matching `ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE`) |
@@ -53,7 +53,7 @@ Existing codec constraints remain with their owners:
 | `sunrise:block_registry` | `content_identity`, an empty digest query or exactly 32 digest bytes |
 | `sunrise:recipe_content` | `lan::recipes`, content parts at most 1,047,552 bytes |
 | `sunrise:recipe_transfer` | `lan::recipes`, request has a VarInt window, a 512-character recipe id and at most one flag byte; reply is empty or a VarInt window and one result byte; no trailing bytes |
-| `sunrise:recipe_book_settings` | `recipe_book::settings_codec`, 524,288 body bytes |
+| `sunrise:recipe_book_settings` (play) | `recipe_book::settings_codec`, VarInt counts checked against remaining bytes and vanilla Identifier string width; the complete packet uses the connection's framing |
 | `sunrise:levels` | `viewed_levels`, configuration both ways: exactly a 2-byte query and a 3-byte answer for a served revision (1 to 3), while another revision's bytes after its revision are ignored; play clientbound only: one level's packets, each of a level-scoped kind (from revision 3 also `Sound` and `SoundEntity`, a protocol error below it) and read exactly by its play codec; a serverbound play payload is refused |
 
 This finite engine-only classification is replaced, not extended, by mod payload

@@ -2340,9 +2340,8 @@ impl Game<'_> {
     ) {
         self.fire_player_teleport_end_gateway(player, name, gateway, cancel);
     }
-    /// A server player's recipe book requested a known recipe be placed in
-    /// their crafting grid. `recipe` is the recipe id; `all` is the shift
-    /// click form. Server-side.
+    /// A server player clicked a known recipe in their current vanilla or mod book,
+    /// before the menu places it. `all` is the Shift-click form.
     pub(in crate::game) fn native_player_recipe_book_click(
         &mut self,
         player: u128,

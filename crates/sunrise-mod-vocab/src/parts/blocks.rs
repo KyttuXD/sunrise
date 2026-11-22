@@ -258,6 +258,7 @@ fn cached_slot_tracks_the_first_owner_in_dispatch_order_and_live_toggles() {
                 order,
                 type_name,
                 part: Arc::new(Probe),
+                panicked: Default::default(),
             };
             let other = attach(0, "other", 0, "Other");
             let owner = attach(1, "owner", 0, "Owner");

@@ -379,6 +379,9 @@ pub(super) struct Level {
     /// Saved player extra NBT (`level.player_extra` / `guest.saved`), shared by player and
     /// persistent-data writes, including dead players.
     player_extra: HashMap<JournaledPlayer, Option<sunrise_core::nbt::Tag>>,
+    /// Each affected custom book's saved flags (or absence) before its first write.
+    player_books:
+        HashMap<(JournaledPlayer, String), Option<sunrise_client::recipe_book::BookFlags>>,
     /// Synced player health and its unpublished update events before set_health.
     player_health: HashMap<u128, KeptPlayerHealth>,
     /// Mob health and synchronization dirtiness before set_health.
@@ -665,6 +668,11 @@ pub(super) enum After {
         eye: [f64; 3],
     },
     PlayerEquip(u128, String, Option<ItemStack>),
+    RecipeBookSettings(
+        mod_api::PlayerRef,
+        mod_api::RecipeBookTypeKey,
+        sunrise_client::recipe_book::BookFlags,
+    ),
     /// An item split off an item entity, dropped where it is (`Block.popResource`'s delay).
     Spawn([f64; 3], ItemStack),
     /// The item entity with this id was emptied: removed, unless it holds items again.
@@ -1163,6 +1171,9 @@ impl Game<'_> {
                 for (owner, kept) in level.player_extra {
                     outer.player_extra.entry(owner).or_insert(kept);
                 }
+                for (owner, kept) in level.player_books {
+                    outer.player_books.entry(owner).or_insert(kept);
+                }
                 for (conn, kept) in level.menus {
                     outer.menus.entry(conn).or_insert(kept);
                 }
@@ -1559,6 +1570,19 @@ impl Game<'_> {
             .player_extra
             .entry(JournaledPlayer::Guest(guest.conn))
             .or_insert_with(|| guest.saved.clone());
+    }
+    /// Keep the original setting of the acting player for this book.
+    pub(super) fn journal_player_book(&mut self, uuid: u128, id: &str) {
+        let Some(level) = self.transactions.last_mut() else {
+            return;
+        };
+        let owner = self
+            .lan_acting
+            .map_or(JournaledPlayer::Local(uuid), JournaledPlayer::Guest);
+        level
+            .player_books
+            .entry((owner, id.to_owned()))
+            .or_insert_with(|| self.level.recipe_book.custom.stored(id));
     }
     /// Called with the target player's body swapped in, before set_health changes it.
     pub(super) fn journal_player_health(&mut self) {
@@ -2022,6 +2046,9 @@ impl Game<'_> {
             After::Trade(effect) => self.commit_merchant_effect(*effect),
             After::Payload(payload) => payload.publish(),
             After::Packet(packet, body) => self.publish_mod_held(packet, body),
+            After::RecipeBookSettings(player, book, flags) => {
+                self.publish_player_book_settings(player, book, flags);
+            }
             After::Composter(effects) => self.commit_composter_effects(effects),
             After::FluidWrite(written) => self.commit_fluid_write(*written),
             After::FluidEffects(effects) => self.commit_fluid_effects(*effects),
@@ -2826,6 +2853,18 @@ impl Game<'_> {
                 Some(PlayerStorageHome::Guest(index)) => {
                     let host = self.lan.as_mut().expect("resolved guest");
                     host.hub.guests.update(index, |g| g.saved = kept);
+                }
+                None => {}
+            }
+        }
+        for ((owner, id), kept) in level.player_books {
+            match self.player_storage_home(owner) {
+                Some(PlayerStorageHome::Game) => self.level.recipe_book.custom.restore(id, kept),
+                Some(PlayerStorageHome::Guest(index)) => {
+                    let host = self.lan.as_mut().expect("resolved guest");
+                    host.hub
+                        .guests
+                        .update(index, |g| g.recipe_book.custom.restore(id, kept));
                 }
                 None => {}
             }

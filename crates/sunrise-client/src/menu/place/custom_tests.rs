@@ -102,7 +102,7 @@ fn noncontiguous_roles_place_one_increment_and_max_without_granting_a_result() {
         let plan = smith();
         for (use_max, expected) in [(false, 1), (false, 2), (true, 4)] {
             assert_eq!(
-                menu.place_custom_recipe(env, &plan, use_max, false, || true),
+                menu.place_custom_recipe(env, &plan, use_max, false),
                 Ok(PostPlace::Nothing)
             );
             for slot in [2, 5, 3] {
@@ -123,7 +123,7 @@ fn ingredient_shortage_returns_old_inputs_but_never_fills_fuel_or_output() {
         menu.load_slot(4, stack("minecraft:dirt", 1));
         menu.load_slot(7, stack("minecraft:coal", 3));
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false, || true),
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false),
             Ok(PostPlace::Ghost)
         );
         assert!(menu.slot(4).is_none());
@@ -146,19 +146,48 @@ fn full_inventory_refuses_unchanged_in_survival_and_defers_creative_drops() {
         menu.load_slot(4, stack("minecraft:dirt", 1));
         let before = menu.container_items();
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false, || true),
-            Err(Refused::NoRoom)
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false),
+            Ok(PostPlace::Nothing)
         );
         assert_eq!(menu.container_items(), before);
         assert!(menu.dropped.is_empty());
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, true, || true),
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, true),
             Ok(PostPlace::Ghost)
         );
         assert_eq!(menu.dropped, vec![ItemStack::new("minecraft:dirt", 1)]);
         assert!((0..36).all(|s| menu.player_item(s).is_some_and(|stack| stack.count == 64)));
     });
 }
+#[test]
+#[ignore = "daily"]
+fn furnace_preflights_only_the_input_and_clears_the_output() {
+    with_env(|env| {
+        let mut menu = Menu::new(kind());
+        for slot in 0..36 {
+            menu.set_player_item(slot, stack("minecraft:stone", 64));
+        }
+        menu.set_player_item(0, stack("minecraft:iron_ore", 64));
+        menu.load_slot(7, stack("minecraft:coal", 3));
+        menu.load_slot(9, stack("minecraft:iron_ingot", 1));
+        assert_eq!(
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false),
+            Ok(PostPlace::Nothing)
+        );
+        assert_eq!(menu.slot(4), stack("minecraft:iron_ore", 1).as_ref());
+        assert_eq!(menu.slot(7), stack("minecraft:coal", 3).as_ref());
+        assert!(menu.slot(9).is_none());
+        assert_eq!(
+            menu.player_item(0),
+            stack("minecraft:iron_ore", 63).as_ref()
+        );
+        assert_eq!(
+            menu.dropped,
+            vec![ItemStack::new("minecraft:iron_ingot", 1)]
+        );
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn per_slot_caps_limit_max_and_policy_refusal_is_not_a_missing_ingredient_ghost() {
@@ -169,14 +198,14 @@ fn per_slot_caps_limit_max_and_policy_refusal_is_not_a_missing_ingredient_ghost(
         limits[4] = Some(2);
         menu.set_container_limits(limits);
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), true, false, || true),
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), true, false),
             Ok(PostPlace::Nothing)
         );
         assert_eq!(menu.slot(4).map(|s| s.count), Some(2));
         menu.hide_slot(4);
         let before = menu.container_items();
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false, || true),
+            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false),
             Err(Refused::Denied)
         );
         assert_eq!(menu.container_items(), before);
@@ -196,7 +225,7 @@ fn component_distinct_stacks_never_pool_into_one_destination() {
             Some(ItemStack::new("minecraft:paper", 1).with_potion("minecraft:healing")),
         );
         assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:paper"), true, false, || true),
+            menu.place_custom_recipe(env, &single("minecraft:paper"), true, false),
             Ok(PostPlace::Nothing)
         );
         assert_eq!(
@@ -208,25 +237,6 @@ fn component_distinct_stacks_never_pool_into_one_destination() {
             menu.player_item(1).map(|s| s.potion()),
             Some(Some("minecraft:healing"))
         );
-    });
-}
-
-#[test]
-#[ignore = "daily"]
-fn an_interrupted_context_refuses_without_applying_even_a_missing_ingredient_clear() {
-    with_env(|env| {
-        let mut menu = Menu::new(kind());
-        menu.load_slot(4, stack("minecraft:oak_planks", 3));
-        assert_eq!(
-            menu.place_custom_recipe(env, &single("minecraft:iron_ore"), false, false, || false),
-            Err(Refused::Changed)
-        );
-        assert_eq!(
-            menu.slot(4).map(|stack| (&*stack.item, stack.count)),
-            Some(("minecraft:oak_planks", 3))
-        );
-        assert!(menu.player_item(0).is_none());
-        assert!(menu.slot(9).is_none());
     });
 }
 
@@ -268,7 +278,7 @@ fn a_persistent_six_cell_grid_preserves_cooked_output_and_fuel() {
         menu.load_slot(7, stack("minecraft:coal", 2));
         menu.load_slot(9, stack("minecraft:baked_potato", 4));
         assert_eq!(
-            menu.place_custom_recipe(env, &plan, false, false, || true),
+            menu.place_custom_recipe(env, &plan, false, false),
             Ok(PostPlace::Nothing)
         );
         assert_eq!(
@@ -295,7 +305,7 @@ fn existing_damaged_input_is_usable_but_inventory_damaged_tools_are_not_autofill
             let mut menu = Menu::new(kind());
             menu.load_slot(4, Some(damaged.clone()));
             assert_eq!(
-                menu.place_custom_recipe(env, &plan, use_max, false, || true),
+                menu.place_custom_recipe(env, &plan, use_max, false),
                 Ok(PostPlace::Nothing)
             );
             assert_eq!(menu.slot(4), Some(&damaged));
@@ -305,7 +315,7 @@ fn existing_damaged_input_is_usable_but_inventory_damaged_tools_are_not_autofill
         let mut menu = Menu::new(kind());
         menu.set_player_item(0, Some(damaged.clone()));
         assert_eq!(
-            menu.place_custom_recipe(env, &plan, false, false, || true),
+            menu.place_custom_recipe(env, &plan, false, false),
             Ok(PostPlace::Ghost)
         );
         assert!(menu.slot(4).is_none());

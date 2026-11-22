@@ -17,6 +17,8 @@ pub struct Attached<P: ?Sized> {
     /// The part's kind, its Rust type's name: one part of each kind per thing.
     pub(crate) type_name: &'static str,
     pub(crate) part: Arc<P>,
+    /// Set if an isolated callback on this attachment panicked and was disabled for the session.
+    pub(crate) panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<P: ?Sized> Attached<P> {
@@ -27,6 +29,7 @@ impl<P: ?Sized> Attached<P> {
             order: self.order,
             type_name: self.type_name,
             part,
+            panicked: self.panicked.clone(),
         }
     }
     // hidden: the game's goal registration reads these (#1077)
@@ -652,6 +655,7 @@ mod lookup_context_tests {
                 order: 0,
                 type_name: "DropObserver",
                 part: Arc::new(DropObserver(observed)),
+                panicked: Default::default(),
             }],
         );
         parts

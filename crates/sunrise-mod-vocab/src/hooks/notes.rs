@@ -276,7 +276,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`player_stop_spectating_entity(player, name, entity_id)`**: a spectator's camera returned to their own player after they stopped watching `entity_id`.
 - **`player_map_filled(player, name, map_id)`**: a server player filled an empty map, after the filled map and its saved map data were created.
 - **`player_teleport_end_gateway(player, name, gateway, cancel)`**: a player is about to travel through the End gateway at `gateway`. Set `cancel` to leave them at the entrance; the gateway does not start its cooldown. The player is not swapped in.
-- **`player_recipe_book_click(player, name, recipe, all)`**: a server player requests a known recipe be placed in their crafting grid through the recipe book. `all` is true for the shift click form. The player is not swapped in.
+- **`player_recipe_book_click(player, name, recipe, all)`**: a server player requests placement of a known recipe through a vanilla or mod book, after menu and recipe checks and before placement or the mod menu's own decision. `all` is true for the Shift-click form. The player is not swapped in.
 - **`player_exp_cooldown_change(player, name, ticks)`**: the player’s XP orb pickup cooldown changed, after its new value is stored. This includes the two tick delay after an orb is picked up and each tick it counts down. The player is not swapped in.
 - **`entity_enter_block(entity, kind, pos, block)`**: a bee was stored in the beehive or nest at `pos`.
 - **`entity_change_block(entity, kind, pos, from, to)`**: a mob changed a block, after the new state was applied.
@@ -1819,7 +1819,7 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
   every stage of a Sunrise shader pack reads as `frame.mods`, so a mod can tell the pack it bundles where and when
   something happened (an explosion's centre and age for a cloud drawn in a post pass).
 
-- Menus of content mods' own menu types (vanilla's `MenuType`): a mod container's `menu` may name a menu type its content mod declares in `data/<id>/sunrise/menu/` with as many slots ([making a content mod](../how-to/content-mods.md#menu-types)). It opens when the block is used, its data slots are the block entity's `data`, and a Sunrise client shows it through the mod's registered screen factory. Server collect hooks `recipe_sources` and `menu_links` name lent ingredient and linked-slot containers; see the menu-types guide for ordering, caps, skips, write-back and the no-listener tick path.
+- Menus of content mods' own menu types (vanilla's `MenuType`): a mod container's `menu` may name a menu type its content mod declares in `data/<id>/sunrise/menu/` with as many slots ([making a content mod](../how-to/content-mods.md#menu-types)). It opens when the block is used, its data slots are the block entity's `data`, and a Sunrise client shows it through the mod's registered screen factory. Server collect hooks `recipe_sources` and `menu_links` name lent ingredient and linked-slot containers; see the menu-types guide for ordering, skips, write-back, uncapped resolution in both, and `menu_links`'s no-listener tick path.
 
 - `block_highlight(pos, state, partial, canceled)` runs before building the eligible targeted block's selection outline, after hidden-HUD and game-mode restrictions. Set `canceled` to suppress only that outline; default behavior is unchanged otherwise. Position is block coordinates and state is the current block state ID. No entity outlines are affected.
 
@@ -2598,7 +2598,7 @@ registration path.
 
 - A server entity about to travel to another level, a player or not: `entity_travel_to_dimension(entity, dimension, cause, cancel)` (NeoForge's `EntityTravelToDimensionEvent`) names the target level; `cause` is `nether_portal`, `end_portal`, `end_gateway` or `teleport`. Cancel to keep the entity where it is. The player's state is not swapped in. Ordinary End exits are `end_portal`; respawn after the End credits is not travel.
 
-- A server player requests a known recipe be placed in their crafting grid through the recipe book (`player_recipe_book_click(player, name, recipe, all)`).
+- A server player requests placement of a known recipe through a vanilla or mod recipe book (`player_recipe_book_click(player, name, recipe, all)`).
 
 - A recipe about to become known to a server player: `player_recipe_discovered(player, name, recipe, cancel)` is heard for advancement rewards, knowledge books and `/recipe give`. Set `cancel` to keep it locked; the client is sent the matching removal. The player's state is not swapped in.
 

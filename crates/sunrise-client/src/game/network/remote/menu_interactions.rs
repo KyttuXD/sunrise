@@ -51,6 +51,21 @@ impl Game<'_> {
         }
         r.menu.set(menu);
         r.set_menu_title(title);
+        if self
+            .native_net
+            .placement
+            .client
+            .window()
+            .is_some_and(|window| !self.native_book_placement_window_matches(window))
+            || self
+                .native_net
+                .placement
+                .view
+                .as_ref()
+                .is_some_and(|view| !self.native_book_placement_catalog_matches(&view.identity))
+        {
+            self.clear_mod_book_placement_screen();
+        }
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
     /// when none is open).
@@ -446,6 +461,10 @@ impl Game<'_> {
         if self.mod_screen.take().is_some() {
             self.clear_mod_book_placement_screen();
             self.screen_state.build.reopened();
+        } else if self.native_net.placement.client.window().is_some()
+            || self.native_net.placement.view.is_some()
+        {
+            self.clear_mod_book_placement_screen();
         }
         self.remote_set_menu(None, None);
         self.mount_menu_reset();

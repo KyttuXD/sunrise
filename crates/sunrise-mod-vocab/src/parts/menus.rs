@@ -161,11 +161,20 @@ pub trait MenusRegistrar {
     ) -> Result<(), String>;
 
     /// Declare this menu's book, authoritative recipe type and destination roles.
+    /// `menu` and `recipe_type` must both pass [`crate::Identifier::parse_namespaced`]:
+    /// both the namespace and the path must be explicit and nonempty (slash-separated paths
+    /// are accepted; whitespace is never trimmed).
     /// The menu remains content-owned; loading checks these roles against its
-    /// actual container slots and crafting declaration.
-    /// Register a screen factory for this menu with [`Self::register_menu_screen`].
-    /// Its layout must set [`crate::MenuScreenLayout::recipe_book`] to this `book`.
-    /// The content can load without the factory. Geometry is checked when the client constructs the screen, not here.
+    /// actual container slots and crafting declaration. A [`crate::RecipeBookLayout::Mod`]
+    /// layout declares no static roles and answers recipe clicks through
+    /// `MenuPart::recipe_book_place` by setting [`crate::RecipeBookPlacement`].
+    /// To show this menu, register a factory with [`Self::register_menu_screen`]
+    /// whose layout sets [`crate::MenuScreenLayout::recipe_book`] to this `book`.
+    /// Content can load without the factory. The client checks for it when the
+    /// menu opens and validates geometry when the factory constructs the screen. The
+    /// declaring mod owns the screen's presentation callbacks and slot controls.
+    /// Placement availability depends on the connection's negotiated custom-book
+    /// capability and current opening, not client brand.
     /// This does not turn display candidates into ingredient predicates.
     /// Invalid ownership, unknown books, duplicate menus or malformed roles
     /// refuse installation, even when the caller ignores the error.
