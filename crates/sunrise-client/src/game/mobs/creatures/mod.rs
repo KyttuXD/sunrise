@@ -273,7 +273,8 @@ pub(super) struct Creatures {
     /// The cat spawner (`CatSpawner`): its countdown.
     pub cat: super::cat_spawner::CatSpawner,
     /// Each level's custom spawners, built when the level opens and dropped on unload (game/mobs/custom_spawners.rs).
-    pub custom_spawners: std::collections::HashMap<super::Dim, mod_api::CustomSpawners>,
+    pub custom_spawners:
+        std::collections::HashMap<super::Dim, mod_api::__private::CustomSpawnerList>,
     /// Native sounds waiting for the server host to be available.
     pub lan_sounds: Vec<NativeSound>,
     /// Particles from a guest's turn, waiting for it to end.
@@ -1351,7 +1352,7 @@ impl Game<'_> {
         }
     }
     /// Advance every mob one tick, then apply their events.
-    pub(super) fn tick_creatures(&mut self) -> Result<()> {
+    pub(super) fn tick_creatures(&mut self) -> Result<super::custom_spawners::CustomSpawnerTick> {
         // Hurts dealt since the last creature tick (explosions, commands, the
         // systems after it) teleport an enderman before it ticks, not in its AI step.
         self.settle_hurt_teleports()?;
@@ -1359,11 +1360,11 @@ impl Game<'_> {
         self.refresh_gear_knockback_resistance();
         self.tick_leads();
         // Vanilla's spawning and raids run before ChunkMap.tick.
-        self.tick_spawners();
+        let custom = self.tick_spawners();
         let ticked =
             sunrise_client::spans::time("tick_creature_entities", || self.tick_creature_entities());
         self.dismount_underwater_mob_riders();
-        ticked
+        ticked.map(|()| custom)
     }
     /// `DistanceManager.inEntityTickingRange` in an entity-ticking chunk
     /// (block coordinates), from every player's tickets (`update_chunk_tickets`).

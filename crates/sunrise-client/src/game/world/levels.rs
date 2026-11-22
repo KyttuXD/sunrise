@@ -889,7 +889,9 @@ impl Game<'_> {
             self.enter_level(dim)?;
             self.wait_for_ticket_chunks(deadline);
         }
-        self.enter_level(back)
+        self.enter_level(back)?;
+        self.update_mob_spawning_flags();
+        Ok(())
     }
 
     /// `TicketStorage.activateAllDeactivatedTickets`: restore portal and

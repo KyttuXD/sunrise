@@ -886,6 +886,7 @@ impl Game<'_> {
                     // The level data holds the world's difficulty: it
                     // survives the reopen, so it follows the change.
                     self.level.set_difficulty(self.ui.difficulty);
+                    self.update_mob_spawning_flags();
                     self.sync_rules();
                     if self.ui.difficulty == 0 {
                         self.mobs.retain(|m| !m.hostile());

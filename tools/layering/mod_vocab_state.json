@@ -214,11 +214,6 @@
     "category": "immutable cache",
     "reason": "Bounded interning for decoded static strings; entries are immutable, shared by value, and never evicted."
   },
-  "world/custom_spawners.rs::SPAWNER_OWNERS": {
-    "type": "LazyLock<Mutex<SpawnerOwners>>",
-    "category": "dispatch table",
-    "reason": "Process-wide map from (mod id, concrete CustomSpawner TypeId) to its session CallbackOwner so a panicking custom spawner disables that mod's spawner type across levels for the session."
-  },
   "world/phase_refusal.rs::SCOPE": {
     "type": "Cell<Option<Scope>>",
     "category": "reentrancy guard",

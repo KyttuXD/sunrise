@@ -354,7 +354,9 @@ The wither and the ender dragon override `checkDespawn` in vanilla, so the event
 
 ## Adding or removing a custom spawner
 
-The level's custom spawners (for the Overworld: wandering trader, patrols, cats, village sieges, and phantoms; other dimensions start empty as in vanilla `MinecraftServer#createLevels`) are a list a mod edits once per server level when it opens, in `modify_custom_spawners`. Remove a built-in with `remove(SpawnerKind::...)`, or append an owned `CustomSpawner` (a struct implementing `CustomSpawner` or a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` closure) with `add`. The level owns each registered spawner for its lifetime, ticks it directly once per eligible server tick (`spawn_mobs` enabled) inside a server transaction, and drops it when the level unloads or the world closes:
+Edit the level's custom spawner list once per server level when it opens, in `modify_custom_spawners`. The Overworld starts with the wandering trader, patrols, cats, village sieges, and phantoms; other dimensions start empty, as in `MinecraftServer#createLevels`. Remove a built-in by kind with `remove`, or inspect all entries through `entries()` and remove an entry by its current index with `remove_at`. Append an owned `CustomSpawner` (a struct implementing the trait or a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` closure) with `add(label, spawner)`. The label is metadata for later listeners, not an id used to tick the spawner. A refused or panicking registration listener leaves earlier edits untouched.
+
+The level ticks each registered spawner directly in list order after the built-ins, including Phantom, in a server transaction. A debug world or a tick with `spawn_mobs` off skips these callbacks. `spawn_enemies` is the server chunk source's spawn setting and does not check difficulty. A phase refusal reports the failure and rolls back only the callback's writes for that tick; a panic also disables that instance, logs the mod's name and queues an error toast. The level drops the object on removal, level unload, or world close:
 
 ```rust,ignore
 struct RatSwarmSpawner {
@@ -378,7 +380,7 @@ impl mod_api::CustomSpawner for RatSwarmSpawner {
 fn modify_custom_spawners(&self, _: &dyn mod_api::Host, event: &mut mod_api::ModifyCustomSpawnersEvent<'_>) {
     // no phantoms in this world
     event.spawners.remove(mod_api::SpawnerKind::Phantom);
-    event.spawners.add(RatSwarmSpawner { cooldown: 0 });
+    event.spawners.add("rat_swarm", RatSwarmSpawner { cooldown: 0 });
 }
 ```
 

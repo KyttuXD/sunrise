@@ -100,6 +100,8 @@ pub(super) fn emit<'a>(
         let carried: Vec<_> = declared.iter().map(|(arg, ty)| (arg.clone(), ty)).collect();
         let mut args = carried.clone();
         let carrier = format!("{}Call", hook_id(name));
+        let custom_spawner_registration = name == "modify_custom_spawners";
+        let custom_spawner_storage = "&mut mod_api::__private::CustomSpawnerList";
         let uses_carrier = !declared.is_empty()
             && (name == "apply_effect_tick" && declaration_only
                 || in_game
@@ -461,7 +463,12 @@ pub(super) fn emit<'a>(
                     ));
                 }
             }
-            dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
+            let spawner_editor = custom_spawner_registration && name == "spawners";
+            if spawner_editor {
+                dispatch_params.push(format!("{name}: {custom_spawner_storage}"));
+            } else {
+                dispatch_params.push(format!("{name}: {}", ty.to_token_stream()));
+            }
             if collect_cancel && name == "cancel" {
                 continue;
             }
@@ -497,8 +504,7 @@ pub(super) fn emit<'a>(
             let (field, scalar) = lifetimes.field(&field_ty);
             let task_registration =
                 event_type == "RegisterConfigurationTasksEvent" && name == "registration";
-            let custom_spawners = event_type == "ModifyCustomSpawnersEvent" && name == "spawners";
-            if scalar || task_registration || custom_spawners {
+            if scalar || task_registration {
                 rollback.push((name.clone(), false));
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
@@ -598,6 +604,8 @@ pub(super) fn emit<'a>(
         };
         let wire_comment = if registration_append.is_some() {
             "// no wire: this event borrows the registration staging vector.\n"
+        } else if custom_spawner_registration {
+            "// no wire: this event borrows one listener's custom spawner registration edits.\n"
         } else {
             ""
         };
@@ -724,7 +732,11 @@ pub(super) fn emit<'a>(
                     ));
                 } else {
                     for (arg, ty) in &engine {
-                        parameter(arg, &ty.to_token_stream().to_string());
+                        if custom_spawner_registration && arg == "spawners" {
+                            parameter(arg, custom_spawner_storage);
+                        } else {
+                            parameter(arg, &ty.to_token_stream().to_string());
+                        }
                     }
                 }
                 let crossing = stack_crossing_routed(
@@ -947,7 +959,10 @@ pub(super) fn emit<'a>(
         // Each listener gets a fresh event with the original inputs. Writable borrowed
         // payloads can still share their pointee. Write-back, the owner filter and chunk
         // I/O checks use the outer event and cannot use a listener-local one.
-        let (build, local_event) = if hook.event_per_listener || isolated_collect {
+        let (build, local_event) = if hook.event_per_listener
+            || isolated_collect
+            || custom_spawner_registration
+        {
             // A replace answer is returned outside the event. A regular collect
             // output borrows one slot, reborrowed for each listener above. Answered
             // collect batches and cancellation do not use this mode. An isolated collector's
@@ -1005,9 +1020,7 @@ pub(super) fn emit<'a>(
                 continue;
             }
             let index = snaps.len();
-            if (event_type == "RegisterConfigurationTasksEvent" && field == "registration")
-                || (event_type == "ModifyCustomSpawnersEvent" && field == "spawners")
-            {
+            if event_type == "RegisterConfigurationTasksEvent" && field == "registration" {
                 snaps.push(format!("{event}.{field}.checkpoint()"));
                 restores.push(format!("{event}.{field}.rollback({saved}.{index});"));
                 continue;
@@ -1073,10 +1086,7 @@ pub(super) fn emit<'a>(
         } else {
             "Default::default()"
         };
-        let report = if matches!(
-            event_type.as_str(),
-            "RegisterConfigurationTasksEvent" | "ModifyCustomSpawnersEvent"
-        ) {
+        let report = if event_type == "RegisterConfigurationTasksEvent" {
             // A refusal from task_type or listener setup also unwinds to this listener's checkpoint.
             "report_each"
         } else {
@@ -1262,6 +1272,12 @@ pub(super) fn emit<'a>(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.{owner} {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
                     owner = hook.owner.as_deref().unwrap(),
+                ),
+            ),
+            None if custom_spawner_registration => (
+                String::new(),
+                format!(
+                    "for (mod_id, {mod_item}) in super::entered_with_id(HookId::{hook_id}, \"{name}\") {{ spawners.edit(mod_id, |spawners| {{ {local_event} {mod_item}.{name}({invoke}); }}); }}"
                 ),
             ),
             None if isolated_collect => (

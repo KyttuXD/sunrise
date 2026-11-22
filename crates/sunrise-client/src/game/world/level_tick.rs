@@ -199,7 +199,7 @@ impl Game<'_> {
 
     pub(in crate::game) fn tick_mobs(&mut self) -> Result<()> {
         self.sync_mob_death_protection();
-        self.tick_creatures()?;
+        let custom = self.tick_creatures()?;
         if !self.entity_attachments.is_empty() {
             self.prune_entity_attachments();
         }
@@ -212,6 +212,11 @@ impl Game<'_> {
         self.tick_worldborder();
         self.tick_subtitles();
         self.spawn_phantoms();
+        if let super::custom_spawners::CustomSpawnerTick::Run { spawn_enemies } = custom {
+            sunrise_client::spans::time("spawn_registered", || {
+                self.tick_registered_custom_spawners(spawn_enemies)
+            });
+        }
         self.tick_advancements();
         self.tick_player_model();
         Ok(())

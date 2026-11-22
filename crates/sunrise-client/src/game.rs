@@ -3579,6 +3579,8 @@ struct Game<'a> {
     /// `mobs` by network id, for the packets that name one (`game/mobs/mob_index.rs`).
     mob_index: mob_index::MobIndex,
     creatures: creatures::Creatures,
+    /// `ServerChunkCache.spawnEnemies`, refreshed at the server's spawn-settings boundaries.
+    chunk_spawn_enemies: bool,
     sculk: sculk::SculkState,
     raiding: raids::Raiding,
     attack_ticks: u32,
@@ -13466,6 +13468,7 @@ impl<'a> Game<'a> {
             mobs: Default::default(),
             mob_index: Default::default(),
             creatures: Default::default(),
+            chunk_spawn_enemies: true,
             sculk: Default::default(),
             raiding: Default::default(),
             attack_ticks: 100,

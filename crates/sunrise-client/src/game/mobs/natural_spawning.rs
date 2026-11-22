@@ -1206,23 +1206,34 @@ impl<'a> Game<'a> {
     /// (`getChunkSource().tick`): natural spawning, then the custom spawners
     /// of `ServerChunkCache.tickChunks`. A wave that lands this tick therefore
     /// joins before that tick's spawns, with the lower entity ids. Nothing spawns once the
-    /// entity ids are exhausted (`entity_ids_exhausted`).
-    pub(super) fn tick_spawners(&mut self) {
+    /// entity ids are exhausted (`entity_ids_exhausted`). The owned tail runs after Phantom,
+    /// using the chunk source's inputs from this phase.
+    pub(super) fn tick_spawners(&mut self) -> super::custom_spawners::CustomSpawnerTick {
+        use super::custom_spawners::CustomSpawnerTick;
+        use sunrise_client::gamerules::vanilla::SPAWN_MOBS;
         if self.entity_ids_exhausted() {
-            return;
+            return CustomSpawnerTick::Skip;
         }
         let from = self.lan_synced_from();
         sunrise_client::spans::time("spawn_raids", || self.tick_raids());
+        // ServerChunkCache.tickChunks reads spawn_mobs before walking the spawning chunks.
+        let eligible = !self.world_debug
+            && self.ui.rules.bool_at(SPAWN_MOBS)
+            && self.remote.is_none()
+            && self.is_logical_server();
         sunrise_client::spans::time("spawn_natural", || self.spawn_natural());
-        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
-        if self
-            .ui
-            .rules
-            .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
-        {
-            sunrise_client::spans::time("spawn_custom", || self.tick_custom_spawners());
+        let custom = if eligible {
+            CustomSpawnerTick::Run {
+                spawn_enemies: self.chunk_spawn_enemies,
+            }
+        } else {
+            CustomSpawnerTick::Skip
+        };
+        if self.ui.rules.bool_at(SPAWN_MOBS) {
+            sunrise_client::spans::time("spawn_custom", || self.tick_builtin_custom_spawners());
         }
         self.lan_synced_since(from);
+        custom
     }
     /// `ServerChunkCache.tickChunks`: the spawn state over the loaded mobs,
     /// the categories under their global caps (creatures every 400 ticks),

@@ -2391,6 +2391,11 @@ impl Game<'_> {
         value: GameRuleValue,
         actor: Option<&GameRuleActor<'_>>,
     ) {
+        // MinecraftServer.onGameRuleChanged updates the chunk source for this rule before
+        // NeoForge's notification, including when a listener writes another rule.
+        if name == "minecraft:spawn_monsters" {
+            self.update_mob_spawning_flags();
+        }
         if mod_api::__private::listened(mod_api::HookId::GameRuleChanged) {
             self.native_game_rule_changed(name, value, actor);
         }

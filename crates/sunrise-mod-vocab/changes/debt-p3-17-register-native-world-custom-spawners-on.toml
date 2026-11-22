@@ -1,5 +1,9 @@
 ids = [
     "hook:modify_custom_spawners",
+    "hook:modify_custom_spawners.spawners",
+    "method:Hooks::modify_custom_spawners",
+    "type:ModifyCustomSpawnersEvent",
+    "type:ModifyCustomSpawnersEvent.spawners",
     "hook:custom_spawner_tick",
     "hook:custom_spawner_tick.dimension",
     "hook:custom_spawner_tick.key",
@@ -13,8 +17,12 @@ ids = [
     "method:CustomSpawner::tick",
     "type:SpawnerKind",
     "type:CustomSpawners",
+    "type:CustomSpawnerEntry",
+    "type:CustomSpawnerEntry.Builtin",
+    "type:CustomSpawnerEntry.Registered",
     "handle:CustomSpawners::add",
     "handle:CustomSpawners::remove",
+    "handle:CustomSpawners::remove_at",
     "handle:CustomSpawners::contains",
     "handle:CustomSpawners::entries",
     "handle:CustomSpawners::builtins",
@@ -30,13 +38,34 @@ ids = [
     "type:SpawnerError.InvalidKey",
     "type:SpawnerError.Duplicate",
 ]
-why = "Server levels now own concrete `CustomSpawner` objects directly (matching vanilla `net.minecraft.world.level.CustomSpawner`, `ServerLevel#tickCustomSpawners`, `MinecraftServer#createLevels`, and NeoForge `ModifyCustomSpawnersEvent`) instead of opaque `SpawnerKey` tokens broadcast to every mod via `custom_spawner_tick`. Non-Overworld levels start with an empty custom spawner list as in vanilla, each registered spawner is ticked directly under its registering mod inside a server transaction and dropped when the level unloads or the world closes, a phase refusal rolls back that tick without disabling the spawner, and a panic rolls back that tick, disables that spawner type for the registering mod for the session, logs loudly and notifies the client error toast queue."
+why = "Server levels own concrete `CustomSpawner` objects, as in vanilla `MinecraftServer#createLevels`, `ServerLevel#tickCustomSpawners`, and NeoForge `EventHooks#getCustomSpawners` and `ModifyCustomSpawnersEvent#getCustomSpawners`. Each listener sees the current ordered list and can remove any entry without taking the callable; its staged edits are discarded if it fails. `ServerChunkCache#tickChunks` skips debug worlds and ticks custom spawners only with `spawn_mobs` on, using the chunk source setting refreshed by `MinecraftServer#updateMobSpawningFlags` and `ServerLevel#isSpawningMonsters` independently of difficulty. Sunrise keeps its existing built-in tick sites, with the registered objects ticking directly after Phantom in list order, not through a broadcast. Each instance has its own panic containment and is dropped on removal, level unload or world close."
 migrate = """
-In `Hooks::modify_custom_spawners` (now version 2), remove `SpawnerKey`, `SpawnerEntry`, \
-`SpawnerError` and `Hooks::custom_spawner_tick`. Pass a `SpawnerKind` directly to \
-`event.spawners.remove(SpawnerKind::...)` and `event.spawners.contains(SpawnerKind::...)`, and \
-inspect remaining built-ins with `event.spawners.builtins()`. To add a custom spawner, implement \
-`CustomSpawner` (or pass a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` closure) \
-and register an owned instance per level with `event.spawners.add(my_spawner)`. Move any \
-per-level spawner state onto that struct; the level owns it until unload or world close.
+In `Hooks::modify_custom_spawners` (version 2), replace `add(SpawnerKey::new(id)...)` with \
+`event.spawners.add(id, my_spawner)`. Implement `CustomSpawner::tick(&mut self, &mut dyn ServerHost, \
+LevelRef, bool)` on `my_spawner` or use a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` \
+closure. Move the body of `Hooks::custom_spawner_tick` into that callback, use the supplied `LevelRef` \
+instead of looking up `event.dimension`, use the supplied boolean instead of `event.spawn_enemies`, \
+and move state keyed by `event.key` or dimension onto that object. Remove the old hook and event. \
+The flag is not a difficulty check; apply any entity-specific difficulty check inside your spawner.
+
+`add` returns `()`, not the old inserted/duplicate boolean, and labels are not required to be unique. \
+If you branched on that boolean, use `event.spawners.entries().any(...)` to match the intended \
+`CustomSpawnerEntry::Registered { mod_id, label, .. }` first; call `add` only if not found. \
+Use `entries().position(...)` followed by `remove_at(index)` in place of `remove(&SpawnerEntry::Mod(key))`; \
+use `entries().any(...)` in place of `contains` for a mod entry. For built-ins replace \
+`remove(&SpawnerEntry::Builtin(kind))` and `contains(&SpawnerEntry::Builtin(kind))` with \
+`remove(kind)` and `contains(kind)`, or use `builtins()` to iterate built-in kinds. A label is \
+plain inspection metadata, not a tick key: replace `SpawnerKey::new`, `as_str`, \
+`String::from(&key)` and `SpawnerKey::try_from(String)` with your own string handling. \
+`SpawnerError` and its invalid-key and duplicate variants are gone.
+
+`SpawnerKind`, `SpawnerEntry` and `SpawnerError` no longer provide the old Wire representations; \
+`CustomSpawners<'_>` is a borrowed editor, not an owned `Clone`/`PartialEq`/`Eq` value. \
+The old list was serialized through its entry conversion, not through a direct `Wire` impl: \
+`Vec::<SpawnerEntry>::from(&list)` and `CustomSpawners::try_from(entries)` are gone. \
+For saved or transmitted data, define a mod-owned `#[derive(Wire)]` enum for the built-in choices \
+(and a Wire record or enum for your custom labels and configuration). Map your enum to `SpawnerKind` \
+when editing, and map the borrowed `entries()` metadata into owned records if you need to clone, \
+compare or serialize a selection. To restore it, read those records in the registration listener \
+and construct fresh spawner objects; do not serialize the editor or the callbacks.
 """

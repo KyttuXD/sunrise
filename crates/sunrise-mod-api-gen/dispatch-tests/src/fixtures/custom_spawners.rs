@@ -1,15 +1,13 @@
 mod api {
-    pub struct CustomSpawners {
-        spawners: Vec<Box<dyn Send>>,
+    pub struct CustomSpawners<'a> {
+        _spawners: &'a mut CustomSpawnerList,
     }
 
-    impl CustomSpawners {
-        pub fn checkpoint(&self) -> usize {
-            self.spawners.len()
-        }
+    pub struct CustomSpawnerList;
 
-        pub fn rollback(&mut self, len: usize) {
-            self.spawners.truncate(len);
+    impl CustomSpawnerList {
+        pub(crate) fn edit(&mut self, _: &'static str, listener: impl FnOnce(CustomSpawners<'_>)) {
+            listener(CustomSpawners { _spawners: self });
         }
     }
 }

@@ -1,22 +1,8 @@
-//! A level's custom spawners (`CustomSpawner`): the list `ModifyCustomSpawnersEvent` edits.
-//!
-//! Vanilla `ServerLevel` owns a list of `CustomSpawner` instances (`MinecraftServer#createLevels`
-//! populates the Overworld with its five built-ins and other dimensions with an empty list) and
-//! ticks each once per eligible server tick (`ServerLevel#tickCustomSpawners`). Mods edit that
-//! list once per level in [`Hooks::modify_custom_spawners`](crate::Hooks::modify_custom_spawners),
-//! removing built-ins or appending owned [`CustomSpawner`] objects directly.
+//! A level's custom spawners (`ServerLevel#tickCustomSpawners`) and the borrowed registration
+//! editor used by [`Hooks::modify_custom_spawners`](crate::Hooks::modify_custom_spawners).
 use crate::callback_owner::CallbackOwner;
 use crate::{LevelRef, ServerHost};
-use std::{
-    any::TypeId,
-    collections::HashMap,
-    fmt,
-    sync::{LazyLock, Mutex},
-};
-
-// The number of concrete native spawner types is fixed by the installed code, not by world state.
-type SpawnerOwners = HashMap<(&'static str, TypeId), CallbackOwner>;
-static SPAWNER_OWNERS: LazyLock<Mutex<SpawnerOwners>> = LazyLock::new(Mutex::default);
+use std::fmt;
 
 /// A built-in spawner vanilla runs for the Overworld (`MinecraftServer#createLevels`).
 // no wire: server-side custom spawner selector, not a serialized payload.
@@ -38,19 +24,18 @@ pub enum SpawnerKind {
 /// An owned custom spawner ticked once per eligible server level tick
 /// (`net.minecraft.world.level.CustomSpawner`).
 ///
-/// Register an instance once per level in
-/// [`Hooks::modify_custom_spawners`](crate::Hooks::modify_custom_spawners) with
-/// [`CustomSpawners::add`]. The level owns the instance for its lifetime and drops it when the
-/// level unloads or the world closes. Each tick runs as the registering mod inside a server
-/// transaction: a phase refusal rolls back that tick's writes without disabling the spawner,
-/// while a panic rolls back that tick's writes, disables this spawner type for the registering
-/// mod for the rest of the session, logs loudly and notifies the client error toast queue.
-/// Dropping a spawner also runs under the registering mod's panic containment.
+/// Register an instance with [`CustomSpawners::add`] in
+/// [`Hooks::modify_custom_spawners`](crate::Hooks::modify_custom_spawners). The level owns it
+/// until it is removed during registration, the level unloads, or the world closes. Each tick
+/// runs as the registering mod in a server transaction. A phase refusal reports and rolls back
+/// that tick's writes without disabling the callback. A panic also disables this instance's
+/// callback, logs the mod's name and queues an error toast. Other instances are unaffected.
+/// Disposal also runs under the registering mod's panic containment.
 // no wire: owned server-side spawner object with local state and tick callback.
 pub trait CustomSpawner: Send + 'static {
-    /// Vanilla `CustomSpawner#tick(ServerLevel, boolean)`: run one custom-spawner tick on
-    /// `level` while the `spawn_mobs` game rule is enabled. `spawn_enemies` matches
-    /// `ServerLevel#isSpawningMonsters()` (`spawn_monsters` enabled and difficulty not peaceful).
+    /// Run one tick on `level`. `spawn_enemies` is the chunk source's spawn setting, set from
+    /// `ServerLevel#isSpawningMonsters` (`spawn_mobs` and `spawn_monsters`) at the server's spawn
+    /// settings refresh. It does not check difficulty; individual spawners and entities do that.
     fn tick(&mut self, host: &mut dyn ServerHost, level: LevelRef, spawn_enemies: bool);
 }
 
@@ -63,25 +48,229 @@ where
     }
 }
 
-/// One level-owned mod custom spawner with its registering mod's session owner.
+/// An entry as seen during registration, without access to its callable object.
+// no wire: borrowed metadata from a level's in-process registration list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CustomSpawnerEntry<'a> {
+    /// One of vanilla's spawners.
+    Builtin(SpawnerKind),
+    /// An owned spawner added by a mod; labels need not be unique.
+    #[non_exhaustive]
+    Registered {
+        /// The registering mod's manifest id.
+        mod_id: &'static str,
+        /// The label the registering mod passed to [`CustomSpawners::add`].
+        label: &'a str,
+    },
+}
+
+/// A borrowed editor of a server level's custom spawner list during `ModifyCustomSpawnersEvent`.
+/// Earlier listeners' accepted edits are visible. This listener's edits apply only if its call
+/// succeeds, and cannot take ownership of or tick an entry.
+// no wire: borrows in-process registrations for one listener invocation.
+// exhaustive: private fields prevent mods from constructing an editor.
+pub struct CustomSpawners<'a> {
+    owner: &'static str,
+    earlier: &'a [RegisteredCustomSpawner],
+    edits: &'a mut SpawnerEdits,
+}
+
+impl CustomSpawners<'_> {
+    /// Append an owned spawner at the end of the list. `label` is registration metadata for
+    /// listeners inspecting [`Self::entries`]; it is not used when ticking and need not be unique.
+    pub fn add(&mut self, label: &str, spawner: impl CustomSpawner) {
+        self.edits.added.push(RegisteredCustomSpawner {
+            label: label.into(),
+            spawner: Some(Box::new(spawner)),
+            owner: CallbackOwner::for_mod(self.owner),
+        });
+    }
+
+    /// Remove the built-in `kind` so it never ticks; return whether it was in the list.
+    pub fn remove(&mut self, kind: SpawnerKind) -> bool {
+        let Some(slot) = self
+            .edits
+            .builtins
+            .iter_mut()
+            .find(|slot| **slot == Some(kind))
+        else {
+            return false;
+        };
+        *slot = None;
+        true
+    }
+
+    /// Whether the built-in `kind` is currently in the list.
+    pub fn contains(&self, kind: SpawnerKind) -> bool {
+        self.edits.builtins.contains(&Some(kind))
+    }
+
+    /// The remaining built-in spawners, in tick order.
+    pub fn builtins(&self) -> impl Iterator<Item = SpawnerKind> + '_ {
+        self.edits.builtins.iter().copied().flatten()
+    }
+
+    /// Inspect all entries in tick order, including objects added by earlier listeners.
+    /// The zero-based position in this iterator can be passed to [`Self::remove_at`].
+    pub fn entries(&self) -> impl Iterator<Item = CustomSpawnerEntry<'_>> + '_ {
+        self.builtins().map(CustomSpawnerEntry::Builtin).chain(
+            self.earlier
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !self.edits.removed.contains(i))
+                .map(|(_, entry)| entry.description())
+                .chain(
+                    self.edits
+                        .added
+                        .iter()
+                        .map(RegisteredCustomSpawner::description),
+                ),
+        )
+    }
+
+    /// Remove the entry at `index` from the current list, returning whether one was present.
+    /// As with a vector, later entries shift for subsequent edits. No callable is returned.
+    pub fn remove_at(&mut self, index: usize) -> bool {
+        let builtin_count = self.builtins().count();
+        let Some(index) = index.checked_sub(builtin_count) else {
+            if let Some(slot) = self
+                .edits
+                .builtins
+                .iter_mut()
+                .filter(|slot| slot.is_some())
+                .nth(index)
+            {
+                *slot = None;
+                return true;
+            }
+            return false;
+        };
+        let mut earlier = (0..self.earlier.len()).filter(|i| !self.edits.removed.contains(i));
+        let earlier_count = self.earlier.len() - self.edits.removed.len();
+        if let Some(i) = earlier.nth(index) {
+            self.edits.removed.push(i);
+            return true;
+        }
+        let index = index - earlier_count;
+        if index < self.edits.added.len() {
+            drop(self.edits.added.remove(index));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Total number of built-in and registered spawners currently in the list.
+    pub fn len(&self) -> usize {
+        self.builtins().count() + self.earlier.len() - self.edits.removed.len()
+            + self.edits.added.len()
+    }
+
+    /// Whether there are no spawners in the current list.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl fmt::Debug for CustomSpawners<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.entries()).finish()
+    }
+}
+
+struct SpawnerEdits {
+    builtins: [Option<SpawnerKind>; 5],
+    removed: Vec<usize>,
+    added: Vec<RegisteredCustomSpawner>,
+}
+
+/// Engine storage for one level's built-ins and registered custom spawners.
+// no wire: owns a level's native spawner objects.
+// hidden: mods only receive the borrowed registration editor.
+#[doc(hidden)]
+#[non_exhaustive]
+pub struct CustomSpawnerList {
+    builtins: [Option<SpawnerKind>; 5],
+    /// The ordered tail, lent to the tick loop without borrowing the game through a callback.
+    pub registered: Vec<RegisteredCustomSpawner>,
+}
+
+impl CustomSpawnerList {
+    /// Start with Sunrise's existing built-in order for the Overworld; elsewhere start empty.
+    pub fn new(overworld: bool) -> Self {
+        use SpawnerKind::*;
+        Self {
+            builtins: [WanderingTrader, Patrol, Cat, VillageSiege, Phantom]
+                .map(|kind| overworld.then_some(kind)),
+            registered: Vec::new(),
+        }
+    }
+
+    /// Remaining built-in spawners, copied to allow ticking without a borrow of the list.
+    pub fn builtins(&self) -> impl Iterator<Item = SpawnerKind> + use<> {
+        self.builtins.into_iter().flatten()
+    }
+
+    /// Run one registration listener and commit only its accepted edits. Prior objects stay
+    /// owned by the level throughout the call, so a refusal cannot remove or replace them.
+    pub(crate) fn edit(&mut self, owner: &'static str, listener: impl FnOnce(CustomSpawners<'_>)) {
+        let mut edits = SpawnerEdits {
+            builtins: self.builtins,
+            removed: Vec::new(),
+            added: Vec::new(),
+        };
+        if !CallbackOwner::call_hook(
+            crate::HookId::ModifyCustomSpawners,
+            owner,
+            "modify_custom_spawners",
+            || {
+                listener(CustomSpawners {
+                    owner,
+                    earlier: &self.registered,
+                    edits: &mut edits,
+                });
+            },
+        ) {
+            return;
+        }
+        self.builtins = edits.builtins;
+        if !edits.removed.is_empty() {
+            edits.removed.sort_unstable();
+            let mut removed = edits.removed.into_iter().peekable();
+            let mut index = 0;
+            self.registered.retain(|_| {
+                let keep = removed.next_if_eq(&index).is_none();
+                index += 1;
+                keep
+            });
+        }
+        self.registered.extend(edits.added);
+    }
+}
+
+/// One level-owned mod spawner with its own callback owner and poison state.
 // no wire: owns a server-side spawner object and its process-local mod identity.
-// hidden: the game ticks registered spawners; mods register through CustomSpawners::add.
+// hidden: only the game ticks registered spawners.
 #[doc(hidden)]
 #[non_exhaustive]
 pub struct RegisteredCustomSpawner {
+    label: Box<str>,
     spawner: Option<Box<dyn CustomSpawner>>,
     owner: CallbackOwner,
 }
 
 impl RegisteredCustomSpawner {
-    /// Whether this spawner's registering mod and concrete type are still enabled this session.
-    pub fn is_enabled(&self) -> bool {
-        self.owner.is_enabled()
+    fn description(&self) -> CustomSpawnerEntry<'_> {
+        CustomSpawnerEntry::Registered {
+            mod_id: self.owner.id(),
+            label: &self.label,
+        }
     }
 
-    /// The registering mod's identifier.
-    pub fn owner_id(&self) -> &'static str {
-        self.owner.id()
+    /// Whether this instance's callback is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.owner.is_enabled()
     }
 
     /// Tick this spawner once as its registering mod.
@@ -105,331 +294,5 @@ impl Drop for RegisteredCustomSpawner {
             self.owner
                 .dispose("custom spawner", "CustomSpawner::drop", spawner);
         }
-    }
-}
-
-/// One step taken from a level's custom spawner list during `ServerLevel#tickCustomSpawners`.
-// no wire: in-process dispatch step carrying a temporarily taken custom spawner.
-// hidden: used only by the game's custom spawner tick loop.
-#[doc(hidden)]
-#[non_exhaustive]
-pub enum CustomSpawnerStep {
-    /// Run a vanilla built-in spawner.
-    Builtin(SpawnerKind),
-    /// Run a mod-owned custom spawner, then return it via [`CustomSpawners::put_back`].
-    Mod(RegisteredCustomSpawner),
-    /// Skip a disabled, poisoned or currently re-entered mod spawner slot.
-    Skip,
-}
-
-/// Engine checkpoint for rolling back one listener's edits to [`CustomSpawners`].
-// no wire: process-local rollback token for one modify_custom_spawners listener.
-// hidden: used only by generated modify_custom_spawners dispatch.
-// exhaustive: private fields prevent downstream construction.
-#[doc(hidden)]
-pub struct CustomSpawnersCheckpoint {
-    total_len: usize,
-    mod_count: usize,
-    builtins: Vec<(usize, SpawnerKind)>,
-}
-
-enum SpawnerSlot {
-    Builtin(SpawnerKind),
-    Mod(Option<RegisteredCustomSpawner>),
-}
-
-/// A level's custom spawners, in the order they tick: what `ModifyCustomSpawnersEvent` edits.
-/// The Overworld starts with vanilla's five built-ins, other dimensions start empty (matching
-/// `MinecraftServer#createLevels`), and a spawner a mod adds goes at the end.
-// no wire: owns per-level server-side CustomSpawner objects.
-// exhaustive: its fields are private, so mods cannot build or destructure it
-pub struct CustomSpawners {
-    entries: Vec<SpawnerSlot>,
-}
-
-impl CustomSpawners {
-    /// The Overworld's initial list: vanilla's five spawners in the order Sunrise ticks them.
-    // hidden: the game builds each level's list, mods only edit it
-    #[doc(hidden)]
-    pub fn vanilla() -> Self {
-        use SpawnerKind::*;
-        Self {
-            entries: [WanderingTrader, Patrol, Cat, VillageSiege, Phantom]
-                .into_iter()
-                .map(SpawnerSlot::Builtin)
-                .collect(),
-        }
-    }
-
-    /// An empty spawner list, as vanilla creates for non-Overworld dimensions
-    /// (`MinecraftServer#createLevels`).
-    // hidden: the game builds each level's list, mods only edit it
-    #[doc(hidden)]
-    pub fn empty() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    /// Appends an owned mod spawner at the end of this level's list. If this spawner type was
-    /// already disabled for the registering mod after an earlier panic this session, `spawner`
-    /// is dropped under the mod's panic containment and not added.
-    pub fn add<S: CustomSpawner>(&mut self, spawner: S) {
-        let mod_id = crate::content::crash::current_native_mod().unwrap_or("unknown");
-        let owner = SPAWNER_OWNERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry((mod_id, TypeId::of::<S>()))
-            .or_insert_with(|| CallbackOwner::for_mod(mod_id))
-            .clone();
-        if !owner.is_enabled() {
-            owner.dispose("custom spawner", "CustomSpawner::drop", spawner);
-            return;
-        }
-        self.entries
-            .push(SpawnerSlot::Mod(Some(RegisteredCustomSpawner {
-                spawner: Some(Box::new(spawner)),
-                owner,
-            })));
-    }
-
-    /// Takes the built-in spawner `kind` out so it never ticks; returns `false` if it was not
-    /// in the list.
-    pub fn remove(&mut self, kind: SpawnerKind) -> bool {
-        let before = self.entries.len();
-        self.entries
-            .retain(|slot| !matches!(slot, SpawnerSlot::Builtin(k) if *k == kind));
-        self.entries.len() != before
-    }
-
-    /// Whether the built-in spawner `kind` is currently in the list.
-    pub fn contains(&self, kind: SpawnerKind) -> bool {
-        self.entries
-            .iter()
-            .any(|slot| matches!(slot, SpawnerSlot::Builtin(k) if *k == kind))
-    }
-
-    /// The built-in spawners remaining in this list, in tick order.
-    pub fn builtins(&self) -> impl Iterator<Item = SpawnerKind> + '_ {
-        self.entries.iter().filter_map(|slot| match slot {
-            SpawnerSlot::Builtin(kind) => Some(*kind),
-            SpawnerSlot::Mod(_) => None,
-        })
-    }
-
-    /// Total number of spawners in the list (built-in plus mod-registered).
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the list contains no spawners.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Snapshot the list before invoking one `modify_custom_spawners` listener so a phase
-    /// refusal rolls back only that listener's removals and additions.
-    // hidden: used only by generated modify_custom_spawners dispatch
-    #[doc(hidden)]
-    pub fn checkpoint(&self) -> CustomSpawnersCheckpoint {
-        let mut mod_count = 0;
-        let mut builtins = Vec::new();
-        for (index, slot) in self.entries.iter().enumerate() {
-            match slot {
-                SpawnerSlot::Builtin(kind) => builtins.push((index, *kind)),
-                SpawnerSlot::Mod(_) => mod_count += 1,
-            }
-        }
-        CustomSpawnersCheckpoint {
-            total_len: self.entries.len(),
-            mod_count,
-            builtins,
-        }
-    }
-
-    /// Restore the list to `checkpoint`, dropping any mod spawners appended after it.
-    // hidden: used only by generated modify_custom_spawners dispatch
-    #[doc(hidden)]
-    pub fn rollback(&mut self, checkpoint: CustomSpawnersCheckpoint) {
-        let mut all_mods = self.entries.drain(..).filter_map(|slot| match slot {
-            SpawnerSlot::Builtin(_) => None,
-            SpawnerSlot::Mod(spawner) => Some(spawner),
-        });
-        let preserved_mods: Vec<Option<RegisteredCustomSpawner>> =
-            all_mods.by_ref().take(checkpoint.mod_count).collect();
-        // Drop any mod spawners added by the rolled-back listener before rebuilding.
-        drop(all_mods);
-
-        let mut restored = Vec::with_capacity(checkpoint.total_len);
-        let mut builtins = checkpoint.builtins.into_iter().peekable();
-        let mut mods = preserved_mods.into_iter();
-        for index in 0..checkpoint.total_len {
-            if builtins.peek().is_some_and(|&(pos, _)| pos == index) {
-                let (_, kind) = builtins.next().unwrap();
-                restored.push(SpawnerSlot::Builtin(kind));
-            } else if let Some(spawner) = mods.next() {
-                restored.push(SpawnerSlot::Mod(spawner));
-            }
-        }
-        self.entries = restored;
-    }
-
-    /// Take the entry at `index` for one tick step without holding a borrow on the list.
-    // hidden: used only by the game's custom spawner tick loop
-    #[doc(hidden)]
-    pub fn take_at(&mut self, index: usize) -> Option<CustomSpawnerStep> {
-        match self.entries.get_mut(index)? {
-            SpawnerSlot::Builtin(kind) => Some(CustomSpawnerStep::Builtin(*kind)),
-            SpawnerSlot::Mod(slot) => {
-                if slot
-                    .as_ref()
-                    .is_some_and(RegisteredCustomSpawner::is_enabled)
-                {
-                    Some(CustomSpawnerStep::Mod(slot.take().unwrap()))
-                } else {
-                    Some(CustomSpawnerStep::Skip)
-                }
-            }
-        }
-    }
-
-    /// Return a mod spawner taken by [`Self::take_at`] back to its slot after ticking.
-    // hidden: used only by the game's custom spawner tick loop
-    #[doc(hidden)]
-    pub fn put_back(&mut self, index: usize, spawner: RegisteredCustomSpawner) {
-        if let Some(SpawnerSlot::Mod(slot @ None)) = self.entries.get_mut(index) {
-            *slot = Some(spawner);
-        }
-    }
-}
-
-impl fmt::Debug for CustomSpawners {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut list = f.debug_list();
-        for slot in &self.entries {
-            match slot {
-                SpawnerSlot::Builtin(kind) => {
-                    list.entry(kind);
-                }
-                SpawnerSlot::Mod(Some(spawner)) => {
-                    list.entry(&format_args!("Mod({})", spawner.owner_id()));
-                }
-                SpawnerSlot::Mod(None) => {
-                    list.entry(&format_args!("Mod(<in-flight>)"));
-                }
-            }
-        }
-        list.finish()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    };
-
-    #[test]
-    fn vanilla_list_keeps_builtin_order_and_empty_starts_empty() {
-        let list = CustomSpawners::vanilla();
-        assert_eq!(list.len(), 5);
-        assert!(!list.is_empty());
-        let builtins: Vec<_> = list.builtins().collect();
-        assert_eq!(
-            builtins,
-            [
-                SpawnerKind::WanderingTrader,
-                SpawnerKind::Patrol,
-                SpawnerKind::Cat,
-                SpawnerKind::VillageSiege,
-                SpawnerKind::Phantom,
-            ]
-        );
-        let empty = CustomSpawners::empty();
-        assert!(empty.is_empty());
-        assert_eq!(empty.len(), 0);
-        assert_eq!(empty.builtins().count(), 0);
-    }
-
-    #[test]
-    fn removing_takes_a_builtin_out_once() {
-        let mut list = CustomSpawners::vanilla();
-        assert!(list.contains(SpawnerKind::Cat));
-        assert!(list.remove(SpawnerKind::Cat));
-        assert!(!list.contains(SpawnerKind::Cat));
-        assert!(!list.remove(SpawnerKind::Cat));
-        assert_eq!(list.len(), 4);
-    }
-
-    #[test]
-    fn checkpoint_and_rollback_restore_builtins_and_drop_added_spawners() {
-        struct DropCounter(Arc<AtomicUsize>);
-        impl CustomSpawner for DropCounter {
-            fn tick(&mut self, _: &mut dyn ServerHost, _: LevelRef, _: bool) {}
-        }
-        impl Drop for DropCounter {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        let kept_drops = Arc::new(AtomicUsize::new(0));
-        let rolled_back_drops = Arc::new(AtomicUsize::new(0));
-        let mut list = CustomSpawners::vanilla();
-        list.add(DropCounter(kept_drops.clone()));
-        assert_eq!(list.len(), 6);
-
-        let checkpoint = list.checkpoint();
-        assert!(list.remove(SpawnerKind::Patrol));
-        assert!(list.remove(SpawnerKind::Phantom));
-        list.add(DropCounter(rolled_back_drops.clone()));
-        assert_eq!(list.len(), 5);
-        assert_eq!(rolled_back_drops.load(Ordering::Relaxed), 0);
-
-        list.rollback(checkpoint);
-        assert_eq!(rolled_back_drops.load(Ordering::Relaxed), 1);
-        assert_eq!(kept_drops.load(Ordering::Relaxed), 0);
-        assert_eq!(list.len(), 6);
-        let builtins: Vec<_> = list.builtins().collect();
-        assert_eq!(
-            builtins,
-            [
-                SpawnerKind::WanderingTrader,
-                SpawnerKind::Patrol,
-                SpawnerKind::Cat,
-                SpawnerKind::VillageSiege,
-                SpawnerKind::Phantom,
-            ]
-        );
-
-        drop(list);
-        assert_eq!(kept_drops.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn take_at_and_put_back_skip_reentered_slots() {
-        let dropped = Arc::new(AtomicBool::new(false));
-        struct Tracked(Arc<AtomicBool>);
-        impl CustomSpawner for Tracked {
-            fn tick(&mut self, _: &mut dyn ServerHost, _: LevelRef, _: bool) {}
-        }
-        impl Drop for Tracked {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Relaxed);
-            }
-        }
-
-        let mut list = CustomSpawners::empty();
-        list.add(Tracked(dropped.clone()));
-        let CustomSpawnerStep::Mod(spawner) = list.take_at(0).unwrap() else {
-            panic!("expected mod spawner at slot 0");
-        };
-        assert!(matches!(list.take_at(0), Some(CustomSpawnerStep::Skip)));
-        list.put_back(0, spawner);
-        assert!(!dropped.load(Ordering::Relaxed));
-        drop(list);
-        assert!(dropped.load(Ordering::Relaxed));
     }
 }

@@ -231,6 +231,33 @@ impl CallbackOwner {
         }
     }
 
+    /// Run a subscribed hook listener, containing refusals and using the existing per-hook
+    /// poison set for real panics. Returns whether the listener's outputs can be committed.
+    pub(crate) fn call_hook(
+        hook: crate::HookId,
+        id: &'static str,
+        operation: &'static str,
+        invoke: impl FnOnce(),
+    ) -> bool {
+        if crate::runtime::poisoned(hook, id) {
+            return false;
+        }
+        let panicked = AtomicBool::new(false);
+        let result = call_opt(
+            id,
+            None,
+            &panicked,
+            "hook",
+            operation,
+            Invocation::Isolated,
+            invoke,
+        );
+        if panicked.into_inner() {
+            crate::runtime::poison(hook, id);
+        }
+        result.is_ok()
+    }
+
     /// Bind a callback owner by mod id, resolving its installed slot when present.
     pub fn for_mod(id: &'static str) -> Self {
         Self {
