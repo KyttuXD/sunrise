@@ -536,13 +536,14 @@ impl Hook {
         }
         if let Some(field) = &api.staged_surface
             && (api.contract != Contract::Listen
-                || scope.is_some()
-                || api.owner.as_ref() == Some(field))
+                || api.owner.as_ref() == Some(field)
+                || scope.as_ref().is_some_and(|scope| scope.key == *field))
         {
             return Err(CatalogError::InvalidHook {
                 hook: name,
-                error: "staged_surface requires a global listener and cannot be the owner filter"
-                    .into(),
+                error:
+                    "staged_surface requires a listener and cannot be its owner filter or Part key"
+                        .into(),
             });
         }
         if api.registration_append == Some(RegistrationAppend::Attributed)

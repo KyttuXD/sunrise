@@ -1878,45 +1878,6 @@ impl super::Game<'_> {
         })
     }
 }
-impl super::GameLevel<'_> {
-    pub(in crate::game) fn api_pre_remove_side_effects(
-        &mut self,
-        pos: sunrise_core::position::BlockPos,
-        state: sunrise_world::registry::BlockStateId,
-        entity: &crate::containers::ModBlockEntity,
-    ) -> super::spill::RemovalOutputs {
-        let mut outputs = super::spill::RemovalOutputs::default();
-        if !mod_api::__private::has_part_hook(mod_api::HookId::PreRemoveSideEffects) {
-            return outputs;
-        }
-        let data = super::native_hooks::ResidentReadBlockEntity::stored(entity);
-        self.native_pre_remove_side_effects(super::native_hooks::PreRemoveSideEffectsCall {
-            pos,
-            state,
-            entity: mod_api::BlockEntityDataView::new(&data),
-            keep_contents: &mut outputs.keep_contents,
-            drops: &mut outputs.drops,
-            spawns: &mut outputs.spawns,
-            experience: &mut outputs.experience,
-        });
-        if outputs.drops.len() > 1024
-            || outputs.spawns.len() > 1024
-            || outputs.experience.len() > 1024
-            || outputs
-                .spawns
-                .iter()
-                .any(|(_, at)| at.iter().any(|v| !v.is_finite()))
-            || outputs
-                .experience
-                .iter()
-                .any(|(_, at)| at.iter().any(|v| !v.is_finite()))
-        {
-            log::warn!("pre_remove_side_effects outputs refused: limit or nonfinite position");
-            return Default::default();
-        }
-        outputs
-    }
-}
 
 #[cfg(test)]
 mod mutable_output_tests {

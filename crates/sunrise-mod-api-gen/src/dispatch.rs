@@ -291,7 +291,7 @@ pub(super) fn emit<'a>(
                     if reference.mutability.is_some() && matches!(*reference.elem, Type::TraitObject(_)))
             {
                 return Err(format!(
-                    "{name}: staged_surface needs a flat global game listener with a mutable registrar or GUI draw surface"
+                    "{name}: staged_surface needs a flat game listener with a mutable surface"
                 ));
             }
             let stage = fresh_name("stage_listener", &mut used);

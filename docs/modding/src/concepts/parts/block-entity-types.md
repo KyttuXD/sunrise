@@ -69,25 +69,28 @@ attachment compound keeps entries it does not know on save), and is read again i
 
 ## Removal side effects
 
-`pre_remove_side_effects` runs on the authoritative server while the block entity and its
-attachments are still readable, before removal's neighbor effects. The level host permits
-reads and random draws, not world writes. Flag 256 skips the call and its outputs.
-Contract version 4 includes removal when a menu callback removes the backing block.
-Do not drop those contents manually in the button callback.
+`pre_remove_side_effects` runs on the authoritative server before the retiring block entity
+is removed and its neighbors are notified. `event.entity` lends the outgoing block entity's
+actual data, and its attachments are still readable through the level host. The host permits
+reads and random draws, not world writes. `UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS` (256) skips
+this callback. It also runs when a menu button callback removes its backing block: don't
+manually drop the container contents in the button callback.
 
-The engine applies the answers after the level write, in this order:
+Use `event.effects` to append contributions. The game applies them before finishing
+removal, in this order:
 
-1. Unless `keep_contents` is true, scatter the base container slots.
-2. Scatter `drops`, a list of `Option<ItemStack>` in slot order. `None` consumes the
-   three position draws of an empty `Containers.dropItemStack` slot but spawns nothing.
-3. Create `spawns`, each `(ItemStack, [f64; 3])`, at that exact position with the default
+1. Scatter the base container slots, unless a Part called `effects.set_keep_contents(true)`.
+2. Scatter each `effects.drop_slot(Some(stack))`; `drop_slot(None)` takes the three
+   position draws of an empty `Containers.dropItemStack` slot without spawning anything.
+3. Create each `effects.spawn_item(stack, position)` at that position with the default
    pickup delay (10 ticks), as a lectern or jukebox does.
-4. Award `experience`, each `(u32, [f64; 3])`, through the furnace's experience-orb path.
+4. Apply each `effects.award_experience(amount, position)` via `ExperienceOrb.award`.
 
-Each list accepts at most 1024 entries; positions must be finite. Invalid list sizes or
-positions refuse the outputs. Stack writes use the usual checked item boundary. The same
-fields go to the Part. A part that answers nothing consumes no random draws.
-The optional drops represent empty slots; wrap a filled slot in `Some`.
+Within each group, contributions keep their order. Stacks use the normal checked item
+boundary and positions must be finite. Each call returns its own error: one refusal
+neither consumes a random draw nor loses any valid contribution. A panicking Part loses
+its contributions without changing earlier Parts' effects. A Part that contributes nothing
+doesn't cause any extra removal effects.
 
 ## Part state
 
