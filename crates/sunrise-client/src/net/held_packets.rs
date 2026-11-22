@@ -1,13 +1,16 @@
 //! Checked publication for the client actor's ordered hold queue.
 use super::*;
 impl Session {
-    /// Send a play packet; silently dropped once the connection is gone,
-    /// and while the server has the connection back in configuration (a
-    /// proxy switching servers). Vanilla's `handleConfigurationStart` clears
-    /// the level before it acknowledges, so no play packet follows the
-    /// acknowledgement; one that did would reach the server as a
-    /// configuration packet, and Velocity drops such a client.
+    /// Send a play packet, logging a refusal when the caller has no result to return.
     pub fn send(&self, packet: play::Serverbound) {
+        if let Err(error) = self.try_send(packet) {
+            eprintln!("[net] send refused: {error}");
+        }
+    }
+
+    /// Queue a play packet on the current writer. No play packet may follow
+    /// the configuration acknowledgement until the connection returns to play.
+    pub fn try_send(&self, packet: play::Serverbound) -> sunrise_protocol::Result<()> {
         if self.debug
             && !matches!(
                 packet,
@@ -18,22 +21,15 @@ impl Session {
         {
             eprintln!("[net] -> {packet:?}");
         }
-        let body = match packet.try_encode() {
-            Ok(body) => body,
-            Err(error) => {
-                eprintln!("[net] send refused: {error}");
-                return;
-            }
-        };
-        let mut writer = self.writer.lock().unwrap();
+        let body = packet.try_encode()?;
+        let writer = self.writer.lock().unwrap();
         if self.configuring.load(Ordering::Relaxed) {
-            return;
+            return Err(sunrise_protocol::Error::new("connection is configuring"));
         }
-        if let Some(w) = writer.as_mut()
-            && w.send(&body).is_err()
-        {
-            w.shutdown();
-        }
+        let writer = writer
+            .as_ref()
+            .ok_or_else(|| sunrise_protocol::Error::new("no connected writer"))?;
+        writer.send(&body).inspect_err(|_| writer.shutdown())
     }
 
     /// Physical connection and play incarnation; changes even after Play/CFG/Play.

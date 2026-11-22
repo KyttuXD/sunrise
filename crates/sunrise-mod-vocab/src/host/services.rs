@@ -118,7 +118,9 @@ pub trait Commands {
     /// console would have printed for it as plain text (`feedback`, as a mod
     /// that answers a remote console wants; Paper's `Server.dispatchCommand`
     /// with a capturing `CommandSender`). The feedback of the command alone is
-    /// kept, never the lines other code logs meanwhile; a call made while
+    /// kept, not public `/say` and `/me` announcements or other lines logged
+    /// meanwhile. Use `success` to check execution and `chat_recipient` to
+    /// observe public delivery attempts. A call made while
     /// another one runs captures its own lines and the outer capture goes on
     /// unchanged. At most 256 lines of 4096 bytes each
     /// come back (a longer line is cut at a character boundary). A command that ran and failed

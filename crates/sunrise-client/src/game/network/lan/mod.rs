@@ -2082,11 +2082,8 @@ impl Game<'_> {
                 HostEvent::RawPayload(delivery) => {
                     self.run_payload(delivery.endpoint, delivery.incoming);
                 }
-                event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
+                event @ (HostEvent::Warn(_) | HostEvent::Error(_)) => {
                     self.lan_log_event(event);
-                }
-                HostEvent::PlayerChat { sender, text } => {
-                    self.lan_player_chatted(sender, &text);
                 }
                 HostEvent::ChatSubmitted {
                     message,
@@ -2165,15 +2162,23 @@ impl Game<'_> {
                     if cancel {
                         continue;
                     }
-                    let mut line = format!("<{name}> {raw}");
                     if text != original {
                         // `withUnsignedContent`: clients show the mod's text,
                         // the signature still covers what was typed.
                         message.unsigned_content =
                             Some(sunrise_client::lan::data::component_nbt(&text.component()));
-                        line = format!("<{name}> {}", text.plain());
                     }
-                    self.lan_broadcast_chat(&message, &bound, line, &name, &text.plain())?;
+                    let shown_name = sunrise_client::scoreboard::comp_text(
+                        &sunrise_client::scoreboard::tag_to_json(&bound.name),
+                    );
+                    let line = Text::translate("chat.type.text", &[shown_name, text.clone()]);
+                    self.lan_broadcast_chat(
+                        (sender, &name),
+                        &text.plain(),
+                        line,
+                        &bound,
+                        super::lan_chat::ChatDelivery::Player(&message),
+                    );
                     self.lan_player_chatted(sender, &raw);
                 }
                 HostEvent::ChatSessionStarted(update) => {
@@ -3563,21 +3568,21 @@ impl Game<'_> {
         let conn = g.conn;
         self.detect_rate_spam(conn, false);
     }
-    /// A hub's chat and log lines: a dedicated server logs them
-    /// (MinecraftServer.logChatMessage, `[Not Secure]` for unsigned or
-    /// expired messages); a LAN host shows the chat.
+    /// `MinecraftServer.logChatMessage`: public chat is logged, not captured as command feedback.
+    pub(super) fn record_public_chat(&mut self, line: Text, secure: bool) {
+        let mark = if secure { "" } else { "[Not Secure] " };
+        if self.is_dedicated_server() {
+            super::dedicated::log_public_chat(&format!("{mark}{}", line.plain()));
+        } else {
+            log::info!("{mark}{}", line.plain());
+            self.player_message(line);
+        }
+    }
+
+    /// Warnings and errors from the hub's validation and connection paths.
     pub(super) fn lan_log_event(&mut self, event: HostEvent) {
         let dedicated = self.is_dedicated_server();
         match event {
-            HostEvent::Chat { line, secure } if dedicated => {
-                let tag = if secure { "" } else { "[Not Secure] " };
-                super::dedicated::log("INFO", &format!("{tag}{line}"));
-            }
-            // Player chat (and `/say`'s or `/me`'s, which are chat messages
-            // too): the host's Chat option decides, as `ChatListener` does
-            // for the guests' packets. Command feedback is a system message
-            // and takes the system-message permission instead.
-            HostEvent::Chat { line, .. } => self.player_message(Text::untrusted(line)),
             HostEvent::Warn(line) if dedicated => super::dedicated::log("WARN", &line),
             HostEvent::Warn(line) => log::warn!("{line}"),
             HostEvent::Error(line) if dedicated => super::dedicated::log("ERROR", &line),

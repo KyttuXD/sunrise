@@ -161,31 +161,33 @@ impl Game<'_> {
         packet: S,
         cauldron: Option<(i64, PendingCauldron)>,
     ) {
-        let Some(remote) = &self.remote else {
-            return;
-        };
+        if let Err(error) = self.try_send_or_hold_play(packet, cauldron) {
+            log::warn!("Play packet refused: {error}");
+        }
+    }
+
+    fn try_send_or_hold_play(
+        &self,
+        packet: S,
+        cauldron: Option<(i64, PendingCauldron)>,
+    ) -> Result<(), String> {
+        let remote = self.remote.as_ref().ok_or("not connected to a server")?;
         let mut holds = self.native_net.holds.borrow_mut();
         holds.sync(self.hold_incarnation());
-        let tracked = cauldron.is_some();
-        if holds.active.is_none() && !tracked {
-            remote.session.send(packet);
-            return;
+        if holds.active.is_none() && cauldron.is_none() {
+            return remote
+                .session
+                .try_send(packet)
+                .map_err(|error| error.to_string());
         }
-        let Some(incarnation) = holds.incarnation else {
-            return;
-        };
-        match packet.try_encode() {
-            Ok(body) => {
-                let result = holds.queue(HeldPlay { body, cauldron }, |packet| {
-                    packet.publish(remote, incarnation)
-                });
-                if tracked && let Err(error) = result {
-                    log::warn!("cauldron use request was not published: {error:?}");
-                }
-            }
-            Err(error) if tracked => log::warn!("cauldron use request encoding failed: {error}"),
-            Err(_) => {}
-        }
+        let incarnation = holds.incarnation.ok_or("connection is not in play")?;
+        let body = packet.try_encode().map_err(|error| error.to_string())?;
+        holds
+            .queue(HeldPlay { body, cauldron }, |packet| {
+                packet.publish(remote, incarnation)
+            })
+            .map(|_| ())
+            .map_err(|error| format!("held packet could not be sent: {error:?}"))
     }
     pub(in crate::game) fn publish_mod_held(
         &self,
@@ -226,11 +228,23 @@ impl Game<'_> {
     /// `Connection.send` for the game's play packets. True if there is a remote
     /// and `client_packet_send` did not cancel; publication can still be held or refused.
     pub(in crate::game) fn send_play(&self, packet: S) -> bool {
-        let queued = self.remote.is_some() && !self.client_packet_send_canceled(&packet);
-        if queued {
-            self.send_or_hold_play(packet, None);
+        if self.remote.is_none() || self.client_packet_send_canceled(&packet) {
+            return false;
         }
-        queued
+        self.send_or_hold_play(packet, None);
+        true
+    }
+
+    /// False means a listener intentionally canceled the send; a local failure is an error.
+    pub(in crate::game) fn try_send_play(&self, packet: S) -> Result<bool, String> {
+        if self.remote.is_none() {
+            return Err("not connected to a server".to_owned());
+        }
+        if self.client_packet_send_canceled(&packet) {
+            return Ok(false);
+        }
+        self.try_send_or_hold_play(packet, None)?;
+        Ok(true)
     }
 }
 

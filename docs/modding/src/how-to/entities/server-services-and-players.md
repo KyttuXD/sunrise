@@ -96,17 +96,17 @@ borrowed service.
 
 ## Chat lines and respawn
 
-Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
-hook is asked once for each placed receiver, the sender included, before any of them is sent the line, with the
-`sender`, `sender_name`, the `message` players see and the `recipient`. Set `hidden` and that one receiver is sent
-nothing, no chat index and no pending acknowledgement; the others still get the line signed as it was sent, so its
-signature verifies for them. It covers a player's chat after `server_chat` let it through and `/say` and `/me`, signed
-or not. For a non-player `/say` source, such as the console or a command block, `sender` is the nil UUID (`0`) and
-`sender_name` is the source's display name. Whispers (`/msg`) are not public and are not asked. It is not a second
-`server_chat`: that hook is heard once for a typed line and cancels it for everyone, while this one is per receiver
-and also covers `/say` and `/me`. With no listener nothing is asked or allocated. A `/say` requested inside
-`chat_recipient` fails instead of reentering the hook or sending an unchecked line. The server's log keeps every
-broadcast line, hidden or not.
+Use `chat_recipient` for per-player filtering of public chat, such as an ignore list. It is asked once per placed
+network player whose chat settings accept player chat, including an eligible sender. Return `Flow::Cancel` to omit
+that copy; it doesn't advance the recipient's chat index or add an acknowledgement. The other recipients still
+get the original signed body. The server logs and checks trust first, then asks immediately before each eligible
+delivery; a disconnected player is not asked. The hook covers player chat accepted by `server_chat` and public
+commands `/say` and `/me`, after selector resolution and decoration, not private `/msg` deliveries. For a non-player source such as
+the console or a command block, `sender` is zero and `sender_name` is the source's display name.
+
+A public message sent by a command inside `chat_recipient` goes through the same hook again. Use the event's
+sender and text to distinguish it from the line that prompted your command. A listener that panics is reported
+and disabled for the session without canceling other listeners' decisions or unrelated deliveries.
 
 `player.respawn(host)` makes the same request as the client's Respawn button (`PERFORM_RESPAWN`). Call it outside
 player hooks, for example from `server_tick`. `Ok(())` means the request was accepted, not that the replacement is
@@ -250,7 +250,7 @@ sets how many players may be on. Server only.
 | Call | Behavior |
 |---|---|
 | `console_line` hook | Observe operator-visible log lines on dedicated and integrated servers: `level` (`INFO`, `WARN` or `ERROR`), `thread`, and `message` without the log prefix. The tap starts on the first tick with an enabled listener; when idle it does not capture lines, allocate a queue or take the queue lock. Lines from every logging thread arrive in order on the server thread at the start of the next tick. The queue keeps the oldest 4096 lines and drops newer ones until it drains. `dropped` gives the count of those newer lines on the batch's first event, and is zero on its other events. Each line keeps up to 8192 bytes of `message` and 128 of `thread` at a character boundary. The listener cannot change the log, and its own log calls are not captured. Paper and NeoForge have no matching event. |
-| `host.commands().run_command_with_output(line)` | `run_command` with its feedback kept, on the same run path and source (the console's: one leading slash dropped, permission level 4, from the overworld's spawn): the same `CommandResult` as `entity.run_command_with_output` (see [server commands](server-commands.md)), with `success` (what `run_command` returns) and `feedback`, what the console would print as plain text, at most 256 lines of 4096 bytes each (further lines dropped, a longer one cut at a character boundary). Only the command's own feedback is kept, never lines logged meanwhile. A command that ran and failed is `success: false` with its message in `feedback`. A line run where no server is open to players, or empty once whitespace and the slash are dropped, runs nothing and is `success: false` with no feedback, as `run_command` answers `false` for it; there is no refusal type, as nothing here tells those apart from a failure that `run_command` cannot. The dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`) are not reached and answer as a command that failed. A call made while another one runs captures its own feedback; the outer capture keeps what it had. |
+| `host.commands().run_command_with_output(line)` | `run_command` with its feedback kept, on the same run path and source (the console's: one leading slash dropped, permission level 4, from the overworld's spawn): the same `CommandResult` as `entity.run_command_with_output` (see [server commands](server-commands.md)), with `success` (what `run_command` returns) and `feedback`, what the console would print as plain text, at most 256 lines of 4096 bytes each (further lines dropped, a longer one cut at a character boundary). Only the command's own feedback is kept, never public `/say` and `/me` announcements or lines logged meanwhile. Use `success` to check execution and `chat_recipient` to observe public delivery attempts. A command that ran and failed is `success: false` with its message in `feedback`. A line run where no server is open to players, or empty once whitespace and the slash are dropped, runs nothing and is `success: false` with no feedback, as `run_command` answers `false` for it; there is no refusal type, as nothing here tells those apart from a failure that `run_command` cannot. The dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`) are not reached and answer as a command that failed. A call made while another one runs captures its own feedback; the outer capture keeps what it had. |
 | `host.server_max_players()` / `host.server_set_max_players(n)` | Paper's `Server.getMaxPlayers` and `setMaxPlayers`: the live cap used for logins and shown in the server list. The read is `None` where no server is open to players. The write takes effect on the next login and ping; already-connected players stay, and operators flagged `bypassesPlayerLimit` on a dedicated server still bypass the cap. Zero refuses every login without the bypass. This call does not write `server.properties` (a restart restores its value; the management protocol's `max_players` setting does write it). Refuses without changing anything with `PlayerLimitRefusal::NotOpen` or `TooHigh { maximum }` for a limit above `i32::MAX`, vanilla's `int`. |
 ## Inventory, ender chest and saved data
 

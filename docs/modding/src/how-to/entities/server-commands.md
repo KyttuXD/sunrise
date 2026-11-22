@@ -131,7 +131,9 @@ The returned `CommandResult` has `success` (the same bool as `run_command`) and
 `feedback`: the success and failure lines received by the source, in order, as
 plain text. The player still receives those lines in chat, and operator
 notifications follow the normal rules. Feedback silenced by the source or game
-rules is absent. Other entities use a silent source and return no lines; a stale,
+rules is absent. Public `/say` and `/me` announcements are delivered as chat, not included in `feedback`. Use
+`success` to check whether the command ran and `chat_recipient` to observe the public delivery attempts.
+Other entities use a silent source and return no lines; a stale,
 removed or unavailable entity returns `success: false` and no lines. Teleports to
 another level still happen at the next tick's start. `run_command(host, line, level)` keeps its bool return.
 

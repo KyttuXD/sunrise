@@ -34,7 +34,9 @@ pub trait EntityActionsBackendMut {
     /// Runs the command exactly as `EntityRef::run_command` does, at the supplied
     /// `level`, returning whether it ran and the success and failure lines its
     /// source received, in order, as plain text. The player's chat still receives
-    /// those lines and operators are notified under the same rules. Another
+    /// those lines and operators are notified under the same rules. Public `/say`
+    /// and `/me` announcements are not feedback; observe them with `chat_recipient`.
+    /// Use `CommandResult.success` to check execution. Another
     /// entity's silent source returns no lines. A stale, removed or unavailable
     /// entity returns unsuccessful with no lines. Cross-level teleports retain
     /// the same next-tick handling. Pass the player's permission level to run

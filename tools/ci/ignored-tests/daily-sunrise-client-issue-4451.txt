@@ -2293,10 +2293,8 @@ sunrise-client game::remote::rider_tick_tests::a_riders_move_takes_the_look_of_t
 sunrise-client game::remote::tables::tests::a_servers_block_and_item_tags_replace_the_games lib daily resources
 sunrise-client game::remote::tests::a_servers_client_takes_its_speed_from_the_attributes_not_the_effect lib daily resources
 sunrise-client game::remote::tests::block_alias_survival_consumption_and_client_prediction lib daily resources
-sunrise-client game::remote::tests::chat_event_tests::mod_chat_needs_a_joined_player_and_what_the_chat_option_allows lib daily resources
 sunrise-client game::remote::tests::chat_event_tests::mods_replace_and_cancel_received_chat lib daily resources
 sunrise-client game::remote::tests::chat_window_and_input_tests::a_mod_chat_line_shows_locally_and_sends_nothing lib daily resources
-sunrise-client game::remote::tests::chat_window_and_input_tests::mod_open_chat_fills_the_box_only_over_the_world lib daily resources
 sunrise-client game::remote::tests::click_ending_tests::an_end_crystal_click_on_a_block_ends_there lib daily resources
 sunrise-client game::remote::tests::click_ending_tests::flint_and_steel_use_on_ends_the_click lib daily resources
 sunrise-client game::remote::tests::client_attributes_tests::update_attributes_answers_the_local_players_living_reads lib daily resources

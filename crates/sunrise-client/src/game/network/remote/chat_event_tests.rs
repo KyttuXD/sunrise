@@ -96,23 +96,128 @@ fn mods_replace_and_cancel_received_chat() {
 
 #[test]
 #[ignore = "daily"]
-fn mod_chat_needs_a_joined_player_and_what_the_chat_option_allows() {
-    with_game(|game| {
-        game.options.execution_role = ExecutionRole::Client;
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "/warp spawn").is_err());
-        let (client, _server) = Pipe::pair();
-        game.connect_local(client, "ChatTest").unwrap();
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "/warp spawn").is_err());
-        game.remote.as_mut().unwrap().joined = true;
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "  ").is_err());
-        // Full, then Commands Only, then Hidden.
-        game.settings.chat_visibility = 0;
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "hello").is_ok());
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "/warp spawn").is_ok());
-        game.settings.chat_visibility = 1;
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "hello").is_err());
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "/warp spawn").is_ok());
-        game.settings.chat_visibility = 2;
-        assert!(mod_api::prelude::NetworkClientHost::send_chat(game, "/warp spawn").is_err());
+fn direct_chat_sends_through_play_without_the_chat_screen_gate() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+    use mod_api::{
+        ClientChatEvent, ClientHost, CommandEvent, RegisterClientCommandsEvent,
+        prelude::NetworkClientHost,
+    };
+    use sunrise_client::net::Session;
+    use sunrise_protocol::packets::play::Serverbound as S;
+
+    if run_fresh_cases(
+        "game::remote::tests::chat_event_tests::direct_chat_sends_through_play_without_the_chat_screen_gate",
+        "SUNRISE_DIRECT_CHAT_CASE",
+        &["send"],
+    ) {
+        return;
+    }
+    struct Broken;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Broken {
+        fn client_chat(&self, _: &mut dyn ClientHost, event: &mut ClientChatEvent<'_>) -> Flow {
+            event.message.clear();
+            panic!("broken chat handler");
+        }
+    }
+    struct Listener;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Listener {
+        fn client_chat(&self, _: &mut dyn ClientHost, event: &mut ClientChatEvent<'_>) -> Flow {
+            match event.original_message {
+                "vetoed" => return Flow::Cancel,
+                "cleared" => event.message.clear(),
+                "rewrite" => event.message.push_str(" and send"),
+                _ => {}
+            }
+            Flow::Continue
+        }
+
+        fn register_client_commands(
+            &self,
+            _: &mut dyn ClientHost,
+            event: &mut RegisterClientCommandsEvent<'_>,
+        ) {
+            event.commands.push(mod_api::Command::new("local_only"));
+        }
+
+        fn command(&self, _: &mut dyn ClientHost, event: &mut CommandEvent<'_>) -> Flow {
+            if event.command == "local_only" {
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        }
+    }
+    let mods = vec![
+        mod_api::ModEntry::new("broken_chat", Box::new(Broken)),
+        mod_api::ModEntry::new("rewrite_chat", Box::new(Listener)),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_client_game(|game| {
+            assert!(NetworkClientHost::send_chat(game, "/warp spawn").is_err());
+            let (client, _server) = Pipe::pair();
+            game.connect_local(client, "ChatTest").unwrap();
+            assert!(NetworkClientHost::send_chat(game, "/warp spawn").is_err());
+            let remote = game.remote.as_mut().unwrap();
+            remote.joined = true;
+            remote.session = Session::replay("no writer");
+            game.mark_message_processed(&[42; 256], true);
+            assert!(NetworkClientHost::send_chat(game, "not connected").is_err());
+
+            let (session, mut peer, _keepalive) = Session::packet_hold_probe();
+            game.remote.as_mut().unwrap().session = session;
+            let mut packet = || {
+                let (id, body) = peer.recv().unwrap();
+                S::decode(id, &body).unwrap()
+            };
+            let history = game.ui.chat.recent.len();
+            game.settings.chat_visibility = 2; // Hidden: UI is blocked, direct play send isn't.
+            game.handle_chat_input("not sent by UI");
+            game.handle_chat_input("/not_sent_by_ui");
+            NetworkClientHost::send_chat(game, "vetoed").unwrap();
+            NetworkClientHost::send_chat(game, "cleared").unwrap();
+            NetworkClientHost::send_chat(game, "/local_only").unwrap();
+            let overflow = "😀".repeat(129);
+            assert!(
+                NetworkClientHost::send_chat(game, &overflow)
+                    .unwrap_err()
+                    .contains("UTF-16")
+            );
+            NetworkClientHost::send_chat(game, "rewrite").unwrap();
+            let S::Chat(chat) = packet() else {
+                panic!("expected the rewritten chat packet")
+            };
+            assert_eq!(chat.message, "rewrite and send");
+            assert_eq!(
+                chat.last_seen.offset, 1,
+                "no rejected or canceled send advanced the window"
+            );
+            assert_eq!(game.ui.chat.recent.len(), history);
+            assert_eq!(
+                mod_api::__private::take_hook_panics(),
+                [mod_api::__private::HookPanicReport {
+                    mod_id: "broken_chat",
+                    hook: "client_chat",
+                }]
+            );
+
+            NetworkClientHost::send_chat(game, "/warp spawn").unwrap();
+            assert_eq!(
+                packet(),
+                S::ChatCommand(play::ChatCommand {
+                    command: "warp spawn".to_owned()
+                })
+            );
+
+            game.settings.chat_visibility = 0;
+            game.handle_chat_input(&overflow);
+            let S::Chat(chat) = packet() else {
+                panic!("expected screen-normalized chat")
+            };
+            assert_eq!(chat.message, "😀".repeat(128));
+            assert_eq!(chat.last_seen.offset, 0);
+        });
     });
 }
