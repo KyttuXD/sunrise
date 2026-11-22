@@ -11,12 +11,12 @@ mod tests;
 
 mod releases;
 use sunrise_mod_package::index::{
+    FILE_HOST,
     registry::{self, Sources},
     resolve::uninstallable_versions,
 };
 
-/// Where this registry publishes its release assets and its site (icons and screenshots).
-const RELEASE: &str = "https://github.com/sunrise-org/sunrise-mods/releases/download/";
+/// Where the registry publishes icons and screenshots.
 const SITE: &str = "https://sunrise-org.github.io/sunrise-mods/";
 
 const USAGE: &str = "usage: cargo sunrise-mod registry build <checkout> --files <dir> --out <index.json> [--release <url>] [--site <url>] [--generated <time>] [--counts <counts.json>] [--releases <file>] [--nightly <file>] [--nightly-build <file>] [--sdk-data <dir>]
@@ -94,7 +94,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
             let mut index = registry::build(&Sources {
                 registry: Path::new(checkout),
                 files: Path::new(files),
-                release: release.unwrap_or(RELEASE),
+                release: release.unwrap_or(FILE_HOST),
                 site: site.unwrap_or(SITE),
                 generated,
                 releases: releases.as_deref(),
@@ -141,7 +141,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
             let sources = Sources {
                 registry: checkout,
                 files: files.unwrap_or(checkout),
-                release: RELEASE,
+                release: FILE_HOST,
                 site: SITE,
                 generated: String::new(),
                 releases: releases.as_deref(),
@@ -261,7 +261,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
                 &Sources {
                     registry: checkout,
                     files,
-                    release: RELEASE,
+                    release: FILE_HOST,
                     site: SITE,
                     generated: String::new(),
                     releases: releases.as_deref(),

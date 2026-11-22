@@ -195,10 +195,9 @@ fn signed_build_appends_to_the_source_and_supplies_exact_fit_on_its_own_sdk() {
     assert!(version.verdicts[RELEASE_TAG].targets.is_empty());
     let fixture =
         Index::parse(&fs::read_to_string(fixtures().join("schema-1.json")).unwrap()).unwrap();
-    assert_eq!(
-        version.native_binaries,
-        fixture.project(ID).unwrap().versions[0].native_binaries
-    );
+    let published = &fixture.project(ID).unwrap().versions[0];
+    assert_eq!(version.file.url, published.file.url);
+    assert_eq!(version.native_binaries, published.native_binaries);
 
     let version = &mut with
         .projects

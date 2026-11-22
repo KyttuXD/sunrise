@@ -57,7 +57,7 @@ The checks `sunrise_mod_package::index::check_file` makes, which [mod-index.md](
 specifies. A launcher that installs from the index makes the same ones:
 
 1. **Where it comes from.** An `https://` address of the index's shape: a registry release
-   (`https://github.com/horizon-rust/horizon-mods/releases/download/...`) or a release asset of the project's own
+   (`https://github.com/sunrise-org/sunrise-mods/releases/download/...`) or a release asset of the project's own
    GitHub repository. Anything else is refused.
 2. **Size and SHA-256.** The size is at most 64 MiB and equals the entry's, and the SHA-256 is the entry's.
    Check both before the file reaches the game folder.

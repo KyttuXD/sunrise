@@ -55,9 +55,11 @@ For a first listing, you can also try an index containing just your project once
 
 ```sh
 cargo sunrise-mod registry build 'target/sunrise-mod/publish' --files 'target/sunrise-mod/publish/files' \
-  --out 'target/sunrise-mod/publish/index.json' \
-  --release 'https://github.com/sunrise-org/sunrise-mods/releases/download/'
+  --out 'target/sunrise-mod/publish/index.json'
 ```
+
+Leave `--release` unset to use the Sunrise registry's release mirror, the same one used during
+registry validation. Pass `--release <base-url>` only when building an index for a different mirror, such as a test registry.
 
 ## 3. Open the pull request
 
