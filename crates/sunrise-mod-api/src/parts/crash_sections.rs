@@ -1,5 +1,6 @@
 //! Concrete crash report line authoring; the frozen list stays in the vocabulary.
 use super::*;
+use mod_vocab::__private::game::CallbackOwner;
 
 impl CrashSectionsRegistrar for PartRegistrar {
     fn crash_section(&mut self, label: &str, section: Arc<dyn CrashSection>) {
@@ -13,11 +14,9 @@ impl CrashSectionsRegistrar for PartRegistrar {
 impl PartRegistrar {
     fn add_crash_line(&mut self, label: Option<Box<str>>, section: Arc<dyn CrashSection>) {
         self.parts.crash_sections.push(CrashSectionPart {
-            mod_id: self.mod_id,
-            mod_index: self.mod_index,
+            owner: CallbackOwner::for_mod(self.mod_id),
             label,
             section,
-            panicked: Default::default(),
         });
     }
 }
@@ -67,7 +66,7 @@ mod tests {
             .parts
             .crash_sections
             .iter()
-            .map(|line| (line.mod_id, line.label.clone(), line.section.value()))
+            .map(|line| (line.owner.id(), line.label.clone(), line.section.value()))
             .collect();
         assert_eq!(
             lines,

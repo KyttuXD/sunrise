@@ -360,31 +360,22 @@ const MOD_LINES_WAIT: Duration = Duration::from_secs(2);
 /// Preserves the full diagnostic text while marking every physical continuation line with `prefix`
 /// so no line of a mod's label, value, header or error can resemble another source's report entry.
 fn prefix_continuations(text: &str, prefix: &str) -> String {
-    if !text.contains([
+    const BREAKS: [char; 7] = [
         '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
-    ]) {
+    ];
+    if !text.contains(BREAKS) {
         return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
-        match ch {
-            '\r' => {
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
+        out.push(ch);
+        if BREAKS.contains(&ch) {
+            // Keep CRLF intact and insert a single marker after the whole separator.
+            if ch == '\r' && chars.next_if_eq(&'\n').is_some() {
                 out.push('\n');
-                out.push_str(prefix);
             }
-            '\n' => {
-                out.push('\n');
-                out.push_str(prefix);
-            }
-            '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => {
-                out.push(ch);
-                out.push_str(prefix);
-            }
-            _ => out.push(ch),
+            out.push_str(prefix);
         }
     }
     out
@@ -942,7 +933,7 @@ pub fn debug_crash_after() -> Option<std::time::Duration> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use mod_api::__private::game::*;
+    use mod_api::__private::game::RegistrationContextNew;
 
     /// The panic hook is process-wide: tests that swap it hold this so they never overlap.
     static PANIC_HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1558,14 +1549,14 @@ pub(crate) mod tests {
         use std::sync::Arc;
 
         let label_head = format!("{} cache", "é".repeat(2050));
-        let label = format!("{label_head}\n\tSunrise Version: forged label");
+        let label = format!("{label_head}\r\n\tSunrise Version: forged label");
         let value_head = "雪".repeat(1400);
         let value = format!(
             "{value_head}\n\tSunrise Version: forged\r\n\tother_mod: status: ok\r\tlast cache: 3"
         );
         let header_head = "!".repeat(4100);
         let header = format!(
-            "{header_head}\nTime: 1999-01-01 00:00:00\nother_mod: forged\n// forged comment"
+            "{header_head}\rTime: 1999-01-01 00:00:00\u{2028}other_mod: forged\n// forged comment"
         );
         let detail = value.clone();
         let banner = header.clone();
@@ -1591,19 +1582,33 @@ pub(crate) mod tests {
                     ..report()
                 };
                 let expected_key = format!(
-                    "diagnostics: {label_head}\n\t\tdiagnostics | \tSunrise Version: forged label"
+                    "diagnostics: {label_head}\r\n\t\tdiagnostics | \tSunrise Version: forged label"
                 );
                 let expected_value = format!(
-                    "{value_head}\n\t\tdiagnostics | \tSunrise Version: forged\n\t\tdiagnostics | \tother_mod: status: ok\n\t\tdiagnostics | \tlast cache: 3"
+                    "{value_head}\n\t\tdiagnostics | \tSunrise Version: forged\r\n\t\tdiagnostics | \tother_mod: status: ok\r\t\tdiagnostics | \tlast cache: 3"
                 );
                 let expected_header = format!(
-                    "diagnostics: {header_head}\n\tdiagnostics | Time: 1999-01-01 00:00:00\n\tdiagnostics | other_mod: forged\n\tdiagnostics | // forged comment"
+                    "diagnostics: {header_head}\r\tdiagnostics | Time: 1999-01-01 00:00:00\u{2028}\tdiagnostics | other_mod: forged\n\tdiagnostics | // forged comment"
                 );
-                assert_eq!(
-                    report.details,
-                    [(expected_key.clone(), expected_value.clone())]
-                );
+                let [(key, marked_value)] = report.details.as_slice() else {
+                    panic!("expected one crash detail, got {:?}", report.details);
+                };
+                assert_eq!(key, &expected_key);
+                assert_eq!(marked_value, &expected_value);
                 let text = report.text();
+                let (marked_header, _) = text
+                    .strip_prefix("---- Minecraft Crash Report ----\ndiagnostics: ")
+                    .unwrap()
+                    .split_once("\n// ")
+                    .unwrap();
+                assert_eq!(marked_header.replace("\tdiagnostics | ", ""), header);
+                assert_eq!(
+                    key.strip_prefix("diagnostics: ")
+                        .unwrap()
+                        .replace("\t\tdiagnostics | ", ""),
+                    label
+                );
+                assert_eq!(marked_value.replace("\t\tdiagnostics | ", ""), value);
                 assert!(text.starts_with(&format!(
                     "---- Minecraft Crash Report ----\n{expected_header}\n// "
                 )));
@@ -1611,7 +1616,7 @@ pub(crate) mod tests {
                 assert!(text.contains(&format!("\t{expected_key}: {expected_value}\n")));
                 // No physical line from the mod's header or detail can pose as an engine or other
                 // mod's entry.
-                assert!(!text.lines().any(|line| {
+                assert!(!text.split(['\n', '\r', '\u{2028}']).any(|line| {
                     matches!(
                         line,
                         "Time: 1999-01-01 00:00:00"
@@ -1715,6 +1720,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_panicking_crash_section_disables_only_itself() {
+        use mod_api::__private::{HookPanicReport, take_hook_panics};
         use std::sync::Arc;
 
         // Keep the process-wide panic hook and error-toast queue away from concurrent tests.
@@ -1802,15 +1808,22 @@ pub(crate) mod tests {
                         assert_eq!(good.0, "diagnostics: healthy");
                         assert_eq!(good.1, "still here");
 
-                        let notices = take_callback_panic_notices();
-                        assert_eq!(notices.len(), 2);
-                        assert_eq!(notices[0].mod_id, "diagnostics");
-                        assert_eq!(notices[0].operation, "crash_header");
-                        assert_eq!(notices[1].mod_id, "diagnostics");
-                        assert_eq!(notices[1].operation, "crash_section");
+                        assert_eq!(
+                            take_hook_panics(),
+                            [
+                                HookPanicReport {
+                                    mod_id: "diagnostics",
+                                    hook: "crash_header",
+                                },
+                                HookPanicReport {
+                                    mod_id: "diagnostics",
+                                    hook: "crash_section",
+                                },
+                            ]
+                        );
                         assert_eq!(mod_headers().as_slice(), std::slice::from_ref(good_header));
                         assert_eq!(mod_lines(false).as_slice(), std::slice::from_ref(good));
-                        assert!(take_callback_panic_notices().is_empty());
+                        assert!(take_hook_panics().is_empty());
                     },
                 );
             },

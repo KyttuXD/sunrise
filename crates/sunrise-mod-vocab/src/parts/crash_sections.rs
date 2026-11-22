@@ -2,6 +2,7 @@
 //! Crash report lines a mod adds (NeoForge's `CrashReportCallables`), computed when a report is
 //! written rather than when they are registered.
 use super::*;
+use crate::callback_owner::CallbackOwner;
 
 /// A crash report line a mod computes when the report is written: NeoForge's
 /// `ISystemReportExtender`, `ICrashReportHeader`, or a `registerCrashCallable` supplier with its
@@ -30,12 +31,10 @@ pub trait CrashSectionsRegistrar {
 // no wire: process-local callback and panic state.
 #[derive(Clone)]
 pub(crate) struct CrashSectionPart {
-    pub(crate) mod_id: &'static str,
-    pub(crate) mod_index: usize,
+    pub(crate) owner: CallbackOwner,
     /// The detail's label; `None` for a header line.
     pub(crate) label: Option<Box<str>>,
     pub(crate) section: Arc<dyn crate::CrashSection>,
-    pub(crate) panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Enabled crash report entries in registration order: the mod's `[mod] id`, label
@@ -57,20 +56,11 @@ pub fn mod_crash_lines(
     installed()
         .into_iter()
         .flat_map(|installed| &installed.keys.crash_sections)
-        .filter(move |line| {
-            line.label.is_none() == headers
-                && crate::callback_owner::enabled(line.mod_index, &line.panicked)
-        })
+        .filter(move |line| line.label.is_none() == headers && line.owner.is_enabled())
         .map(move |line| {
-            (line.mod_id, line.label.as_deref(), move || {
-                crate::callback_owner::call(
-                    line.mod_id,
-                    line.mod_index,
-                    &line.panicked,
-                    "crash report",
-                    operation,
-                    || line.section.value(),
-                )
+            (line.owner.id(), line.label.as_deref(), move || {
+                line.owner
+                    .call("crash report", operation, || line.section.value())
             })
         })
 }
