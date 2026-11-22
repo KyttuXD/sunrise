@@ -675,7 +675,7 @@ impl DatapackRegistryDeclaration {
     /// [`Self::decode_entry`] with the top-level keys `ignored` belonging to the caller
     /// (`neoforge:conditions`, the engine's), not to the schema. A map's pairs keep the order the
     /// file wrote them in.
-    pub fn decode_entry_ignoring(
+    pub(super) fn decode_entry_ignoring(
         &self,
         text: &str,
         ignored: &[&str],
@@ -683,10 +683,13 @@ impl DatapackRegistryDeclaration {
         // serde_json's own recursion limit (128) bounds nesting before any value is built.
         let json: Json = serde_json::from_str(text)
             .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
-        let Json::Object(object) = json else {
+        let Json::Object(mut object) = json else {
             return Err(DatapackDecodeError::NotAnObject);
         };
-        decode_fields(&self.fields, &object, ignored, "").map(|values| DatapackEntry { values })
+        if !ignored.is_empty() {
+            object.retain(|(key, _)| !ignored.contains(&key.as_str()));
+        }
+        decode_fields(&self.fields, &object, &[], "").map(|values| DatapackEntry { values })
     }
 }
 
@@ -1537,6 +1540,23 @@ pub(crate) mod tests {
             DatapackDecodeError::UnknownField {
                 field: "neoforge:conditions".into()
             }
+        );
+
+        let mut overlapping = decl;
+        overlapping.fields.push(DatapackField::with_default(
+            "neoforge:conditions",
+            DatapackFieldKind::Bool,
+            DatapackValue::Bool(true),
+        ));
+        let entry = overlapping
+            .decode_entry_ignoring(
+                r#"{"neoforge:conditions": [], "tiers": {}}"#,
+                &["neoforge:conditions"],
+            )
+            .unwrap();
+        assert_eq!(
+            entry.get("neoforge:conditions"),
+            Some(&DatapackValue::Bool(true))
         );
     }
 
