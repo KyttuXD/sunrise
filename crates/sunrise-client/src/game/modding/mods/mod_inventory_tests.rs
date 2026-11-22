@@ -363,20 +363,49 @@ fn content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_j
     }
 
     let fixture = Fixture::new("dropped-remainder-inventory");
-    let consumer_manifest = "id='consumer'\nname='consumer'\nversion='1'\napi='0.2'\nside='both'\n";
+    let consumer_manifest = "id='consumer'\nname='consumer'\nversion='1'\napi='0.2'\nside='both'\ncapabilities=['registries']\n";
     let consumer_path = fixture.0.join("consumer.smod");
     std::fs::write(
         &consumer_path,
         sunrise_mod_package::Package::write_files(
             consumer_manifest,
             &[(
-                "data/consumer/sunrise/items/filled.json",
-                br#"{"crafting_remainder":"minecraft:foreign_bucket"}"#,
+                "data/consumer/sunrise/item/filled.json",
+                br#"{"template":"minecraft:bucket","crafting_remainder":"minecraft:foreign_bucket"}"#,
             )],
         )
         .unwrap(),
     )
     .unwrap();
+    let consumer = sunrise_mod_package::Package::read(&consumer_path).unwrap();
+    let read =
+        sunrise_mod_package::Content::read_declaring(&consumer_path, &consumer.manifest, &[])
+            .unwrap();
+    assert_eq!(read.items.len(), 1);
+    assert_eq!(read.items[0].id, "consumer:filled");
+    assert_eq!(
+        read.items[0].crafting_remainder.as_deref(),
+        Some("minecraft:foreign_bucket")
+    );
+
+    struct DropLog;
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+    impl log::Log for DropLog {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if record.level() == log::Level::Warn && record.args().to_string().contains(
+                "mod consumer content not loaded: consumer:filled: crafting_remainder \"minecraft:foreign_bucket\" is not a vanilla item",
+            ) {
+                DROPPED.store(true, Ordering::Relaxed);
+            }
+        }
+        fn flush(&self) {}
+    }
+    log::set_logger(&DropLog).unwrap();
+    log::set_max_level(log::LevelFilter::Warn);
+
     let survivor_manifest = "id='survivor'\nname='survivor'\nversion='1'\napi='0.2'\nside='both'\n";
     let survivor_path = fixture.0.join("survivor.smod");
     std::fs::write(
@@ -387,7 +416,7 @@ fn content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_j
     let sources = ModsState {
         selected: vec![
             SelectedPackage {
-                package: sunrise_mod_package::Package::read(&consumer_path).unwrap(),
+                package: consumer,
                 path: consumer_path,
             },
             SelectedPackage {
@@ -404,6 +433,17 @@ fn content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_j
         || {
             let overlay = content_overlay(&base, &sources, &fixture.0.join("jars")).unwrap();
             assert!(overlay.announce);
+            assert!(
+                DROPPED.load(Ordering::Relaxed),
+                "consumer must reach remainder admission"
+            );
+            assert!(overlay.mods.iter().any(|m| {
+                m.id == "owner_mod"
+                    && m.content
+                        .items
+                        .iter()
+                        .any(|item| item.id == "minecraft:foreign_bucket")
+            }));
             assert!(!overlay.mods.iter().any(|m| m.id == "consumer"));
             assert!(!overlay.content_mods.iter().any(|m| m.id == "consumer"));
             assert!(!overlay.announced.iter().any(|m| m.id == "consumer"));
