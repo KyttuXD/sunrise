@@ -171,14 +171,13 @@ pub(super) fn overlay_files(
 impl FnState {
     /// The enabled world packs in resource priority order, highest first: a
     /// later selected pack overrides an earlier one (`PackRepository` order).
-    pub(in crate::game) fn pack_sources(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = &sunrise_assets::resource_source::ResourceSource> {
-        self.enabled
-            .iter()
-            .rev()
-            .filter_map(|id| self.packs.iter().find(|pack| &pack.id == id))
-            .map(|pack| pack.source())
+    pub(in crate::game) fn enabled_packs_highest_first(&self) -> impl Iterator<Item = &DataPack> {
+        self.enabled.iter().rev().filter_map(|id| {
+            self.packs
+                .iter()
+                .find(|pack| &pack.id == id)
+                .map(Arc::as_ref)
+        })
     }
 
     /// The highest enabled world pack providing this data resource.
@@ -186,7 +185,8 @@ impl FnState {
         &self,
         name: &str,
     ) -> Option<sunrise_assets::resource_source::Resource> {
-        self.pack_sources()
+        self.enabled_packs_highest_first()
+            .map(DataPack::source)
             .find(|source| source.contains(name))
             .map(|source| {
                 sunrise_assets::resource_source::Resource::file(source.clone(), name.to_owned())
@@ -1267,8 +1267,7 @@ impl Game<'_> {
             _ => None,
         };
         let selected = self.selected_packs();
-        let previous_enabled = self.fns.enabled.clone();
-        let previous_vanilla_disabled = self.cmds.vanilla_disabled;
+        let mut enabled = self.fns.enabled.clone();
         // `DataPackCommand.listAvailablePacks`: a feature pack the world's
         // features do not cover is not available.
         let mut available: Vec<String> = std::iter::once("vanilla".to_owned())
@@ -1338,9 +1337,8 @@ impl Game<'_> {
                         &[&name, &missing.join(", ")],
                     ));
                 }
-                if name == "vanilla" {
-                    self.cmds.vanilla_disabled = false;
-                } else {
+                let vanilla_disabled = name != "vanilla" && self.cmds.vanilla_disabled;
+                if name != "vanilla" {
                     let existing = match ctx.get("existing") {
                         Some(Arg::Str(e)) => Some(e.clone()),
                         _ => None,
@@ -1348,7 +1346,7 @@ impl Game<'_> {
                     let position = if ctx.has("first") {
                         0
                     } else if let Some(e) = &existing {
-                        let Some(i) = self.fns.enabled.iter().position(|p| p == e) else {
+                        let Some(i) = enabled.iter().position(|p| p == e) else {
                             return Err(err("commands.datapack.unknown", &[e]));
                         };
                         if ctx.has("before") { i } else { i + 1 }
@@ -1365,15 +1363,15 @@ impl Game<'_> {
                     {
                         0
                     } else {
-                        self.fns.enabled.len()
+                        enabled.len()
                     };
-                    self.fns.enabled.insert(position, name.clone());
+                    enabled.insert(position, name.clone());
                 }
                 self.feedback(Text::translate(
                     "commands.datapack.modify.enable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change(previous_enabled, previous_vanilla_disabled)?;
+                self.apply_pack_change(&enabled, vanilla_disabled)?;
                 Ok(self.selected_packs().len() as i32)
             }
             _ => {
@@ -1411,16 +1409,13 @@ impl Game<'_> {
                         &[&name, &missing.join(", ")],
                     ));
                 }
-                if name == "vanilla" {
-                    self.cmds.vanilla_disabled = true;
-                } else {
-                    self.fns.enabled.retain(|p| p != &name);
-                }
+                let vanilla_disabled = name == "vanilla" || self.cmds.vanilla_disabled;
+                enabled.retain(|p| p != &name);
                 self.feedback(Text::translate(
                     "commands.datapack.modify.disable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change(previous_enabled, previous_vanilla_disabled)?;
+                self.apply_pack_change(&enabled, vanilla_disabled)?;
                 Ok(self.selected_packs().len() as i32)
             }
         }
@@ -1428,11 +1423,7 @@ impl Game<'_> {
     /// `ReloadCommand.reloadPacks`: no message of its own. It reloads the
     /// server's data as `/reload` does (`reload_datapacks`), the content
     /// tables with the functions.
-    fn apply_pack_change(
-        &mut self,
-        previous_enabled: Vec<String>,
-        previous_vanilla_disabled: bool,
-    ) -> R<()> {
+    fn apply_pack_change(&mut self, enabled: &[String], vanilla_disabled: bool) -> R<()> {
         // One resolve for the store and the tables, as `/reload`'s is: the
         // timers already in memory stay, and none come back from disk
         // (`ServerFunctionManager` keeps its queue over a pack change).
@@ -1442,45 +1433,27 @@ impl Game<'_> {
             &self.options.resources,
             &self.pack.data_source,
             &self.pack.data_changes,
-            self.cmds.vanilla_disabled,
+            vanilla_disabled,
             &self.level.enabled_features,
             &additional,
         );
-        stack.enabled =
-            datapack::selected_ids(stack.packs.iter().map(Arc::as_ref), &self.fns.enabled);
-        let prepared = match self.prepare_pack_condition_reload(&stack) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.fns.enabled = previous_enabled;
-                self.cmds.vanilla_disabled = previous_vanilla_disabled;
-                return Err(Self::reload_failure(error));
-            }
-        };
+        stack.enabled = datapack::selected_ids(stack.packs.iter().map(Arc::as_ref), enabled);
+        let prepared = self
+            .prepare_pack_condition_reload(&stack)
+            .map_err(Self::reload_failure)?;
         let root = self.options.resources.clone();
-        let context = match self.prepare_loop_context(&root) {
-            Ok(context) => context,
-            Err(error) => {
-                self.fns.enabled = previous_enabled;
-                self.cmds.vanilla_disabled = previous_vanilla_disabled;
-                return Err(Self::reload_failure(ReloadStageError::DataSource(
-                    error.to_string(),
-                )));
-            }
-        };
-        let world = match self.prepare_world_reload(&stack, &root) {
-            Ok(world) => world,
-            Err(error) => {
-                self.fns.enabled = previous_enabled;
-                self.cmds.vanilla_disabled = previous_vanilla_disabled;
-                return Err(Self::reload_failure(ReloadStageError::DataSource(
-                    error.to_string(),
-                )));
-            }
-        };
+        let context = self.prepare_loop_context(&root).map_err(|error| {
+            Self::reload_failure(ReloadStageError::DataSource(error.to_string()))
+        })?;
+        let world = self.prepare_world_reload(&stack, &root).map_err(|error| {
+            Self::reload_failure(ReloadStageError::DataSource(error.to_string()))
+        })?;
         prepared.bind_loot(&world);
+        // `MinecraftServer.reloadResources`: publish the selection only after preparation succeeds.
         self.install_loop_context(context);
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
+        self.cmds.vanilla_disabled = vanilla_disabled;
         self.pack.additional_data = additional.into();
         self.save_datapack_settings();
         self.fns.load_pending = true;

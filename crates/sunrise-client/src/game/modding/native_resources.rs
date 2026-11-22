@@ -1,49 +1,55 @@
-//! Resource reads for native mods through the game's selected pack stacks.
+//! Resource readers for native mods through the game's selected pack stacks.
 use super::Game;
-use mod_api::{Identifier, PackType};
-use sunrise_assets::resource_source::read_winning_resource;
+use mod_api::{Identifier, PackType, ResourceOpenError};
+use std::io::Read;
+use sunrise_assets::resource_source::ResourcePath;
 
 impl Game<'_> {
-    /// The winning bytes of `identifier` in `pack_type`'s stack. Client
-    /// resources are already resolved into `PackResources::source` by
-    /// `packs::resources` (filters and overrides included); server data is
-    /// resolved here in vanilla's priority order: the selected world packs
-    /// (later overrides earlier), then the mods' content root, then the game's
-    /// own data unless `minecraft:vanilla` is disabled.
-    pub(in crate::game) fn resource(
+    pub(in crate::game) fn open_resource(
         &self,
         pack_type: PackType,
         identifier: &Identifier,
-    ) -> Option<Vec<u8>> {
-        let (top, sources) = if pack_type == PackType::ClientResources {
-            // A server has no client resource stack to read; only a client
-            // selects the asset packs this asks about.
-            if !self.options.execution_role.is_client() {
-                return None;
+    ) -> Result<Option<Box<dyn Read + '_>>, ResourceOpenError> {
+        match pack_type {
+            PackType::ClientResources if self.options.execution_role.is_client() => {
+                let name = format!("assets/{}/{}", identifier.namespace(), identifier.path());
+                let Some(path) = ResourcePath::new(&name) else {
+                    return Ok(None);
+                };
+                self.pack.source.raw_pack_files().open_resource(path)
             }
-            ("assets", vec![&self.pack.source])
-        } else {
-            let mut sources = Vec::new();
-            if !self.cmds.vanilla_disabled {
-                sources.push(&self.pack.data_source);
+            PackType::ServerData => {
+                let world = self
+                    .options
+                    .execution_role
+                    .is_logical_server()
+                    .then(|| self.fns.enabled_packs_highest_first())
+                    .into_iter()
+                    .flatten();
+                let lower = std::iter::once(&self.pack.data_changes)
+                    .chain((!self.cmds.vanilla_disabled).then_some(&self.pack.data_source));
+                sunrise_client::datapack::open_resource(world, lower, identifier)
             }
-            sources.push(&self.pack.data_changes);
-            if self.options.execution_role.is_logical_server() {
-                sources.extend(self.fns.pack_sources().rev());
-            }
-            ("data", sources)
-        };
-        let name = format!("{top}/{}/{}", identifier.namespace(), identifier.path());
-        read_winning_resource(&sources, &name, mod_api::MAX_RESOURCE_BYTES)
+            _ => return Ok(None),
+        }
+        .map_err(ResourceOpenError::Io)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::prelude::Host;
+    use std::collections::BTreeMap;
+    use sunrise_assets::resource_source::{Resource, ResourceSource};
 
-    fn id(value: &str) -> Identifier {
-        Identifier::parse(value).unwrap()
+    fn read(host: &dyn Host, pack_type: PackType, name: &str) -> Option<Vec<u8>> {
+        let mut reader = host
+            .open_resource(pack_type, &Identifier::parse(name).unwrap())
+            .unwrap()?;
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        Some(bytes)
     }
 
     #[test]
@@ -70,15 +76,13 @@ mod tests {
             assert!(game.run_command("datapack enable \"file/low\" first"));
             assert!(game.run_command("datapack enable \"file/high\" last"));
             assert_eq!(
-                game.resource(PackType::ServerData, &id("demo:value/order.json"))
-                    .as_deref(),
+                read(game, PackType::ServerData, "demo:value/order.json").as_deref(),
                 Some(b"high".as_slice())
             );
             assert!(game.run_command("datapack disable \"file/low\""));
             assert!(game.run_command("datapack enable \"file/low\" last"));
             assert_eq!(
-                game.resource(PackType::ServerData, &id("demo:value/order.json"))
-                    .as_deref(),
+                read(game, PackType::ServerData, "demo:value/order.json").as_deref(),
                 Some(b"low".as_slice())
             );
         });
@@ -88,25 +92,27 @@ mod tests {
     #[ignore = "daily"]
     fn server_data_reads_vanilla_files_and_refuses_missing_ones() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            let bytes = game
-                .resource(
-                    PackType::ServerData,
-                    &id("minecraft:enchantment/sharpness.json"),
-                )
-                .expect("the game's own data pack holds sharpness");
+            let bytes = read(
+                game,
+                PackType::ServerData,
+                "minecraft:enchantment/sharpness.json",
+            )
+            .expect("the game's own data pack holds sharpness");
             assert!(bytes.starts_with(b"{"));
             assert!(
-                game.resource(
+                read(
+                    game,
                     PackType::ServerData,
-                    &id("minecraft:enchantment/not_a_real_enchantment.json")
+                    "minecraft:enchantment/not_a_real_enchantment.json"
                 )
                 .is_none()
             );
             // A server has no selected client asset stack to read.
             assert!(
-                game.resource(
+                read(
+                    game,
                     PackType::ClientResources,
-                    &id("minecraft:models/block/stone.json")
+                    "minecraft:models/block/stone.json"
                 )
                 .is_none()
             );
@@ -116,15 +122,13 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn server_data_reads_mod_content_and_lets_it_override_the_game() {
-        use std::collections::BTreeMap;
-        use sunrise_assets::resource_source::{Resource, ResourceSource};
         super::super::native_entity_refs::tests::with_game(|game| {
-            let vanilla = game
-                .resource(
-                    PackType::ServerData,
-                    &id("minecraft:enchantment/sharpness.json"),
-                )
-                .expect("the game's own data pack holds sharpness");
+            let vanilla = read(
+                game,
+                PackType::ServerData,
+                "minecraft:enchantment/sharpness.json",
+            )
+            .expect("the game's own data pack holds sharpness");
             game.pack.data_changes = ResourceSource::indexed(BTreeMap::from([
                 (
                     "data/demo/machines/furnace.json".to_owned(),
@@ -137,18 +141,18 @@ mod tests {
             ]));
             // A mod's own data file resolves through its content layer.
             assert_eq!(
-                game.resource(PackType::ServerData, &id("demo:machines/furnace.json"))
-                    .as_deref(),
-                Some(&b"{\"mod\":true}"[..])
+                read(game, PackType::ServerData, "demo:machines/furnace.json").as_deref(),
+                Some(b"{\"mod\":true}".as_slice())
             );
             // A later layer in the stack overrides the game's own data.
             assert_eq!(
-                game.resource(
+                read(
+                    game,
                     PackType::ServerData,
-                    &id("minecraft:enchantment/sharpness.json")
+                    "minecraft:enchantment/sharpness.json"
                 )
                 .as_deref(),
-                Some(&b"{\"pack\":true}"[..])
+                Some(b"{\"pack\":true}".as_slice())
             );
             assert_ne!(vanilla, b"{\"pack\":true}");
         });
@@ -158,17 +162,18 @@ mod tests {
     #[ignore = "daily"]
     fn client_assets_read_the_winning_pack_file() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
-            let bytes = game
-                .resource(
-                    PackType::ClientResources,
-                    &id("minecraft:models/block/stone.json"),
-                )
-                .expect("the vanilla asset pack holds stone's model");
+            let bytes = read(
+                game,
+                PackType::ClientResources,
+                "minecraft:models/block/stone.json",
+            )
+            .expect("the vanilla asset pack holds stone's model");
             assert!(bytes.starts_with(b"{"));
             assert!(
-                game.resource(
+                read(
+                    game,
                     PackType::ClientResources,
-                    &id("minecraft:models/block/not_a_real_model.json")
+                    "minecraft:models/block/not_a_real_model.json"
                 )
                 .is_none()
             );

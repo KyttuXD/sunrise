@@ -71,14 +71,24 @@ succeeds. A [failed registration callback](../../concepts/load-phases.md#reloadi
 of its listeners, edges or retained entries; later mods can still register. This applies to the
 initial client load as well as later client and server reloads.
 
-Outside a listener, `host.resource(pack_type, &identifier)` reads one file from the selected
-stack: `PackType::ServerData` takes `mymod:machines/furnace.json` from `data/`, and
+Use `host.open_resource(pack_type, &identifier)` on a `Host` or `ReloadContext` to open one file
+from the published stack: `PackType::ServerData` takes `mymod:machines/furnace.json` from `data/`, and
 `PackType::ClientResources` takes `mymod:models/block/furnace.json` from `assets/`. As with
-`ResourceManager.getResource`, the highest selected pack that supplies the file wins; filters,
-a world's datapacks and a mod's own root data all apply. The answer is the winning bytes, or
-`None` for a missing, unreadable or over-64-MiB file. Use a reload listener for a whole folder
-or for parsing at reload time; a single read does not reload packs. Directory-pack
-symlinks follow vanilla pack behavior: linked resource files are read through the pack.
+`ResourceManager.getResource`, each selected pack in priority order first gets to supply its own
+file, then its `filter.block` can hide lower files. Opening reads the original file, not a merged
+file such as the language table. It never reloads packs or substitutes a lower pack's file if
+the winner fails.
+
+- `Ok(Some(reader))` gives a `std::io::Read` scoped to the host's published pack generation. Pass it
+  to a streaming decoder, or call `reader.read_to_end(&mut bytes)` to fill a `Vec<u8>` when you need owned bytes.
+  Opening does not load the whole resource or set a file-size limit; apply your codec's own limits
+  when reading. The reader can report I/O or archive decoding errors, and the consumer reports its
+  own format errors.
+- `Ok(None)` means no matching resource or pack stack, including a resource hidden by a pack filter.
+- `Err(error)` means lookup or opening failed. `ResourceOpenError::Io` preserves the original error.
+
+Use a reload listener to process a whole folder or parse resources when the packs change. Directory
+packs follow vanilla's symlink behavior: linked resource files are read through the pack.
 
 ## Embedded data
 

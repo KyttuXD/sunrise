@@ -1,12 +1,15 @@
 //! Data packs (`<world>/datapacks`: folders and zips with `pack.mcmeta`) and
 //! the parts of them commands use: `.mcfunction` functions (with macros and
 //! line continuation), function tags and predicates.
-use crate::resource_source::ResourceSource;
+use crate::packs::{Filter, filter_of};
+use crate::resource_source::{ResourcePath, ResourceSource};
+use sunrise_core::identifier::Identifier;
 use sunrise_world::loot::RecipePriorityLayer;
 mod slot_sources;
 use crate::zip::Zip;
 use std::{
     collections::BTreeMap,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 use {
@@ -23,6 +26,7 @@ pub struct DataPack {
     /// `file/<name>` in `/datapack` and level.dat.
     pub id: String,
     source: ResourceSource,
+    filter: Vec<Filter>,
     /// Presentation and selection supplied by an additional repository source.
     pub selection: Option<crate::pack_screen::PackInfo>,
 }
@@ -38,8 +42,14 @@ impl DataPack {
         Self {
             id,
             source,
+            filter: Vec::new(),
             selection: None,
         }
+    }
+    /// Retain the pack's parsed `filter.block` section for this generation.
+    pub fn with_filter(mut self, filter: Vec<Filter>) -> Self {
+        self.filter = filter;
+        self
     }
     pub fn source(&self) -> &ResourceSource {
         &self.source
@@ -101,21 +111,51 @@ impl DataPack {
 impl DataPack {
     /// A mod's passive data layer, without reading the archive's pack metadata.
     pub fn mod_layer(id: String, source: &crate::packs::Source) -> std::io::Result<Self> {
-        Ok(Self {
-            id,
-            source: source.open()?,
-            selection: None,
-        })
+        Ok(Self::from_source(id, source.open()?))
     }
     /// The built-in `vanilla` pack: the game's own data directory.
     pub fn builtin(root: &Path) -> Self {
-        DataPack {
-            id: "vanilla".into(),
-            source: ResourceSource::directory(root.to_path_buf()),
-            selection: None,
-        }
+        Self::from_source(
+            "vanilla".into(),
+            ResourceSource::directory(root.to_path_buf()),
+        )
     }
 }
+/// Open one resource from the published selection, highest-priority pack first.
+/// The passive content and vanilla sources are below every selected pack.
+pub fn open_resource<'a>(
+    selected: impl IntoIterator<Item = &'a DataPack>,
+    lower: impl IntoIterator<Item = &'a ResourceSource>,
+    id: &Identifier,
+) -> io::Result<Option<Box<dyn Read + 'a>>> {
+    let name = format!("data/{}/{}", id.namespace(), id.path());
+    let Some(path) = ResourcePath::new(&name) else {
+        return Ok(None);
+    };
+    for pack in selected {
+        if let Some(reader) = pack.source.open_resource(path)? {
+            return Ok(Some(reader));
+        }
+        if pack
+            .filter
+            .iter()
+            .any(|filter| filter.matches(id.namespace(), id.path()))
+        {
+            log::warn!(
+                "Resource {id} not found, but was filtered by pack {}",
+                pack.id
+            );
+            return Ok(None);
+        }
+    }
+    for source in lower {
+        if let Some(reader) = source.open_resource(path)? {
+            return Ok(Some(reader));
+        }
+    }
+    Ok(None)
+}
+
 /// Compare repository IDs as `PackRepository`'s TreeMap compares its keys.
 pub fn compare_ids(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
@@ -155,23 +195,33 @@ pub(crate) fn discover_folder_with(
                 continue;
             }
         };
-        if path.is_dir() && folder_metadata_present(&path) {
-            packs.push(DataPack {
-                id: format!("file/{name}"),
-                source: ResourceSource::directory(path),
-                selection: None,
-            });
+        if path.is_dir()
+            && let Some(meta) = folder_metadata(&path)
+        {
+            packs.push(
+                DataPack::from_source(format!("file/{name}"), ResourceSource::directory(path))
+                    .with_filter(filter_of(&meta)),
+            );
         } else if path
             .file_name()
             .is_some_and(|n| n.to_string_lossy().ends_with(".zip"))
             && let Ok(z) = Zip::open(&path)
             && z.contains("pack.mcmeta")
         {
-            packs.push(DataPack {
-                id: format!("file/{name}"),
-                source: ResourceSource::opened_archive(z),
-                selection: None,
-            });
+            let filter = match z
+                .read("pack.mcmeta")
+                .and_then(|bytes| crate::packs::first_json(&bytes).map_err(std::io::Error::other))
+            {
+                Ok(meta) => filter_of(&meta),
+                Err(error) => {
+                    log::error!("Failed to read the filter section from data pack {name}: {error}");
+                    Vec::new()
+                }
+            };
+            packs.push(
+                DataPack::from_source(format!("file/{name}"), ResourceSource::opened_archive(z))
+                    .with_filter(filter),
+            );
         }
     }
     packs.sort_by(|a, b| compare_ids(&a.id, &b.id));
@@ -180,18 +230,11 @@ pub(crate) fn discover_folder_with(
 /// `Pack.readPackMetadata`: even its fallback codec requires a pack section
 /// and description. Keep this folder gate separate from format compatibility
 /// and the existing interpretation of the description component.
-fn folder_metadata_present(path: &Path) -> bool {
-    let Some(meta) = std::fs::read(path.join("pack.mcmeta"))
+fn folder_metadata(path: &Path) -> Option<serde_json::Value> {
+    let meta = std::fs::read(path.join("pack.mcmeta"))
         .ok()
-        .and_then(|bytes| crate::packs::parse_meta(&bytes))
-    else {
-        return false;
-    };
-    meta.as_object()
-        .and_then(|root| root.get("pack"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|pack| pack.get("description"))
-        .is_some_and(|description| !description.is_null())
+        .and_then(|bytes| crate::packs::parse_meta(&bytes))?;
+    (!meta["pack"]["description"].is_null()).then_some(meta)
 }
 /// The resources root's built-in feature packs (`ServerPacksSource`
 /// scanning the game's `data/minecraft/datapacks`): every folder with a
@@ -206,12 +249,12 @@ pub fn feature_packs(resources: &Path) -> Vec<DataPack> {
     for e in entries.flatten() {
         let path = e.path();
         if path.join("pack.mcmeta").exists() {
-            let mut pack = DataPack {
-                id: e.file_name().to_string_lossy().into_owned(),
-                source: ResourceSource::directory(path),
-                selection: None,
-            };
+            let mut pack = DataPack::from_source(
+                e.file_name().to_string_lossy().into_owned(),
+                ResourceSource::directory(path),
+            );
             let meta = pack.mcmeta();
+            pack.filter = filter_of(&meta);
             let (description, description_style) =
                 crate::packs::component_root(&meta["pack"]["description"]);
             let name = format!("dataPack.{}.name", pack.id);
@@ -1364,6 +1407,97 @@ pub fn worldgen_overrides_over(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn selected_data_pack_filter_hides_lower_files_but_not_its_own() {
+        use crate::resource_source::Resource;
+        use std::io::Write;
+        let scratch = tempfile::tempdir().unwrap();
+        let low = scratch.path().join("low");
+        let high = scratch.path().join("high");
+        for pack in [&low, &high] {
+            fs::create_dir_all(pack.join("data/demo/value")).unwrap();
+        }
+        fs::write(
+            low.join("pack.mcmeta"),
+            br#"{"pack":{"description":"low"}}"#,
+        )
+        .unwrap();
+        let meta = serde_json::json!({
+            "pack": {"description": "high"},
+            "filter": {"block": [
+                {"namespace": "^demo$", "path": "^value/"},
+                {"namespace": "^minecraft$", "path": "^test[.]txt$"},
+            ]},
+        })
+        .to_string();
+        let own = "data/demo/value/own.json";
+        fs::write(high.join("pack.mcmeta"), &meta).unwrap();
+        fs::write(low.join("data/demo/value/hidden.json"), b"lower world pack").unwrap();
+        fs::write(high.join(own), b"higher world pack").unwrap();
+        let content = ResourceSource::indexed(BTreeMap::from([
+            (
+                "data/demo/value/mod.json".into(),
+                Resource::bytes(b"mod pack".to_vec()),
+            ),
+            (
+                "data/demo/test.txt".into(),
+                Resource::bytes(b"unfiltered".to_vec()),
+            ),
+        ]));
+        let vanilla = ResourceSource::indexed(BTreeMap::from([(
+            "data/minecraft/test.txt".into(),
+            Resource::bytes(b"vanilla pack".to_vec()),
+        )]));
+        let read = |selected: &[&DataPack], id: &str| {
+            let mut reader = open_resource(
+                selected.iter().copied(),
+                [&content, &vanilla],
+                &Identifier::parse(id).unwrap(),
+            )
+            .unwrap()?;
+            let mut text = String::new();
+            reader.read_to_string(&mut text).unwrap();
+            Some(text)
+        };
+        let check_selected = || {
+            let selected = discover_folder(scratch.path());
+            let [high, low] = selected.as_slice() else {
+                panic!("expected both world packs")
+            };
+            for (id, expected) in [
+                ("demo:value/hidden.json", "lower world pack"),
+                ("demo:value/mod.json", "mod pack"),
+                ("minecraft:test.txt", "vanilla pack"),
+            ] {
+                assert_eq!(read(&[low], id).as_deref(), Some(expected));
+                assert!(read(&[high, low], id).is_none());
+            }
+            assert_eq!(
+                read(&[high, low], "demo:value/own.json").as_deref(),
+                Some("higher world pack")
+            );
+            assert_eq!(
+                read(&[high, low], "demo:test.txt").as_deref(),
+                Some("unfiltered")
+            );
+        };
+        check_selected();
+        // A selected ZIP has the same filter semantics as a folder.
+        fs::remove_dir_all(high).unwrap();
+        let mut zip =
+            zip::ZipWriter::new(fs::File::create(scratch.path().join("high.zip")).unwrap());
+        for (name, bytes) in [
+            ("pack.mcmeta", meta.as_bytes()),
+            (own, b"higher world pack"),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        check_selected();
+    }
 
     #[test]
     fn neoforge_recipe_priorities_keep_pack_order_and_read_errors() {

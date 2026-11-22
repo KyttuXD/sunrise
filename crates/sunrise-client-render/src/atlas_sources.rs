@@ -1306,6 +1306,7 @@ mod tests {
                 (merged.to_owned(), vec![bytes("one"), bytes("two")]),
             ]
             .into(),
+            None,
         );
         let seen = Arc::new(Mutex::new(Vec::new()));
         let kept: Arc<Mutex<Option<Arc<dyn ResourceReader>>>> = Arc::default();
