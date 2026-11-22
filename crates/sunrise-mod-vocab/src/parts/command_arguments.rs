@@ -3,9 +3,10 @@
 use super::*;
 use std::sync::Arc;
 
-/// A command argument type a mod registered, and the id a `Command` usage names.
+/// A command argument type a mod registered: its owner, the id a `Command` usage names, and its type.
 #[derive(Clone)]
 pub(crate) struct CommandArgumentInfo {
+    pub(crate) owner: crate::callback_owner::CallbackOwner,
     pub(crate) id: Box<str>,
     pub(crate) argument: Arc<dyn crate::CommandArgumentType>,
 }

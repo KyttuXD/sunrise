@@ -883,6 +883,24 @@ fn a_registered_token_reads_as_a_whole_word_before_the_vanilla_letter() {
     assert_eq!(error.key, "argument.entity.selector.unknown");
 }
 #[test]
+fn a_registered_token_accepts_brigadier_unquoted_characters() {
+    let mut reg = reg();
+    reg.selector_tokens
+        .push(sunrise_client_core::registries::SelectorToken {
+            name: "Allies_1.0+team-a".into(),
+            tooltip: "test.selector.allies_v1".into(),
+            players_only: false,
+            limit: 4,
+            sort: "furthest",
+        });
+    let mut r = Reader::new("@Allies_1.0+team-a[limit=2]");
+    let s = selector::parse(&mut r, &reg, true).unwrap();
+    assert_eq!(s.token.as_deref(), Some("Allies_1.0+team-a"));
+    assert_eq!((s.limit, s.sort), (2, Sort::Furthest));
+    assert!(s.include_entities);
+    assert!(!r.can_read());
+}
+#[test]
 fn a_uuid_selects_by_entity_uuid() {
     // EntitySelectorParser.parseNameOrUUID: a UUID sets entityUUID and
     // includesEntities, never playerName (which findEntities checks first).
@@ -1729,14 +1747,15 @@ fn a_custom_argument_parses_completes_and_keeps_its_id() {
                 Err(Text::literal(format!("unknown machine `{input}`")))
             }
         },
-        |_, prefix| {
+        |_, prefix, _| {
             ["press", "furnace"]
                 .into_iter()
                 .filter(|machine| machine.starts_with(prefix))
-                .map(|text| CustomSuggestion {
+                .map(|text| Suggestion {
+                    range: (0, prefix.len()),
                     text: text.to_owned(),
                     tooltip: None,
-                    replace_start: None,
+                    int_value: None,
                 })
                 .collect()
         },
@@ -1784,7 +1803,7 @@ fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
         "example:note",
         CustomArgumentKind::Greedy,
         |input| Ok(input.trim().to_owned()),
-        |_, _| Vec::new(),
+        |_, _, _| Vec::new(),
     ));
     let mut dispatcher = Dispatcher::new();
     let note = dispatcher.literal(0, "note");
@@ -1828,44 +1847,58 @@ fn an_ask_server_node_replies_with_the_token_range_when_it_has_no_suggestion_of_
 }
 
 #[test]
-fn an_expanded_suggestion_past_the_packet_text_limit_is_left_out() {
-    // Two completions that each fit the packet's 32767 UTF-16 units on their own: one replaces
-    // the whole 32002-character text, the other only its last character. Padding the second with
-    // the prefix it starts after expands to 64768 characters, so the packet cannot carry it; it
-    // is left out and the first one stays.
+fn merge_suggestions_preserves_sub_token_ranges_tooltips_and_int_values_without_packet_drop() {
+    // Sub-token range expansion and long local suggestions stay intact pre-packet: packet text
+    // limits apply only at the ClientboundCommandSuggestionsPacket boundary.
     let input = "a".repeat(32002);
-    let whole = || Suggestion {
+    let whole = Suggestion {
         range: (0, input.len()),
         text: "short".into(),
-        tooltip: None,
+        tooltip: Some("whole".into()),
         int_value: None,
     };
-    let from_last = |len: usize| Suggestion {
+    let from_last = Suggestion {
         range: (input.len() - 1, input.len()),
-        text: "b".repeat(len),
-        tooltip: None,
+        text: "b".repeat(MAX_SUGGESTION_TEXT),
+        tooltip: Some("tail".into()),
         int_value: None,
     };
-    let (range, merged) = merge_suggestions(&input, vec![whole(), from_last(32767)]);
+    let (range, merged) = merge_suggestions(&input, vec![whole, from_last]);
     assert_eq!(range, (0, input.len()));
-    assert_eq!(
-        merged.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
-        ["short"]
-    );
-    // The kept one applies to the whole text, so the chat can still offer it.
-    assert_eq!(merged[0].apply(&input), "short");
-    // The limit counts the expanded text: the 32001 characters in front of the last one plus
-    // its own 766 is exactly 32767 and stays, one character more does not.
-    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(766)]);
     assert_eq!(merged.len(), 2);
     assert!(
         merged
             .iter()
-            .any(|s| s.text.encode_utf16().count() == 32767),
-        "a completion expanded to exactly the limit stays"
+            .any(|s| s.text.encode_utf16().count() > MAX_SUGGESTION_TEXT
+                && s.tooltip.as_deref() == Some("tail")),
+        "local merge does not prematurely drop suggestions past the server packet text limit"
     );
-    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(767)]);
-    assert_eq!(merged.len(), 1, "32768 characters cannot cross the wire");
+
+    // Numeric int_value ordering and tooltips survive merge_suggestions when ranges match.
+    let (range, ints) = merge_suggestions(
+        "num ",
+        vec![
+            Suggestion {
+                range: (4, 4),
+                text: "10".into(),
+                tooltip: Some("ten".into()),
+                int_value: Some(10),
+            },
+            Suggestion {
+                range: (4, 4),
+                text: "2".into(),
+                tooltip: Some("two".into()),
+                int_value: Some(2),
+            },
+        ],
+    );
+    assert_eq!(range, (4, 4));
+    assert_eq!(
+        ints.iter()
+            .map(|s| (s.text.as_str(), s.tooltip.as_deref(), s.int_value))
+            .collect::<Vec<_>>(),
+        [("2", Some("two"), Some(2)), ("10", Some("ten"), Some(10))]
+    );
 }
 
 #[test]
@@ -1874,22 +1907,31 @@ fn a_custom_suggestion_replaces_only_the_token_it_names() {
         "example:pattern",
         CustomArgumentKind::Greedy,
         |input| Ok(input.to_owned()),
-        |_, prefix| {
+        |_, prefix, _| {
             let start = prefix.rfind(' ').map_or(0, |space| space + 1);
-            let mut out: Vec<CustomSuggestion> = ["stone", "dirt"]
+            let mut out: Vec<Suggestion> = ["stone", "dirt"]
                 .into_iter()
                 .filter(|block| block.starts_with(&prefix[start..]))
-                .map(|block| CustomSuggestion {
+                .map(|block| Suggestion {
+                    range: (start, prefix.len()),
                     text: block.to_owned(),
                     tooltip: None,
-                    replace_start: Some(start),
+                    int_value: None,
                 })
                 .collect();
-            // A suggestion past the typed text is left out, never applied.
-            out.push(CustomSuggestion {
+            // A suggestion with an out-of-bounds or inverted range is skipped without dropping
+            // valid siblings.
+            out.push(Suggestion {
+                range: (prefix.len() + 1, prefix.len() + 1),
                 text: "nowhere".to_owned(),
                 tooltip: None,
-                replace_start: Some(prefix.len() + 1),
+                int_value: None,
+            });
+            out.push(Suggestion {
+                range: (prefix.len(), start),
+                text: "inverted".to_owned(),
+                tooltip: None,
+                int_value: None,
             });
             out
         },
@@ -1920,17 +1962,19 @@ fn a_split_character_completion_does_not_displace_a_valid_neighbor() {
         "example:unicode",
         CustomArgumentKind::Greedy,
         |input| Ok(input.to_owned()),
-        |_, _| {
+        |_, prefix, _| {
             vec![
-                CustomSuggestion {
+                Suggestion {
+                    range: (0, prefix.len()),
                     text: "emerald".into(),
                     tooltip: None,
-                    replace_start: Some(0),
+                    int_value: None,
                 },
-                CustomSuggestion {
+                Suggestion {
+                    range: (1, prefix.len()),
                     text: "broken".into(),
                     tooltip: None,
-                    replace_start: Some(1),
+                    int_value: None,
                 },
             ]
         },
@@ -2055,42 +2099,40 @@ fn a_servers_own_profiler_keeps_its_node_and_is_not_sunrises() {
     assert!(!vanilla::game_dispatcher().has_sunrise_profiler());
 }
 
-/// The provider a test argument type declares: it records every request and answers a fixed
-/// candidate list, so a test can see what the engine asked and which candidates it kept.
-type ProviderCalls =
+/// Recorded invocations of a custom argument completer: prefix, prior arguments, and sender.
+type SuggestCalls =
     std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>, Option<(u128, String)>)>>>;
 
-fn provider_argument(candidates: Vec<CustomSuggestion>, calls: ProviderCalls) -> ArgType {
+fn custom_argument(candidates: Vec<Suggestion>, calls: SuggestCalls) -> ArgType {
     let argument = CustomArgument::new(
         "example:machine",
         CustomArgumentKind::Word,
         |input| Ok(input.to_owned()),
-        |_, _| panic!("the type's own suggest is not called once it declares a provider"),
-    )
-    .with_provider(move |reg, prefix, arguments| {
-        calls.lock().unwrap().push((
-            prefix.to_owned(),
-            arguments
-                .iter()
-                .map(|argument| (argument.name.clone(), argument.text.clone()))
-                .collect(),
-            reg.sender
-                .as_ref()
-                .map(|sender| (sender.uuid, sender.name.clone())),
-        ));
-        candidates.clone()
-    });
+        move |reg, prefix, arguments| {
+            calls.lock().unwrap().push((
+                prefix.to_owned(),
+                arguments
+                    .iter()
+                    .map(|argument| (argument.name.clone(), argument.text.clone()))
+                    .collect(),
+                reg.sender
+                    .as_ref()
+                    .map(|sender| (sender.uuid, sender.name.clone())),
+            ));
+            candidates.clone()
+        },
+    );
     ArgType::Custom(argument)
 }
 
-/// `machine use <mode:example:mode> <machine:example:machine>`: a plain custom argument before
-/// the one the provider completes.
-fn provider_dispatcher(argument: ArgType) -> Dispatcher {
+/// `machine use <mode:example:mode> <machine:example:machine>`: a custom argument before
+/// the one being completed.
+fn custom_argument_dispatcher(argument: ArgType) -> Dispatcher {
     let plain = ArgType::Custom(CustomArgument::new(
         "example:mode",
         CustomArgumentKind::Word,
         |input| Ok(input.to_owned()),
-        |_, _| Vec::new(),
+        |_, _, _| Vec::new(),
     ));
     let mut dispatcher = Dispatcher::new();
     let command = dispatcher.literal(0, "machine");
@@ -2102,27 +2144,30 @@ fn provider_dispatcher(argument: ArgType) -> Dispatcher {
 }
 
 #[test]
-fn a_declared_provider_is_asked_with_the_prefix_the_earlier_arguments_and_the_sender() {
-    let calls: ProviderCalls = Default::default();
-    let dispatcher = provider_dispatcher(provider_argument(
-        [
-            CustomSuggestion {
+fn a_custom_argument_sees_prefix_earlier_arguments_sender_and_preserves_ranges_tooltips_and_ints() {
+    let calls: SuggestCalls = Default::default();
+    let dispatcher = custom_argument_dispatcher(custom_argument(
+        vec![
+            Suggestion {
+                range: (0, 2),
                 text: "press".into(),
                 tooltip: Some("a press".into()),
-                replace_start: None,
+                int_value: None,
             },
-            CustomSuggestion {
-                text: "furnace".into(),
-                tooltip: None,
-                replace_start: None,
-            },
-            CustomSuggestion {
+            Suggestion {
+                range: (0, 2),
                 text: "extra/press".into(),
                 tooltip: None,
-                replace_start: None,
+                int_value: None,
             },
-        ]
-        .to_vec(),
+            // No-op replacement matching the typed prefix is skipped.
+            Suggestion {
+                range: (0, 2),
+                text: "pr".into(),
+                tooltip: Some("ignored".into()),
+                int_value: None,
+            },
+        ],
         calls.clone(),
     ));
     let mut registries = reg();
@@ -2131,13 +2176,12 @@ fn a_declared_provider_is_asked_with_the_prefix_the_earlier_arguments_and_the_se
         name: "Simon".into(),
     });
     let typed = "machine use fast pr";
-    let (_, suggestions) = dispatcher.suggestions(
+    let (range, suggestions) = dispatcher.suggestions(
         &dispatcher.parse(typed, &registries),
         typed.len(),
         &registries,
     );
-    // SharedSuggestionProvider.suggest: the prefix at the start, or after a `.`, `_` or `/`; the
-    // merged list is sorted by text ignoring case.
+    assert_eq!(range, (17, 19));
     assert_eq!(
         suggestions
             .iter()
@@ -2156,31 +2200,28 @@ fn a_declared_provider_is_asked_with_the_prefix_the_earlier_arguments_and_the_se
 }
 
 #[test]
-fn a_provider_answer_is_capped_after_matching_and_rejecting_candidates() {
-    let calls: ProviderCalls = Default::default();
-    let none = |text: String, tooltip: Option<String>| CustomSuggestion {
-        text,
-        tooltip,
-        replace_start: None,
-    };
-    // 1,000 candidates the typed text does not match, then the ones it does: the cap counts what
-    // the reply keeps, so the non-matches before a match cost it nothing.
-    let mut candidates: Vec<CustomSuggestion> = (0..MAX_PROVIDER_SUGGESTIONS)
-        .map(|i| none(format!("x{i}"), None))
+fn custom_argument_preserves_more_than_1000_suggestions_and_sub_token_ranges_pre_packet() {
+    let calls: SuggestCalls = Default::default();
+    // 1,250 candidates sorted alphabetically after merge (including entries that sort before the
+    // first 1,000 returned by the completer): none are prematurely dropped before the packet
+    // boundary.
+    let mut candidates: Vec<Suggestion> = (0..1250)
+        .rev()
+        .map(|i| Suggestion {
+            range: (0, 2),
+            text: format!("pr{i:04}"),
+            tooltip: (i == 0).then(|| "first".into()),
+            int_value: None,
+        })
         .collect();
-    candidates.push(none(
-        // A match past STRING_UTF8's 32767 UTF-16 code units: dropped, and no budget spent.
-        format!("pr{}", "a".repeat(MAX_SUGGESTION_TEXT)),
-        None,
-    ));
-    candidates.push(none(
-        "prtip".into(),
-        // The NBT string limit for a tooltip is 65535 modified-UTF-8 bytes.
-        Some("b".repeat(MAX_SUGGESTION_TOOLTIP + 1)),
-    ));
-    candidates.push(none("press".into(), Some("a press".into())));
-    candidates.extend((0..MAX_PROVIDER_SUGGESTIONS).map(|i| none(format!("prm{i}"), None)));
-    let dispatcher = provider_dispatcher(provider_argument(candidates, calls.clone()));
+    // Include one invalid range to ensure valid siblings still survive.
+    candidates.push(Suggestion {
+        range: (0, 99),
+        text: "invalid".into(),
+        tooltip: None,
+        int_value: None,
+    });
+    let dispatcher = custom_argument_dispatcher(custom_argument(candidates, calls.clone()));
     let registries = reg();
     let typed = "machine use fast pr";
     let (_, suggestions) = dispatcher.suggestions(
@@ -2188,106 +2229,53 @@ fn a_provider_answer_is_capped_after_matching_and_rejecting_candidates() {
         typed.len(),
         &registries,
     );
-    assert_eq!(calls.lock().unwrap().len(), 1, "one request, one answer");
-    let texts: Vec<&str> = suggestions.iter().map(|s| s.text.as_str()).collect();
-    // The cap keeps 1,000 candidates, from the first one that matches: the matching candidate
-    // after 1,000 non-matches is offered.
-    assert_eq!(texts.len(), MAX_PROVIDER_SUGGESTIONS);
-    assert!(
-        texts.contains(&"press"),
-        "a match after 1,000 non-matches is still offered"
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(suggestions.len(), 1250);
+    assert_eq!(suggestions[0].text, "pr0000");
+    assert_eq!(suggestions[0].tooltip.as_deref(), Some("first"));
+    assert_eq!(suggestions[1249].text, "pr1249");
+
+    // Sub-token (start, end) range replacement in the middle of a prefix and int_value ordering.
+    let sub_arg = ArgType::Custom(CustomArgument::new(
+        "example:subrange",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |_, _, _| {
+            vec![
+                Suggestion {
+                    range: (2, 5),
+                    text: "10".into(),
+                    tooltip: Some("ten".into()),
+                    int_value: Some(10),
+                },
+                Suggestion {
+                    range: (2, 5),
+                    text: "2".into(),
+                    tooltip: Some("two".into()),
+                    int_value: Some(2),
+                },
+            ]
+        },
+    ));
+    let mut sub_dispatcher = Dispatcher::new();
+    let cmd = sub_dispatcher.literal(0, "edit");
+    let arg = sub_dispatcher.argument(cmd, "expr", sub_arg);
+    sub_dispatcher.executes(arg, "test");
+    let typed = "edit a=old+b";
+    let (range, suggestions) = sub_dispatcher.suggestions(
+        &sub_dispatcher.parse(typed, &registries),
+        typed.len(),
+        &registries,
     );
+    assert_eq!(range, (7, 10));
     assert_eq!(
         suggestions
             .iter()
-            .find(|s| s.text == "press")
-            .and_then(|s| s.tooltip.as_deref()),
-        Some("a press"),
-        "its tooltip survives"
+            .map(|s| (s.text.as_str(), s.tooltip.as_deref(), s.int_value))
+            .collect::<Vec<_>>(),
+        [("2", Some("two"), Some(2)), ("10", Some("ten"), Some(10))]
     );
-    assert!(
-        !texts.iter().any(|text| text.starts_with("prt")),
-        "the candidate whose tooltip is past the NBT string limit is dropped, by name"
-    );
-    assert!(
-        texts.iter().all(|text| text.len() <= MAX_SUGGESTION_TEXT),
-        "the 32768-code-unit candidate is dropped, by name"
-    );
-    assert!(
-        texts.contains(&"prm998"),
-        "the 1,000th kept candidate stays"
-    );
-    assert!(
-        !texts.contains(&"prm999"),
-        "the count stops the reply at 1,000 kept candidates"
-    );
-}
-
-#[test]
-fn candidates_equal_to_the_input_or_repeated_spend_none_of_the_cap() {
-    let none = |text: &str, tooltip: Option<String>| CustomSuggestion {
-        text: text.into(),
-        tooltip,
-        replace_start: None,
-    };
-    let answer = |mut candidates: Vec<CustomSuggestion>| {
-        candidates.push(none("press", None));
-        let dispatcher = provider_dispatcher(provider_argument(candidates, Default::default()));
-        let registries = reg();
-        let typed = "machine use fast pr";
-        let (_, suggestions) = dispatcher.suggestions(
-            &dispatcher.parse(typed, &registries),
-            typed.len(),
-            &registries,
-        );
-        suggestions.into_iter().map(|s| s.text).collect::<Vec<_>>()
-    };
-    // 1,000 candidates identical to the typed text (each with its own tooltip, so none repeats
-    // another), then a useful one.
-    let texts = answer(
-        (0..MAX_PROVIDER_SUGGESTIONS)
-            .map(|i| none("pr", Some(format!("tip {i}"))))
-            .collect(),
-    );
-    assert_eq!(texts, ["press"]);
-    // 1,000 copies of one text and tooltip, then a useful one: the copy counts once.
-    let texts = answer(
-        (0..MAX_PROVIDER_SUGGESTIONS)
-            .map(|_| none("prdup", Some("same".into())))
-            .collect(),
-    );
-    assert_eq!(texts, ["prdup", "press"]);
-}
-
-#[test]
-fn only_the_argument_a_provider_owns_is_marked_as_owned() {
-    let calls: ProviderCalls = Default::default();
-    let dispatcher = provider_dispatcher(provider_argument(
-        vec![CustomSuggestion {
-            text: "press".into(),
-            tooltip: None,
-            replace_start: None,
-        }],
-        calls,
-    ));
-    let registries = reg();
-    // The provider's own argument: its answer is what the reply shows, untouched.
-    let typed = "machine use fast pr";
-    let (_, suggestions, owned) = dispatcher.client_suggestions_owned(
-        &dispatcher.parse(typed, &registries),
-        typed.len(),
-        &registries,
-    );
-    assert_eq!(suggestions.len(), 1);
-    assert!(owned, "the type declares a provider for this argument");
-    // One word earlier, a type that declares nothing keeps its completions open to a listener.
-    let typed = "machine use fa";
-    let (_, _, owned) = dispatcher.client_suggestions_owned(
-        &dispatcher.parse(typed, &registries),
-        typed.len(),
-        &registries,
-    );
-    assert!(!owned, "`suggest` alone leaves the completions open");
+    assert_eq!(suggestions[0].apply(typed), "edit a=2+b");
 }
 
 /// A syntax error at byte `cursor` of `input`.

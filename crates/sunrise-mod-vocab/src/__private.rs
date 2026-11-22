@@ -230,31 +230,54 @@ pub fn client_required_declarations(id: &str) -> Vec<(&'static str, String)> {
         .unwrap_or_default()
 }
 
-/// The command argument types mods registered at startup, by namespaced id, for the game's
-/// command trees. Not part of the mod surface.
-pub fn command_argument_types() -> Vec<(String, std::sync::Arc<dyn crate::CommandArgumentType>)> {
+/// The command argument types mods registered at startup, with their owner and namespaced id, for
+/// the game's command trees. Not part of the mod surface.
+pub fn command_argument_types() -> Vec<(
+    String,
+    crate::callback_owner::CallbackOwner,
+    std::sync::Arc<dyn crate::CommandArgumentType>,
+)> {
     crate::parts::installed_command_arguments()
         .iter()
-        .map(|info| (info.id.to_string(), info.argument.clone()))
+        .map(|info| {
+            (
+                info.id.to_string(),
+                info.owner.clone(),
+                info.argument.clone(),
+            )
+        })
         .collect()
 }
 
 /// The selector tokens mods registered at startup, by name, for the game's command
 /// registries. Not part of the mod surface.
-pub fn entity_selector_types() -> impl Iterator<Item = (&'static str, &'static crate::SelectorBase)>
-{
+pub fn entity_selector_types() -> impl Iterator<
+    Item = (
+        &'static str,
+        &'static crate::callback_owner::CallbackOwner,
+        &'static dyn crate::EntitySelectorType,
+    ),
+> {
     crate::parts::installed_entity_selectors()
         .iter()
-        .map(|info| (info.name.as_ref(), &info.base))
+        .map(|info| (info.name.as_ref(), &info.owner, info.selector.as_ref()))
 }
 
-/// Resolve an installed selector's handler by reference, without allocating or cloning a resource.
-pub fn entity_selector_type(name: &str) -> Option<&'static dyn crate::EntitySelectorType> {
+/// Resolve an installed selector's owner and handler by reference, without allocating or cloning a resource.
+pub fn entity_selector_type(
+    name: &str,
+) -> Option<(
+    &'static crate::callback_owner::CallbackOwner,
+    &'static dyn crate::EntitySelectorType,
+)> {
     let selectors = crate::parts::installed_entity_selectors();
     selectors
         .binary_search_by(|info| info.name.as_ref().cmp(name))
         .ok()
-        .map(|index| selectors[index].selector.as_ref())
+        .map(|index| {
+            let info = &selectors[index];
+            (&info.owner, info.selector.as_ref())
+        })
 }
 
 /// The startup package inventory at an owning engine load boundary.

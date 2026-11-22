@@ -25,7 +25,6 @@ impl PartRegistrar {
         let recipe_book_fields = self.recipe_book_fields.clone();
         let recipe_book_filters = self.recipe_book_filters.clone();
         let registered = self.registered;
-        let entity_selector_bytes = self.entity_selector_bytes;
         let block_entity_transforms = self.block_entity_transforms.clone();
         // Append-only tables retain previous mods' entries without requiring
         // Clone on runtime callback objects or their eventual frozen caches.
@@ -54,7 +53,6 @@ impl PartRegistrar {
                     registrar.recipe_book_fields = recipe_book_fields;
                     registrar.recipe_book_filters = recipe_book_filters;
                     registrar.registered = registered;
-                    registrar.entity_selector_bytes = entity_selector_bytes;
                     // The checkpoint is fully restored before destroying even one value.
                     // Drop individual owned entries, never a collection containing multiple
                     // mod destructors that could panic while unwinding the first destructor.

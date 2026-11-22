@@ -4,7 +4,9 @@
 //! mod's own registry offers only what that sender may use (#4307).
 
 use super::Game;
-use super::native_server::{CommandArguments, command_tree, register_dispatcher};
+use super::native_server::{
+    CommandArguments, RegisteredArgument, command_tree, register_dispatcher,
+};
 use crate::game::lan::LanSettings;
 use std::sync::{Arc, atomic::AtomicI32, mpsc};
 use sunrise_client::{
@@ -36,17 +38,16 @@ impl mod_api::CommandArgumentType for WarpNames {
         Ok(input.to_owned())
     }
 
-    fn suggest(
-        &self,
-        sender: Option<&mod_api::CommandSender>,
-        prefix: &str,
-    ) -> Vec<mod_api::CommandSuggestion> {
-        let permission = sender.map_or(0, |sender| sender.permission().level());
+    fn suggest(&self, request: &mod_api::SuggestionRequest) -> Vec<mod_api::Suggestion> {
+        let permission = request
+            .sender
+            .as_ref()
+            .map_or(0, |sender| sender.permission().level());
         WARPS
             .into_iter()
             .filter(|(_, level)| *level <= permission)
-            .filter(|(name, _)| name.starts_with(prefix))
-            .map(|(name, _)| mod_api::CommandSuggestion::new(name))
+            .filter(|(name, _)| name.starts_with(request.prefix.as_str()))
+            .map(|(name, _)| request.suggest(name))
             .collect()
     }
 }
@@ -119,7 +120,7 @@ fn game_with_guest<'a>(
 fn install_warps(game: &mut Game<'_>) {
     let arguments: CommandArguments = std::collections::HashMap::from([(
         "test:warp".to_owned(),
-        Arc::new(WarpNames) as Arc<dyn mod_api::CommandArgumentType>,
+        RegisteredArgument::builtin(Arc::new(WarpNames)),
     )]);
     let commands = [
         mod_api::Command::new("warp"),
@@ -202,10 +203,12 @@ fn suggestions(game: &mut Game<'_>, rx: &mpsc::Receiver<Out>, command: &str) -> 
     panic!("no command suggestions packet for `{command}`");
 }
 
-/// A type whose arguments declare a suggestion provider: its own `suggest` must never answer.
-struct ProviderWarps;
+/// An argument type that emits oversized entries alongside valid siblings and > 1,000 candidates
+/// in reverse sort order so packet-boundary framing and post-sort truncation are exercised end to
+/// end over `COMMAND_SUGGESTIONS`.
+struct OversizedAndMany;
 
-impl mod_api::CommandArgumentType for ProviderWarps {
+impl mod_api::CommandArgumentType for OversizedAndMany {
     fn kind(&self) -> mod_api::CommandArgumentKind {
         mod_api::CommandArgumentKind::Word
     }
@@ -214,89 +217,61 @@ impl mod_api::CommandArgumentType for ProviderWarps {
         Ok(input.to_owned())
     }
 
-    fn suggest(
-        &self,
-        _: Option<&mod_api::CommandSender>,
-        _: &str,
-    ) -> Vec<mod_api::CommandSuggestion> {
-        panic!("`suggest` is not called for an argument that declares a provider")
-    }
-
-    fn suggestion_provider(&self) -> Option<Arc<dyn mod_api::SuggestionProvider>> {
-        Some(Arc::new(Warps))
-    }
-}
-
-/// The provider that owns its argument's completions: two candidates, one of which the typed text
-/// does not match.
-struct Warps;
-
-impl mod_api::SuggestionProvider for Warps {
-    fn suggest(&self, _: &mod_api::SuggestionRequest) -> mod_api::SuggestionReply {
-        mod_api::SuggestionReply::new([
-            mod_api::CommandSuggestion::with_tooltip("press", "the press"),
-            mod_api::CommandSuggestion::new("furnace"),
-        ])
+    fn suggest(&self, request: &mod_api::SuggestionRequest) -> Vec<mod_api::Suggestion> {
+        if request.prefix == "mix" {
+            return vec![
+                request.suggest("a".repeat(32768)),
+                request.suggest_with_tooltip("bad_tip", "b".repeat(65536)),
+                request.suggest_with_tooltip("bad_nul", "\0".repeat(32768)),
+                request.suggest_with_tooltip("ok_sibling", "valid tooltip"),
+                request.suggest_with_tooltip("z".repeat(32767), "y".repeat(65535)),
+            ];
+        }
+        // Emit 1,050 valid entries in reverse order plus one oversized entry so sorting must run
+        // before vanilla's 1,000-entry `ServerCommandSuggestionsProvider.limitSuggestionCount`.
+        let mut out = vec![request.suggest("a".repeat(32768))];
+        out.extend(
+            (0..1050)
+                .rev()
+                .map(|i| request.suggest(format!("cand_{i:04}"))),
+        );
+        out
     }
 }
 
-/// A listener that would erase the answer of the argument being completed and put its own there:
-/// it must never see a provider's answer.
-struct ErasingCompletion;
-
-#[mod_api::__subscriptions]
-impl mod_api::Hooks for ErasingCompletion {
-    fn tab_complete(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::TabCompleteEvent<'_>,
-    ) {
-        event.suggestions.clear();
-        event.suggestions.push(mod_api::Suggestion::new(
-            (event.range[0], event.range[1]),
-            "erased",
-        ));
-    }
-}
-
-/// The provider's answer reaches the player as the provider gave it, and the request never offers
-/// it to `tab_complete`; an ordinary argument still reaches the listener.
+/// Oversized suggestions are dropped individually at the `COMMAND_SUGGESTIONS` packet boundary
+/// while valid siblings arrive intact, and > 1,000 candidates are sorted before vanilla's
+/// post-sort 1,000-entry packet truncation.
 #[test]
 #[ignore = "daily"]
-fn a_providers_answer_reaches_the_player_without_passing_through_the_completion_listener() {
-    let mods = vec![mod_api::ModEntry::new(
-        "erasing_completion",
-        Box::new(ErasingCompletion),
-    )]
-    .into();
-    mod_platform::testing::with_mods(mods, || {
-        let mut resources = None;
-        let (mut game, rx) = game_with_guest(&mut resources, "Alex");
-        let arguments: CommandArguments = std::collections::HashMap::from([(
-            "test:warp".to_owned(),
-            Arc::new(ProviderWarps) as Arc<dyn mod_api::CommandArgumentType>,
-        )]);
-        let (tree, _, problems) = command_tree(
-            &[
-                mod_api::Command::new("warp go <name:test:warp>"),
-                mod_api::Command::new("probe <value:word>"),
-            ],
-            |_| false,
-            &arguments,
-        );
-        assert!(problems.is_empty(), "{problems:?}");
-        let mut dispatcher = (*game.ui.dispatcher.0).clone();
-        register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
-        game.ui.dispatcher.0 = Arc::new(dispatcher);
-        game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
-        last_tree(&rx);
+fn oversized_suggestions_drop_individually_and_over_1000_truncate_post_sort_at_packet_boundary() {
+    let mut resources = None;
+    let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+    let arguments: CommandArguments = std::collections::HashMap::from([(
+        "test:many".to_owned(),
+        RegisteredArgument::builtin(Arc::new(OversizedAndMany)),
+    )]);
+    let (tree, _, problems) = command_tree(
+        &[mod_api::Command::new("probe <value:test:many>")],
+        |_| false,
+        &arguments,
+    );
+    assert!(problems.is_empty(), "{problems:?}");
+    let mut dispatcher = (*game.ui.dispatcher.0).clone();
+    register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
+    game.ui.dispatcher.0 = Arc::new(dispatcher);
+    game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+    last_tree(&rx);
 
-        // The provider's argument: its matching candidate, its tooltip, and nothing the listener
-        // would have put there.
-        assert_eq!(suggestions(&mut game, &rx, "warp go pr"), ["press"]);
-        // A plain `word` argument: the listener still answers, so the hook is not gone.
-        assert_eq!(suggestions(&mut game, &rx, "probe "), ["erased"]);
-    });
+    let mixed = suggestions(&mut game, &rx, "probe mix");
+    assert_eq!(mixed.len(), 2);
+    assert_eq!(mixed[0], "ok_sibling");
+    assert_eq!(mixed[1], "z".repeat(32767));
+
+    let truncated = suggestions(&mut game, &rx, "probe ");
+    assert_eq!(truncated.len(), 1000);
+    assert_eq!(truncated[0], "cand_0000");
+    assert_eq!(truncated[999], "cand_0999");
 }
 
 struct IdentifierCompletion;
@@ -312,7 +287,7 @@ impl mod_api::Hooks for IdentifierCompletion {
             assert_eq!(event.range, [6, 8]);
             event
                 .suggestions
-                .push(mod_api::Suggestion::new((6, 8), "example:stone"));
+                .push(mod_api::Suggestion::new((7, 8), "xample:stone").with_tooltip("a stone"));
         }
     }
 }
@@ -363,12 +338,16 @@ fn an_identifier_listener_replies_on_the_wire_and_leaves_room_for_the_next_argum
                 let length = reader.varint().unwrap();
                 assert_eq!(reader.varint().unwrap(), 1);
                 let text = reader.string(32767).unwrap();
-                assert!(!reader.bool().unwrap());
+                assert!(reader.bool().unwrap());
+                assert_eq!(
+                    reader.nbt().unwrap(),
+                    sunrise_protocol::text::literal("a stone")
+                );
                 assert!(answer.replace((start, length, text)).is_none());
             }
         }
         let (start, length, text) = answer.expect("no suggestion packet");
-        assert_eq!((start, length, text.as_str()), (6, 2, "example:stone"));
+        assert_eq!((start, length, text.as_str()), (7, 1, "xample:stone"));
         let mut applied = typed.to_owned();
         applied.replace_range(start as usize..(start + length) as usize, &text);
         assert_eq!(applied, "probe example:stone");

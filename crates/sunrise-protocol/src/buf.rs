@@ -8,6 +8,18 @@ use crate::{Error, Result};
 use std::marker::PhantomData;
 use sunrise_core::{nbt, nbt::Tag, vanilla_bytes::Writer};
 
+/// `FriendlyByteBuf.MAX_STRING_LENGTH`, also used by `ByteBufCodecs.STRING_UTF8`.
+pub const MAX_STRING_UTF16: usize = 32_767;
+
+/// `Utf8String.write`: a VarInt UTF-8 length and at most `max` UTF-16 code units.
+pub fn write_utf8(w: &mut Writer, text: &str, max: usize) -> Result<()> {
+    if text.len() > max.saturating_mul(3) || text.encode_utf16().count() > max {
+        return Err(Error::new(format!("string longer than {max} chars")));
+    }
+    w.string(text);
+    Ok(())
+}
+
 /// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota).
 pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
 /// The most tags one network NBT value can hold within [`NBT_QUOTA`], using

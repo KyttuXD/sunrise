@@ -77,6 +77,15 @@ impl OwnedHeap for sunrise_core::nbt::JavaString {
         self.0.owned_heap_bytes()
     }
 }
+impl OwnedHeap for sunrise_core::identifier::Identifier {
+    fn owned_heap_bytes(&self) -> usize {
+        // Arc<Data> holds strong/weak counts, two Box<str> fat pointers, an i32 hash, and
+        // the two boxed UTF-8 slices.
+        (7usize * size_of::<usize>())
+            .saturating_add(self.namespace().len())
+            .saturating_add(self.path().len())
+    }
+}
 impl OwnedHeap for sunrise_core::nbt::Tag {
     fn owned_heap_bytes(&self) -> usize {
         use sunrise_core::nbt::Tag::*;

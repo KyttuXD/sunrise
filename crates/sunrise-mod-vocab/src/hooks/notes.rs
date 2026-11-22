@@ -345,7 +345,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`world_saved(wait)`**: the server completed its world save cycle; `wait` is true when chunk writes were flushed before returning.
 - **`entities_load(dimension, chunk, count)`**: saved entity records for `chunk` finished loading into `dimension`.
 - **`entities_unload(dimension, chunk, count)`**: entities in `chunk` left the active world and were queued for saving.
-- **`tab_complete(player, name, command, range, suggestions)`**: a guest's server completion request was evaluated; mods may add or filter suggestions. `range` is the replaced byte range. Guest state is not swapped in.
+- **`tab_complete(player, name, command, range, suggestions)`**: a guest's server completion request was evaluated; mods may add or filter suggestions, including custom argument completions. `range` is the initial byte span; final entries supply their own byte ranges in `command`. Guest state is not swapped in.
 - **`broadcast_message(line, cancel)`**: a system broadcast line is about to be logged and sent to every player. A mod may change `line` or set `cancel` to drop the broadcast.
 - **`whitelist_state_update(enabled)`**: the dedicated server's player whitelist was enabled or disabled.
 - **`player_bundle_item_select(player, name, slot, index)`**: a server player selected an item in a bundle;
@@ -2644,7 +2644,7 @@ registration path.
 
 - `sponge_absorb(dimension, pos)` is called after a sponge at `pos` has absorbed water and become wet.
 
-- A guest's server command completion request was evaluated: `tab_complete(player, name, command, range, suggestions)` lets a mod add or filter the suggestions; `range` is the replaced byte range. The guest's state is not swapped in.
+- A guest's server command completion request was evaluated: `tab_complete(player, name, command, range, suggestions)` lets a mod add or filter suggestions, including custom argument completions. `range` is the initial byte span; final entries supply their own byte ranges in `command`. The guest's state is not swapped in.
 
 - `target_hit(dimension, pos, strength)` is called after a projectile hits the target block at `pos` and it takes the reported redstone output strength.
 

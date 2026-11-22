@@ -272,9 +272,9 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
 #[ignore = "daily"]
 fn reload_command_runs_listeners_on_both_sides_of_function_library() {
     use mod_api::{
-        Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSender,
-        CommandSuggestion, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost,
-        VanillaServerListeners,
+        Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType,
+        RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost, Suggestion,
+        SuggestionRequest, VanillaServerListeners,
     };
 
     struct Listener {
@@ -303,7 +303,7 @@ fn reload_command_runs_listeners_on_both_sides_of_function_library() {
             self.0.lock().unwrap().push(format!("parse {input}"));
             Ok(input.into())
         }
-        fn suggest(&self, _: Option<&CommandSender>, _: &str) -> Vec<CommandSuggestion> {
+        fn suggest(&self, _: &SuggestionRequest) -> Vec<Suggestion> {
             Vec::new()
         }
     }

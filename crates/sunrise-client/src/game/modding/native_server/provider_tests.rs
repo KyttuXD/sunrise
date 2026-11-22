@@ -1,29 +1,30 @@
-//! A mod's command argument type declaring a suggestion provider: the tree's ask-the-server
-//! marker, the request the engine builds for it, and what reaches a player's completion.
-//!
-//! The engine talks to the mod API boundary (`mod_api::SuggestionProvider`), so these tests
-//! stand where the game does: they build the report tree, register it into a dispatcher, and
-//! complete like `guest_suggestions` does with the guest's registries swapped in.
+//! A mod's custom command argument type completing through the unified `CommandArgumentType::suggest`
+//! path: the request the engine builds (prefix, prior parsed arguments, sender), parity between
+//! server and client commands, and `CallbackOwner` panic containment.
 use super::*;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use sunrise_client::command::{Registries, Suggestion};
 
-/// What one provider call saw: the prefix, the arguments before it, and the sender.
+/// What one `suggest` call saw: the prefix, the arguments before it, and the sender.
 type Seen = Arc<Mutex<Vec<(String, Vec<(String, String)>, Option<(u128, String, u8)>)>>>;
 
 fn seen() -> Seen {
     Default::default()
 }
 
-/// A command argument type whose suggestions come from a provider, and whose own `suggest`
-/// panics: the engine must not call both for the same argument.
-struct Declared {
-    candidates: Vec<mod_api::CommandSuggestion>,
+/// A command argument type whose suggestions inspect `request.prefix`, `request.arguments`, and
+/// `request.sender`.
+struct ContextWarps {
+    candidates: Vec<(String, Option<String>)>,
     seen: Seen,
     panic_on_answer: bool,
+    calls: Arc<AtomicUsize>,
 }
 
-impl mod_api::CommandArgumentType for Declared {
+impl mod_api::CommandArgumentType for ContextWarps {
     fn kind(&self) -> mod_api::CommandArgumentKind {
         mod_api::CommandArgumentKind::Word
     }
@@ -32,31 +33,8 @@ impl mod_api::CommandArgumentType for Declared {
         Ok(input.to_owned())
     }
 
-    fn suggest(
-        &self,
-        _: Option<&mod_api::CommandSender>,
-        _: &str,
-    ) -> Vec<mod_api::CommandSuggestion> {
-        panic!("`suggest` is not called for an argument that declares a provider")
-    }
-
-    fn suggestion_provider(&self) -> Option<Arc<dyn mod_api::SuggestionProvider>> {
-        Some(Arc::new(DeclaredProvider {
-            candidates: self.candidates.clone(),
-            seen: self.seen.clone(),
-            panic_on_answer: self.panic_on_answer,
-        }))
-    }
-}
-
-struct DeclaredProvider {
-    candidates: Vec<mod_api::CommandSuggestion>,
-    seen: Seen,
-    panic_on_answer: bool,
-}
-
-impl mod_api::SuggestionProvider for DeclaredProvider {
-    fn suggest(&self, request: &mod_api::SuggestionRequest) -> mod_api::SuggestionReply {
+    fn suggest(&self, request: &mod_api::SuggestionRequest) -> Vec<mod_api::Suggestion> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
         self.seen.lock().unwrap().push((
             request.prefix.clone(),
             request
@@ -73,13 +51,27 @@ impl mod_api::SuggestionProvider for DeclaredProvider {
             }),
         ));
         if self.panic_on_answer {
-            panic!("the mod's provider panicked");
+            panic!("the mod's completer panicked");
         }
-        mod_api::SuggestionReply::new(self.candidates.clone())
+        let world_matches = request
+            .arguments
+            .iter()
+            .any(|arg| arg.name == "world" && arg.text == "survival");
+        if !world_matches {
+            return Vec::new();
+        }
+        self.candidates
+            .iter()
+            .filter(|(text, _)| text.starts_with(request.prefix.as_str()))
+            .map(|(text, tooltip)| match tooltip {
+                Some(tip) => request.suggest_with_tooltip(text, tip),
+                None => request.suggest(text),
+            })
+            .collect()
     }
 }
 
-/// A type with no provider declaration: its own `suggest` answers.
+/// A simple argument type completing a fixed set of modes.
 struct Plain;
 
 impl mod_api::CommandArgumentType for Plain {
@@ -91,35 +83,37 @@ impl mod_api::CommandArgumentType for Plain {
         Ok(input.to_owned())
     }
 
-    fn suggest(
-        &self,
-        _: Option<&mod_api::CommandSender>,
-        prefix: &str,
-    ) -> Vec<mod_api::CommandSuggestion> {
+    fn suggest(&self, request: &mod_api::SuggestionRequest) -> Vec<mod_api::Suggestion> {
         ["survival", "creative"]
             .into_iter()
-            .filter(|mode| mode.starts_with(prefix))
-            .map(mod_api::CommandSuggestion::new)
+            .filter(|mode| mode.starts_with(request.prefix.as_str()))
+            .map(|mode| request.suggest(mode))
             .collect()
     }
 }
 
-fn arguments(declared: Declared) -> CommandArguments {
+fn arguments(
+    warps: ContextWarps,
+    owner: mod_api::__private::game::CallbackOwner,
+) -> CommandArguments {
     HashMap::from([
         (
             "test:warp".to_owned(),
-            Arc::new(declared) as Arc<dyn mod_api::CommandArgumentType>,
+            RegisteredArgument::owned(owner, Arc::new(warps)),
         ),
         (
             "test:mode".to_owned(),
-            Arc::new(Plain) as Arc<dyn mod_api::CommandArgumentType>,
+            RegisteredArgument::builtin(Arc::new(Plain)),
         ),
     ])
 }
 
 /// The tree and dispatcher of `warp go <world:test:mode> <name:test:warp>`.
-fn warp(declared: Declared) -> (Value, Dispatcher) {
-    let arguments = arguments(declared);
+fn warp(
+    warps: ContextWarps,
+    owner: mod_api::__private::game::CallbackOwner,
+) -> (Value, Dispatcher) {
+    let arguments = arguments(warps, owner);
     let (tree, _, problems) = super::command_tree(
         &[mod_api::Command::new(
             "warp go <world:test:mode> <name:test:warp>",
@@ -149,20 +143,22 @@ fn texts(suggestions: &[Suggestion]) -> Vec<&str> {
 }
 
 #[test]
-fn a_declared_provider_is_asked_only_for_its_argument_with_the_sender_and_the_arguments_before_it()
-{
+fn a_custom_argument_receives_prefix_earlier_arguments_and_sender() {
     let seen = seen();
-    let (tree, dispatcher) = warp(Declared {
-        candidates: vec![
-            mod_api::CommandSuggestion::with_tooltip("press", "the press"),
-            mod_api::CommandSuggestion::new("furnace"),
-        ],
-        seen: seen.clone(),
-        panic_on_answer: false,
-    });
+    let owner = mod_api::__private::game::CallbackOwner::for_mod("provider_test_server");
+    let (tree, dispatcher) = warp(
+        ContextWarps {
+            candidates: vec![
+                ("press".into(), Some("the press".into())),
+                ("furnace".into(), None),
+            ],
+            seen: seen.clone(),
+            panic_on_answer: false,
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        owner,
+    );
 
-    // The engine mirrors the declaration as the node's ask-the-server marker, so a client asks
-    // the server for this argument instead of running the mod's code.
     let node = &tree["children"]["warp"]["children"]["go"]["children"]["world"]["children"]["name"];
     assert_eq!(node["custom_argument"], "test:warp");
     assert_eq!(node["suggestions"], "minecraft:ask_server");
@@ -178,11 +174,8 @@ fn a_declared_provider_is_asked_only_for_its_argument_with_the_sender_and_the_ar
         typed.len(),
         &registries,
     );
-    // The engine keeps the candidates that match the typed text, in the chat's own order.
     assert_eq!(texts(&suggestions), ["press"]);
     assert_eq!(suggestions[0].tooltip.as_deref(), Some("the press"));
-    // The provider saw the prefix of its argument alone, the arguments parsed before it, and the
-    // sender's uuid, name and command level.
     assert_eq!(
         seen.lock().unwrap().as_slice(),
         [(
@@ -193,66 +186,80 @@ fn a_declared_provider_is_asked_only_for_its_argument_with_the_sender_and_the_ar
     );
 }
 
-/// The same builder builds the server's tree and the client's own: a client command that names an
-/// argument type declaring a provider is refused by name, and no mod code runs for it, while an
-/// ordinary argument type still builds and completes.
 #[test]
-fn a_client_command_refuses_an_argument_type_that_declares_a_provider_by_name() {
+fn a_custom_argument_reading_arguments_and_prefix_works_on_both_server_and_client_commands() {
     let seen = seen();
-    let arguments = arguments(Declared {
-        candidates: vec![mod_api::CommandSuggestion::new("press")],
-        seen: seen.clone(),
-        panic_on_answer: false,
-    });
-    let commands = [
-        mod_api::Command::new("warp go <world:test:mode> <name:test:warp>"),
-        mod_api::Command::new("warp use <world:test:mode>"),
-    ];
-
-    // The client's own tree: the usage that would run the provider is left out, named.
-    let (tree, _, problems) = super::client_command_tree(&commands, |_| false, &arguments);
-    assert_eq!(problems.len(), 1, "{problems:?}");
-    assert!(problems[0].contains("test:warp"), "{}", problems[0]);
-    assert!(
-        problems[0].contains("suggestion provider"),
-        "{}",
-        problems[0]
+    let owner = mod_api::__private::game::CallbackOwner::for_mod("provider_test_both_sides");
+    let arguments = arguments(
+        ContextWarps {
+            candidates: vec![
+                ("press".into(), Some("the press".into())),
+                ("furnace".into(), None),
+            ],
+            seen: seen.clone(),
+            panic_on_answer: false,
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        owner,
     );
-    assert!(
-        tree["children"]["warp"]["children"].get("go").is_none(),
-        "the provider-backed usage is left out"
-    );
+    let commands = [mod_api::Command::new(
+        "warp go <world:test:mode> <name:test:warp>",
+    )];
 
-    // The ordinary argument type keeps building, and completes by its own `suggest`.
+    // Client command tree accepts the same custom argument type without refusal.
+    let (client_tree, _, client_problems) = super::client_command_tree(&commands, &arguments, None);
+    assert!(client_problems.is_empty(), "{client_problems:?}");
     let mut chat = sunrise_client::command::vanilla::game_dispatcher().clone();
-    register_dispatcher(&mut chat, &tree, "native_mod_command", &arguments);
-    let registries = Registries::default();
-    let typed = "warp use cr";
-    let (_, suggestions) =
-        chat.client_suggestions(&chat.parse(typed, &registries), typed.len(), &registries);
-    assert_eq!(texts(&suggestions), ["creative"]);
-    assert!(
-        seen.lock().unwrap().is_empty(),
-        "no provider ran for a client command"
-    );
+    register_dispatcher(&mut chat, &client_tree, "native_mod_command", &arguments);
+    let typed = "warp go survival pr";
+    let client_reg = Registries::default();
+    let (_, client_suggestions) =
+        chat.client_suggestions(&chat.parse(typed, &client_reg), typed.len(), &client_reg);
+    assert_eq!(texts(&client_suggestions), ["press"]);
+    assert_eq!(client_suggestions[0].tooltip.as_deref(), Some("the press"));
 
-    // The server's tree keeps the same usage.
-    let (tree, _, problems) = super::command_tree(&commands, |_| false, &arguments);
-    assert!(problems.is_empty(), "{problems:?}");
+    // Server command tree builds and completes identically with the sender present.
+    let (server_tree, _, server_problems) = super::command_tree(&commands, |_| false, &arguments);
+    assert!(server_problems.is_empty(), "{server_problems:?}");
+    let mut server = Dispatcher::new();
+    register_dispatcher(&mut server, &server_tree, "native_mod_command", &arguments);
+    let server_reg = guest();
+    let (_, server_suggestions) =
+        server.client_suggestions(&server.parse(typed, &server_reg), typed.len(), &server_reg);
+    assert_eq!(texts(&server_suggestions), ["press"]);
+    assert_eq!(server_suggestions[0].tooltip.as_deref(), Some("the press"));
+
     assert_eq!(
-        tree["children"]["warp"]["children"]["go"]["children"]["world"]["children"]["name"]["custom_argument"],
-        "test:warp"
+        seen.lock().unwrap().as_slice(),
+        [
+            (
+                "pr".to_owned(),
+                vec![("world".to_owned(), "survival".to_owned())],
+                None,
+            ),
+            (
+                "pr".to_owned(),
+                vec![("world".to_owned(), "survival".to_owned())],
+                Some((0x5eed, "Simon".to_owned(), 3)),
+            ),
+        ]
     );
 }
 
 #[test]
-fn a_panicking_provider_answers_no_suggestion_and_the_rest_of_the_line_still_completes() {
+fn a_panicking_completer_disables_itself_while_siblings_keep_completing() {
     let seen = seen();
-    let (_, dispatcher) = warp(Declared {
-        candidates: Vec::new(),
-        seen,
-        panic_on_answer: true,
-    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let owner = mod_api::__private::game::CallbackOwner::for_mod("provider_test_panic");
+    let (_, dispatcher) = warp(
+        ContextWarps {
+            candidates: Vec::new(),
+            seen,
+            panic_on_answer: true,
+            calls: calls.clone(),
+        },
+        owner.clone(),
+    );
     let registries = guest();
     let typed = "warp go survival pr";
     let (_, suggestions) = dispatcher.suggestions(
@@ -261,8 +268,19 @@ fn a_panicking_provider_answers_no_suggestion_and_the_rest_of_the_line_still_com
         &registries,
     );
     assert!(suggestions.is_empty(), "{suggestions:?}");
+    assert!(!owner.is_enabled());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 
-    // One argument earlier, the type that declares nothing still completes by its own `suggest`.
+    // Disabled after the first panic: subsequent completions do not call it again.
+    let (_, suggestions) = dispatcher.suggestions(
+        &dispatcher.parse(typed, &registries),
+        typed.len(),
+        &registries,
+    );
+    assert!(suggestions.is_empty());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+    // Sibling argument type keeps completing normally.
     let typed = "warp go cr";
     let (_, suggestions) = dispatcher.suggestions(
         &dispatcher.parse(typed, &registries),

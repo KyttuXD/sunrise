@@ -239,8 +239,8 @@ impl Game<'_> {
         else {
             return;
         };
-        let skip = usize::from(text.starts_with('/'));
-        let command = &text[skip..];
+        let slash = text.starts_with('/');
+        let command = &text[usize::from(slash)..];
         let d = self.ui.dispatcher.0.clone();
         // Server players and lists, not the host's registries: a dedicated server has no local player.
         let triggers =
@@ -293,20 +293,15 @@ impl Game<'_> {
         // Commands.sendCommands prunes the tree a player's client completes from; the answer the
         // server sends follows the same test, so a child literal of a path the sender may not run
         // is not offered either (Bukkit hides it; brigadier alone lists every child).
-        let ((start, end), mut suggestions, provider) =
-            d.client_suggestions_owned(&parse, command.len(), &self.ui.registries);
-        // An argument whose type declares a suggestion provider owns its answer: the provider
-        // already gave it for this sender, so `tab_complete` is not asked and no listener can add
-        // to, replace or erase it. Ordinary completions keep the hook.
-        if !provider {
-            self.native_tab_complete(
-                player_uuid,
-                &player_name,
-                command,
-                [start, end],
-                &mut suggestions,
-            );
-        }
+        let ((start, end), mut suggestions) =
+            d.client_suggestions(&parse, command.len(), &self.ui.registries);
+        self.native_tab_complete(
+            player_uuid,
+            &player_name,
+            command,
+            [start, end],
+            &mut suggestions,
+        );
         let reg = self.suggestion_registries();
         reg.permission = level;
         reg.sender = own_sender;
@@ -316,30 +311,9 @@ impl Game<'_> {
         reg.banned_ips = own_banned_ips;
         reg.whitelisted = own_whitelisted;
         reg.trigger_objectives = own_triggers;
-        // ServerCommandSuggestionsProvider.limitSuggestionCount.
-        suggestions.truncate(1000);
-        let utf16 = |byte: usize| command[..byte.min(command.len())].encode_utf16().count() as i32;
-        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
-        w.varint(id);
-        w.varint(utf16(start) + skip as i32);
-        w.varint(utf16(end) - utf16(start));
-        w.varint(suggestions.len() as i32);
-        for s in &suggestions {
-            w.string(&s.text);
-            w.bool(s.tooltip.is_some());
-            if let Some(tip) = &s.tooltip {
-                w.nbt(&literal(tip));
-            }
-        }
-        let Some(host) = self.lan.as_ref() else {
+        let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) else {
             return;
         };
-        host.hub.send_to(
-            conn,
-            &C::Unknown(
-                sunrise_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS,
-                w.data,
-            ),
-        );
+        guest.send_command_suggestions(command, id, slash, suggestions);
     }
 }

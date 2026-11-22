@@ -1,6 +1,6 @@
 //! Commands and their authority.
 
-use crate::{CommandInvocation, CommandSource, ServerHost};
+use crate::{ClientHost, CommandInvocation, CommandSource, ServerHost};
 use std::sync::Arc;
 
 // no wire: a native executor runs only in the server process.
@@ -25,8 +25,29 @@ pub fn split_command_registration(
     (registration.command, registration.executor)
 }
 
+// no wire: a native client executor runs only in the client process.
+/// The client's retained callable for an executable client command usage.
+pub type ClientCommandExecutor =
+    dyn Fn(&mut dyn ClientHost, &CommandInvocation) -> Option<i32> + Send + Sync + 'static;
+
+// no wire: a registration binds client code to a descriptor; only the descriptor is data.
+// exhaustive: only Command::executes_client constructs the opaque descriptor/executor pair.
+/// A client command usage together with its executor. Create it with [`Command::executes_client`].
+pub struct ClientCommandRegistration {
+    command: Command,
+    executor: Arc<ClientCommandExecutor>,
+}
+
+/// Separate a client registration's descriptor from its process-local executor.
+pub fn split_client_command_registration(
+    registration: ClientCommandRegistration,
+) -> (Command, Arc<ClientCommandExecutor>) {
+    (registration.command, registration.executor)
+}
+
 /// A data-only command usage. Attach behavior with [`Command::executes`] when
-/// registering it on the server.
+/// registering it on the server, or [`Command::executes_client`] when registering
+/// it on the client.
 ///
 /// Literal words use lowercase letters, digits, `_` and `-`. Only the first word may
 /// additionally begin with one `/`: register `/set <x:word>` and type `//set stone` in chat.
@@ -40,10 +61,9 @@ pub fn split_command_registration(
 /// rest of the line, last), `integer`, `number`, `boolean`, `player`, `players`,
 /// `entity`, `entities`, `item`, `block_pos`, `vec3` (a point, `Vec3Argument.vec3()`; delivered
 /// as `Vec3`), `id` (a free `namespace:path` identifier, delivered as that canonical string),
-/// `mod_id` (a loaded package id, delivered as a
-/// string), `resource:<registry>` (an id that registry holds, delivered as `Id`:
-/// `<kind:resource:minecraft:entity_type>`), or a command argument type a mod registered with
-/// `Registrar::register_command_argument`, named by its namespaced id:
+/// `mod_id` (a loaded package id, delivered as a string), `resource:<registry>` (an id that
+/// registry holds, delivered as `Id`: `<kind:resource:minecraft:entity_type>`), or a command
+/// argument type a mod registered with `Registrar::register_command_argument`, named by its namespaced id:
 /// `machine use <machine:mymod:machine>`. Usages of one command share their
 /// words; the server merges them into one tree. A public `foo bar` lets everyone traverse
 /// `foo`, but does not by itself make an operator-only `foo` executable. Optional arguments
@@ -51,6 +71,11 @@ pub fn split_command_registration(
 /// the same node, each later accepted registration overwrites that node's executor (matching
 /// Brigadier's `CommandNode.addChild`) and updates Sunrise's paired execution permission
 /// level for that node.
+///
+/// A `resource:<registry>` usage requires a `namespace:path` registry name; an invalid name
+/// refuses the usage. Registry names have no registration budget. A branch whose
+/// name cannot be written by vanilla's registry-identifier string codec is kept
+/// in the local dispatcher but left out of the command tree sent to players.
 ///
 /// Side: server. Selector arguments use vanilla's source position, permissions,
 /// cardinality and selection order; `player`/`entity` require one result and
@@ -104,6 +129,27 @@ impl Command {
         + 'static,
     ) -> CommandRegistration {
         CommandRegistration {
+            command: self,
+            executor: Arc::new(executor),
+        }
+    }
+
+    /// Bind this usage to a client executor for `register_client_commands`.
+    /// The executor runs as the registering mod on the client thread, after parsing and
+    /// argument resolution. Return `Some(n)` for success with result `n` (including zero),
+    /// or `None` for failure. A failed executor or disabled owner never forwards the
+    /// command to the server or gives another mod a turn. Only a parse from the current
+    /// client dispatcher generation can reach this executor. Capture owned or shared
+    /// state rather than borrowing the registration event. A panic disables the
+    /// usage from that mod for the session, including across command-tree refreshes.
+    pub fn executes_client(
+        self,
+        executor: impl Fn(&mut dyn ClientHost, &CommandInvocation) -> Option<i32>
+        + Send
+        + Sync
+        + 'static,
+    ) -> ClientCommandRegistration {
+        ClientCommandRegistration {
             command: self,
             executor: Arc::new(executor),
         }

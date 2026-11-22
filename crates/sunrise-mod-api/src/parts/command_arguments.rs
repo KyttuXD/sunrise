@@ -27,6 +27,10 @@ impl CommandArgumentsRegistrar for PartRegistrar {
             return;
         }
         self.parts.command_arguments.push(CommandArgumentInfo {
+            owner: mod_vocab::__private::game::CallbackOwner::for_index(
+                self.mod_id,
+                self.mod_index,
+            ),
             id: id.into(),
             argument,
         });
@@ -57,15 +61,11 @@ pub mod tests {
                 }
             }
 
-            fn suggest(
-                &self,
-                _: Option<&crate::CommandSender>,
-                prefix: &str,
-            ) -> Vec<crate::CommandSuggestion> {
+            fn suggest(&self, request: &crate::SuggestionRequest) -> Vec<crate::Suggestion> {
                 ["fast", "slow"]
                     .into_iter()
-                    .filter(|mode| mode.starts_with(prefix))
-                    .map(crate::CommandSuggestion::new)
+                    .filter(|mode| mode.starts_with(request.prefix.as_str()))
+                    .map(|mode| request.suggest(mode))
                     .collect()
             }
         }
@@ -97,10 +97,13 @@ pub mod tests {
         let installed = mod_vocab::__private::parts_installation::testing_command_arguments();
         assert_eq!(installed.len(), 1);
         assert_eq!(&*installed[0].id, "test:mode");
+        assert_eq!(installed[0].owner.id(), "test");
         assert_eq!(installed[0].argument.parse("fast"), Ok("fast".to_owned()));
         assert_eq!(
-            installed[0].argument.suggest(None, "s"),
-            [crate::CommandSuggestion::new("slow")]
+            installed[0]
+                .argument
+                .suggest(&crate::SuggestionRequest::new("s", Vec::new(), None)),
+            [crate::Suggestion::new((0, 1), "slow")]
         );
 
         let errors = crate::parts::tests::install_parts_fixture(&[crate::ModEntry::new(

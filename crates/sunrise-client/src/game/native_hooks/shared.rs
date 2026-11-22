@@ -3385,15 +3385,6 @@ impl Game<'_> {
             page.settings = settings;
         }
     }
-    /// A client mod's command (the `command` hook); a server never asks.
-    pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
-        if self.lan_acting.is_some() {
-            return false;
-        }
-        let mut ran = false;
-        self.native_command(command, &mut ran);
-        ran
-    }
     /// The zoom in effect while playing (a native mod's); the spyglass's own
     /// view wins.
     pub(super) fn native_zoom_now(&self) -> Option<mod_api::Zoom> {

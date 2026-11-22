@@ -8,11 +8,8 @@
 //! the custom providers are the same code on both sides); any other node
 //! (another server's or a mod's) gets the type its parser and properties
 //! describe.
-use super::{ArgType, Dispatcher, Node, NodeKind, Suggests};
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::{Mutex, OnceLock},
-};
+use super::{ArgType, Dispatcher, Node, NodeKind, RegistryId, Suggests};
+use std::collections::{HashSet, VecDeque};
 use sunrise_protocol::packets::play::{ARGUMENT_TYPES, ArgumentProperties, Commands};
 
 /// The command id of every executable node of a server's tree: the chat
@@ -41,9 +38,15 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
     // The local node at the same path, found breadth first from the roots
     // along children (redirects are not paths of their own).
     let mut matched: Vec<Option<usize>> = vec![None; count];
-    matched[root] = Some(0);
-    let mut queue = VecDeque::from([root]);
-    let mut seen = HashSet::from([root]);
+    if count > 0 {
+        matched[root] = Some(0);
+    }
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    if count > 0 {
+        queue.push_back(root);
+        seen.insert(root);
+    }
     while let Some(n) = queue.pop_front() {
         for c in packet.nodes[n].children.iter().filter_map(valid) {
             if !seen.insert(c) {
@@ -114,53 +117,19 @@ fn provider(id: &str) -> Option<Suggests> {
     }
 }
 
-/// The longest registry id kept, and how many distinct ones: a game knows a few hundred
-/// registries, with ids far shorter.
-const MAX_NAME: usize = 256;
-const MAX_NAMES: usize = 1024;
-
-/// A registry name kept for the life of the game (argument types hold
-/// `&'static str`): each distinct name is stored once. The names come from the server's command
-/// tree, so a server sending trees of new 32 KiB names packet after packet leaked memory until
-/// the client ran out: a name too long, not a resource location, or past [`MAX_NAMES`] is kept
-/// as "" instead (no suggestions for that argument), where vanilla's tree frees its keys anyway.
-fn intern(name: &str) -> &'static str {
-    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    let mut names = NAMES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    intern_in(&mut names, name)
-}
-fn intern_in(names: &mut HashSet<&'static str>, name: &str) -> &'static str {
-    if let Some(&n) = names.get(name) {
-        return n;
-    }
-    let resource_location = name
-        .bytes()
-        .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b'/' | b':'));
-    if name.len() > MAX_NAME || !resource_location || names.len() >= MAX_NAMES {
-        return "";
-    }
-    let n: &'static str = Box::leak(name.to_owned().into_boxed_str());
-    names.insert(n);
-    n
-}
-
-/// The argument type a parser and its properties describe
+/// The argument type a parser and its decoded properties describe
 /// (ArgumentTypeInfo.Template.instantiate).
-pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
+pub fn argument_type(id: i32, properties: &ArgumentProperties) -> ArgType {
     let Some(name) = usize::try_from(id).ok().and_then(|i| ARGUMENT_TYPES.get(i)) else {
         return ArgType::Word;
     };
-    let p = ArgumentProperties::decode(id, props).unwrap_or(ArgumentProperties::None);
-    let registry = || match &p {
-        ArgumentProperties::Registry(r) => intern(r),
-        _ => "",
+    let registry = || match properties {
+        ArgumentProperties::Registry(id) => RegistryId::from_identifier(id.clone()),
+        _ => RegistryId::from_static(""),
     };
     match *name {
         "brigadier:bool" => ArgType::Bool,
-        "brigadier:integer" => match p {
+        "brigadier:integer" => match properties {
             ArgumentProperties::Integer { min, max } => ArgType::Integer {
                 min: min.unwrap_or(i32::MIN),
                 max: max.unwrap_or(i32::MAX),
@@ -172,7 +141,7 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
         },
         // No long type of its own: a double over the same bounds reads
         // the same digits.
-        "brigadier:long" => match p {
+        "brigadier:long" => match properties {
             ArgumentProperties::Long { min, max } => ArgType::Double {
                 min: min.map_or(f64::MIN, |v| v as f64),
                 max: max.map_or(f64::MAX, |v| v as f64),
@@ -182,7 +151,7 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
                 max: f64::MAX,
             },
         },
-        "brigadier:float" => match p {
+        "brigadier:float" => match properties {
             ArgumentProperties::Float { min, max } => ArgType::Float {
                 min: min.unwrap_or(f32::MIN),
                 max: max.unwrap_or(f32::MAX),
@@ -192,7 +161,7 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
                 max: f32::MAX,
             },
         },
-        "brigadier:double" => match p {
+        "brigadier:double" => match properties {
             ArgumentProperties::Double { min, max } => ArgType::Double {
                 min: min.unwrap_or(f64::MIN),
                 max: max.unwrap_or(f64::MAX),
@@ -202,18 +171,18 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
                 max: f64::MAX,
             },
         },
-        "brigadier:string" => match p {
+        "brigadier:string" => match properties {
             ArgumentProperties::String(1) => ArgType::Str,
             ArgumentProperties::String(2) => ArgType::Greedy,
             _ => ArgType::Word,
         },
-        "minecraft:entity" => match p {
+        "minecraft:entity" => match properties {
             ArgumentProperties::Entity {
                 single,
                 players_only,
             } => ArgType::Entity {
-                single,
-                players: players_only,
+                single: *single,
+                players: *players_only,
             },
             _ => ArgType::Entity {
                 single: false,
@@ -245,7 +214,10 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
         "minecraft:rotation" => ArgType::Rotation,
         "minecraft:scoreboard_slot" => ArgType::ScoreboardSlot,
         "minecraft:score_holder" => ArgType::ScoreHolder {
-            multiple: matches!(p, ArgumentProperties::ScoreHolder { multiple: true }),
+            multiple: matches!(
+                properties,
+                ArgumentProperties::ScoreHolder { multiple: true }
+            ),
         },
         "minecraft:swizzle" => ArgType::Swizzle,
         "minecraft:team" => ArgType::Team,
@@ -259,8 +231,8 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
         "minecraft:dimension" => ArgType::Dimension,
         "minecraft:gamemode" => ArgType::GameMode,
         "minecraft:time" => ArgType::Time {
-            min: match p {
-                ArgumentProperties::Time { min } => min,
+            min: match properties {
+                ArgumentProperties::Time { min } => *min,
                 _ => 0,
             },
         },
@@ -280,16 +252,26 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
             "ocean_floor",
         ]),
         "minecraft:swing_animation" => ArgType::Enum(&["none", "whack", "stab"]),
-        "minecraft:loot_table" => ArgType::ResourceOrId("minecraft:loot_table"),
-        "minecraft:loot_predicate" => ArgType::ResourceOrId("minecraft:predicate"),
-        "minecraft:loot_modifier" => ArgType::ResourceOrId("minecraft:item_modifier"),
-        "minecraft:context_float_provider" => {
-            ArgType::ResourceOrId("minecraft:context_float_provider")
+        "minecraft:loot_table" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:loot_table"))
         }
-        "minecraft:context_int_provider" => ArgType::ResourceOrId("minecraft:context_int_provider"),
+        "minecraft:loot_predicate" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:predicate"))
+        }
+        "minecraft:loot_modifier" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:item_modifier"))
+        }
+        "minecraft:context_float_provider" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:context_float_provider"))
+        }
+        "minecraft:context_int_provider" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:context_int_provider"))
+        }
         "minecraft:slot_source" => ArgType::SlotSource,
-        "minecraft:dialog" => ArgType::ResourceOrId("minecraft:dialog"),
-        "minecraft:feature" => ArgType::ResourceOrId("minecraft:worldgen/feature"),
+        "minecraft:dialog" => ArgType::ResourceOrId(RegistryId::from_static("minecraft:dialog")),
+        "minecraft:feature" => {
+            ArgType::ResourceOrId(RegistryId::from_static("minecraft:worldgen/feature"))
+        }
         "minecraft:uuid" => ArgType::Uuid,
         _ => ArgType::Word,
     }
@@ -299,32 +281,101 @@ pub fn argument_type(id: i32, props: &[u8]) -> ArgType {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_servers_registry_names_are_kept_within_bounds() {
-        // A set of its own: the game's is shared with every other test.
-        let mut names = HashSet::new();
-        let item = intern_in(&mut names, "minecraft:item");
-        assert_eq!(item, "minecraft:item");
-        assert!(std::ptr::eq(item, intern_in(&mut names, "minecraft:item")));
-        // Too long, or not a resource location: not kept.
-        assert_eq!(intern_in(&mut names, &"a".repeat(32767)), "");
-        assert_eq!(intern_in(&mut names, "Not A Registry"), "");
-        // However many distinct names a server sends, the set stops growing.
-        for i in 0..2 * MAX_NAMES {
-            intern_in(&mut names, &format!("evil:registry_{i}"));
-        }
-        assert_eq!(names.len(), MAX_NAMES);
-        assert_eq!(intern_in(&mut names, "evil:one_more_after_the_cap"), "");
-        assert!(
-            std::ptr::eq(item, intern_in(&mut names, "minecraft:item")),
-            "kept names stay"
-        );
-    }
     use sunrise_core::vanilla_bytes::Writer;
     use sunrise_protocol::{
         buf::{Codec, Reader},
         packets::play::CommandNode,
     };
+
+    fn encode_registry_commands(parser_id: i32, raw_registry: &str) -> Vec<u8> {
+        let mut wire = Writer::new();
+        wire.varint(3);
+        // Node 0: root -> [1]
+        wire.u8(0);
+        wire.varint(1);
+        wire.varint(1);
+        // Node 1: literal "use_registry" -> [2]
+        wire.u8(1);
+        wire.varint(1);
+        wire.varint(2);
+        wire.string("use_registry");
+        // Node 2: argument "value", executable, parser with raw wire registry string
+        wire.u8(2 | 4);
+        wire.varint(0);
+        wire.string("value");
+        wire.varint(parser_id);
+        wire.string(raw_registry);
+        // Root index
+        wire.varint(0);
+        wire.data
+    }
+
+    #[test]
+    fn registry_properties_are_owned_and_use_the_vanilla_string_frame() {
+        let id = ARGUMENT_TYPES
+            .iter()
+            .position(|&name| name == "minecraft:resource")
+            .unwrap() as i32;
+        let decode = |name: &str| {
+            let wire = encode_registry_commands(id, name);
+            let packet = Commands::read(&mut Reader::new(&wire))?;
+            let dispatcher = from_packet(&packet, &Dispatcher::new());
+            let root = dispatcher.find("use_registry").unwrap();
+            let arg_node = dispatcher.nodes[root].children[0];
+            let NodeKind::Argument {
+                ty: ArgType::Res(registry),
+                ..
+            } = &dispatcher.nodes[arg_node].kind
+            else {
+                panic!("expected a resource argument");
+            };
+            Ok::<_, sunrise_protocol::Error>(registry.clone())
+        };
+        for i in 0..1025 {
+            let name = format!("test:registry_{i}");
+            assert_eq!(decode(&name).unwrap().as_str(), name);
+        }
+        let mut long = format!(
+            "test:registry/{}",
+            "r".repeat(32767 - "test:registry/".len())
+        );
+        let first = decode(&long).unwrap();
+        let second = decode(&long).unwrap();
+        assert_eq!(first.as_str(), long);
+        assert_eq!(second.as_str(), long);
+        assert_ne!(first.as_ptr(), second.as_ptr(), "no shared global interner");
+        long.push('r');
+        assert!(decode(&long).is_err());
+
+        for (input, expected) in [
+            ("item", "minecraft:item"),
+            (":item", "minecraft:item"),
+            ("", "minecraft:"),
+            ("test:", "test:"),
+        ] {
+            assert_eq!(decode(input).unwrap().as_str(), expected);
+        }
+        for invalid in [
+            "INVALID:registry",
+            "test:a:b",
+            "te/st:item",
+            "Test:item",
+            "..:item",
+            "test:é",
+        ] {
+            assert!(decode(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn an_invalid_registry_property_refuses_the_packet_at_decode_time() {
+        let id = ARGUMENT_TYPES
+            .iter()
+            .position(|&name| name == "minecraft:resource_key")
+            .unwrap() as i32;
+        let wire = encode_registry_commands(id, "INVALID:registry");
+        assert!(Commands::read(&mut Reader::new(&wire)).is_err());
+    }
 
     fn literal(name: &str, children: Vec<i32>, executable: bool) -> CommandNode {
         CommandNode {
@@ -339,7 +390,12 @@ mod tests {
         }
     }
 
-    fn argument(name: &str, parser: &str, props: Vec<u8>, executable: bool) -> CommandNode {
+    fn argument(
+        name: &str,
+        parser: &str,
+        props: ArgumentProperties,
+        executable: bool,
+    ) -> CommandNode {
         let id = ARGUMENT_TYPES.iter().position(|p| *p == parser).unwrap() as i32;
         CommandNode {
             kind: 2,
@@ -356,16 +412,28 @@ mod tests {
     /// A tree with the root last (as vanilla's numbering need not put it
     /// first), a vanilla command and one the client does not know.
     fn packet() -> Commands {
-        let mut range = Writer::new();
-        range.u8(3);
-        range.i32(1);
-        range.i32(64);
         Commands {
             nodes: vec![
                 literal("give", vec![2], false),
                 literal("warp", vec![3], false),
-                argument("targets", "minecraft:entity", vec![2], false),
-                argument("count", "brigadier:integer", range.data, true),
+                argument(
+                    "targets",
+                    "minecraft:entity",
+                    ArgumentProperties::Entity {
+                        single: false,
+                        players_only: true,
+                    },
+                    false,
+                ),
+                argument(
+                    "count",
+                    "brigadier:integer",
+                    ArgumentProperties::Integer {
+                        min: Some(1),
+                        max: Some(64),
+                    },
+                    true,
+                ),
                 CommandNode {
                     kind: 0,
                     executable: false,
@@ -389,7 +457,12 @@ mod tests {
             nodes: vec![
                 stop,
                 literal("say", vec![2], false),
-                argument("message", "minecraft:message", Vec::new(), true),
+                argument(
+                    "message",
+                    "minecraft:message",
+                    ArgumentProperties::None,
+                    true,
+                ),
                 literal("list", Vec::new(), true),
                 CommandNode {
                     kind: 0,
@@ -499,15 +572,28 @@ mod tests {
     /// not know, and nothing for a command without one.
     #[test]
     fn signable_arguments_of_a_server_tree() {
-        let mut shout = argument("text", "minecraft:message", vec![], true);
+        let mut shout = argument("text", "minecraft:message", ArgumentProperties::None, true);
         shout.suggestions = None;
-        let mut targets = argument("targets", "minecraft:entity", vec![0], false);
+        let mut targets = argument(
+            "targets",
+            "minecraft:entity",
+            ArgumentProperties::Entity {
+                single: false,
+                players_only: false,
+            },
+            false,
+        );
         targets.children = vec![2];
         let packet = Commands {
             nodes: vec![
                 literal("msg", vec![1], false),
                 targets,
-                argument("message", "minecraft:message", vec![], true),
+                argument(
+                    "message",
+                    "minecraft:message",
+                    ArgumentProperties::None,
+                    true,
+                ),
                 literal("shout", vec![4], false),
                 shout,
                 literal("spawn", vec![], true),
@@ -586,9 +672,12 @@ mod tests {
                 _ => {}
             }
             let mut r = Reader::new(&w.data);
-            ArgumentProperties::read(&mut r, id as i32).unwrap();
+            let props = ArgumentProperties::read(&mut r, id as i32).unwrap();
             assert_eq!(r.remaining(), 0, "{name}");
-            let _ = argument_type(id as i32, &w.data);
+            let mut roundtrip = Writer::new();
+            props.write(&mut roundtrip);
+            assert_eq!(roundtrip.data, w.data, "{name}");
+            let _ = argument_type(id as i32, &props);
         }
     }
 }

@@ -523,6 +523,24 @@ impl PlayerSender {
             cost,
         })
     }
+    /// Queue contents already accepted by this connection's framing codec. This is for
+    /// ordinary replies produced by the server tick, not deferred transaction packets.
+    pub(crate) fn send_frame_contents(&self, contents: Vec<u8>) {
+        match &self.to {
+            To::Pool(outbox, _) => {
+                let cost = io_pool::charge(contents.capacity());
+                if !self.reserve_queued(cost) {
+                    self.close();
+                    return;
+                }
+                self.flush();
+                outbox.publish(contents, cost);
+            }
+            To::Channel(_) => self.send(contents), // No compression on the test channel.
+            To::Disabled => {}
+        }
+    }
+
     pub fn send(&self, body: Vec<u8>) {
         self.send_body(body.into());
     }

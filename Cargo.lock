@@ -4592,6 +4592,7 @@ dependencies = [
 name = "sunrise-command"
 version = "0.1.0"
 dependencies = [
+ "log",
  "sunrise-client-core",
  "sunrise-core",
  "sunrise-items",

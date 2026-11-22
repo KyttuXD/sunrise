@@ -247,8 +247,8 @@ impl Game<'_> {
         (!cancel).then_some(amount)
     }
 
-    /// Commands.performCommand for a line without its slash. A client mod's
-    /// `command` hook is the caller's: this also runs on a server.
+    /// Commands.performCommand for a line without its slash. Client dispatcher
+    /// handling belongs to the chat entry points, not server or console execution.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
         let d = self.ui.dispatcher.0.clone();
         let parse = d.parse(command, &self.ui.registries);
@@ -311,9 +311,14 @@ impl Game<'_> {
     }
     pub(in crate::game) fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());
-        let Some(window) = e.context_window() else {
-            return;
-        };
+        if let Some(context) = Self::command_syntax_context(e, command) {
+            self.command_failure(context);
+        }
+    }
+
+    /// Brigadier's clickable cursor context, shared by client and server failure reporting.
+    pub(in crate::game) fn command_syntax_context(e: &CommandError, command: &str) -> Option<Text> {
+        let window = e.context_window()?;
         let suggest = Style {
             click: Some(text::ClickEvent::SuggestCommand(format!("/{command}"))),
             ..Style::default()
@@ -335,7 +340,7 @@ impl Game<'_> {
                 .with_color(text::RED)
                 .italic(),
         );
-        self.command_failure(context.with_color(text::GRAY).with_style(&suggest));
+        Some(context.with_color(text::GRAY).with_style(&suggest))
     }
     /// CommandSourceStack.sendFailure: red text.
     pub(super) fn command_failure(&mut self, message: Text) {

@@ -464,7 +464,7 @@ impl Game<'_> {
         let chat_tree = self.chat_tree_for(Some(&tree));
         if let Some(r) = self.remote.as_mut() {
             r.chat_tree = chat_tree;
-            r.chat_tree_received = true;
+            r.server_chat_tree = Some(tree);
         }
     }
 

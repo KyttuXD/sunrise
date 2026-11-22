@@ -82,6 +82,67 @@ fn a_command_tree_with_a_cycle_is_refused() {
 }
 
 #[test]
+fn commands_decoder_validates_resource_registry_identifiers() {
+    let parser_id = ARGUMENT_TYPES
+        .iter()
+        .position(|&name| name == "minecraft:resource")
+        .unwrap() as i32;
+    let encode_raw = |raw_registry: &str| {
+        let mut w = Writer::new();
+        w.varint(3);
+        // Node 0: root -> [1]
+        w.u8(0);
+        w.varint(1);
+        w.varint(1);
+        // Node 1: literal "pick" -> [2]
+        w.u8(1);
+        w.varint(1);
+        w.varint(2);
+        w.string("pick");
+        // Node 2: argument "value", executable, minecraft:resource with raw registry spelling
+        w.u8(2 | 4);
+        w.varint(0);
+        w.string("value");
+        w.varint(parser_id);
+        w.string(raw_registry);
+        // Root index
+        w.varint(0);
+        w.data
+    };
+    for (raw, expected) in [
+        ("minecraft:item", "minecraft:item"),
+        ("item", "minecraft:item"),
+        (":item", "minecraft:item"),
+        ("", "minecraft:"),
+        ("test:", "test:"),
+    ] {
+        let bytes = encode_raw(raw);
+        let decoded = Commands::read(&mut Reader::new(&bytes)).unwrap();
+        let Some((id, ArgumentProperties::Registry(registry))) = &decoded.nodes[2].parser else {
+            panic!("expected decoded Registry property for {raw:?}");
+        };
+        assert_eq!(*id, parser_id);
+        assert_eq!(registry.to_string(), expected);
+    }
+    for invalid in [
+        "INVALID:registry",
+        "test:a:b",
+        "te/st:item",
+        "Test:item",
+        "..:item",
+        "test:é",
+    ] {
+        let bytes = encode_raw(invalid);
+        assert!(
+            Commands::read(&mut Reader::new(&bytes)).is_err(),
+            "{invalid:?}"
+        );
+    }
+    let overlong = format!("test:{}", "r".repeat(crate::buf::MAX_STRING_UTF16));
+    assert!(Commands::read(&mut Reader::new(&encode_raw(&overlong))).is_err());
+}
+
+#[test]
 fn vec_delta_quantizes_the_base_like_math_round() {
     // Math.round(-2.5) is -2, so a delta of 1 lands on -1/4096, not -2/4096.
     let out = VecDelta::apply([-2.5 / 4096.0, 0.0, 0.0], [1, 0, 0]);

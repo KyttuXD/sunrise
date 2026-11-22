@@ -1,0 +1,2 @@
+sunrise-client game::native_command_completion_tests::oversized_suggestions_drop_individually_and_over_1000_truncate_post_sort_at_packet_boundary lib daily resources
+sunrise-client game::native_server::tests::client_commands_execute_bound_typed_invocations_contain_panics_and_reject_stale_generations lib daily resources

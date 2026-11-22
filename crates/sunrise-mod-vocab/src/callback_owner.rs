@@ -211,7 +211,8 @@ impl CallbackOwner {
         })
     }
 
-    pub(crate) fn for_index(id: &'static str, index: usize) -> Self {
+    /// Bind a retained registration to its exact `(id, index)` mod slot during registration.
+    pub fn for_index(id: &'static str, index: usize) -> Self {
         Self {
             id,
             binding: OwnerBinding {

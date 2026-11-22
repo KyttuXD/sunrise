@@ -5876,8 +5876,14 @@ mod tests {
             assert_eq!(
                 value.parser.as_ref().unwrap().1,
                 match report_bounds.get("max") {
-                    None => vec![1, 0, 0, 0, 0],
-                    Some(_) => vec![3, 0, 0, 0, 0, 0, 0, 0, 8],
+                    None => play::ArgumentProperties::Integer {
+                        min: Some(0),
+                        max: None,
+                    },
+                    Some(_) => play::ArgumentProperties::Integer {
+                        min: Some(0),
+                        max: Some(8),
+                    },
                 }
             );
         }

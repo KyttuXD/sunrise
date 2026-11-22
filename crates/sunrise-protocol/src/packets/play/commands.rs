@@ -2,9 +2,9 @@
 //! and their parser properties.
 use crate::{
     Result,
-    buf::{Codec, Reader},
+    buf::{Codec, MAX_STRING_UTF16, Reader},
 };
-use sunrise_core::vanilla_bytes::Writer;
+use sunrise_core::{identifier::Identifier, vanilla_bytes::Writer};
 
 /// One entry of ClientboundCommandsPacket: a literal or an argument node.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,8 +16,8 @@ pub struct CommandNode {
     pub children: Vec<i32>,
     pub redirect: Option<i32>,
     pub name: String,
-    /// Argument parser registry id and its raw property bytes.
-    pub parser: Option<(i32, Vec<u8>)>,
+    /// Argument parser registry id and its decoded network properties.
+    pub parser: Option<(i32, ArgumentProperties)>,
     /// Custom suggestion provider (`minecraft:ask_server`).
     pub suggestions: Option<String>,
 }
@@ -121,8 +121,8 @@ pub enum ArgumentProperties {
     Time {
         min: i32,
     },
-    /// The resource arguments' registry.
-    Registry(String),
+    /// The resource arguments' registry (`FriendlyByteBuf.readRegistryKey`).
+    Registry(Identifier),
 }
 
 impl ArgumentProperties {
@@ -177,19 +177,70 @@ impl ArgumentProperties {
             | "minecraft:resource_key"
             | "minecraft:resource_or_tag"
             | "minecraft:resource_or_tag_key"
-            | "minecraft:resource_selector" => Self::Registry(r.string(32767)?),
+            | "minecraft:resource_selector" => {
+                let raw = r.string(MAX_STRING_UTF16)?;
+                let registry = Identifier::parse(&raw).map_err(|err| {
+                    crate::Error::new(format!("command argument registry `{raw}`: {err}"))
+                })?;
+                Self::Registry(registry)
+            }
             _ => Self::None,
         })
     }
-    /// Decodes a node's raw `parser` bytes.
-    pub fn decode(id: i32, bytes: &[u8]) -> Result<Self> {
-        Self::read(&mut Reader::new(bytes), id)
-    }
-}
 
-/// Reads past an argument node's parser properties.
-fn read_argument_properties(r: &mut Reader, id: i32) -> Result<()> {
-    ArgumentProperties::read(r, id).map(|_| ())
+    /// ArgumentTypeInfo.serializeToNetwork for this template.
+    pub fn write(&self, w: &mut Writer) {
+        let flags = |w: &mut Writer, has_min: bool, has_max: bool| {
+            w.u8(u8::from(has_min) | (u8::from(has_max) << 1));
+        };
+        match self {
+            Self::None => {}
+            Self::Integer { min, max } => {
+                flags(w, min.is_some(), max.is_some());
+                if let Some(v) = min {
+                    w.i32(*v);
+                }
+                if let Some(v) = max {
+                    w.i32(*v);
+                }
+            }
+            Self::Long { min, max } => {
+                flags(w, min.is_some(), max.is_some());
+                if let Some(v) = min {
+                    w.i64(*v);
+                }
+                if let Some(v) = max {
+                    w.i64(*v);
+                }
+            }
+            Self::Float { min, max } => {
+                flags(w, min.is_some(), max.is_some());
+                if let Some(v) = min {
+                    w.f32(*v);
+                }
+                if let Some(v) = max {
+                    w.f32(*v);
+                }
+            }
+            Self::Double { min, max } => {
+                flags(w, min.is_some(), max.is_some());
+                if let Some(v) = min {
+                    w.f64(*v);
+                }
+                if let Some(v) = max {
+                    w.f64(*v);
+                }
+            }
+            Self::String(kind) => w.varint(*kind),
+            Self::Entity {
+                single,
+                players_only,
+            } => w.u8(u8::from(*single) | (u8::from(*players_only) << 1)),
+            Self::ScoreHolder { multiple } => w.u8(u8::from(*multiple)),
+            Self::Time { min } => w.i32(*min),
+            Self::Registry(id) => w.string(&id.to_string()),
+        }
+    }
 }
 
 /// Whether following `edges` from any node never comes back to it. An index
@@ -258,9 +309,8 @@ impl Codec<Commands> for Commands {
             }
             if kind == 2 {
                 let id = r.varint()?;
-                let start = r.position();
-                read_argument_properties(r, id)?;
-                parser = Some((id, r.since(start).to_vec()));
+                let properties = ArgumentProperties::read(r, id)?;
+                parser = Some((id, properties));
                 if flags & 16 != 0 {
                     suggestions = Some(r.string(32767)?);
                 }
@@ -313,9 +363,10 @@ impl Codec<Commands> for Commands {
                 w.string(&n.name);
             }
             if n.kind == 2 {
-                let (id, props) = n.parser.clone().unwrap_or((5, Vec::new()));
-                w.varint(id);
-                w.bytes(&props);
+                let fallback = (5, ArgumentProperties::String(0));
+                let (id, props) = n.parser.as_ref().unwrap_or(&fallback);
+                w.varint(*id);
+                props.write(w);
                 if let Some(s) = &n.suggestions {
                     w.string(s);
                 }

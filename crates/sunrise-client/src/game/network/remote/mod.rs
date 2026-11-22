@@ -544,10 +544,9 @@ pub(super) struct Remote {
     /// that base changes, not at each keystroke.
     pub chat_tree: sunrise_client::command::Dispatcher,
     selector_metadata_supported: bool,
-    /// Whether a `ClientboundCommandsPacket` has supplied the server's tree.
-    /// The local fallback is for UI completion only; vanilla signs command
-    /// arguments against an empty tree until the server sends one.
-    pub(super) chat_tree_received: bool,
+    /// The server's original tree, used for signing and verifying remote commands.
+    /// Vanilla uses an empty tree until it receives `ClientboundCommandsPacket`.
+    pub(super) server_chat_tree: Option<sunrise_client::command::Dispatcher>,
     /// The chat session, the last-seen window and the signature cache.
     pub(super) secure_chat: super::remote_chat::SecureChat,
     /// `ClientSuggestionProvider.customCompletionSuggestions`: the extra chat

@@ -138,7 +138,7 @@ impl CommandArgument {
     }
 }
 
-/// Validated input borrowed by a registered server command's executor, never a raw line.
+/// Validated input borrowed by a registered server or client command's executor, never a raw line.
 ///
 /// Missing optional arguments are absent. Selectors are permission-checked and resolved
 /// by the current server dispatcher before the executor runs. `entity` and `player` select exactly one;
@@ -212,5 +212,4 @@ impl CommandResult {
 pub(crate) mod command_argument;
 pub(crate) mod entity_selector;
 pub(crate) mod suggestion;
-pub(crate) mod suggestion_provider;
 pub(crate) mod types;
