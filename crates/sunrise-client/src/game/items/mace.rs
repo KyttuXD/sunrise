@@ -327,6 +327,7 @@ impl Game<'_> {
         );
         // The causing entity's aim, for what turns a blow by where it points
         // (`SulfurCube.knockback`).
+        let mob_id = self.mobs[index].id;
         self.mobs[index].creative_attacker = self.creative;
         self.mobs[index].attacker_aim = aim;
         self.mobs[index].dealt_absorbed = 0;
@@ -339,6 +340,9 @@ impl Game<'_> {
         );
         self.mobs[index].attacker_aim = None;
         self.mobs[index].creative_attacker = false;
+        if hurt {
+            self.flush_mob_death_protection(mob_id);
+        }
         // `Guardian.hurtServer`'s spikes answer the attacker inside the hurt,
         // before `super.hurtServer` returns: those hits land here, where
         // `Who::Player` is the player whose blow this is. Left in the outbox,

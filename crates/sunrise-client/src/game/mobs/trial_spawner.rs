@@ -342,31 +342,37 @@ impl Game<'_> {
     /// minutes per level, with Trial Omen's sound when it is new. `uuid` is
     /// the player found: the one in the game's frame, else a guest.
     fn bad_omen_to_trial_omen(&mut self, uuid: Uuid) {
-        // MobEffect.onEffectAdded plays at the player's feet.
-        let feet = if self.acting_uuid() == uuid {
-            let added = transform_bad_omen(&mut self.potions.effects);
-            self.player
-                .as_ref()
-                .filter(|_| added)
-                .map(|p| [p.position.x, p.position.y, p.position.z])
-        } else {
-            let acting = self.lan_acting;
-            let Some(host) = self.lan.as_mut() else {
-                return;
-            };
-            let Some(index) = host.hub.guests.iter().position(|g| {
-                sunrise_client::lan::playerdata::uuid_ints(g.uuid) == uuid && Some(g.conn) != acting
-            }) else {
-                return;
-            };
-            host.hub.guests.update(index, |guest| {
-                transform_bad_omen(&mut guest.effects).then_some(guest.position)
-            })
-        };
-        if let Some(at) = feet {
-            self.audio
-                .play("minecraft:event.mob_effect.trial_omen", Some(at), 1.0, 1.0);
+        if self.acting_uuid() == uuid {
+            self.transform_player_bad_omen();
+            return;
         }
+        let acting = self.lan_acting;
+        let conn = self.lan.as_ref().and_then(|host| {
+            host.hub.guests.iter().find_map(|g| {
+                (sunrise_client::lan::playerdata::uuid_ints(g.uuid) == uuid
+                    && Some(g.conn) != acting)
+                    .then_some(g.conn)
+            })
+        });
+        if let Some(conn) = conn {
+            self.as_guest(conn, |g| g.transform_player_bad_omen());
+        }
+    }
+    /// `TrialSpawnerStateData.transformBadOmenIntoTrialOmen` for the acting
+    /// player: `removeEffect(BAD_OMEN)` then `addEffect(TRIAL_OMEN)` through
+    /// the standard effect hooks and added-sound path.
+    fn transform_player_bad_omen(&mut self) {
+        let Some(amplifier) = self.potions.effects.amplifier("bad_omen") else {
+            return;
+        };
+        if let Some(def) = sunrise_client::brewing::effect("bad_omen") {
+            self.remove_player_effects(Some(def.index));
+        }
+        self.add_player_effect(sunrise_client::effects::EffectInstance::new(
+            "trial_omen",
+            TRIAL_OMEN_TICKS_PER_LEVEL * (amplifier + 1),
+            0,
+        ));
     }
     /// `sendBlockUpdated` of a block entity: the clients load its new update tag.
     pub(super) fn mark_block_entity_updated(&mut self, key: Pos) {
@@ -380,6 +386,7 @@ impl Game<'_> {
 }
 
 /// Swap Bad Omen for Trial Omen on `effects`; true when Trial Omen is new.
+#[cfg(test)]
 fn transform_bad_omen(effects: &mut sunrise_client::effects::PlayerEffects) -> bool {
     let Some(amplifier) = effects.amplifier("bad_omen") else {
         return false;

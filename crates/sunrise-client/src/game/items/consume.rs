@@ -304,18 +304,42 @@ impl Game<'_> {
                     };
                     can_finish &= teleport.apply(&mut actor, dim).is_ok();
                 }
-                _ => {
-                    if let Some(mob) = self
+                ConsumeEffect::ApplyEffects { .. }
+                | ConsumeEffect::ClearAllEffects
+                | ConsumeEffect::RemoveEffects(_) => {
+                    if self
                         .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id && m.alive() && !m.removed)
+                        .iter()
+                        .any(|m| m.id == id && m.alive() && !m.removed)
                     {
-                        mob.apply_consume_effect(effect);
+                        can_finish &= self
+                            .apply_consume_effect(stack, effect, Some(consumer), consumer.entity())
+                            .is_some();
                     }
                 }
             }
         }
         can_finish
+    }
+
+    /// `DeathProtection.applyEffects` for a mob saved by a `death_protection`
+    /// item: runs every `ConsumeEffect` in list order on the owning `Game` so
+    /// `MobEffectEvent.Remove`, `Applicable`, `Added` and
+    /// `MobEffectPart::on_effect_added` all fire.
+    pub(in crate::game) fn apply_mob_death_protection_effects(
+        &mut self,
+        id: u32,
+        stack: &ItemStack,
+        effects: &[ConsumeEffect],
+    ) {
+        let Some(consumer) = self.entity(id).and_then(|entity| self.living(entity)) else {
+            return;
+        };
+        self.apply_consumable_effects(
+            stack,
+            effects,
+            Some((consumer, MobConsumption::DeathProtection)),
+        );
     }
 
     /// Specialized player drinks have already applied their built-in component listener.
@@ -762,6 +786,7 @@ impl TeleportConsumeWorld for Teleporter<'_, '_> {
 enum MobConsumption<'a> {
     Fox(&'a sunrise_client::mobs::fox::Consumption),
     Drink(&'a ItemStack),
+    DeathProtection,
 }
 impl MobConsumption<'_> {
     fn still_valid(self, mob: &sunrise_client::mobs::Mob, from: Vec3) -> bool {
@@ -773,6 +798,7 @@ impl MobConsumption<'_> {
                     && mob.position == from
                     && mob.extra.main_hand_stack() == Some(stack)
             }
+            Self::DeathProtection => mob.alive() && !mob.removed && mob.position == from,
         }
     }
 }

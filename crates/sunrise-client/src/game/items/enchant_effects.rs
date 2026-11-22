@@ -598,10 +598,13 @@ impl Game<'_> {
         };
         let ticks = (between("min_duration", "max_duration") * 20.0).round() as i32;
         let amplifier = (between("min_amplifier", "max_amplifier").round() as i32).max(0);
-        if let Some(id) = super::potions::mob_effect_id(ids[pick]) {
-            let (new, entity) = (!m.has_effect(id), m.id as i32);
-            m.add_effect(id, ticks, amplifier);
-            self.mod_effect_added(id, Some(entity), amplifier, new);
+        let mob_id = m.id;
+        if let Some(def) = sunrise_client::brewing::effect(ids[pick]) {
+            self.add_mob_effect(
+                mob_id,
+                sunrise_client::effects::EffectInstance::from_def(def, ticks, amplifier),
+                None,
+            );
         }
     }
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):

@@ -1807,6 +1807,14 @@ pub enum MobEvent {
         mob: u32,
         stack: crate::items::ItemStack,
     },
+    /// `DeathProtection.applyEffects` for a mob saved by a `death_protection`
+    /// item: delivered on the owning `Game` so `MobEffectEvent.Remove`,
+    /// `Applicable`, `Added` and `MobEffectPart::on_effect_added` all fire.
+    DeathProtectionEffects {
+        mob: u32,
+        stack: crate::items::ItemStack,
+        effects: Vec<crate::items::ConsumeEffect>,
+    },
     /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
     SquidCycle {
         mob: u32,
@@ -3145,7 +3153,11 @@ impl PufferfishReaction {
         mob.id == self.fish && mob.join == self.fish_join && !mob.removed
     }
 
-    pub fn poison(&self, target: Option<&mut Mob>) -> Vec<MobEvent> {
+    pub fn poison_ticks(&self) -> Option<i32> {
+        self.poison_ticks
+    }
+
+    fn poison(&self, target: Option<&mut Mob>) -> Vec<MobEvent> {
         if let Some(ticks) = self.poison_ticks
             && let Some(target) = target.filter(|m| self.same_target(m))
         {
@@ -3277,7 +3289,7 @@ pub fn apply_brain_events_until_hurt(
                         fish_join,
                         poison_ticks: landed.then_some(60 * size),
                     };
-                    if can_pause && t.hurt_needs_owner() {
+                    if can_pause && (t.hurt_needs_owner() || (landed && hit_level.defers_death_protection_effects())) {
                         let mut position = 0;
                         // The rest of this candidate list belongs to the same objects
                         // even if the host removes one or inserts a new occupant of its id.
@@ -4917,6 +4929,11 @@ impl Mob {
         ) {
             return false;
         }
+        let protector = self
+            .extra
+            .slot_stack(slot)
+            .cloned()
+            .unwrap_or_else(|| crate::items::ItemStack::new(TOTEM, 1));
         let remaining = self.extra.slot_stack(slot).cloned().and_then(|mut s| {
             s.count -= 1;
             (s.count > 0).then_some(s)
@@ -4924,8 +4941,16 @@ impl Mob {
         self.extra.set_slot_stack(slot, remaining);
         self.extra.hand_protection = None;
         self.health = 1.0;
-        for effect in &effects {
-            self.apply_consume_effect(effect);
+        if level.defers_death_protection_effects() {
+            self.outbox.push(MobEvent::DeathProtectionEffects {
+                mob: self.id,
+                stack: protector,
+                effects,
+            });
+        } else {
+            for effect in &effects {
+                self.apply_consume_effect(effect);
+            }
         }
         let at = [self.position.x, self.position.y, self.position.z];
         self.outbox.push(MobEvent::EntityEvent {

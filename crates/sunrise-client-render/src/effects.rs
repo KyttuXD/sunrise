@@ -65,7 +65,7 @@ impl EffectInstance {
         self.show_icon = visible;
         self
     }
-    fn infinite(&self) -> bool {
+    pub fn infinite(&self) -> bool {
         self.duration == -1
     }
     /// This effect as its entity's swirls are computed from.
@@ -143,7 +143,7 @@ impl EffectInstance {
             self.duration = self.duration.wrapping_sub(1);
         }
     }
-    fn downgrade(&mut self) -> bool {
+    pub fn downgrade(&mut self) -> bool {
         if self.duration == 0
             && let Some(h) = self.hidden.take()
         {
@@ -177,7 +177,7 @@ pub enum EffectAction {
     Remove(&'static str),
 }
 /// `shouldApplyEffectTickThisTick` + `applyEffectTick` for the periodic effects.
-fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
+pub fn periodic(id: &str, tick: i32, amp: i32) -> Option<EffectAction> {
     // Java's `>>` and `<<` take the shift distance modulo 32 (`wrapping_*`).
     let every = |base: i32| {
         let interval = base.wrapping_shr(amp as u32);

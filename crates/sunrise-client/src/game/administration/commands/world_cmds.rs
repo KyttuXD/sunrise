@@ -556,6 +556,7 @@ impl Game<'_> {
             hurt
         };
         if hurt {
+            self.flush_mob_death_protection(id);
             if damage.attacker == Some(Who::Player) {
                 self.remember_mob_player_credit(id);
                 if let Some(host) = self.lan.as_mut() {

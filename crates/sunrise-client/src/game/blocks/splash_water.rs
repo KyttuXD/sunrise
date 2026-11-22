@@ -168,11 +168,12 @@ impl Game<'_> {
                     continue;
                 }
                 if hurts && sensitive {
+                    let mob_id = m.id;
                     let invulnerable = m.invulnerable_flag;
-                    let plan = self.prepare_knockback_credit(m.id as i32, attacker, &attack);
+                    let plan = self.prepare_knockback_credit(mob_id as i32, attacker, &attack);
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
                     let m = &mut self.mobs[index];
-                    m.damage(
+                    let hurt = m.damage(
                         crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
                         1.0,
                         source,

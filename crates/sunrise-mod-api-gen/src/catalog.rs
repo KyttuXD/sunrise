@@ -436,13 +436,12 @@ impl Hook {
         let effect = scope
             .as_ref()
             .is_some_and(|scope| scope.kind == PartKind::Effect);
-        if effect != (entry.target == EFFECT_TICK_TARGET)
-            || effect
-                && !matches!(
-                    name.as_str(),
-                    "apply_effect_tick" | "should_apply_effect_tick_this_tick"
-                )
-        {
+        let is_effect_tick = effect
+            && matches!(
+                name.as_str(),
+                "apply_effect_tick" | "should_apply_effect_tick_this_tick"
+            );
+        if is_effect_tick != (entry.target == EFFECT_TICK_TARGET) {
             return Err(CatalogError::InvalidHook {
                 hook: name,
                 error: format!("effect tick hooks must target {EFFECT_TICK_TARGET}"),
@@ -454,13 +453,13 @@ impl Hook {
         let mut effect_count = false;
         for (param, ty) in &entry.engine {
             match (param.as_str(), ty.as_str()) {
-                ("ticks", "& mut Ticks") if !effect => engine_ticks = true,
-                ("inert", "& mut bool") if !effect => engine_inert = true,
-                ("tick_count", "i32") if name == "apply_effect_tick" && effect => {
+                ("ticks", "& mut Ticks") if !is_effect_tick => engine_ticks = true,
+                ("inert", "& mut bool") if !is_effect_tick => engine_inert = true,
+                ("tick_count", "i32") if name == "apply_effect_tick" && is_effect_tick => {
                     effect_count = true
                 }
                 ("make_call", "impl FnOnce (EffectKey , i32) -> ApplyEffectTickCall < '_ >")
-                    if effect =>
+                    if is_effect_tick =>
                 {
                     effect_factory = true
                 }
@@ -479,7 +478,7 @@ impl Hook {
                     .into(),
             });
         }
-        if effect && (!effect_factory || effect_count != (name == "apply_effect_tick")) {
+        if is_effect_tick && (!effect_factory || effect_count != (name == "apply_effect_tick")) {
             return Err(CatalogError::InvalidHook {
                 hook: name,
                 error:

@@ -359,3 +359,72 @@ fn a_removed_dependency_row_cannot_authorize_a_foreign_effect_part() {
         },
     );
 }
+
+#[test]
+fn on_effect_added_part_runs_owner_first_and_only_after_validation() {
+    struct NoHost;
+    impl Host for NoHost {}
+    crate::impl_host_areas!(NoHost);
+    impl ServerHost for NoHost {}
+    crate::impl_server_host_areas!(NoHost);
+
+    #[derive(Clone)]
+    struct AddedRecorder {
+        package: &'static str,
+        seen: Arc<Mutex<Vec<(&'static str, i32)>>>,
+    }
+    #[mod_api::sunrise_part]
+    impl MobEffectPart for AddedRecorder {
+        fn on_effect_added(&self, _: &mut dyn ServerHost, event: &mut OnEffectAddedEvent) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((self.package, event.amplifier));
+        }
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for AddedRecorder {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            let effect = r.effect_key("owner:comfort");
+            r.mob_effect_part(&effect, self.clone()).unwrap();
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods: Mods = vec![
+        ModEntry::new(
+            "behaviour",
+            Box::new(AddedRecorder {
+                package: "behaviour",
+                seen: seen.clone(),
+            }),
+        ),
+        ModEntry::new(
+            "owner",
+            Box::new(AddedRecorder {
+                package: "owner",
+                seen: seen.clone(),
+            }),
+        ),
+    ]
+    .into();
+    let living = LivingRef::new(EntityRef::new(WorldEpoch::new(1), 7));
+    crate::load_state::with_test_package_inventory(
+        vec![
+            package("owner", None),
+            package("behaviour", Some(DependencyKind::Required)),
+        ],
+        || {
+            crate::testing::with_mods(mods.clone(), || {
+                let effect = install(&mods);
+                // Before owner validation freezes the table, no MobEffectPart::on_effect_added runs.
+                dispatch_on_effect_added(&mut NoHost, effect, living, 1);
+                assert!(seen.lock().unwrap().is_empty());
+
+                mod_vocab::__private::validate_effect_part_owners(|_| Some("owner")).unwrap();
+                dispatch_on_effect_added(&mut NoHost, effect, living, 2);
+                assert_eq!(*seen.lock().unwrap(), vec![("owner", 2), ("behaviour", 2)]);
+            });
+        },
+    );
+}

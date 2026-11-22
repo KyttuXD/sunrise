@@ -716,45 +716,52 @@ impl Game<'_> {
                     let Some(def) = sunrise_client::brewing::effect(&eff.id) else {
                         continue;
                     };
+                    if eff.duration < -1 {
+                        continue;
+                    }
+                    let mut instance = sunrise_client::effects::EffectInstance::from_def(
+                        def,
+                        eff.duration,
+                        eff.amplifier.clamp(0, 255),
+                    );
+                    instance.ambient = eff.ambient;
+                    instance.visible = eff.show_particles;
+                    instance.show_icon = eff.show_icon;
                     if let Some(living) = mob {
-                        let effect = mod_api::ActiveEffect::new(
-                            mod_api::__private::effect_key_by_index(def.index)
-                                .expect("effects resolved at load"),
-                            eff.duration,
-                            eff.amplifier,
-                            eff.ambient,
-                            eff.show_particles,
-                            eff.show_icon,
-                        );
-                        changed |= self.living_add_effect(living, &effect);
+                        let commands::Target::Mob(id) = self.native_living_target(living)? else {
+                            return None;
+                        };
+                        changed |= self.add_mob_effect(id, instance, None);
                     } else {
-                        let mut instance = sunrise_client::effects::EffectInstance::new(
-                            def.id,
-                            eff.duration,
-                            eff.amplifier,
-                        );
-                        instance.ambient = eff.ambient;
-                        instance.visible = eff.show_particles;
-                        instance.show_icon = eff.show_icon;
                         changed |= self.add_player_effect(instance);
                     }
                 }
                 changed
             }
             ConsumeEffect::ClearAllEffects => match mob {
-                Some(living) => self.living_remove_all_effects(living),
+                Some(living) => {
+                    let commands::Target::Mob(_) = self.native_living_target(living)? else {
+                        return None;
+                    };
+                    self.living_remove_all_effects(living)
+                }
                 None => self.remove_player_effects(None),
             },
             ConsumeEffect::RemoveEffects(effects) => {
                 let mut changed = false;
-                for effect in effects {
-                    changed |= match mob {
-                        Some(living) => sunrise_client::brewing::effect(effect)
-                            .and_then(|def| mod_api::__private::effect_key_by_index(def.index))
-                            .is_some_and(|key| self.living_remove_effect(living, key)),
-                        None => sunrise_client::brewing::effect(effect)
-                            .is_some_and(|def| self.remove_player_effects(Some(def.index))),
+                if let Some(living) = mob {
+                    let commands::Target::Mob(id) = self.native_living_target(living)? else {
+                        return None;
                     };
+                    for effect in effects {
+                        changed |= sunrise_client::brewing::effect(effect)
+                            .is_some_and(|def| self.remove_mob_effect_by_index(id, def.index));
+                    }
+                } else {
+                    for effect in effects {
+                        changed |= sunrise_client::brewing::effect(effect)
+                            .is_some_and(|def| self.remove_player_effects(Some(def.index)));
+                    }
                 }
                 changed
             }

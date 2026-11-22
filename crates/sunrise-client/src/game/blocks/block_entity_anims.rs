@@ -346,9 +346,19 @@ impl Game<'_> {
                 self.particles.add(&options, p, [0.0; 3]);
             }
             // makeRaidersGlow (the server's effect).
-            for m in self.mobs.iter_mut().filter(|_| self.remote.is_none()) {
-                if glow.contains(&u64::from(m.id)) {
-                    m.add_effect("minecraft:glowing", 60, 0);
+            if self.remote.is_none() {
+                let targets: Vec<u32> = self
+                    .mobs
+                    .iter()
+                    .filter(|m| glow.contains(&u64::from(m.id)))
+                    .map(|m| m.id)
+                    .collect();
+                for mob_id in targets {
+                    self.add_mob_effect(
+                        mob_id,
+                        sunrise_client::effects::EffectInstance::new("glowing", 60, 0),
+                        None,
+                    );
                 }
             }
         }
@@ -656,7 +666,7 @@ impl Game<'_> {
                 ambient: true,
                 ..EffectInstance::new("conduit_power", 260, 0)
             };
-            g.apply_player_effect(power);
+            g.add_player_effect(power);
         });
     }
     /// `Entity.isInRain`: rain at the block position or at the top of the box.

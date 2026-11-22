@@ -555,10 +555,11 @@ impl Game<'_> {
                 }
                 merchant::Event::LevelUp(_) => {
                     if let Some(id) = mob {
-                        let _ =
-                            self.mutate_mob_effects(id, Some("minecraft:regeneration"), |mob| {
-                                mob.add_effect("minecraft:regeneration", 200, 0)
-                            });
+                        let _ = self.add_mob_effect(
+                            id,
+                            sunrise_client::effects::EffectInstance::new("regeneration", 200, 0),
+                            None,
+                        );
                     }
                 }
                 merchant::Event::TradeUpdated(yes, pitch) => {

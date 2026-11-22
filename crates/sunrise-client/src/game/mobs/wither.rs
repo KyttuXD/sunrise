@@ -289,14 +289,18 @@ impl Game<'_> {
                         Some("minecraft:wither_skull"),
                     );
                 }
-                if survived_hit
-                    && wither_ticks > 0
-                    && let Some(m) = self
-                        .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id && m.species() != Species::Wither)
-                {
-                    m.add_effect("minecraft:wither", wither_ticks, 1);
+                if survived_hit && wither_ticks > 0 {
+                    let effect_source = match live_owner {
+                        Some(Who::Mob(owner_id)) => self.entity(owner_id),
+                        Some(Who::Player) => self.entity(self.own_entity_id() as u32),
+                        None => None,
+                    }
+                    .or_else(|| self.entity(p.id));
+                    self.add_mob_effect(
+                        id,
+                        sunrise_client::effects::EffectInstance::new("wither", wither_ticks, 1),
+                        effect_source,
+                    );
                 }
                 if killed {
                     self.heal_skull_owner(p, live_owner);

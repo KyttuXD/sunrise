@@ -1,0 +1,1 @@
+sunrise-client game::potions::tests::mob_effect_added_event_and_part_on_effect_added_contract lib daily resources

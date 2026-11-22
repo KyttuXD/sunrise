@@ -1028,17 +1028,20 @@ impl Game<'_> {
             }
             return;
         }
+        let source = mob.and_then(|id| self.entity(id));
         match target {
             Who::Player => {
                 self.combat.stuck.add_stinger();
                 if poison_ticks > 0 {
-                    self.give_player_effect("minecraft:poison", poison_ticks, 0);
+                    self.give_player_effect_from("minecraft:poison", poison_ticks, 0, source);
                 }
             }
             Who::Mob(id) if poison_ticks > 0 => {
-                if let Some(t) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    t.add_effect("minecraft:poison", poison_ticks, 0);
-                }
+                self.add_mob_effect(
+                    id,
+                    sunrise_client::effects::EffectInstance::new("poison", poison_ticks, 0),
+                    source,
+                );
             }
             Who::Mob(_) => {}
         }

@@ -1738,14 +1738,19 @@ impl Game<'_> {
         let Some(mob) = self.mobs.get_mut(index) else {
             return;
         };
-        let Some(hit) = mob.damage_completion.take() else {
+        let id = mob.id;
+        let hit = mob.damage_completion.take();
+        let kind = hit
+            .as_ref()
+            .and_then(|hit| hit.post.as_ref())
+            .map(|_| mob.kind.clone());
+        let death = hit.is_some().then(|| mob.clone());
+        self.flush_mob_death_protection(id);
+        let Some((hit, death)) = hit.zip(death) else {
             return;
         };
-        let id = mob.id;
         // Keep the hit apart from the body: the death hooks may remove or revive it.
-        let kind = hit.post.as_ref().map(|_| mob.kind.clone());
         if self.died.insert(id) {
-            let death = mob.clone();
             self.mob_die(&death);
         }
         if let Some((post, kind)) = hit.post.zip(kind) {
@@ -2244,6 +2249,39 @@ impl Game<'_> {
             self.creaking_hurt(home, id, by_player);
         }
     }
+    /// Apply any queued death-protection consume effects for `mob` right after
+    /// a `Mob::damage*` call returns so `MobEffectEvent.Remove`, `Applicable`,
+    /// `Added` and `MobEffectPart::on_effect_added` run immediately instead of
+    /// waiting for the end-of-tick outbox drain.
+    pub(in crate::game) fn flush_mob_death_protection(&mut self, mob: u32) {
+        let Some(index) = self.mob_index.find(&self.mobs, mob) else {
+            return;
+        };
+        let m = &mut self.mobs[index];
+        if !m
+            .outbox
+            .iter()
+            .any(|e| matches!(e, MobEvent::DeathProtectionEffects { .. }))
+        {
+            return;
+        }
+        let mut pending = Vec::new();
+        let mut kept = Vec::with_capacity(m.outbox.len());
+        for event in std::mem::take(&mut m.outbox) {
+            match event {
+                MobEvent::DeathProtectionEffects {
+                    mob,
+                    stack,
+                    effects,
+                } => pending.push((mob, stack, effects)),
+                other => kept.push(other),
+            }
+        }
+        m.outbox = kept;
+        for (mob, stack, effects) in pending {
+            self.apply_mob_death_protection_effects(mob, &stack, &effects);
+        }
+    }
     /// `LivingEntity.resolvePlayerResponsibleForDamage` after `source` hurt a mob, through the
     /// hit's credit loan (a tame wolf's hit is its owner's; an ownerless tame wolf clears it):
     /// what an accepted hit's site commits, for tests that set up the credit without a hit.
@@ -2497,6 +2535,11 @@ impl Game<'_> {
                     speed,
                 } => self.landing_dust(state, Vec3::new(at[0], at[1], at[2]), count, speed),
                 MobEvent::DrinkFinished { mob, stack } => self.finish_mob_drink(mob, &stack),
+                MobEvent::DeathProtectionEffects {
+                    mob,
+                    stack,
+                    effects,
+                } => self.apply_mob_death_protection_effects(mob, &stack, &effects),
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Drown { mob, at, bubbles } => self.mob_drown(mob, at, bubbles),
@@ -2925,11 +2968,26 @@ impl Game<'_> {
                     // CaveSpider, Husk and WitherSkeleton.doHurtTarget: the
                     // effect sits inside the branch where the hit landed, and
                     // `LivingEntity.addEffect` takes a mob as well as a player.
+                    let attacker = source.attacker;
                     self.combat.hit_landed = self.mob_attacks_mob(target, amount, source);
                     if self.combat.hit_landed
-                        && let Some(t) = self.mobs.iter_mut().find(|m| m.id == target)
+                        && let Some(def) = sunrise_client::brewing::effect(effect)
                     {
-                        t.add_effect(effect, ticks, amplifier);
+                        let effect_source = match attacker {
+                            Some(Who::Mob(id)) => self.entity(id),
+                            Some(Who::Player) => self
+                                .player
+                                .as_ref()
+                                .and_then(|p| self.entity(p.entity_id as u32)),
+                            None => None,
+                        };
+                        self.add_mob_effect(
+                            target,
+                            sunrise_client::effects::EffectInstance::from_def(
+                                def, ticks, amplifier,
+                            ),
+                            effect_source,
+                        );
                     }
                 }
                 MobEvent::CubeHurtPlayer { cube, amount, from } => {
@@ -3678,8 +3736,14 @@ impl Game<'_> {
                     ticks,
                     amplifier,
                 } => {
-                    if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
-                        t.add_effect(effect, ticks, amplifier);
+                    if let Some(def) = sunrise_client::brewing::effect(effect) {
+                        self.add_mob_effect(
+                            target,
+                            sunrise_client::effects::EffectInstance::from_def(
+                                def, ticks, amplifier,
+                            ),
+                            None,
+                        );
                     }
                 }
                 MobEvent::Ignite(target, seconds) => self.ignite_entity(target, seconds)?,
@@ -4599,13 +4663,33 @@ impl Game<'_> {
     ) {
         self.give_mob_effect(effect, ticks, amplifier, false);
     }
+    /// [`Self::give_player_effect`] with an explicit causing entity for `MobEffectEvent.Added`.
+    pub(in crate::game) fn give_player_effect_from(
+        &mut self,
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+        source: Option<mod_api::EntityRef>,
+    ) {
+        self.give_mob_effect_from(effect, ticks, amplifier, false, source);
+    }
     /// A mob's effect on the player. Creative and spectator players shrug off
     /// the damaging effects here, but the nautilus's ambient Breath is plain
     /// `addEffect` and lands in every game mode.
     fn give_mob_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32, ambient: bool) {
+        self.give_mob_effect_from(effect, ticks, amplifier, ambient, None);
+    }
+    fn give_mob_effect_from(
+        &mut self,
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+        ambient: bool,
+        source: Option<mod_api::EntityRef>,
+    ) {
         let immune = self.creative || self.spectator();
         if let Some(instance) = mob_effect_instance(effect, ticks, amplifier, ambient, immune) {
-            self.apply_player_effect(instance);
+            self.add_player_effect_from(instance, source);
         }
     }
     /// `WitherRoseBlock.entityInside` for the player: on a server level that
@@ -6652,43 +6736,67 @@ impl Game<'_> {
                 }
             },
             // ShulkerBullet.onHitEntity: 4 damage, then levitation for 10 s.
-            (ProjectileKind::ShulkerBullet { .. }, Hit::Entity { who, .. }) => match who {
-                Who::Player => {
-                    // Only a hit that hurt (`wasHurt`) brings the levitation.
-                    if self.mob_hits_player(
-                        4.0,
-                        [p.previous.x, p.previous.y, p.previous.z],
-                        "minecraft:mob_projectile",
-                    ) {
-                        self.give_player_effect("minecraft:levitation", 200, 0);
-                    }
+            (ProjectileKind::ShulkerBullet { .. }, Hit::Entity { who, .. }) => {
+                let effect_source = match p.owner {
+                    Some(Who::Mob(id)) => self.entity(id),
+                    Some(Who::Player) => self
+                        .player
+                        .as_ref()
+                        .and_then(|player| self.entity(player.entity_id as u32)),
+                    None => None,
                 }
-                Who::Mob(id) => {
-                    let Some(index) = self.mob_index.find(&self.mobs, id) else {
-                        return Ok(());
-                    };
-                    let join = self.mobs[index].join;
-                    let same_target = |m: &Mob| m.id == id && m.join == join && !m.removed;
-                    if self.damage_projectile_with_weapon(p, id, 4.0, source, aim) {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| same_target(m)) {
-                            // Shulker.hurtServer: a shulker hit by a bullet.
-                            sunrise_client::mobs::shulker::hit_by_bullet(m);
-                        }
-                        // The hurt's teleport (`teleportSomewhere`,
-                        // `hitByShulkerBullet`) comes before the levitation.
-                        self.settle_hurt_teleports()?;
-                        self.shot_post_attack(
-                            p,
-                            who,
-                            "minecraft:shulker_bullet",
+                .or_else(|| self.entity(p.id));
+                match who {
+                    Who::Player => {
+                        // Only a hit that hurt (`wasHurt`) brings the levitation.
+                        if self.mob_hits_player(
+                            4.0,
+                            [p.previous.x, p.previous.y, p.previous.z],
                             "minecraft:mob_projectile",
-                        );
-                        if let Some(m) = self.mobs.iter_mut().find(|m| same_target(m)) {
-                            m.add_effect("minecraft:levitation", 200, 0);
+                        ) {
+                            self.give_player_effect_from(
+                                "minecraft:levitation",
+                                200,
+                                0,
+                                effect_source,
+                            );
+                        }
+                    }
+                    Who::Mob(id) => {
+                        let Some(index) = self.mob_index.find(&self.mobs, id) else {
+                            return Ok(());
+                        };
+                        let join = self.mobs[index].join;
+                        let same_target = |m: &Mob| m.id == id && m.join == join && !m.removed;
+                        if self.damage_projectile_with_weapon(p, id, 4.0, source, aim) {
+                            if let Some(m) = self.mobs.iter_mut().find(|m| same_target(m)) {
+                                // Shulker.hurtServer: a shulker hit by a bullet.
+                                sunrise_client::mobs::shulker::hit_by_bullet(m);
+                            }
+                            // The hurt's teleport (`teleportSomewhere`,
+                            // `hitByShulkerBullet`) comes before the levitation.
+                            self.settle_hurt_teleports()?;
+                            self.shot_post_attack(
+                                p,
+                                who,
+                                "minecraft:shulker_bullet",
+                                "minecraft:mob_projectile",
+                            );
+                            if self.mob_object(id).is_some_and(same_target) {
+                                self.add_mob_effect(
+                                    id,
+                                    sunrise_client::effects::EffectInstance::new(
+                                        "levitation",
+                                        200,
+                                        0,
+                                    ),
+                                    effect_source,
+                                );
+                            }
                         }
                     }
                 }
-            },
+            }
             // DragonFireball.onHit (its own owner's hit never gets here): the
             // dragon's breath where it burst.
             (ProjectileKind::DragonFireball, _) => self.dragon_fireball_on_hit(at),
@@ -7469,23 +7577,33 @@ impl Game<'_> {
                     .is_some_and(|t| t.contains(&*item)) =>
             {
                 consume = true;
-                m.add_effect("minecraft:poison", 900, 0);
                 let id = m.id;
-                let hurt = m.damage(
-                    crate::game::entity::damage_level_of!(
-                        self,
-                        &sunrise_client::health::NO_ATTACK,
-                        &mut credit_plan.lend(&mut self.last_hurt_by_player),
-                        None
-                    ),
-                    f32::MAX,
-                    sunrise_client::mobs::Damage::player(player_at.unwrap_or(center)),
+                let join = m.join;
+                self.add_mob_effect(
+                    id,
+                    sunrise_client::effects::EffectInstance::new("poison", 900, 0),
+                    None,
                 );
-                // The feeder gets the kill, as for a normal player attack.
-                if hurt {
-                    self.remember_mob_player_credit(id);
+                if let Some(index) = self.mob_index.find(&self.mobs, id)
+                    && self.mobs[index].join == join
+                    && !self.mobs[index].removed
+                {
+                    let hurt = self.mobs[index].damage(
+                        crate::game::entity::damage_level_of!(
+                            self,
+                            &sunrise_client::health::NO_ATTACK,
+                            &mut credit_plan.lend(&mut self.last_hurt_by_player),
+                            None
+                        ),
+                        f32::MAX,
+                        sunrise_client::mobs::Damage::player(player_at.unwrap_or(center)),
+                    );
+                    // The feeder gets the kill, as for a normal player attack.
+                    if hurt {
+                        self.remember_mob_player_credit(id);
+                    }
+                    self.finish_mob_damage_at(index);
                 }
-                self.finish_mob_damage_at(index);
             }
             // Parrot.mobInteract: parrot food may tame a wild one (one time in
             // ten); a parrot never takes it as Animal food (isFood is false).
@@ -7545,11 +7663,13 @@ impl Game<'_> {
                         "minecraft:wither_rose" | "minecraft:open_eyeblossom"
                     ) =>
             {
-                if &*item == "minecraft:wither_rose" {
-                    m.add_effect("minecraft:wither", 40, 0);
+                let id = m.id;
+                let effect = if &*item == "minecraft:wither_rose" {
+                    sunrise_client::effects::EffectInstance::new("wither", 40, 0)
                 } else {
-                    m.add_effect("minecraft:poison", 25, 0);
-                }
+                    sunrise_client::effects::EffectInstance::new("poison", 25, 0)
+                };
+                self.add_mob_effect(id, effect, None);
                 consume = true;
             }
             // Ocelot.mobInteract: raw fish from a hand within 3 blocks, while it comes for the

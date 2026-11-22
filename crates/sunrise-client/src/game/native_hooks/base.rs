@@ -3934,29 +3934,6 @@ impl Game<'_> {
     pub(in crate::game) fn native_on_equip(&mut self, slot: &str, new: Option<&ItemStack>) {
         self.fire_on_equip(slot, new);
     }
-    /// `MobEffect.onEffectAdded`: `LivingEntity.addEffect` gave `entity`
-    /// the content mod's effect `effect`,
-    /// which it didn't have. Server-side.
-    pub(in crate::game) fn native_on_effect_added(
-        &mut self,
-        effect: EffectKey,
-        entity: Option<i32>,
-        amplifier: i32,
-    ) {
-        self.fire_on_effect_added(effect, entity, amplifier);
-    }
-    /// NeoForge's `MobEffectEvent.Added`, vanilla's `MobEffect.onEffectStarted`:
-    /// every `LivingEntity.addEffect` of the content mod's effect `effect`,
-    /// new or not, changed or not, after `native_on_effect_added`.
-    /// Server-side.
-    pub(in crate::game) fn native_mob_effect_added(
-        &mut self,
-        effect: EffectKey,
-        entity: Option<i32>,
-        amplifier: i32,
-    ) {
-        self.fire_mob_effect_added(effect, entity, amplifier);
-    }
     /// LivingEntity.knockback before resistance and motion, after the unchanged v1 hook.
     /// Cancellation from either hook wins. Attacker is the attacking entity's network id,
     /// falling back to the victim's last hurt-by mob, or 0 when unknown; `attacker_main` and

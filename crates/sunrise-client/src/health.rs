@@ -800,6 +800,11 @@ impl DamageLevel<'_> {
         };
         hook(self.reborrow(), hurting, off_hand)
     }
+    /// Whether this level belongs to a logical server `Game` whose hooks
+    /// apply mob death-protection and effect additions through the owning loop.
+    pub fn defers_death_protection_effects(&self) -> bool {
+        !self.client_side && self.hooks.totem.is_some()
+    }
 }
 /// The block an entity with no raised item is asked about: none, and one a mod forces
 /// stops the whole hit.

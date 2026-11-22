@@ -321,13 +321,13 @@ pub trait LivingBackendMut {
     /// Side: server.
     /// `LivingEntity.addEffect(instance)`: gives the living entity the
     /// effect by the game's own path. A player's or a guest's goes through
-    /// `add_player_effect` (so `MobEffectInstance.update`'s rules, the
-    /// attribute modifiers, absorption and the added-effect hooks of a
-    /// content mod's effect all apply); a mob's goes past `canBeAffected`
-    /// (a spider shrugs off poison) into its effects with the same hooks.
+    /// `add_player_effect` and a mob's goes through `add_mob_effect`, so
+    /// `canBeAffected`, `mob_effect_applicable`, `mob_effect_added`,
+    /// `MobEffectInstance.update`, attribute modifiers, absorption and
+    /// `MobEffectPart::on_effect_added` all apply in vanilla/NeoForge order.
     /// The amplifier is cut to 0..=255 and the duration is -1 (infinite) or
     /// ticks. False before effect resolution, for a duration below -1, an armor
-    /// stand, the dragon, a stale handle or a client, or when the active
+    /// stand, the dragon, a wither, a stale handle or a client, or when the active
     /// instance did not change, as in vanilla's `addEffect`.
     fn living_add_effect(&mut self, living: LivingRef, effect: &ActiveEffect) -> bool;
     /// Side: server.

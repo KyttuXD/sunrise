@@ -1608,15 +1608,17 @@ one, where vanilla gives the `by` one.
   `fluids`, so they survive restarts, and the block's own tick reads them there. Other blocks and mods reach them, and a
   cauldron's, through the [`FLUIDS` capability](../concepts/capabilities/block-fluids.md).
 
-- A content effect's tick behaviour belongs to its [`MobEffectPart`](../how-to/entities/effect-ticks.md), not global listeners.
-  `on_effect_added` hears a content effect given to an entity that did not have it; `mob_effect_added` (NeoForge's `MobEffectEvent.Added`) hears every addition.
-  The three moments around them cover every effect, vanilla's included: `mob_effect_applicable`
+- A content effect's own behaviour belongs to its [`MobEffectPart`](../how-to/entities/effect-ticks.md), not global listeners:
+  `MobEffectPart::on_effect_added` (`MobEffect.onEffectAdded`, version 2) runs after `LivingEntity.addEffect` inserts an instance of that effect the entity did not already have (never on reapplications, `forceAddEffect`, load or sync), and `should_apply_effect_tick_this_tick` / `apply_effect_tick` own its tick cadence and action.
+  The four global `MobEffectEvent` hooks cover every effect, vanilla's included, and all name their entity as a `LivingRef` (the player's own included): `mob_effect_applicable`
   (NeoForge's `MobEffectEvent.Applicable`, vanilla's `canBeAffected`) answers whether an effect can land — the first
   mod to answer `Allow` or `Deny` overrides the vanilla tag check, and an unanswered hook falls
-  back to it; `mob_effect_expired` (`.Expired`) hears one count down to nothing — cancelling
+  back to it; `mob_effect_added` (NeoForge's `MobEffectEvent.Added`, version 2) hears every accepted
+  addition pre-mutation with `old_effect`, `new_effect` and optional `source` (including reapplications
+  and unchanged updates, non-cancellable); `mob_effect_expired` (`.Expired`) hears one count down to nothing — cancelling
   refuses the expiry, and the effect stays, kept at no ticks and asked again next tick;
   `mob_effect_remove` (`.Remove`) hears one about to be removed by any path — a command, milk or a
-  mod's removal helper — and cancelling keeps it. All three name their entity as a `LivingRef`, the player's own included.
+  mod's removal helper — and cancelling keeps it.
 
 - Chunks and players coming and going, on the server: `chunk_load` (with whether the chunk is new), `chunk_unload`, and
   `player_logged_in` and `player_logged_out` (version 2), which come in pairs for network players however they leave, the server stopping included. A kicked fake also produces logout without a preceding login; silent `remove_fake` produces neither. Changes made to the departing chunk in `chunk_unload` aren't saved: as in vanilla, the chunk is saved before it unloads.
