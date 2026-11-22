@@ -235,6 +235,10 @@ pub struct EntityMemory {
     pub(super) joins_canceled: u32,
     /// The latest insertion considered for `native_entity_join_level`.
     pub(super) joined_seq: sunrise_client::join_seq::JoinSeq,
+    /// Joins admitted synchronously (`admit_fresh_join`) whose `JoinSeq` is
+    /// still ahead of `joined_seq`: kept independently of `live` so a later
+    /// flush never re-announces an entity that already joined and left.
+    pub(super) admitted_joins: Vec<(sunrise_client::join_seq::JoinSeq, u32)>,
     /// The entities mods were told of and that have not left since: id (in
     /// increasing order), type, and whether the last leave sweep saw it.
     /// Only filled while a mod is loaded.
@@ -2130,14 +2134,103 @@ impl Game<'_> {
         }
         out.into_iter().collect()
     }
-    /// Write the entities of every resident chunk (an autosave or quit).
+    /// Every chunk that currently holds an in-memory savable entity or kept
+    /// unknown record (`PersistentEntitySectionManager.getAllChunksToSave`).
+    fn occupied_entity_chunks(&self) -> HashSet<ChunkKey> {
+        use super::entity::{Entity as _, entity_lists_of, for_each_entity};
+        let mut keys = HashSet::new();
+        let mut include = |id: u32, at: Vec3| {
+            if at.x.is_finite() && at.z.is_finite() && !self.persist.transient.contains(&id) {
+                keys.insert(chunk_of(at));
+            }
+        };
+        for_each_entity!(entity_lists_of!(self), e => {
+            if !e.is_removed() {
+                include(e.id(), e.position());
+            }
+        });
+        if let Some(d) = self.dragon.as_ref() {
+            include(d.id, d.position);
+        }
+        for c in &self.crystals {
+            include(c.id, c.position);
+        }
+        for s in &self.ominous_spawners {
+            include(s.id, Vec3::new(s.position[0], s.position[1], s.position[2]));
+        }
+        for f in &self.item_frames {
+            let (lo, hi) = f.bounds();
+            include(
+                f.id,
+                Vec3::new(
+                    (lo[0] + hi[0]) / 2.0,
+                    (lo[1] + hi[1]) / 2.0,
+                    (lo[2] + hi[2]) / 2.0,
+                ),
+            );
+        }
+        for c in &self.cushions {
+            include(c.id, c.position);
+        }
+        for p in &self.paintings {
+            include(p.id, painting_center(p));
+        }
+        for f in &self.fangs.list {
+            include(f.id, Vec3::new(f.pos[0], f.pos[1], f.pos[2]));
+        }
+        for c in &self.breath_clouds {
+            if c.potion.is_some() {
+                include(c.id, Vec3::new(c.at[0], c.at[1], c.at[2]));
+            }
+        }
+        for o in &self.others {
+            if o.kind.as_str() != "minecraft:leash_knot" {
+                include(o.id, o.position);
+            }
+        }
+        keys.extend(self.persist.unknown.keys().copied());
+        keys
+    }
+    /// Write the entities of every resident chunk and every occupied hidden
+    /// entity section (`PersistentEntitySectionManager.getAllChunksToSave`).
     /// Without `wait` (the autosave) they are written on the region writer
     /// meanwhile: `PersistentEntitySectionManager.autoSave` stores them
     /// without `saveAll`'s flush.
     pub(super) fn save_entities(&mut self, wait: bool) -> Result<()> {
         self.spawn_loaded_entities();
-        let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
-        let chunks = self.entity_chunks(&keys, false);
+        let resident: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
+        let mut keys = resident.clone();
+        keys.extend(self.occupied_entity_chunks());
+        let mut chunks = self.entity_chunks(&keys, false);
+        // Unloaded columns may already hold saved entities on disk that were
+        // never loaded into memory: merge them with the freshly snapshotted
+        // hidden-section entities, deduplicating by UUID so repeat saves stay
+        // idempotent and never clobber existing column records.
+        chunks.retain_mut(|(key, fresh)| {
+            if resident.contains(key) {
+                return true;
+            }
+            if fresh.is_empty() {
+                return false;
+            }
+            let Ok(existing) = self.save.load_entities(key.0, key.1) else {
+                return false;
+            };
+            if existing.is_empty() {
+                return true;
+            }
+            let fresh_uuids: HashSet<[i32; 4]> =
+                fresh.iter().filter_map(entity_nbt::uuid).collect();
+            let mut merged: Vec<Tag> = existing
+                .into_iter()
+                .filter(|tag| {
+                    !entity_nbt::uuid(tag).is_some_and(|uuid| fresh_uuids.contains(&uuid))
+                })
+                .collect();
+            merged.append(fresh);
+            *fresh = merged;
+            true
+        });
         self.prune_entity_memory();
         if wait {
             self.save.save_entities(chunks)
@@ -2405,15 +2498,20 @@ impl Game<'_> {
         i: usize,
         keys: &HashSet<ChunkKey>,
     ) -> Option<(ChunkKey, Tag)> {
-        let f = &self.falling[i];
-        if !keys.contains(&chunk_of(f.position)) {
+        let (id, pos) = (self.falling[i].id, self.falling[i].position);
+        if !keys.contains(&chunk_of(pos)) {
             return None;
         }
+        let uuid = if id != 0 {
+            self.uuid_for(id)
+        } else {
+            random_uuid()
+        };
+        let f = &self.falling[i];
         let raw = match &f.saved {
             Some(saved) => Some(saved.1.clone()),
             None => anon_raw(&self.persist, "minecraft:falling_block", f.position),
         };
-        let uuid = saved_uuid(&self.persist, f.id);
         let tag = entity_nbt::falling_block_to_nbt(
             self.state_to_nbt(f.state),
             f.position,
@@ -2432,7 +2530,7 @@ impl Game<'_> {
             // Its simulated fire, not a saved copy's (`with_raw` keeps those).
             fields.insert("Fire".into(), Tag::Short(f.fire_ticks as i16));
         }
-        Some((chunk_of(f.position), tag))
+        Some((chunk_of(pos), tag))
     }
     pub(super) fn save_rocket(
         &mut self,

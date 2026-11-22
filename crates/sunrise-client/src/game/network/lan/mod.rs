@@ -1952,6 +1952,8 @@ impl Game<'_> {
             e.meta.push((8, serializer::INT, Value::Int(o.value)));
         }
         self.lan_object_states(out, drain_minecart_steps, after);
+        // PersistentEntitySectionManager only tracks accessible sections.
+        out.retain(|entity| self.entity_position_accessible(entity.position));
     }
 
     /// `LivingEntity.updateSynchronizedMobEffectParticles` while a native mod

@@ -228,6 +228,9 @@ impl Game<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
     ) {
+        if transferred.is_none() && uuid.is_some_and(|u| self.target_with_uuid(u).is_some()) {
+            return;
+        }
         if let Some((state, position, velocity, age, fall_distance)) =
             entity_nbt::falling_block_from_nbt(&tag)
             && let Some(state) =

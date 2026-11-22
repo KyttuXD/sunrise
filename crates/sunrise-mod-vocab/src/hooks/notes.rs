@@ -1249,17 +1249,23 @@ devices probes each one: ask from setup or a settings screen, not every frame.
 
 ### Falling blocks
 
-`crates/sunrise-client/src/game/modding/native_falling.rs`: a helper for server mods, for the level in place, on a server only. It
-names the level it means by its `dimension` (`minecraft:overworld`), as `native_set_block` does.
+`crates/sunrise-client/src/game/modding/native_falling.rs`: falling-block spawning for server mods through a
+`LevelRef`, sharing `Game::spawn_falling_block_entity` with `LevelEvent::FallingBlock`.
 
-- `native_spawn_falling_block(dimension, state, pos, velocity, falling)` throws a falling block of `state` from `pos` (its
-  bottom centre) at `velocity` in blocks a tick, each axis cut to 3.9. It flies, lands and places itself as sand does, or
-  drops as an item where it can't be placed. `Falling` holds `drop_item` (default true) and `hurts` (hurts what it
-  lands on as an anvil does, 2 a block fallen and 40 at most; default false).
-- The block at `pos` stays: take it away first with `native_set_block` to make a block fall out of the world, as an
+- `level.spawn_falling_block(host, state, pos, velocity, falling)` spawns a falling block of `state` at `pos` (its
+  bottom centre) with initial `velocity` in blocks a tick (`Entity.setDeltaMovement`, kept exact on live state while
+  network packets quantize through `LpVec3` on send). It flies, lands and places itself as sand does, or drops as an
+  item where it can't. `Falling` holds `drop_item` (default true) and `hurts` (hurts what it lands on as an anvil
+  does, 2 a block fallen and 40 at most; default false). Any valid block state is accepted, including air (which
+  vanilla discards on its first tick in `FallingBlockEntity.tick`), with no per-level count cap.
+- The block at `pos` stays: take it away first with `level.set_block` to make a block fall out of the world, as an
   explosion's debris or a collapsing tower would.
-- It answers false, throwing nothing, on a client, for another dimension, air or an unknown state, a chunk that isn't
-  loaded, a value that isn't finite, or with 1024 falling blocks in the level already.
+- The named open level can be parked. The call neither requires nor loads the destination chunk;
+  section visibility and ticking govern when the admitted entity is active.
+- It runs `entity_constructing` and `entity_join_level` at the call. A transaction in the destination level
+  delays the join until root commit and makes the returned handle stale on abort or a veto at commit.
+  `Ok(None)` means non-finite coordinates or velocity, exhausted entity ids, or an immediate join veto.
+  `Err(LevelWriteError)` means a stale or closed level, a client, or an unknown block state.
 
 ### Bulk block edits
 
@@ -1807,8 +1813,8 @@ game `Host`, handle constructors or transactions. Declarations still go on each 
 
 - The open screen hears of a mouse button going down (`screen_mouse_button_pressed_pre`) or up (`screen_mouse_button_released_pre`) before it acts, as NeoForge's `ScreenEvent.MouseButtonPressed.Pre` and `.MouseButtonReleased.Pre`: the screen, the GLFW button (0 left, 1 right, 2 middle, 3 back, 4 forward; a button past those is the platform's own number, which differs between systems) and GLFW's modifier bits (shift 1, control 2, alt 4, super 8), with the pointer in `screen.mouse`. A real press also carries `double_click`, true when the last handled press was on this screen instance with this button less than 250 ms ago. A cancelled press skips the screen handler, Post and gameplay mappings, but counts as handled for double-click detection. Cancel a release only when its press was cancelled, or a drag it ended stays held. These hooks cover the game's and title's screens, not the connect and loading screens, prompts, books and sign editors drawn over gameplay, or a gamepad or keyboard-focus click.
 
-- [falling blocks](#falling-blocks) for server mods: `native_spawn_falling_block(dimension, state, pos, velocity, falling)`
-  throws a block that flies, lands and places itself as sand does, for debris and collapsing structures.
+- [falling blocks](#falling-blocks) for server mods: `level.spawn_falling_block(host, state, pos, velocity, falling)`
+  spawns a falling block that flies, lands and places itself as sand does, for debris and collapsing structures.
 
 - Camera shake for client mods: `camera_shake(partial, shake)` asks each frame for turns in degrees and an
   offset in blocks, which add up across mods and multiply into the view after its bobbing. Sunrise scales the sum by

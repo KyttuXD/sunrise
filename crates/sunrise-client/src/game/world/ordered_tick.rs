@@ -179,7 +179,9 @@ impl Game<'_> {
                         continue;
                     };
                     let at = self.tnts[i].position;
-                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
+                        && self.entity_position_accessible([at.x, at.y, at.z])
+                    {
                         let t = &self.tnts[i];
                         let area = t.bounds().expand_towards(t.velocity);
                         obstacles
@@ -203,7 +205,9 @@ impl Game<'_> {
                         continue;
                     };
                     let at = self.falling[i].position;
-                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
+                        && self.entity_position_accessible([at.x, at.y, at.z])
+                    {
                         events = true;
                         let f = &self.falling[i];
                         let area = sunrise_client::falling_block::bounds(f.position)
@@ -225,7 +229,9 @@ impl Game<'_> {
                         continue;
                     };
                     let at = self.others[i].position;
-                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                    if entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
+                        && self.entity_position_accessible([at.x, at.y, at.z])
+                    {
                         self.native_other_tick_alone(told, i);
                     }
                 }
@@ -234,7 +240,9 @@ impl Game<'_> {
                         continue;
                     };
                     let at = self.orbs[i].position;
-                    if !entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                    if !entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
+                        || !self.entity_position_accessible([at.x, at.y, at.z])
+                    {
                         continue;
                     }
                     // ExperienceOrb.tick runs scanForMerges before it moves.

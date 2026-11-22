@@ -358,6 +358,11 @@ impl Levels {
     pub fn random_tick_bounds(&self) -> Option<(i32, i32, i32, i32)> {
         self.1
     }
+    /// `ChunkLevel.fullStatus` is `FULL` or better: the chunk's entity section
+    /// is accessible (`Visibility.fromFullChunkStatus`).
+    pub fn loaded(&self, x: i32, z: i32) -> bool {
+        self.get(x, z).is_none_or(|(l, _)| l <= FULL)
+    }
     /// The loading track has `FullChunkStatus.ENTITY_TICKING`, independently
     /// of whether the simulation tracker also permits entities to tick.
     pub fn loaded_entity_ticking(&self, x: i32, z: i32) -> bool {
@@ -484,6 +489,11 @@ impl ChunkTickets {
     }
     pub fn levels(&self) -> Levels {
         self.levels.clone()
+    }
+    /// Whether chunk `(x, z)` is at `FULL` or better in the current ticket map
+    /// (accessible everywhere while no ticket sources are set).
+    pub fn loaded(&self, x: i32, z: i32) -> bool {
+        self.levels.loaded(x, z)
     }
     /// A level's tickets as `TicketStorage.activateAllDeactivatedTickets`
     /// leaves its saved `PORTAL` ones: each keeps its level and the ticks it
