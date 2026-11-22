@@ -1275,47 +1275,52 @@ impl Game<'_> {
     /// `LivingEntity.onChangedBlock`, landing and `collectEquipmentChanges`
     /// for an armor stand: run location effects before travel (including a
     /// piston push), on landing, and for newly equipped items.
-    pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+    pub(super) fn armor_stand_location_effects(&mut self, mut index: usize, landed: bool) {
         let stand = &mut self.armor_stands[index];
         let block = BlockPos::containing(stand.position);
         let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
-        // `collectEquipmentChanges` walks every `EquipmentSlot`, body and
-        // saddle included; only the six slots below wear enchantments.
-        let changed: [bool; 8] =
-            std::array::from_fn(|i| stand.equipment[i] != stand.enchantment_equipment[i]);
-        if !moved && !landed && !changed.iter().any(|c| *c) {
-            return;
-        }
         let id = stand.id;
-        let notify_epoch = (self.remote.is_none()
-            && !self.options.execution_role.is_client()
-            && mod_api::__private::listened(mod_api::HookId::LivingEquipmentChange))
-        .then(|| self.native_lifecycle.epoch())
-        .flatten();
-        if let Some(epoch) = notify_epoch {
-            let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
+        let mut changed = [false; 8];
+        if !landed {
+            let living = self
+                .equipment_change_epoch()
+                .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id)));
             for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
                 let i = slot as usize;
-                if !changed[i] {
+                let Some(stand) = self.armor_stands.get_mut(index).filter(|s| s.id == id) else {
+                    return;
+                };
+                let previous = stand.enchantment_equipment[i].as_ref();
+                let current = stand.equipment[i].as_ref();
+                use sunrise_client::mobs::finalize::EquipmentRead;
+                if EquipmentRead::same_slot(current.map(EquipmentRead::resident).as_ref(), previous)
+                {
                     continue;
                 }
-                let Some(stand) = self.armor_stands.get_mut(index).filter(|s| s.id == id) else {
-                    break;
-                };
-                let to = stand.equipment[i].clone();
-                let from = stand.enchantment_equipment[i].take();
-                self.dispatch_living_equipment_change(living, slot, from.as_ref(), to.as_ref());
-                if let Some(stand) = self.armor_stands.get_mut(index).filter(|s| s.id == id) {
-                    stand.enchantment_equipment[i] = to;
+                changed[i] = true;
+                let to = current.cloned();
+                if let Some(living) = living {
+                    let from = stand.enchantment_equipment[i].take();
+                    self.dispatch_living_equipment_change(living, slot, from.as_ref(), to.as_ref());
+                    if self
+                        .persist
+                        .removals
+                        .contains(&super::commands::Target::Stand(id))
+                    {
+                        return;
+                    }
+                    if self.armor_stands.get(index).is_none_or(|s| s.id != id) {
+                        let Some(actual) = self.armor_stands.iter().position(|s| s.id == id) else {
+                            return;
+                        };
+                        index = actual;
+                    }
                 }
+                self.armor_stands[index].enchantment_equipment[i] = to;
             }
-        } else {
-            let stand = &mut self.armor_stands[index];
-            for (i, is_changed) in changed.iter().enumerate() {
-                if *is_changed {
-                    stand.enchantment_equipment[i] = stand.equipment[i].clone();
-                }
-            }
+        }
+        if !moved && !landed && !changed.contains(&true) {
+            return;
         }
         let Some(stand) = self.armor_stands.get(index).filter(|s| s.id == id) else {
             return;
@@ -1328,7 +1333,17 @@ impl Game<'_> {
             .zip(sunrise_client::entities::ArmorStand::SLOTS)
             .enumerate()
             .filter(|(i, _)| moved || landed || changed[*i])
-            .filter(|(_, (stack, _))| {
+            .map(|(i, (stack, slot))| {
+                (
+                    if changed[i] {
+                        &stand.enchantment_equipment[i]
+                    } else {
+                        stack
+                    },
+                    slot,
+                )
+            })
+            .filter(|(stack, _)| {
                 moved
                     || landed
                     || !stack.as_ref().is_some_and(|stack| {
@@ -1348,8 +1363,7 @@ impl Game<'_> {
                             && component("!minecraft:damage").is_none()
                             && stack.damage >= max_damage
                     })
-            })
-            .map(|(_, item)| item);
+            });
         let disks = location_disks(
             &self.stations().enchantments,
             equipment,
@@ -1480,46 +1494,6 @@ impl Game<'_> {
                         })
                     })
             })
-    }
-    /// Enchantment attribute modifiers of active equipment, including held Efficiency.
-    /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
-    /// so the same enchantment on two pieces stacks instead of replacing itself.
-    pub(super) fn apply_enchantment_attributes(&mut self) {
-        let mut wanted: Vec<(String, String, f64, String)> = Vec::new();
-        for (stack, slot) in self
-            .armor
-            .iter()
-            .zip(["head", "chest", "legs", "feet"])
-            .chain([
-                (&self.inventory[self.selected], "mainhand"),
-                (&self.offhand, "offhand"),
-            ])
-        {
-            let Some(stack) = stack else { continue };
-            for sunrise_items::item_data::ModifierRow {
-                attribute: attr,
-                id,
-                amount,
-                operation: op,
-                slot: group,
-            } in self.stations().enchantments.modifier_rows(stack)
-            {
-                if super::equipment_modifier_applies(&group, slot) {
-                    wanted.push((attr, format!("{id}/{slot}"), amount, op));
-                }
-            }
-        }
-        let Some(p) = self.player.as_mut() else {
-            return;
-        };
-        for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
-            let _ = p.set_modifier_unclamped(&attr, &id, 0.0, &op, false);
-        }
-        for (attr, id, amount, op) in &wanted {
-            let _ = p.set_modifier_unclamped(attr, id, *amount, op, true);
-        }
-        let _ = p.clamp_health_to_max();
-        self.potions.enchant_modifiers = wanted;
     }
 }
 

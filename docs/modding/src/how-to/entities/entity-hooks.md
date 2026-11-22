@@ -34,6 +34,18 @@ Use `project()` when you need components or an owned stack after the callback. F
 server-side attacker's live weapon, use `with_weapon_item`; for the weapon recorded by a
 projectile, see [Death sources and weapons](../items/death-loot-context.md).
 
+## Listening for equipment changes
+
+Implement `living_equipment_change` to get a server-side notice for each changed slot. The event
+carries a `LivingRef`, an `EquipmentSlot`, and lazy `from` and `to` stack views (`None` means empty).
+Read `stack.item()` or `stack.count()` from a view; call `stack.project()` for components or an
+owned stack. The event cannot veto the change, and does not need a separate opt-in hook.
+
+Changes are checked in `EquipmentSlot` order; a write through `event.entity.set_equipment` to a
+later slot is visible when that slot is compared. A server player's main hand is the selected
+hotbar slot, and item use that changes its contents is reported in the same body tick. Mobs and
+armor stands also report changes, including what they wear on their first equipment tick.
+
 ## Checking an entity's tags
 
 In a server hook that gives you an entity and a host, use

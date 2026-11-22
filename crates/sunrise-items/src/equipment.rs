@@ -4,7 +4,10 @@
 //! and all of them save through it.
 use crate::item_nbt::{item_from_nbt, item_to_nbt};
 use crate::items::ItemStack;
-use sunrise_core::nbt::{Compound, Tag};
+use sunrise_core::{
+    equipment_slot::EquipmentSlot,
+    nbt::{Compound, Tag},
+};
 
 /// The slot names of the compound, by `EquipmentSlot` ordinal.
 pub const SLOT_NAMES: [&str; 8] = [
@@ -104,6 +107,25 @@ impl IntoIterator for Equipment {
 impl From<[Option<ItemStack>; 8]> for Equipment {
     fn from(slots: [Option<ItemStack>; 8]) -> Self {
         Self(slots)
+    }
+}
+
+/// A player's stack in `slot`, from its inventory, armour and off hand.
+pub fn player_slot<'a>(
+    inventory: &'a [Option<ItemStack>],
+    selected: usize,
+    armor: &'a [Option<ItemStack>; 4],
+    offhand: &'a Option<ItemStack>,
+    equipment: &'a Equipment,
+    slot: EquipmentSlot,
+) -> Option<&'a ItemStack> {
+    match slot {
+        EquipmentSlot::MainHand => inventory.get(selected)?.as_ref(),
+        EquipmentSlot::OffHand => offhand.as_ref(),
+        EquipmentSlot::Body | EquipmentSlot::Saddle => equipment.get(slot as usize),
+        EquipmentSlot::Feet | EquipmentSlot::Legs | EquipmentSlot::Chest | EquipmentSlot::Head => {
+            armor[HEAD - slot as usize].as_ref()
+        }
     }
 }
 

@@ -3308,7 +3308,7 @@ impl Hub {
     fn guest_equipment(&mut self, i: usize) -> Vec<(u8, Option<sunrise_protocol::item::Stack>)> {
         for index in 0..equipment_cache::SLOTS {
             let g = &self.guests[i];
-            let source = equipment_source(g, index);
+            let source = g.equipment_in(sunrise_core::equipment_slot::EquipmentSlot::ALL[index]);
             if !g.equipment_cache.is_stale(index, source) {
                 continue;
             }
@@ -5230,18 +5230,6 @@ fn listed_properties(
     }
 }
 
-/// The source in wire slot order: hands, armor feet..head, body, saddle.
-fn equipment_source(g: &Guest, index: usize) -> Option<&ItemStack> {
-    match index {
-        0 => g.inventory.get(g.selected)?.as_ref(),
-        1 => g.offhand.as_ref(),
-        2..=5 => g.armor[5 - index].as_ref(),
-        6 => g.equipment[sunrise_items::equipment::BODY].as_ref(),
-        7 => g.equipment[sunrise_items::equipment::SADDLE].as_ref(),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     mod carried_check_tests;
@@ -6490,9 +6478,11 @@ mod tests {
             assert_eq!(hub.guest_equipment(0), first);
             for slot in 0..equipment_cache::SLOTS {
                 assert!(
-                    !hub.guests[0]
-                        .equipment_cache
-                        .is_stale(slot, equipment_source(&hub.guests[0], slot))
+                    !hub.guests[0].equipment_cache.is_stale(
+                        slot,
+                        hub.guests[0]
+                            .equipment_in(sunrise_core::equipment_slot::EquipmentSlot::ALL[slot])
+                    )
                 );
             }
         }

@@ -15,7 +15,10 @@ use std::{
         atomic::{AtomicI32, AtomicU64, Ordering},
     },
 };
-use sunrise_core::geometry::{Aabb, Vec3};
+use sunrise_core::{
+    equipment_slot::EquipmentSlot,
+    geometry::{Aabb, Vec3},
+};
 use sunrise_protocol::{
     attachment_sync,
     item::Stack,
@@ -572,6 +575,18 @@ pub struct Guest {
 }
 
 impl Guest {
+    /// The complete player equipment slot, in vanilla `EquipmentSlot` order.
+    pub fn equipment_in(&self, slot: EquipmentSlot) -> Option<&ItemStack> {
+        sunrise_items::equipment::player_slot(
+            &self.inventory,
+            self.selected,
+            &self.armor,
+            &self.offhand,
+            &self.equipment,
+            slot,
+        )
+    }
+
     /// The client's socket address, including the port.
     pub fn address(&self) -> SocketAddr {
         self.address

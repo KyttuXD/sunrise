@@ -21,6 +21,7 @@ use sunrise_client::mobs::{
     Mob,
     finalize::{self, EquipmentRead},
 };
+use sunrise_items::equipment::player_slot;
 use sunrise_world::attributes::{Modifier, Operation};
 
 /// A player's armour slots (`armor`, head first) by equipment slot.
@@ -31,23 +32,6 @@ fn armor_index(slot: EquipmentSlot) -> Option<usize> {
         EquipmentSlot::Legs => Some(2),
         EquipmentSlot::Feet => Some(3),
         _ => None,
-    }
-}
-
-/// A player's stack in `slot`, from its inventory, armour and off hand.
-fn player_slot<'a>(
-    inventory: &'a [Option<ItemStack>],
-    selected: usize,
-    armor: &'a [Option<ItemStack>; 4],
-    offhand: &'a Option<ItemStack>,
-    equipment: &'a sunrise_items::equipment::Equipment,
-    slot: EquipmentSlot,
-) -> Option<&'a ItemStack> {
-    match slot {
-        EquipmentSlot::MainHand => inventory.get(selected)?.as_ref(),
-        EquipmentSlot::OffHand => offhand.as_ref(),
-        EquipmentSlot::Body | EquipmentSlot::Saddle => equipment.get(slot as usize),
-        _ => armor[armor_index(slot)?].as_ref(),
     }
 }
 
@@ -1520,6 +1504,7 @@ mod tests {
         use mod_api::Host;
         use sunrise_client::motion::PlayerMotion;
         use sunrise_core::geometry::Vec3;
+        use sunrise_items::equipment::player_slot;
         use sunrise_world::attributes::{Modifier, Operation};
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
@@ -2697,7 +2682,13 @@ mod tests {
     #[ignore = "daily"]
     fn armor_stand_first_tick_equipment_change_fires_after_base_tick() {
         use mod_api::{self, Hooks, LivingEquipmentChangeEvent, ModEntry, ServerHost};
-        struct Reequip;
+        use std::sync::{Arc, Mutex};
+        type Heard = Vec<(
+            EquipmentSlot,
+            Option<mod_api::ItemKey>,
+            Option<mod_api::ItemKey>,
+        )>;
+        struct Reequip(Arc<Mutex<Heard>>);
         #[mod_api::__subscriptions]
         impl Hooks for Reequip {
             fn living_equipment_change(
@@ -2705,7 +2696,15 @@ mod tests {
                 host: &mut dyn ServerHost,
                 event: &mut LivingEquipmentChangeEvent<'_>,
             ) {
-                if event.entity.id() == 18 && event.slot == EquipmentSlot::MainHand {
+                if event.entity.id() != 18 {
+                    return;
+                }
+                self.0.lock().unwrap().push((
+                    event.slot,
+                    event.from.as_ref().map(|stack| stack.item()),
+                    event.to.as_ref().map(|stack| stack.item()),
+                ));
+                if event.slot == EquipmentSlot::MainHand {
                     assert!(
                         event
                             .entity
@@ -2723,8 +2722,13 @@ mod tests {
                 }
             }
         }
+        let heard = Arc::new(Mutex::new(Heard::new()));
         mod_platform::testing::with_mods(
-            vec![ModEntry::new("first_tick_equipment", Box::new(Reequip))].into(),
+            vec![ModEntry::new(
+                "first_tick_equipment",
+                Box::new(Reequip(heard.clone())),
+            )]
+            .into(),
             || {
                 super::super::native_entity_refs::tests::with_game(|game| {
                     let mut stand = sunrise_client::entities::ArmorStand::new(
@@ -2740,6 +2744,22 @@ mod tests {
                     game.tick_armor_stands().unwrap();
                     let events = super::super::dispense_fixture::stop_recording();
                     assert_eq!(
+                        *heard.lock().unwrap(),
+                        [
+                            (
+                                EquipmentSlot::MainHand,
+                                None,
+                                mod_api::__private::item_key("minecraft:stone")
+                            ),
+                            (
+                                EquipmentSlot::Head,
+                                None,
+                                mod_api::__private::item_key("minecraft:iron_helmet")
+                            ),
+                        ],
+                        "a later slot written by a listener compares in the same pass",
+                    );
+                    assert_eq!(
                         game.armor_stands[0].equipment[5],
                         Some(ItemStack::new("minecraft:iron_helmet", 1)),
                         "real listener/handle write control",
@@ -2751,6 +2771,21 @@ mod tests {
                         .filter(|e| e.ends_with("minecraft:equip"))
                         .count();
                     assert_eq!((sounds, equips), (1, 1));
+
+                    heard.lock().unwrap().clear();
+                    game.armor_stands[0].equipment[0] = Some(ItemStack::new("minecraft:dirt", 1));
+                    game.armor_stands[0].equipment[5] =
+                        Some(ItemStack::new("minecraft:golden_helmet", 1));
+                    game.tick_armor_stands().unwrap();
+                    assert_eq!(
+                        *heard.lock().unwrap(),
+                        [(
+                            EquipmentSlot::MainHand,
+                            mod_api::__private::item_key("minecraft:stone"),
+                            mod_api::__private::item_key("minecraft:dirt"),
+                        )],
+                        "restoring the later slot to its prior value does not report a change",
+                    );
                 });
             },
         );

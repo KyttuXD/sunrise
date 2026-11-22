@@ -5,11 +5,12 @@ use super::Game;
 use super::commands::Target;
 use std::convert::Infallible;
 use std::sync::Arc;
-use sunrise_client::living_attributes::{ModifierChanges, ModifierSnapshot};
+use sunrise_client::living_attributes::{EquipmentChanges, ModifierChanges, ModifierSnapshot};
 use sunrise_client::mobs::{
     Mob,
-    finalize::{self, Attr, Op},
+    finalize::{self, Attr, EquipmentRead, Op},
 };
+use sunrise_core::equipment_slot::EquipmentSlot;
 use sunrise_items::items::Items;
 use sunrise_world::attributes::{
     AttributeError, Instance, Modifier, Observer, Operation,
@@ -23,10 +24,14 @@ use sunrise_world::attributes::{
 pub(in crate::game) fn collect_equipment(catalog: &Arc<Catalog>, items: &Items, m: &mut Mob) {
     sunrise_client::mobs::armor::prepare(m, catalog);
     let mut live = std::mem::take(&mut m.extra.live);
-    let changed =
-        live.collect_equipment_changes(catalog, &m.kind.id, &m.extra.equipment, items, || {
-            equipment_seed(m)
-        });
+    let mob = &*m;
+    let changed = live.refresh_equipment(
+        catalog,
+        &mob.kind.id,
+        |slot| finalize::equipment_slot(mob, EquipmentSlot::ALL[slot]),
+        items,
+        || equipment_seed(mob),
+    );
     warn_failed(m.id, &m.kind.id, changed);
     m.extra.live = live;
 }
@@ -109,13 +114,84 @@ impl Game<'_> {
             return;
         }
         let catalog = self.motion.attributes.clone();
-        let items = world_items!(self);
-        for m in self.mobs.iter_mut().filter(|m| !m.removed) {
-            if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
+        let epoch = self.equipment_change_epoch();
+        let joined = sunrise_client::join_seq::JoinSeq::upcoming();
+        let mut index = 0;
+        while let Some(mob) = self.mobs.get_mut(index) {
+            let hint = index;
+            index += 1;
+            if mob.removed
+                || mob.join >= joined
+                || (mob.extra.equipment.is_empty() && !mob.extra.live.has_worn())
+            {
                 continue;
             }
-            collect_equipment(&catalog, items, m);
+            if !self.creatures.ticked.contains(&mob.id) {
+                // Keep the existing attribute refresh for a mob that didn't
+                // run its body, without consuming its next equipment tick.
+                collect_equipment(&catalog, world_items!(self), mob);
+                continue;
+            }
+            let id = mob.id;
+            let living =
+                epoch.map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id)));
+            let mut changes = EquipmentChanges::default();
+            for slot in EquipmentSlot::ALL {
+                let Some(mob) = self
+                    .mobs
+                    .get(hint)
+                    .filter(|m| m.id == id)
+                    .or_else(|| self.mobs.iter().find(|m| m.id == id))
+                    .filter(|m| !m.removed)
+                else {
+                    break;
+                };
+                let i = slot as usize;
+                let previous = mob.extra.live.previous_equipment(i);
+                let current = finalize::equipment_slot(mob, slot);
+                if EquipmentRead::same_slot(current.as_ref(), previous.map(Arc::as_ref)) {
+                    continue;
+                }
+                let current = current.map(|stack| Arc::new(stack.project().into_owned()));
+                if let Some(living) = living {
+                    let previous = previous.cloned();
+                    self.dispatch_living_equipment_change(
+                        living,
+                        slot,
+                        previous.as_deref(),
+                        current.as_deref(),
+                    );
+                }
+                changes[i] = Some(current);
+            }
+            let Some(actual) = self
+                .mobs
+                .get(hint)
+                .filter(|m| m.id == id)
+                .map(|_| hint)
+                .or_else(|| self.mobs.iter().position(|m| m.id == id))
+            else {
+                index = hint;
+                continue;
+            };
+            index = actual + 1;
+            let mob = &mut self.mobs[actual];
+            if mob.removed {
+                continue;
+            }
+            sunrise_client::mobs::armor::prepare(mob, &catalog);
+            let mut live = std::mem::take(&mut mob.extra.live);
+            let changed = live.apply_equipment_tick(
+                &catalog,
+                &mob.kind.id,
+                changes,
+                world_items!(self),
+                || equipment_seed(mob),
+            );
+            warn_failed(id, &mob.kind.id, changed);
+            mob.extra.live = live;
         }
+        let items = world_items!(self);
         for a in self.armor_stands.iter_mut() {
             if a.equipment.is_empty() && !a.live.has_worn() {
                 continue;

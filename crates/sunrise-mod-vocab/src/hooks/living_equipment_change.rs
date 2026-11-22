@@ -2,30 +2,21 @@
 // catalog-order: 0157
 
 pub trait Hooks {
-    /// A mob's, an armor stand's or a player's equipment slot took a different
-    /// stack (NeoForge's `LivingEquipmentChangeEvent`, posted in
-    /// `LivingEntity.collectEquipmentChanges` / `detectEquipmentUpdates`):
-    /// `entity` is the [`LivingRef`] (call `entity.entity().kind(host)` for its
-    /// type or `entity.set_equipment(...)` to edit it), `slot` the
-    /// [`EquipmentSlot`] (`MainHand`, `OffHand`, `Feet`, `Legs`, `Chest`,
-    /// `Head`, `Body`, `Saddle`), `from` a lazy [`ItemStackView`] of what the
-    /// slot held when last heard (none for empty) and `to` a lazy
-    /// [`ItemStackView`] of what it holds now (call [`ItemStackView::project`]
-    /// on demand for components or an owned copy). Once for each slot that
-    /// changed, in `EquipmentSlot` order, after the mobs' tick, so an entity
-    /// that joins the level wearing something counts from empty on its first
-    /// tick. It only hears: change the entity with its own helpers.
+    /// A mob's, armor stand's or connected player's equipment slot changed (NeoForge's
+    /// `LivingEquipmentChangeEvent` in `LivingEntity.collectEquipmentChanges`).
+    /// `entity` is a [`LivingRef`], `slot` an [`EquipmentSlot`], and `from` and
+    /// `to` lend the previous tick's and current stack as [`ItemStackView`]s
+    /// (`None` for an empty slot). Call [`ItemStackView::project`] if you need
+    /// components or an owned copy.
     ///
-    /// Players are told the same way, once a tick, for the players connected
-    /// to the server (a dedicated server's, a published world's guests),
-    /// walking all eight `EquipmentSlot`s as vanilla's `PlayerEquipment` and
-    /// `LivingEntity.collectEquipmentChanges` do: a player new to the level
-    /// counts from empty, and `MainHand` is the selected hotbar slot, so a
-    /// hotbar selection or a pickup into the selected slot is a `MainHand`
-    /// change. Mobs and players are told only while a mod sets
-    /// `living_equipment_listened`. The world host's own player, in single
-    /// player or hosting a LAN world, isn't told here: `on_equip` hears it.
-    /// Server-side.
+    /// Each changed slot fires in `EquipmentSlot` order, before moving to the
+    /// next slot. Initial equipment compares against empty. For connected
+    /// server players (including the owner on the integrated server), the
+    /// comparison is in the player body tick, after item use and before its
+    /// equipment modifiers are applied. `MainHand` reads the selected hotbar
+    /// slot; all eight slots, including `Body` and `Saddle`, are checked.
+    /// Mobs are checked in their server equipment pass and armor stands in
+    /// their own tick. This is a notice, not a veto; the views cannot be edited.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_equipment_change",
         dispatch = "api_carrier",

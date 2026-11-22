@@ -54,7 +54,6 @@ impl Game<'_> {
         self.lan_menu_links_tick();
         self.lan_containers_tick();
         self.tick_lan_mount_menus();
-        self.native_players_equipment();
         self.announce_guest_advancements();
         let mut told = None;
         for &(conn, _) in &turns {
@@ -453,17 +452,14 @@ impl Game<'_> {
         // LivingEntity.tick's detectEquipmentUpdates, part of the body: after the
         // item use above and before aiStep's travel and updatePlayerPose, so a new
         // scale modifier rebuilds the box this tick.
-        if body
-            && let Some(host) = self.lan.as_mut()
-            && {
-                let g = &host.hub.guests[gi];
-                let held = g.inventory.get(g.selected).and_then(Option::as_ref);
-                let play = host.play.entry(conn).or_default();
-                equipment_changed(&mut play.equipped, &g.armor, held, g.offhand.as_ref())
-            }
-        {
-            let _ = self.as_guest_at(gi, conn, |g| g.put_equipment_modifiers());
-        }
+        let gi = if body {
+            let Some(gi) = self.detect_guest_equipment(conn) else {
+                return;
+            };
+            gi
+        } else {
+            gi
+        };
         self.guest_server_tick(conn, body);
         let Some(host) = self.lan.as_mut() else {
             return;
@@ -506,6 +502,69 @@ impl Game<'_> {
                 game.native_player_tick_post(mod_api::__private::PlayerTickPostCall { player })
             });
         }
+    }
+
+    /// Compare and retain the slots on the body tick, before their modifiers
+    /// are used by movement. A callback can change a later slot, so compare
+    /// each slot just before posting its event.
+    fn detect_guest_equipment(&mut self, conn: u32) -> Option<usize> {
+        use sunrise_client::mobs::finalize::EquipmentRead;
+        use sunrise_core::equipment_slot::EquipmentSlot;
+        use sunrise_items::equipment::Equipment;
+
+        let epoch = self.equipment_change_epoch();
+        let host = self.lan.as_mut()?;
+        let mut gi = host.hub.guests.connection_index(conn)?;
+        let guest = &host.hub.guests[gi];
+        if !host.hub.here(guest) {
+            return None;
+        }
+        let living = epoch.map(|epoch| {
+            mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, guest.entity_id as u32))
+        });
+        // The history is not part of the player's lent body. Keeping it here
+        // lets callbacks borrow the old stack while taking ordinary guest turns.
+        let mut detected = host.play.get_mut(&conn)?.equipped.take();
+        let mut changed = false;
+        let mut here = true;
+        for slot in EquipmentSlot::ALL {
+            let host = self.lan.as_ref()?;
+            let current = host.hub.guests[gi].equipment_in(slot);
+            let i = slot as usize;
+            let previous = detected.as_deref().and_then(|e| e.get(i));
+            if EquipmentRead::same_slot(current.map(EquipmentRead::resident).as_ref(), previous) {
+                continue;
+            }
+            let current = current.cloned();
+            if let Some(living) = living {
+                self.dispatch_living_equipment_change(living, slot, previous, current.as_ref());
+                // A callback can transfer a guest or change the hub's row indices.
+                let host = self.lan.as_ref()?;
+                gi = host.hub.guests.connection_index(conn)?;
+                here = host.hub.here(&host.hub.guests[gi]);
+            }
+            if current.is_some() || detected.is_some() {
+                detected.get_or_insert_with(Default::default)[i] = current;
+            }
+            changed = true;
+            if !here {
+                break;
+            }
+        }
+        let detected = detected.filter(|e| !e.is_empty());
+        if changed && here {
+            let empty = Equipment::default();
+            let _ = self.as_guest_at(gi, conn, |game| {
+                game.put_equipment_modifiers(Some(detected.as_deref().unwrap_or(&empty)));
+            });
+        }
+        let host = self.lan.as_mut()?;
+        host.play.get_mut(&conn)?.equipped = detected;
+        if changed && here {
+            gi = host.hub.guests.connection_index(conn)?;
+            here = host.hub.here(&host.hub.guests[gi]);
+        }
+        here.then_some(gi)
     }
 
     #[cfg(test)]

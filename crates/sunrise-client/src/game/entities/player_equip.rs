@@ -4,6 +4,8 @@
 //! the swap-hands key, dispensers), for the host and for LAN guests.
 use super::Game;
 use sunrise_client::items::ItemStack;
+use sunrise_core::equipment_slot::EquipmentSlot;
+use sunrise_items::equipment::{Equipment, player_slot};
 
 /// The equipment slots `onEquipItem` can act on, as `EquipmentSlot` names:
 /// the armour (`Player.doesEmitEquipEvent`: these emit the game event) and
@@ -112,35 +114,48 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges). A guest's
-    /// change waits for its body tick's detectEquipmentUpdates (`equipment_changed`), so a
+    /// change waits for its body tick's detectEquipmentUpdates, so a
     /// swap made and undone between two ticks leaves the modifiers it found.
     pub(super) fn apply_equipment(&mut self) {
         if !self.lan_guest_swaps.is_empty() {
             return;
         }
-        self.put_equipment_modifiers();
+        self.put_equipment_modifiers(None);
     }
 
-    pub(in crate::game) fn put_equipment_modifiers(&mut self) {
+    /// The guest body uses the stacks captured by detection, not a later
+    /// live read that could include writes by a callback to an earlier slot.
+    pub(in crate::game) fn put_equipment_modifiers(&mut self, detected: Option<&Equipment>) {
         let Some(player) = self.player.as_mut() else {
             return;
         };
         for (attribute, id) in std::mem::take(&mut self.applied_modifiers) {
             let _ = player.set_modifier_unclamped(&attribute, &id, 0.0, "add_value", false);
         }
-        let slots = ["head", "chest", "legs", "feet"];
-        let mut equipped: Vec<(Option<&ItemStack>, &str)> = self
-            .armor
-            .iter()
-            .zip(slots)
-            .map(|(s, n)| (s.as_ref(), n))
-            .collect();
-        equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
-        equipped.push((self.offhand.as_ref(), "offhand"));
-        for (stack, slot) in equipped {
-            let Some(stack) = stack else {
-                continue;
+        let mut enchant_modifiers = Vec::new();
+        for slot in [
+            EquipmentSlot::Head,
+            EquipmentSlot::Chest,
+            EquipmentSlot::Legs,
+            EquipmentSlot::Feet,
+            EquipmentSlot::MainHand,
+            EquipmentSlot::OffHand,
+            EquipmentSlot::Body,
+            EquipmentSlot::Saddle,
+        ] {
+            let stack = match detected {
+                Some(equipment) => equipment.get(slot as usize),
+                None => player_slot(
+                    &self.inventory,
+                    self.selected,
+                    &self.armor,
+                    &self.offhand,
+                    &self.equipment,
+                    slot,
+                ),
             };
+            let Some(stack) = stack else { continue };
+            let slot = slot.name();
             for sunrise_items::item_data::ModifierRow {
                 attribute,
                 id,
@@ -162,8 +177,27 @@ impl Game<'_> {
                     self.applied_modifiers.push((attribute.clone(), id.clone()));
                 }
             }
+            for sunrise_items::item_data::ModifierRow {
+                attribute,
+                id,
+                amount,
+                operation,
+                slot: group,
+            } in world_stations!(self).enchantments.modifier_rows(stack)
+            {
+                if sunrise_client::living_attributes::modifier_applies(&group, slot) {
+                    enchant_modifiers.push((attribute, format!("{id}/{slot}"), amount, operation));
+                }
+            }
         }
         let _ = player.clamp_health_to_max();
-        self.apply_enchantment_attributes();
+        for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
+            let _ = player.set_modifier_unclamped(&attr, &id, 0.0, &op, false);
+        }
+        for (attr, id, amount, op) in &enchant_modifiers {
+            let _ = player.set_modifier_unclamped(attr, id, *amount, op, true);
+        }
+        let _ = player.clamp_health_to_max();
+        self.potions.enchant_modifiers = enchant_modifiers;
     }
 }

@@ -1008,8 +1008,15 @@ impl Game<'_> {
         // `isPassengerOfSameVehicle` leaves those riders out.
         let mut obstacles: Option<sunrise_client::entities::ObstacleGrid> = None;
         let mut nearby = Vec::new();
-        for i in 0..self.armor_stands.len() {
-            let at = self.armor_stands[i].position;
+        let joined = sunrise_client::join_seq::JoinSeq::upcoming();
+        let mut cursor = 0;
+        while let Some(stand) = self.armor_stands.get(cursor) {
+            let mut i = cursor;
+            cursor += 1;
+            if stand.join >= joined {
+                continue;
+            }
+            let (id, at) = (stand.id, stand.position);
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
                 self.armor_stands[i].previous = at;
                 self.armor_stands[i].previous_yaw = self.armor_stands[i].yaw;
@@ -1020,6 +1027,22 @@ impl Game<'_> {
             // (#916).
             self.tick_saved_invulnerable_time(self.armor_stands[i].id);
             self.armor_stand_location_effects(i, false);
+            // The equipment callback can kill a stand and shift the list.
+            if self.armor_stands.get(i).is_none_or(|stand| stand.id != id) {
+                let Some(actual) = self.armor_stands.iter().position(|stand| stand.id == id) else {
+                    cursor = i;
+                    continue;
+                };
+                i = actual;
+                cursor = i + 1;
+            }
+            if self
+                .persist
+                .removals
+                .contains(&super::commands::Target::Stand(id))
+            {
+                continue;
+            }
             // ArmorStand.travel: a marker or a NoGravity stand does not move.
             let travels = !self.armor_stands[i].marker && !self.armor_stands[i].no_gravity;
             if travels && obstacles.is_none() {

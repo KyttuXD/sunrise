@@ -65,9 +65,6 @@ pub(super) struct GuestPlay {
     pub(super) mount_window: Option<super::lan_mount_menu::GuestMount>,
     /// The lectern the guest reads (game/network/lan_stations.rs).
     pub(super) lectern: Option<super::lan_stations::GuestLectern>,
-    /// The equipment the mods last heard this guest wear (`native_players_equipment`), by
-    /// `EquipmentSlot` ordinal (`mainhand` through `saddle`). Allocated only while non-empty.
-    pub(super) equipment_heard: Option<Box<sunrise_items::equipment::Equipment>>,
     /// The slots of the guest's inventories the mods last heard (`native_players_inventory_changes`),
     /// by `NativeInventoryKind`: Player, Ender, Cursor, Crafting.
     pub(super) inventory_heard: Option<Box<[Vec<Option<crate::items::ItemStack>>; 4]>>,
@@ -100,7 +97,10 @@ pub(super) struct GuestPlay {
     /// is a `ServerPlayer` too, whose worn armour counts
     /// (`LivingEntity.collectEquipmentChanges`).
     modifiers: Vec<(String, String)>,
-    equipped: Option<Vec<Option<ItemStack>>>,
+    equipped: Option<Box<sunrise_items::equipment::Equipment>>,
+    /// A body gets its initial modifiers before its first action. Its first
+    /// detection still starts with vanilla's empty lastEquipmentItems.
+    equipment_initialized: bool,
     craft_grid: Vec<Option<ItemStack>>,
     /// The guest's cast fishing hook (`Player.fishing`).
     pub(super) hook: sunrise_client::join_seq::ResidentSlot<super::fishing::Hook>,
@@ -108,31 +108,6 @@ pub(super) struct GuestPlay {
     /// What `ServerPlayer` last recorded for the guest's scoreboard criteria
     /// (`lastRecordedHealthAndAbsorption` and the others).
     score_recorded: super::scoreboard::Recorded,
-}
-
-/// `LivingEntity.collectEquipmentChanges` for a guest: whether its armor, main hand or off
-/// hand differs from what its modifiers were put on for (`equipped`), which then records them.
-/// The body tick asks (`detectEquipmentUpdates`), so the packets of a tick act with the
-/// modifiers from before it: a slot change and an attack sent in one tick hit with the old
-/// item's attack damage and charge speed (the attribute swap).
-fn equipment_changed(
-    equipped: &mut Option<Vec<Option<ItemStack>>>,
-    armor: &[Option<ItemStack>],
-    held: Option<&ItemStack>,
-    offhand: Option<&ItemStack>,
-) -> bool {
-    let unchanged = equipped.as_deref().is_some_and(|eq| {
-        eq.len() == armor.len() + 2
-            && eq[..armor.len()] == armor[..]
-            && eq[armor.len()].as_ref() == held
-            && eq[armor.len() + 1].as_ref() == offhand
-    });
-    if !unchanged {
-        let mut now = armor.to_vec();
-        now.extend([held.cloned(), offhand.cloned()]);
-        *equipped = Some(now);
-    }
-    !unchanged
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).

@@ -223,7 +223,7 @@ impl Game<'_> {
         if fresh {
             // A new body (joined, respawned, changed level): nothing on it yet,
             // its effects' modifiers and armor protection included.
-            play.equipped = None;
+            play.equipment_initialized = false;
             play.potions = Default::default();
             play.sculk = Default::default();
             // A new ServerPlayer has everything to record again.
@@ -453,12 +453,11 @@ impl Game<'_> {
             &mut self.applied_modifiers,
             std::mem::take(&mut play.modifiers),
         );
-        // Its equipment's modifiers on its attributes from its first turn. A later change
-        // waits for the guest's body tick (`equipment_changed`, tick.rs).
-        if play.equipped.is_none() {
-            let held = self.inventory.get(self.selected).and_then(Option::as_ref);
-            equipment_changed(&mut play.equipped, &self.armor, held, self.offhand.as_ref());
-            self.put_equipment_modifiers();
+        // Initial modifiers are available to packets before the first body tick;
+        // later changes wait for detectEquipmentUpdates in that tick.
+        if !play.equipment_initialized {
+            self.put_equipment_modifiers(None);
+            play.equipment_initialized = true;
         }
         // The player's effects are on the new body before anything it does
         // (the movement that brought it, a landing): vanilla keeps the same

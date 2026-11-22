@@ -3671,24 +3671,10 @@ impl Game<'_> {
     ) {
         self.fire_player_stop_tracking(player, name, entity, uuid, kind);
     }
-    /// Whether a mod listens to `native_living_equipment_change` for mobs and
-    /// connected players: a mod that hooks it hooks this one too and sets
-    /// `listened` (HEAD, `*listened = true`). Without it the game does not read
-    /// their equipment each tick and only armor stands are told. A mob or player
-    /// counts from empty once it is set. Asked once a tick. Server-side.
-    pub(in crate::game) fn native_living_equipment_listened(&mut self, listened: &mut bool) {
-        self.fire_living_equipment_listened(listened);
-    }
-    /// A mob's, an armor stand's or a connected player's equipment slot took a
-    /// different stack (NeoForge's `LivingEquipmentChangeEvent`,
-    /// `LivingEntity.collectEquipmentChanges` / `detectEquipmentUpdates`):
-    /// `entity` its `LivingRef`, `slot` the `EquipmentSlot`, `from` a lazy
-    /// `ItemStackView` of what the slot held when last heard and `to` a lazy
-    /// `ItemStackView` of what it holds now. Once per changed slot across all
-    /// eight `EquipmentSlot`s, after the mobs' tick; one new to the level
-    /// counts from empty. A player's `MainHand` is the selected hotbar slot.
-    /// The world host's own player is heard by `native_on_equip`. It only
-    /// hears. Server-side.
+    /// NeoForge's server-side `LivingEquipmentChangeEvent`: the per-slot
+    /// comparison in `LivingEntity.collectEquipmentChanges`. Lends the living
+    /// subject and the previous and current stack. For mobs, armor stands and
+    /// connected players; the player's body compares after completing item use.
     pub(in crate::game) fn native_living_equipment_change(
         &mut self,
         call: mod_api::__private::LivingEquipmentChangeCall<'_>,

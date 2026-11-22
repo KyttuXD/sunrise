@@ -1385,10 +1385,6 @@ pub struct Extra {
     /// What a piglin's or hoglin's brain remembers: its avoid target, the
     /// adults its sensor sees and the activity it is in.
     pub piglin: piglin::Memories,
-    /// What the native mods last heard it hold and wear
-    /// (`LivingEntity.lastEquipmentItems`, empty at first), by
-    /// `EquipmentSlot` ordinal: see `Mob::equipment_stacks`.
-    pub equipment_heard: Option<Box<sunrise_items::equipment::Equipment>>,
     /// The live attribute map (`AttributeMap`), built when an item with
     /// attribute modifiers is worn or it is read. Mob logic still reads
     /// `MobType::attributes` and `attributes` above.
@@ -2740,22 +2736,15 @@ impl Mob {
     /// off hand, feet, legs, chest, head, body and saddle
     /// (`ClientboundSetEquipmentPacket`'s slots).
     pub fn equipment_stacks(&self) -> sunrise_items::equipment::Equipment {
-        use sunrise_items::equipment::{HEAD, MAINHAND};
-        let mut out = self.extra.equipment.clone();
-        // The worn armour keeps its stack: a dyed leather piece keeps its
-        // colour, and the enchantments and trim come from `gear`.
-        for slot in MAINHAND..=HEAD {
-            if let Some(stack) = finalize::stored_stack(self, slot) {
-                out.set(slot, Some(stack));
-            }
-        }
-        out
+        sunrise_core::equipment_slot::EquipmentSlot::ALL
+            .map(|slot| {
+                finalize::equipment_slot(self, slot).map(|stack| stack.project().into_owned())
+            })
+            .into()
     }
     /// Remove and return the complete body stack.
     pub fn take_body_equipment(&mut self) -> Option<crate::items::ItemStack> {
-        let stack = self.equipment_stacks()[6].clone();
-        self.extra.set_body_stack(None);
-        stack
+        self.extra.equipment[sunrise_items::equipment::BODY].take()
     }
 
     /// Set the complete equipment stack by the protocol slot ordinal.

@@ -1294,6 +1294,15 @@ impl<'a> EquipmentRead<'a> {
         Cow::Owned(stack)
     }
 
+    /// `ItemStack.matches` for an equipment slot, including an empty slot.
+    pub fn same_slot(current: Option<&Self>, previous: Option<&ItemStack>) -> bool {
+        match (current, previous) {
+            (None, None) => true,
+            (Some(current), Some(previous)) => current.matches_stack(previous),
+            _ => false,
+        }
+    }
+
     /// Whether this stack matches `other` (`ItemStack.matches`), including any
     /// separate gear overlay, without cloning the stack or its components.
     pub fn matches_stack(&self, other: &ItemStack) -> bool {
@@ -1355,29 +1364,32 @@ impl<'a> EquipmentRead<'a> {
     }
 }
 
-fn stored_equipment<'a>(m: &'a Mob, slot: usize, base: &'a ItemStack) -> Option<EquipmentRead<'a>> {
-    if slot > HEAD || (base.damage == 0 && base.count <= 1 && base.extra.is_none()) {
-        return None;
+fn equipment_read<'a>(m: &'a Mob, slot: usize, base: &'a ItemStack) -> EquipmentRead<'a> {
+    if slot > HEAD {
+        return EquipmentRead::resident(base);
     }
     let index = gear_slot(slot);
     let overlays = gear::gear(m)
         .filter(|gear| !gear.slots[index].is_empty() || gear.trims[index].is_some())
         .map(|gear| (gear, index));
-    Some(EquipmentRead { base, overlays })
+    EquipmentRead { base, overlays }
 }
 
-/// Borrow one slot as `Mob::equipment_stacks` reads it, without reading the other slots.
+/// Borrow one complete equipment slot, including gear stored separately from
+/// a simple resident stack.
 pub fn equipment_slot(m: &Mob, slot: EquipmentSlot) -> Option<EquipmentRead<'_>> {
     let slot = slot as usize;
-    let base = m.extra.slot_stack(slot)?;
-    Some(stored_equipment(m, slot, base).unwrap_or_else(|| EquipmentRead::resident(base)))
+    Some(equipment_read(m, slot, m.extra.slot_stack(slot)?))
 }
 
 /// The whole stack a mob keeps in `slot` (damage, name, components, count,
-/// enchantments and trim), when it kept more than the item id.
+/// enchantments and trim), when it kept more than the item id in the stack.
 pub fn stored_stack(m: &Mob, slot: usize) -> Option<ItemStack> {
     let base = m.extra.slot_stack(slot)?;
-    Some(stored_equipment(m, slot, base)?.project().into_owned())
+    if slot > HEAD || (base.damage == 0 && base.count <= 1 && base.extra.is_none()) {
+        return None;
+    }
+    Some(equipment_read(m, slot, base).project().into_owned())
 }
 /// What a mob has in `slot` as a stack: the one it kept, else one item with
 /// its enchantments.
