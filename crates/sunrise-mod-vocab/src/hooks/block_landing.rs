@@ -22,7 +22,7 @@ pub trait Hooks {
         damage_multiplier: &mut f32,
         deferred: mod_api::__private::LandingDeferred<'_>,
     );
-    /// An entity bounced off a block state this part is attached to (`Block.bounceOn`), after falling `event.fall_distance` blocks. It fires only when the entity bounced, just before vanilla sets its movement. `event.entity` lends a scoped [`LandingEntity`](mod_api::LandingEntity) shared view of the pre-bounce entity, and `event.movement` is the movement the bounce leaves it (`x`, `y`, `z`): change it to change what the entity keeps. It runs synchronously inside the entity's move on the level random host: it reads blocks, draws the level's random in vanilla's order, and accesses attachments. Work that needs `&mut dyn ServerHost` after the entity batch (such as bounce sounds or block changes) is queued with [`BounceOnEvent::after_bounce`](mod_api::BounceOnEvent::after_bounce) as an owned native callback. Players and mobs bounce here; dropped items and the other entities do not.
+    /// An entity bounced off a block state this part is attached to (`Block.bounceOn`), after falling `event.fall_distance` blocks. It fires only when the entity bounced, just before vanilla sets its movement. `event.entity` lends a scoped [`BouncingEntity`](mod_api::BouncingEntity) view of the pre-bounce entity, and `event.movement` is the movement the bounce leaves it (`x`, `y`, `z`): change it to change what the entity keeps. It runs synchronously inside the entity's move on the level random host: it reads blocks, draws the level's random in vanilla's order, and accesses attachments. Work that needs `&mut dyn ServerHost` after the entity batch (such as bounce sounds or block changes) is queued with [`BounceOnEvent::after_bounce`](mod_api::BounceOnEvent::after_bounce) as an owned native callback. Players and mobs bounce here; dropped items and the other entities do not.
     #[hook(
         side = "server",
         contract = "collect",
@@ -36,7 +36,7 @@ pub trait Hooks {
     )]
     fn bounce_on(
         dimension: &str,
-        entity: &mod_api::LandingEntity<'_>,
+        entity: mod_api::BouncingEntity<'_>,
         state: BlockState,
         pos: BlockPos,
         fall_distance: f64,

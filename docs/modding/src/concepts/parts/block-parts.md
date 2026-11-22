@@ -162,7 +162,7 @@ exposing its id, type kind, position, block position, velocity, fall distance, g
 `Entity.isShiftKeyDown` as checked by `SlimeBlock.fallOn`), and bounding-box dimensions.
 At `fall_on`, the view also supports direct `set_velocity` (rejecting non-finite components) and
 `reset_fall_distance`. The server publishes player velocity edits to the controlling client.
-At `bounce_on`, the entity is shared and its velocity describes the pre-bounce entity;
+At `bounce_on`, the `BouncingEntity` still allows a fall-distance reset, but its velocity is read-only;
 write through `event.movement` to set the movement the bounce actually leaves.
 
 `fall_on` exposes writable `event.distance` and `event.damage_multiplier`, not calculated

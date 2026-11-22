@@ -91,6 +91,32 @@ impl<'a> LandingEntity<'a> {
     }
 }
 
+/// The live entity at `Block.bounceOn`. Its velocity is still the pre-bounce
+/// velocity; write the bounce event's `movement` for the final velocity.
+// exhaustive: only the engine constructs this view.
+// no wire: a call-scoped entity borrow, not a payload.
+pub struct BouncingEntity<'a>(LandingEntity<'a>);
+
+impl<'a> BouncingEntity<'a> {
+    #[doc(hidden)]
+    pub fn new(data: &'a mut dyn LandingEntityAccess) -> Self {
+        Self(LandingEntity::new(data))
+    }
+
+    /// Reset the entity's accumulated fall distance (`Entity.resetFallDistance`).
+    pub fn reset_fall_distance(&mut self) {
+        self.0.reset_fall_distance();
+    }
+}
+
+impl<'a> std::ops::Deref for BouncingEntity<'a> {
+    type Target = LandingEntity<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Engine-side access to a falling or bouncing entity.
 // hidden: the engine owns entity access; listeners receive `LandingEntity`.
 #[doc(hidden)]
