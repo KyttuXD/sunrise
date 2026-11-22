@@ -31,9 +31,9 @@ signed sums and each slice as the SDK fetch does, and unpacks them into the tool
 The Rust is the one `sdk.json` names: `rustup`'s, installed with `--profile minimal` when missing, or the `rustc` on
 `PATH` when it is exactly that version; otherwise `build` stops and says the version and both ways to get it.
 A mod with crates.io dependencies and no `Cargo.lock` gets one; `build --update-lock` resolves again, and is refused for
-a content mod. The compile
-is [`native-build`'s](08-native-build.md), in process, with registry crates approved (the mod's own `Cargo.toml`),
-for the `client` side. It prints `Built <library>` and the build log's path, and exits non-zero with the error on failure.
+a content mod. `build` uses the same compiler as [`native-build`](08-native-build.md), with registry crates approved
+(the mod's own `Cargo.toml`), for the `client` side. It prints `Built <library>` and the build log's path, and exits
+non-zero with the error on failure.
 
 In `--binaries` mode, `build` uses the same compiler but fetches only the verified `runtime` and `api` slices
 for the selected host. It refuses mod dependencies and routes other than the standalone API route. It creates a

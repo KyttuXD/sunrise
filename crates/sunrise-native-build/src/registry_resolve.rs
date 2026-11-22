@@ -21,7 +21,7 @@ pub(super) fn resolve(
         let mut command = cargo("update");
         // `generate-lockfile` would ignore the seed.
         command.args(["--workspace", "--color", "never"]);
-        super::run(command, "Resolving registry dependency pins", |_| {})?;
+        super::run(command, "Resolving registry dependency pins")?;
         let text = super::read_lock(directory)?;
         let resolved = RegistryLock::parse(&text)?;
         Ok::<_, String>((text, resolved))
@@ -160,7 +160,6 @@ pub(super) fn resolve(
         }
         let mut choices: Vec<_> = lines.iter().map(|pins| pins.len() - 1).collect();
         loop {
-            crate::check_cancelled()?;
             let mut attempt = retry_seed.clone();
             for (pins, &choice) in lines.iter().zip(&choices) {
                 let pin = pins[choice];

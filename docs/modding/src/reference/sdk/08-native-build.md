@@ -2,9 +2,9 @@
 
 `cargo sunrise-mod native-build` compiles native mods against one build's SDK. It is the JSON form of what
 `cargo sunrise-mod build` does for one mod, for a caller that builds for someone else: a build server, or a player's
-launcher. All of them run the same code (`crates/sunrise-native-build`). Every SDK release carries the tool for each host it is built for, as
-`tool-<target>.tar.xz` holding `cargo-sunrise-mod` (`.exe` on Windows), so a caller that already checked the SDK's
-signed `sdk.json` gets a tool made from that build's own source.
+launcher. Both commands use the same compiler (`crates/sunrise-native-build`). Every SDK release carries the tool
+for each host it is built for, as `tool-<target>.tar.xz` holding `cargo-sunrise-mod` (`.exe` on Windows), so a caller
+that already checked the SDK's signed `sdk.json` gets a tool made from that build's own source.
 Use that SDK's tool for the JSON commands: its horizon-mixins revision and patch match the SDK by construction.
 
 Native mod authors keep the same code and `sunrise-mod.toml`. On Windows the SDK sets the main-thread stack
@@ -22,7 +22,9 @@ tool built. The tool compiles, and nothing else.
 
 It reads a plan from the first line of standard input, writes one JSON event per line to standard output, and appends
 its log to `build.log` in the plan's `work` folder: emptying it before a build is the caller's, since a caller's own
-lines about the build may go there first.
+lines about the build may go there first. The caller runs the tool as a subprocess and owns cancellation of the
+process tree. On Unix, start the tool in its own process group to be able to stop the whole build: its build
+commands stay in that group.
 
 ```sh
 cargo sunrise-mod native-build < plan.json
@@ -43,7 +45,7 @@ doesn't know is refused (exit 2).
 | Field | What it is |
 |---|---|
 | `contract` | `2`. A change to any field or event below takes a new number. |
-| `work` | The build's own folder: `build.log`, the horizon-mixins tool, the game source a mixin patch copies from, and kept compiles under `prebuilt-build/`. The launcher passes its `native/` folder, so the kept compiles are the ones its in-process build made. |
+| `work` | The build's own folder: `build.log`, the horizon-mixins tool, the game source a mixin patch copies from, and kept compiles under `prebuilt-build/`. |
 | `toolchain` | `dir` (holding `bin/cargo` and `bin/rustc`), `target` (its host triple), `cargo_home`, `cargo_config` (`--config` values every cargo command gets; the launcher's Windows ARM64 flags) and `c_bin` (the folder of its C and link programs, when it brings them). The Rust release must be the SDK's (`sdk.json`'s `toolchain.rust`). |
 | `package` | `runtime`, `api` and `engine`: the folders the SDK's three slices for this host and side are unpacked into. The API route reads only `runtime` and `api`. |
 | `mods` | A mod's folder, or a folder of mod folders, read in path order. Every mod in it is compiled: a caller leaves a mod out by not putting it there. |
@@ -57,10 +59,13 @@ Each line is an object whose `event` names it.
 
 | Event | Fields | When |
 |---|---|---|
-| `mod` | `id`, `done`, `total` | A mod's own library starts compiling, `done` of `total`. |
+| `mod` | `id`, `done`, `total` | A mod's own library starts compiling, `done` of `total`. Only the API and direct rustc routes emit this event. |
 | `consent` | `added_crates`, `build_scripts`, `proc_macros` | Registry crates need a yes and the plan gave no `registry`. The caller answers with one line on standard input: `true` agrees, anything else refuses. |
 | `built` | `route`, `binary`, `libraries`, `records`, `mods`, `internals`, `mixins`, `used` | The executable and the libraries to install beside it, in load order; `records` is each library's identity, the build record's `libraries`: one row per library, the patch library included, whose `identity` is `<build id> <mod id> <version> <rustc release> unwind` (the panic strategy the library's entry reports; the loader refuses `abort`); `route` is `prebuilt-api` or `prebuilt`, as the record names it; `mods` is the compiled mods in dependency order. `internals` has each compiled mod's `[[internals]]` by mod id, every absent `hash` taken from the SDK's catalog, as the build record keeps them; `mixins` is the horizon-mixins revision the build ran; `used` lists the kept folders and files under `work` it used, for a caller's cache to count as used. |
 | `failed` | `error`, `blame`, `used` | Why it did not build, as the build log ends with it. `blame` is `null`, or the mod the error is that mod's own and how: `{"mod": id, "kind": "compile" \| "build-script" \| "features"}`, the one a caller leaves out next time. `used` as for `built`. |
+
+`mod` is optional per-mod progress, not per-crate Cargo progress. For registry builds, read `build.log` for
+compiler diagnostics and use `built` or `failed` together with the subprocess exit status to determine the outcome.
 
 For SDK downloads, registry release discovery and native-build downloads, the mod tool uses the first
 nonblank setting in this order: `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` for HTTPS, or

@@ -199,7 +199,7 @@ pub fn build(
         let mut arg = std::ffi::OsString::from("@");
         arg.push(&argfile);
         cmd.arg(arg);
-        super::run(cmd, "Compiling the patched functions", |_| {})?;
+        super::run(cmd, "Compiling the patched functions")?;
         fs::write(saved, fingerprint).map_err(|e| e.to_string())?;
         compiled.push((name.clone(), rlib));
     }
@@ -578,7 +578,7 @@ pub fn prepare<'a>(
         // The features are the game crate's: the tool decides `feature` predicates only in its
         // copies, and refuses them in the copies of the crates below it.
         cmd.arg("--features-of").arg(CRATE);
-        super::run(cmd, "Applying the mixins to their functions", |_| {})?;
+        super::run(cmd, "Applying the mixins to their functions")?;
         patched
     } else {
         workspace.clone()
