@@ -1540,7 +1540,7 @@ mod tests {
                 _: &dyn ClientHost,
                 event: &mut ScreenRenderInventoryMobEffectsEvent<'_>,
             ) -> Flow {
-                *event.horizontal_offset += 5;
+                event.horizontal_offset += 5;
                 Flow::Continue
             }
 
