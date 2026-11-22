@@ -1634,7 +1634,7 @@ mod tests {
                     ]),
                 ),
             ]);
-            assert!(sunrise_items::item_nbt::item_from_persistent_nbt(&saved).is_none());
+            assert!(sunrise_items::item_nbt::item_from_persistent_nbt(&saved).is_err());
             let inventory = Tag::List(vec![saved]);
             let slots = sunrise_items::item_nbt::decode_items(Some(&inventory), 3);
             let stack = slots[2].as_ref().expect("item survives reopening");

@@ -380,16 +380,18 @@ impl Template {
     pub fn to_tag(&self) -> Result<Tag, String> {
         self.tag(Projection::Tree)
     }
-    fn tag(&self, projection: Projection) -> Result<Tag, String> {
+    /// Project the own persistent patch to its canonical `components` compound without
+    /// re-validating against the built-in-only registry.
+    pub fn patch_to_tag(&self) -> Result<Option<Tag>, String> {
+        let patch = self.project_patch(Projection::Codec)?;
+        Ok((!patch.is_empty()).then_some(Tag::Compound(patch)))
+    }
+    fn project_patch(&self, projection: Projection) -> Result<Compound, String> {
         let children = if projection == Projection::Presentation {
             projection
         } else {
             Projection::Codec
         };
-        let mut fields = vec![("id".into(), Tag::String(self.item.as_str().into()))];
-        if self.count != 1 {
-            fields.push(("count".into(), Tag::Int(self.count)));
-        }
         let mut patch = Compound::new();
         for (name, value) in effective_patch(&self.patch) {
             if projection != Projection::Presentation && !is_persistent(name) {
@@ -413,6 +415,14 @@ impl Template {
                 discard_tag(replaced);
             }
         }
+        Ok(patch)
+    }
+    fn tag(&self, projection: Projection) -> Result<Tag, String> {
+        let mut fields = vec![("id".into(), Tag::String(self.item.as_str().into()))];
+        if self.count != 1 {
+            fields.push(("count".into(), Tag::Int(self.count)));
+        }
+        let patch = self.project_patch(projection)?;
         if !patch.is_empty() {
             fields.push(("components".into(), Tag::Compound(patch)));
         }
