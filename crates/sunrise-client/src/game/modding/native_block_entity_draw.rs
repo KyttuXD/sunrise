@@ -2513,6 +2513,7 @@ mod tests {
                     false,
                     false,
                     &super::super::Progress::new(),
+                    sunrise_client::hud::MAX_ATLAS_SIZE,
                 )
                 .is_err()
             );
@@ -2538,6 +2539,7 @@ mod tests {
                 false,
                 false,
                 &super::super::Progress::new(),
+                sunrise_client::hud::MAX_ATLAS_SIZE,
             )
             .unwrap();
             game.apply_staged_pack(staged).unwrap();

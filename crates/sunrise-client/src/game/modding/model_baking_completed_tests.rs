@@ -264,6 +264,7 @@ fn a_failed_reload_fires_no_model_baking_completed() {
                 game.settings.force_unicode,
                 game.settings.japanese_glyphs,
                 &Progress::new(),
+                sunrise_client::hud::MAX_ATLAS_SIZE,
             )
             .unwrap();
             // An unreadable enabled-mods marker refuses the staged pack's application.

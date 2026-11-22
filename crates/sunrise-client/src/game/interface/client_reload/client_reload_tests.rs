@@ -834,6 +834,7 @@ fn refused_client_context_keeps_pack_and_listeners() {
             game.settings.force_unicode,
             game.settings.japanese_glyphs,
             &Progress::new(),
+            sunrise_client::hud::MAX_ATLAS_SIZE,
         )
         .unwrap();
         let root =

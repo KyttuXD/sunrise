@@ -165,6 +165,7 @@ fn reload(game: &mut Game<'_>, server: &[sunrise_client::packs::Pack]) {
         false,
         false,
         &Progress::new(),
+        sunrise_client::hud::MAX_ATLAS_SIZE,
     )
     .unwrap();
     game.apply_staged_pack(staged).unwrap();

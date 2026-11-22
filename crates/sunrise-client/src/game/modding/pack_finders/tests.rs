@@ -562,6 +562,7 @@ fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
                 false,
                 false,
                 &crate::game::Progress::new(),
+                sunrise_client::hud::MAX_ATLAS_SIZE,
             )
             .unwrap();
             game.apply_staged_pack(staged).unwrap();
@@ -598,6 +599,7 @@ fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
                     false,
                     false,
                     &crate::game::Progress::new(),
+                    sunrise_client::hud::MAX_ATLAS_SIZE,
                 )
                 .unwrap();
                 assert_eq!(staged.language.get("packmod.optional"), Some(expected));
