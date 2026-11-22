@@ -2032,7 +2032,7 @@ pub(super) mod interact_vibration_tests {
             fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
                 for id in [MC_ITEM, ALT_ITEM, BUILTIN_ITEM] {
                     let key = r.item_key(id);
-                    r.item_part(&key, self.clone()).unwrap();
+                    r.item_part(key, self.clone());
                 }
             }
             fn items(&self, _: &RegistrationContext, event: &mut ItemsEvent<'_>) {
@@ -2055,7 +2055,7 @@ pub(super) mod interact_vibration_tests {
         #[mod_api::sunrise_part]
         impl ItemPart for TimedUseMod {
             fn use_duration(&self, _: &dyn Host, event: &mut UseDurationEvent<'_>) {
-                *event.duration = 4;
+                event.duration = 4;
             }
         }
 

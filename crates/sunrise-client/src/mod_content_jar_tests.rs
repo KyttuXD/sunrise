@@ -836,10 +836,21 @@ fn biome_modifier_cross_alias_precedence_resolves_before_parsing_and_rejects_cod
         },
     }
     .json();
-    let early = folder_mod(
-        &scratch.join("early"),
+    let fixture = Fixture(scratch.clone());
+    // The lower Forge alias is intentionally malformed. The later NeoForge alias must
+    // replace it by registry key before the loader tries to parse either file.
+    let lower = fixture.jar(
+        "lower",
+        'a',
+        &[(
+            "data/shared/forge/biome_modifier/add.json",
+            "{not valid json",
+        )],
+    );
+    let mut late = folder_mod(
+        &scratch.join("late"),
         &[
-            ("sunrise-mod.toml", &manifest("early", "")),
+            ("sunrise-mod.toml", &manifest("late", r#""zinc", "shared""#)),
             (
                 "data/zinc/worldgen/feature/ore_zinc.json",
                 r#"{"type":"minecraft:ore","config":{}}"#,
@@ -848,23 +859,12 @@ fn biome_modifier_cross_alias_precedence_resolves_before_parsing_and_rejects_cod
                 "data/zinc/worldgen/placed_feature/ore_zinc.json",
                 r#"{"feature":"zinc:ore_zinc","placement":[]}"#,
             ),
-            // Losing directory alias has invalid JSON: cross-alias precedence must pick the later
-            // pack's `neoforge/biome_modifier/add.json` before reading or parsing this file.
-            (
-                "data/shared/forge/biome_modifier/add.json",
-                "{not valid json",
-            ),
-        ],
-    );
-    let late = folder_mod(
-        &scratch.join("late"),
-        &[
-            ("sunrise-mod.toml", &manifest("late", "")),
             ("data/shared/neoforge/biome_modifier/add.json", &valid),
         ],
     );
+    late.jars.push(lower);
     let out = scratch.join("out");
-    build_fixture(&base, &base.join("jars"), &[early, late], &out).unwrap();
+    build_fixture(&base, &scratch.join("jars"), &[late], &out).unwrap();
     let features = biome_features(&out);
     assert_eq!(
         features["minecraft:plains"],
@@ -895,5 +895,4 @@ fn biome_modifier_cross_alias_precedence_resolves_before_parsing_and_rejects_cod
         error.contains("mod late") && error.contains("mod code_owner"),
         "{error}"
     );
-    fs::remove_dir_all(scratch).unwrap();
 }
