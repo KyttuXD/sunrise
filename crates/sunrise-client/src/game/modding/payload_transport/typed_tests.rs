@@ -371,14 +371,12 @@ fn lan(game: &mut super::Game<'_>) {
     send(&mut witness, UP, empty(7).to_vec());
     assert_eq!(await_reply(&mut witness, DOWN), empty(2));
     assert_eq!(await_reply(&mut witness, DOWN), empty(8));
-    // A reply staged before a panic is never sent, and the session closes.
+    // No staged reply escapes the panic, and another registration on this peer still runs.
     let mut failing = super::sender_tests::connect_peer(port, "TypedPanic");
     send(&mut failing, UP, empty(13).to_vec());
-    let reason = await_disconnect(&mut failing, DOWN);
-    assert!(reason.contains("typed_probe"), "{reason}");
     // The staged write to the witness was rolled back, as a healthy callback sees it.
-    send(&mut witness, OTHER, empty(4).to_vec());
-    assert_eq!(await_reply(&mut witness, DOWN), empty(4));
+    send(&mut failing, OTHER, empty(4).to_vec());
+    assert_eq!(await_reply(&mut failing, DOWN), empty(4));
     let seen: Vec<_> = SERVER
         .lock()
         .unwrap()
@@ -403,12 +401,17 @@ fn lan(game: &mut super::Game<'_>) {
         Some(full),
         "the failed handler's write was rolled back"
     );
-    // The panicked callback is disabled: a later message on it is refused at ingress, as for
-    // a disabled owner, and the session ends without running it.
+    // The mod session quarantines UP even on a new connection, without touching OTHER.
     let mut later = super::sender_tests::connect_peer(port, "TypedLater");
     send(&mut later, UP, empty(7).to_vec());
-    await_disconnect(&mut later, DOWN);
-    assert_eq!(SERVER.lock().unwrap().len(), seen.len());
+    send(&mut later, OTHER, empty(5).to_vec());
+    assert_eq!(await_reply(&mut later, DOWN), empty(5));
+    let server = SERVER.lock().unwrap();
+    assert_eq!(server.len(), seen.len() + 1);
+    assert_eq!(
+        server.last().map(|&(id, counter, _)| (id, counter)),
+        Some((OTHER, 5))
+    );
 }
 
 /// Send `data` on `channel` from a TCP peer in play.

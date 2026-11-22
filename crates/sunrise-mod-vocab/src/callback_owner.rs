@@ -511,6 +511,26 @@ pub(crate) fn call_typed<T>(
     })
 }
 
+pub(crate) fn dispose_typed<T>(
+    owner: &'static str,
+    index: usize,
+    poisoned: &AtomicBool,
+    kind: &'static str,
+    operation: &'static str,
+    value: T,
+) -> Result<(), CallbackFailure> {
+    call_opt(
+        owner,
+        OwnerBinding::current(Some(index)),
+        poisoned,
+        kind,
+        operation,
+        Invocation::Dispose,
+        || drop(value),
+    )
+    .map_err(|_| CallbackFailure::Panicked)
+}
+
 enum ScheduledFailure {
     Disabled,
     Panicked(String),
@@ -626,10 +646,17 @@ mod tests {
 
         const ORIGINAL: &str = "original opaque callback panic";
         const DESTRUCTOR: &str = "panic in the payload destructor";
-        struct PanicOnDrop(Arc<AtomicBool>);
+        struct PanicOnDrop {
+            owner: CallbackOwner,
+            dropped: Arc<AtomicBool>,
+            reentered: Arc<AtomicBool>,
+        }
         impl Drop for PanicOnDrop {
             fn drop(&mut self) {
-                self.0.store(true, Ordering::Relaxed);
+                self.dropped.store(true, Ordering::Relaxed);
+                let _ = self.owner.call("test", "destructor_reentry", || {
+                    self.reentered.store(true, Ordering::Relaxed);
+                });
                 std::panic::panic_any(DESTRUCTOR);
             }
         }
@@ -649,20 +676,26 @@ mod tests {
         }));
 
         let dropped = Arc::new(AtomicBool::new(false));
-        let poisoned = AtomicBool::new(false);
-        let result: Result<(), _> = call("owner", 0, &poisoned, "test", "test", || {
-            std::panic::panic_any(PanicOnDrop(dropped.clone()));
+        let reentered = Arc::new(AtomicBool::new(false));
+        let owner = CallbackOwner::for_mod("owner");
+        let result: Result<(), _> = owner.call("test", "test", || {
+            std::panic::panic_any(PanicOnDrop {
+                owner: owner.clone(),
+                dropped: dropped.clone(),
+                reentered: reentered.clone(),
+            });
         });
         drop(std::panic::take_hook());
         assert!(dropped.load(Ordering::Relaxed));
+        assert!(!reentered.load(Ordering::Relaxed));
         assert_eq!(
             recorded.lock().unwrap().as_slice(),
             [(ORIGINAL, true), (DESTRUCTOR, true)]
         );
         assert_eq!(
             result.unwrap_err(),
-            "test callback panicked; it is disabled: original opaque callback panic"
+            "mod owner: test callback panicked; it is disabled: original opaque callback panic"
         );
-        assert!(poisoned.load(Ordering::Acquire));
+        assert!(!owner.is_enabled());
     }
 }

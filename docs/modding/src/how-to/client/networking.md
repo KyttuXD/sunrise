@@ -250,7 +250,9 @@ fn register(r: &mut dyn Registrar) {
   owning mod and shows an error toast. Work in the handler’s transaction journal or staged
   send queue is discarded. Later packets for that callback still pass framing and channel
   checks, but are skipped before reserving callback or main-thread queue space. Other handlers
-  and the rest of the bundle still run.
+  and the rest of the bundle still run. The engine releases its `PayloadWork` reference under
+  that same registration after execution, refusal, or cancellation. A destructor panic is
+  reported under its owner and discards effects staged by the affected delivery.
 - **Raw channel failures stay local.** A raw channel (`play_raw`) carries bytes from any client,
   so a declaring mod's handler that returns `Failed` does not close the session: the game logs the mod and the channel, rolls back that delivery's staged
   work (a staged disconnect included), and still delivers the other declaring mods' copies. A
