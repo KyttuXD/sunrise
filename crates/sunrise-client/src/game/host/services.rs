@@ -1,7 +1,7 @@
 //! The game's implementations of the mod API's service traits.
-use crate::game::{Game, api_values::TryIntoEngine};
+use crate::game::{Game, api_values::TryIntoEngine, native_console::Output};
 use mod_api::*;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc::Sender};
 
 impl ClientSession for Game<'_> {
     fn client_server(&self) -> Option<ClientServer<'_>> {
@@ -33,6 +33,14 @@ impl Commands for Game<'_> {
     }
     fn run_command_with_output(&mut self, line: &str) -> mod_api::CommandResult {
         self.native_run_command_with_output(line)
+    }
+    fn run_command_with_feedback(
+        &mut self,
+        line: &str,
+        output: Sender<Result<CommandFeedback, TextFormError>>,
+    ) -> bool {
+        self.run_console_command(line, Some(Output::Stream(output)))
+            .success
     }
 }
 impl Levels for Game<'_> {

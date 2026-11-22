@@ -1266,7 +1266,10 @@ impl Game<'_> {
             return Ok(0);
         };
         let modifier = self.item_modifier_arg(ctx, "modifier")?;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1430,7 +1433,10 @@ impl Game<'_> {
             // ItemCommands.applyModifier on each source stack.
             if ctx.get("modifier").is_some() {
                 let modifier = self.item_modifier_arg(ctx, "modifier")?;
-                let source = self.command_source.unwrap_or_else(|| self.player_source());
+                let source = self
+                    .command_source
+                    .clone()
+                    .unwrap_or_else(|| self.player_source());
                 let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
                 let mut rng = sunrise_core::random::LegacyRandom::new(0);
                 found = found

@@ -187,6 +187,19 @@ impl CommandInvocation {
     }
 }
 
+/// One structured message delivered to the native console's command source.
+// no wire: these messages travel through an in-process command output sink.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum CommandFeedback {
+    /// Feedback sent by `CommandSourceStack.sendSuccess`.
+    Success(crate::Text),
+    /// Feedback sent by `CommandSourceStack.sendFailure`, including its error style.
+    Failure(crate::Text),
+    /// A direct `CommandSourceStack.sendSystemMessage`, not gated as success feedback.
+    System(crate::Text),
+}
+
 /// A command's outcome and the messages received by its source.
 ///
 /// The default is an unsuccessful run with no feedback, including when a handle

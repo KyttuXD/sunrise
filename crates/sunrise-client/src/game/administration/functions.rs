@@ -64,8 +64,8 @@ pub(in crate::game) struct PreparedFunctionCall {
     call: std::sync::Arc<FunctionCall>,
 }
 impl PreparedFunctionCall {
-    fn matches(&self, ctx: &Context, source: Source) -> bool {
-        let s = self.source;
+    fn matches(&self, ctx: &Context, source: &Source) -> bool {
+        let s = &self.source;
         self.invocation == ctx as *const Context as usize
             && s.entity == source.entity
             && s.pos.map(f64::to_bits) == source.pos.map(f64::to_bits)
@@ -627,11 +627,11 @@ impl Game<'_> {
         if self.fns.load_pending {
             self.fns.load_pending = false;
             for f in self.fns.store.tag_functions("minecraft:load") {
-                self.run_function_by_id(&f, None, source);
+                self.run_function_by_id(&f, None, source.clone());
             }
         }
         for f in self.fns.store.tag_functions("minecraft:tick") {
-            self.run_function_by_id(&f, None, source);
+            self.run_function_by_id(&f, None, source.clone());
         }
     }
     /// `ServerLevel.tickTime`'s `getScheduledEvents().tick`: the scheduled
@@ -658,10 +658,10 @@ impl Game<'_> {
             match event.id.strip_prefix('#') {
                 Some(tag) => {
                     for f in self.fns.store.tag_functions(tag) {
-                        self.run_function_by_id(&f, None, source);
+                        self.run_function_by_id(&f, None, source.clone());
                     }
                 }
-                None => self.run_function_by_id(&event.id, None, source),
+                None => self.run_function_by_id(&event.id, None, source.clone()),
             }
         }
     }
@@ -747,7 +747,7 @@ impl Game<'_> {
             ..source
         };
         for line in lines {
-            let _ = self.execute_line(&line, inner);
+            let _ = self.execute_line(&line, inner.clone());
             if self.exec.returned.is_some() {
                 break;
             }
@@ -838,10 +838,13 @@ impl Game<'_> {
         args: Option<&Tag>,
     ) -> R<Vec<Option<i32>>> {
         let functions = self.functions_named(name)?;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let mut out = Vec::new();
         for f in functions {
-            out.push(match self.run_function(&f, args, source)? {
+            out.push(match self.run_function(&f, args, source.clone())? {
                 Outcome::NoReturn => None,
                 Outcome::Value(v) => Some(v),
                 Outcome::Fail => Some(0),
@@ -855,12 +858,15 @@ impl Game<'_> {
     /// `FunctionCommand.decorateOutputIfNeeded`: consume only this invocation's
     /// prepared call before its body can invoke another function.
     pub(super) fn cmd_function(&mut self, ctx: &Context) -> R<i32> {
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let call = if self
             .exec
             .prepared_function
             .as_ref()
-            .is_some_and(|p| p.matches(ctx, source))
+            .is_some_and(|p| p.matches(ctx, &source))
         {
             std::sync::Arc::unwrap_or_clone(self.exec.prepared_function.take().unwrap().call)
         } else {
@@ -939,12 +945,15 @@ impl Game<'_> {
     /// `FunctionCommand.decorateOutputIfNeeded`: retain body, result and callback delivery.
     fn execute_function_call(&mut self, call: FunctionCall) -> R<i32> {
         let FunctionCall { functions, args } = call;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let mut sum: i32 = 0;
         let mut any = false;
         let mut failed = false;
         for f in functions {
-            match self.run_function(&f, args.as_ref(), source)? {
+            match self.run_function(&f, args.as_ref(), source.clone())? {
                 Outcome::NoReturn => {}
                 Outcome::Value(v) => {
                     any = true;
@@ -1007,19 +1016,21 @@ impl Game<'_> {
         }
         // No start or slot is published until the existing validation succeeds.
         let call = self
-            .with_source(sources[0], |g| g.prepare_function_call(ctx))
+            .with_source(sources[0].clone(), |g| g.prepare_function_call(ctx))
             .ok()??;
         let call = std::sync::Arc::new(call);
         let tasks: Vec<_> = sources
             .iter()
-            .map(|&source| PreparedFunctionCall {
+            .map(|source| PreparedFunctionCall {
                 invocation: ctx as *const Context as usize,
-                source,
+                source: source.clone(),
                 call: call.clone(),
             })
             .collect();
         for task in &tasks {
-            self.with_source(task.source, |g| g.start_function_call(&task.call.functions));
+            self.with_source(task.source.clone(), |g| {
+                g.start_function_call(&task.call.functions)
+            });
         }
         Some(tasks)
     }
@@ -1527,7 +1538,10 @@ impl Game<'_> {
                 )
             })?
         };
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| self.entity_view_scored(t, &json));
         Ok(self.command_conditions_hold(&json, view.as_ref(), source.pos))
     }
@@ -2269,7 +2283,7 @@ mod tests {
             };
             game.exec.functions.push("test:outer".into());
             let source = game.server_source();
-            game.run_function(&inner, None, source).unwrap();
+            game.run_function(&inner, None, source.clone()).unwrap();
             assert_eq!(game.exec.functions, ["test:outer"]);
             game.exec.functions.clear();
             game.run_function(&inner, None, source).unwrap();
@@ -3751,7 +3765,7 @@ mod required_tag_tests {
                     }
                 }
             }
-            let previous = game.command_source;
+            let previous = game.command_source.clone();
             let server = game.server_source();
             assert!(server.entity.is_none());
             game.command_source = Some(server);
@@ -3759,7 +3773,7 @@ mod required_tag_tests {
             assert!(!game.check_predicate("h121:reference").unwrap());
             assert!(game.check_predicate("h121:inverted").unwrap());
             assert!(game.check_predicate("h121:absent").is_err());
-            game.command_source = previous;
+            game.command_source = previous.clone();
             // Defensive evaluator controls only. Java rejects these graphs at
             // world load (a reload refuses a dangling or cyclic reference, so they cannot come from a
             // pack): they are put in the loaded store directly. This does not establish

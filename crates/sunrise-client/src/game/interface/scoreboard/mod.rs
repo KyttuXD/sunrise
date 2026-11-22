@@ -1137,7 +1137,7 @@ impl Env for GameEnv<'_, '_> {
         }
     }
     fn source(&mut self) -> Option<(Holder, bool)> {
-        let entity = match self.g.command_source {
+        let entity = match &self.g.command_source {
             Some(s) => s.entity,
             None => Some(Target::Player),
         }?;

@@ -19,7 +19,7 @@ mod registered_commands;
 mod selector_tests;
 
 use super::api_values::{TryIntoApi, TryIntoEngine};
-use super::{Dim, Game, commands::execute, respawn_anchor::RespawnConfig};
+use super::{Dim, Game, respawn_anchor::RespawnConfig};
 use crate::game::level_control_hooks::LevelControl;
 pub(super) use argument_kinds::{CommandArguments, command_arguments};
 use argument_kinds::{
@@ -1877,7 +1877,10 @@ impl Game<'_> {
     /// A command's success feedback, routed to its originating source using
     /// vanilla's silence, send-command-feedback and block/cart track-output rules.
     pub(super) fn native_feedback(&mut self, line: Text) {
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         self.with_source(
             super::commands::execute::Source {
                 dimension: source.origin_dimension,
@@ -1898,52 +1901,6 @@ impl Game<'_> {
             mod_api::EntityRef::new(self.native_lifecycle.epoch()?, self.native_acting_entity()),
             self.lan_acting_uuid?,
         ))
-    }
-    /// Runs `line` (no slash) as the server's console does: permission
-    /// level 4, from the world spawn in its level, with no output. A teleport to
-    /// another level (`execute in minecraft:the_nether run tp Alex 0 70 0`)
-    /// happens at the next tick's start, as the console's. Whether it ran
-    /// without failing. During a guest's turn, live players (including the
-    /// acting player) are reachable; displaced outer players are excluded
-    /// from name, UUID and selector resolution on this path only.
-    pub(super) fn native_run_command(&mut self, line: &str) -> bool {
-        self.run_console_command(line, false).0
-    }
-    /// The one path `native_run_command` and `native_run_command_with_output` run a line
-    /// by: the console's source from the world spawn in its level, the native command filter on,
-    /// and the running command's own chat capture, so a call inside another capture leaves
-    /// the outer one as it was. With `capture`, the source is not silent and the feedback
-    /// comes back as the second value.
-    pub(super) fn run_console_command(
-        &mut self,
-        line: &str,
-        capture: bool,
-    ) -> (bool, Vec<sunrise_client::text::Text>) {
-        if self.lan.is_none() {
-            return (false, Vec::new());
-        }
-        let base = self.server_source();
-        let server = execute::Source {
-            silent: base.silent && !capture,
-            ..base
-        };
-        let outer = self.command_source.replace(server);
-        let filter = std::mem::replace(&mut self.native_command_filter, true);
-        let outer_exec = std::mem::take(&mut self.exec);
-        let outer_results = self.cmds.results.take();
-        let outer_capture = capture.then(|| self.chat_capture.replace(Vec::new()));
-        let ok = self.as_console(|g| g.run_command(line));
-        let lines = match outer_capture {
-            Some(outer_capture) => {
-                std::mem::replace(&mut self.chat_capture, outer_capture).unwrap_or_default()
-            }
-            None => Vec::new(),
-        };
-        self.exec = outer_exec;
-        self.cmds.results = outer_results;
-        self.native_command_filter = filter;
-        self.command_source = outer;
-        (ok, lines)
     }
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
@@ -2230,7 +2187,10 @@ impl Game<'_> {
         use super::commands::err;
         use mod_api::CommandSource;
         let permission = mod_api::PermissionLevel::from_level(i32::from(permission));
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let origin = if let Some(id) = self.exec.functions.last() {
             CommandSource::Function {
                 id: mod_api::Identifier::parse(id).map_err(|_| err("command.failed", &[]))?,
@@ -2761,7 +2721,9 @@ mod tests {
                     block.track_output = track;
                     block.last_output = None;
                 }
-                game.with_source(source, |game| game.native_feedback(Text::literal("answer")));
+                game.with_source(source.clone(), |game| {
+                    game.native_feedback(Text::literal("answer"))
+                });
                 let Some(BlockEntity::CommandBlock(block)) =
                     game.world.block_entities.get(&(1, 64, 1))
                 else {

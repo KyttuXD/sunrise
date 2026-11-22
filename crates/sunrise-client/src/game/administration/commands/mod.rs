@@ -31,6 +31,7 @@ mod text_commands;
 mod world_cmds;
 
 use super::{Dim, Game, Screen, chat::PLAYER_NAME, vehicle_teleport::TeleportMotion};
+use mod_api::CommandFeedback;
 use sunrise_client::{
     command::{
         Arg, CommandError, Context, Reader,
@@ -339,42 +340,70 @@ impl Game<'_> {
     }
     /// CommandSourceStack.sendFailure: red text.
     pub(super) fn command_failure(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
         let message = Text::empty().append(message).with_color(text::RED);
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_output(block, message);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_output(cart, message);
             return;
         }
-        self.system_message(message);
+        self.send_command_output(CommandFeedback::Failure, message);
+    }
+    /// `CommandSourceStack.sendSystemMessage`: no success-feedback rule. Unlike `sendSuccess`
+    /// and `sendFailure`, it addresses the executing player when there is one.
+    pub(super) fn command_system_message(&mut self, message: Text) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
+            return;
+        }
+        if self.native_console_source() {
+            let conn = match self.source_entity() {
+                Some(Target::Player) => self.lan_acting,
+                Some(Target::Guest(conn)) => Some(conn),
+                _ => {
+                    self.send_command_output(CommandFeedback::System, message);
+                    return;
+                }
+            };
+            if let Some(conn) = conn {
+                if let Some(host) = &self.lan {
+                    host.hub
+                        .send_to(conn, &super::native_server::system_chat(&message));
+                }
+            } else {
+                self.system_message(message);
+            }
+            return;
+        }
+        self.send_command_output(CommandFeedback::System, message);
     }
     /// `sendSuccess(message, false)`: the source is told (when it takes
     /// success feedback), the operators are not.
     pub(super) fn feedback_unbroadcast(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_success(block, message, false);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_success(cart, message, false);
             return;
         }
         if self.accepts_success() {
-            self.system_message(message);
+            self.send_command_output(CommandFeedback::Success, message);
         }
     }
     /// `CommandSource.acceptsSuccess`: a player's source takes success feedback while
     /// `send_command_feedback` is on; the server console's and an RCON client's always do.
     fn accepts_success(&self) -> bool {
-        self.console_broadcast.is_some()
+        self.native_console_source()
+            || self.console_broadcast.is_some()
             || self
                 .ui
                 .rules
@@ -382,19 +411,19 @@ impl Game<'_> {
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
-        if self.command_source.is_some_and(|s| s.silent) {
+        if self.command_source.as_ref().is_some_and(|s| s.silent) {
             return;
         }
-        if let Some(block) = self.command_source.and_then(|s| s.block) {
+        if let Some(block) = self.command_source.as_ref().and_then(|s| s.block) {
             self.command_block_success(block, message, true);
             return;
         }
-        if let Some(cart) = self.command_source.and_then(|s| s.cart) {
+        if let Some(cart) = self.command_source.as_ref().and_then(|s| s.cart) {
             self.cart_command_success(cart, message, true);
             return;
         }
         if self.accepts_success() {
-            self.system_message(message.clone());
+            self.send_command_output(CommandFeedback::Success, message.clone());
         }
         self.broadcast_to_admins(message);
     }
@@ -450,6 +479,7 @@ impl Game<'_> {
             .bool_at(sunrise_client::gamerules::vanilla::SEND_COMMAND_FEEDBACK);
         // MinecraftServer.sendSystemMessage, unless the server is the source.
         let console = self.console_broadcast.is_none()
+            && !self.native_console_source()
             && self.lan_acting.is_some()
             && self.is_dedicated_server()
             && self
@@ -461,9 +491,11 @@ impl Game<'_> {
         }
         // getDisplayName: the entity the command runs as (`execute as`), or
         // the server's own source, "Server".
-        let who = match self.command_source.and_then(|s| s.entity) {
+        let who = match self.command_source.as_ref().and_then(|s| s.entity) {
             Some(entity) => self.target_name(entity),
-            None if self.console_broadcast.is_some() => self.server_name(),
+            None if self.console_broadcast.is_some() || self.native_console_source() => {
+                self.server_name()
+            }
             None => self.player_display_name(),
         };
         let line = Text::translate("chat.type.admin", &[who, message])
@@ -504,6 +536,7 @@ impl Game<'_> {
     }
     pub(super) fn source_rotation(&self) -> [f32; 2] {
         self.command_source
+            .as_ref()
             .map_or([self.yaw, self.pitch], |s| s.rot)
     }
     /// LocalCoordinates use the anchored position; world coordinates the position.
@@ -1929,7 +1962,7 @@ impl Game<'_> {
         };
         // Entity.lookAt: from the source's anchor (the feet, unless `anchored
         // eyes`) on the teleported entity, so the eyes depend on the target.
-        let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+        let anchored_eyes = self.command_source.as_ref().is_some_and(|s| s.eyes);
         let look_at = |this: &Self, t: Target, at: [f64; 3]| {
             let f = facing?;
             let eye = if anchored_eyes {
@@ -1942,7 +1975,7 @@ impl Game<'_> {
         // A server's player in another level than the source's (`execute
         // in`, the console's Overworld) moves there (ServerPlayer.teleport
         // into another level), after the command.
-        let source_level = match self.command_source.and_then(|s| s.level) {
+        let source_level = match self.command_source.as_ref().and_then(|s| s.level) {
             Some(level) => level,
             None if self.source_entity().is_none() => super::Dim::Overworld,
             None => self.dim,
@@ -2979,7 +3012,10 @@ impl Game<'_> {
     }
     fn clone_levels(&mut self, ctx: &Context) -> R<i32> {
         let here = self.dim;
-        let source_level = self.command_source.map_or(self.dim, |s| s.dimension);
+        let source_level = self
+            .command_source
+            .as_ref()
+            .map_or(self.dim, |s| s.dimension);
         // The coordinates, from the command's own source, before any level moves.
         let position = |name: &str| -> R<[i32; 3]> {
             let c = self
@@ -3549,7 +3585,10 @@ impl Game<'_> {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
             _ => [0.0, 0.0],
         };
-        let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+        let dimension = self
+            .command_source
+            .as_ref()
+            .map_or(self.dim, |s| s.dimension);
         let [yaw, pitch] = self.set_world_spawn(dimension, pos, rot);
         let args = [
             Text::literal(pos[0].to_string()),
@@ -4113,21 +4152,59 @@ impl Game<'_> {
             }
             "me" => Text::translate("chat.type.emote", &[name, message]),
             _ => {
-                let _ = self.entities(ctx, "targets", true)?;
-                // Whispering to yourself: the incoming and outgoing lines.
-                let out = Text::translate(
-                    "commands.message.display.outgoing",
-                    &[self.player_display_name(), message.clone()],
-                )
-                .with_color(text::GRAY)
-                .italic();
-                self.system_message(out);
-                Text::translate(
-                    "commands.message.display.incoming",
-                    &[self.player_display_name(), message],
-                )
-                .with_color(text::GRAY)
-                .italic()
+                let targets = self.entities(ctx, "targets", true)?;
+                let count = targets.len() as i32;
+                for target in targets {
+                    let target_name = match target {
+                        Target::Player => self.player_display_name(),
+                        other => self.target_name(other),
+                    };
+                    let out = Text::translate(
+                        "commands.message.display.outgoing",
+                        &[target_name, message.clone()],
+                    )
+                    .with_color(text::GRAY)
+                    .italic();
+                    // MsgCommand.sendMessage -> CommandSourceStack.sendChatMessage:
+                    // a non-player source receives the decorated outgoing line via
+                    // sendSystemMessage; a player source receives it as its own message.
+                    self.command_system_message(out);
+                    let incoming = Text::translate(
+                        "commands.message.display.incoming",
+                        &[name.clone(), message.clone()],
+                    )
+                    .with_color(text::GRAY)
+                    .italic();
+                    let conn = match target {
+                        Target::Guest(conn) => Some(conn),
+                        Target::Player => self.lan_acting,
+                        _ => None,
+                    };
+                    if let Some(conn) = conn {
+                        if self.lan_acting == Some(conn)
+                            && let Some(capture) = self.chat_capture.as_mut()
+                        {
+                            capture.push(incoming);
+                        } else if let Some(host) = &self.lan {
+                            host.hub
+                                .send_to(conn, &super::native_server::system_chat(&incoming));
+                        }
+                    } else {
+                        if let Some(capture) = self.chat_capture.as_mut() {
+                            capture.push(incoming.clone());
+                        }
+                        let focused = self.screen == Screen::Chat;
+                        self.ui.chat.add(
+                            &self.gui.atlas,
+                            incoming,
+                            None,
+                            sunrise_client::chat::ChatSource::Player,
+                            self.visual_ticks(),
+                            focused,
+                        );
+                    }
+                }
+                return Ok(count);
             }
         };
         if let Some(capture) = self.chat_capture.as_mut() {

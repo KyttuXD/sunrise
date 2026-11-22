@@ -597,6 +597,7 @@ impl Game<'_> {
         }
         let entity = self
             .command_source
+            .as_ref()
             .and_then(|s| s.entity)
             .unwrap_or(Target::Player);
         let slot = if ctx.has("offhand") {
@@ -701,7 +702,7 @@ impl Game<'_> {
                 // LootCommand.dropKillLoot: the source's entity is the killer.
                 // A connected player is the last damage player, and its own
                 // stack counts; it is in place only to read that stack.
-                let guest = match self.command_source.map(|s| s.entity) {
+                let guest = match self.command_source.as_ref().map(|s| s.entity) {
                     Some(Some(Target::Guest(conn))) => self.for_player(Target::Guest(conn), |g| {
                         g.slot_get(&super::items::Slot::Inv(g.selected))
                     }),
@@ -711,7 +712,7 @@ impl Game<'_> {
                     Some(held) => (true, held),
                     None => (
                         matches!(
-                            self.command_source.map(|s| s.entity),
+                            self.command_source.as_ref().map(|s| s.entity),
                             None | Some(Some(Target::Player))
                         ),
                         self.slot_get(&super::items::Slot::Inv(self.selected)),
@@ -723,6 +724,7 @@ impl Game<'_> {
                     target: t,
                     killer: self
                         .command_source
+                        .as_ref()
                         .map(|s| s.entity)
                         .unwrap_or(Some(Target::Player)),
                     by_player,
@@ -750,7 +752,7 @@ impl Game<'_> {
                     pending.record_saved(p, &saved);
                 }
                 // LootCommand: the source's entity is `this`, if it has one.
-                let entity = match self.command_source.map(|s| s.entity) {
+                let entity = match self.command_source.as_ref().map(|s| s.entity) {
                     None | Some(Some(Target::Player)) => Some(self.native_clicker().1 as u32),
                     Some(Some(Target::Guest(conn))) => self
                         .player_entity_id_by_connection(Some(conn))
