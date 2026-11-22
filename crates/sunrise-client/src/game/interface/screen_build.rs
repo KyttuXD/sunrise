@@ -487,10 +487,11 @@ impl ScreenBuildState {
 }
 
 impl Game<'_> {
-    /// The framebuffer's size and its GUI-scaled size and scale, as the HUD
-    /// computes them (`HudBatch::new`). Never asks for the renderer: before one
-    /// exists, the window's own size serves.
-    fn gui_frame_now(&self) -> ([u32; 2], GuiSize) {
+    /// `Screen.init`/`Screen.resize` for the game's open screen: builds it
+    /// when it opens, remakes it when the window or the GUI scale changed it,
+    /// and drops it when it closes. A frame that changes neither builds
+    /// nothing, so `observe_screen` calls it every frame.
+    pub(super) fn build_screen(&mut self) {
         let framebuffer = self.renderer.as_ref().map_or_else(
             || {
                 self.window.as_ref().map_or([1280, 720], |window| {
@@ -500,16 +501,10 @@ impl Game<'_> {
             },
             |renderer| [renderer.config.width, renderer.config.height],
         );
-        let inputs = self.settings.gui_scale_inputs();
-        let gui = GuiSize::new(framebuffer, inputs.requested, inputs.unicode);
-        (framebuffer, gui)
+        self.build_screen_at(framebuffer);
     }
 
-    /// `Screen.init`/`Screen.resize` for the game's open screen: builds it
-    /// when it opens, remakes it when the window or the GUI scale changed it,
-    /// and drops it when it closes. A frame that changes neither builds
-    /// nothing, so `observe_screen` calls it every frame.
-    pub(super) fn build_screen(&mut self) {
+    fn build_screen_at(&mut self, framebuffer: [u32; 2]) {
         let shown =
             self.screen != Screen::Playing || self.title.is_some() || self.screen_over_playing();
         // Gui.setScreen: KeyMapping.releaseAll, as the screen or overlay opens.
@@ -517,7 +512,8 @@ impl Game<'_> {
             self.native_input.mappings.release_all();
             self.release_screen_mappings();
         }
-        let (framebuffer, gui) = self.gui_frame_now();
+        let inputs = self.settings.gui_scale_inputs();
+        let gui = GuiSize::new(framebuffer, inputs.requested, inputs.unicode);
         let identity = self
             .title
             .as_ref()
@@ -1513,7 +1509,15 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn each_screen_region_is_where_vanilla_draws_it() {
-        use mod_api::{ScreenRegion, ScreenRegionKind as Kind};
+        use mod_api::{
+            ClientHost, Flow, Hooks, ModEntry, ScreenRegion, ScreenRegionKind as Kind,
+            ScreenRenderInventoryMobEffectsEvent, ScreenRenderPostEvent, ScreenRenderPreEvent,
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+
         if crate::game::native_entity_refs::tests::run_fresh_cases(
             "game::screen_build::tests::each_screen_region_is_where_vanilla_draws_it",
             "SUNRISE_SCREEN_REGIONS_CHILD",
@@ -1521,107 +1525,143 @@ mod tests {
         ) {
             return;
         }
-        crate::game::native_entity_refs::tests::with_game(|game| {
-            game.title = None;
-            game.container = None;
-            game.craft_size = 2;
-            // The regions a hook's view carries after a draw of `batch`'s layout (`drawn`
-            // false: `screen_render_pre` cancelled it): collected, then published as a frame does.
-            let hook_view = |game: &mut crate::game::Game<'_>, batch: &HudBatch, drawn: bool| {
-                let layout = game.container_layout(batch);
-                let mut out = Vec::new();
-                game.collect_screen_regions(&layout, batch.width, &mut out);
-                game.screen_state.pending_regions = (Some(game.screen), out);
-                game.publish_screen_regions(drawn);
-                let rect = game.screen_rect(batch, game.screen);
-                game.screen_view_at(game.screen, rect).regions.to_vec()
-            };
-            let view =
-                |game: &mut crate::game::Game<'_>, batch: &HudBatch| hook_view(game, batch, true);
-            let gui = |window, scale| {
-                HudBatch::new(
-                    window,
-                    GuiScale {
-                        requested: scale,
-                        unicode: false,
-                    },
-                )
-            };
-            // 320 x 240 at scale 1: the inventory's panel at (72, 37), 176 x 166.
-            let small = gui([320, 240], 1);
-            game.screen = Screen::Inventory;
-            assert!(view(game, &small).is_empty(), "no book, no effects");
-            // EffectsInInventory: leftPos + imageWidth + 2, topPos; one compact 32 x 32 effect.
-            game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
-                "speed", 200, 0,
-            )];
-            assert_eq!(
-                view(game, &small),
-                [ScreenRegion::new(Kind::Effects, [250.0, 37.0, 32.0, 32.0])]
-            );
-            game.potions.effects.list.clear();
 
-            // Creative at 320 x 240, operator utilities enabled for this player who may use
-            // them: the panel at (62, 52), 195 x 136. Every tab
-            // of page one, 26 x 32 at getTabX (27 a column; the last two
-            // right-aligned at 195 - 27 * (7 - column) + 1) and getTabY (28
-            // above, 136 - 4 below): building, colored, natural, functional and
-            // redstone blocks, the saved hotbars and search above; tools,
-            // combat, food, ingredients and spawn eggs, and the player's
-            // inventory below, and operator utilities in column 5 below.
-            game.settings.operator_items_tab = true;
-            game.screen = Screen::Creative;
-            let mut tabs: Vec<[f32; 2]> = view(game, &small)
-                .iter()
-                .map(|r| {
-                    assert_eq!(r.kind, Kind::CreativeTab);
-                    assert_eq!([r.rect[2], r.rect[3]], [26.0, 32.0]);
-                    [r.rect[0], r.rect[1]]
-                })
-                .collect();
-            tabs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let mut want = Vec::new();
-            for y in [24.0, 184.0] {
-                for x in [0.0, 27.0, 54.0, 81.0, 108.0] {
-                    want.push([62.0 + x, y]);
+        #[derive(Default)]
+        struct Observer {
+            canceled: AtomicBool,
+            posts: Mutex<Vec<Vec<ScreenRegion>>>,
+        }
+
+        struct Observe(Arc<Observer>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Observe {
+            fn screen_render_inventory_mob_effects(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut ScreenRenderInventoryMobEffectsEvent<'_>,
+            ) -> Flow {
+                *event.horizontal_offset += 5;
+                Flow::Continue
+            }
+
+            fn screen_render_pre(
+                &self,
+                _: &dyn ClientHost,
+                _: &mut ScreenRenderPreEvent<'_>,
+            ) -> Flow {
+                if self.0.canceled.load(Ordering::Relaxed) {
+                    Flow::Cancel
+                } else {
+                    Flow::Continue
                 }
             }
-            want.extend([
-                [62.0 + 142.0, 24.0],
-                [62.0 + 169.0, 24.0],
-                [62.0 + 169.0, 184.0],
-            ]);
-            want.push([62.0 + 142.0, 184.0]);
-            want.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            assert_eq!(tabs, want);
 
-            // The crafting book open at 427 x 240 (wide enough, 379): its panel
-            // at ((427 - 147) / 2 - 86, (240 - 166) / 2) = (54, 37), 147 x 166,
-            // then the column its tabs drew (two, the first selected).
-            game.screen = Screen::Inventory;
-            let crafting = sunrise_client::recipe_book::BookType::Crafting.index();
-            game.level.recipe_book.open[crafting] = true;
-            // The column its two tabs (the first selected) painted, as the painter records it
-            // (`recipe_book_screen::sprite_bounds` of the tab sprites, unit-tested there).
-            game.screen_state
-                .drawn_book_tabs
-                .set(Some([22.0, 40.0, 37.0, 54.0]));
-            assert_eq!(
-                view(game, &gui([854, 480], 2)),
-                [
-                    ScreenRegion::new(Kind::RecipeBook, [54.0, 37.0, 147.0, 166.0]),
-                    ScreenRegion::new(Kind::RecipeBookTabs, [22.0, 40.0, 37.0, 54.0]),
-                ]
-            );
-            // Too narrow (320): the book is drawn over the window, not beside it.
-            assert!(
-                view(game, &small)
-                    .iter()
-                    .all(|r| r.kind != Kind::RecipeBook),
-                "a book over the window isn't a side region"
-            );
-            // A cancelled render drew nothing: the hooks' view then has no regions.
-            assert!(hook_view(game, &gui([854, 480], 2), false).is_empty());
+            fn screen_render_post(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut ScreenRenderPostEvent<'_>,
+            ) {
+                self.0
+                    .posts
+                    .lock()
+                    .unwrap()
+                    .push(event.screen.regions.to_vec());
+            }
+        }
+
+        let observer = Arc::new(Observer::default());
+        let mods: mod_api::Mods = vec![ModEntry::new(
+            "regions",
+            Box::new(Observe(observer.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                game.title = None;
+                game.container = None;
+                game.craft_size = 2;
+                game.screen = Screen::Inventory;
+                game.settings.gui_scale = 1;
+                game.settings.force_unicode = false;
+                let crafting = sunrise_client::recipe_book::BookType::Crafting.index();
+                game.level.recipe_book.recipes.clear();
+                game.level.recipe_book.open[crafting] = false;
+
+                let render = |game: &mut crate::game::Game<'_>, size| {
+                    game.hud_layers(size);
+                    let mut posts = observer.posts.lock().unwrap();
+                    assert_eq!(posts.len(), 1, "one Render.Post per draw");
+                    posts.pop().unwrap()
+                };
+                let small = [320, 240];
+                game.build_screen_at(small);
+                assert!(render(game, small).is_empty());
+
+                // EffectsInInventory at 320 x 240: leftPos + imageWidth + 2,
+                // shifted five pixels right by the subscriber, one compact row.
+                game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
+                    "speed", 200, 0,
+                )];
+                game.build_screen_at(small);
+                let compact = ScreenRegion::new(Kind::Effects, [255.0, 37.0, 32.0, 32.0]);
+                assert_eq!(render(game, small), [compact]);
+
+                // Build twice in the same frame, opening a book whose only tab
+                // is Search. At 427 x 240 the book and shifted compact effect
+                // fit on opposite sides of the inventory.
+                let wide = [854, 480];
+                game.settings.gui_scale = 2;
+                game.build_screen_at(wide);
+                game.level.recipe_book.open[crafting] = true;
+                game.build_screen_at(wide);
+                assert_eq!(
+                    render(game, wide),
+                    [
+                        ScreenRegion::new(Kind::RecipeBook, [54.0, 37.0, 147.0, 166.0]),
+                        ScreenRegion::new(Kind::RecipeBookTabs, [22.0, 40.0, 35.0, 27.0]),
+                        ScreenRegion::new(Kind::Effects, [385.0, 37.0, 32.0, 32.0]),
+                    ]
+                );
+
+                observer.canceled.store(true, Ordering::Relaxed);
+                assert!(render(game, wide).is_empty());
+                assert!(game.screen_regions(Screen::Inventory).is_empty());
+                observer.canceled.store(false, Ordering::Relaxed);
+
+                // The narrow book covers the inventory, so its panel is not a side region.
+                game.settings.gui_scale = 1;
+                game.build_screen_at(small);
+                assert_eq!(
+                    render(game, small),
+                    [
+                        ScreenRegion::new(Kind::RecipeBookTabs, [54.0, 40.0, 35.0, 27.0]),
+                        compact
+                    ]
+                );
+
+                // Switch directly from drawing the book to drawing Creative.
+                // Vanilla's painted 26 x 32 tabs are in two rows. The player
+                // can use the operator utilities, including the tab in column five.
+                game.potions.effects.list.clear();
+                game.creative = true;
+                game.ui.registries.permission = 2;
+                game.settings.operator_items_tab = true;
+                game.screen = Screen::Creative;
+                game.refresh_creative_tabs();
+                game.build_screen_at(small);
+                let mut tabs = render(game, small);
+                let by_origin = |a: &ScreenRegion, b: &ScreenRegion| {
+                    a.rect[..2].partial_cmp(&b.rect[..2]).unwrap()
+                };
+                tabs.sort_by(by_origin);
+                let mut expected = Vec::new();
+                for x in [62.0, 89.0, 116.0, 143.0, 170.0, 204.0, 231.0] {
+                    for y in [24.0, 184.0] {
+                        expected.push(ScreenRegion::new(Kind::CreativeTab, [x, y, 26.0, 32.0]));
+                    }
+                }
+                assert_eq!(tabs, expected);
+            });
         });
     }
 }
