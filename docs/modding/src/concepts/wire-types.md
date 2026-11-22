@@ -36,7 +36,7 @@ convert to `ItemStack` or `FluidStack`, or copy the fields you need into your ow
 ```rust,ignore
 #[derive(mod_api::Wire)]
 pub struct ChemicalAmount {
-    pub chemical: String,
+    pub chemical: mod_api::Identifier,
     pub amount: u64,
 }
 ```
@@ -44,7 +44,9 @@ pub struct ChemicalAmount {
 Records encode fields in declaration order. Enums encode a case index followed by
 its fields. Lengths and numbers are little-endian; collections are length-prefixed.
 Decoding returns `WireError` for invalid data rather than accepting an unknown tag,
-invalid UTF-8 or an unsupported length.
+invalid UTF-8 or an unsupported length. An `Identifier` writes the namespace and path
+as two length-prefixed UTF-8 strings in both ordinary Wire and typed payloads. The reader
+validates the pair as an owned resource name; it does not resolve or intern a registry key.
 
 ## Nesting and stacks
 

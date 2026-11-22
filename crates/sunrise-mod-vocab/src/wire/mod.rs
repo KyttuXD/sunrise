@@ -1062,6 +1062,7 @@ impl Wire for std::time::Duration {
 }
 
 // The same declarations feed the runtime fingerprint and the SDK surface generator.
+// A checked contract names the validation independently of payload admission.
 macro_rules! layout_fields {
     ($availability:ident $contract:literal; $($field:literal => $ty:ty),* $(,)?) => {
         $crate::wire::layout_fields!(@describe ($availability) ($contract) $($field => $ty),*);
