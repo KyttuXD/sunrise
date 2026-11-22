@@ -32,7 +32,7 @@ pub(super) struct SignEditor {
 fn sign_box() -> EditBox {
     let mut edit = EditBox::new(0.0, 0.0, 90.0, 9.0);
     edit.bordered = false;
-    edit.max_length = 384;
+    edit.max_length = play::SignLines::MAX_UTF16;
     edit.focused = true;
     edit
 }

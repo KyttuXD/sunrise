@@ -143,42 +143,42 @@ impl std::error::Error for MappingError {
     }
 }
 
-/// The metadata of a server play packet observed by `Hooks::client_packet`.
+/// A read-only view of a play packet in `Hooks::client_packet` or `Hooks::client_packet_send`.
 ///
-/// Fields beyond the type id are exposed only for custom payloads. This is
-/// plain mod API data, not the game's decoded protocol enum.
-// no wire: this is a local envelope for already-encoded vanilla packet bytes.
-#[derive(Clone, Debug, PartialEq)]
+/// The view is valid only during the hook. Only custom payloads expose more
+/// than the packet type. Copy any data you need to keep after the hook returns.
+// no wire: borrows the decoded packet for synchronous observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct ClientPacket {
+pub struct ClientPacket<'a> {
     /// The protocol type, such as `minecraft:ping` or `minecraft:custom_payload`.
     /// An id outside the protocol's packet table is reported as `sunrise:unknown`.
-    pub id: Identifier,
+    pub id: &'a Identifier,
     /// The channel and bytes of a custom payload; `None` for other packet types.
-    pub custom_payload: Option<ClientPayload>,
+    pub custom_payload: Option<ClientPayload<'a>>,
 }
 
-impl ClientPacket {
-    /// Construct packet metadata with an optional custom payload.
-    pub fn new(id: Identifier, custom_payload: Option<ClientPayload>) -> Self {
+impl<'a> ClientPacket<'a> {
+    /// Construct a view from a borrowed type identifier and an optional payload view.
+    pub fn new(id: &'a Identifier, custom_payload: Option<ClientPayload<'a>>) -> Self {
         Self { id, custom_payload }
     }
 }
 
-/// The channel and uninterpreted bytes of a server custom payload.
-#[derive(Clone, Debug, PartialEq)]
+/// A borrowed channel and uninterpreted byte slice from a play custom payload.
+// no wire: borrows the decoded packet for synchronous observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ClientPayload {
-    /// The namespaced plugin channel, exactly as received.
-    pub channel: String,
+pub struct ClientPayload<'a> {
+    /// The namespaced plugin channel, exactly as carried by the packet.
+    pub channel: &'a str,
     /// The payload bytes, without the packet id or channel prefix.
-    pub data: Vec<u8>,
+    pub data: &'a [u8],
 }
 
-impl ClientPayload {
-    /// Construct a custom payload without interpreting its bytes.
-    pub fn new(channel: String, data: Vec<u8>) -> Self {
+impl<'a> ClientPayload<'a> {
+    /// Borrow a custom payload's channel and bytes without interpreting them.
+    pub fn new(channel: &'a str, data: &'a [u8]) -> Self {
         Self { channel, data }
     }
 }

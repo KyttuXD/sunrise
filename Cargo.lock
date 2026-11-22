@@ -4965,7 +4965,6 @@ dependencies = [
  "sunrise-mod-api-gen",
  "sunrise-mod-api-macros",
  "sunrise-mod-runtime",
- "sunrise-protocol",
 ]
 
 [[package]]

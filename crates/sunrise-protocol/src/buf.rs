@@ -694,6 +694,19 @@ macro_rules! packet {
             fn write(v: &$name, w: &mut ::sunrise_core::vanilla_bytes::Writer) {
                 $(<$codec as $crate::buf::Codec<$ty>>::write(&v.$field, w);)*
             }
+            #[allow(unused_variables)]
+            fn validate(v: &$name) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate(&v.$field)?;)*
+                Ok(())
+            }
+            #[allow(unused_variables)]
+            fn validate_with_payload_codecs(
+                v: &$name,
+                codecs: &$crate::packets::custom_payload::PayloadCodecs,
+            ) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate_with_payload_codecs(&v.$field, codecs)?;)*
+                Ok(())
+            }
         }
     };
 }

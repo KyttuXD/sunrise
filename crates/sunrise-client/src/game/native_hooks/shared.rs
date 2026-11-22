@@ -3578,7 +3578,7 @@ pub(super) fn mod_screen_opens(
     None
 }
 
-fn client_packet_view(packet: &sunrise_protocol::packets::play::Clientbound) -> ClientPacket {
+fn client_packet_view(packet: &sunrise_protocol::packets::play::Clientbound) -> ClientPacket<'_> {
     use mod_api::Identifier;
     use std::sync::LazyLock;
     use sunrise_protocol::packets::play::Clientbound;
@@ -3593,7 +3593,9 @@ fn client_packet_view(packet: &sunrise_protocol::packets::play::Clientbound) -> 
 }
 
 /// `client_packet_send`'s view of a packet the game sends: as `client_packet_view`.
-fn serverbound_packet_view(packet: &sunrise_protocol::packets::play::Serverbound) -> ClientPacket {
+fn serverbound_packet_view(
+    packet: &sunrise_protocol::packets::play::Serverbound,
+) -> ClientPacket<'_> {
     use mod_api::Identifier;
     use std::sync::LazyLock;
     use sunrise_protocol::packets::play::Serverbound;
@@ -3616,11 +3618,11 @@ fn packet_types(names: &[&str]) -> Vec<mod_api::Identifier> {
 }
 
 /// A packet's type, `sunrise:unknown` outside the protocol's table, and its custom payload.
-fn packet_view(
-    types: &[mod_api::Identifier],
+fn packet_view<'a>(
+    types: &'static [mod_api::Identifier],
     id: i32,
-    payload: Option<&sunrise_protocol::packets::configuration::CustomPayload>,
-) -> ClientPacket {
+    payload: Option<&'a sunrise_protocol::packets::configuration::CustomPayload>,
+) -> ClientPacket<'a> {
     use mod_api::Identifier;
     use std::sync::LazyLock;
 
@@ -3629,9 +3631,8 @@ fn packet_view(
     let id = usize::try_from(id)
         .ok()
         .and_then(|id| types.get(id))
-        .unwrap_or(&UNKNOWN)
-        .clone();
-    let payload = payload.map(|p| ClientPayload::new(p.channel.clone(), p.data.clone()));
+        .unwrap_or(&UNKNOWN);
+    let payload = payload.map(|p| ClientPayload::new(p.channel.as_str(), p.data.as_slice()));
     ClientPacket::new(id, payload)
 }
 

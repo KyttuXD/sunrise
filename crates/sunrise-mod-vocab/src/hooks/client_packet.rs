@@ -11,18 +11,27 @@ pub trait Hooks {
     /// `minecraft:brand` and far terrain tiles; neither is the configuration
     /// phase.
     /// Read-only: the game handles the packet as it would without the mod.
-    /// Client-side, on any server, single player's own included.
-    /// Every packet exposes its protocol type id. Custom payloads also expose
-    /// their channel and raw bytes; no other decoded fields cross the API.
+    /// Client-side, on any server, single player's own included. With no
+    /// listener, the receive path checks one flag and builds no view.
+    /// Every packet exposes its protocol type id (`&Identifier`). Custom payloads also expose
+    /// their channel (`&str`) and raw bytes (`&[u8]`); no other decoded fields or mutable
+    /// bytes cross the API.
+    /// The immutable `ClientPacket<'_>` view is valid only for the callback; copy what you
+    /// store (`id.clone()`, `channel.to_owned()`, `data.to_vec()`). A panic is logged and
+    /// shown in an error toast naming the mod, disables only that mod's `client_packet`
+    /// callback for the session, and does not stop later listeners. Reassigning `event.packet`
+    /// only changes this listener's event; later listeners see the original packet.
     #[notes = r#"## Decoded client packets
 
-`Hooks::client_packet` receives `&mut dyn ClientHost` and a read-only
-`ClientPacketEvent` before the window handles a decoded server play packet.
-The read-only `event.packet` is a `mod_api::ClientPacket`: `id` identifies the
-packet type (for example, `minecraft:custom_payload`); `custom_payload` contains
-the channel and raw bytes for a custom payload, or `None` otherwise. An id
-outside the protocol's packet table is reported as `sunrise:unknown`.
-Other decoded fields are not exposed.
+`Hooks::client_packet` receives `&mut dyn ClientHost` and a `ClientPacketEvent<'_>`
+before the window handles a decoded server play packet. `event.packet` borrows
+an immutable callback-lifetime `mod_api::ClientPacket<'a>`: `id: &'a Identifier`
+identifies the packet type (for example, `minecraft:custom_payload`); `custom_payload`
+is `Option<ClientPayload<'a>>` (`channel: &'a str`, `data: &'a [u8]`) for a custom
+payload, or `None` otherwise. An id outside the protocol's packet table is reported as
+`sunrise:unknown`. Other decoded fields and mutable packet bytes are not exposed. Copy
+only what you retain after the callback returns (`id.clone()`, `channel.to_owned()`,
+`data.to_vec()`). With no listener, the receive path checks one flag and builds nothing.
 
 The hook cannot cancel or replace a packet. It also observes chunk packets
 handled by the batching path, once each. Configuration and control packets (including keep-alives,
@@ -40,21 +49,27 @@ and aborted travel invalidate holds. Keep-alives, chunk batch acknowledgements, 
 cookies and pack answers bypass the queue, standalone or bundled. Held packets expose no additional
 inspection or editing API.
 
-`Hooks::client_packet_send` is the other direction: a `ClientPacketSendEvent` with the same
-`ClientPacket` view for each play packet the window's game is about to send (`Connection.send`),
-in order, including the selected slot sent before an attack or a use. Returning `Flow::Cancel` drops
-the packet, and the game goes on as if it had been sent. Play-phase pongs pass through this hook.
-Control replies (keep-alives, chunk batch acknowledgements, configuration pongs and cookies),
-configuration packets, the phase-dependent answers (resource pack status and a dialog's custom
-click action), and far terrain requests do not fire it. With no listener the
-send path checks one flag and builds nothing."#]
+`Hooks::client_packet_send` is the other direction: a `ClientPacketSendEvent<'_>` with the same
+borrowed `ClientPacket<'_>` view for each play packet the window's game is about to send
+(`Connection.send`), in order, including the selected slot sent before an attack or a use.
+Returning `Flow::Cancel` drops the packet unless a later `#[listener(receive_cancelled)]`
+listener sets `event.cancelled = false` and returns `Flow::Continue`. Play-phase pongs pass
+through this hook. Control replies (keep-alives, chunk batch acknowledgements, configuration
+pongs and cookies), configuration packets, the phase-dependent answers (resource pack status
+and a dialog's custom click action), and far terrain requests do not fire it. With no listener
+the send path checks one flag and builds nothing.
+
+Both hooks give later listeners the original borrowed view. A panic logs and shows an error
+toast naming the mod, disables only its callback for that hook, and leaves any accepted send
+cancellation unchanged. Later eligible listeners still run."#]
     #[hook(
         dispatch = "flat",
         side = "client",
         contract = "listen",
         cancellable = false,
-        version = 2,
+        event_per_listener = true,
+        version = 3,
         neoforge = "none (NeoForge has no raw play-packet receive event)"
     )]
-    fn client_packet(packet: &ClientPacket);
+    fn client_packet(packet: &ClientPacket<'_>);
 }

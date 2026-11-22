@@ -34,6 +34,43 @@ The executor belongs to the client application, not to a connection or level. Ke
 configuration controls. A `ClientExecutor` task receives no payload context. Check any retained
 entity or level handle when the task runs; a disconnect or dimension change may have made it stale.
 
+## Observing play packets
+
+`client_packet` and `client_packet_send` lend each listener an immutable
+`ClientPacket<'a>` view (`id: &'a Identifier`, `custom_payload: Option<ClientPayload<'a>>`
+with `channel: &'a str` and `data: &'a [u8]`) valid only for the duration of the
+callback. Neither hook exposes other decoded fields or mutable packet bytes. Copy
+only what you need to retain after the callback returns (`event.packet.id.clone()`,
+`payload.channel.to_owned()`, `payload.data.to_vec()`). Reassigning `event.packet`
+inside a listener only changes that listener's local event struct; later listeners
+and the game still observe the original borrowed packet.
+
+Both hooks run client-side on any server (including single player's integrated
+server), in packet order, and pay only a single subscriber check when no mod listens:
+
+- `client_packet` fires for every decoded play-phase server packet before the
+  window handles it, including custom payloads and each chunk packet from the
+  batching path. An ID outside the protocol's packet table is reported as
+  `sunrise:unknown`. Configuration and control packets do not fire it, standalone
+  or bundled: keep-alives, chunk batch starts and finishes, bundle delimiters,
+  resource pack pushes and pops, cookies, server links, transfers, disconnects, the
+  configuration switch, `minecraft:brand`, and far terrain tiles. The receive hook
+  cannot cancel a packet.
+- `client_packet_send` fires for every play-phase packet the window is about to
+  send, in send order, including the selected slot sent before an attack or use and
+  play-phase pongs. Control replies (keep-alives, chunk batch acknowledgements,
+  configuration pongs and cookies), configuration packets, phase-dependent connection
+  answers (resource pack status and a dialog's custom click action), and far terrain
+  requests do not fire it. Returning `Flow::Cancel` drops
+  the packet unless a later listener marked `#[listener(receive_cancelled)]` sets
+  `event.cancelled = false` and returns `Flow::Continue`.
+
+A panic in either hook is logged and shown in an error toast naming the mod, and
+disables only that mod's callback for that hook for the rest of the session (not the
+other hook or other mods). Later eligible listeners still run on the original packet
+view; a panicked send listener neither adds nor clears a cancellation, even if it
+wrote `event.cancelled` before panicking.
+
 ## Holding outgoing play packets
 
 Call `host.hold_packets()` to start an ordered hold and receive its opaque `HoldId`.

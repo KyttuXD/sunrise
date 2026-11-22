@@ -28,6 +28,16 @@ pub trait NetworkClientHost {
     /// 404.
     fn send_chat(&mut self, message: &str) -> Result<(), String>;
     /// Side: client.
+    /// Encodes a typed serverbound play packet with the client's vanilla protocol encoder.
+    /// Available in client host contexts including setup, without reading a connection or
+    /// changing local state. Validates vanilla wire field bounds and applies no gameplay or
+    /// local effects; submit the result with `send_packet`.
+    #[static_call]
+    fn build_play_packet(
+        &self,
+        request: &PlayPacketRequest,
+    ) -> Result<ServerboundPlayPacket, PacketBuildError>;
+    /// Side: client.
     /// Builds a vanilla container click; it needs the host because the packet carries hashed stacks.
     /// Uses this connection's registries and component codecs, refusing components that
     /// cannot be encoded or hashed, unrepresentable IDs/slots and more than 128 changed slots.

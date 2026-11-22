@@ -947,3 +947,31 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
         assert_eq!(read(&*game, "minecraft:zombie", "max_health"), Some(20.0));
     });
 }
+
+#[test]
+fn live_section_host_builds_play_packets_and_refuses_container_click() {
+    use mod_api::{
+        ContainerClickRequest, PacketBuildError, PlayPacketRequest, prelude::NetworkClientHost,
+    };
+    use sunrise_protocol::{
+        ids::play::serverbound as sb,
+        packets::play::{Attack, Serverbound},
+    };
+
+    let host = LiveSectionHost(None);
+    let packet = host
+        .build_play_packet(&PlayPacketRequest::Attack { entity: 9 })
+        .unwrap();
+    assert_eq!(packet.id.to_string(), "minecraft:attack");
+    assert_eq!(
+        Serverbound::decode(sb::ATTACK, &packet.body).unwrap(),
+        Serverbound::Attack(Attack { id: 9 })
+    );
+    assert_eq!(
+        host.container_click(&ContainerClickRequest::default()),
+        Err(PacketBuildError::Unavailable {
+            packet: "container_click".into(),
+            field: "host".into(),
+        })
+    );
+}

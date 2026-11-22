@@ -1206,6 +1206,43 @@ fn sign_packets_match_vanilla_stream_codecs() {
     let body = update.encode();
     assert_eq!(body[9..], [2, b'H', b'i', 0, 1, b'x', 0, 0]);
     round_trip(update, Serverbound::encode, Serverbound::decode);
+
+    // ServerboundSignUpdatePacket.MAX_STRING_LENGTH (384 UTF-16 code units) is enforced on
+    // protocol encode validation too, matching vanilla Utf8String.write(buf, line, 384).
+    let at_limit = Serverbound::SignUpdate(SignUpdate {
+        pos: [1, 64, -2],
+        lines: [
+            "a".repeat(SignLines::MAX_UTF16),
+            "🦀".repeat(SignLines::MAX_UTF16 / 2),
+            String::new(),
+            String::new(),
+        ],
+        front: true,
+    });
+    assert!(at_limit.try_encode().is_ok());
+    assert!(at_limit.try_encode_payload().is_ok());
+    for bad_lines in [
+        [
+            "a".repeat(SignLines::MAX_UTF16 + 1),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        [
+            String::new(),
+            String::new(),
+            "🦀".repeat(SignLines::MAX_UTF16 / 2 + 1),
+            String::new(),
+        ],
+    ] {
+        let too_long = Serverbound::SignUpdate(SignUpdate {
+            pos: [1, 64, -2],
+            lines: bad_lines,
+            front: true,
+        });
+        assert!(too_long.try_encode().is_err());
+        assert!(too_long.try_encode_payload().is_err());
+    }
 }
 
 #[test]

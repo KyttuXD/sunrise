@@ -1107,25 +1107,25 @@ pub(super) fn emit<'a>(
             )
         };
         // Each listener gets a fresh event with the original inputs. Writable borrowed
-        // payloads can still share their pointee. Write-back, the owner filter and chunk
-        // I/O checks use the outer event and cannot use a listener-local one.
+        // payloads can still share their pointee. The owner filter and chunk I/O checks
+        // use the outer event and cannot use a listener-local one.
+        let local_cancel = hook.event_per_listener && mod_cancel;
         let (build, local_event) = if staged.is_some() {
             (String::new(), build)
         } else if hook.event_per_listener || answered_return {
-            // A replace answer is returned outside the event. A regular collect
-            // output borrows one slot, reborrowed for each listener above. Answered
-            // collect batches and cancellation do not use this mode. An isolated collector's
-            // one return value is outside the event too; each mod gets the original inputs.
+            // The ordinary collect output and the accepted cancellation live outside the event.
             let reply_outside_event =
                 matches!(contract, Contract::Listen | Contract::Replace) || answered_return;
             let shared_collect_output = collected.is_some() && !answered && !collect_cancel;
-            if (!reply_outside_event && !shared_collect_output)
+            let cancellation_only =
+                local_cancel && contract == Contract::Cancel && rollback.is_empty();
+            if (!reply_outside_event && !shared_collect_output && !cancellation_only)
                 || !stack_outputs.is_empty()
                 || hook.owner.is_some()
                 || hook.context == Some(PhaseContext::ChunkDisk)
             {
                 return Err(format!(
-                    "{name}: event_per_listener requires a listen or replace hook, or a collect hook with a shared borrowed output, without scalar or stack writeback or other shared event state"
+                    "{name}: event_per_listener requires a listen or replace hook, a collect hook with a shared borrowed output, or a global cancel hook with no writable output except cancellation"
                 ));
             }
             (String::new(), build)
@@ -1188,7 +1188,7 @@ pub(super) fn emit<'a>(
             ));
         }
         let previous_cancel = snaps.len();
-        if mod_cancel {
+        if mod_cancel && !local_cancel {
             restores.push(format!("{event}.cancelled = {saved}.{previous_cancel};"));
             snaps.push(format!("{event}.cancelled"));
         }
@@ -1485,13 +1485,28 @@ pub(super) fn emit<'a>(
                     ),
                 )
             }
-            None if mod_cancel => (
-                String::new(),
-                format!(
-                    "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {event}.cancelled && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {cancel_step} }} }} *{o} = {event}.cancelled;",
-                    o = cancel_out.unwrap()
-                ),
-            ),
+            None if mod_cancel => {
+                let out = cancel_out.unwrap();
+                let (accepted, publish_each, publish_end) = if local_cancel {
+                    (
+                        format!("*{out}"),
+                        format!("*{out} = {event}.cancelled;"),
+                        String::new(),
+                    )
+                } else {
+                    (
+                        format!("{event}.cancelled"),
+                        String::new(),
+                        format!("*{out} = {event}.cancelled;"),
+                    )
+                };
+                (
+                    String::new(),
+                    format!(
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {accepted} && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} {publish_each} }} }} {publish_end}"
+                    ),
+                )
+            }
             None => {
                 let each = if filtered_subscribers {
                     format!(
