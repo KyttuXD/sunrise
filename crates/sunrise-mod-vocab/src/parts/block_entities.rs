@@ -244,8 +244,8 @@ impl dyn Registrar + '_ {
             blocks: Vec::new(),
         }
     }
-    /// Attach a Part to a native type, including one another mod declares later.
-    /// Vanilla keys are usable for capabilities, but not for native payload Parts.
+    /// Attach a Part to a registered native type, including one another mod declares later.
+    /// Built-in types are usable for capabilities, but not for native payload Parts.
     ///
     /// A type declared by another package takes this package's Part only when its
     /// `[dependencies]` row for the declaring package applies on this installation side and
@@ -352,7 +352,7 @@ pub trait BlockEntitiesRegistrar {
         key: crate::BlockEntityTypeKey,
         step: Arc<dyn crate::BlockEntityTransform>,
     );
-    /// Look up a vanilla or another mod's type. The final registry validates it at load.
+    /// Request a type by registry ID. A missing type in the complete registry refuses load.
     fn block_entity_type_key(&mut self, id: &str) -> crate::BlockEntityTypeKey;
 
     /// Declare block entity type `path` in a namespace owned by this mod's manifest, held by `blocks`
@@ -363,7 +363,9 @@ pub trait BlockEntitiesRegistrar {
         blocks: Vec<String>,
     ) -> crate::BlockEntityTypeKey;
 
-    /// Attach `part`, of kind `kind`, to the mod block entity type `key`.
+    /// Attach `part`, of kind `kind`, to the native block entity type `key`.
+    /// The type is resolved by registry ID; a foreign type requires a dependency on its owner.
+    /// An absent optional dependency skips this Part; other missing types refuse loading.
     fn attach_block_entity_part(
         &mut self,
         key: &crate::BlockEntityTypeKey,

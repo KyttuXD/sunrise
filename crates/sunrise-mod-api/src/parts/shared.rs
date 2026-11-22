@@ -186,6 +186,14 @@ impl PartRegistrar {
         ))
     }
 
+    /// Check the frozen built-in inventory, not the namespace of the key.
+    pub(crate) fn is_builtin(registry: &str, id: &str) -> bool {
+        use mod_vocab::__private::game::RegistrationContextNew;
+        crate::RegistrationContext::new()
+            .registry(registry)
+            .is_some_and(|entries| entries.iter().any(|entry| entry == id))
+    }
+
     /// Attach `part`, of kind `kind`, to `id` in `table`; false if it is refused.
     pub(crate) fn attach<P: ?Sized>(
         &mut self,
@@ -401,6 +409,21 @@ pub mod tests {
     use crate::*;
 
     use std::sync::Arc;
+
+    #[cfg(test)]
+    pub(crate) fn with_builtin_part_registry<T>(
+        registry: &str,
+        id: &str,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let data = mod_vocab::__private::RegistrationData::new(
+            [(registry.to_owned(), vec![id.to_owned()])].into(),
+            Default::default(),
+            InstanceDirectory::from_path(std::path::Path::new(".")).unwrap(),
+            RuntimeEnvironment::new(Dist::Client, "26.3".into(), "test".into(), false),
+        );
+        crate::load_state::with_test_registration_data(data, f)
+    }
 
     include!(concat!(env!("OUT_DIR"), "/shared_fixtures.rs"));
 }

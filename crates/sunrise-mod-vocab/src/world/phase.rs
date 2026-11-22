@@ -958,9 +958,9 @@ impl LoadedMods {
 /// dispatch order or on which hook asks:
 ///
 /// - [`mods`](Self::mods): the loaded packages.
-/// - [`registry`](Self::registry): the built-in registries, as `registries.json` lists them.
-///   Entries that mods declare during registration are not in it; a mod already has its own
-///   declarations on its event or registrar.
+/// - [`registry`](Self::registry): built-in registry names in ID order. Mob effects come from the
+///   game's built-in effect table; other registry names come from the prepared report. Entries
+///   that mods declare during registration are not in this view.
 /// - [`setting`](Self::setting): the settings on disk for the loaded packages when registration
 ///   began. Later writes are not seen.
 ///

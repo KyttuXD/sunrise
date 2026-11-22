@@ -148,7 +148,7 @@ impl EffectsRegistrar for PartRegistrar {
             ));
             return Err(MobEffectPartError::InvalidKey { effect: *effect });
         };
-        if id.starts_with("minecraft:") {
+        if Self::is_builtin("minecraft:mob_effect", &id) {
             return Err(MobEffectPartError::VanillaEffect { effect: *effect });
         }
         if self.attach_known(|parts| &mut parts.effects, kind, &id, part) {
@@ -195,10 +195,13 @@ impl PartRegistrar {
             }
             self.parts.effects.get_mut(&id).unwrap().retain(|part| {
                 if part.mod_id != namespace
-                    && dependencies.kind(part.mod_id, namespace) == Some(crate::DependencyKind::Optional)
+                    && dependencies.kind(part.mod_id, namespace)
+                        == Some(crate::DependencyKind::Optional)
                 {
-                    self.registry_keys.borrow_mut().effects.withdraw(part.mod_id, &id);
-                    log::debug!("mod {} skipped {} on effect {id}: optional dependency {namespace} is absent", part.mod_id, part.type_name);
+                    self.registry_keys
+                        .borrow_mut()
+                        .effects
+                        .withdraw(part.mod_id, &id);
                     return false;
                 }
                 true

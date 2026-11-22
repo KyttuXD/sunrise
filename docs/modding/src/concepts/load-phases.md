@@ -81,10 +81,17 @@ stitching, respectively. Atlas admission, duplicate handling and dispatch timing
 
 The context's `mods()`, `registry(name)` and `setting(mod_id, key)` borrow
 one view captured before the first of them runs, so every registration step sees the same values
-whatever the dispatch order: the loaded packages (`&LoadedMods`), the built-in registries as
-`registries.json` lists them (`Option<&[String]>`, without what mods declare during registration),
-and the settings on disk when the snapshot is captured (`Option<&str>`). An unknown registry,
-an unset key, or a context with no engine snapshot returns `None`.
+whatever the dispatch order: the loaded packages (`&LoadedMods`), the built-in registry names
+(`Option<&[String]>`, without what mods declare during registration), and the settings on disk when
+the snapshot is captured (`Option<&str>`). `minecraft:mob_effect` comes from the engine's built-in
+effect registry; other names come from the prepared registry report. An unknown registry, an unset
+key, or a context with no engine snapshot returns `None`. Reload-time registration hooks still see
+this same startup snapshot.
+
+A part on a type from a required dependency is refused at load if the type is missing.
+A part on a type from a declared optional dependency is skipped quietly when that package is absent.
+A part on a type from an undeclared package is refused by name.
+Vanilla types need no declaration.
 
 `client_setup` runs once after initial assets are applied, with `&mut dyn ClientSetupContext` and
 `&mut ClientSetupEvent`. Afterward the window loads its Client and Common configs, before title,

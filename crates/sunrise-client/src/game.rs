@@ -1121,8 +1121,6 @@ mod native_console;
 #[cfg(test)]
 #[path = "game/modding/native_console_tests.rs"]
 mod native_console_tests;
-#[path = "game/modding/native_content_items.rs"]
-mod native_content_items;
 #[path = "game/modding/native_criteria.rs"]
 mod native_criteria;
 #[path = "game/modding/native_custom_geometry.rs"]

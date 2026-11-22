@@ -141,7 +141,7 @@ fn registration_refuses_vanilla_and_duplicate_effect_parts() {
                 r.mob_effect_part(&vanilla, part()),
                 Err(MobEffectPartError::VanillaEffect { effect: vanilla })
             );
-            let custom = r.effect_key("owner:comfort");
+            let custom = r.effect_key("minecraft:comfort");
             r.mob_effect_part(&custom, part()).unwrap();
             assert_eq!(
                 r.mob_effect_part(&custom, part()),
@@ -152,13 +152,23 @@ fn registration_refuses_vanilla_and_duplicate_effect_parts() {
             );
         }
     }
-    let errors = install_parts(
-        &[ModEntry::new("owner", Box::new(Registration))],
-        &crate::parts::tests::rule_schema(),
-        |_| false,
-    )
-    .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("owner:comfort")));
+    let errors = super::super::shared::tests::with_builtin_part_registry(
+        "minecraft:mob_effect",
+        "minecraft:poison",
+        || {
+            install_parts(
+                &[ModEntry::new("owner", Box::new(Registration))],
+                &crate::parts::tests::rule_schema(),
+                |_| false,
+            )
+            .unwrap_err()
+        },
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("minecraft:comfort"))
+    );
 }
 
 #[test]

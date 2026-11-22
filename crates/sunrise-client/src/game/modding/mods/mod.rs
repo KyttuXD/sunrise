@@ -31,7 +31,7 @@ use sunrise_world::{
 /// Read filesystem-bound package declarations concurrently, retaining dependency order and
 /// keeping an individual package's refusal attached to that package.
 fn read_contents(
-    requests: &[(&Path, &sunrise_mod_package::Manifest, Vec<String>)],
+    requests: &[(&Path, &sunrise_mod_package::Manifest)],
 ) -> Vec<Result<sunrise_mod_package::Content, String>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let next = AtomicUsize::new(0);
@@ -43,14 +43,11 @@ fn read_contents(
                     let mut done = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((path, manifest, declared)) = requests.get(index) else {
+                        let Some((path, manifest)) = requests.get(index) else {
                             return done;
                         };
-                        let content =
-                            sunrise_mod_package::Content::read_declaring(path, manifest, declared);
-                        if declared.is_empty()
-                            && let Ok(content) = &content
-                        {
+                        let content = sunrise_mod_package::Content::read(path, manifest);
+                        if let Ok(content) = &content {
                             remember_verdict(path, content);
                         }
                         done.push((index, content));
@@ -306,6 +303,22 @@ fn builtin_registry_names(root: &Path) -> sunrise_client::Result<BTreeMap<String
     Ok(registries)
 }
 
+fn registration_registry_names(
+    root: &Path,
+) -> sunrise_client::Result<BTreeMap<String, Vec<String>>> {
+    use sunrise_client_core::potions::{EFFECTS, namespaced};
+    let mut registries = builtin_registry_names(root)?;
+    // Effects resolve against the engine table even if the prepared report omits an entry.
+    registries.insert(
+        "minecraft:mob_effect".into(),
+        EFFECTS
+            .iter()
+            .map(|def| namespaced(def.id).to_owned())
+            .collect(),
+    );
+    Ok(registries)
+}
+
 /// Capture registration's stable registries, settings and stock capability type owners.
 pub(super) fn install_registration_data(
     root: &Path,
@@ -316,7 +329,7 @@ pub(super) fn install_registration_data(
         .expect("the host path has an encoding the mod API carries");
     (mod_api::__private::platform::platform()?.install_registration_data)(
         mod_api::__private::RegistrationData::new(
-            builtin_registry_names(root)?,
+            registration_registry_names(root)?,
             sunrise_world::native_load_context::capture_settings(
                 &Game::mod_data_root(),
                 packages.ids(),
@@ -1086,9 +1099,7 @@ pub(super) fn content_overlay(
         .iter()
         .map(|&index| {
             let source = &packages[index];
-            let item_ids =
-                super::native_content_items::owned_item_ids(source.manifest, &declared.batches);
-            (source.path, source.manifest, item_ids)
+            (source.path, source.manifest)
         })
         .collect();
     let read = read_contents(&requests);
@@ -1169,11 +1180,6 @@ pub(super) fn content_overlay(
             return Err(DeclarationFailures::new(refusals).into());
         }
         admission?;
-        // A file item's remainder named a code-declared item that was refused: that mod
-        // alone is left out, not every content mod through the overlay's check.
-        for e in mod_content::drop_dangling_remainders(&mut mods) {
-            log::warn!("Sunrise: {e}");
-        }
     } else if !refusals.is_empty() {
         return Err(DeclarationFailures::new(refusals).into());
     }
@@ -2969,9 +2975,11 @@ mod tests {
         assert_eq!(load_err.mod_id, "runes");
         assert_eq!(load_err.stage, ServedContentStage::Read);
 
-        // A served package whose crafting_remainder names an owned-namespace item passes
-        // package-only Content::read (build/check), yet fatally fails load-time content_overlay
-        // if the serving host never declares that item.
+        // A served package's file passes parsing, but a remainder not supplied by any
+        // registered item still refuses load during overlay construction.
+        std::fs::write(base.join("facts.json"), r#"{"states":[],"defaults":{}}"#).unwrap();
+        std::fs::write(base.join("gameplay-facts.json"), r#"{"states":[]}"#).unwrap();
+        std::fs::write(base.join("items.json"), r#"{"minecraft:mushroom_stew":{}}"#).unwrap();
         let runes_missing_remainder = make_content(
             "runes-missing-rem.smod",
             "id='runes'\nname='Runes'\nversion='1.0.0'\napi='0.2'\nside='both'\ncapabilities=['registries']\nserved_by='horizon_java'\n",
@@ -2993,12 +3001,10 @@ mod tests {
         let err = content_overlay(&base, &missing_rem_state, &store)
             .err()
             .unwrap();
-        let load_err = err
-            .downcast_ref::<ServedContentLoadError>()
-            .expect("undeclared host crafting_remainder fails load fatally");
-        assert_eq!(load_err.mod_id, "runes");
-        assert_eq!(load_err.stage, ServedContentStage::Read);
-        assert!(load_err.detail.contains("runes:host_bowl"), "{load_err}");
+        assert_eq!(
+            err.to_string(),
+            r#"items.json: runes:stew: crafting_remainder "runes:host_bowl" is not an item"#,
+        );
 
         // accept_mod error (unknown component) on a served content package is fatal.
         let runes_bad_component = make_content(
@@ -4176,6 +4182,13 @@ mod tests {
         );
         assert!(collect_key_mappings(ExecutionRole::IntegratedServer, &declared).is_empty());
         assert!(collect_key_mappings(ExecutionRole::DedicatedServer, &declared).is_empty());
+    }
+
+    mod content_admission {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/game/modding/mods/content_admission_tests.rs"
+        ));
     }
 
     mod inventory {
@@ -5426,7 +5439,7 @@ mod concurrent_content_tests {
             .collect();
         let requests: Vec<_> = packages
             .iter()
-            .map(|(path, package)| (path.as_path(), &package.manifest, Vec::new()))
+            .map(|(path, package)| (path.as_path(), &package.manifest))
             .collect();
         let read = read_contents(&requests);
         assert_eq!(read.len(), 12);

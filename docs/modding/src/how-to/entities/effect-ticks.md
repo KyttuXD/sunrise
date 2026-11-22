@@ -4,7 +4,10 @@ Attach server-side behaviour to a content-declared effect with a `MobEffectPart`
 
 ```rust,ignore
 let effect = r.effect_key("meals:comfort");
-r.mob_effect_part(&effect, Comfort).expect("attach Comfort to its effect");
+if let Err(error) = r.mob_effect_part(&effect, Comfort) {
+    context.refuse(&format!("Cannot attach Comfort: {error:?}"));
+    return;
+}
 ```
 
 Implement the Part with `#[mod_api::sunrise_part]`. Its two methods are:
@@ -38,7 +41,7 @@ skipped only when an optional dependency row applies on the installation side an
 instance overrides. A present package must declare the requested effect; other unknown effects
 keep the normal unknown-key refusal.
 
-Unresolved keys refuse with `MobEffectPartError::InvalidKey`; vanilla effects refuse
+Invalid keys refuse with `MobEffectPartError::InvalidKey`; built-in vanilla effects refuse
 immediately with `MobEffectPartError::VanillaEffect`; attaching the same concrete
 Part type twice returns `Duplicate`. A Part attached to several
 effects distinguishes them with `event.effect`. `on_effect_added` stays global;

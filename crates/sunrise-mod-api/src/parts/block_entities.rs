@@ -28,11 +28,6 @@ impl PartRegistrar {
                     let dependency = dependencies.kind(part.mod_id, dependency_id);
                     match dependency {
                         Some(crate::DependencyKind::Optional) if absent => {
-                            log::debug!(
-                                "mod {} skipped {} on block entity type {id}: optional dependency {dependency_id} is absent",
-                                part.mod_id,
-                                part.type_name
-                            );
                             // Its type key asked for a type that, with the dependency absent,
                             // nobody declares: the request is not a load error, unless this mod
                             // also keyed a capability provider on the type, which still needs it.
@@ -53,7 +48,7 @@ impl PartRegistrar {
                             part.mod_id, part.type_name
                         )),
                         _ => self.refused.push(format!(
-                            "mod {} attached {} to undeclared native block entity type {id}",
+                            "mod {} attached {} to unknown native block entity type {id}",
                             part.mod_id, part.type_name
                         )),
                     }
@@ -318,15 +313,26 @@ pub mod tests {
 
     #[test]
     pub(crate) fn a_vanilla_type_refuses_a_native_payload_part_at_registration() {
-        let mut r = super::PartRegistrar::new("test");
-        let kind = r.block_entity_type_key("minecraft:chest");
-        assert_eq!(
-            (&mut r as &mut dyn Registrar).block_entity_part(&kind, Press),
-            Err(BlockEntityPartError::VanillaType { kind }),
+        super::super::shared::tests::with_builtin_part_registry(
+            "minecraft:block_entity_type",
+            "minecraft:chest",
+            || {
+                let mut r = super::PartRegistrar::new("test");
+                let kind = r.block_entity_type_key("minecraft:chest");
+                assert_eq!(
+                    (&mut r as &mut dyn Registrar).block_entity_part(&kind, Press),
+                    Err(BlockEntityPartError::VanillaType { kind }),
+                );
+                let invalid = r.block_entity_type_key("Bad Id");
+                assert_eq!(
+                    (&mut r as &mut dyn Registrar).block_entity_part(&invalid, Press),
+                    Err(BlockEntityPartError::InvalidKey { kind: invalid }),
+                );
+                assert!(r.parts.block_entity_kinds.is_empty());
+                assert!(r.parts.blocks.is_empty());
+                assert!(r.parts.block_entities.is_empty());
+            },
         );
-        assert!(r.parts.block_entity_kinds.is_empty());
-        assert!(r.parts.blocks.is_empty());
-        assert!(r.parts.block_entities.is_empty());
     }
 
     #[test]
@@ -525,7 +531,7 @@ pub mod tests {
             assert_eq!(
                 refused,
                 [format!(
-                    "mod b attached {} to undeclared native block entity type owner:press",
+                    "mod b attached {} to unknown native block entity type owner:press",
                     type_name::<FromB>()
                 )]
             );
@@ -997,9 +1003,11 @@ impl BlockEntitiesRegistrar for PartRegistrar {
             .borrow()
             .block_entity_types
             .id(mod_vocab::__private::parts_installation::block_entity_type_key_slot(*key))
-            .map(str::to_owned)
-            .unwrap_or_default();
-        if id.starts_with("minecraft:") {
+            .map(str::to_owned);
+        let Some(id) = id else {
+            return Err(crate::BlockEntityPartError::InvalidKey { kind: *key });
+        };
+        if Self::is_builtin("minecraft:block_entity_type", &id) {
             return Err(crate::BlockEntityPartError::VanillaType { kind: *key });
         }
         if self.attach_known(|p| &mut p.block_entity_kinds, kind, &id, part) {
