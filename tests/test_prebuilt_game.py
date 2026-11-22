@@ -39,6 +39,33 @@ def write_build_data(root: Path, identity: dict | None = None, commit: str = COM
 
 
 class StageToolTests(unittest.TestCase):
+    def test_lower_crate_cfgs_use_target_library_artifacts_not_host_or_game_features(self):
+        staged = Path("staged")
+        target = Path("target") / "build-target"
+        metadata = {"packages": [
+            {"id": "lower", "name": "sunrise-lower", "manifest_path": str(staged / "crates/sunrise-lower/Cargo.toml")},
+            {"id": "game", "name": prebuilt_game.GAME, "manifest_path": str(staged / "crates/sunrise-client/Cargo.toml")},
+        ]}
+
+        def artifact(package_id, path, feature, debug_assertions):
+            return {"reason": "compiler-artifact", "package_id": package_id, "target": {"kind": ["lib"]},
+                    "filenames": [str(path / "lib.rlib")], "features": [feature],
+                    "profile": {"debug_assertions": debug_assertions}}
+
+        messages = [
+            artifact("game", target, "game-only", False),
+            artifact("lower", target, "lower-only", False),
+            artifact("lower", Path("target/host"), "host-only", True),
+            {"reason": "build-script-executed", "package_id": "lower",
+             "out_dir": str(target / "out"), "cfgs": ['backend="target"']},
+            {"reason": "build-script-executed", "package_id": "lower",
+             "out_dir": "target/host/out", "cfgs": ['backend="host"']},
+        ]
+        self.assertEqual(
+            prebuilt_game.lower_crate_cfgs(metadata, messages, staged, target, {"unix", "debug_assertions"}),
+            {"sunrise_lower": ['backend="target"', 'feature="lower-only"', "unix"]},
+        )
+
     def test_stage_sync_only_rewrites_different_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

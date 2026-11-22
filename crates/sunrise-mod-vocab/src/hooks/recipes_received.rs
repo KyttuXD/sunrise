@@ -1,5 +1,4 @@
 //! The `recipes_received` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0124
 
 pub trait Hooks {
     /// The server's recipes of `recipe_types` arrived (NeoForge's

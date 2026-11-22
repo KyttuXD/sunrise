@@ -1,5 +1,4 @@
 //! The `analog_output` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0073
 
 pub trait Hooks {
     /// `BlockState.getAnalogOutputSignal`: the signal a comparator reads from

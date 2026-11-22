@@ -1,5 +1,4 @@
 //! The `player_stop_using_item` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0313
 
 pub trait Hooks {
     /// A server player released the use-item key, or a mod's `LivingRef::release_using_item` did,

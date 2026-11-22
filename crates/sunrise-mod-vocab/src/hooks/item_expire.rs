@@ -1,5 +1,4 @@
 //! The `item_expire` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0231
 
 pub trait Hooks {
     /// A dropped item reaches its lifespan on the server (`ItemEntity.tick`,

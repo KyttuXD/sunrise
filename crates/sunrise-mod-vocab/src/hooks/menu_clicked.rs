@@ -1,5 +1,4 @@
 //! The `menu_clicked` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0034
 
 pub trait Hooks {
     /// A click in `menu`, before its default action (`ServerGamePacketListenerImpl.handleContainerClick`,

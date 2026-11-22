@@ -1,5 +1,4 @@
 //! The `trade_with_villager` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0338
 
 pub trait Hooks {
     /// A server player's take from a villager or wandering trader, once per trade, after its

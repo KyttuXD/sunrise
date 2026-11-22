@@ -38,15 +38,12 @@
 //! | `dispatch` | a game target takes the generated engine carrier by default; existing flat, already-converted (`"api_carrier"`), and direct bindings name their shape explicitly |
 //!
 //! Every hook needs `///` lines: they are the rustdoc of its trait method, and a hook without them
-//! is refused. `HookId` values are process-local dispatch indexes, not persistent API identities.
-//! Native mods compile for the selected revision. Existing split hooks retain their generated order
-//! through each file's `// catalog-order: N` comment.
-//! These frozen ordinals only keep the split's output byte-identical; they provide no cross-build
-//! compatibility. New hooks omit the comment and follow in file-name order. No shared list is
-//! edited: the generator discovers the files directly.
+//! is refused. `HookId` values are process-local dispatch indexes, not serialized or persistent
+//! API identities (SDK records identify hooks by name as `hook:<name>`).
+//! Native binaries rebuild for the selected game build. The generator discovers `*.rs` declaration
+//! files (other than `mod.rs`) in lexical file-name order, and each file's declarations in in-file
+//! order, without a shared list or ordinal pins.
 //! Each new hook goes in a file of its own.
-//! The JSON catalog (`native-hooks.json`,
-//! `tools/native-hook-fragments/`) is retired and a file there fails the build.
 //!
 //! A new game hook takes its generated `fire::<Name>Call` carrier, built from these declarations
 //! and the generator's engine value and draw mappings. A hook with no event parameters needs no

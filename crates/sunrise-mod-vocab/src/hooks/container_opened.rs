@@ -1,5 +1,4 @@
 //! The `container_opened` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0241
 
 pub trait Hooks {
     /// A player opens one of the game's own menus (`ServerPlayer.openMenu`; the

@@ -1,5 +1,4 @@
 //! The `player_recipe_book_click` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0304
 
 pub trait Hooks {
     /// A server player's recipe book requested a known recipe be placed in

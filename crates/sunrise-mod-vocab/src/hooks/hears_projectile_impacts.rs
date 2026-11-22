@@ -1,5 +1,4 @@
 //! The `hears_projectile_impacts` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0142
 
 pub trait Hooks {
     /// Whether a mod hears projectiles' impacts (`native_projectile_impact`):

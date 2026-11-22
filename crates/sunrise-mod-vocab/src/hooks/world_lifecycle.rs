@@ -1,5 +1,4 @@
 //! The `world_lifecycle` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0003
 
 pub trait Hooks {
     /// Read-only world phases on integrated and dedicated servers, never on the client window.

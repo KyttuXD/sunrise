@@ -1,5 +1,4 @@
 //! The `arrow_loose` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0167
 
 pub trait Hooks {
     /// NeoForge's `ArrowLooseEvent`: the player releases a bow `stack` with

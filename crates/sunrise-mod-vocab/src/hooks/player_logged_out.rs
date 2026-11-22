@@ -1,5 +1,4 @@
 //! The `player_logged_out` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0068
 
 pub trait Hooks {
     /// `player` (`name`) left the game (NeoForge's `PlayerLoggedOutEvent`), by

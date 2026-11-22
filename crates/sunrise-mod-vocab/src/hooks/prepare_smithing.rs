@@ -1,5 +1,4 @@
 //! The `prepare_smithing` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0326
 
 pub trait Hooks {
     /// A smithing result was prepared for a server player at `pos`. Change it before it is sent.

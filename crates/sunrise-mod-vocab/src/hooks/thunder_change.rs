@@ -1,5 +1,4 @@
 //! The `thunder_change` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0335
 
 pub trait Hooks {
     /// The server changed its thunder state through `/weather`. Set `cancel`

@@ -1,5 +1,4 @@
 //! The `perform_bonemeal` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0084
 
 pub trait Hooks {
     /// `BonemealableBlock.performBonemeal` for a block that answered

@@ -1,5 +1,4 @@
 //! The `tooltip_component` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0076
 
 pub trait Hooks {
     /// Client-side image component for this stack's tooltip. Answer its width/height

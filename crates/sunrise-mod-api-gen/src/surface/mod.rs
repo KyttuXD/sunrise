@@ -45,53 +45,22 @@ pub(crate) struct Boundary {
     unions: Vec<(String, String)>,
 }
 
-const HOST_AREAS: &[(&str, &str, &str)] = &[
-    ("ConfigFiles", "", ""),
-    ("Commands", "server_host_mut", "Ok(h.commands())"),
-    ("Levels", "server_host", "Ok(h.levels())"),
-    ("Messages", "server_host", "Ok(h.messages())"),
-    ("Players", "server_host", "Ok(h.players())"),
-    ("RuntimeLevels", "server_host_mut", "Ok(h.runtime_levels())"),
-    ("ClientSession", "client_host", "Ok(h.client_session())"),
-    ("RenderAssets", "client_host", "Ok(h.render_assets())"),
-    ("InstanceGroups", "client_host", "Ok(h.instance_groups())"),
-    // Type metadata belongs to load, so retained snapshots need no live world host.
-    (
-        "AttachmentDeclarations",
-        "",
-        "Ok(crate::__private::attachment_declarations())",
-    ),
-    // A level hook's host first: inside a level write it is the one the call hands over.
-    (
-        "AttachmentStore",
-        "",
-        "level_random_host_mut().map(|h| h.attachments()).or_else(|_| host_mut().map(|h| h.attachments()))",
-    ),
-    (
-        "CapabilityProviders",
-        "host",
-        "Ok(h.capability_providers())",
-    ),
-    (
-        "ServerReloadResources",
-        "server_host",
-        "Ok(h.reload_resources())",
-    ),
-    (
-        "Backend",
-        "host",
-        "h.backend().map(crate::BackendRef::open).ok_or_else(|| missing(\"game backend\"))",
-    ),
-    (
-        "BackendMut",
-        "server_host_mut",
-        "crate::backend_mut_of(h).ok_or_else(|| missing(\"game backend\"))",
-    ),
-    (
-        "ClientBackendMut",
-        "client_host_mut",
-        "crate::client_backend_mut_of(h).ok_or_else(|| missing(\"client game backend\"))",
-    ),
+/// Host unions and host-accessed services whose traits belong to one logical side;
+/// unlisted boundary traits default to [`Side::Both`].
+const HOST_SIDES: &[(&str, Side)] = &[
+    ("ServerHost", Side::Server),
+    ("Commands", Side::Server),
+    ("Levels", Side::Server),
+    ("Messages", Side::Server),
+    ("Players", Side::Server),
+    ("RuntimeLevels", Side::Server),
+    ("ServerReloadResources", Side::Server),
+    ("BackendMut", Side::Server),
+    ("ClientHost", Side::Client),
+    ("ClientSession", Side::Client),
+    ("RenderAssets", Side::Client),
+    ("InstanceGroups", Side::Client),
+    ("ClientBackendMut", Side::Client),
 ];
 
 impl Boundary {
@@ -148,20 +117,11 @@ impl Boundary {
                 }
             }
         }
-        boundary.sides.extend([
-            ("ServerHost".into(), Side::Server),
-            ("ClientHost".into(), Side::Client),
-        ]);
-        for (owner, accessor, _) in HOST_AREAS {
-            let side = if accessor.starts_with("server_host") {
-                Side::Server
-            } else if accessor.starts_with("client_host") {
-                Side::Client
-            } else {
-                continue;
-            };
-            boundary.sides.push(((*owner).to_owned(), side));
-        }
+        boundary.sides.extend(
+            HOST_SIDES
+                .iter()
+                .map(|&(owner, side)| (owner.to_owned(), side)),
+        );
         Ok(boundary)
     }
 }

@@ -1,5 +1,4 @@
 //! The `interaction_key_mapping_triggered` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0143
 
 pub trait Hooks {
     /// A projectile hit something (NeoForge's `ProjectileImpactEvent`, posted

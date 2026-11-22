@@ -1,5 +1,4 @@
 //! The `explosion_detonate` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0042
 
 pub trait Hooks {
     /// An explosion at `center` in `dimension` (`minecraft:overworld`) is

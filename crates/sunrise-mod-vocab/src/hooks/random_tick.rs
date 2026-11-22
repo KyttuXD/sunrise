@@ -1,5 +1,4 @@
 //! The `random_tick` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0014
 
 pub trait Hooks {
     /// An authoritative server's `ServerLevel.tickChunk` is about to

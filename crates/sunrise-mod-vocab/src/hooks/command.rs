@@ -1,5 +1,4 @@
 //! The `command` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0016
 
 pub trait Hooks {
     /// An authoritative server is about to compute the state the block

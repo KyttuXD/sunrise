@@ -1,5 +1,4 @@
 //! The `weather_change` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0341
 
 pub trait Hooks {
     /// The server changed its weather parameters. `raining` and `thundering`

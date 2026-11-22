@@ -1,5 +1,4 @@
 //! The `mob_spawned` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0048
 
 pub trait Hooks {
     /// A new mob of `kind` joined `dimension` at `pos`: `natural` when the

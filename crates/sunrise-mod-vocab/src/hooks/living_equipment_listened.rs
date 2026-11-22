@@ -1,5 +1,4 @@
 //! The `living_equipment_listened` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0158
 
 pub trait Hooks {
     /// Whether a mod listens to the mobs' and players'

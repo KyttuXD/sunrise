@@ -1,5 +1,4 @@
 //! The `release_using` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0135
 
 pub trait Hooks {
     /// `Item.releaseUsing` of `stack`: `entity` let it go with `time_left`

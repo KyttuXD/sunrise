@@ -1,5 +1,4 @@
 //! The `camera_shake` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0095
 
 pub trait Hooks {
     /// The camera shake native mods ask for in this frame, `partial` ticks

@@ -14,6 +14,9 @@ Mods run in order of their listener priority, highest first, then in dependency 
 depends on. When a mod cancels an event, the mods after it are skipped, unless they receive cancelled events
 ([Listener priority and cancellation](#listener-priority-and-cancellation)).
 
+Generated declaration order only orders the generated `Hooks` items and local `HookId` discriminants; it does not
+control which mod runs first. Runtime dispatch order is set solely by listener priority and mod dependency order.
+
 What a hook's return value means depends on its kind:
 
 - **Listen** hooks are notices: every subscribed mod is called.

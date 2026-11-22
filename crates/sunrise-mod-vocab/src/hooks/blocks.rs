@@ -1,5 +1,4 @@
 //! The `blocks` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0152
 
 pub trait Hooks {
     /// Declare blocks in code once at startup on each side, before resources load.

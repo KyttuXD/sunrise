@@ -1,5 +1,4 @@
 //! The server block-entity ticker, in vanilla's `Level.tickBlockEntities` order.
-// catalog-order: 0024
 
 pub trait Hooks {
     /// A server tick of a resident mod block entity of your registered `kind`.

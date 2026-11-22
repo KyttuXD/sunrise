@@ -1,5 +1,4 @@
 //! The container loot fill hook.
-// catalog-order: 0351
 
 pub trait Hooks {
     /// Sunrise addition: no NeoForge counterpart. Fired once per container fill,

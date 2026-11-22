@@ -1,5 +1,4 @@
 //! The `bucket_empty` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0240
 
 pub trait Hooks {
     /// A server player empties a bucket at `pos` (`fluid`: `minecraft:water`,

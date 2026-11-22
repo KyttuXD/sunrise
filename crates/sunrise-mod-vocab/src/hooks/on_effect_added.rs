@@ -1,5 +1,4 @@
 //! The `on_effect_added` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0063
 
 pub trait Hooks {
     /// `MobEffect.applyEffectTick`: the content mod's resolved `EffectKey` `effect` acts on

@@ -1,5 +1,4 @@
 //! The `experience_orb_merge` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0130
 
 pub trait Hooks {
     /// The experience orb `into` (`into_value` points, `into_count` orbs) is about to

@@ -1,5 +1,4 @@
 //! The `hurt_enemy` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0051
 
 pub trait Hooks {
     /// A player's hit landed on the mob `entity` of type `kind`

@@ -1,5 +1,4 @@
 //! The `living_entity_use_item_finish` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0105
 
 pub trait Hooks {
     /// NeoForge's `LivingEntityUseItemEvent.Finish`: `entity`'s use of

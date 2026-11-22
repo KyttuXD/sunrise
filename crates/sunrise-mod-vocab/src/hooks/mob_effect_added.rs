@@ -1,5 +1,4 @@
 //! The `mob_effect_added` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0064
 
 pub trait Hooks {
     /// NeoForge's `MobEffectEvent.Added`, vanilla's `MobEffect.onEffectStarted`:

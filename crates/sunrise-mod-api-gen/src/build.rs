@@ -180,7 +180,7 @@ pub(crate) fn game_host_generated(root: &Path) -> Result<String, String> {
 pub fn generate_render(root: &Path, out_dir: &Path) -> Result<(), String> {
     let declarations = root.join(super::catalog::DECLARATIONS);
     crate::rerun_if_changed(&declarations.display());
-    for module in Catalog::modules(&declarations)? {
+    for module in sunrise_game_discovery::module_files(&declarations)? {
         crate::rerun_if_changed(&declarations.join(format!("{module}.rs")).display());
     }
     let generated = super::dispatch::render(&Catalog::load(root)?)?;
@@ -255,14 +255,6 @@ pub(super) fn track(root: &Path) -> Result<(), String> {
         Ok(())
     }
     crate::rerun_if_changed(&root.join("crates/sunrise-mod-vocab/src").display());
-    for retired in super::catalog::RETIRED {
-        // Only while present: Cargo reruns a build script on every build for a path that doesn't
-        // exist. One that appears fails the next generation, and every fresh build, such as CI's.
-        let path = root.join(retired);
-        if path.exists() {
-            crate::rerun_if_changed(&path.display());
-        }
-    }
     directory(&root.join(super::catalog::DECLARATIONS), "rs", false)?;
     directory(&root.join(super::exports::DIRECTORY), "rs", false)?;
     directory(

@@ -418,7 +418,7 @@ pub(super) fn source(root: &Path) -> Result<String, String> {
     let mut factories = TokenStream::new();
     if directory.exists() {
         crate::rerun_if_changed(&directory.display());
-        for name in crate::catalog::Catalog::modules(&directory).map_err(|e| e.to_string())? {
+        for name in sunrise_game_discovery::module_files(&directory)? {
             let path = directory
                 .join(format!("{name}.rs"))
                 .to_string_lossy()

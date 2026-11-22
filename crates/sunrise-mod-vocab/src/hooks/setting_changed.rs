@@ -1,5 +1,4 @@
 //! The `setting_changed` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0020
 
 pub trait Hooks {
     /// The player changed setting `key` of mod `mod_id` on its page in Options > Mods

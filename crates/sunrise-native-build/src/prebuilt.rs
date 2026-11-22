@@ -200,6 +200,10 @@ pub struct Identity {
     /// The game crate's features the SDK was built with: a patched function copied out of its
     /// source is compiled under the same `cfg`s.
     game_features: Vec<String>,
+    /// The cfg atoms of the lower libraries in this target and side's build. Older identities
+    /// are still readable for the API route; lower mirrors require their original cfgs.
+    #[serde(default)]
+    lower_crate_cfg: std::collections::BTreeMap<String, Vec<String>>,
     slices: Slices,
 }
 
@@ -354,6 +358,10 @@ impl Identity {
 
     pub fn game_features(&self) -> &[String] {
         &self.game_features
+    }
+
+    pub(crate) fn lower_crate_cfg(&self) -> &std::collections::BTreeMap<String, Vec<String>> {
+        &self.lower_crate_cfg
     }
 
     /// Which package files the `runtime` and `api` slices hold.

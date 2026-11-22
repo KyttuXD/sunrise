@@ -1,5 +1,4 @@
 //! The `consume_effect` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0086
 
 pub trait Hooks {
     /// A custom entry of the stack's effective `consumable`, in list order,

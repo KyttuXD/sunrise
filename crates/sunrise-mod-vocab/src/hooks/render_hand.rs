@@ -1,5 +1,4 @@
 //! The `render_hand` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0098
 
 pub trait Hooks {
     /// Before one first-person hand of this window's player is drawn

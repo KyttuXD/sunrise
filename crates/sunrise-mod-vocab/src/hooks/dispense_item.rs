@@ -1,5 +1,4 @@
 //! The `dispense_item` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0075
 
 pub trait Hooks {
     /// `DispenserBlock.getDispenseMethod`: choose a behaviour for any item,

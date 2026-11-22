@@ -1,5 +1,4 @@
 //! The `player_commands_sent` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0249
 
 pub trait Hooks {
     /// Filter the command tree just before it is sent to a live server player,

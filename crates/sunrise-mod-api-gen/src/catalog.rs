@@ -247,7 +247,6 @@ pub enum CatalogError {
     OwnerNeedsGlobalListener(String),
     ScopeNeedsKey(String),
     NoHooks,
-    Retired(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -255,11 +254,6 @@ impl fmt::Display for CatalogError {
         match self {
             Self::Read { path, error } => write!(f, "{path}: {error}"),
             Self::Declaration { path, error } => write!(f, "{path}: {error}"),
-            Self::Retired(path) => write!(
-                f,
-                "{path}: hooks are declared in Rust now, in {DECLARATIONS}/<area>.rs; move the entry there as a \
-                 `#[hook(...)]` declaration (the old keys are the attribute's arguments) and delete this file"
-            ),
             Self::NamelessHook => f.write_str("hook name missing"),
             Self::DuplicateHook(name) => write!(f, "duplicate hook {name}"),
             Self::InvalidHook { hook, error } => write!(f, "hook {hook}: {error}"),
@@ -607,7 +601,7 @@ pub(crate) fn validate_stack_count_output(
 /// Everything the generator reads from the catalog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
-    /// In declaration order: base first, then files by name, each file's declarations in order.
+    /// In declaration order: files by name, each file's declarations in order.
     pub hooks: Vec<Hook>,
     pub draw_contexts: Vec<DrawContext>,
     /// Prose that belongs to no one hook, from the `Notes` trait's `#[notes]`.
@@ -616,9 +610,6 @@ pub struct Catalog {
 
 /// Where the declarations live, relative to the checkout root.
 pub const DECLARATIONS: &str = "crates/sunrise-mod-vocab/src/hooks";
-
-/// What the catalog was declared in before the declarations: a file here is refused, never ignored.
-pub(crate) const RETIRED: &[&str] = &["native-hooks.json", "tools/native-hook-fragments"];
 
 /// The default binding for a game hook in the same-named `native_hooks` module.
 fn default_target(name: &str, area: &str) -> String {
@@ -857,87 +848,26 @@ impl Declared {
 }
 
 impl Catalog {
-    /// The catalog of the checkout at `root`: every file of the declarations directory, `base.rs` first and
-    /// then by name, so the order never depends on a list a PR edits.
-    /// The retired JSON catalog is refused wherever it still exists.
+    /// The catalog of the checkout at `root`: every file of the declarations directory, sorted by
+    /// name, so the order never depends on a list a PR edits.
     pub fn load(root: &Path) -> Result<Self, CatalogError> {
-        let read_error = |path: &Path, e: std::io::Error| CatalogError::Read {
+        let read_error = |path: &Path, error: String| CatalogError::Read {
             path: path.display().to_string(),
-            error: e.to_string(),
+            error,
         };
-        for retired in RETIRED {
-            let path = root.join(retired);
-            if path.is_file() {
-                return Err(CatalogError::Retired((*retired).to_string()));
-            }
-            if path.is_dir() {
-                let mut entries = fs::read_dir(&path).map_err(|e| read_error(&path, e))?;
-                if let Some(entry) = entries.next() {
-                    let entry = entry.map_err(|e| read_error(&path, e))?;
-                    return Err(CatalogError::Retired(format!(
-                        "{retired}/{}",
-                        entry.file_name().to_string_lossy()
-                    )));
-                }
-            }
-        }
         let dir = root.join(DECLARATIONS);
-        let modules = Self::modules(&dir)?;
+        let modules =
+            sunrise_game_discovery::module_files(&dir).map_err(|error| read_error(&dir, error))?;
         let files = modules
             .iter()
             .map(|module| {
                 let path = dir.join(format!("{module}.rs"));
-                let text = fs::read_to_string(&path).map_err(|e| read_error(&path, e))?;
+                let text =
+                    fs::read_to_string(&path).map_err(|e| read_error(&path, e.to_string()))?;
                 Ok((path.display().to_string(), text))
             })
             .collect::<Result<Vec<_>, CatalogError>>()?;
         Self::parse(&files)
-    }
-
-    pub(crate) fn modules(dir: &Path) -> Result<Vec<String>, CatalogError> {
-        let read_error = |path: &Path, e: std::io::Error| CatalogError::Read {
-            path: path.display().to_string(),
-            error: e.to_string(),
-        };
-        // The one enumerator of source modules, shared with the static inventories.
-        let mut modules =
-            sunrise_game_discovery::module_files(dir).map_err(|error| CatalogError::Read {
-                path: dir.display().to_string(),
-                error,
-            })?;
-        // Split declarations retain their original HookId positions in per-item metadata.
-        // Unnumbered additions are discovered alphabetically, without a shared registry.
-        let mut order = std::collections::HashMap::new();
-        for module in &modules {
-            let path = dir.join(format!("{module}.rs"));
-            let source = fs::read_to_string(&path).map_err(|e| read_error(&path, e))?;
-            if let Some(value) = source
-                .lines()
-                .find_map(|line| line.strip_prefix("// catalog-order: "))
-            {
-                let ordinal = value
-                    .parse::<usize>()
-                    .map_err(|e| CatalogError::Declaration {
-                        path: path.display().to_string(),
-                        error: format!("invalid catalog-order: {e}"),
-                    })?;
-                if order.values().any(|previous| *previous == ordinal) {
-                    return Err(CatalogError::Declaration {
-                        path: path.display().to_string(),
-                        error: format!("duplicate catalog-order: {ordinal}"),
-                    });
-                }
-                order.insert(module.clone(), ordinal);
-            }
-        }
-        modules.sort_by(|a, b| {
-            (a != "base", order.get(a).copied().unwrap_or(usize::MAX), a).cmp(&(
-                b != "base",
-                order.get(b).copied().unwrap_or(usize::MAX),
-                b,
-            ))
-        });
-        Ok(modules)
     }
 
     /// The catalog of declaration files given as (path, source), in the order given.
@@ -1110,44 +1040,47 @@ mod tests {
     }
 
     #[test]
-    fn the_retired_json_catalog_is_refused_wherever_it_is() {
-        let base = format!("{DECLARATIONS}/base.rs");
-        let index = format!("{DECLARATIONS}/mod.rs");
-        for retired in ["native-hooks.json", "tools/native-hook-fragments/late.json"] {
-            let root = checkout(&[(&base, HOOK), (&index, "mod base;"), (retired, "{}")]);
-            let error = Catalog::load(&root).unwrap_err().to_string();
-            assert!(error.starts_with(retired), "{error}");
-            assert!(error.contains("declared in Rust now"), "{error}");
-            fs::remove_dir_all(root).unwrap();
-        }
-    }
-
-    #[test]
     fn the_order_comes_from_the_directory_without_a_shared_module_list() {
-        let second = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn two(); }";
-        let base = format!("{DECLARATIONS}/base.rs");
-        let alpha = format!("{DECLARATIONS}/alpha.rs");
+        let zeta = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn zeta(); }";
+        let alpha = r#"
+            pub trait Hooks {
+                /// Doc.
+                #[hook(side = "server", contract = "listen")]
+                fn alpha_second();
+                /// Doc.
+                #[hook(side = "server", contract = "listen")]
+                fn alpha_first();
+            }
+        "#;
+        let ignored = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn ignored(); }";
         let index = format!("{DECLARATIONS}/mod.rs");
         let root = checkout(&[
-            (&alpha, second),
-            (&base, HOOK),
-            (&index, "mod base;\nmod alpha;"),
+            (&format!("{DECLARATIONS}/zeta.rs"), zeta),
+            (&format!("{DECLARATIONS}/base.rs"), HOOK),
+            (&format!("{DECLARATIONS}/alpha.rs"), alpha),
+            (&index, ignored),
         ]);
-        let catalog = Catalog::load(&root).unwrap();
-        let names = catalog
-            .hooks
-            .iter()
-            .map(|h| h.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, ["one", "two"], "base.rs first, then by name");
+        let names = |catalog: Catalog| {
+            catalog
+                .hooks
+                .into_iter()
+                .map(|h| h.name)
+                .collect::<Vec<_>>()
+        };
+        let expected = ["alpha_second", "alpha_first", "one", "zeta"];
+        assert_eq!(names(Catalog::load(&root).unwrap()), expected);
         fs::remove_file(root.join(&index)).unwrap();
-        assert_eq!(Catalog::load(&root).unwrap().hooks.len(), 2);
+        assert_eq!(names(Catalog::load(&root).unwrap()), expected);
         fs::write(root.join(DECLARATIONS).join("not-valid.rs"), HOOK).unwrap();
+        let error = Catalog::load(&root).unwrap_err();
+        let expected_dir = root.join(DECLARATIONS).display().to_string();
         assert!(
-            Catalog::load(&root)
-                .unwrap_err()
-                .to_string()
-                .contains("not-valid.rs")
+            matches!(&error, CatalogError::Read { path, .. } if path.as_str() == expected_dir.as_str()),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("not a Rust identifier"),
+            "{error}"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1416,30 +1349,6 @@ mod tests {
                 CatalogError::AnsweredNeedsGlobalOutput("a".into())
             );
         }
-    }
-    #[test]
-    fn split_file_order_is_stable_and_validated() {
-        let dir = std::env::temp_dir().join(format!("hook-order-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("z.rs"), "// catalog-order: 1\n").unwrap();
-        fs::write(dir.join("a.rs"), "// catalog-order: 2\n").unwrap();
-        fs::write(dir.join("b.rs"), "").unwrap();
-        assert_eq!(Catalog::modules(&dir).unwrap(), ["z", "a", "b"]);
-        fs::write(dir.join("b.rs"), "// catalog-order: 2\n").unwrap();
-        assert!(
-            Catalog::modules(&dir)
-                .unwrap_err()
-                .to_string()
-                .contains("duplicate catalog-order")
-        );
-        fs::write(dir.join("b.rs"), "// catalog-order: bad\n").unwrap();
-        assert!(
-            Catalog::modules(&dir)
-                .unwrap_err()
-                .to_string()
-                .contains("invalid catalog-order")
-        );
-        fs::remove_dir_all(dir).unwrap();
     }
 }
 

@@ -1,5 +1,4 @@
 //! The `player_totem` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0265
 
 pub trait Hooks {
     /// A totem of undying saved the server player `player` (`name`): their
