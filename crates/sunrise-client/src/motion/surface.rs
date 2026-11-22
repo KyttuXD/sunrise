@@ -27,10 +27,13 @@ pub trait SideLevel {
         registry: &BlockRegistry,
         entity: mod_api::BlockEntityRef,
     ) -> Option<mod_api::Compound>;
+    /// The read-only block-state and fluid fact tables of this side. Only dry test/probe sides
+    /// have no tables.
+    fn block_states(&self) -> Option<mod_api::BlockStates<'_>>;
 }
 
-/// The level data of a side with no weather, features, tags or block entities. Only for tests and
-/// probes that never read them: a game tick lends the real data (`game_side!`).
+/// The level data of a side with no weather, features, tags, block entities or fact tables.
+/// Only for tests and probes that never read them: a game tick lends real data (`game_side!`).
 #[cfg(any(test, feature = "test-dry-side"))]
 pub fn dry_side() -> &'static dyn SideLevel {
     struct Dry(std::sync::Arc<[String]>);
@@ -53,6 +56,9 @@ pub fn dry_side() -> &'static dyn SideLevel {
             _: &BlockRegistry,
             _: mod_api::BlockEntityRef,
         ) -> Option<mod_api::Compound> {
+            None
+        }
+        fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
             None
         }
     }

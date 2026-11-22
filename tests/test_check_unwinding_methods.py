@@ -38,6 +38,13 @@ class UnwindingListRatchet(unittest.TestCase):
         self.assertEqual(self.check(base).returncode, 0)
         self.assertEqual(self.check(shrunk).returncode, 0)
 
+    def test_a_method_can_move_but_cannot_be_duplicated(self):
+        base = self.commit("a::one\nb::two\n")
+        self.commit("b::two\nc::one\n")
+        self.assertEqual(self.check(base).returncode, 0)
+        self.commit("a::one\nb::two\nc::one\n")
+        self.assertIn("c::one", self.check(base).stderr)
+
     def test_a_base_without_the_list_is_a_new_list(self):
         base = self.commit(None)
         self.commit("a::one\n")

@@ -2,7 +2,7 @@
 # See docs/modding/src/how-to/native-mods.md, "Refused calls".
 # The list only shrinks: sunrise-mod-api-gen rejects a method that has no typed refusal or optional callback
 # and is not listed here, and a line whose method has gained a refusal. tools/ci/check_unwinding_methods.py
-# rejects a line added since the base.
+# rejects a new method or a duplicate occurrence, but allows an existing method to move areas.
 advancements::advancement
 block_entities::block_entity
 block_entities::block_entity_data
@@ -563,6 +563,7 @@ level_fluids::level_fluid_shape
 level_fluids::level_fluid_state
 level_fluids::level_fluid_tick
 level_fluids::level_fluid_tick_delay
+level_fluids::unresolved_fluid_id
 level_light::level_brightness
 level_light::level_can_see_sky
 level_light::level_check_light
@@ -1113,14 +1114,7 @@ services::messages
 services::players
 services::render_assets
 services::runtime_levels
-tags::fluid_bucket
-tags::fluid_empty_sound
-tags::fluid_is_same
-tags::fluid_pickup_sound
-tags::state_fluid_state
-tags::state_outline
 tags::tags
-tags::unresolved_fluid_id
 text::text_from_json
 text::text_from_legacy
 text::text_string

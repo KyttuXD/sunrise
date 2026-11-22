@@ -238,9 +238,17 @@ and `is_loaded(pos)` (`Level.isLoaded`: inside the build height and in a loaded 
 (`LevelReader.enabledFeatures`, a shared `FeatureFlags` with the world's effective flags). An omitted
 flag list in the save means `minecraft:vanilla`, not an empty set. These queries do not allocate.
 None of them loads a chunk. Light can be available outside the build height or where no chunk is
-resident, so check `is_loaded` first when you need a resident block. `LevelHost` also answers tag and fluid questions without a `Host`: `tags()`, `fluid_state(pos)`
-(`getFluidState`, `None` where the block read is),
-and `state_fluid_state(state)`. Fluid reads return `FluidState` with a
+resident, so check `is_loaded` first when you need a resident block. `LevelHost` reads fluid at a
+position with `fluid_state(pos)` (`BlockGetter.getFluidState`, `None` outside the build height or
+in an unloaded chunk).
+
+Use `let states = level.block_states();` in a restricted callback, or `host.block_states()` with
+`HostBlockStates` in scope on a full `Host`. Both read the same block-state and fluid tables.
+`state.fluid_state(&states)` reads the state's fluid, including water for a waterlogged block.
+`state.outline(&states)` borrows its block-local outline (`BlockState.getShape` with an empty
+getter at the origin). An unknown state or unavailable tables returns `None`; air has an empty
+outline and the empty fluid. `FluidKey::is_same`, `bucket`, `pickup_sound` and `empty_sound`
+read fluid facts from the same tables without raw names. A position or state fluid read returns a
 `FluidKey`, amount, falling flag and engine-derived source flag; `is_empty()`, `is_source()` and
 `is_in_tag(tags, tag)` query those states without a registry lookup. `block_state_id(name)` parses a block and properties, and `block_state_default(block)` gives a block's default state, as on `Host`; both return `None` for invalid input or unavailable context. For tag reads on either `Host` or `LevelHost`, use `tags()`: resolve a `TagKey` once through `Registrar::tag_key` or `Tags::key`, then call `is_in_tag(tags, tag)` on a `BlockKey`, `BlockState`, `FluidKey`, `FluidState` or `ItemKey` (or `Tags::block_in_tag`, `Tags::fluid_in_tag`, `Tags::is_in_tag`), or `Tags::items`, `Tags::blocks` or `Tags::fluids` for ordered member lists. The list methods return `TagMembers::Missing` for an absent tag and `TagMembers::Members(keys)` for a loaded tag, even if `keys` is empty. They return `TagMembers::Unavailable` until that registry's authoritative tags have been applied or if a member key cannot be resolved. On clients `tags_updated` announces the applied server tags; the query never substitutes local resource-pack tags.
 `default_components_bound` precedes `tags_updated` after item defaults are published and readable.

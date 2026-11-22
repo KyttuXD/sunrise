@@ -14,7 +14,6 @@ use sunrise_client::{
 };
 use sunrise_core::position::BlockPos;
 use sunrise_world::{
-    fluid::FluidState as EngineFluidState,
     native_load_context::LoopSide,
     registry::{BlockRegistry, BlockStateId},
 };
@@ -27,6 +26,7 @@ pub(crate) struct GameSide<'a> {
     /// The level handle of the open world, absent before a world has an epoch.
     pub(in crate::game) level: Option<LevelRef>,
     pub(in crate::game) facts: &'a sunrise_client::blocks::BlockFacts,
+    pub(in crate::game) tables: super::native_block_tables::BlockTables<'a>,
     pub(in crate::game) biomes: &'a sunrise_client::biome::Biomes,
     pub(in crate::game) behaviours: &'a sunrise_world::level::Behaviours,
     pub(in crate::game) features: &'a std::sync::Arc<[String]>,
@@ -76,6 +76,10 @@ impl sunrise_client::motion::SideLevel for GameSide<'_> {
             world, registry, self.items, entity,
         )
     }
+
+    fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
+        Some(mod_api::BlockStates::of(&self.tables))
+    }
 }
 
 /// The game's own side, for a tick that only reads it: each query builds the borrowed tables.
@@ -103,6 +107,10 @@ impl sunrise_client::motion::SideLevel for Game<'_> {
         entity: BlockEntityRef,
     ) -> Option<Compound> {
         game_side!(self).block_entity_data(world, registry, entity)
+    }
+
+    fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
+        Some(mod_api::BlockStates::of(self))
     }
 }
 
@@ -152,13 +160,6 @@ pub(crate) fn friction(
 
 pub(crate) struct FrictionView<'a>(FrictionLevel<'a>);
 
-impl FrictionView<'_> {
-    fn state_fluid(&self, state: BlockStateId) -> Option<FluidState> {
-        let state = self.0.registry.state(state)?;
-        super::native_world_read::api_fluid_state(EngineFluidState::from_block(state).ok()?)
-    }
-}
-
 impl super::mod_api_host::SidedLevel for FrictionView<'_> {
     fn client_side(&self) -> bool {
         self.0.context.side() == LoopSide::Client
@@ -168,6 +169,16 @@ impl super::mod_api_host::SidedLevel for FrictionView<'_> {
 super::native_tags::impl_tags!(FrictionView<'_>, view, view.0.side.tag_items());
 
 impl LevelHost for FrictionView<'_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        struct NoTables;
+        impl LevelHost for NoTables {}
+        static NONE: NoTables = NoTables;
+        self.0
+            .side
+            .block_states()
+            .unwrap_or_else(|| NONE.block_states())
+    }
+
     fn friction(
         &self,
         [x, y, z]: [i32; 3],
@@ -237,11 +248,9 @@ impl LevelHost for FrictionView<'_> {
         if !self.0.world.is_loaded_at(x, y, z) {
             return None;
         }
-        self.state_fluid(self.0.world.block(x, y, z))
-    }
-
-    fn state_fluid_state(&self, state: BlockState) -> Option<FluidState> {
-        self.state_fluid(state.try_into_engine(&()).ok()?)
+        let states = self.0.side.block_states()?;
+        let state = self.0.world.block(x, y, z).try_into_api().ok()?;
+        state.fluid_state(&states)
     }
 
     fn state_with_property(&self, state: BlockState, key: &str, value: &str) -> Option<BlockState> {
@@ -901,6 +910,16 @@ mod tests {
             );
             assert_eq!(stone.is_in_tag(view.tags(), climbable), Some(false));
             assert_eq!(water.is_in_tag(view.tags(), water_tag), Some(true));
+            let stone_state = view.block_state_default(stone).unwrap();
+            let view_states = view.block_states();
+            assert_eq!(
+                stone_state.outline(&view_states),
+                Some(&[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]][..])
+            );
+            assert_eq!(
+                water.pickup_sound(&view_states),
+                Some("minecraft:item.bucket.fill")
+            );
             // A resident block entity has the handle of this side's level; an empty position none.
             let level = game.level_ref(game.native_lifecycle.epoch().unwrap(), game.dim.key());
             let found = view.block_entity([3, 64, 3]).unwrap();

@@ -388,12 +388,6 @@ impl crate::prelude::TagsHost for FakeHost {
     fn tags(&self) -> &dyn crate::Tags {
         &self.registries
     }
-    fn fluid_pickup_sound(&self, fluid: &str) -> Option<&'static str> {
-        self.registries.fluid_sound(fluid, true)
-    }
-    fn fluid_empty_sound(&self, fluid: &str) -> Option<&'static str> {
-        self.registries.fluid_sound(fluid, false)
-    }
 }
 impl crate::prelude::BlockStatesHost for FakeHost {
     fn fluid_key(&self, id: &str) -> Option<crate::FluidKey> {
@@ -699,10 +693,25 @@ impl crate::prelude::PlayerWorldBackend for FakeHost {
         crate::Identifier::parse(level.dimension_id()).ok()
     }
 }
+impl crate::prelude::BlockStatesBackend for FakeHost {
+    fn fluid_pickup_sound(
+        &self,
+        fluid: crate::FluidKey,
+    ) -> Result<Option<&'static str>, crate::LevelReadError> {
+        Ok(self.registries.fluid_sound(fluid, true))
+    }
+    fn fluid_empty_sound(
+        &self,
+        fluid: crate::FluidKey,
+    ) -> Result<Option<&'static str>, crate::LevelReadError> {
+        Ok(self.registries.fluid_sound(fluid, false))
+    }
+}
 crate::impl_backend_areas!(
     FakeHost,
     except(
         block_entities,
+        block_states,
         entity_identity,
         fluids_energy,
         items,

@@ -76,16 +76,6 @@ pub(super) enum NativeBlockReadError {
     InvalidState,
 }
 
-/// `BlockState.getFluidState`. None for an id no state has.
-pub(super) fn state_fluid(
-    behaviours: &Behaviours,
-    registry: &BlockRegistry,
-    state: BlockStateId,
-) -> Option<FluidState> {
-    registry.state(state)?;
-    api_fluid_state(behaviours.fluid(state))
-}
-
 /// Convert the engine's state using the load-owned kind-to-key mapping.
 pub(super) fn api_fluid_state(state: EngineFluidState) -> Option<FluidState> {
     Some(mod_api::__private::fluid_state(
@@ -111,11 +101,6 @@ fn fluid_shape(fluid: EngineFluidState, above: Option<EngineFluidState>) -> Opti
         f64::from(fluid.own_height())
     };
     Some([0.0, 0.0, 0.0, 1.0, height, 1.0])
-}
-
-/// The fluid a registry id names, with or without `minecraft:`.
-fn fluid_kind(fluid: &str) -> Option<FluidKind> {
-    FluidKind::from_name(&sunrise_client::command::args::normalized(fluid))
 }
 
 /// The world fluid a registered key names. None for a tank-only fluid, which has no world
@@ -173,28 +158,15 @@ impl Game<'_> {
         self.session_lock.is_some().then(|| self.items())
     }
 
-    /// The outline of `state` as `BlockState.getShape` answers it with an empty getter at the
-    /// origin (`EmptyBlockGetter.INSTANCE`, `BlockPos.ZERO`): its boxes, each `[min x, y, z,
-    /// max x, y, z]` in the block's own space, with no random offset and none of a world's
-    /// context (a state that reads its neighbours or block entity answers what its state alone
-    /// gives). Empty for a state with no outline, such as air. None for an id no state has.
-    pub(super) fn state_outline(&self, state: BlockStateId) -> Option<Vec<[f64; 6]>> {
-        self.pack.assets.registry.state(state)?;
-        Some(self.res.facts().get(state).outline.to_vec())
-    }
-
-    /// The fluid state `state` holds (`BlockState.getFluidState`): water for a waterlogged state,
-    /// the empty fluid for most. None for an id no state has.
-    pub(super) fn state_fluid_state(&self, state: BlockStateId) -> Option<FluidState> {
-        state_fluid(self.res.behaviours(), self.pack.assets.registry, state)
-    }
-
     /// The fluid state at `pos` of the level `level` names (`BlockGetter.getFluidState`). None
     /// for a stale handle, a chunk that isn't loaded or a `y` outside the world: a read never
     /// loads a chunk.
     pub(super) fn level_fluid_state(&self, level: LevelRef, pos: [i32; 3]) -> Option<FluidState> {
         let state = self.level_block_state(level, pos)?;
-        self.state_fluid_state(state)
+        super::native_block_tables::BlockTables::of(self)
+            .block_state_fluid_state(state)
+            .ok()
+            .flatten()
     }
 
     /// The fluid's shape at `pos` (`FluidState.getShape`), block-local: none for no fluid, else
@@ -286,38 +258,6 @@ impl Game<'_> {
         }))
     }
 
-    /// Whether `fluid` and `other` are the same fluid (`Fluid.isSame`): a source and its
-    /// flowing form are, so `minecraft:water` and `minecraft:flowing_water` are the same, water
-    /// and lava not. Names are fluid ids, with or without `minecraft:`; false when either
-    /// names no fluid.
-    pub(super) fn fluid_is_same(&self, fluid: &str, other: &str) -> bool {
-        match (fluid_kind(fluid), fluid_kind(other)) {
-            (Some(fluid), Some(other)) => fluid.same_family(other),
-            _ => false,
-        }
-    }
-
-    /// The bucket item that picks `fluid` up (`Fluid.getBucket`), `minecraft:water_bucket` for
-    /// water and flowing water. None for `minecraft:empty`, whose bucket is air, and for a name
-    /// no fluid has.
-    pub(super) fn fluid_bucket(&self, fluid: &str) -> Option<mod_api::ItemKey> {
-        mod_api::__private::item_key(sunrise_world::level::fluid_bucket(fluid_kind(fluid)?)?)
-    }
-
-    /// The sound event a bucket plays as it picks `fluid` up (`Fluid.getPickupSound`),
-    /// `minecraft:item.bucket.fill_lava` for lava and flowing lava. None for
-    /// `minecraft:empty`, which has none, and for a name no fluid has.
-    pub(super) fn fluid_pickup_sound(&self, fluid: &str) -> Option<&'static str> {
-        sunrise_world::level::fluid_pickup_sound(fluid_kind(fluid)?)
-    }
-
-    /// The sound event a bucket plays as it empties `fluid` (`BucketItem.playEmptySound`),
-    /// `minecraft:item.bucket.empty_lava` for lava and flowing lava. None for
-    /// `minecraft:empty`, for a tank-only fluid and for a name no fluid has.
-    pub(super) fn fluid_empty_sound(&self, fluid: &str) -> Option<&'static str> {
-        sunrise_world::level::fluid_empty_sound(fluid_kind(fluid)?)
-    }
-
     /// Read a loaded block in a server tick hook, without loading a chunk.
     /// The returned name and properties are owned and remain valid after the hook.
     #[allow(dead_code)]
@@ -369,7 +309,6 @@ fn read_block(
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
     use super::*;
-    use mod_api::HostBlockStates;
     use mod_api::LevelHost;
     use std::sync::Arc;
     use sunrise_client::chunk::{Chunk, Light};
@@ -668,22 +607,34 @@ mod tests {
 
             // A full block is one unit box, a bottom slab half of it, air none, and an id no
             // state has is unknown.
-            let states = mod_api::HostBlockStates::block_states(&*game);
-            let invalid_state = mod_api::__private::block_state_from_ordinal(
-                stone.try_into_api().unwrap().block(),
-                u16::MAX,
-            );
-            assert_eq!(
-                stone.try_into_api().unwrap().outline(&states),
-                Some(&[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]][..])
-            );
-            assert_eq!(
-                dry_slab.try_into_api().unwrap().outline(&states),
-                Some(&[[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]][..])
-            );
-            let air = registry.default_state("minecraft:air").unwrap();
-            assert_eq!(air.try_into_api().unwrap().outline(&states), Some(&[][..]));
-            assert_eq!(invalid_state.outline(&states), None);
+            use super::super::api_values::TryIntoApi;
+            use mod_api::HostBlockStates;
+            let stone_state = stone.try_into_api().unwrap();
+            let water_state = water.try_into_api().unwrap();
+            let slab_state = slab.try_into_api().unwrap();
+            let dry_slab_state = dry_slab.try_into_api().unwrap();
+            let lava_state = lava.try_into_api().unwrap();
+            let air_state = registry
+                .default_state("minecraft:air")
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let invalid_state =
+                mod_api::__private::block_state_from_ordinal(stone_state.block(), u16::MAX);
+            {
+                let host: &dyn mod_api::Host = game;
+                let states = host.block_states();
+                assert_eq!(
+                    stone_state.outline(&states),
+                    Some(&[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]][..])
+                );
+                assert_eq!(
+                    dry_slab_state.outline(&states),
+                    Some(&[[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]][..])
+                );
+                assert_eq!(air_state.outline(&states), Some(&[][..]));
+                assert_eq!(invalid_state.outline(&states), None);
+            }
 
             let stone_key = mod_platform::__private::part_tests::block_key("minecraft:stone");
             assert_eq!(
@@ -720,43 +671,39 @@ mod tests {
                 (base_stone_tag, logs_tag, water_tag)
             };
 
-            assert_eq!(
-                water.try_into_api().unwrap().fluid_state(&states),
-                api_fluid_state(EngineFluidState::WATER)
-            );
-            assert_eq!(
-                water
-                    .try_into_api()
-                    .unwrap()
-                    .fluid_state(&states)
-                    .unwrap()
-                    .is_in_tag(&*game, water_tag),
-                Some(true)
-            );
-            assert_eq!(
-                mod_api::__private::fluid_id(
-                    lava.try_into_api()
-                        .unwrap()
+            {
+                let host: &dyn mod_api::Host = game;
+                let states = host.block_states();
+                assert_eq!(
+                    water_state.fluid_state(&states),
+                    api_fluid_state(EngineFluidState::WATER)
+                );
+                assert_eq!(
+                    water_state
                         .fluid_state(&states)
                         .unwrap()
-                        .fluid
-                )
-                .unwrap(),
-                "minecraft:lava"
-            );
-            assert_eq!(
-                slab.try_into_api().unwrap().fluid_state(&states),
-                api_fluid_state(EngineFluidState::WATER)
-            );
-            assert_eq!(
-                dry_slab.try_into_api().unwrap().fluid_state(&states),
-                api_fluid_state(EngineFluidState::EMPTY)
-            );
-            assert_eq!(
-                stone.try_into_api().unwrap().fluid_state(&states),
-                api_fluid_state(EngineFluidState::EMPTY)
-            );
-            assert_eq!(invalid_state.fluid_state(&states), None);
+                        .is_in_tag(host.tags(), water_tag),
+                    Some(true)
+                );
+                assert_eq!(
+                    mod_api::__private::fluid_id(lava_state.fluid_state(&states).unwrap().fluid)
+                        .unwrap(),
+                    "minecraft:lava"
+                );
+                assert_eq!(
+                    slab_state.fluid_state(&states),
+                    api_fluid_state(EngineFluidState::WATER)
+                );
+                assert_eq!(
+                    dry_slab_state.fluid_state(&states),
+                    api_fluid_state(EngineFluidState::EMPTY)
+                );
+                assert_eq!(
+                    stone_state.fluid_state(&states),
+                    api_fluid_state(EngineFluidState::EMPTY)
+                );
+                assert_eq!(invalid_state.fluid_state(&states), None);
+            }
 
             // The world holds a chunk with water in it; a neighbour is not loaded.
             let mut chunk = Chunk::empty(0, 0);
@@ -788,10 +735,9 @@ mod tests {
                 super::super::execution_role::ExecutionRole::IntegratedServer;
             game.options.dedicated = Some(Vec::new());
             let bounds = game.level_height(level).unwrap();
-            use super::super::api_values::TryIntoApi;
-            let stone = stone.try_into_api().unwrap();
-            let slab = slab.try_into_api().unwrap();
-            let invalid = mod_api::__private::block_state_from_ordinal(stone.block(), u16::MAX);
+            let stone = stone_state;
+            let slab = slab_state;
+            let invalid = invalid_state;
             let parsed = game
                 .block_state_id("minecraft:oak_slab[waterlogged=true]")
                 .try_into_api()
@@ -924,6 +870,7 @@ mod tests {
     #[ignore = "daily"]
     fn fluid_sameness_buckets_and_bucket_sounds_follow_vanilla() {
         with_game(|game| {
+            use mod_api::HostBlockStates;
             let host: &dyn mod_api::Host = game;
             let states = host.block_states();
             let water = host.fluid_key("minecraft:water").unwrap();
@@ -932,6 +879,7 @@ mod tests {
             let flowing_lava = host.fluid_key("flowing_lava").unwrap();
             let empty = host.fluid_key("minecraft:empty").unwrap();
             assert_eq!(host.fluid_key("nope:missing"), None);
+
             assert!(water.is_same(&states, flowing_water));
             assert!(flowing_lava.is_same(&states, lava));
             assert!(empty.is_same(&states, empty));

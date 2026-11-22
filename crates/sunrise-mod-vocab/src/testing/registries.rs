@@ -60,8 +60,9 @@ impl FakeRegistries {
         self
     }
     /// Gives fluid `fluid` the sounds a bucket plays as it fills with it (`pickup`) and empties
-    /// it (`empty`), as `fluid_pickup_sound` and `fluid_empty_sound` answer; a fluid not given
-    /// any has none, as a tank-only fluid has none in the game.
+    /// it (`empty`), as [`FluidKey::pickup_sound`](crate::FluidKey::pickup_sound) and
+    /// [`FluidKey::empty_sound`](crate::FluidKey::empty_sound) answer; a fluid not given any has
+    /// none, as a tank-only fluid has none in the game.
     pub fn fluid_sounds(
         &mut self,
         fluid: &str,
@@ -100,8 +101,10 @@ impl FakeRegistries {
             .map(|&slots| vec![None; slots])
     }
     /// The sound a bucket plays filling with `fluid` (`pickup`) or emptying it, if given.
-    pub(super) fn fluid_sound(&self, fluid: &str, pickup: bool) -> Option<&'static str> {
-        let (fill, empty) = self.fluid_sounds.get(fluid)?;
+    pub(super) fn fluid_sound(&self, fluid: crate::FluidKey, pickup: bool) -> Option<&'static str> {
+        let (fill, empty) = self
+            .fluid_sounds
+            .get(crate::content::registry_keys::fluid_id(fluid)?)?;
         Some(if pickup { fill } else { empty })
     }
     pub(super) fn is_loaded(&self, id: &str) -> bool {

@@ -1,7 +1,11 @@
 //! The read-only tables behind `BlockStates`: the facts a block state carries, read from the
 //! game's shared resources alone. `Game` and every level view hand out this one view, so a part
 //! reads the same facts in a level callback as through a `Host`.
-use super::{Game, PackResources, Resources, WorldRest, api_values::TryIntoEngine};
+use super::{
+    Game, PackResources, Resources, WorldRest,
+    api_values::TryIntoEngine,
+    native_world_read::{api_fluid_state, engine_fluid_kind},
+};
 use mod_api::{
     BlockKey, BlockSoundType, BlockState, BlockStateRange, FluidDefinition, FluidKey, FluidState,
     FluidStateError, FluidTypeProperties, StateConstraint, StateMatchError, StateProperties,
@@ -33,6 +37,76 @@ impl<'a> BlockTables<'a> {
         self.res.items()
     }
 
+    /// `BlockState.getShape` with an empty getter at the origin (`EmptyBlockGetter.INSTANCE`,
+    /// `BlockPos.ZERO`): the state's outline boxes in block-local space. Empty for a state with
+    /// no outline (air); None for an unknown state.
+    pub(in crate::game) fn block_state_outline(
+        &self,
+        state: BlockStateId,
+    ) -> Result<Option<&'a [[f64; 6]]>, mod_api::LevelReadError> {
+        Ok(self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .map(|_| self.res.facts().get(state).outline.as_ref()))
+    }
+
+    /// `BlockState.getFluidState`: the fluid state `state` holds (water for a waterlogged state,
+    /// the empty fluid for most). None for an unknown state.
+    pub(in crate::game) fn block_state_fluid_state(
+        &self,
+        state: BlockStateId,
+    ) -> Result<Option<FluidState>, mod_api::LevelReadError> {
+        Ok(self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|_| api_fluid_state(self.res.behaviours().fluid(state))))
+    }
+
+    /// `Fluid.isSame`: whether `fluid` and `other` are the same fluid family. False when either
+    /// key has no world fluid.
+    pub(in crate::game) fn fluid_is_same(
+        &self,
+        fluid: FluidKey,
+        other: FluidKey,
+    ) -> Result<bool, mod_api::LevelReadError> {
+        Ok(match (engine_fluid_kind(fluid), engine_fluid_kind(other)) {
+            (Some(fluid), Some(other)) => fluid.same_family(other),
+            _ => false,
+        })
+    }
+
+    /// `Fluid.getBucket`: the bucket item that picks `fluid` up. None for `minecraft:empty`
+    /// and for fluids without a bucket.
+    pub(in crate::game) fn fluid_bucket(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<mod_api::ItemKey>, mod_api::LevelReadError> {
+        Ok(engine_fluid_kind(fluid)
+            .and_then(sunrise_world::level::fluid_bucket)
+            .and_then(mod_api::__private::item_key))
+    }
+
+    /// `Fluid.getPickupSound`: the sound event a bucket plays as it picks `fluid` up.
+    pub(in crate::game) fn fluid_pickup_sound(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<&'static str>, mod_api::LevelReadError> {
+        Ok(engine_fluid_kind(fluid).and_then(sunrise_world::level::fluid_pickup_sound))
+    }
+
+    /// `BucketItem.playEmptySound` / NeoForge `FluidType.getSound(BUCKET_EMPTY)`:
+    /// the sound event a bucket plays as it empties `fluid`.
+    pub(in crate::game) fn fluid_empty_sound(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<&'static str>, mod_api::LevelReadError> {
+        Ok(engine_fluid_kind(fluid).and_then(sunrise_world::level::fluid_empty_sound))
+    }
+
     /// The exported definition of a world fluid, or a tank-only identity.
     pub(in crate::game) fn fluid_state_definition(
         &self,
@@ -42,7 +116,7 @@ impl<'a> BlockTables<'a> {
         let Some(definition) = self.res.behaviours().fluid_definitions().get(id) else {
             return Some(FluidDefinition::TankOnly);
         };
-        let default = super::native_world_read::api_fluid_state(definition.default)?;
+        let default = api_fluid_state(definition.default)?;
         Some(FluidDefinition::World {
             default,
             properties: StateProperties::of(&definition.properties),

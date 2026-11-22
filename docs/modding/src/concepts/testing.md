@@ -43,7 +43,7 @@ assert_eq!(into.count("minecraft:stone"), 3);
 Sounds and game events a hook plays in the level are kept in `host.sounds` and `host.game_events`, in order and
 outside the journal, as the game sends them at once. Fluids a test uses are resolved with
 `host.registries.resolve_fluids([...])`, and `host.registries.fluid_sounds(fluid, fill, empty)` gives one the
-bucket sounds `FluidKey::pickup_sound` and `FluidKey::empty_sound` answer.
+bucket sounds `FluidKey::pickup_sound` and `FluidKey::empty_sound` answer through `host.block_states()`.
 
 A fake's constructors do not install or resolve entity types. Declare its entities with
 `host.level.entity(id, kind)`, then call `host.resolve_entity_types().unwrap()` explicitly.

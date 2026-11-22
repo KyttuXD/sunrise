@@ -9,8 +9,8 @@
 use crate::content::resource::{Ends, move_once};
 use crate::{
     Capability, Direction, DispenseItemEvent, Dispensed, FLUIDS, FluidResource, FluidStack,
-    GameEventContext, Hand, HostTransaction, ITEM_FLUIDS, ItemPlace, LevelRef, PlayerRef,
-    ResourceHandler, ServerHost, SoundSource,
+    GameEventContext, Hand, HostBlockStates, HostTransaction, ITEM_FLUIDS, ItemPlace, LevelRef,
+    PlayerRef, ResourceHandler, ServerHost, SoundSource,
 };
 
 /// `FluidType.BUCKET_VOLUME`: what a source block holds, and what a placement takes.
@@ -113,9 +113,9 @@ pub fn interact_with_handler(
 /// `FluidUtil.triggerSoundAndGameEvent`: what a bucket plays as `fluid` goes in or out of a
 /// container at `at` in `level`. `pickup` is true when the fluid came out of the handler into the
 /// container (`minecraft:fluid_pickup` and the fluid's
-/// [`fluid_pickup_sound`](crate::prelude::TagsHost::fluid_pickup_sound)) and false when it went
+/// [`pickup_sound`](crate::FluidKey::pickup_sound)) and false when it went
 /// in (`minecraft:fluid_place` and its
-/// [`fluid_empty_sound`](crate::prelude::TagsHost::fluid_empty_sound)). The sound plays under
+/// [`empty_sound`](crate::FluidKey::empty_sound)). The sound plays under
 /// the block slider at full volume and pitch for every player near, the acting one included,
 /// since the server decides the move; the game event names `player` as its source when given.
 /// A fluid with no world form, a tank-only one, has no sound, and only its game event goes out.
@@ -127,13 +127,12 @@ pub fn trigger_sound_and_game_event(
     player: Option<PlayerRef>,
     pickup: bool,
 ) {
-    let id = fluid
-        .fluid()
-        .key()
-        .and_then(crate::content::registry_keys::fluid_id);
-    let sound = id.and_then(|id| match pickup {
-        true => host.fluid_pickup_sound(id),
-        false => host.fluid_empty_sound(id),
+    let sound = fluid.fluid().key().and_then(|key| {
+        let states = host.block_states();
+        match pickup {
+            true => key.pickup_sound(&states),
+            false => key.empty_sound(&states),
+        }
     });
     if let Some(sound) = sound {
         level.play_sound(host, sound, at, SoundSource::Blocks, 1.0, 1.0, None);

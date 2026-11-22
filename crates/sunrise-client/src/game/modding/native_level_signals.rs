@@ -280,11 +280,12 @@ impl LevelHost for ReadLevel<'_, '_> {
             .world
             .is_loaded_at(x, y, z)
             .then(|| self.game.world.block(x, y, z))
-            .and_then(|state| self.game.state_fluid_state(state))
-    }
-    fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
-        self.game
-            .state_fluid_state(state.try_into_engine(&()).ok()?)
+            .and_then(|state| {
+                super::native_block_tables::BlockTables::of(self.game)
+                    .block_state_fluid_state(state)
+                    .ok()
+                    .flatten()
+            })
     }
     fn state_with_property(
         &self,
