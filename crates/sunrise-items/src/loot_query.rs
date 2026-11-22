@@ -1,6 +1,6 @@
 use super::*;
-use crate::loot_candidate::LootCandidate;
-use sunrise_world::loot::{LootListAccess, LootStackAccess, LootToolAccess};
+use crate::loot_candidate::{LootCandidate, LootCandidates};
+use sunrise_world::loot::{LootBlockView, LootListAccess, LootStackAccess, LootToolAccess};
 
 impl LootToolAccess for ItemStack {
     fn item_id(&self) -> &str {
@@ -76,7 +76,7 @@ impl<R: RandomSource> LootContext<'_, R> {
                 .collect();
         }
         let dynamic = dynamic.unwrap_or(&[]);
-        let mut generated = self.expand_dynamic(stacks, dynamic, true);
+        let generated = self.expand_dynamic(stacks, dynamic, true);
         if generation.is_empty() {
             return generated
                 .into_iter()
@@ -88,8 +88,10 @@ impl<R: RandomSource> LootContext<'_, R> {
             random,
             dynamic,
         };
+        let mut generated = LootCandidates(generated);
         generation.apply(&mut scope, &mut generated);
         generated
+            .0
             .into_iter()
             .map(|candidate| candidate.into_item_stack(self.items))
             .collect()
@@ -132,7 +134,8 @@ impl<R: RandomSource> LootContext<'_, R> {
             damage: None,
             player: None,
             interacting_entity: self.interacting_entity.map(|(entity, _)| entity),
-            block: (!self.block.is_empty()).then_some(self.block),
+            block: (!self.block.is_empty())
+                .then(|| LootBlockView::new(self.block, self.properties)),
             tool: self.held.map(|tool| tool as &dyn LootToolAccess),
             luck: 0.0,
             biome: None,
@@ -348,14 +351,10 @@ impl<R: RandomSource> sunrise_world::loot::global_modifiers::ModifierRoll
         id: &str,
         generated: &mut dyn LootListAccess,
     ) -> std::result::Result<(), String> {
-        let raw = self.eval_raw(id)?;
-        if let Some(vec) = generated.as_any_mut().downcast_mut::<Vec<LootCandidate>>() {
-            vec.extend(raw);
-        } else {
-            for candidate in raw {
-                candidate.push_into_list(generated);
-            }
-        }
+        let target = (generated as &mut dyn std::any::Any)
+            .downcast_mut::<LootCandidates>()
+            .ok_or("foreign loot output list")?;
+        target.0.extend(self.eval_raw(id)?);
         Ok(())
     }
 }

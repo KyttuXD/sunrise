@@ -1,63 +1,51 @@
 use super::*;
-use crate::callback_owner::CallbackOwner;
+use crate::callback_owner::{CallbackOwner, CallbackValue};
 
 pub(crate) fn owned_serializer(
     owner: CallbackOwner,
     serializer: Arc<dyn GlobalLootModifierSerializer>,
 ) -> Arc<dyn GlobalLootModifierSerializer> {
-    Arc::new(OwnedSerializer { owner, serializer })
+    Arc::new(OwnedSerializer(CallbackValue::new(
+        owner,
+        "loot modifier serializer",
+        "global_loot_modifier_serializer_drop",
+        serializer,
+    )))
 }
 
-struct OwnedSerializer {
-    owner: CallbackOwner,
-    serializer: Arc<dyn GlobalLootModifierSerializer>,
-}
+struct OwnedSerializer(CallbackValue<Arc<dyn GlobalLootModifierSerializer>>);
 impl GlobalLootModifierSerializer for OwnedSerializer {
     fn decode(
         &self,
         data: &Value,
         load: &dyn DataLoadContext,
     ) -> Result<Arc<dyn GlobalLootModifier>, LootModifierError> {
-        let instance = self
-            .owner
+        let owner = self.0.owner();
+        let instance = owner
             .call(
                 "loot modifier serializer",
                 "global_loot_modifier_decode",
-                || self.serializer.decode(data, load),
+                || self.0.value().decode(data, load),
             )
             .map_err(|reason| LootModifierError::new("$", reason))??;
-        // These resource methods execute mod code too. Capture them in
-        // the same owning load and owner scope, never on the roll path.
-        let metadata = self.owner.call(
+        let instance = CallbackValue::new(
+            owner.clone(),
             "loot modifier serializer",
-            "global_loot_modifier_metadata",
-            || -> Result<_, LootModifierError> {
-                let priority = instance.priority()?;
-                let condition = instance.condition()?;
-                Ok((priority, condition))
-            },
+            "global_loot_modifier_drop",
+            instance,
         );
-        let (priority, condition) = match metadata {
-            Ok(Ok(metadata)) => metadata,
-            Ok(Err(error)) => {
-                self.owner.dispose(
-                    "loot modifier serializer",
-                    "global_loot_modifier_drop",
-                    instance,
-                );
-                return Err(error);
-            }
-            Err(reason) => {
-                self.owner.dispose(
-                    "loot modifier serializer",
-                    "global_loot_modifier_drop",
-                    instance,
-                );
-                return Err(LootModifierError::new("$", reason));
-            }
-        };
+        // Metadata is mod code, too; capture it in the owning load, never during a roll.
+        let (priority, condition) = owner
+            .call(
+                "loot modifier serializer",
+                "global_loot_modifier_metadata",
+                || {
+                    let modifier = instance.value();
+                    Ok::<_, LootModifierError>((modifier.priority()?, modifier.condition()?))
+                },
+            )
+            .map_err(|reason| LootModifierError::new("$", reason))??;
         Ok(Arc::new(OwnedModifier {
-            owner: self.owner.clone(),
             instance,
             priority,
             condition,
@@ -66,8 +54,7 @@ impl GlobalLootModifierSerializer for OwnedSerializer {
 }
 
 struct OwnedModifier {
-    owner: CallbackOwner,
-    instance: Arc<dyn GlobalLootModifier>,
+    instance: CallbackValue<Arc<dyn GlobalLootModifier>>,
     priority: i32,
     condition: Option<Value>,
 }
@@ -83,9 +70,10 @@ impl GlobalLootModifier for OwnedModifier {
         context: &mut dyn LootModifierContext,
         generated: &mut LootList<'_>,
     ) -> Result<(), LootModifierError> {
-        self.owner
+        self.instance
+            .owner()
             .call("loot modifier", "global_loot_modifier_apply", || {
-                self.instance.apply(context, generated)
+                self.instance.value().apply(context, generated)
             })
             .map_err(|reason| LootModifierError::new("apply", reason))?
     }

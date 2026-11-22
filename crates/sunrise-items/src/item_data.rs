@@ -718,19 +718,12 @@ impl StackData {
                 );
             }
             _ if MODELLED.contains(&id) => {
-                let mut saved = match components_tag(0, Some(self)) {
-                    Some(Tag::Compound(c)) => c,
-                    _ => Default::default(),
-                };
-                saved.remove(&JavaString::from(id));
-                if let Some(tag) = tag {
-                    saved.insert(JavaString::from(id), tag);
+                if self.ominous_banner && is_ominous_component(id) {
+                    self.materialize_ominous_banner();
                 }
-                // A damage set before stays where it was: reading would take it.
-                let damage = self.other("minecraft:damage").cloned();
-                let (_, read) = decode_components(Some(&Tag::Compound(saved)));
-                *self = read.map_or_else(Default::default, |data| *data);
-                self.set_other("minecraft:damage", damage);
+                let decoded =
+                    tag.and_then(|tag| decode_components(Some(&Tag::compound([(id, tag)]))).1);
+                self.apply_component_changes(decoded, std::iter::once(id));
             }
             _ => self.set_other(id, tag),
         }

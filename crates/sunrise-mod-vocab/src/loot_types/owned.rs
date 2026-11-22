@@ -1,60 +1,61 @@
 //! Attribute every codec and bound-rule call to its registration's shared `CallbackOwner`.
 use super::*;
-use crate::callback_owner::CallbackOwner;
+use crate::callback_owner::{CallbackOwner, CallbackValue};
 use std::sync::Arc;
 
 pub(crate) fn function_codec(
     owner: CallbackOwner,
     codec: Arc<dyn ModLootFunctionCodec>,
 ) -> Arc<dyn ModLootFunctionCodec> {
-    let conditional = owner.call("loot function type", "loot_function_metadata", || {
-        codec.conditional()
-    });
-    Arc::new(FunctionCodec {
+    let codec = CallbackValue::new(
         owner,
+        "loot function type",
+        "loot_function_codec_drop",
         codec,
-        conditional,
-    })
+    );
+    let conditional = codec
+        .owner()
+        .call("loot function type", "loot_function_metadata", || {
+            codec.value().conditional()
+        });
+    Arc::new(FunctionCodec { codec, conditional })
 }
 
 pub(crate) fn condition_codec(
     owner: CallbackOwner,
     codec: Arc<dyn ModLootConditionCodec>,
 ) -> Arc<dyn ModLootConditionCodec> {
-    Arc::new(ConditionCodec { owner, codec })
+    Arc::new(ConditionCodec(CallbackValue::new(
+        owner,
+        "loot condition type",
+        "loot_condition_codec_drop",
+        codec,
+    )))
 }
 
 struct FunctionCodec {
-    owner: CallbackOwner,
-    codec: Arc<dyn ModLootFunctionCodec>,
+    codec: CallbackValue<Arc<dyn ModLootFunctionCodec>>,
     conditional: Result<bool, String>,
 }
 impl ModLootFunctionCodec for FunctionCodec {
     fn decode(&self, data: &serde_json::Value) -> Result<Arc<dyn ModLootFunction>, String> {
         self.conditional.as_ref().map_err(Clone::clone)?;
-        let rule = self
-            .owner
+        let owner = self.codec.owner();
+        let rule = owner
             .call("loot function type", "loot_function_decode", || {
-                self.codec.decode(data)
+                self.codec.value().decode(data)
             })?
-            .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))?;
-        let params = match self
-            .owner
-            .call("loot function type", "loot_function_metadata", || {
-                rule.referenced_context_params()
-            }) {
-            Ok(params) => params,
-            Err(reason) => {
-                self.owner
-                    .dispose("loot function type", "loot_function_drop", rule);
-                return Err(reason);
-            }
-        };
-        Ok(Arc::new(OwnedFunction {
-            owner: self.owner.clone(),
+            .map_err(|reason| format!("mod {}: {reason}", owner.id()))?;
+        let rule = CallbackValue::new(
+            owner.clone(),
+            "loot function type",
+            "loot_function_drop",
             rule,
-            params,
-        }))
+        );
+        let params = owner.call("loot function type", "loot_function_metadata", || {
+            rule.value().referenced_context_params()
+        })?;
+        Ok(Arc::new(OwnedFunction { rule, params }))
     }
     fn conditional(&self) -> bool {
         self.conditional.as_ref().copied().unwrap_or(true)
@@ -62,8 +63,7 @@ impl ModLootFunctionCodec for FunctionCodec {
 }
 
 struct OwnedFunction {
-    owner: CallbackOwner,
-    rule: Arc<dyn ModLootFunction>,
+    rule: CallbackValue<Arc<dyn ModLootFunction>>,
     params: Vec<Identifier>,
 }
 impl ModLootFunction for OwnedFunction {
@@ -75,49 +75,39 @@ impl ModLootFunction for OwnedFunction {
         stack: &mut LootStackEditor<'_>,
         context: &mut dyn LootTypeContext,
     ) -> Result<(), String> {
-        self.owner
+        let owner = self.rule.owner();
+        owner
             .call("loot function type", "loot_function_apply", || {
-                self.rule.apply(stack, context)
+                self.rule.value().apply(stack, context)
             })?
-            .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))
+            .map_err(|reason| format!("mod {}: {reason}", owner.id()))
     }
 }
 
-struct ConditionCodec {
-    owner: CallbackOwner,
-    codec: Arc<dyn ModLootConditionCodec>,
-}
+struct ConditionCodec(CallbackValue<Arc<dyn ModLootConditionCodec>>);
 impl ModLootConditionCodec for ConditionCodec {
     fn decode(&self, data: &serde_json::Value) -> Result<Arc<dyn ModLootCondition>, String> {
-        let rule = self
-            .owner
+        let owner = self.0.owner();
+        let rule = owner
             .call("loot condition type", "loot_condition_decode", || {
-                self.codec.decode(data)
+                self.0.value().decode(data)
             })?
-            .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))?;
-        let params = match self
-            .owner
-            .call("loot condition type", "loot_condition_metadata", || {
-                rule.referenced_context_params()
-            }) {
-            Ok(params) => params,
-            Err(reason) => {
-                self.owner
-                    .dispose("loot condition type", "loot_condition_drop", rule);
-                return Err(reason);
-            }
-        };
-        Ok(Arc::new(OwnedCondition {
-            owner: self.owner.clone(),
+            .map_err(|reason| format!("mod {}: {reason}", owner.id()))?;
+        let rule = CallbackValue::new(
+            owner.clone(),
+            "loot condition type",
+            "loot_condition_drop",
             rule,
-            params,
-        }))
+        );
+        let params = owner.call("loot condition type", "loot_condition_metadata", || {
+            rule.value().referenced_context_params()
+        })?;
+        Ok(Arc::new(OwnedCondition { rule, params }))
     }
 }
 
 struct OwnedCondition {
-    owner: CallbackOwner,
-    rule: Arc<dyn ModLootCondition>,
+    rule: CallbackValue<Arc<dyn ModLootCondition>>,
     params: Vec<Identifier>,
 }
 impl ModLootCondition for OwnedCondition {
@@ -125,10 +115,11 @@ impl ModLootCondition for OwnedCondition {
         self.params.clone()
     }
     fn test(&self, context: &mut dyn LootTypeContext) -> Result<bool, String> {
-        self.owner
+        let owner = self.rule.owner();
+        owner
             .call("loot condition type", "loot_condition_test", || {
-                self.rule.test(context)
+                self.rule.value().test(context)
             })?
-            .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))
+            .map_err(|reason| format!("mod {}: {reason}", owner.id()))
     }
 }

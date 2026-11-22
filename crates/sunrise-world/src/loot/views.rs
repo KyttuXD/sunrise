@@ -10,6 +10,12 @@ use mod_api::{
 use serde_json::Value;
 use sunrise_core::nbt::Tag;
 
+impl mod_api::__private::LootBlockProperties for crate::chunk::BlockProperties {
+    fn property(&self, name: &str) -> Option<&str> {
+        self.get(name).map(String::as_str)
+    }
+}
+
 impl super::LootToolAccess for LootStack {
     fn item_id(&self) -> &str {
         &self.item
@@ -178,26 +184,32 @@ impl LootStackEditAccess for LootStack {
     }
 }
 
-impl LootListAccess for Vec<LootStack> {
+/// World-owned backing for the world evaluator's live output list.
+#[derive(Default)]
+pub struct LootStacks(pub Vec<LootStack>);
+
+impl LootListAccess for LootStacks {
     fn len(&self) -> usize {
-        Vec::len(self)
+        self.0.len()
     }
 
     fn get(&self, index: usize) -> Option<&dyn LootStackAccess> {
-        self.as_slice()
+        self.0
+            .as_slice()
             .get(index)
             .map(|stack| stack as &dyn LootStackAccess)
     }
 
     fn get_mut(&mut self, index: usize) -> Option<&mut dyn LootStackEditAccess> {
-        self.as_mut_slice()
+        self.0
+            .as_mut_slice()
             .get_mut(index)
             .map(|stack| stack as &mut dyn LootStackEditAccess)
     }
 
     fn push_empty(&mut self, item_id: &str) -> &mut dyn LootStackEditAccess {
-        self.push(LootStack::new(item_id));
-        self.last_mut().expect("just pushed")
+        self.0.push(LootStack::new(item_id));
+        self.0.last_mut().expect("just pushed")
     }
 
     fn insert_empty(
@@ -208,36 +220,36 @@ impl LootListAccess for Vec<LootStack> {
         if index > self.len() {
             return None;
         }
-        self.insert(index, LootStack::new(item_id));
-        Some(&mut self[index])
+        self.0.insert(index, LootStack::new(item_id));
+        Some(&mut self.0[index])
     }
 
     fn remove(&mut self, index: usize) -> bool {
         if index >= self.len() {
             return false;
         }
-        Vec::remove(self, index);
+        self.0.remove(index);
         true
     }
 
     fn clear(&mut self) {
-        Vec::clear(self);
+        self.0.clear();
     }
 
     fn truncate(&mut self, len: usize) {
-        Vec::truncate(self, len);
+        self.0.truncate(len);
     }
 
     fn swap(&mut self, a: usize, b: usize) -> bool {
         if a >= self.len() || b >= self.len() {
             return false;
         }
-        self.as_mut_slice().swap(a, b);
+        self.0.as_mut_slice().swap(a, b);
         true
     }
 
     fn reverse(&mut self) {
-        self.as_mut_slice().reverse();
+        self.0.as_mut_slice().reverse();
     }
 
     fn reorder(&mut self, from: usize, to: usize) -> bool {
@@ -245,15 +257,11 @@ impl LootListAccess for Vec<LootStack> {
             return false;
         }
         match from.cmp(&to) {
-            std::cmp::Ordering::Less => self[from..=to].rotate_left(1),
-            std::cmp::Ordering::Greater => self[to..=from].rotate_right(1),
+            std::cmp::Ordering::Less => self.0[from..=to].rotate_left(1),
+            std::cmp::Ordering::Greater => self.0[to..=from].rotate_right(1),
             std::cmp::Ordering::Equal => {}
         }
         true
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

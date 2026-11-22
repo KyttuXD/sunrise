@@ -19,7 +19,7 @@ pub struct LootParamsParts<'a> {
     pub interacting_entity: Option<&'a dyn LootEntityAccess>,
     pub damage: Option<&'a dyn LootDamageAccess>,
     pub tool: Option<&'a dyn LootToolAccess>,
-    pub block: Option<&'a str>,
+    pub block: Option<LootBlockView<'a>>,
     pub biome: Option<&'a str>,
     pub origin: Option<[f64; 3]>,
     pub block_entity: Option<&'a Tag>,
@@ -90,8 +90,8 @@ impl<'a> LootParamsView<'a> {
         self.0.tool.map(LootToolView)
     }
 
-    /// Block identifier in a block or block-interaction roll.
-    pub fn block(&self) -> Option<&'a str> {
+    /// The `BLOCK_STATE` supplied to a block or block-interaction roll.
+    pub fn block(&self) -> Option<LootBlockView<'a>> {
         self.0.block
     }
 
@@ -118,6 +118,35 @@ impl<'a> LootParamsView<'a> {
     /// Luck applied to this roll.
     pub fn luck(&self) -> f32 {
         self.0.luck
+    }
+}
+
+// hidden: the engine lends its resident properties, without constructing an owned state.
+#[doc(hidden)]
+pub trait LootBlockProperties {
+    fn property(&self, name: &str) -> Option<&str>;
+}
+
+/// The identifier and state properties of the block supplied to a loot roll.
+// no wire: borrows the evaluated block's state.
+// exhaustive: constructed only at the engine integration boundary.
+#[derive(Clone, Copy)]
+pub struct LootBlockView<'a>(&'a str, &'a dyn LootBlockProperties);
+
+impl<'a> LootBlockView<'a> {
+    #[doc(hidden)]
+    pub fn new(id: &'a str, properties: &'a dyn LootBlockProperties) -> Self {
+        Self(id, properties)
+    }
+
+    /// The block's resource identifier, independent of its properties.
+    pub fn id(&self) -> &'a str {
+        self.0
+    }
+
+    /// Read one state property, or `None` if the state has no such property.
+    pub fn property(&self, name: &str) -> Option<&'a str> {
+        self.1.property(name)
     }
 }
 
@@ -888,7 +917,7 @@ impl<'a> LootStackEditor<'a> {
 
 // hidden: lends the evaluator's active generated loot list without cloning it.
 #[doc(hidden)]
-pub trait LootListAccess {
+pub trait LootListAccess: std::any::Any {
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -904,7 +933,6 @@ pub trait LootListAccess {
     fn swap(&mut self, a: usize, b: usize) -> bool;
     fn reverse(&mut self);
     fn reorder(&mut self, from: usize, to: usize) -> bool;
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Scoped in-place editor for the generated loot list passed to a global loot modifier.
@@ -934,12 +962,6 @@ impl<'a> LootList<'a> {
             project_name,
             encode_name,
         }
-    }
-
-    // hidden: lets the engine's raw append path move native stacks directly into the backing buffer.
-    #[doc(hidden)]
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.list.as_any_mut().downcast_mut::<T>()
     }
 
     // hidden: lends the evaluator's backing list directly to `ModifierRoll::append_raw`.

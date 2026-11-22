@@ -45,6 +45,10 @@ ids = [
     "method:LootModifierContext::append_raw",
     # Borrowed loot parameter views, stack editors, and live generated list
     "type:LootParamsView",
+    "handle:LootParamsView::block",
+    "type:LootBlockView",
+    "handle:LootBlockView::id",
+    "handle:LootBlockView::property",
     "handle:LootParamsView::interacting_entity",
     "type:LootToolView",
     "type:LootEntityView",
@@ -120,6 +124,10 @@ migrate = """
      `params.damage()`, `params.tool()`, `params.block()`, `params.biome()`,
      `params.origin()`, `params.block_entity()`, `params.level()`,
      `params.luck()`, `params.queried_table_id()`, `params.queried_stack()`).
+   - `handle:LootParamsView::block`: use `params.block()` to borrow `BLOCK_STATE`, not a string.
+   - `type:LootBlockView`: keep this view only for the parameter borrow; it refers to the evaluated state.
+   - `handle:LootBlockView::id`: replace string reads of the block id with `block.id()`.
+   - `handle:LootBlockView::property`: use `block.property("honey_level")` to read a supplied state property.
    - Release any borrow from `context.params()` before calling `context.random()`,
      and use `context.random()` directly (the removed `seed` field had no seed).
    - `LootStack`, `ExplorationMap`, `LootModifierError` and `LootModifierSettings`
@@ -134,9 +142,9 @@ migrate = """
      `generated.get_mut(i)` (`LootStackEditor`), `generated.iter()`, `push`,
      `insert`, `replace`, `remove`, `pop`, `clear`, `truncate`, `swap`, `reverse`,
      `reorder` and `retain`. `LootStackEditError` converts into `LootModifierError` via `?`.
-   - Replace `generated.extend(context.roll_raw(&table)?)` with
-     `context.append_raw(&table, generated)?` to append raw sub-rolls without
-     snapshot round-trips.
+   - `method:LootModifierContext::append_raw`: replace `generated.extend(context.roll_raw(&table)?)`
+     with `context.append_raw(&table, generated)?` to append raw sub-rolls without
+     snapshot round-trips. Pass the same `generated` loan supplied to `apply`.
    - When inspecting sub-roll entries before keeping them, pass a visitor to
      `context.roll_raw(&table, &mut |stack| { ... })` and call `stack.to_owned()?`
      only for stacks you retain.

@@ -3205,54 +3205,6 @@ fn apply_component_patch(stack: &mut ItemStack, patch: sunrise_core::nbt::Compou
     stack.tidy();
 }
 
-/// One entry of a loot component patch, written as `PatchedDataComponentMap`
-/// does. A value replaces the stack's own one and any `!id` removal. A removal
-/// (`id` with `None`, or the `!id` form with a value) drops the stack's own
-/// value (a damage removal zeroes the scalar too) and records the `!id`
-/// marker when the item's prototype carries `id`, so the prototype's value
-/// doesn't come back; when the prototype lacks it the marker goes too. When
-/// `prototype_has` can't tell (`None`: no prototypes at hand), an explicit
-/// `!id` is written and an existing one is kept. `id` with `None` in the `!id`
-/// form drops the marker, giving the prototype's value back.
-pub(crate) fn patch_loot_component(
-    stack: &mut ItemStack,
-    id: &str,
-    value: &Option<sunrise_core::nbt::Tag>,
-    prototype_has: &impl Fn(&str, &str) -> Option<bool>,
-) {
-    let (base, removal) = match id.strip_prefix('!') {
-        Some(base) if value.is_some() => (base, true),
-        Some(_) => {
-            stack.data_mut().set_other(id, None);
-            return;
-        }
-        None => (id, value.is_none()),
-    };
-    let marker = format!("!{base}");
-    if !removal {
-        // The owning setter validates the value; only one it took replaces
-        // the removal, so a refused value leaves the `!id` as it was.
-        let data = stack.data_mut();
-        data.set_loot_component(base, value);
-        if data.sets_component(base) {
-            data.set_other(&marker, None);
-        }
-        return;
-    }
-    stack.data_mut().set_loot_component(base, &None);
-    if base == "minecraft:damage" {
-        stack.damage = 0;
-    }
-    let keep = match prototype_has(&stack.item, base) {
-        Some(has) => has,
-        None => id.starts_with('!') || stack.data().is_some_and(|d| d.other(&marker).is_some()),
-    };
-    stack.data_mut().set_other(
-        &marker,
-        keep.then(|| sunrise_core::nbt::Tag::Compound(Default::default())),
-    );
-}
-
 /// `prototype_has` over `items`: whether an item's prototype carries a
 /// component, or `None` for an item `items` doesn't know.
 pub(crate) fn prototypes_of(items: &Items) -> impl Fn(&str, &str) -> Option<bool> + '_ {
@@ -4680,6 +4632,13 @@ mod tests {
                     skip_existing_chunks: false,
                 }));
                 stack.push_component(
+                    "minecraft:potion_contents".into(),
+                    Some(Tag::compound([
+                        ("potion", Tag::String("minecraft:healing".into())),
+                        ("custom_color", Tag::Int(0x186cb8)),
+                    ])),
+                );
+                stack.push_component(
                     "minecraft:written_book_content".into(),
                     Some(Tag::compound([
                         (
@@ -4717,8 +4676,11 @@ mod tests {
                         == "minecraft:written_book_content"
                         && value.is_some())
                 );
+                assert_eq!(view.potion(), Some("minecraft:healing"));
                 let next = view.count() + 5;
                 stack.set_count(next);
+                stack.set_potion_id(Some("minecraft:swiftness".into()));
+                assert_eq!(stack.as_view().potion(), Some("minecraft:swiftness"));
                 Ok(())
             }
         }
@@ -4781,16 +4743,21 @@ mod tests {
                 Some("minecraft:on_woodland_explorer_maps".to_owned())
             ))
         );
-        assert_eq!(drops.len(), 1);
-        assert_eq!(drops[0].count, 3);
-        let written = drops[0]
-            .data()
-            .and_then(|data| data.written.as_ref())
-            .expect("written_book_content decoded through the component codec");
-        assert_eq!(written.title, "Notes");
-        assert_eq!(written.author, "Alice");
-        assert_eq!(written.generation, 1);
-        assert_eq!(written.pages, vec!["Hello".to_owned()]);
+        assert_eq!(drops.len(), 3);
+        for book in &drops {
+            assert_eq!(book.count, 1);
+            assert_eq!(book.potion(), Some("minecraft:swiftness"));
+            let data = book.data().expect("book and potion components");
+            assert_eq!(
+                data.potion_extra,
+                vec![("custom_color".into(), Tag::Int(0x186cb8))]
+            );
+            let written = data.written.as_ref().expect("decoded book contents");
+            assert_eq!(written.title, "Notes");
+            assert_eq!(written.author, "Alice");
+            assert_eq!(written.generation, 1);
+            assert_eq!(written.pages, ["Hello"]);
+        }
     }
 
     #[test]

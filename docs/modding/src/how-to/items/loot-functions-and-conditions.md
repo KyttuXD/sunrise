@@ -139,6 +139,8 @@ that registration's owner across reloads.
 
 The context lends `LootParamsView` through `params()`, authoritative tags through
 `tags()`, and the evaluator's actual selected random stream through `random()`.
+When supplied, `params().block()` lends `BLOCK_STATE`: use `block.id()` for its
+identifier and `block.property("honey_level")` (for example) for a state property.
 See [Reading tags](loot-tags.md). Reading parameters consumes no random. Use the
 roll's random directly, and end any parameter borrow before drawing. Bound rules are
 shared immutable declarations and must not keep random state between calls.

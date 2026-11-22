@@ -284,9 +284,6 @@ impl LootListAccess for Vec<TestStack> {
         }
         true
     }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 fn test_loot_list(stacks: &mut Vec<TestStack>) -> LootList<'_> {

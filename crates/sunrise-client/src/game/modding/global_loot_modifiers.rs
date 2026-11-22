@@ -3,7 +3,12 @@ use mod_api::{
     GlobalLootModifier, GlobalLootModifierSerializer, Identifier, LootModifierError,
     LootModifierSettings,
 };
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    path::Path,
+    sync::Arc,
+};
 use sunrise_assets::resource_source::ResourceSource;
 use sunrise_world::{
     loot::{
@@ -144,7 +149,12 @@ impl ModifierApply for Adapter {
         roll: &mut dyn ModifierRoll,
         generated: &mut dyn loot::LootListAccess,
     ) -> Result<(), String> {
-        let mut context = RollAdapter { roll };
+        let active = &*generated as &dyn Any;
+        let mut context = RollAdapter {
+            roll,
+            list_type: Any::type_id(active),
+            list_address: std::ptr::from_ref(active).cast::<()>(),
+        };
         let mut list = super::api_values::loot_values::loot_list(generated);
         self.0
             .apply(&mut context, &mut list)
@@ -153,6 +163,8 @@ impl ModifierApply for Adapter {
 }
 struct RollAdapter<'a> {
     roll: &'a mut dyn ModifierRoll,
+    list_type: TypeId,
+    list_address: *const (),
 }
 impl mod_api::LootModifierContext for RollAdapter<'_> {
     fn params(&self) -> mod_api::LootParamsView<'_> {
@@ -178,6 +190,16 @@ impl mod_api::LootModifierContext for RollAdapter<'_> {
         generated: &mut mod_api::LootList<'_>,
     ) -> Result<(), LootModifierError> {
         let target = generated.access_mut();
+        let backing = &*target as &dyn Any;
+        // Check the actual evaluator's loan without calling through a mod's vtable.
+        if Any::type_id(backing) != self.list_type
+            || !std::ptr::eq(std::ptr::from_ref(backing).cast::<()>(), self.list_address)
+        {
+            return Err(LootModifierError::new(
+                "append_raw",
+                "foreign loot output list",
+            ));
+        }
         mod_api::__private::game::CallbackOwner::call_engine(|| {
             self.roll.append_raw(&table.to_string(), target)
         })
@@ -450,6 +472,15 @@ mod tests {
                         first.push_component("minecraft:custom_data", Tag::Int(42))?;
                     }
                     generated.truncate(1);
+                    // A second list of the same engine type is still not the
+                    // evaluator's active loan, even if its caller supplied it.
+                    let mut foreign = loot::LootStacks::default();
+                    let mut foreign_list =
+                        super::super::api_values::loot_values::loot_list(&mut foreign);
+                    let error = context.append_raw(&raw_id, &mut foreign_list).unwrap_err();
+                    assert_eq!(error.field, "append_raw");
+                    assert_eq!(error.reason, "foreign loot output list");
+                    assert!(foreign.0.is_empty());
                     context.append_raw(&raw_id, generated)?;
                     assert!(generated.reorder(1, 0));
 

@@ -994,6 +994,114 @@ fn an_interaction_drop_copies_components_from_the_interacting_entity() {
 }
 
 #[test]
+fn a_global_modifier_can_clear_the_component_the_splitter_used() {
+    use sunrise_core::nbt::Tag;
+    use sunrise_world::loot::{
+        LootListAccess, LootStackEditAccess, LootTags,
+        global_modifiers::{
+            DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
+        },
+        types::{BoundFunction, DecodedCondition, DecodedFunction, Registry, RollRandom, Types},
+    };
+    const MAX_STACK: &str = "minecraft:max_stack_size";
+    struct Capacity;
+    impl BoundFunction for Capacity {
+        fn apply(
+            &self,
+            _: &sunrise_world::loot::LootContext<'_>,
+            _: &mut dyn RollRandom,
+            _: &dyn LootTags,
+            stack: &mut dyn LootStackEditAccess,
+        ) -> std::result::Result<(), String> {
+            stack.set_count(2);
+            stack.push_component(MAX_STACK.into(), Some(Tag::Int(2)));
+            Ok(())
+        }
+    }
+    impl Registry for Capacity {
+        fn contains(&self, kind: &str, function: bool) -> bool {
+            function && kind == "test:capacity"
+        }
+        fn conditional(&self, _: &str) -> bool {
+            false
+        }
+        fn decode_function(
+            &self,
+            _: &str,
+            _: &Value,
+        ) -> std::result::Result<DecodedFunction, String> {
+            Ok(DecodedFunction {
+                rule: Arc::new(Self),
+                referenced_params: Vec::new(),
+            })
+        }
+        fn decode_condition(
+            &self,
+            kind: &str,
+            _: &Value,
+        ) -> std::result::Result<DecodedCondition, String> {
+            Err(format!("unknown condition {kind}"))
+        }
+    }
+    struct Clear;
+    impl ModifierApply for Clear {
+        fn apply(
+            &self,
+            _: &mut dyn ModifierRoll,
+            generated: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
+            // Without the function's component the empty catalog would split into two stacks.
+            assert_eq!(generated.len(), 1);
+            let candidate = generated.get_mut(0).unwrap();
+            assert_eq!(candidate.as_view().count(), 2);
+            assert_eq!(
+                candidate.as_view().components().last().unwrap().1,
+                Some(Tag::Int(2))
+            );
+            candidate.clear_components();
+            Ok(())
+        }
+    }
+    let tables = Arc::new(sunrise_world::loot::LootTables::from_iter([(
+        "test:capacity".into(),
+        json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:stick",
+            "modifier":{"type":"test:capacity"}}]}]}),
+    )]));
+    let mut items = Items::for_tests(HashMap::new());
+    items.loot_bindings = Types::new(Arc::new(Capacity))
+        .bind_generation(
+            tables.clone(),
+            Arc::default(),
+            Arc::default(),
+            Vec::new(),
+            Default::default(),
+        )
+        .unwrap();
+    items.loot = tables;
+    items.global_modifiers = Arc::new(GlobalLootModifiers::load(
+        [ModifierFile {
+            id: "test:clear".into(),
+            pack: "test".into(),
+            path: "clear.json".into(),
+            read: Box::new(|| Ok(br#"{"type":"test:clear"}"#.to_vec())),
+        }],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+        |_, _, _| {
+            Ok(DecodedModifier {
+                priority: 1,
+                condition: None,
+                apply: Arc::new(Clear),
+            })
+        },
+        |error| panic!("{error}"),
+    ));
+    let output = items.loot_table("test:capacity", false, None, &mut LegacyRandom::new(1));
+    assert_eq!(output.len(), 1);
+    assert_eq!(output[0].count, 2);
+    assert!(!output[0].carries_component(None, MAX_STACK));
+}
+
+#[test]
 fn noop_global_modifier_preserves_modelled_components_on_dynamic_drops() {
     use sunrise_world::loot::{
         LootListAccess,
@@ -1079,6 +1187,7 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
     };
     type Observed = (
         Option<String>,
+        Option<String>,
         Option<[f64; 3]>,
         bool,
         Option<String>,
@@ -1094,7 +1203,11 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
         ) -> std::result::Result<(), String> {
             let facts = roll.facts();
             *self.0.lock().unwrap() = Some((
-                facts.block.map(str::to_owned),
+                facts.block.map(|block| block.id().to_owned()),
+                facts
+                    .block
+                    .and_then(|block| block.property("honey_level"))
+                    .map(str::to_owned),
                 facts.place.and_then(|place| place.origin),
                 facts
                     .place
@@ -1111,9 +1224,9 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
         }
     }
     let table = json!({"pools":[{"rolls":1,
-        "conditions":[{"type":"neoforge:can_item_perform_ability","ability":"shears_carve"}],
-        "entries":[{"type":"minecraft:item","name":"minecraft:pumpkin_seeds"}]}]});
-    let mut items = data(vec![("minecraft:harvest/pumpkin", table)]);
+        "conditions":[{"type":"neoforge:can_item_perform_ability","ability":"shears_harvest"}],
+        "entries":[{"type":"minecraft:item","name":"minecraft:honeycomb"}]}]});
+    let mut items = data(vec![("minecraft:harvest/beehive", table)]);
     let seen = Arc::new(Mutex::new(None));
     let watch = seen.clone();
     items.global_modifiers = Arc::new(GlobalLootModifiers::load(
@@ -1133,7 +1246,7 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
         },
         |error| panic!("{error}"),
     ));
-    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:pumpkin":0},"states":[["pumpkin",false,false,"","minecraft:pumpkin"]]}"#[..]).unwrap();
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:beehive":0},"states":[["beehive",false,false,"",{"id":"minecraft:beehive","properties":{"facing":"north","honey_level":"5"}}]]}"#[..]).unwrap();
     let player = sunrise_world::loot::LootEntity::new("minecraft:player");
     let matcher: &EntityMatcher = &|_, _| true;
     let shears = ItemStack::new("minecraft:shears", 1);
@@ -1154,7 +1267,7 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
     };
     let drops = with_native_loot_place(place, || {
         items.interact_loot(
-            "minecraft:harvest/pumpkin",
+            "minecraft:harvest/beehive",
             &registry,
             BlockStateId(0),
             Some((&player, matcher)),
@@ -1166,11 +1279,12 @@ fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_
         )
     });
     assert_eq!(drops.len(), 1);
-    assert_eq!(&*drops[0].item, "minecraft:pumpkin_seeds");
+    assert_eq!(&*drops[0].item, "minecraft:honeycomb");
     assert_eq!(
         *seen.lock().unwrap(),
         Some((
-            Some("minecraft:pumpkin".to_owned()),
+            Some("minecraft:beehive".to_owned()),
+            Some("5".to_owned()),
             Some([4.5, 64.5, -2.5]),
             true,
             Some("minecraft:overworld".to_owned()),

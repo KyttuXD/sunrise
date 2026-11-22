@@ -177,7 +177,8 @@ pub trait LootModifierContext {
     /// Roll `table` raw with the same parameters, tags, random, visited guards and
     /// data generation, moving unmodified raw output directly into `generated`
     /// without an API stack round-trip, modifier pass or second stack splitter.
-    /// A missing table refuses by id; a visited table appends nothing.
+    /// Use only the active `generated` list passed to this modifier. A missing
+    /// table or a different list is refused; a visited table appends nothing.
     fn append_raw(
         &mut self,
         table: &Identifier,

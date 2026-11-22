@@ -1,6 +1,6 @@
 //! Live candidate backing the items loot evaluator without whole-stack cloning or
 //! detached `LootStack` snapshots.
-use crate::items::{DYNAMIC, ItemStack, Items, patch_loot_component, prototypes_of};
+use crate::items::{DYNAMIC, ItemStack, Items, prototypes_of};
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use sunrise_core::nbt::Tag;
@@ -8,31 +8,6 @@ use sunrise_world::loot::{
     ApiExplorationMap, ExplorationMap, LootExplorationView, LootListAccess, LootStackAccess,
     LootStackEditAccess, LootToolAccess,
 };
-
-#[derive(Clone, Copy, Debug, Default)]
-struct Dirty {
-    count: bool,
-    damage: bool,
-    enchantments: bool,
-    potion: bool,
-    ominous_amplifier: bool,
-    stew_effects: bool,
-    names: bool,
-    components: bool,
-}
-
-impl Dirty {
-    fn any(self) -> bool {
-        self.count
-            || self.damage
-            || self.enchantments
-            || self.potion
-            || self.ominous_amplifier
-            || self.stew_effects
-            || self.names
-            || self.components
-    }
-}
 
 /// One live candidate in the items loot evaluator.
 ///
@@ -49,13 +24,12 @@ pub(crate) struct LootCandidate {
     map: bool,
     exploration: Option<Box<ExplorationMap>>,
     ominous_amplifier: Option<i32>,
-    potion: Option<String>,
     enchantments: OnceLock<Vec<(String, i32)>>,
     stew_effects: OnceLock<Vec<(String, i32)>>,
     components: OnceLock<Vec<(String, Option<Tag>)>>,
-    baseline_components: Option<Vec<(String, Option<Tag>)>>,
+    removals: Vec<String>,
+    component_edited: bool,
     names: Vec<(String, Value)>,
-    dirty: Dirty,
 }
 
 impl LootCandidate {
@@ -66,7 +40,6 @@ impl LootCandidate {
             .data()
             .and_then(|d| d.ominous_amplifier)
             .map(i32::from);
-        let potion = stack.potion().map(str::to_owned);
         Self {
             stack,
             count,
@@ -74,13 +47,12 @@ impl LootCandidate {
             map: false,
             exploration: None,
             ominous_amplifier,
-            potion,
             enchantments: OnceLock::new(),
             stew_effects: OnceLock::new(),
             components: OnceLock::new(),
-            baseline_components: None,
+            removals: Vec::new(),
+            component_edited: false,
             names: Vec::new(),
-            dirty: Dirty::default(),
         }
     }
 
@@ -97,8 +69,9 @@ impl LootCandidate {
 
     pub(crate) fn from_loot_stack(value: &sunrise_world::loot::LootStack) -> ItemStack {
         let mut candidate = Self::from_item(value.item.as_str(), value.count);
-        candidate.dirty.count = true;
-        candidate.set_damage(value.damage);
+        if value.damage != 0 {
+            candidate.set_damage(value.damage);
+        }
         if !value.enchantments.is_empty() {
             candidate.set_enchantments(value.enchantments.clone());
         }
@@ -134,18 +107,17 @@ impl LootCandidate {
 
     pub(crate) fn set_signed_count(&mut self, count: i32) {
         self.count = count;
-        self.dirty.count = true;
+        self.stack.count = count.max(0) as u32;
     }
 
-    /// Run a vanilla `ItemStack` edit on the resident stack after flushing any
-    /// pending mod edits, preserving signed count/damage when vanilla leaves them
-    /// unchanged and keeping deferred map/exploration metadata intact.
+    /// Run a vanilla edit on the resident stack once it has the correct removal
+    /// markers, preserving signed count/damage when vanilla leaves them unchanged.
     pub(crate) fn with_resident_mut<T>(
         &mut self,
         items: &Items,
         edit: impl FnOnce(&mut ItemStack) -> T,
     ) -> T {
-        self.flush_to_resident(&prototypes_of(items));
+        self.resolve_component_removals(&prototypes_of(items));
         let flushed_count = self.stack.count;
         let flushed_damage = self.stack.damage;
         let prev_count = self.count;
@@ -161,7 +133,6 @@ impl LootCandidate {
         } else {
             self.damage = prev_damage;
         }
-        self.potion = self.stack.potion().map(str::to_owned);
         self.ominous_amplifier = self
             .stack
             .data()
@@ -170,14 +141,12 @@ impl LootCandidate {
         self.enchantments.take();
         self.stew_effects.take();
         self.components.take();
-        self.baseline_components = None;
+        self.removals.clear();
         result
     }
 
     pub(crate) fn max_stack(&mut self, items: &Items) -> i32 {
-        if self.dirty.components {
-            self.flush_to_resident(&prototypes_of(items));
-        }
+        self.resolve_component_removals(&prototypes_of(items));
         crate::bundle::max_stack(items, &self.stack) as i32
     }
 
@@ -196,34 +165,12 @@ impl LootCandidate {
             let mut part = self.clone();
             part.count = max;
             part.stack.count = max as u32;
-            part.dirty.count = false;
             out.push(part);
             remaining -= max;
         }
         self.count = remaining;
         self.stack.count = remaining as u32;
-        self.dirty.count = false;
         out.push(self);
-    }
-
-    pub(crate) fn push_into_list(self, target: &mut dyn LootListAccess) {
-        let slot = target.push_empty(&self.stack.item);
-        slot.set_count(self.count);
-        slot.set_damage(self.damage);
-        slot.set_enchantments(self.enchantments_slice().to_vec());
-        slot.set_potion_id(self.potion.clone());
-        slot.set_map(self.map);
-        slot.set_exploration(self.exploration.as_deref().map(|map| ApiExplorationMap {
-            destination: map.destination.clone(),
-            decoration: map.decoration.clone(),
-            zoom: map.zoom,
-            search_radius: map.search_radius,
-            skip_existing_chunks: map.skip_existing_chunks,
-        }));
-        slot.set_ominous_amplifier(self.ominous_amplifier);
-        slot.set_stew_effects(self.stew_effects_slice().to_vec());
-        slot.set_names_values(self.names.clone());
-        slot.set_components(self.components_slice().to_vec());
     }
 
     pub(crate) fn into_item_stack(self, items: &Items) -> ItemStack {
@@ -234,75 +181,108 @@ impl LootCandidate {
         mut self,
         prototype_has: &impl Fn(&str, &str) -> Option<bool>,
     ) -> ItemStack {
-        self.flush_to_resident(prototype_has);
+        self.resolve_component_removals(prototype_has);
         self.stack
     }
 
-    fn flush_to_resident(&mut self, prototype_has: &impl Fn(&str, &str) -> Option<bool>) {
-        if !self.dirty.any() {
+    fn resolve_component_removals(&mut self, prototype_has: &impl Fn(&str, &str) -> Option<bool>) {
+        // A codec write takes effect immediately. Only removal markers depend on
+        // the final item's prototype, which the splitter and consumer know.
+        for id in &self.removals {
+            if let Some(has) = prototype_has(&self.stack.item, id) {
+                self.stack
+                    .data_mut()
+                    .set_other(&format!("!{id}"), has.then(removal_marker));
+            }
+        }
+        if self.component_edited || !self.removals.is_empty() {
+            self.stack.tidy();
+            self.component_edited = false;
+        }
+    }
+
+    fn write_component(&mut self, id: &str, value: &Option<Tag>) {
+        let base = component_key(id);
+        self.component_edited = true;
+        if id != base && value.is_none() {
+            // A !key/None removes the marker, not the component.
+            self.stack.data_mut().set_other(id, None);
+            self.removals.retain(|key| key != base);
             return;
         }
-        if self.dirty.count {
-            self.stack.count = self.count.max(0) as u32;
-        }
-        if self.dirty.damage {
-            self.stack.damage = self.damage.max(0) as u32;
-        }
-        if self.dirty.enchantments
-            && let Some(enchantments) = self.enchantments.get()
-        {
-            let levels = enchantments
-                .iter()
-                .filter(|(_, level)| *level > 0)
-                .map(|(id, level)| (Arc::from(id.as_str()), *level as u32))
-                .collect();
-            self.stack.set_crafting_enchantments(levels);
-        }
-        if self.dirty.potion {
-            self.stack.data_mut().potion = self.potion.as_deref().map(Arc::from);
-        }
-        if self.dirty.ominous_amplifier {
-            self.stack.data_mut().ominous_amplifier =
-                self.ominous_amplifier.map(|a| a.clamp(0, 255) as u8);
-        }
-        if self.dirty.stew_effects
-            && let Some(stew) = self.stew_effects.get()
-        {
-            self.stack.data_mut().stew_effects = stew
-                .iter()
-                .map(|(effect, ticks)| (Arc::from(effect.as_str()), *ticks))
-                .collect();
-        }
-        if self.dirty.names {
-            for (id, text) in &self.names {
-                self.stack.data_mut().set_loot_name(id, text);
+        let marker = format!("!{base}");
+        if id != base || value.is_none() {
+            let data = self.stack.data_mut();
+            data.set_loot_component(base, &None);
+            if id != base {
+                data.set_other(&marker, Some(removal_marker()));
+            }
+            if base == "minecraft:damage" {
+                self.stack.damage = 0;
+            }
+            if !self.removals.iter().any(|key| key == base) {
+                self.removals.push(base.to_owned());
+            }
+        } else {
+            let data = self.stack.data_mut();
+            data.set_loot_component(base, value);
+            if !data.sets_component(base) {
+                return;
+            }
+            data.set_other(&marker, None);
+            self.removals.retain(|key| key != base);
+            if base == "minecraft:damage" {
+                self.stack.damage =
+                    sunrise_world::datafix::dynamic::as_int(value.as_ref(), 0).max(0) as u32;
             }
         }
-        if self.dirty.components
-            && let Some(after) = self.components.get()
-        {
-            let before = self.baseline_components.as_deref().unwrap_or(&[]);
-            for (id, value) in after {
-                let unchanged = before
-                    .iter()
-                    .filter(|(key, _)| key == id)
-                    .map(|(_, value)| value)
-                    .eq(after
-                        .iter()
-                        .filter(|(key, _)| key == id)
-                        .map(|(_, value)| value));
-                if !unchanged {
-                    patch_loot_component(&mut self.stack, id, value, prototype_has);
+        match base {
+            "minecraft:damage" => self.damage = self.stack.damage as i32,
+            "minecraft:enchantments" | "minecraft:stored_enchantments"
+                if base == self.enchantments_id() =>
+            {
+                self.enchantments.take();
+            }
+            "minecraft:suspicious_stew_effects" => {
+                self.stew_effects.take();
+            }
+            "minecraft:ominous_bottle_amplifier" => {
+                self.ominous_amplifier = self
+                    .stack
+                    .data()
+                    .and_then(|d| d.ominous_amplifier)
+                    .map(i32::from);
+            }
+            "minecraft:custom_name" | "minecraft:item_name" => {
+                self.names.retain(|(key, _)| key != base);
+                if let Some(tag) = self.stack.data().and_then(|d| d.other(base)) {
+                    self.names.push((
+                        base.to_owned(),
+                        sunrise_client_core::scoreboard::tag_to_json(tag),
+                    ));
                 }
             }
-            for (id, _) in before {
-                if !after.iter().any(|(i, _)| i == id) {
-                    patch_loot_component(&mut self.stack, id, &None, prototype_has);
-                }
-            }
+            _ => {}
         }
-        self.stack.tidy();
-        self.dirty = Dirty::default();
+    }
+
+    fn write_typed_component(&mut self, id: &str, value: Option<Tag>) {
+        // An ordered raw edit may already exist for the same component. A
+        // later typed write supersedes it; never replay the old raw value.
+        let _ = self.components_slice();
+        self.components
+            .get_mut()
+            .expect("components initialized")
+            .retain(|(key, _)| component_key(key) != id);
+        self.write_component(id, &value);
+    }
+
+    fn enchantments_id(&self) -> &'static str {
+        if &*self.stack.item == "minecraft:enchanted_book" {
+            "minecraft:stored_enchantments"
+        } else {
+            "minecraft:enchantments"
+        }
     }
 
     fn enchantments_slice(&self) -> &[(String, i32)] {
@@ -313,14 +293,6 @@ impl LootCandidate {
                 .map(|(id, level)| (id.to_string(), *level as i32))
                 .collect()
         })
-    }
-
-    fn enchantments_mut(&mut self) -> &mut Vec<(String, i32)> {
-        let _ = self.enchantments_slice();
-        self.dirty.enchantments = true;
-        self.enchantments
-            .get_mut()
-            .expect("enchantments initialized")
     }
 
     fn stew_effects_slice(&self) -> &[(String, i32)] {
@@ -337,27 +309,18 @@ impl LootCandidate {
         })
     }
 
-    fn stew_effects_mut(&mut self) -> &mut Vec<(String, i32)> {
-        let _ = self.stew_effects_slice();
-        self.dirty.stew_effects = true;
-        self.stew_effects
-            .get_mut()
-            .expect("stew effects initialized")
-    }
-
     fn components_slice(&self) -> &[(String, Option<Tag>)] {
         self.components
             .get_or_init(|| capture_components(&self.stack))
     }
+}
 
-    fn components_mut(&mut self) -> &mut Vec<(String, Option<Tag>)> {
-        let _ = self.components_slice();
-        if self.baseline_components.is_none() {
-            self.baseline_components = self.components.get().cloned();
-        }
-        self.dirty.components = true;
-        self.components.get_mut().expect("components initialized")
-    }
+fn component_key(id: &str) -> &str {
+    id.strip_prefix('!').unwrap_or(id)
+}
+
+fn removal_marker() -> Tag {
+    Tag::Compound(Default::default())
 }
 
 fn capture_components(stack: &ItemStack) -> Vec<(String, Option<Tag>)> {
@@ -418,7 +381,7 @@ impl LootStackAccess for LootCandidate {
     }
 
     fn potion(&self) -> Option<&str> {
-        self.potion.as_deref()
+        self.stack.potion()
     }
 
     fn stew_effects(&self) -> &[(String, i32)] {
@@ -456,13 +419,23 @@ impl LootStackEditAccess for LootCandidate {
     }
 
     fn set_count(&mut self, count: i32) {
-        self.count = count;
-        self.dirty.count = true;
+        self.set_signed_count(count);
     }
 
     fn set_damage(&mut self, damage: i32) {
+        const DAMAGE: &str = "minecraft:damage";
+        if damage != 0
+            || self.damage != 0
+            || self.stack.carries_component(None, DAMAGE)
+            || self.removals.iter().any(|key| key == DAMAGE)
+            || self
+                .stack
+                .data()
+                .is_some_and(|data| data.other("!minecraft:damage").is_some())
+        {
+            self.write_typed_component(DAMAGE, Some(Tag::Int(damage.max(0))));
+        }
         self.damage = damage;
-        self.dirty.damage = true;
     }
 
     fn set_map(&mut self, map: bool) {
@@ -470,13 +443,46 @@ impl LootStackEditAccess for LootCandidate {
     }
 
     fn set_ominous_amplifier(&mut self, amplifier: Option<i32>) {
+        if amplifier.is_some() || self.ominous_amplifier.is_some() {
+            self.write_typed_component(
+                "minecraft:ominous_bottle_amplifier",
+                amplifier.map(Tag::Int),
+            );
+        }
         self.ominous_amplifier = amplifier;
-        self.dirty.ominous_amplifier = true;
     }
 
     fn set_potion_id(&mut self, potion: Option<String>) {
-        self.potion = potion;
-        self.dirty.potion = true;
+        const POTION: &str = "minecraft:potion_contents";
+        let extras = self
+            .stack
+            .data()
+            .map_or(&[][..], |d| d.potion_extra.as_slice());
+        let base = potion
+            .as_deref()
+            .map(|id| ("potion", Tag::String(id.into())));
+        if base.is_none() && extras.is_empty() && self.stack.potion().is_none() {
+            return;
+        }
+        let value = (base.is_some() || !extras.is_empty()).then(|| {
+            Tag::compound(
+                base.into_iter().chain(
+                    extras
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.clone())),
+                ),
+            )
+        });
+        // Potion extras also belong to the component view; retain them after
+        // replacing the typed potion id so an explicit copy can keep them.
+        let has_extras = !extras.is_empty();
+        self.write_typed_component(POTION, value.clone());
+        if has_extras {
+            let _ = self.components_slice();
+            let components = self.components.get_mut().expect("components initialized");
+            components.retain(|(key, _)| component_key(key) != POTION);
+            components.push((POTION.into(), value));
+        }
     }
 
     fn set_exploration(&mut self, exploration: Option<ApiExplorationMap>) {
@@ -492,96 +498,172 @@ impl LootStackEditAccess for LootCandidate {
     }
 
     fn push_enchantment(&mut self, id: String, level: i32) {
-        self.enchantments_mut().push((id, level));
+        let mut values = self.enchantments_slice().to_vec();
+        values.push((id, level));
+        self.set_enchantments(values);
     }
 
     fn set_enchantment(&mut self, id: String, level: i32) {
-        let enchantments = self.enchantments_mut();
-        match enchantments.iter_mut().find(|(name, _)| *name == id) {
+        let mut values = self.enchantments_slice().to_vec();
+        match values.iter_mut().find(|(name, _)| *name == id) {
             Some(entry) => entry.1 = level,
-            None => enchantments.push((id, level)),
+            None => values.push((id, level)),
         }
+        self.set_enchantments(values);
     }
 
     fn set_enchantments(&mut self, enchantments: Vec<(String, i32)>) {
-        *self.enchantments_mut() = enchantments;
+        if !enchantments.is_empty() || !self.enchantments_slice().is_empty() {
+            let levels = Tag::compound(
+                enchantments
+                    .iter()
+                    .map(|(id, level)| (id.as_str(), Tag::Int(*level))),
+            );
+            self.write_typed_component(self.enchantments_id(), Some(levels));
+        }
+        // The intermediate API retains order and signed values even when
+        // the item component codec cannot materialize an enchantment level.
+        self.enchantments = OnceLock::from(enchantments);
     }
 
     fn clear_enchantments(&mut self) {
-        self.enchantments_mut().clear();
+        self.set_enchantments(Vec::new());
     }
 
     fn push_stew_effect(&mut self, id: String, duration_ticks: i32) {
-        self.stew_effects_mut().push((id, duration_ticks));
+        let mut effects = self.stew_effects_slice().to_vec();
+        effects.push((id, duration_ticks));
+        self.set_stew_effects(effects);
     }
 
     fn set_stew_effects(&mut self, effects: Vec<(String, i32)>) {
-        *self.stew_effects_mut() = effects;
+        if !effects.is_empty() || !self.stew_effects_slice().is_empty() {
+            let value = Tag::List(
+                effects
+                    .iter()
+                    .map(|(id, duration)| {
+                        Tag::compound([
+                            ("id", Tag::String(id.as_str().into())),
+                            ("duration", Tag::Int(*duration)),
+                        ])
+                    })
+                    .collect(),
+            );
+            self.write_typed_component("minecraft:suspicious_stew_effects", Some(value));
+        }
+        self.stew_effects = OnceLock::from(effects);
     }
 
     fn clear_stew_effects(&mut self) {
-        self.stew_effects_mut().clear();
+        self.set_stew_effects(Vec::new());
     }
 
     fn push_name_value(&mut self, id: String, value: Value) {
+        let tag = Some(sunrise_client_core::scoreboard::json_to_tag(&value));
+        // Names preserve ordered entries; the codec stores the last name for a key.
+        let previous = std::mem::take(&mut self.names);
+        self.write_typed_component(&id, tag);
+        self.names = previous;
         self.names.push((id, value));
-        self.dirty.names = true;
     }
 
     fn set_name_value(&mut self, id: String, value: Value) {
         self.names.retain(|(existing, _)| *existing != id);
-        self.names.push((id, value));
-        self.dirty.names = true;
+        self.push_name_value(id, value);
     }
 
     fn set_names_values(&mut self, names: Vec<(String, Value)>) {
+        for (id, _) in std::mem::take(&mut self.names) {
+            if !names.iter().any(|(next, _)| *next == id) {
+                self.write_typed_component(&id, None);
+            }
+        }
+        for (id, value) in &names {
+            self.write_typed_component(
+                id,
+                Some(sunrise_client_core::scoreboard::json_to_tag(value)),
+            );
+        }
         self.names = names;
-        self.dirty.names = true;
     }
 
     fn clear_names(&mut self) {
-        self.names.clear();
-        self.dirty.names = true;
+        self.set_names_values(Vec::new());
     }
 
     fn push_component(&mut self, id: String, value: Option<Tag>) {
-        self.components_mut().push((id, value));
+        let _ = self.components_slice();
+        self.write_component(&id, &value);
+        self.components
+            .get_mut()
+            .expect("components initialized")
+            .push((id, value));
     }
 
     fn set_components(&mut self, components: Vec<(String, Option<Tag>)>) {
-        *self.components_mut() = components;
+        let before = self
+            .components
+            .take()
+            .unwrap_or_else(|| capture_components(&self.stack));
+        for (id, _) in &before {
+            if !components.iter().any(|(key, _)| key == id) {
+                self.write_component(id, &None);
+            }
+        }
+        for (id, value) in &components {
+            let base = component_key(id);
+            let same = |entry: &&(String, Option<Tag>)| component_key(&entry.0) == base;
+            if !before
+                .iter()
+                .filter(same)
+                .eq(components.iter().filter(same))
+            {
+                self.write_component(id, value);
+            }
+        }
+        self.components = OnceLock::from(components);
     }
 
     fn clear_components(&mut self) {
-        self.components_mut().clear();
+        self.set_components(Vec::new());
     }
 
     fn retain_components(&mut self, keep: &mut dyn FnMut(&str, Option<&Tag>) -> bool) {
-        self.components_mut()
-            .retain(|(id, value)| keep(id.as_str(), value.as_ref()));
+        let retained = self
+            .components_slice()
+            .iter()
+            .filter(|(id, value)| keep(id, value.as_ref()))
+            .cloned()
+            .collect();
+        self.set_components(retained);
     }
 }
 
-impl LootListAccess for Vec<LootCandidate> {
+/// Items-owned backing for the evaluator's live output list.
+pub(crate) struct LootCandidates(pub(crate) Vec<LootCandidate>);
+
+impl LootListAccess for LootCandidates {
     fn len(&self) -> usize {
-        Vec::len(self)
+        self.0.len()
     }
 
     fn get(&self, index: usize) -> Option<&dyn LootStackAccess> {
-        self.as_slice()
+        self.0
+            .as_slice()
             .get(index)
             .map(|stack| stack as &dyn LootStackAccess)
     }
 
     fn get_mut(&mut self, index: usize) -> Option<&mut dyn LootStackEditAccess> {
-        self.as_mut_slice()
+        self.0
+            .as_mut_slice()
             .get_mut(index)
             .map(|stack| stack as &mut dyn LootStackEditAccess)
     }
 
     fn push_empty(&mut self, item_id: &str) -> &mut dyn LootStackEditAccess {
-        self.push(LootCandidate::from_item(item_id, 1));
-        self.last_mut().expect("just pushed")
+        self.0.push(LootCandidate::from_item(item_id, 1));
+        self.0.last_mut().expect("just pushed")
     }
 
     fn insert_empty(
@@ -592,36 +674,36 @@ impl LootListAccess for Vec<LootCandidate> {
         if index > self.len() {
             return None;
         }
-        self.insert(index, LootCandidate::from_item(item_id, 1));
-        Some(&mut self[index])
+        self.0.insert(index, LootCandidate::from_item(item_id, 1));
+        Some(&mut self.0[index])
     }
 
     fn remove(&mut self, index: usize) -> bool {
         if index >= self.len() {
             return false;
         }
-        Vec::remove(self, index);
+        self.0.remove(index);
         true
     }
 
     fn clear(&mut self) {
-        Vec::clear(self);
+        self.0.clear();
     }
 
     fn truncate(&mut self, len: usize) {
-        Vec::truncate(self, len);
+        self.0.truncate(len);
     }
 
     fn swap(&mut self, a: usize, b: usize) -> bool {
         if a >= self.len() || b >= self.len() {
             return false;
         }
-        self.as_mut_slice().swap(a, b);
+        self.0.as_mut_slice().swap(a, b);
         true
     }
 
     fn reverse(&mut self) {
-        self.as_mut_slice().reverse();
+        self.0.as_mut_slice().reverse();
     }
 
     fn reorder(&mut self, from: usize, to: usize) -> bool {
@@ -629,14 +711,10 @@ impl LootListAccess for Vec<LootCandidate> {
             return false;
         }
         match from.cmp(&to) {
-            std::cmp::Ordering::Less => self[from..=to].rotate_left(1),
-            std::cmp::Ordering::Greater => self[to..=from].rotate_right(1),
+            std::cmp::Ordering::Less => self.0[from..=to].rotate_left(1),
+            std::cmp::Ordering::Greater => self.0[to..=from].rotate_right(1),
             std::cmp::Ordering::Equal => {}
         }
         true
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }

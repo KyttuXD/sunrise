@@ -34,6 +34,7 @@ pub mod types;
 mod views;
 pub use fill::ContainerLootContext;
 pub use query::LootAbilityTool;
+pub use views::LootStacks;
 #[path = "loot/tags.rs"]
 mod loot_tags;
 pub use loot_tags::LootTags;
@@ -128,7 +129,7 @@ impl<'a> PackOverlay<'a> {
 pub use mod_api::__private::{
     LootListAccess, LootStackAccess, LootStackEditAccess, LootToolAccess,
 };
-pub use mod_api::{ExplorationMap as ApiExplorationMap, LootExplorationView};
+pub use mod_api::{ExplorationMap as ApiExplorationMap, LootBlockView, LootExplorationView};
 
 /// Parameters borrowed from either evaluator for the duration of a loot operation.
 /// Randomness is lent separately from these immutable inputs.
@@ -148,8 +149,8 @@ pub struct LootContext<'a> {
     pub interacting_entity: Option<&'a LootEntity>,
     /// `TOOL`, when supplied.
     pub tool: Option<&'a dyn LootToolAccess>,
-    /// Block identifier for a block or block-interaction roll.
-    pub block: Option<&'a str>,
+    /// `BLOCK_STATE` for a block or block-interaction roll.
+    pub block: Option<LootBlockView<'a>>,
     /// `LootContext.getLuck`.
     pub luck: f32,
     /// The biome the roll is in, if supplied.

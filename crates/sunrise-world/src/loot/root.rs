@@ -17,8 +17,9 @@ impl<R: RandomSource + Clone> Context<'_, R> {
         if generation.is_empty() {
             return items;
         }
-        generation.apply(self, &mut items);
-        items
+        let mut generated = LootStacks(items);
+        generation.apply(self, &mut generated);
+        generated.0
     }
 }
 
@@ -61,9 +62,9 @@ impl<R: RandomSource + Clone> global_modifiers::ModifierRoll for Context<'_, R> 
         id: &str,
         visit: &mut dyn FnMut(&dyn LootStackAccess),
     ) -> Result<(), String> {
-        let mut output = Vec::new();
+        let mut output = LootStacks::default();
         self.append_raw(id, &mut output)?;
-        for stack in &output {
+        for stack in &output.0 {
             visit(stack);
         }
         Ok(())
@@ -74,31 +75,10 @@ impl<R: RandomSource + Clone> global_modifiers::ModifierRoll for Context<'_, R> 
             .tables
             .get(id)
             .ok_or_else(|| format!("table: missing loot table {id}"))?;
-        if let Some(vec) = generated.as_any_mut().downcast_mut::<Vec<LootStack>>() {
-            self.table_raw(id, table, &mut |_, stack| vec.push(stack));
-        } else {
-            self.table_raw(id, table, &mut |_, stack| push_loot_stack(generated, stack));
-        }
+        let target = (generated as &mut dyn std::any::Any)
+            .downcast_mut::<LootStacks>()
+            .ok_or("foreign loot output list")?;
+        self.table_raw(id, table, &mut |_, stack| target.0.push(stack));
         Ok(())
     }
-}
-
-fn push_loot_stack(generated: &mut dyn LootListAccess, stack: LootStack) {
-    let slot = generated.push_empty(&stack.item);
-    slot.set_count(stack.count);
-    slot.set_damage(stack.damage);
-    slot.set_enchantments(stack.enchantments);
-    slot.set_potion_id(stack.potion);
-    slot.set_map(stack.map);
-    slot.set_exploration(stack.exploration.map(|map| ApiExplorationMap {
-        destination: map.destination,
-        decoration: map.decoration,
-        zoom: map.zoom,
-        search_radius: map.search_radius,
-        skip_existing_chunks: map.skip_existing_chunks,
-    }));
-    slot.set_ominous_amplifier(stack.ominous_amplifier);
-    slot.set_stew_effects(stack.stew_effects);
-    slot.set_names_values(stack.names);
-    slot.set_components(stack.components);
 }
