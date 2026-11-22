@@ -66,15 +66,15 @@ impl Game<'_> {
         let [l, r] = &mut self.extras.cps;
         (l.per_second(now) as u32, r.per_second(now) as u32)
     }
-    /// The PvP HUD widgets and the engine's extra corner panels. The caller hides
-    /// these with F1, and hands the remaining corner space to the whole-HUD Post hook.
-    pub(super) fn draw_extras(&mut self, batch: &mut HudBatch, corners: &mut Corners) {
-        self.draw_pvp_hud(batch, corners);
+    /// The PvP HUD widgets and Sunrise hook layers (hidden with F1 by the caller).
+    pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
+        let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
+        self.draw_pvp_hud(batch, &mut corners);
         // The layers crates registered (`sunrise_hooks::hud`): none, no canvas.
         let layers = sunrise_hooks::hud::engine::all();
         if !layers.is_empty() {
             let shown = Corner::ALL.map(|corner| !(self.debug && corner == Corner::TopLeft));
-            extras_hud::draw_layers(layers, batch, &self.gui.atlas, corners, shown);
+            extras_hud::draw_layers(layers, batch, &self.gui.atlas, &mut corners, shown);
         }
     }
     /// The height the status effect icons take at the top right

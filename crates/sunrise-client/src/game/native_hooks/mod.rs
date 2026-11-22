@@ -83,7 +83,6 @@ use sunrise_client::{
     },
     crafting::{Ingredient, recipe_result},
     extras::Corner,
-    extras_hud::Corners,
     fast_hash::FxHashMap,
     first_person::Hand,
     health::{
@@ -301,7 +300,6 @@ mod get_arm_pose;
 mod grindstone_place;
 mod grindstone_take;
 mod guest_death_lifecycle_tests;
-mod gui_render_post;
 mod gui_ticks;
 mod held_item_tint;
 mod highlight_tip;

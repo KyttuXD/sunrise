@@ -7,14 +7,14 @@ between the two is cut to `rect`, `[x, y, w, h]` in GUI pixels as `fill` takes i
 a glyph or an item stays.
 
 ```rust,ignore
-fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
     let [x, y, w, h] = self.list_box;
-    if event.batch.push_clip([x, y, w, h]).is_ok() {
+    if event.draw.push_clip([x, y, w, h]).is_ok() {
         for (row, line) in self.lines.iter().enumerate() {
             let top = y + row as f32 * 12.0 - self.scroll;
-            event.batch.text(line, [x + 2.0, top], 0xFFFF_FFFF, false);
+            event.draw.text(line, [x + 2.0, top], 0xFFFF_FFFF, false);
         }
-        let _ = event.batch.pop_clip();
+        let _ = event.draw.pop_clip();
     }
 }
 ```

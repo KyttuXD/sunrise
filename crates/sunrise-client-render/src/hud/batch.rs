@@ -14,8 +14,24 @@ pub struct HudVertex {
     /// pack's text shader draws when it has one.
     pub text: u32,
 }
+/// A triangle clipped by a rectangle has at most seven vertices.
+type ClippedTriangle = SmallVec<[HudVertex; 7]>;
+
+fn triangle_area([a, b, c]: &[HudVertex; 3]) -> f32 {
+    (b.pos[0] - a.pos[0]) * (c.pos[1] - a.pos[1]) - (c.pos[0] - a.pos[0]) * (b.pos[1] - a.pos[1])
+}
+
+fn clip_triangle(triangle: &[HudVertex; 3], [x0, y0, x1, y1]: [f32; 4]) -> ClippedTriangle {
+    let mut poly = ClippedTriangle::from_slice(triangle);
+    for (axis, limit, keep_below) in [(0, x0, false), (0, x1, true), (1, y0, false), (1, y1, true)]
+    {
+        poly = clip_polygon(&poly, axis, limit, keep_below);
+    }
+    poly
+}
+
 /// Sutherland-Hodgman against one half plane, interpolating every attribute.
-fn clip_polygon(poly: &[HudVertex], axis: usize, limit: f32, keep_below: bool) -> Vec<HudVertex> {
+fn clip_polygon(poly: &[HudVertex], axis: usize, limit: f32, keep_below: bool) -> ClippedTriangle {
     let inside = |v: &HudVertex| {
         if keep_below {
             v.pos[axis] < limit
@@ -38,7 +54,7 @@ fn clip_polygon(poly: &[HudVertex], axis: usize, limit: f32, keep_below: bool) -
         v.pos[axis] = limit;
         v
     };
-    let mut out = Vec::with_capacity(poly.len() + 2);
+    let mut out = ClippedTriangle::new();
     for i in 0..poly.len() {
         let (a, b) = (&poly[i], &poly[(i + 1) % poly.len()]);
         let (ia, ib) = (inside(a), inside(b));
@@ -66,6 +82,8 @@ pub struct HudBatch {
     pub scale: f32,
     pub width: f32,
     pub height: f32,
+    /// Physical viewport; GUI width and height round up at non-integer ratios.
+    viewport: [u32; 2],
     /// Glyph pixels to upload into the atlas before drawing.
     pub patches: Vec<crate::font::Patch>,
     /// Client mods' dynamic textures to upload into their atlas slots before drawing, sharing
@@ -137,6 +155,23 @@ pub enum Blend {
     /// `GlintTextures::blends` says.
     CitGlint(u8),
 }
+impl Blend {
+    pub(super) fn scissor(self) -> Option<[u32; 4]> {
+        match self {
+            Self::Depth(clip) | Self::DepthGlint(clip) => Some(clip),
+            _ => None,
+        }
+    }
+}
+
+/// The backend scissor, intersected with its viewport in device pixels.
+pub(super) fn hud_scissor(clip: [u32; 4], size: [u32; 2], zoom: f32) -> Option<[u32; 4]> {
+    let [x, y, w, h] = clip.map(|v| (v as f32 * zoom) as u32);
+    let (x, y) = (x.min(size[0]), y.min(size[1]));
+    let (w, h) = (w.min(size[0] - x), h.min(size[1] - y));
+    (w != 0 && h != 0).then_some([x, y, w, h])
+}
+
 /// What a `Blend::EndPortal` fill samples: the atlas rects (u0, v0, width,
 /// height) of `end_sky.png` and `end_portal.png`, and the `GameTime` uniform.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -153,19 +188,13 @@ impl HudBatch {
     pub fn new(window: [u32; 2], inputs: GuiScale) -> Self {
         let gui =
             sunrise_client_input::window::GuiSize::new(window, inputs.requested, inputs.unicode);
-        Self::with_gui_size(gui)
-    }
-    /// An offscreen or test batch, independent of the active view's settings.
-    pub fn scratch(window: [u32; 2]) -> Self {
-        Self::with_gui_size(sunrise_client_input::window::GuiSize::new(window, 0, false))
-    }
-    fn with_gui_size(gui: sunrise_client_input::window::GuiSize) -> Self {
         Self {
             pictures: Vec::new(),
             vertices: Vec::new(),
             scale: gui.scale as f32,
             width: gui.size[0] as f32,
             height: gui.size[1] as f32,
+            viewport: window,
             patches: Vec::new(),
             image_patches: Vec::new(),
             blends: Vec::new(),
@@ -176,6 +205,16 @@ impl HudBatch {
             blur_at: 0,
             inline_profiles: Vec::new(),
         }
+    }
+    /// An offscreen or test batch, independent of the active view's settings.
+    pub fn scratch(window: [u32; 2]) -> Self {
+        Self::new(
+            window,
+            GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        )
     }
     /// Start tracking one callback's writes to this batch without copying existing paint.
     pub fn paint_checkpoint(&self) -> HudPaintCheckpoint {
@@ -239,29 +278,32 @@ impl HudBatch {
     pub(super) fn runs_in(
         &self,
         vertices: std::ops::Range<u32>,
-    ) -> SmallVec<[(std::ops::Range<u32>, Blend); 16]> {
-        let mut runs = SmallVec::new();
+    ) -> impl Iterator<Item = (std::ops::Range<u32>, Blend)> + '_ {
+        // Scissors and other non-default runs are kept in vertex order.
+        let first = self
+            .blends
+            .partition_point(|(run, _)| run.end <= vertices.start);
+        let mut runs = self.blends[first..].iter().peekable();
+        let end = vertices.end.min(self.vertices.len() as u32);
         let mut at = vertices.start;
-        for (range, blend) in &self.blends {
-            if range.start > at {
-                let start = at.max(vertices.start);
-                let end = range.start.min(vertices.end);
-                if start < end {
-                    runs.push((start..end, Blend::Alpha));
+        std::iter::from_fn(move || {
+            while let Some((run, blend)) = runs.peek().copied().filter(|(run, _)| run.start < end) {
+                if at < run.start {
+                    let gap = at..run.start;
+                    at = run.start;
+                    return Some((gap, Blend::Alpha));
+                }
+                runs.next();
+                let range = run.start.max(vertices.start)..run.end.min(end);
+                at = at.max(range.end);
+                if !range.is_empty() {
+                    return Some((range, *blend));
                 }
             }
-            let start = range.start.max(vertices.start);
-            let end = range.end.min(vertices.end);
-            if start < end {
-                runs.push((start..end, *blend));
-            }
-            at = at.max(range.end);
-        }
-        let end = (self.vertices.len() as u32).min(vertices.end);
-        if at < end {
-            runs.push((at.max(vertices.start)..end, Blend::Alpha));
-        }
-        runs
+            let tail = at..end;
+            at = end;
+            (!tail.is_empty()).then_some((tail, Blend::Alpha))
+        })
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -475,17 +517,10 @@ impl HudBatch {
                 // rectangle and re-emit the fan, so a triangle straddling the
                 // edge keeps its visible part instead of vanishing whole.
                 for tri in [[q[0], q[1], q[2]], [q[3], q[4], q[5]]] {
-                    let area = (tri[1].pos[0] - tri[0].pos[0]) * (tri[2].pos[1] - tri[0].pos[1])
-                        - (tri[2].pos[0] - tri[0].pos[0]) * (tri[1].pos[1] - tri[0].pos[1]);
-                    if area == 0.0 {
+                    if triangle_area(&tri) == 0.0 {
                         continue;
                     }
-                    let mut poly = tri.to_vec();
-                    for (axis, limit, keep_below) in
-                        [(0, x0, false), (0, x1, true), (1, y0, false), (1, y1, true)]
-                    {
-                        poly = clip_polygon(&poly, axis, limit, keep_below);
-                    }
+                    let poly = clip_triangle(&tri, [x0, y0, x1, y1]);
                     for i in 1..poly.len().saturating_sub(1) {
                         // A triangle as the quad `a, b, c, c`.
                         let (a, b, c) = (poly[0], poly[i], poly[i + 1]);
@@ -665,6 +700,70 @@ impl HudBatch {
         self.vertices.extend(glyphs);
         behind
     }
+
+    /// `[x, y, width, height]` of the geometry appended since `start`, in GUI pixels,
+    /// after clipping to the viewport and the scissor of each draw run.
+    pub fn visible_vertex_bounds(&self, start: usize) -> Option<[f32; 4]> {
+        if self.viewport.contains(&0) || start >= self.vertices.len() {
+            return None;
+        }
+        let mut bounds = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let mut include = |[x, y]: [f32; 2]| {
+            bounds[0] = bounds[0].min(x);
+            bounds[1] = bounds[1].min(y);
+            bounds[2] = bounds[2].max(x);
+            bounds[3] = bounds[3].max(y);
+        };
+        for (range, blend) in self.runs_in(start as u32..self.vertices.len() as u32) {
+            let [x, y, w, h] = if let Some(clip) = blend.scissor() {
+                let Some(scissor) = hud_scissor(clip, self.viewport, 1.0) else {
+                    continue;
+                };
+                scissor
+            } else {
+                [0, 0, self.viewport[0], self.viewport[1]]
+            };
+            let [x0, y0, x1, y1] = [x, y, x + w, y + h].map(|v| v as f32 / self.scale);
+            let vertices = &self.vertices[range.start as usize..range.end as usize];
+            for triangle in vertices.as_chunks::<3>().0 {
+                if triangle.iter().flat_map(|v| v.pos).any(|v| !v.is_finite())
+                    || triangle_area(triangle) == 0.0
+                {
+                    continue;
+                }
+                if triangle.iter().all(|v| {
+                    let [x, y] = v.pos;
+                    x >= x0 && x <= x1 && y >= y0 && y <= y1
+                }) {
+                    triangle.iter().for_each(|v| include(v.pos));
+                } else {
+                    let poly = clip_triangle(triangle, [x0, y0, x1, y1]);
+                    if poly.len() >= 3 {
+                        // A polygon left on a clipping edge has no area. It must not
+                        // extend the bounds of neighbouring, actually drawn triangles.
+                        let (mut lo, mut hi) = (poly[0].pos, poly[0].pos);
+                        for v in &poly[1..] {
+                            for axis in 0..2 {
+                                lo[axis] = lo[axis].min(v.pos[axis]);
+                                hi[axis] = hi[axis].max(v.pos[axis]);
+                            }
+                        }
+                        if lo[0] < hi[0] && lo[1] < hi[1] {
+                            include(lo);
+                            include(hi);
+                        }
+                    }
+                }
+            }
+        }
+        let [x0, y0, x1, y1] = bounds;
+        (x0 < x1 && y0 < y1).then_some([x0, y0, x1 - x0, y1 - y0])
+    }
 }
 
 fn inline_profile_name(profile: &serde_json::Value) -> Option<&str> {
@@ -696,5 +795,82 @@ impl HudUniform {
                 [fill.game_time, tint[0], tint[1], tint[2]],
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn visible_vertex_bounds_tracks_drawn_slice_and_ignores_empty_geometry() {
+        let mut batch = HudBatch::scratch([320, 240]);
+        let uv = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 1,
+            h: 1,
+        };
+        assert_eq!(batch.visible_vertex_bounds(0), None);
+        batch.rect_uv(10.0, 20.0, 30.0, 40.0, uv, u32::MAX);
+        assert_eq!(
+            batch.visible_vertex_bounds(0),
+            Some([10.0, 20.0, 30.0, 40.0])
+        );
+
+        let layer_start = batch.vertices.len();
+        assert_eq!(batch.visible_vertex_bounds(layer_start), None);
+        batch.rect_uv(295.0, 1.0, 24.0, 24.0, uv, u32::MAX);
+        batch.rect_uv(270.0, 26.0, 24.0, 24.0, uv, u32::MAX);
+        assert_eq!(
+            batch.visible_vertex_bounds(layer_start),
+            Some([270.0, 1.0, 49.0, 49.0])
+        );
+
+        let degenerate = batch.vertices.len();
+        batch.rect_uv(5.0, 5.0, 0.0, 10.0, uv, u32::MAX);
+        assert_eq!(batch.visible_vertex_bounds(degenerate), None);
+    }
+
+    #[test]
+    fn visible_vertex_bounds_clips_preview_triangles_per_run_and_uses_the_physical_viewport() {
+        let mut batch = HudBatch::new(
+            [641, 481],
+            GuiScale {
+                requested: 2,
+                unicode: false,
+            },
+        );
+        // Same triangle in two model preview runs. The second scissor overlaps the
+        // triangle's axis-aligned box, but is wholly beyond the diagonal edge x+y=40.
+        let preview = [
+            [0.0, 0.0, 0.0],
+            [40.0, 0.0, 0.0],
+            [0.0, 40.0, 1.0],
+            [0.0, 40.0, 1.0],
+        ];
+        batch.quad_3d(preview, [[0.0; 2]; 4], u32::MAX);
+        batch.depth_since(0, [10.25, 10.0, 22.5, 40.0]);
+        let hidden = batch.vertices.len();
+        batch.quad_3d(preview, [[0.0; 2]; 4], u32::MAX);
+        batch.depth_since(hidden, [30.0, 30.0, 80.0, 80.0]);
+        assert_eq!(batch.visible_vertex_bounds(hidden), None);
+        assert_eq!(
+            batch.visible_vertex_bounds(0),
+            Some([10.0, 10.0, 12.5, 20.0])
+        );
+
+        let ordinary = batch.vertices.len();
+        batch.quad(
+            [[319.0, 1.0], [321.0, 1.0], [321.0, 3.0], [319.0, 3.0]],
+            [[0.0; 2]; 4],
+            u32::MAX,
+        );
+        assert_eq!(
+            batch.visible_vertex_bounds(ordinary),
+            Some([319.0, 1.0, 1.5, 2.0])
+        );
     }
 }

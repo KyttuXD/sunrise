@@ -210,8 +210,8 @@ impl<'g> Game<'g> {
     }
 
     /// Draws inserted layers not drawn yet this frame, below `until` or to the end with `None`.
-    /// A skipped vanilla layer keeps its place; its neighbours draw at the next paint site.
-    /// Inserted layers don't draw while the HUD is hidden.
+    /// A vanilla slot keeps its place even if its original body emits no paint.
+    /// Inserted layers do not draw outside the layer walk.
     pub(in crate::game) fn draw_mod_gui_layers(
         &mut self,
         until: Option<VanillaGuiLayer>,
@@ -237,7 +237,7 @@ impl<'g> Game<'g> {
 
     fn run_gui_layer(
         &mut self,
-        id: &str,
+        id: &'static str,
         batch: &mut HudBatch,
         body: &GuiLayerBody,
         vanilla: Option<&mut VanillaGuiDraw<'_, 'g>>,
@@ -252,6 +252,9 @@ impl<'g> Game<'g> {
         self.draw_gui_layer_body(batch, body, vanilla);
         if status_row {
             self.keep_status_rows(&batch.vertices[start..], batch.width, batch.height);
+        }
+        if let Some(bounds) = batch.visible_vertex_bounds(start) {
+            self.hud_layer_bounds.push((id, bounds));
         }
         self.native_gui_layer_post(id, batch);
     }

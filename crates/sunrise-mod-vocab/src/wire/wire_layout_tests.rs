@@ -46,14 +46,6 @@ fn checked_records_have_declared_field_bytes() {
         (vec!["example:a".to_owned(), "example:b".to_owned()],),
     );
     fields(
-        Corners {
-            width: 13.0,
-            height: 17.0,
-            used: [1.0, 2.0, 3.0, 4.0],
-        },
-        (13.0f32, 17.0f32, [1.0f32, 2.0, 3.0, 4.0]),
-    );
-    fields(
         BlockPos {
             x: -3,
             y: 71,

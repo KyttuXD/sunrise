@@ -5,10 +5,14 @@ is one of vanilla's `GuiGraphics` calls: `fill`, `text`, `sprite`, `item_stack` 
 takes a buffer of `GuiDraw` ops for the same calls, with `Push` / `Pop` for the pose.
 
 `ClientHost::debug_overlay_visible()` reports whether the client draws its debug overlay this frame. In
-`render_gui_post`, use it to leave space for the overlay. Always-on debug entries can make it visible with
-F3 off. F1 hides the overlay unless a screen is open. The read is available only on the client host.
-An unfinished `render_gui_post` or `gui_render_post` callback leaves no drawing in the batch;
-its corner reservations do not affect the next listener.
+`render_gui_post`, use it to leave space for the overlay, and use `ClientHost::hud_layer_bounds(layer)`
+to read the `[x, y, width, height]` rectangle in GUI pixels of a layer drawn earlier in the current
+HUD pass, clipped to the viewport and its scissors. For example, use `"minecraft:effects"` to place
+an overlay below the visible effect icons, with each overlay's offset managed by the mod itself.
+`Ok(None)` means the layer did not paint visible geometry or the HUD pass is not running; screen hooks
+never see the earlier HUD's bounds. Always-on debug entries can make the debug overlay visible with
+F3 off. F1 hides the debug overlay unless a screen is open. A panicking `render_gui_post` listener
+leaves no drawing in the batch.
 
 ## Registering a HUD layer
 
@@ -70,12 +74,14 @@ session, and later layers still draw. A disabled wrapper leaves the previous bod
 Callback failure toasts remain visible under F1, except for audio stream notices. Draw errors such
 as malformed `gui_paint` buffers are returned to the caller without disabling the callback or
 changing previously submitted paint. If Pre cancels the slot, neither the installed body nor Post
-runs. For work that must happen even when the HUD is hidden, use the independent foreground
-`gui_render_post` hook.
+runs.
 
-`render_gui_post` runs after the complete HUD walk and before the open screen. Focused chat
-paints separately in its screen. The original subtitle layer can defer paint to a screen
-background without running its hooks again. Cancel that layer to suppress scheduled paint.
+`render_gui_post` runs after the complete HUD walk, including under F1, and before screens, toasts,
+debug overlays and IME. It does not run on the title, during replay, or after a canceled
+`render_gui_pre`. Use `host.window_focused()` to check focus, and `Hooks::screen_render_post` to
+paint above an open screen. Focused chat paints separately in its screen. The original subtitle layer
+can defer paint to a screen background without running its hooks again. Cancel that layer to suppress
+scheduled paint.
 
 ## Status rows and fixed text positions
 
@@ -250,11 +256,11 @@ fade out. The current HUD shader discards interpolated alpha below 0.004, not ju
 fragments can therefore differ from vanilla's exact-zero discard.
 
 ```rust,ignore
-fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
     // A panel shaded from dark purple at the top to black at the bottom.
-    event.batch.fill_gradient([20.0, 20.0, 120.0, 60.0], 0xF010_0010, 0xF000_0000);
+    event.draw.fill_gradient([20.0, 20.0, 120.0, 60.0], 0xF010_0010, 0xF000_0000);
     // A shade that fades out downwards.
-    event.batch.fill_gradient([20.0, 80.0, 120.0, 10.0], 0x8000_0000, 0x0000_0000);
+    event.draw.fill_gradient([20.0, 80.0, 120.0, 10.0], 0x8000_0000, 0x0000_0000);
 }
 ```
 

@@ -3487,8 +3487,11 @@ struct Game<'a> {
     debug_renderers: Vec<sunrise_client::debug_entries::ActiveDebugRenderer>,
     /// `DebugRenderer.lastDebugEntriesVersion`: none before the first view of a world.
     debug_renderers_version: Option<u64>,
-    /// Next undrawn mod layer in HUD `gui_layers::order`; `None` while hidden or outside its pass.
+    /// Next undrawn mod layer in HUD `gui_layers::order`; `None` outside their pass.
     hud_layer_next: Option<usize>,
+    /// Drawn bounding rectangles `[x, y, width, height]` in GUI pixels for HUD layers drawn so far
+    /// in the current HUD pass (`ScreensClientHost::hud_layer_bounds`). Cleared before screens draw.
+    hud_layer_bounds: Vec<(&'static str, [f32; 4])>,
     /// The mod block entities' view distances, asked of the parts once (`native_block_entity_draw`).
     mod_view_distances: std::cell::OnceCell<native_block_entity_draw::ViewDistances>,
     /// `item_level` for one frame, game time, day time and dimension.
@@ -7319,8 +7322,6 @@ impl Game<'_> {
             self.draw_music_toast(&mut batch, false);
             return batch;
         }
-        let atlas_ptr: *const HudAtlas = &self.gui.atlas;
-        let _ = atlas_ptr;
         // The ToastManager draws over every screen: a server's packs
         // download while the connection screen shows.
         if self.remote_overlay(&mut batch) {
@@ -7445,17 +7446,8 @@ impl Game<'_> {
                     g.draw_boss_bars(batch);
                 }
             });
-            let mut corners = sunrise_client::extras_hud::Corners::new(
-                w,
-                h,
-                if show_hud {
-                    self.effect_rows_height()
-                } else {
-                    0.0
-                },
-            );
             if show_hud {
-                self.draw_extras(&mut batch, &mut corners);
+                self.draw_extras(&mut batch);
             }
 
             // NeoForge's Hud.registerVanillaLayers: each status row owns its own extraction.
@@ -7719,7 +7711,8 @@ impl Game<'_> {
             });
             self.draw_mod_gui_layers(None, &mut batch);
             self.hud_layer_next = None;
-            self.native_render_gui_post(&mut batch, &mut corners);
+            self.native_render_gui_post(&mut batch);
+            self.hud_layer_bounds.clear();
         }
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
@@ -11218,7 +11211,6 @@ impl Game<'_> {
         // GUI hooks project against this frame's camera, including its bob/spin and FOV.
         let mut hud = sunrise_client::spans::time("hud", || self.hud(size));
         self.flush_ime(&mut hud);
-        self.native_gui_render_post(&mut hud, self.ui.hide_gui, self.focused);
         if let Some((bar, fade)) = reload_overlay {
             sunrise_client::level_loading::draw_loading_overlay(
                 &mut hud,
@@ -13423,6 +13415,14 @@ impl<'a> Game<'a> {
             settings.file.int("tutorialStep"),
         ));
         let creative = options.creative;
+        let hud_layer_bounds = if options.execution_role.is_client() {
+            use sunrise_client::gui_layers::{VanillaGuiLayer, order};
+            Vec::with_capacity(
+                order().map_or(VanillaGuiLayer::ALL.len(), |order| order.slots().len()),
+            )
+        } else {
+            Vec::new()
+        };
         let inventory = vec![None; 36];
         let now = Instant::now();
         let look = options.look;
@@ -13628,6 +13628,7 @@ impl<'a> Game<'a> {
             debug_renderers: Vec::new(),
             debug_renderers_version: None,
             hud_layer_next: None,
+            hud_layer_bounds,
             mod_view_distances: Default::default(),
             item_level_cache: Default::default(),
             world_frames: 0,

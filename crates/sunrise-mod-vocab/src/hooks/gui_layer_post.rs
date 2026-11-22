@@ -7,7 +7,7 @@ pub trait Hooks {
     /// the vanilla drawing, or if a wrapper omitted its previous body. Does not fire
     /// when `gui_layer_pre` cancels the layer. If the body schedules deferred subtitle paint,
     /// Post still fires in the HUD walk, not when that paint runs. Use `event.draw` to
-    /// paint after the body, or `gui_render_post` for a foreground pass independent of any layer.
+    /// paint after the body, or `render_gui_post` for a pass after the whole HUD walk.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_gui_layer_post",
         receiver = "read",

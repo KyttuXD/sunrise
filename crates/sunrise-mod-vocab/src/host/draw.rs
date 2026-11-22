@@ -221,7 +221,7 @@ pub trait DrawContext {
     /// renderer and `register_entity_layers` layers included, else the vanilla
     /// model), full bright, lit by `Lighting.ENTITY_IN_UI`'s two lights, with a
     /// depth of its own and cut off at the box. A client's call, available
-    /// with [`crate::MenuScreen::with_draw`] or `gui_render_post`.
+    /// with [`crate::MenuScreen::with_draw`], `render_gui_post`, or `screen_render_post`.
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         Err(GuiEntityError::Unavailable)
     }
@@ -242,8 +242,8 @@ pub trait DrawContext {
     ///   is no z input. Both are cut by the clips opened with [`DrawContext::push_clip`], as
     ///   `fill` is.
     ///
-    /// A client's call, available with [`crate::MenuScreen::with_draw`] or
-    /// `gui_render_post`. A `minecraft:air` stack returns `Ok(())` without using the view or
+    /// A client's call, available with [`crate::MenuScreen::with_draw`], `render_gui_post`,
+    /// or `screen_render_post`. A `minecraft:air` stack returns `Ok(())` without using the view or
     /// converting components.
     /// A non-air item with an unreadable component override returns [`Gui3dError::InvalidStack`].
     /// Per call it draws the subject's baked quads, the cached

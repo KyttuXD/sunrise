@@ -55,7 +55,9 @@ use `Above("minecraft:air_level".into())` to put it above all status rows. Use
 keeps a layer both above the mount hearts and below the player rows after the reorder.
 
 The whole walk runs under F1: visibility checks belong to the original bodies, not to
-inserted layers, replacements or wrappers. A canceled `Hooks::render_gui_pre` skips the whole walk."#]
+inserted layers, replacements or wrappers. A canceled `Hooks::render_gui_pre` skips the whole walk and `Hooks::render_gui_post`. Use
+`Hooks::render_gui_post` to draw after the layer walk, or `Hooks::screen_render_post` to draw
+above an open screen."#]
     #[hook(
         receiver = "associated",
         dispatch = "flat",

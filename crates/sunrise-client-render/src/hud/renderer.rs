@@ -487,13 +487,10 @@ impl HudRenderer {
         } else {
             attachment_count = 1;
         }
-        let runs = batch.runs_in(vertices);
+        let runs: SmallVec<[(std::ops::Range<u32>, Blend); 16]> = batch.runs_in(vertices).collect();
         let mut at = 0;
         while at < runs.len() {
-            let clip = match runs[at].1 {
-                Blend::Depth(clip) | Blend::DepthGlint(clip) => Some(clip),
-                _ => None,
-            };
+            let clip = runs[at].1.scissor();
             let end = if let Some(clip) = clip {
                 // The model's glint shares its pass and depth buffer.
                 at + 1
@@ -524,13 +521,10 @@ impl HudRenderer {
             pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, self.buffer.slice(..));
             if let Some(clip) = clip {
-                let [x, y, w, h] = clip.map(|v| (v as f32 * self.zoom) as u32);
-                let (x, y) = (x.min(size[0]), y.min(size[1]));
-                let (w, h) = (w.min(size[0] - x), h.min(size[1] - y));
-                if w == 0 || h == 0 {
+                let Some([x, y, w, h]) = batch::hud_scissor(clip, size, self.zoom) else {
                     at = end;
                     continue;
-                }
+                };
                 pass.set_scissor_rect(x, y, w, h);
             }
             for (range, blend) in &runs[at..end] {
