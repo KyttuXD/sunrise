@@ -224,10 +224,11 @@ with the caller's transaction. A stack not held in a menu slot or cursor is refu
 ## Keeping a mod menu open
 
 The server asks the open mod menu's `MenuPart` for `menu_still_valid` each tick and before processing a
-matching non-spectator container click, as a Java menu overrides `AbstractContainerMenu.stillValid`. A click
-for a different window is dropped; a matching spectator click resends the menu without asking the part.
-In `menu_still_valid` v3, `event.menu` is the menu type. For a blockless open, `event.valid` starts
-true and `event.pos` is `None`, even if the open request supplied a position for the client's screen.
+matching non-spectator container click, as a Java menu overrides `AbstractContainerMenu.stillValid`.
+In v4, if `menu_clicked` leaves the default unhandled, the server asks again before executing it.
+A click for a different window is dropped; a matching spectator click resends the menu without asking the part.
+`event.menu` is the menu type. For a blockless open, `event.valid` starts true and `event.pos` is `None`,
+even if the open request supplied a position for the client's screen.
 Set `event.valid` to false to close the menu and return the cursor stack as on a normal close.
 
 An item opener can set the request's `opening_hand` to `Some(hand)` regardless of what backs the slots.
@@ -336,10 +337,33 @@ host.transaction(|host, tx| {
 })
 ```
 
-`menu_clicked` (contract version 2) runs as one action: what a listener writes through the `Host` stays when it
-returns and is undone with the rest of the action when a listener fails. `menu_clicked` hears the raw slot, button
-and click type on a menu a mod opened (a single-slot drag once); menu-button clicks, recipe placement and creative
-set-slot never reach it, and it cannot know whether the click changes anything.
+`MenuPart::menu_clicked` v4 runs directly on parts registered for the open mod menu's type before
+default click execution (`ServerGamePacketListenerImpl.handleContainerClick`,
+`AbstractContainerMenu.clicked`). The event names that type and gives the raw slot, button and
+click type. Menu-button clicks, recipe placement and creative set-slot do not reach it. There is
+no synthetic decided-action wrapper or whole-inventory rollback: open a transaction explicitly with
+`host.transaction(...)` when a callback wants atomic multi-step edits, and prior unrelated writes
+stand even when the default click is cancelled or refused. Return `Flow::Cancel` after doing the
+click yourself to skip only the default click. On `Flow::Continue`, the server rechecks receiver
+preconditions (live player, same menu generation and window, non-spectator, the menu's
+`stillValid` answer and a valid slot index) and runs the default click on the live menu. The client
+still predicts the default action; after an override or refusal the server sends the full menu, cursor and any predicted swap
+target omitted from the menu. A display-only menu has no default moves.
+
+Inside `menu_clicked`, `host.open_menu`, `PlayerRef::open_mod_menu`, `PlayerRef::open_menu`,
+`PlayerRef::open_ender_chest`, `host.close_menu` and `MenuRef::close_container` can act on the
+player's live menu. Outside a transaction the close or replacement is immediate. Inside one it
+takes effect only at the outermost commit; an abort leaves the live menu, its cursors and its
+window counter alone. A staged `open_menu` or `open_mod_menu` returns a negative staged-open
+identity (`< 0`), separate from live protocol window ids (`0..=100`), without running
+`container_opened` inside the transaction. At outermost commit, the veto runs in the player's
+level outside the transaction, the next vanilla window id is allocated when the open installs,
+and you can read it from `player_container_open` or `player.container_menu(host)`. A close or
+replacement that takes effect before default execution prevents it from running on the old menu.
+
+A panic aborts any transaction still open in the callback and disables only that mod's `menu_clicked`
+callback for the session, with an error log and toast naming the mod. Other parts still run, but the
+server skips the failed click's default, preserves committed edits and resyncs the still-live menu.
 
 `menu_quick_move` (contract version 6) lends the resident block entity and the server `Host` sequentially through
 `event.subject: BlockEntityScope<'_>`. It runs after the live menu allows pickup, and `stack` copies what the clicked

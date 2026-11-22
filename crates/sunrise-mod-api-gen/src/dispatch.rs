@@ -1555,9 +1555,16 @@ pub(super) fn emit<'a>(
                     } else {
                         &listener_id
                     };
+                    // A live menu click can have committed edits before a listener panics.
+                    // Continue dispatch, but do not run the default after such a failure.
+                    let on_abort = if name == "menu_clicked" {
+                        format!("*{} = true; continue;", out.unwrap())
+                    } else {
+                        "continue;".to_owned()
+                    };
                     format!(
                         "for ({part_owner}, {part_item}) in super::entered_parts(HookId::{hook_id}, {part_list}, \"{name}\") {{ {} }}",
-                        call(&part_item, &listener_id, "continue;", "break"),
+                        call(&part_item, &listener_id, &on_abort, "break"),
                     )
                 },
             ),

@@ -591,7 +591,8 @@ impl Guest {
         self.ip_address = address.ip().to_string();
     }
 
-    /// Allocate the next protocol window and a non-reusable menu identity.
+    /// Allocate the next protocol window (`ServerPlayer.nextContainerCounter`) and a
+    /// non-reusable menu identity.
     pub fn next_menu_window(&mut self) -> i32 {
         self.next_window = self.next_window % 100 + 1;
         self.menu_generation = menu_generation();

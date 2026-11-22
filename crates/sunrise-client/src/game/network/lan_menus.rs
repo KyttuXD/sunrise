@@ -21,8 +21,6 @@ pub(in crate::game) struct GuestMenus {
     pub(super) owned_menu: Option<(u64, Box<sunrise_client::menu::Menu>)>,
     /// Identity and mutation stamp for this connection's merchant window, even while loaned.
     pub(super) merchant: MenuOwner<()>,
-    /// The outer `menu_clicked` decision. Nested default routing can decide a pickup on `hub`.
-    pub(super) click: MenuOwner<()>,
     /// Names the hub's container clicks of this guest, which have no menu value of their own: a
     /// click while another of the guest's is being decided is refused as busy.
     pub(in crate::game) hub: MenuOwner<()>,
@@ -49,6 +47,27 @@ pub(super) enum ClickReply {
 }
 
 impl super::Game<'_> {
+    /// The addressed player's menu owns its level. Run its lifecycle there, even when
+    /// a callback from another level requested it, and restore the caller's level.
+    pub(super) fn in_menu_owner_level<R>(
+        &mut self,
+        conn: u32,
+        run: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let guest = self.lan.as_ref()?.hub.guest(conn)?;
+        let dim = super::Dim::from_id(&guest.dimension);
+        if dim == self.dim {
+            return Some(run(self));
+        }
+        let back = self.enter_command_level(dim)?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        self.enter_command_level(back);
+        match result {
+            Ok(value) => Some(value),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     pub(super) fn reply_predicted_menu_click(
         &mut self,
         conn: u32,
@@ -77,18 +96,18 @@ impl super::Game<'_> {
         }
     }
 
-    /// Close the admitted window through the same generation-checked path whether it
-    /// can close immediately or a click transaction must publish it at commit.
+    /// Run `removed` only after the outermost commit. On abort the inventory journal
+    /// still names the same menu and cursor it recorded. Without a transaction this is immediate.
     pub(super) fn request_menu_close(&mut self, conn: u32, window: i32, generation: u64) {
         let reply = MenuClickReply {
             conn,
             generation,
             reply: ClickReply::Close(window),
         };
-        if self.menu_click_in_progress(conn) {
-            self.after_commit(super::transactions::After::MenuClick(Box::new(reply)));
-        } else {
+        if self.transactions.is_empty() {
             self.publish_menu_click(reply);
+        } else {
+            self.after_commit(super::transactions::After::MenuClick(Box::new(reply)));
         }
     }
 
@@ -136,8 +155,10 @@ impl super::Game<'_> {
                     .as_ref()
                     .is_some_and(|m| m.window == window)
                 {
-                    self.forget_menu_places(conn);
-                    self.guest_close_menus_and_tell(conn);
+                    self.in_menu_owner_level(conn, |game| {
+                        game.forget_menu_places(conn);
+                        game.guest_close_menus_and_tell(conn);
+                    });
                 }
             }
         }

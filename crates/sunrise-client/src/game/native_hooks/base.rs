@@ -2986,8 +2986,8 @@ impl Game<'_> {
     ) {
         self.fire_player_level_change(player, name, from, to);
     }
-    /// A server click in a mod menu before the default slot action. A listener sets
-    /// `handled` after doing the click itself.
+    /// A server click in a mod menu before the default slot action. Dispatch sets
+    /// `handled` if a listener cancels or fails, so the caller only reconciles the menu.
     pub(in crate::game) fn native_menu_clicked(
         &mut self,
         call: mod_api::__private::MenuClickedCall<'_>,

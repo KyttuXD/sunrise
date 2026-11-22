@@ -105,6 +105,8 @@ pub(super) struct OpenTransactions {
     /// kept in sync with open transaction frames so mutations roll back on abort.
     retained_original_attachments:
         Vec<std::sync::Arc<std::sync::Mutex<super::original_player::OriginalAttachmentSlot>>>,
+    /// Negative staged-open identity counter (`i32::MIN..=-1`), separate from live protocol ids.
+    staged_menu_open: i32,
     #[cfg(test)]
     pub(in crate::game) trace: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
@@ -234,6 +236,15 @@ impl OpenTransactions {
     /// The journaled-write epoch of players' own state.
     pub(in crate::game) fn player_writes(&self) -> u64 {
         self.player_writes
+    }
+    /// Allocates a negative staged-open identity that never overlaps live protocol window
+    /// ids (`0` for inventory, `1..=100` for `ServerPlayer.nextContainerCounter`).
+    pub(in crate::game) fn next_staged_menu_open(&mut self) -> i32 {
+        self.staged_menu_open = match self.staged_menu_open.checked_sub(1) {
+            Some(next) if next < 0 => next,
+            _ => -1,
+        };
+        self.staged_menu_open
     }
 }
 
@@ -605,6 +616,7 @@ pub(super) enum After {
     QuickMoveChanged(QuickMoveNotice),
     GuestMenu(u32, Box<super::lan_crafting::GuestMenuEffects>),
     MenuClick(Box<super::lan_menus::MenuClickReply>),
+    MenuOpen(u32, Box<super::native_menus::PendingMenuOpen>),
     MenuPlacesNotice(u32, u128, i32),
     FurnaceMenu(Box<super::lan_crafting::FurnaceMenuEffects>),
     StoreCartItems(Pos),
@@ -2040,6 +2052,7 @@ impl Game<'_> {
             }
             After::GuestMenu(conn, effects) => self.publish_guest_menu_effects(conn, *effects),
             After::MenuClick(reply) => self.publish_menu_click(*reply),
+            After::MenuOpen(conn, open) => self.publish_menu_open(conn, *open),
             After::MenuPlacesNotice(conn, uuid, window) => {
                 self.queue_menu_places_notice(conn, uuid, window);
             }

@@ -285,9 +285,10 @@ or changing levels stops every sound. Add particles from the same tick with `hos
 ([hook notes](../../reference/hook-notes.md#client-ticks-hums-smoke-and-moving-parts)).
 
 `player.open_menu(host, entity)` also returns `Result<bool, BlockEntityError>`:
-`Ok(true)` means opened, `Ok(false)` means a non-provider, cancelled open,
-or unconnected/wrong-level player, and
-`Err(BlockEntityError::Stale)` means the entity
+`Ok(true)` means opened, or queued if called inside a transaction. A queued open runs at
+outermost commit and the provider can still refuse; an abort discards the request. `Ok(false)`
+means a non-provider, cancelled open, unconnected/wrong-level player or an active speculative menu
+action. `Err(BlockEntityError::Stale)` means the entity
 does not resolve. It never opens a replacement through an old handle.
 
 ## Blockless status menus
@@ -305,6 +306,11 @@ The menu's declared container slots, if any, start empty. Opening returns the wi
 `Ok(None)` when vetoed. Invalid type,
 connection or client support, opening bytes, data count or
 title returns `OpenMenuError`. Neither a refused nor a cancelled open closes the old menu.
+In a transaction `Ok(Some(staged))` returns a negative staged-open identity (`< 0`), separate
+from live protocol window ids (`0..=100`), and defers `container_opened` and installation to
+outermost commit in the player's level. Read the allocated vanilla window id after commit from
+`player.container_menu(host)` or in `player_container_open`; an abort leaves the old menu and
+its window counter untouched.
 
 For a slotless status screen, declare `data/mymod/sunrise/menu/status.json` as
 `{ "slots": 0, "player_inventory": false, "data_slots": 2 }`. Register a screen factory

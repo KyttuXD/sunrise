@@ -2,10 +2,11 @@
 //! Owned slots run ordinary clicks; display slots move nothing by default. Menu parts can
 //! replace a click, and a close listener receives any detached owned contents.
 use super::api_values::TryIntoEngine;
-use super::{Game, lan::LanHost, lan_menus::GuestMenus};
+use super::{Game, lan::LanHost, lan_menus::GuestMenus, transactions::After};
 use mod_api::__private::game::*;
 use mod_api::{MenuRef, MenuReplace, ModMenuOpen};
 use sunrise_client::{
+    containers::ModMenuType,
     items::ItemStack,
     lan::{
         data::component_nbt,
@@ -13,6 +14,7 @@ use sunrise_client::{
     },
     text::Text,
 };
+use sunrise_core::nbt::Tag;
 
 /// The inventory slot (0..9 the hotbar, 9..36 the rest) a click on `slot`
 /// of a native menu of `size` slots landed on, when it is the player's
@@ -63,6 +65,42 @@ pub(super) fn fit(
     true
 }
 
+/// An open that must not replace the current menu or return its cursor until commit.
+pub(super) enum PendingMenuOpen {
+    Native(NativeMenuOpen),
+    ModMenu(PendingModMenuOpen),
+    Block(mod_api::PlayerRef, mod_api::BlockEntityRef),
+    Ender(mod_api::PlayerRef, Text),
+}
+
+pub(super) struct PendingModMenuOpen {
+    player: mod_api::PlayerRef,
+    id: String,
+    kind: &'static ModMenuType,
+    title: Tag,
+    extra: Vec<u8>,
+    data: Vec<i32>,
+    pos: Option<[i32; 3]>,
+    opening_hand: Option<mod_api::Hand>,
+    replace: MenuReplace,
+}
+
+pub(super) struct NativeMenuOpen {
+    menu: String,
+    title: Tag,
+    items: Vec<Option<ItemStack>>,
+    replace: MenuReplace,
+    pos: Option<(i32, i32, i32)>,
+    extra: Option<Vec<u8>>,
+    content: Option<ModMenuData>,
+}
+
+struct ModMenuData {
+    kind: &'static ModMenuType,
+    data: Vec<i32>,
+    opening_item: Option<(mod_api::Hand, Option<ItemStack>)>,
+}
+
 /// Server menus, for server mods. The players are named by UUID;
 /// none of these runs while a player's state is swapped in (inside
 /// a command executor, the menus can be opened and filled).
@@ -87,23 +125,116 @@ impl Game<'_> {
         uuid: u128,
         rows: u8,
         title: Text,
-        items: Vec<Option<ItemStack>>,
+        mut items: Vec<Option<ItemStack>>,
         replace: MenuReplace,
     ) -> Option<i32> {
         let conn = self.native_conn(uuid)?;
         if self.menu_click_in_progress(conn) {
             return None;
         }
+        let rows = rows.clamp(1, 6);
+        let menu = format!("minecraft:generic_9x{rows}");
+        self.lan
+            .as_ref()?
+            .hub
+            .registry_id("minecraft:menu", &menu)?;
+        items.resize(usize::from(rows) * 9, None);
+        self.request_native_menu_open(
+            conn,
+            NativeMenuOpen {
+                menu,
+                title: component_nbt(&title.component()),
+                items,
+                replace,
+                pos: None,
+                extra: None,
+                content: None,
+            },
+        )
+    }
+
+    /// Outside a transaction, installs the menu and returns its live vanilla protocol window
+    /// id (`1..=100`). Inside one, stages the open for outermost commit and returns a negative
+    /// staged-open identity (`< 0`) without advancing `Guest::next_window` or retiring the
+    /// current menu; the live window id is allocated when installed at publication.
+    fn request_native_menu_open(&mut self, conn: u32, open: NativeMenuOpen) -> Option<i32> {
+        if self.transactions.is_empty() {
+            return self.in_menu_owner_level(conn, |game| game.install_native_menu(conn, open))?;
+        }
+        let staged = self.transactions.next_staged_menu_open();
+        self.after_commit(After::MenuOpen(
+            conn,
+            Box::new(PendingMenuOpen::Native(open)),
+        ));
+        Some(staged)
+    }
+
+    pub(super) fn publish_menu_open(&mut self, conn: u32, request: PendingMenuOpen) {
+        let opened = self.in_menu_owner_level(conn, |game| match request {
+            PendingMenuOpen::Native(open) => game.install_native_menu(conn, open).is_some(),
+            PendingMenuOpen::ModMenu(open) => {
+                matches!(game.finish_open_mod_menu(conn, open), Ok(Some(_)))
+            }
+            PendingMenuOpen::Block(player, entity) => {
+                matches!(game.player_open_menu(player, entity), Ok(true))
+            }
+            PendingMenuOpen::Ender(player, title) => {
+                matches!(game.player_open_ender_chest(player, title), Ok(true))
+            }
+        });
+        if opened != Some(true) {
+            log::warn!("deferred menu open for connection {conn} was refused");
+        }
+    }
+
+    fn install_native_menu(&mut self, conn: u32, open: NativeMenuOpen) -> Option<i32> {
+        let guest = self.lan.as_ref()?.hub.guest(conn)?;
+        if !guest.placed || !guest.participates_online() {
+            return None;
+        }
+        if open.content.is_some() && (guest.dead || guest.disconnect_pending) {
+            return None;
+        }
+        if self.menu_click_in_progress(conn) {
+            return None;
+        }
+        let NativeMenuOpen {
+            menu,
+            title,
+            items,
+            replace,
+            pos,
+            extra,
+            content,
+        } = open;
         self.close_for_open(conn, replace);
         let gi = self.guest_index(conn)?;
         // The first contents show the player's own inventory and cursor, in their turn too.
         let window = self.with_own_record(gi, |lan, _| {
-            lan.hub
-                .open_native_menu(conn, rows, component_nbt(&title.component()), items)
+            let window = lan.hub.open_menu_window_at(
+                conn,
+                &menu,
+                title,
+                pos,
+                Slots::Native,
+                items,
+                extra,
+                content.as_ref().map(|c| c.kind),
+            )?;
+            if let Some(content) = content {
+                lan.hub.guests.update(gi, |g| {
+                    let open = g.menu.as_mut().expect("the window was just installed");
+                    open.blockless_data = content.data;
+                    open.opening_item = content.opening_item;
+                    g.send_menu_data_snapshot();
+                });
+            }
+            Some(window)
         })?;
         self.player_menu_opening(conn);
         Some(window)
     }
+
     /// `ServerPlayer.openMenu`'s close of the menu that was open: `closeContainer`, which then
     /// tells the client, or `doCloseContainer` for a provider that skips the client's close.
     /// Either way the old menu's `removed` runs and the mods hear it close.
@@ -171,7 +302,70 @@ impl Game<'_> {
             .as_ref()
             .and_then(|host| host.hub.registry_id("minecraft:menu", &id))
             .ok_or(OpenMenuError::NotModMenu)?;
-        // An admitted click cannot send packets for a speculative screen replacement.
+        // A speculative quick move or merchant action may still own the window.
+        if self.menu_click_in_progress(conn) {
+            return Err(OpenMenuError::ClickInProgress);
+        }
+        let open = PendingModMenuOpen {
+            player,
+            id: id.to_string(),
+            kind,
+            title,
+            extra,
+            data,
+            pos,
+            opening_hand,
+            replace,
+        };
+        if !self.transactions.is_empty() {
+            let staged = self.transactions.next_staged_menu_open();
+            self.after_commit(After::MenuOpen(
+                conn,
+                Box::new(PendingMenuOpen::ModMenu(open)),
+            ));
+            return Ok(Some(staged));
+        }
+        self.in_menu_owner_level(conn, |game| game.finish_open_mod_menu(conn, open))
+            .ok_or(OpenMenuError::PlayerUnavailable)?
+    }
+
+    fn finish_open_mod_menu(
+        &mut self,
+        conn: u32,
+        open: PendingModMenuOpen,
+    ) -> Result<Option<i32>, mod_api::OpenMenuError> {
+        use mod_api::OpenMenuError;
+        use sunrise_protocol::menu_extra;
+
+        let PendingModMenuOpen {
+            player,
+            id,
+            kind,
+            title,
+            extra,
+            data,
+            pos,
+            opening_hand,
+            replace,
+        } = open;
+        let guest = self
+            .online_player_record(player)
+            .filter(|g| g.conn == conn && !g.dead && !g.disconnect_pending)
+            .ok_or(OpenMenuError::PlayerUnavailable)?;
+        let revision = if !data.is_empty() || !kind.player_inventory || kind.slots == 0 {
+            menu_extra::LIVE_DATA_REVISION
+        } else {
+            1
+        };
+        if !sunrise_client::containers::menu_reaches(&guest.brand, &id)
+            || guest.sender.menu_extra_rev < revision
+        {
+            return Err(OpenMenuError::PlayerUnavailable);
+        }
+        self.lan
+            .as_ref()
+            .and_then(|host| host.hub.registry_id("minecraft:menu", &id))
+            .ok_or(OpenMenuError::NotModMenu)?;
         if self.menu_click_in_progress(conn) {
             return Err(OpenMenuError::ClickInProgress);
         }
@@ -187,33 +381,24 @@ impl Game<'_> {
             .ok_or(OpenMenuError::PlayerUnavailable)?;
         let opening_item = opening_hand.map(|hand| (hand, self.held_by(guest, hand).1.cloned()));
         let pos = pos.map(|[x, y, z]| (x, y, z));
-        self.close_for_open(conn, replace);
-        let gi = self
-            .guest_index(conn)
-            .ok_or(OpenMenuError::PlayerUnavailable)?;
-        // The first contents show the player's own inventory and cursor, in their turn too.
-        let window = self
-            .with_own_record(gi, |lan, _| {
-                let window = lan.hub.open_menu_window(
-                    conn,
-                    &id,
-                    title,
-                    pos,
-                    Slots::Native,
-                    vec![None; kind.slots],
-                    Some(extra),
-                )?;
-                lan.hub.guests.update(gi, |g| {
-                    let open = g.menu.as_mut().expect("the window was just installed");
-                    open.blockless_data = data;
-                    open.opening_item = opening_item;
-                    g.send_menu_data_snapshot();
-                });
-                Some(window)
-            })
-            .ok_or(OpenMenuError::PlayerUnavailable)?;
-        self.player_menu_opening(conn);
-        Ok(Some(window))
+        self.install_native_menu(
+            conn,
+            NativeMenuOpen {
+                menu: id,
+                title,
+                items: vec![None; kind.slots],
+                replace,
+                pos,
+                extra: Some(extra),
+                content: Some(ModMenuData {
+                    kind,
+                    data,
+                    opening_item,
+                }),
+            },
+        )
+        .map(Some)
+        .ok_or(OpenMenuError::PlayerUnavailable)
     }
     /// The native menu the player has open as window `window`, for its slots;
     /// None for another window, a menu the game opened, or a player not here.
@@ -251,19 +436,13 @@ impl Game<'_> {
         let host = self.lan.as_mut().ok_or(MenuItemsRefusal::NoPlayer)?;
         host.hub
             .set_native_menu_items(conn, window, items, !transactional)?;
-        // The scoped click reconciles its own window on both override and refusal.
-        if transactional
-            && !self
-                .transactions
-                .iter()
-                .any(|level| level.menu_click_active == Some(conn))
-        {
+        if transactional {
             self.reply_menu_click(conn, super::lan_menus::ClickReply::Resend(window));
         }
         Ok(())
     }
-    /// Closes the player's native menu (a `native_menu_closed` follows). An active click
-    /// stages the close for its current window and sends it only once the transaction commits.
+    /// Closes the player's native menu (a `native_menu_closed` follows). In a transaction,
+    /// stages the close for its current window until the outermost commit.
     pub(super) fn close_menu(&mut self, uuid: u128) {
         if let Some(conn) = self.native_conn(uuid)
             && let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn))
@@ -2339,16 +2518,42 @@ mod tests {
                         let replaced: Result<(), ()> =
                             (game as &mut dyn ServerHost).transaction(|host, _| {
                                 assert_eq!(menu.set_data_slot(host, 0, 900), Ok(true));
-                                assert_eq!(show(host, vec![5, 6]), Ok(Some(window)));
+                                let staged = show(host, vec![5, 6]).unwrap().unwrap();
+                                assert!(staged < 0);
+                                assert!(host.menu(123, staged).is_none());
                                 Ok(())
                             });
                         assert_eq!(replaced, Ok(()));
                         assert_eq!(
+                            player.container_menu(game).unwrap().container_id(game),
+                            Some(window)
+                        );
+                        assert_eq!(
                             menu.set_data_slot(game, 0, 999),
                             Err(MenuDataRefusal::Stale)
                         );
+                        // The old generation's commit can update the old screen, but its
+                        // data must precede OpenScreen even though the protocol id is reused.
+                        let mut packets = sent(&rx);
+                        let opened = packets
+                            .iter()
+                            .position(|p| {
+                                matches!(p,
+                                    C::OpenScreen(p) if p.container == window
+                                )
+                            })
+                            .unwrap();
+                        let replacement = packets.split_off(opened);
                         assert_eq!(
-                            updates(sent(&rx)),
+                            updates(packets),
+                            [DataSlot {
+                                window,
+                                index: 0,
+                                value: 900
+                            }]
+                        );
+                        assert_eq!(
+                            updates(replacement),
                             [
                                 DataSlot {
                                     window,
@@ -2502,6 +2707,374 @@ mod tests {
                 })
             },
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn cross_dimension_mod_menu_open_in_transaction_isolates_veto_writes() {
+        use super::super::Dim;
+        use mod_api::{BlockUpdateFlags, ContainerOpenedEvent, HostBlockStates};
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        use sunrise_client::chunk::Chunk;
+
+        const POS: [i32; 3] = [2, 64, 2];
+        struct Veto {
+            calls: Arc<AtomicUsize>,
+        }
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Veto {
+            fn container_opened(
+                &self,
+                host: &mut dyn ServerHost,
+                _: &mut ContainerOpenedEvent<'_>,
+            ) -> mod_api::Flow {
+                self.calls.fetch_add(1, Relaxed);
+                assert_eq!(
+                    host.transaction_current(),
+                    None,
+                    "deferred cross-level veto must not borrow the caller's transaction journal"
+                );
+                let nether = host.level("minecraft:the_nether").unwrap();
+                let gold = mod_api::BlockState::of(
+                    &host.block_states(),
+                    mod_api::__private::block_key("minecraft:gold_block").unwrap(),
+                    &[],
+                )
+                .unwrap();
+                assert_eq!(
+                    nether.set_block(host, POS, gold, BlockUpdateFlags::NEIGHBORS),
+                    Ok(true)
+                );
+                mod_api::Flow::Continue
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "cross_veto",
+            Box::new(Veto {
+                calls: calls.clone(),
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            sunrise_client::containers::with_mod_menu_types(
+                [(
+                    MOD_MENU.into(),
+                    "cross_veto".into(),
+                    1,
+                    0,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    true,
+                    None,
+                )],
+                || {
+                    with_game(|game| {
+                        let (_rx, key) = mod_menu_guest(game);
+                        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                            g.dimension = Dim::Nether.id().to_owned();
+                        });
+                        let registry = game.pack.assets.registry;
+                        let stone = registry.default_state("minecraft:stone").unwrap();
+                        let netherrack = registry.default_state("minecraft:netherrack").unwrap();
+                        let cobblestone = registry.default_state("minecraft:cobblestone").unwrap();
+                        let gold_block = registry.default_state("minecraft:gold_block").unwrap();
+
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                        game.world.set(POS[0], POS[1], POS[2], stone).unwrap();
+                        game.enter_level(Dim::Nether).unwrap();
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                        game.world.set(POS[0], POS[1], POS[2], netherrack).unwrap();
+                        game.enter_level(Dim::Overworld).unwrap();
+
+                        let player = game.player(123).unwrap();
+                        let aborted: Result<(), ()> =
+                            (game as &mut dyn ServerHost).transaction(|host, _| {
+                                let overworld = host.level("minecraft:overworld").unwrap();
+                                let planks = mod_api::BlockState::of(
+                                    &host.block_states(),
+                                    mod_api::__private::block_key("minecraft:oak_planks").unwrap(),
+                                    &[],
+                                )
+                                .unwrap();
+                                assert_eq!(
+                                    overworld.set_block(
+                                        host,
+                                        POS,
+                                        planks,
+                                        BlockUpdateFlags::NEIGHBORS,
+                                    ),
+                                    Ok(true)
+                                );
+                                let staged = player
+                                    .open_mod_menu(
+                                        host,
+                                        ModMenuOpen::new(key, mod_api::Text::literal("aborted")),
+                                    )
+                                    .unwrap()
+                                    .unwrap();
+                                assert!(staged < 0);
+                                assert_eq!(calls.load(Relaxed), 0);
+                                Err(())
+                            });
+                        assert_eq!(aborted, Err(()));
+                        assert_eq!(game.dim, Dim::Overworld);
+                        assert_eq!(calls.load(Relaxed), 0);
+                        assert_eq!(game.world.block(POS[0], POS[1], POS[2]), stone);
+                        assert!(
+                            game.lan
+                                .as_ref()
+                                .unwrap()
+                                .hub
+                                .guest(1)
+                                .unwrap()
+                                .menu
+                                .is_none()
+                        );
+                        game.enter_level(Dim::Nether).unwrap();
+                        assert_eq!(game.world.block(POS[0], POS[1], POS[2]), netherrack);
+                        game.enter_level(Dim::Overworld).unwrap();
+
+                        let committed: Result<(), ()> =
+                            (game as &mut dyn ServerHost).transaction(|host, _| {
+                                let overworld = host.level("minecraft:overworld").unwrap();
+                                let cobble = mod_api::BlockState::of(
+                                    &host.block_states(),
+                                    mod_api::__private::block_key("minecraft:cobblestone").unwrap(),
+                                    &[],
+                                )
+                                .unwrap();
+                                assert_eq!(
+                                    overworld.set_block(
+                                        host,
+                                        POS,
+                                        cobble,
+                                        BlockUpdateFlags::NEIGHBORS,
+                                    ),
+                                    Ok(true)
+                                );
+                                let staged = player
+                                    .open_mod_menu(
+                                        host,
+                                        ModMenuOpen::new(key, mod_api::Text::literal("committed")),
+                                    )
+                                    .unwrap()
+                                    .unwrap();
+                                assert!(staged < 0);
+                                assert_eq!(calls.load(Relaxed), 0);
+                                Ok(())
+                            });
+                        assert_eq!(committed, Ok(()));
+                        assert_eq!(game.dim, Dim::Overworld);
+                        assert_eq!(calls.load(Relaxed), 1);
+                        assert_eq!(game.world.block(POS[0], POS[1], POS[2]), cobblestone);
+                        let live = game
+                            .lan
+                            .as_ref()
+                            .unwrap()
+                            .hub
+                            .guest(1)
+                            .unwrap()
+                            .menu
+                            .as_ref()
+                            .expect("committed cross-level open installed the menu")
+                            .window;
+                        assert!((1..=100).contains(&live));
+                        game.enter_level(Dim::Nether).unwrap();
+                        assert_eq!(game.world.block(POS[0], POS[1], POS[2]), gold_block);
+                        game.enter_level(Dim::Overworld).unwrap();
+                    });
+                },
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn aborted_staged_menu_opens_never_wrap_onto_or_access_the_live_window() {
+        use mod_api::{MenuItemsRefusal, MenuSlotBackRefusal, PlayerContainerOpenEvent};
+        use std::sync::Mutex;
+
+        struct Opened(Arc<Mutex<Vec<Option<i32>>>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Opened {
+            fn player_container_open(
+                &self,
+                host: &mut dyn ServerHost,
+                event: &mut PlayerContainerOpenEvent<'_>,
+            ) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(event.menu.and_then(|menu| menu.container_id(host)));
+            }
+        }
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "opened",
+            Box::new(Opened(opened.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            sunrise_client::containers::with_mod_menu_types(
+                [(
+                    MOD_MENU.into(),
+                    "opened".into(),
+                    1,
+                    0,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    true,
+                    None,
+                )],
+                || {
+                    with_game(|game| {
+                        let (rx, key) = mod_menu_guest(game);
+                        let player = game.player(123).unwrap();
+                        let stone = ItemStack::new("minecraft:stone", 1).try_into_api().unwrap();
+                        let dirt = ItemStack::new("minecraft:dirt", 1).try_into_api().unwrap();
+
+                        for start_counter in [0, 99] {
+                            game.lan
+                                .as_mut()
+                                .unwrap()
+                                .hub
+                                .guests
+                                .update(0, |g| g.next_window = start_counter);
+                            let live = open(game, 1, "live", MenuReplace::CloseFirst);
+                            assert_eq!(live, start_counter % 100 + 1);
+                            (game as &mut dyn ServerHost)
+                                .menu_set_items(123, live, vec![Some(stone.clone())])
+                                .unwrap();
+                            opened.lock().unwrap().clear();
+                            sent(&rx);
+
+                            for step in 0..105 {
+                                let aborted: Result<(), ()> = (game as &mut dyn ServerHost)
+                                    .transaction(|host, _| {
+                                        let staged = if step % 2 == 0 {
+                                            host.open_menu(
+                                                123,
+                                                1,
+                                                mod_api::Text::literal("aborted"),
+                                                vec![Some(dirt.clone())],
+                                                MenuReplace::InPlace,
+                                            )
+                                            .unwrap()
+                                            .unwrap()
+                                        } else {
+                                            let mut req = ModMenuOpen::new(
+                                                key,
+                                                mod_api::Text::literal("aborted mod"),
+                                            );
+                                            req.replace = MenuReplace::InPlace;
+                                            player.open_mod_menu(host, req).unwrap().unwrap()
+                                        };
+                                        assert!(staged < 0);
+                                        assert_ne!(staged, live);
+                                        assert!(host.menu(123, staged).is_none());
+                                        assert_eq!(
+                                            host.menu_set_items(
+                                                123,
+                                                staged,
+                                                vec![Some(dirt.clone())],
+                                            ),
+                                            Err(MenuItemsRefusal::NotOpen)
+                                        );
+                                        assert_eq!(
+                                            player.back_mod_menu_slots(host, staged, Vec::new()),
+                                            Err(MenuSlotBackRefusal::NoPlayerOrWindow)
+                                        );
+                                        assert!(host.menu(123, live).is_some());
+                                        Err(())
+                                    });
+                                assert_eq!(aborted, Err(()));
+                            }
+
+                            assert_eq!(
+                                game.lan.as_ref().unwrap().hub.guest(1).unwrap().next_window,
+                                live
+                            );
+                            assert_eq!(
+                                game.menu(123, live).unwrap().slot(game, 0),
+                                Some(Some(stone.clone()))
+                            );
+                            assert!(opened.lock().unwrap().is_empty());
+                            assert!(sent(&rx).is_empty());
+
+                            let committed: Result<i32, ()> = (game as &mut dyn ServerHost)
+                                .transaction(|host, _| {
+                                    let staged = host
+                                        .open_menu(
+                                            123,
+                                            1,
+                                            mod_api::Text::literal("replacement"),
+                                            vec![Some(dirt.clone())],
+                                            MenuReplace::InPlace,
+                                        )
+                                        .unwrap()
+                                        .unwrap();
+                                    assert!(staged < 0);
+                                    assert!(host.menu(123, staged).is_none());
+                                    assert_eq!(
+                                        host.menu_set_items(123, staged, vec![Some(dirt.clone())]),
+                                        Err(MenuItemsRefusal::NotOpen)
+                                    );
+                                    Ok(staged)
+                                });
+                            let staged = committed.unwrap();
+                            let next = live % 100 + 1;
+                            assert_ne!(next, live);
+                            assert_eq!(*opened.lock().unwrap(), [Some(next)]);
+                            assert_eq!(
+                                player.container_menu(game).unwrap().container_id(game),
+                                Some(next)
+                            );
+                            assert!(game.menu(123, live).is_none());
+                            assert!(game.menu(123, staged).is_none());
+                            assert_eq!(
+                                game.menu(123, next).unwrap().slot(game, 0),
+                                Some(Some(dirt.clone()))
+                            );
+                            let packets = sent(&rx);
+                            assert!(
+                                packets.iter().any(|p| {
+                                    matches!(p, C::OpenScreen(p) if p.container == next)
+                                })
+                            );
+                            assert!(!packets.iter().any(|p| matches!(p, C::ContainerClose(_))));
+
+                            // An in-flight click for the outgoing window is ignored by the replacement.
+                            game.lan_guest_packet(
+                                1,
+                                S::ContainerClick(play::ContainerClick {
+                                    container: live,
+                                    state: 0,
+                                    slot: 0,
+                                    button: 0,
+                                    input: sunrise_client::lan::menu::input::PICKUP,
+                                    changed: vec![],
+                                    carried: None,
+                                }),
+                            );
+                            assert!(sent(&rx).is_empty());
+                            assert_eq!(
+                                game.menu(123, next).unwrap().slot(game, 0),
+                                Some(Some(dirt.clone()))
+                            );
+                        }
+                    });
+                },
+            );
+        });
     }
 
     #[test]

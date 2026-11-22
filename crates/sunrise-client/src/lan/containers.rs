@@ -5,7 +5,7 @@ use super::{
     menu::{self, Menu, NativeMenuEvent, Rules, Slots, View},
 };
 use crate::{
-    containers::{BlockEntity, ModContainerInsertRule},
+    containers::{BlockEntity, ModContainerInsertRule, ModMenuType},
     items::ItemStack,
     world::World,
 };
@@ -376,11 +376,33 @@ impl Hub {
         items: Vec<Option<ItemStack>>,
         extra: Option<Vec<u8>>,
     ) -> Option<i32> {
-        let kind = self
-            .sync
-            .builtin
-            .get("minecraft:menu")
-            .and_then(|m| m.id(menu_kind))?;
+        self.open_menu_window_at(
+            conn,
+            menu_kind,
+            title,
+            pos,
+            slots,
+            items,
+            extra,
+            crate::containers::mod_menu_type(menu_kind),
+        )
+    }
+
+    /// Install a window and allocate its next vanilla protocol id (`1..=100`).
+    /// Stock displays have no mod menu type, even if a part listens to their clicks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_menu_window_at(
+        &mut self,
+        conn: u32,
+        menu_kind: &str,
+        title: Tag,
+        pos: Option<(i32, i32, i32)>,
+        slots: Slots,
+        items: Vec<Option<ItemStack>>,
+        extra: Option<Vec<u8>>,
+        mod_type: Option<&'static ModMenuType>,
+    ) -> Option<i32> {
+        let kind = self.registry_id("minecraft:menu", menu_kind)?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
         let encoded_extra = match extra {
             Some(data) => {
@@ -417,7 +439,6 @@ impl Hub {
                 menu: kind,
                 title,
             }));
-            let mod_type = crate::containers::mod_menu_type(menu_kind);
             g.menu = Some(Menu {
                 window,
                 kind,
@@ -456,47 +477,17 @@ impl Hub {
         mut items: Vec<Option<ItemStack>>,
     ) -> Option<i32> {
         let rows = rows.clamp(1, 6);
-        let kind = self
-            .sync
-            .builtin
-            .get("minecraft:menu")
-            .and_then(|m| m.id(&format!("minecraft:generic_9x{rows}")))?;
-        let i = self.guests.iter().position(|g| g.conn == conn)?;
-        self.close_container_at(i);
-        let size = usize::from(rows) * 9;
-        items.resize(size, None);
-        let window = self.guests.update(i, |g| {
-            g.native_menu = items.clone();
-            let window = g.next_menu_window();
-            g.send(&C::OpenScreen(play::OpenScreen {
-                container: window,
-                menu: kind,
-                title,
-            }));
-            g.menu = Some(Menu {
-                window,
-                kind,
-                registry_id: format!("minecraft:generic_9x{rows}").into_boxed_str(),
-                pos: None,
-                slots: Slots::Native,
-                size,
-                state: 0,
-                sent: Vec::new(),
-                drag: None,
-                sent_data: Vec::new(),
-                reported_unsent_data_len: None,
-                blockless_data: Vec::new(),
-
-                mod_type: None,
-                craft: None,
-                links: Vec::new(),
-                asks_still_valid: false,
-                opening_item: None,
-            });
-            window
-        });
-        self.send_menu_content(i, items);
-        Some(window)
+        items.resize(usize::from(rows) * 9, None);
+        self.open_menu_window_at(
+            conn,
+            &format!("minecraft:generic_9x{rows}"),
+            title,
+            None,
+            Slots::Native,
+            items,
+            None,
+            None,
+        )
     }
 
     /// Replaces what the guest's open native menu `window` shows with `items` (padded to its

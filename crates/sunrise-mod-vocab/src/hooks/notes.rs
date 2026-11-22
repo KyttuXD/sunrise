@@ -1318,9 +1318,13 @@ stock client shows as a chest (`generic_9x1` to `generic_9x6`); nothing is insta
 
 - `host.open_menu(uuid, rows, title, items, replace)` opens one in place of the player's open menu (its window id, a new one each time, as `ServerPlayer.openMenu` counts them); the old menu closes on the server as a close does, its cursor stack back to the inventory, and its window's packets are ignored. `MenuReplace::CloseFirst` first sends the client a close, vanilla's default; `MenuReplace::InPlace` doesn't (`MenuProvider.shouldTriggerClientSideContainerClosingOnOpen`), so the title and rows change without the mouse centring again. A title changes only this way. `host.close_menu(uuid)` closes it.
   `host.menu(uuid, window)` is the open one's `MenuRef` (None for another window or player): its slots are [menu slots](../concepts/capabilities/menu-slots.md), written in a transaction, and the tick's container sync sends each changed one (`ContainerSetSlot`). Change its items that way, not by opening it again.
-- A display menu's default click moves nothing. `MenuPart::menu_clicked` v3 runs on parts registered for the
-  menu type. It shares one transaction with the default click unless the part handles the click and returns
-  `Flow::Cancel`. An override or refusal sends the committed menu, cursor and any omitted swap target.
+- A display menu's default click moves nothing. `MenuPart::menu_clicked` v4 runs directly on parts registered for
+  the menu type before default click execution, with no synthetic decided-action wrapper or whole-inventory rollback.
+  Returning `Flow::Cancel` skips only the default click and resyncs the menu, cursor and any omitted swap target;
+  returning `Flow::Continue` rechecks the live menu, including `stillValid`, before running its default. An open or
+  close in a transaction takes effect at the outermost commit; an abort leaves the old menu and both cursors intact.
+  A panic disables only that mod's `menu_clicked` callback for the session with an error log and toast. It skips the
+  default for that click, keeping committed edits and resyncing the still-live menu.
 - `menu_closed` v2 names the player and window and passes any opening hand and detached owned slot values.
 - A trade on these menus leaves the offered stacks in their owners' inventories until both sides are settled. Then,
   in one `host.transaction`, each offered inventory index is checked to still hold exactly what was offered, taken

@@ -4,7 +4,9 @@ use super::{
     Game,
     api_values::{project_stack, stack_read_metadata},
     commands::items::Slot,
+    native_menus::PendingMenuOpen,
     native_server::PlayerRead,
+    transactions::After,
 };
 use mod_api::{InventoryView, MenuReplace, OpenMenuError, PlayerDataRefusal, PlayerRef};
 use sunrise_client::{
@@ -99,6 +101,13 @@ impl Game<'_> {
         if self.menu_click_in_progress(conn) {
             return Ok(false);
         }
+        if !self.transactions.is_empty() {
+            self.after_commit(After::MenuOpen(
+                conn,
+                Box::new(PendingMenuOpen::Ender(player, title)),
+            ));
+            return Ok(true);
+        }
         let title = component_nbt(&title.component());
         if self.lan_guest_swaps.contains(&conn) {
             self.lan_ender_menus.push((conn, title));
@@ -126,6 +135,11 @@ impl Game<'_> {
     /// the menu they had open closes as `ServerPlayer.openMenu` closes it, and the slots are
     /// the guest's own 27 (`Slots::Ender`, no block), which the game's container clicks move.
     fn open_ender_menu(&mut self, conn: u32, title: Tag) -> bool {
+        self.in_menu_owner_level(conn, |game| game.install_ender_menu(conn, title))
+            .unwrap_or(false)
+    }
+
+    fn install_ender_menu(&mut self, conn: u32, title: Tag) -> bool {
         const MENU: &str = "minecraft:generic_9x3";
         if self
             .lan

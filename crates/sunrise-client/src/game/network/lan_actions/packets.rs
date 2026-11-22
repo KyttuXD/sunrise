@@ -826,7 +826,7 @@ impl Game<'_> {
                 }
             }
             S::ContainerClick(p) => {
-                if !self.menu_clicked_decided(conn, &p) {
+                if !self.lan_menu_clicked(conn, &p) {
                     self.lan_default_container_click(conn, &p);
                 }
             }
@@ -1354,8 +1354,82 @@ impl Game<'_> {
         host.hub.teleport(gi, Some(at));
     }
 
-    /// Ordinary click routing. A scoped override calls this inside its action on Continue;
-    /// an unsubscribed click uses it directly. False means the route refused the click.
+    /// `ServerGamePacketListenerImpl.handleContainerClick` / `AbstractContainerMenu.clicked`
+    /// for a mod menu with registered `MenuPart::menu_clicked` callbacks: fires the hook
+    /// directly on the receiving menu before default click execution, with no synthetic
+    /// decided-action wrapper or whole-inventory snapshot/undo. Returns `true` when this
+    /// path consumed the packet, `false` when ordinary routing should run directly.
+    fn lan_menu_clicked(&mut self, conn: u32, click: &play::ContainerClick) -> bool {
+        use super::super::lan_menus::ClickReply;
+        if !mod_api::__private::has_part_hook(mod_api::HookId::MenuClicked) {
+            return false;
+        }
+        let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) else {
+            return false;
+        };
+        let Some(open) = guest.menu.as_ref().filter(|m| {
+            m.window == click.container && (m.mod_type.is_some() || m.slots == Slots::Native)
+        }) else {
+            return false;
+        };
+        if guest.spectator() {
+            return false;
+        }
+        if usize::try_from(click.slot).is_ok_and(|slot| slot >= open.slot_count()) {
+            return true;
+        }
+        if !mod_api::__private::menu_listens(mod_api::HookId::MenuClicked, &open.registry_id) {
+            return false;
+        }
+        let (uuid, generation) = (guest.uuid, guest.menu_generation);
+        let menu = open.registry_id.clone();
+        let mut skip_default = false;
+        self.native_menu_clicked(mod_api::__private::MenuClickedCall {
+            menu: &menu,
+            uuid,
+            window: click.container,
+            slot: i32::from(click.slot),
+            button: i32::from(click.button),
+            mode: click.input,
+            handled: &mut skip_default,
+        });
+        let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) else {
+            return true;
+        };
+        if guest.dead || guest.disconnect_pending || guest.menu_generation != generation {
+            return true;
+        }
+        let Some(open) = guest.menu.as_ref().filter(|m| m.window == click.container) else {
+            return true;
+        };
+        if skip_default {
+            // The client predicted the unmodified click. Resend the live menu and cursor so
+            // any override or component change reconciles authoritatively.
+            self.reply_menu_click(conn, ClickReply::Resend(click.container));
+            return true;
+        }
+        if guest.spectator() {
+            self.reply_menu_click(conn, ClickReply::Resend(click.container));
+            return true;
+        }
+        let slot_out_of_range =
+            usize::try_from(click.slot).is_ok_and(|slot| slot >= open.slot_count());
+        if !self.guest_validate_menu(conn) {
+            return true;
+        }
+        if slot_out_of_range {
+            self.reply_menu_click(conn, ClickReply::Resend(click.container));
+            return true;
+        }
+        self.journal_guest_click(conn);
+        self.journal_menu_click(conn);
+        self.lan_default_container_click(conn, click);
+        true
+    }
+
+    /// Ordinary click routing. Called directly for unsubscribed clicks and after
+    /// `MenuPart::menu_clicked` returns `Flow::Continue` when receiver preconditions hold.
+    /// False means the route refused the click.
     pub(in crate::game) fn lan_default_container_click(
         &mut self,
         conn: u32,

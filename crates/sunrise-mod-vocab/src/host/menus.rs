@@ -15,8 +15,14 @@ pub trait MenusServerHost {
     /// `MenuReplace::InPlace` changes the title and rows without the client
     /// centring the mouse again. Packets for the old window are ignored. The
     /// items of an open menu change through its slots (`menu`), not by
-    /// opening it again. An active speculative menu click refuses the open with `Ok(None)`.
-
+    /// opening it again. In a transaction, the open is staged for outermost commit
+    /// and returns a negative staged-open identity (`< 0`), separate from live
+    /// protocol window ids (`0..=100`); it cannot look up or change any live menu.
+    /// The next vanilla protocol window id (`1..=100`) is allocated when the open is
+    /// installed at commit and exposed through `player_container_open` and
+    /// `PlayerRef::container_menu`. An abort keeps the current menu without advancing
+    /// the window counter. An active speculative quick move or trade action still refuses an open
+    /// with `Ok(None)`.
     #[serialize_text]
     fn open_menu(
         &mut self,
@@ -36,9 +42,9 @@ pub trait MenusServerHost {
     /// a player who isn't here.
     fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef>;
     /// Side: server.
-    /// Closes the player's native menu (a `menu_closed` follows). During an active menu click,
-    /// the close waits for the transaction to commit; an abort leaves the window open.
-
+    /// Closes the player's native menu (a `menu_closed` follows). Without a transaction it
+    /// closes immediately. Inside one, the same window closes only at outermost commit;
+    /// an abort leaves it open.
     fn close_menu(&mut self, uuid: u128);
     /// Side: server.
     /// Replaces everything the player's open `open_menu` menu `window` shows with `items` (by
@@ -201,9 +207,9 @@ pub trait MenusBackendMut {
     /// `ContainerClose`, then removes the menu, returns the carried stack to the inventory,
     /// and fires `player_container_close`. Refuses stale menus, clients, a player whose state
     /// is swapped in for a turn, a pending disconnect, and the player's own inventory menu.
-    /// During a click action, true accepts a request to close that same window at commit; an
-    /// aborted action leaves it open. A client closes its own screen with `close`.
-
+    /// Outside a transaction the close is immediate. Inside one, true accepts a request
+    /// to close that same window at outermost commit; an abort leaves it open. A client
+    /// closes its own screen with `close`.
     fn menu_close_container(&mut self, menu: MenuRef) -> bool;
     /// Side: server.
     /// Set a data slot of the owning mod's current blockless menu (`DataSlot.set`).

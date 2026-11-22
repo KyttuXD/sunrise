@@ -25,8 +25,9 @@ pub trait PlayerMenusBackendMut {
     /// Side: server.
     /// Opens a block entity's menu for a connected player (`ServerPlayer.openMenu`).
     /// Returns Stale for an invalidated entity; Ok(false) for a wrong-level player,
-    /// non-provider, cancelled open, active menu click, an out-of-range slot exclusion, or an
-    /// unconnected player such as a fake player.
+    /// non-provider, cancelled open, active speculative quick move or trade action, or an
+    /// unconnected player such as a fake player. Inside a transaction, `Ok(true)` means queued;
+    /// the provider runs at outermost commit and can still refuse. An abort does not open the menu.
     fn player_open_menu(
         &mut self,
         player: PlayerRef,
@@ -51,12 +52,18 @@ pub trait PlayerMenusBackendMut {
     /// inventory) before the new one is built; `replace` says whether the client is first sent
     /// a close for it, as for `open_menu`. `MenuReplace::InPlace` sends none: the client keeps
     /// its screen and mouse until the new screen replaces it. The window id, or Ok(None) when
-    /// a mod cancelled the open or a registered exclusion is out of range. Errors: `NotModMenu`,
-    /// `OwnedSlotsWithResults`, `ClickInProgress` (a speculative click cannot open a new screen),
+    /// a mod cancelled the open. Errors: `NotModMenu`, `OwnedSlotsWithResults`,
+    /// `ClickInProgress` (an active speculative quick move or trade action cannot open a new screen),
     /// `PlayerUnavailable` (including a client that does not support the blockless layout, a
     /// disconnect in progress or a turn unavailable for the veto), `TooLarge`,
     /// `DataCountMismatch`, `Title` or `TitleNotEncodable`. A cancelled or refused open
-    /// does not close the old menu.
+    /// does not close the old menu. In a transaction, `Ok(Some(staged))` returns a negative
+    /// staged-open identity (`< 0`), separate from live protocol window ids (`0..=100`),
+    /// without switching levels, running `container_opened`, or advancing the window counter.
+    /// At outermost commit, the veto runs in the player's level outside the transaction, the
+    /// next vanilla window id (`1..=100`) is allocated when the open installs, and that id is
+    /// exposed in `player_container_open` and `PlayerRef::container_menu`. An abort drops the
+    /// request and keeps the old menu.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,
@@ -70,8 +77,9 @@ pub trait PlayerMenusBackendMut {
     /// on a click or shift-click on those slots, and an `ItemPlace::MenuSlot` write, go through
     /// that storage's own handler, journalled; the client sees ordinary synced slots, mirrored
     /// after each click and each write through an `ItemPlace` of that storage, never each tick.
-    /// Right after the open is the place to call it, the player's own item use included: backed
-    /// inside a hook of that player's own action, the slots are mirrored once the action is over.
+    /// Call it with the live window after the open installs, not with a staged-open identity.
+    /// If backed inside a hook of the player's own action, the slots are mirrored once that
+    /// action is over.
     /// A slot past `places` stays the mods' own (`menu_clicked`). The menu closes once a
     /// place stops resolving (the backpack left the hand, the entity is gone) or a held stack is
     /// no longer the one bound when the slots were backed, checked before each click and at
@@ -101,8 +109,10 @@ pub trait PlayerMenusBackendMut {
     /// cancel). Inside a hook of the player's own action (`use_item`, `right_click_item`,
     /// `right_click_block`, their command), the menu opens when that action ends, as a block's
     /// menu the same action opens does. Ok(true) inside an action means queued: the menu is
-    /// still subject to cancellation when the queue runs; outside one it opened. Ok(false) is an
-    /// immediate cancellation by a mod. Errors:
+    /// still subject to cancellation when the queue runs; outside one it opened. In a
+    /// transaction, `Ok(true)` also means queued, until the outermost commit; an abort drops
+    /// the request. `Ok(false)` is an immediate cancellation by a mod or a refusal during an
+    /// active speculative quick move or trade action. Errors:
     /// `PlayerUnavailable` (stale, dead, fake, or on a client), or `Title` for a title that
     /// could not cross; nothing opens then.
     #[serialize_text]
