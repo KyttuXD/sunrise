@@ -121,7 +121,7 @@ fn with_dispenser(test: impl FnOnce(&mut Game<'_>, LevelRef)) {
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
             game.native_lifecycle
-                .begin_open(mod_api::Authority::IntegratedServer);
+                .begin_open(Some(mod_api::Authority::IntegratedServer));
             let stone = state(game, "minecraft:stone");
             for x in 0..16 {
                 for z in 0..16 {

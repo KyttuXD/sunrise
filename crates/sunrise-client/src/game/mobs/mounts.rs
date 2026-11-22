@@ -1803,7 +1803,7 @@ mod tests {
         .ok()?;
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         game.creative = false;
         game.options.dedicated = Some(Vec::new());
         game.world.chunks.insert(

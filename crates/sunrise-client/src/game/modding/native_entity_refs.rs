@@ -1768,7 +1768,7 @@ pub(super) mod tests {
         .unwrap();
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(Authority::IntegratedServer);
+            .begin_open(Some(Authority::IntegratedServer));
 
         // A game that opened its world resolves its parts; the harness stops
         // short of the open, so do it here for the by-state part table.
@@ -2797,7 +2797,7 @@ pub(super) mod tests {
                 .chunks
                 .insert((-2, 3), Arc::new(Chunk::empty(-2, 3)));
             game.native_lifecycle
-                .begin_open(Authority::IntegratedServer);
+                .begin_open(Some(Authority::IntegratedServer));
             assert!(game.chunk(level, [-2, 3]).is_none());
             assert!(!chunk.loaded(game));
             assert_eq!(chunk.status(game), None);
@@ -4522,7 +4522,7 @@ pub(super) mod tests {
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         game.native_lifecycle
-            .begin_open(Authority::IntegratedServer);
+            .begin_open(Some(Authority::IntegratedServer));
 
         let level = game.level("minecraft:overworld").unwrap();
         assert!(
@@ -4664,7 +4664,7 @@ pub(super) mod tests {
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         game.native_lifecycle
-            .begin_open(Authority::IntegratedServer);
+            .begin_open(Some(Authority::IntegratedServer));
 
         let level = game.level("minecraft:overworld").unwrap();
         let stone = game

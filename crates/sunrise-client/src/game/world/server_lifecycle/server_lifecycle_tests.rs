@@ -74,7 +74,7 @@ fn integrated_stop_finishes_after_an_unencodable_record() {
             game.session_lock = Some(SessionLock::acquire(root.path()).unwrap());
             game.world_adopted = true;
             game.native_lifecycle
-                .begin_open(mod_api::Authority::IntegratedServer);
+                .begin_open(Some(mod_api::Authority::IntegratedServer));
             game.native_lifecycle.world_open_ready().unwrap();
             game.save_game().unwrap();
             assert_eq!(*events.lock().unwrap(), ["level saved", "world saved"]);

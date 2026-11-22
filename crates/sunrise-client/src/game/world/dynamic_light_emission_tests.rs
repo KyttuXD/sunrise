@@ -163,7 +163,7 @@ fn with_lights_sides(
     with_game_role(root, role, |game| {
         let _server = client.then(|| {
             let server = logged_client(game);
-            game.native_lifecycle.begin_open(Authority::RemoteClient);
+            game.native_lifecycle.begin_open(None);
             // The remote dimension's key, not the client's legacy Dim field, names its level.
             let remote = game.remote.as_mut().unwrap();
             remote.level = "lights:remote".into();

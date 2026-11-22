@@ -231,8 +231,8 @@ impl<'a> From<BlockClick<'a>> for super::BlockClick<'a> {
         }
     }
 }
+// no wire: builds an in-process server lifecycle context.
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct LifecycleContext {
     pub authority: Authority,
     pub epoch: super::WorldEpoch,

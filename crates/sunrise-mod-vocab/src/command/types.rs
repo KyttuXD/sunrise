@@ -110,19 +110,15 @@ impl Command {
     }
 }
 
-/// Which `Game` observes the phase; a mirror `Game` never fires.
+// no wire: the server role is only used in in-process lifecycle callbacks.
+/// The server role that fired a world lifecycle or server tick phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum Authority {
-    /// A single-player game with no server thread; does not fire.
-    LocalAuthoritative,
     /// The server thread of a single-player or LAN world.
     IntegratedServer,
     /// A dedicated server.
     DedicatedServer,
-    /// A client of someone else's server; does not fire.
-    RemoteClient,
 }
 
 /// `PermissionLevel`: how much a player may do, as `op-permission-level` and

@@ -706,7 +706,7 @@ fn cauldron_world_close_discards_callbacks_before_failed_preparation() {
         );
         game.native_lifecycle_world_closed();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         assert!(
             game.resolve_parts()
                 .unwrap_err()

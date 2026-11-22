@@ -2478,7 +2478,8 @@ mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             with_game_role(fixture_root(), ExecutionRole::DedicatedServer, |game| {
-                game.native_lifecycle.begin_open(Authority::DedicatedServer);
+                game.native_lifecycle
+                    .begin_open(Some(Authority::DedicatedServer));
                 game.native_lifecycle.world_open_ready().unwrap();
                 let dir = tempfile::tempdir().unwrap();
                 game.world_root = dir.path().to_path_buf();
@@ -2533,7 +2534,8 @@ mod tests {
                     error.downcast_ref::<std::io::Error>().unwrap().kind(),
                     expected.kind()
                 );
-                game.native_lifecycle.begin_open(Authority::DedicatedServer);
+                game.native_lifecycle
+                    .begin_open(Some(Authority::DedicatedServer));
                 game.native_lifecycle.world_open_ready().unwrap();
                 let error = game.stop_after_crash(cause).unwrap_err();
                 assert!(error.to_string().contains(cause));

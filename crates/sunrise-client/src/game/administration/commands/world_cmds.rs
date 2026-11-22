@@ -3167,7 +3167,7 @@ mod attribute_modifier_command_tests {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
             game.reset_entity_residency();
             game.native_lifecycle
-                .begin_open(mod_api::Authority::IntegratedServer);
+                .begin_open(Some(mod_api::Authority::IntegratedServer));
             crate::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
             assert!(game.run_command(
                 "attribute @s minecraft:step_height modifier add test:a 0.4 add_value"

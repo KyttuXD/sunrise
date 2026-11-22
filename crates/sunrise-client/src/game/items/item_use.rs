@@ -1530,7 +1530,7 @@ pub(super) mod interact_vibration_tests {
         );
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         super::super::native_entity_refs::tests::bind_local_player(&mut game, 41, 123);
         *game.held_mut() = Some(ItemStack::new(held, 1));
         crate::game::dispense_fixture::start_recording();

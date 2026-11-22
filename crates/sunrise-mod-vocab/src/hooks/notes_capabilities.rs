@@ -28,7 +28,8 @@ pub trait Notes {
   delete the match arm. Nothing else about the phases changed. Diverges from upstream: upstream still has the phase.
 
 - Authoritative server tick events through `server_tick`: start (before any level ticks, like NeoForge's `ServerTickEvent.Pre`) and end of each non-paused
-  server tick, with `world_running`. A frozen world reports false except during a requested step.
+  server tick, with `world_running`. A frozen world reports false except during a requested step. Like `world_lifecycle`,
+  it only fires for `Authority::IntegratedServer` (single player or LAN) and `Authority::DedicatedServer`.
 
 - Server commands and players: `register_commands` adds usages to the server tree with
   `Command::executes` to bind their executors, with helpers to answer

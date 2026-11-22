@@ -241,8 +241,7 @@ mod tests {
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();
                 finish_login(game, &mut server);
-                game.native_lifecycle
-                    .begin_open(mod_api::Authority::RemoteClient);
+                game.native_lifecycle.begin_open(None);
                 game.title = None;
                 game.player =
                     Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
@@ -306,8 +305,7 @@ mod tests {
                     sent_attacks(game, &mut server).is_empty(),
                     "explicit extra batch targets still obey occlusion"
                 );
-                game.native_lifecycle
-                    .begin_open(mod_api::Authority::RemoteClient);
+                game.native_lifecycle.begin_open(None);
                 assert!(game.mod_attack_targets());
                 assert!(sent_attacks(game, &mut server).is_empty());
             })

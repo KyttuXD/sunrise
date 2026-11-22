@@ -1,13 +1,11 @@
 //! Read-only block, tag and fluid queries for native mods.
+use super::Game;
 use super::native_level_signals::ReadLevel;
-use super::{Dim, Game};
-use mod_api::BlockKey;
-use mod_api::{FluidKey, FluidState, LevelRef, LifecycleContext, UnresolvedFluid};
+use mod_api::{BlockKey, FluidKey, FluidState, LevelRef, UnresolvedFluid};
 use std::cell::RefCell;
 use sunrise_client::{items::Items, world::World};
 use sunrise_core::{geometry::Direction, position::BlockPos};
 use sunrise_world::{
-    chunk::BlockState,
     fluid::{FluidHeightWorld, FluidKind, FluidState as EngineFluidState},
     level::{Behaviours, fluid_can_be_replaced_with, fluid_tick_delay},
     registry::{BlockRegistry, BlockStateId},
@@ -119,19 +117,6 @@ pub(super) fn block_face_sturdy(
 pub(super) fn can_see_sky(world: &World, pos: [i32; 3]) -> bool {
     world.shape.sky_light
         && super::native_level_refs::world_brightness(world, mod_api::LightLayer::Sky, pos) >= 15
-}
-
-/// Why a server block cannot be read.
-#[allow(dead_code)]
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum NativeBlockReadError {
-    /// The context is stale or the call is outside its server tick hook.
-    InactiveContext,
-    /// The dimension is unknown or is not currently open on the server.
-    UnavailableDimension,
-    OutOfBounds,
-    Unloaded,
-    InvalidState,
 }
 
 thread_local! {
@@ -454,52 +439,6 @@ impl Game<'_> {
     pub(super) fn fluid_empty_sound(&self, fluid: &str) -> Option<&'static str> {
         sunrise_world::level::fluid_empty_sound(fluid_kind(fluid)?)
     }
-
-    /// Read a loaded block in a server tick hook, without loading a chunk.
-    /// The returned name and properties are owned and remain valid after the hook.
-    #[allow(dead_code)]
-    pub(super) fn native_server_block(
-        &self,
-        context: &LifecycleContext,
-        dimension: &str,
-        pos: [i32; 3],
-    ) -> Result<BlockState, NativeBlockReadError> {
-        if !self.native_lifecycle.permits_read(context) {
-            return Err(NativeBlockReadError::InactiveContext);
-        }
-        if !Dim::exists(dimension) {
-            return Err(NativeBlockReadError::UnavailableDimension);
-        }
-        let dim = Dim::from_id(dimension);
-        let world = if dim == self.dim {
-            Some(&self.world)
-        } else {
-            self.levels.parked_world(dim)
-        }
-        .ok_or(NativeBlockReadError::UnavailableDimension)?;
-        read_block(world, self.pack.assets.registry, pos)
-    }
-}
-
-/// Resolve an existing world state, preserving unloaded and invalid states.
-fn read_block(
-    world: &World,
-    registry: &BlockRegistry,
-    [x, y, z]: [i32; 3],
-) -> Result<BlockState, NativeBlockReadError> {
-    if !(-30_000_000..30_000_000).contains(&x)
-        || !(-30_000_000..30_000_000).contains(&z)
-        || !world.shape.contains_y(y)
-    {
-        return Err(NativeBlockReadError::OutOfBounds);
-    }
-    if !world.loaded(x, z) {
-        return Err(NativeBlockReadError::Unloaded);
-    }
-    registry
-        .state(world.block(x, y, z))
-        .cloned()
-        .ok_or(NativeBlockReadError::InvalidState)
 }
 
 #[cfg(test)]
@@ -629,47 +568,6 @@ mod tests {
                 .unwrap(),
             None
         );
-    }
-
-    #[test]
-    fn reads_only_loaded_in_bounds_states() {
-        let facts = br#"{"defaults":{"minecraft:air":0,"test:pillar":1},"states":[
-            ["air",true,false,"","minecraft:air"],
-            ["pillar",false,false,"",{"id":"test:pillar","properties":{"axis":"x"}}]
-        ]}"#;
-        let registry = BlockRegistry::from_facts_json(&facts[..]).unwrap();
-        let mut world = World::new(BlockStateId(0), 0);
-        world.chunks.insert((-1, 0), Arc::new(Chunk::empty(-1, 0)));
-        world.set(-1, 64, 1, BlockStateId(1)).unwrap();
-        // The Nether's build range starts at y 0 (its level's shape).
-        let mut nether = World::new(BlockStateId(0), 0);
-        nether.shape = sunrise_client::chunk::LevelShape::NETHER;
-        nether.chunks.insert((-1, 0), Arc::new(Chunk::empty(-1, 0)));
-        let block = read_block(&world, &registry, [-1, 64, 1]).unwrap();
-        assert_eq!(block.name, "test:pillar");
-        assert_eq!(block.properties["axis"], "x");
-        assert_eq!(
-            read_block(&world, &registry, [-1, 65, 1]).unwrap().name,
-            "minecraft:air"
-        );
-        assert_eq!(
-            read_block(&world, &registry, [0, 64, 1]),
-            Err(NativeBlockReadError::Unloaded)
-        );
-        assert_eq!(
-            read_block(&nether, &registry, [-1, -1, 1]),
-            Err(NativeBlockReadError::OutOfBounds)
-        );
-        assert_eq!(
-            read_block(&world, &registry, [30_000_000, 64, 1]),
-            Err(NativeBlockReadError::OutOfBounds)
-        );
-        world.set(-1, 64, 1, BlockStateId(99)).unwrap();
-        assert_eq!(
-            read_block(&world, &registry, [-1, 64, 1]),
-            Err(NativeBlockReadError::InvalidState)
-        );
-        assert_eq!(world.chunks.len(), 1, "reads must not load chunks");
     }
 
     #[test]

@@ -43,7 +43,7 @@ impl Hooks for Mod {
 fn field(game: &mut Game<'_>) {
     game.options.dedicated = Some(Vec::new());
     game.native_lifecycle
-        .begin_open(mod_api::Authority::IntegratedServer);
+        .begin_open(Some(mod_api::Authority::IntegratedServer));
     game.world = sunrise_client::world::World::new(game.res.facts().air, 1);
     game.world
         .chunks
