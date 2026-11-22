@@ -75,9 +75,11 @@ baker can run on a resource worker during each load, and borrows its bake contex
 invocation. See [model drawing](../how-to/client/model-drawing.md) and
 [particle render groups](../how-to/client/particles-and-movement-queries.md#particle-render-groups).
 
-Not every registration-context hook runs only at startup. `register_fluid_models` and
-`register_texture_atlases` collect declarations again on client resource reload before baking or
-stitching, respectively. Atlas admission, duplicate handling and dispatch timing are unchanged.
+Not every registration-context hook runs only at startup. `register_fluid_models`,
+`register_texture_atlases` and `emissive` collect declarations again on client resource reload
+before baking or stitching, respectively. Texture atlases reject only collisions with vanilla's
+built-in engine atlases and duplicate atlas IDs, without namespace bans or private atlas/sprite
+quotas.
 
 The context's `mods()`, `registry(name)` and `setting(mod_id, key)` borrow
 one view captured before the first of them runs, so every registration step sees the same values

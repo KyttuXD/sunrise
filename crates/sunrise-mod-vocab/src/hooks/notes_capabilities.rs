@@ -376,11 +376,14 @@ pub trait Notes {
   so disabling a native mod or leaving the world clears them without a retained
   state. Helpers `native_lit_block_name` and `native_flame_particle` read loaded
   blocks and emit a nearby vanilla flame particle; native mods must rate-limit
-  emission. It also adds `emissive`: a world-frame hook for at most 32 pairs of
-  already-loaded terrain sprites. Transparent pixels in an overlay leave its
+  emission. It also adds `emissive`: a registration-context hook called at client
+  startup and on every resource reload to register typed `EmissiveSpriteRegistration`
+  pairs (`base` and `overlay` `Identifier`s). Transparent pixels in an overlay leave its
   base unchanged; opaque pixels are drawn full-bright without changing gameplay
-  light or the surrounding rock. The source pack must supply the overlay texture
-  under `assets/<namespace>/textures/emissive/`. When no mod requests overlays,
+  light or the surrounding rock. Overlay textures resolve from
+  `assets/<namespace>/textures/<path>.png` during bake/reload without a per-mod
+  quota, stay bound to the loaded render-asset generation, and share the GPU
+  emissive uniform table with OptiFine overlays. When no overlays are active,
   the terrain shader skips the lookup.
   When a native mod bundles a Sunrise shader pack, naming its folder
   `native-<mod-id>` makes the Mods On/Off control pause that pack too (without

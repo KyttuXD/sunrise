@@ -148,11 +148,15 @@ pub enum TextureAtlas {
 // exhaustive: mods submit declarations by value
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct TextureAtlasRegistration {
-    /// The atlas's id, in the mod's own namespace (`mymod:icons`).
+    /// The atlas's id (`mymod:icons`). Any namespace is allowed except collisions with vanilla
+    /// 26.3's built-in engine atlases (`AtlasManager.KNOWN_ATLASES`, such as `minecraft:blocks` or
+    /// `minecraft:gui`).
     pub atlas: Identifier,
     /// Its definition, `assets/<namespace>/atlases/<path>.json` (`mymod:icons`): a `sources` list
     /// like vanilla's atlas definitions (`directory`, `single`, `filter`, `unstitch`,
-    /// `paletted_permutations`), which resource packs can change like theirs.
+    /// `paletted_permutations`), which resource packs can change like theirs. Must not reuse a
+    /// built-in engine atlas definition (`AtlasManager.KNOWN_ATLASES`) or a definition already
+    /// registered by an earlier mod.
     pub definition: Identifier,
 }
 
@@ -191,5 +195,26 @@ impl AtlasRegion {
     /// A region, from the game's atlas.
     pub fn new(uv: [f32; 4], size: [u32; 2]) -> Self {
         Self { uv, size }
+    }
+}
+
+/// An emissive overlay sprite pair a client mod registers during resource load and reload
+/// (`Hooks::emissive`). Transparent pixels in `overlay` leave `base` unchanged; opaque pixels
+/// draw full-bright without illuminating surrounding blocks or changing gameplay light.
+#[derive(Clone, Debug, PartialEq, Eq)]
+// exhaustive: mods submit declarations by value
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct EmissiveSpriteRegistration {
+    /// The base block sprite id (`minecraft:block/redstone_ore` or `mymod:block/reactor`).
+    pub base: Identifier,
+    /// The overlay texture id (`mymod:block/reactor_e` or `mymod:emissive/reactor_glow`),
+    /// resolved from `assets/<namespace>/textures/<path>.png`.
+    pub overlay: Identifier,
+}
+
+impl EmissiveSpriteRegistration {
+    /// Pair a base block sprite with an emissive overlay texture.
+    pub fn new(base: Identifier, overlay: Identifier) -> Self {
+        Self { base, overlay }
     }
 }

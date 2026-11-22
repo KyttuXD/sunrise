@@ -13,8 +13,8 @@ use motion_ids::{motion_at, motion_block_entity};
 #[cfg(test)]
 use resource_load::load_resources;
 use resource_load::{
-    Progress, StartupLoadContext, launch_world, load_resources_for_mods, load_resources_sync,
-    named_scope, synchronous_startup,
+    Progress, StartupLoadContext, launch_world, load_resources_for_mods,
+    load_resources_for_mods_with_limit, load_resources_sync, named_scope, synchronous_startup,
 };
 /// The content tables the world plays with, as field-level borrows: the
 /// world's data packs' over the game's own. The `Game::items`/`recipes`/
@@ -11071,19 +11071,6 @@ impl Game<'_> {
         } else {
             native_visuals::FrameVisuals::default()
         };
-        let emissive_layers = if self.title.is_none() {
-            let mut requests = Vec::new();
-            self.native_emissive(&mut requests);
-            // Native mods' overlays first, then the packs' OptiFine emissive blocks.
-            sunrise_client::native_emissive::table(
-                &self.pack.render.sprite_layers,
-                &self.pack.render.file_layers,
-                requests,
-                &self.pack.render.emissive,
-            )
-        } else {
-            Vec::new()
-        };
         pr.lap("pr_native_visuals");
         let view = if self.studio.flying() {
             glam::Mat4::from_quat(self.camera_orientation().conjugate())
@@ -11552,7 +11539,11 @@ impl Game<'_> {
             glowing: &glowing,
             dynamic_lights: &self.dynamic_lights,
             colored_lights: &colored_lights,
-            emissive_layers: &emissive_layers,
+            emissive_layers: if self.title.is_none() {
+                &self.pack.render.emissive_layers
+            } else {
+                &[]
+            },
             lightning: sunrise_client::gfx::lightning::Input {
                 bolts: &bolts,
                 uv: sunrise_client::gfx::lightning::white_uv(&self.gui.atlas.font.white()),

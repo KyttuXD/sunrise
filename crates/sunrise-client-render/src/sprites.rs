@@ -437,6 +437,20 @@ impl Sprites {
             None => self.load(name, Lookup::Model),
         }
     }
+    /// Load a sprite id or resource file into [`Sprites::files`] without substituting the
+    /// missing texture on error and without a synthetic byte cap.
+    pub fn try_insert_texture_file(&mut self, name: &str) -> Result<u32> {
+        if let Some(layer) = self.files.get(name) {
+            return Ok(*layer);
+        }
+        let path = if name.contains(':') {
+            crate::atlas_sources::texture_resource(name, "textures")
+        } else {
+            name.to_owned()
+        };
+        let bytes = self.source.read(&path)?;
+        self.load(name, Lookup::File(&bytes))
+    }
     /// Load a sprite id or resource file only when its PNG fits the byte limit,
     /// including cached layers. The checked bytes are reused when decoding.
     pub fn try_insert_limited(&mut self, name: &str, max: u64) -> Result<u32> {

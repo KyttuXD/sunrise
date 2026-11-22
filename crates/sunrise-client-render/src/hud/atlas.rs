@@ -394,6 +394,10 @@ impl HudAtlas {
     pub fn build(root: &ResourceSource) -> Result<Self> {
         Self::build_over(root, root)
     }
+    /// [`Self::build`] bounded by the GPU's `max_texture_dimension_2d` limit.
+    pub fn build_with_limit(root: &ResourceSource, max_atlas_size: u32) -> Result<Self> {
+        Self::build_over_with_dynamic_textures_and_limit(root, root, root, false, max_atlas_size)
+    }
     /// The atlas of a resource root that layers packs over `defaults` (the
     /// game's own resources), whose textures give the sprites' GUI sizes.
     pub fn build_over(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
@@ -411,7 +415,25 @@ impl HudAtlas {
         game: &ResourceSource,
         pool: bool,
     ) -> Result<Self> {
-        let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, pool)?;
+        Self::build_over_with_dynamic_textures_and_limit(root, defaults, game, pool, MAX_ATLAS_SIZE)
+    }
+    /// [`Self::build_over_with_dynamic_textures`] bounded by the renderer device's actual
+    /// `max_texture_dimension_2d` limit (`TextureAtlas.maxSupportedTextureSize` in vanilla 26.3).
+    pub fn build_over_with_dynamic_textures_and_limit(
+        root: &ResourceSource,
+        defaults: &ResourceSource,
+        game: &ResourceSource,
+        pool: bool,
+        max_atlas_size: u32,
+    ) -> Result<Self> {
+        let mut atlas = Self::pack(
+            root,
+            defaults,
+            WALKED_TEXTURE_FOLDERS,
+            true,
+            pool,
+            max_atlas_size,
+        )?;
         atlas.dynamic_texture_pool =
             dynamic_textures::Pool::take(&mut atlas.sprites, atlas.width, atlas.height);
         pack_text::load_shaders(&mut atlas, root, game)?;

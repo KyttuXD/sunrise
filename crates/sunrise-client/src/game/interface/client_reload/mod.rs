@@ -5,7 +5,9 @@
 use mod_api::__private::game::*;
 
 mod texture_atlases;
-pub(in crate::game) use texture_atlases::{collect_texture_atlases, stage_texture_atlases};
+pub(in crate::game) use texture_atlases::{
+    collect_emissive_sprites, collect_texture_atlases, stage_texture_atlases,
+};
 
 #[cfg(test)]
 #[path = "client_reload_tests.rs"]

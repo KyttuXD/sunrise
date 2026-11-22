@@ -504,11 +504,13 @@ impl Game<'_> {
     ) {
         self.fire_visuals(rims, lights);
     }
-    /// At most 32 pairs of already-loaded base and transparent overlay sprites.
-    /// Per-pixel alpha in the overlay marks full-bright material, without
-    /// illuminating the surrounding block or changing gameplay light.
-    pub(in crate::game) fn native_emissive(&self, layers: &mut Vec<(&'static str, &'static str)>) {
-        self.fire_emissive(layers);
+    /// Collect mod-registered emissive overlay sprite pairs during client startup and resource
+    /// reload.
+    pub(in crate::game) fn native_emissive(
+        context: &mod_api::RegistrationContext,
+        layers: &mut Vec<mod_api::Answered<mod_api::EmissiveSpriteRegistration>>,
+    ) {
+        Self::fire_emissive(context, layers);
     }
     /// The world's phases, read-only; `error_text` carries the engine's
     /// error text for `WorldOpenFailed` and `WorldCloseFailed`, empty otherwise.

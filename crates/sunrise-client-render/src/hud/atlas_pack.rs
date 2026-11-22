@@ -12,53 +12,63 @@ impl HudAtlas {
     /// room: a pack of thousands of mixed sizes (server packs with custom
     /// items) fits where the shelves' ragged ends would not.
     pub(super) fn layout(images: &[PackedImage], max: u32) -> Result<(u32, Vec<(u32, u32)>, u32)> {
+        let dims: Vec<(u32, u32)> = images.iter().map(|i| (i.1, i.2)).collect();
+        Self::layout_dims(&dims, max)
+    }
+    fn layout_dims(dims: &[(u32, u32)], max: u32) -> Result<(u32, Vec<(u32, u32)>, u32)> {
         let mut width = 4096.min(max);
         loop {
-            let wide_enough = images.iter().all(|i| i.1 < width);
+            let wide_enough = dims.iter().all(|&(w, _)| w < width);
             if wide_enough {
                 for first_fit in [false, true] {
-                    let (placements, glyph_region) = Self::shelves(images, width, first_fit);
-                    if glyph_region + GLYPH_ROWS <= max {
+                    let (placements, glyph_region) = Self::shelves_dims(dims, width, first_fit);
+                    if glyph_region.saturating_add(GLYPH_ROWS) <= max {
                         return Ok((width, placements, glyph_region));
                     }
                 }
             }
             if width >= max {
-                let texels: u64 = images.iter().map(|i| u64::from(i.1) * u64::from(i.2)).sum();
+                let texels: u64 = dims.iter().map(|&(w, h)| u64::from(w) * u64::from(h)).sum();
                 return Err(format!(
                     "the textures ({} images, {texels} texels) do not fit a {max}x{max} atlas",
-                    images.len()
+                    dims.len()
                 )
                 .into());
             }
-            width = (width * 2).min(max);
+            width = width.saturating_mul(2).min(max);
         }
     }
     /// `layout`'s shelves at one width: the placements and the first row below
     /// them. `first_fit` puts an image in the first shelf that is tall enough
     /// and has room, instead of only the last one.
-    fn shelves(images: &[PackedImage], width: u32, first_fit: bool) -> (Vec<(u32, u32)>, u32) {
+    fn shelves_dims(dims: &[(u32, u32)], width: u32, first_fit: bool) -> (Vec<(u32, u32)>, u32) {
         // Each shelf: its top row, its height (its first image's) and the next free column.
         let mut shelves: Vec<(u32, u32, u32)> = Vec::new();
-        let mut placements = Vec::with_capacity(images.len());
-        for (_, w, h, _) in images {
+        let mut placements = Vec::with_capacity(dims.len());
+        for &(w, h) in dims {
             let open = if first_fit {
-                shelves.iter().position(|s| s.1 >= *h && s.2 + w < width)
+                shelves
+                    .iter()
+                    .position(|s| s.1 >= h && s.2.saturating_add(w) < width)
             } else {
                 shelves
                     .len()
                     .checked_sub(1)
-                    .filter(|&i| shelves[i].1 >= *h && shelves[i].2 + w < width)
+                    .filter(|&i| shelves[i].1 >= h && shelves[i].2.saturating_add(w) < width)
             };
             let i = open.unwrap_or_else(|| {
-                let top = shelves.last().map_or(0, |s| s.0 + s.1 + 1);
-                shelves.push((top, *h, 0));
+                let top = shelves
+                    .last()
+                    .map_or(0, |s| s.0.saturating_add(s.1).saturating_add(1));
+                shelves.push((top, h, 0));
                 shelves.len() - 1
             });
             placements.push((shelves[i].2, shelves[i].0));
-            shelves[i].2 += w + 1;
+            shelves[i].2 = shelves[i].2.saturating_add(w).saturating_add(1);
         }
-        let glyph_region = shelves.last().map_or(1, |s| s.0 + s.1 + 1);
+        let glyph_region = shelves
+            .last()
+            .map_or(1, |s| s.0.saturating_add(s.1).saturating_add(1));
         (placements, glyph_region)
     }
     /// Pack the textures under these folders of `textures/`, and for the
@@ -69,6 +79,7 @@ impl HudAtlas {
         folders: &[&str],
         full: bool,
         pool: bool,
+        max_atlas_size: u32,
     ) -> Result<Self> {
         let textures = "assets/minecraft/textures";
         let mut files = Vec::new();
@@ -231,9 +242,15 @@ impl HudAtlas {
             .filter(|&size| size != (w, h));
             let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
             let animated = frames && animation.is_some();
+            // Mod-registered atlases (`ns:gui/atlases/...`) bypass the GUI widget size filter;
+            // the renderer's actual texture limit is enforced per registered atlas during layout.
+            let registered_atlas = name
+                .split_once(':')
+                .map_or(name.as_str(), |(_, p)| p)
+                .starts_with("gui/atlases/");
             // Vanilla particle atlases accept sprites of any size.
             let particle = name.starts_with("particle/") || name.contains(":particle/");
-            let (gw, gh) = if particle {
+            let (gw, gh) = if particle || registered_atlas {
                 (0, 0)
             } else {
                 gui_size.unwrap_or((w, h))
@@ -383,25 +400,141 @@ impl HudAtlas {
                 decode_bytes(include_bytes!("../jei_recipes/config_button.png"))?;
             images.push(("sunrise/recipes/settings".to_owned(), width, height, rgba));
         }
-        images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)
+        let mut base_images = Vec::with_capacity(images.len());
+        let mut registered_images = Vec::new();
+        for image in images {
+            if image.0.starts_with(REGISTERED_KEY) {
+                registered_images.push(image);
+            } else {
+                base_images.push(image);
+            }
+        }
+        base_images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+        let (mut width, mut placements, mut glyph_region) =
+            Self::layout_leaving_out(&mut base_images, &mut animated, &cit_names, max_atlas_size)
                 .or_else(|error| -> Result<_> {
-                    let models = reducible_model_sprites(root, &images, &bordered);
-                    let layout = Self::layout_reducing_models(
-                        &mut images,
-                        &mut gui_sizes,
-                        &models,
-                        MAX_ATLAS_SIZE,
-                    )?;
-                    log::warn!(
-                        "reduced HUD model texture resolution to keep the resource pack: {error}"
+                let models = reducible_model_sprites(root, &base_images, &bordered);
+                let layout = Self::layout_reducing_models(
+                    &mut base_images,
+                    &mut gui_sizes,
+                    &models,
+                    max_atlas_size,
+                )?;
+                log::warn!(
+                    "reduced HUD model texture resolution to keep the resource pack: {error}"
+                );
+                Ok(layout)
+            })?;
+        let mut images = base_images;
+        if !registered_images.is_empty() {
+            // Fast path: try stitching every registered atlas onto the base HUD at once.
+            // Only when the combined layout exceeds the GPU texture limit do we stitch each
+            // registered atlas individually in registration order so an overflowing atlas is
+            // diagnosed and isolated without disturbing the base HUD, model textures, or
+            // other mod atlases.
+            let mut all_dims: Vec<(u32, u32)> = images
+                .iter()
+                .chain(&registered_images)
+                .map(|i| (i.1, i.2))
+                .collect();
+            all_dims.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+            match Self::layout_dims(&all_dims, max_atlas_size) {
+                Ok((w, p, g)) => {
+                    images.extend(registered_images);
+                    images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+                    width = w;
+                    placements = p;
+                    glyph_region = g;
+                }
+                Err(_) => {
+                    let staged = root.cached_get::<crate::atlas_sources::StagedTextureAtlases>();
+                    let mut ordered: Vec<(String, Option<&'static str>, Vec<PackedImage>)> = staged
+                        .as_ref()
+                        .map(|s| {
+                            s.order
+                                .iter()
+                                .map(|(atlas, mod_id)| (atlas.clone(), Some(*mod_id), Vec::new()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut unattributed: std::collections::BTreeMap<String, Vec<PackedImage>> =
+                        std::collections::BTreeMap::new();
+                    for image in registered_images {
+                        let public = image.0.strip_prefix(REGISTERED_KEY).unwrap_or(&image.0);
+                        let canonical = if public.contains(':') {
+                            std::borrow::Cow::Borrowed(public)
+                        } else {
+                            std::borrow::Cow::Owned(format!("minecraft:{public}"))
+                        };
+                        if let Some(&idx) = staged
+                            .as_ref()
+                            .and_then(|s| s.sprite_atlas.get(canonical.as_ref()))
+                            .filter(|&&idx| idx < ordered.len())
+                        {
+                            ordered[idx].2.push(image);
+                        } else {
+                            let (ns, rest) =
+                                public.split_once(':').unwrap_or(("minecraft", public));
+                            let atlas_seg = rest
+                                .strip_prefix("gui/atlases/")
+                                .and_then(|s| s.split('/').next())
+                                .unwrap_or("");
+                            unattributed
+                                .entry(format!("{ns}:{atlas_seg}"))
+                                .or_default()
+                                .push(image);
+                        }
+                    }
+                    let groups = ordered.into_iter().chain(
+                        unattributed
+                            .into_iter()
+                            .map(|(atlas, group)| (atlas, None, group)),
                     );
-                    Ok(layout)
-                })?;
+                    for (atlas_id, mod_id, group) in groups {
+                        if group.is_empty() {
+                            continue;
+                        }
+                        let mut trial_dims: Vec<(u32, u32)> =
+                            images.iter().chain(&group).map(|i| (i.1, i.2)).collect();
+                        trial_dims.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+                        match Self::layout_dims(&trial_dims, max_atlas_size) {
+                            Ok((w, p, g)) => {
+                                images.extend(group);
+                                images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+                                width = w;
+                                placements = p;
+                                glyph_region = g;
+                            }
+                            Err(error) => {
+                                match mod_id {
+                                    Some(mod_id) => log::error!(
+                                        "Sunrise: mod '{mod_id}' texture atlas '{atlas_id}' ({} sprites) does not fit the GPU texture limit ({max_atlas_size}x{max_atlas_size}): {error}; isolating this atlas",
+                                        group.len()
+                                    ),
+                                    None => log::error!(
+                                        "Sunrise: texture atlas '{atlas_id}' ({} sprites) does not fit the GPU texture limit ({max_atlas_size}x{max_atlas_size}): {error}; isolating this atlas",
+                                        group.len()
+                                    ),
+                                }
+                                let dropped: HashSet<String> =
+                                    group.into_iter().map(|i| i.0).collect();
+                                animated.retain(|name| !dropped.contains(name));
+                                flags.retain(|name, _| !dropped.contains(name));
+                                gui_sizes.retain(|name, _| !dropped.contains(name));
+                                maps.retain(|name, _| !dropped.contains(name));
+                                bordered.retain(|name| !dropped.contains(name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
-        let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
+        let height = glyph_region
+            .saturating_add(GLYPH_ROWS)
+            .next_multiple_of(1024)
+            .min(max_atlas_size);
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut sprites = HashMap::new();
         let mut translucent = HashSet::new();
@@ -505,7 +638,7 @@ impl HudAtlas {
                     })
                 })
                 .collect();
-            crate::paged_maps::build((width, height), &mapped, MAX_ATLAS_SIZE)
+            crate::paged_maps::build((width, height), &mapped, max_atlas_size)
         };
         let white = sprites["sunrise/white"];
         let glint = Self::glint_texture(root, defaults, "enchanted_glint_item");

@@ -439,25 +439,34 @@ impl Game<'_> {
             self.pack.context.clone(),
         );
         let (unicode, japanese) = (self.settings.force_unicode, self.settings.japanese_glyphs);
+        let max_atlas_size = self
+            .renderer
+            .as_ref()
+            .map_or(sunrise_client::hud::MAX_ATLAS_SIZE, |r| {
+                r.device.limits().max_texture_dimension_2d
+            });
         // The reload's mod listeners register here, on the thread that owns
         // the game, before the staging worker starts: each listener keeps its
         // registering mod for crash attribution.
         let client_listeners = self.register_client_reload_listeners();
         let texture_atlases = super::client_reload::collect_texture_atlases();
+        let emissive_sprites = super::client_reload::collect_emissive_sprites();
         super::mods::register_fluid_models(self.options.execution_role);
         let stage = move |progress: &crate::game::Progress| {
-            stage_pack(
+            stage_pack_with_emissive(
                 &vanilla,
                 &selected,
                 &server,
                 &mod_sources,
                 client_listeners,
                 &texture_atlases,
+                &emissive_sprites,
                 &assets,
                 &res,
                 &context,
                 unicode,
                 japanese,
+                max_atlas_size,
                 progress,
             )
             .map_err(|e| e.to_string())
@@ -724,18 +733,55 @@ impl Game<'_> {
 /// `apply_staged_pack` does the GPU half and the swap): the overlay
 /// root, the models and sprites, the menu bundle, the pack's tables and its
 /// CPU mip chains.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn stage_pack(
     vanilla_root: &Path,
     selected: &[String],
     server: &[Pack],
     mod_sources: &super::mods::ModsState,
     client_listeners: mod_api::ClientListenerRegistry,
-    texture_atlases: &[mod_api::TextureAtlasRegistration],
+    texture_atlases: &[mod_api::Answered<mod_api::TextureAtlasRegistration>],
     assets: &Arc<Assets>,
     res: &Resources,
     context: &WorkerContext,
     force_unicode: bool,
     japanese: bool,
+    progress: &super::Progress,
+) -> sunrise_client::Result<StagedPack> {
+    stage_pack_with_emissive(
+        vanilla_root,
+        selected,
+        server,
+        mod_sources,
+        client_listeners,
+        texture_atlases,
+        &[],
+        assets,
+        res,
+        context,
+        force_unicode,
+        japanese,
+        sunrise_client::hud::MAX_ATLAS_SIZE,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stage_pack_with_emissive(
+    vanilla_root: &Path,
+    selected: &[String],
+    server: &[Pack],
+    mod_sources: &super::mods::ModsState,
+    client_listeners: mod_api::ClientListenerRegistry,
+    texture_atlases: &[mod_api::Answered<mod_api::TextureAtlasRegistration>],
+    emissive_sprites: &[mod_api::Answered<mod_api::EmissiveSpriteRegistration>],
+    assets: &Arc<Assets>,
+    res: &Resources,
+    context: &WorkerContext,
+    force_unicode: bool,
+    japanese: bool,
+    max_atlas_size: u32,
     progress: &super::Progress,
 ) -> sunrise_client::Result<StagedPack> {
     let resource_root = startup_root(vanilla_root, selected, server, mod_sources)?.selected?;
@@ -757,8 +803,14 @@ pub(super) fn stage_pack(
                     let game = sunrise_assets::resource_source::ResourceSource::directory(
                         vanilla_root.to_path_buf(),
                     );
-                    HudAtlas::build_over_with_dynamic_textures(&source, &source, &game, pool)
-                        .map_err(|e| e.to_string())
+                    HudAtlas::build_over_with_dynamic_textures_and_limit(
+                        &source,
+                        &source,
+                        &game,
+                        pool,
+                        max_atlas_size,
+                    )
+                    .map_err(|e| e.to_string())
                 });
                 let panorama = super::resource_load::named_scope(s, "pack-assets", || {
                     sunrise_client::gfx::panorama::Faces::load(&source, &source)
@@ -770,7 +822,7 @@ pub(super) fn stage_pack(
                     )
                 });
                 (
-                    assets.reload(&resource_root),
+                    assets.reload_with_emissive(&resource_root, emissive_sprites),
                     atlas.join(),
                     panorama.join(),
                     small

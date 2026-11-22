@@ -1,5 +1,26 @@
 use super::*;
 
+/// The shared HUD atlas was packed before the GPU device opened and exceeds that device's
+/// `max_texture_dimension_2d` limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtlasExceedsDeviceLimit {
+    pub width: u32,
+    pub height: u32,
+    pub limit: u32,
+}
+
+impl std::fmt::Display for AtlasExceedsDeviceLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the shared atlas is {}x{}; this GPU allows {}x{}",
+            self.width, self.height, self.limit, self.limit
+        )
+    }
+}
+
+impl std::error::Error for AtlasExceedsDeviceLimit {}
+
 impl Renderer {
     pub async fn new(
         window: Arc<Window>,
@@ -972,9 +993,11 @@ impl Renderer {
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
         let limit = device.limits().max_texture_dimension_2d;
         if atlas_width.max(atlas_height) > limit {
-            return Err(format!(
-                "the shared atlas is {atlas_width}x{atlas_height}; this GPU allows {limit}x{limit}"
-            )
+            return Err(AtlasExceedsDeviceLimit {
+                width: atlas_width,
+                height: atlas_height,
+                limit,
+            }
             .into());
         }
         let atlas = device.create_texture_with_data(

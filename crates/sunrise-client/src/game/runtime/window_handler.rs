@@ -444,11 +444,36 @@ impl ApplicationHandler for Game<'_> {
             sunrise_threads::system_menu::suppress(hwnd);
         }
         drop(window_step);
-        let pending = self.pending_initial_models.take();
-        let renderer = match &pending {
-            Some(start) => self.renderer_for(window.clone(), &start.models.pack, &start.models.gui),
-            None => self.new_renderer(window.clone()),
-        };
+        let mut pending = self.pending_initial_models.take();
+        let renderer = (|| {
+            let Some(start) = &mut pending else {
+                return self.new_renderer(window.clone());
+            };
+            let models = &mut start.models;
+            let error = match self.renderer_for(window.clone(), &models.pack, &models.gui) {
+                Ok(renderer) => return Ok(renderer),
+                Err(error) => error,
+            };
+            let Some(exceeded) =
+                error.downcast_ref::<sunrise_client::gfx::AtlasExceedsDeviceLimit>()
+            else {
+                return Err(error);
+            };
+            let game =
+                sunrise_assets::resource_source::ResourceSource::directory(self.vanilla_root());
+            let source = &models.pack.source;
+            let mut atlas = HudAtlas::build_over_with_dynamic_textures_and_limit(
+                source,
+                source,
+                &game,
+                resource_tables::dynamic_texture_pool(),
+                exceeded.limit,
+            )?;
+            atlas.font.uniform = self.settings.force_unicode;
+            atlas.font.japanese = self.settings.japanese_glyphs;
+            models.gui.atlas = atlas;
+            self.renderer_for(window.clone(), &models.pack, &models.gui)
+        })();
         self.resize_state = Some(self.resize_state_of(window.inner_size()));
         self.window = Some(window);
         if let Some(pending) = pending {

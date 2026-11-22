@@ -90,6 +90,7 @@ mod hdr_config;
 #[cfg(test)]
 mod inter_stage_tests;
 mod renderer_construction;
+pub use renderer_construction::AtlasExceedsDeviceLimit;
 mod section_fade;
 mod section_upload;
 mod shader_pack;

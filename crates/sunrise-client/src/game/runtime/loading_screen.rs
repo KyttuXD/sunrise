@@ -50,6 +50,8 @@ pub(super) fn run_event_loop(mut game: Game<'_>) -> Result<()> {
 pub(super) struct Loading {
     pub(super) window: Option<Arc<Window>>,
     pub(super) renderer: Option<Renderer>,
+    /// The opened GPU device's `max_texture_dimension_2d`, shared with the background loader.
+    pub(super) max_atlas_size: Arc<AtomicU32>,
     /// The boot screen's atlas, until the pack's GUI atlas replaces it.
     pub(super) boot: sunrise_client::hud::HudAtlas,
     pub(super) gui: Option<UiResources>,
@@ -172,7 +174,13 @@ impl Loading {
             None,
             self.settings.sunrise.api,
         ) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(r) => {
+                self.max_atlas_size.store(
+                    r.device.limits().max_texture_dimension_2d,
+                    Ordering::Relaxed,
+                );
+                self.renderer = Some(r);
+            }
             Err(e) => {
                 #[cfg(target_os = "windows")]
                 if let Some(stop) = &boot_paint_stop {
@@ -210,11 +218,39 @@ impl Loading {
     }
     /// The menu bundle arrived: rebuild the loading screen with the real atlas
     /// and title panorama.
-    pub(super) fn set_ui(&mut self, gui: UiResources, root: PathBuf) {
+    pub(super) fn set_ui(
+        &mut self,
+        mut gui: UiResources,
+        root: PathBuf,
+        source: sunrise_assets::resource_source::ResourceSource,
+    ) {
         log::info!(
             "Sunrise: loading the title artwork after {} ms",
             self.started.elapsed().as_millis()
         );
+        if let Some(limit) = self
+            .renderer
+            .as_ref()
+            .map(|r| r.device.limits().max_texture_dimension_2d)
+            && gui.atlas.width.max(gui.atlas.height) > limit
+        {
+            let game = sunrise_assets::resource_source::ResourceSource::directory(
+                self.vanilla_root.clone(),
+            );
+            match HudAtlas::build_over_with_dynamic_textures_and_limit(
+                &source,
+                &source,
+                &game,
+                resource_tables::dynamic_texture_pool(),
+                limit,
+            ) {
+                Ok(atlas) => gui.atlas = atlas,
+                Err(error) => {
+                    self.error = Some(error);
+                    return;
+                }
+            }
+        }
         let additional = self
             .options
             .as_ref()

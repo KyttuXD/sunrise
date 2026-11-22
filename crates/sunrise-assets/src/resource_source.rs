@@ -358,7 +358,8 @@ impl ResourceSource {
         }
     }
     /// A source of the same files, `files` added over them, in the same generation: it keeps
-    /// the layers and shares what [`ResourceSource::cached`] holds.
+    /// the layers and starts with a snapshot of what [`ResourceSource::cached`] already holds.
+    /// Values cached on the returned source afterwards stay scoped to it.
     pub fn extended(&self, files: BTreeMap<String, Resource>) -> Self {
         let mut index: BTreeMap<_, _> = self
             .list("")
@@ -371,14 +372,15 @@ impl ResourceSource {
             Storage::Index(.., sources) => sources.clone(),
             _ => Arc::from([]),
         };
+        let memo = self.1.lock().unwrap_or_else(|e| e.into_inner()).clone();
         Self(
             Arc::new(Storage::Index(index, layers, sources)),
-            self.1.clone(),
+            Arc::new(std::sync::Mutex::new(memo)),
         )
     }
     /// A value computed once for this generation and shared by every clone of the source and
-    /// every source `extended` from it: the first caller makes it, the rest wait for it and take
-    /// the same one. `make` must not call `cached` on this source.
+    /// every source `extended` from it after the value was stored: the first caller makes it,
+    /// the rest wait for it and take the same one. `make` must not call `cached` on this source.
     pub fn cached<T: Send + Sync + 'static>(&self, make: impl FnOnce() -> T) -> Arc<T> {
         let mut memo = self.1.lock().unwrap_or_else(|e| e.into_inner());
         let value = memo
@@ -387,6 +389,13 @@ impl ResourceSource {
         Arc::clone(value)
             .downcast()
             .expect("a value is kept under its own type")
+    }
+    /// Read a value already stored by [`ResourceSource::cached`] on this generation, without
+    /// inserting one when absent.
+    pub fn cached_get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        let memo = self.1.lock().unwrap_or_else(|e| e.into_inner());
+        let value = memo.get(&std::any::TypeId::of::<T>())?;
+        Arc::clone(value).downcast().ok()
     }
     pub fn directory(root: PathBuf) -> Self {
         Self::from(Storage::Directory(root))
