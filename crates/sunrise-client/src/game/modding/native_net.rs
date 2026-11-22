@@ -356,14 +356,12 @@ mod tests {
         use crate::game::{Screen, chat::ChatDraft};
         use mod_api::{
             ClientHost, Hooks, ScreenClosingEvent, ScreenInitPostEvent, ScreenOpening,
-            ScreenOpeningEvent,
+            ScreenOpeningEvent, ScreenTarget,
         };
-        use std::sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-        };
+        use std::sync::{Arc, Mutex};
         use sunrise_client::motion::PlayerMotion;
         use sunrise_core::geometry::Vec3;
+        use winit::keyboard::{KeyCode, ModifiersState};
 
         if run_fresh_cases(
             "game::native_net::tests::waking_bed_chat_dismisses_empty_or_draft_despite_veto_and_keeps_edited_draft",
@@ -374,7 +372,7 @@ mod tests {
         }
         #[derive(Default)]
         struct Probe {
-            cancel: AtomicBool,
+            answer: Mutex<Option<ScreenOpening>>,
             events: Mutex<Vec<String>>,
         }
         struct Listener(Arc<Probe>);
@@ -390,10 +388,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .push(format!("{}->{}", event.current.id, event.new.id));
-                self.0
-                    .cancel
-                    .load(Ordering::Relaxed)
-                    .then_some(ScreenOpening::Cancel)
+                self.0.answer.lock().unwrap().clone()
             }
             fn screen_closing(&self, _: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
                 self.0
@@ -428,7 +423,7 @@ mod tests {
                     assert!(game.begin_chat_screen("", false));
                     game.ui.in_bed_chat = true;
                     probe.events.lock().unwrap().clear();
-                    probe.cancel.store(true, Ordering::Relaxed);
+                    *probe.answer.lock().unwrap() = Some(ScreenOpening::Cancel);
                     game.tick_in_bed_chat();
                     game.tick_in_bed_chat();
                     game.observe_screen();
@@ -441,7 +436,7 @@ mod tests {
                     );
 
                     // Untouched restored draft in bed also dismisses despite veto and preserves draft.
-                    probe.cancel.store(false, Ordering::Relaxed);
+                    *probe.answer.lock().unwrap() = None;
                     game.ui.chat_draft = Some(ChatDraft {
                         text: "saved draft".into(),
                         command: false,
@@ -450,7 +445,7 @@ mod tests {
                     assert!(game.ui.chat_screen.as_ref().unwrap().is_draft());
                     game.ui.in_bed_chat = true;
                     probe.events.lock().unwrap().clear();
-                    probe.cancel.store(true, Ordering::Relaxed);
+                    *probe.answer.lock().unwrap() = Some(ScreenOpening::Cancel);
                     game.tick_in_bed_chat();
                     game.tick_in_bed_chat();
                     game.observe_screen();
@@ -468,13 +463,26 @@ mod tests {
 
                     // Editing a restored draft clears the live is_draft flag, so waking carries it
                     // into ordinary chat instead of dismissing the box.
-                    probe.cancel.store(false, Ordering::Relaxed);
+                    *probe.answer.lock().unwrap() = None;
                     assert!(game.begin_chat_screen("saved draft", true));
                     assert!(game.ui.chat_screen.as_ref().unwrap().is_draft());
                     game.ui.in_bed_chat = true;
                     game.chat_type("!");
                     assert!(!game.ui.chat_screen.as_ref().unwrap().is_draft());
                     probe.events.lock().unwrap().clear();
+                    *probe.answer.lock().unwrap() = Some(ScreenOpening::Cancel);
+                    game.tick_in_bed_chat();
+                    assert!(game.ui.in_bed_chat);
+                    assert_eq!(
+                        game.ui.chat_screen.as_ref().unwrap().value(),
+                        "saved draft!"
+                    );
+                    assert_eq!(game.ui.chat_draft.as_ref().unwrap().text, "saved draft");
+                    assert_eq!(
+                        std::mem::take(&mut *probe.events.lock().unwrap()),
+                        ["chat->chat"]
+                    );
+                    *probe.answer.lock().unwrap() = None;
                     game.tick_in_bed_chat();
                     game.observe_screen();
                     assert_eq!(game.screen, Screen::Chat);
@@ -489,6 +497,77 @@ mod tests {
                         *probe.events.lock().unwrap(),
                         ["chat->chat", "close chat", "init chat"]
                     );
+
+                    // A redirect doesn't install the requested prefilled instance, even if
+                    // another Chat screen is what it opens.
+                    for (answer, target) in [
+                        (ScreenOpening::Vanilla(ScreenTarget::Pause), Screen::Paused),
+                        (ScreenOpening::ModScreen, Screen::Mod),
+                        (ScreenOpening::Vanilla(ScreenTarget::Chat), Screen::Chat),
+                    ] {
+                        game.set_screen(Screen::Playing);
+                        game.ui.chat_draft = Some(ChatDraft {
+                            text: "recover me".into(),
+                            command: false,
+                        });
+                        game.open_chat_method("");
+                        game.ui.in_bed_chat = true;
+                        game.chat_type("!");
+                        *probe.answer.lock().unwrap() = Some(answer);
+                        game.tick_in_bed_chat();
+                        *probe.answer.lock().unwrap() = None;
+                        assert_eq!(game.screen, target);
+                        assert!(!game.ui.in_bed_chat);
+                        assert_eq!(game.ui.chat_draft.as_ref().unwrap().text, "recover me!");
+                        if target == Screen::Chat {
+                            assert_eq!(game.ui.chat_screen.as_ref().unwrap().value(), "");
+                        }
+                        game.open_chat_method("");
+                        let restored = game.ui.chat_screen.as_ref().unwrap();
+                        assert_eq!(restored.value(), "recover me!");
+                        assert!(restored.is_draft());
+                    }
+
+                    // Ctrl+F borrows the input. Wake must classify the original input, not
+                    // the nonempty query that cleared the widget's draft flag.
+                    game.settings.extras.pvp.chat.search = true;
+                    for edited in [false, true] {
+                        game.set_screen(Screen::Playing);
+                        game.ui.chat_draft = Some(ChatDraft {
+                            text: "message before search".into(),
+                            command: false,
+                        });
+                        game.open_chat_method("");
+                        game.ui.in_bed_chat = true;
+                        if edited {
+                            game.chat_type("!");
+                        }
+                        game.modifiers = if cfg!(target_os = "macos") {
+                            ModifiersState::SUPER
+                        } else {
+                            ModifiersState::CONTROL
+                        };
+                        game.chat_key_code(KeyCode::KeyF, None);
+                        game.modifiers = ModifiersState::empty();
+                        game.chat_type("query");
+                        assert_eq!(game.ui.chat_screen.as_ref().unwrap().value(), "query");
+                        game.tick_in_bed_chat();
+                        assert!(!game.ui.in_bed_chat);
+                        if edited {
+                            assert_eq!(game.screen, Screen::Chat);
+                            assert_eq!(
+                                game.ui.chat_screen.as_ref().unwrap().value(),
+                                "message before search!"
+                            );
+                            assert!(game.ui.chat_draft.is_none());
+                        } else {
+                            assert_eq!(game.screen, Screen::Playing);
+                            game.open_chat_method("");
+                            let restored = game.ui.chat_screen.as_ref().unwrap();
+                            assert_eq!(restored.value(), "message before search");
+                            assert!(restored.is_draft());
+                        }
+                    }
                 });
             },
         );
