@@ -2148,9 +2148,14 @@ mod tests {
                             .unwrap();
                         })
                         .unwrap();
+                        let old_menu = game.menu(123, old).unwrap();
                         assert_eq!(
-                            game.menu_kind(game.menu(123, old).unwrap()),
+                            game.menu_kind(old_menu),
                             Some(Some("minecraft:generic_9x3".into()))
+                        );
+                        assert_eq!(
+                            old_menu.set_data_slot(game, 0, 1),
+                            Err(MenuDataRefusal::Unsupported)
                         );
                         assert!(sent(&rx).is_empty());
 
@@ -2183,7 +2188,8 @@ mod tests {
                             ]
                         );
                         {
-                            // The menu's namespace is not its package identity.
+                            // Any server caller with the live MenuRef can update a declared
+                            // data slot, not only the mod that registered the menu type.
                             let _guard = mod_api::content::crash::enter_native_mod(
                                 mod_api::content::crash::ModCall {
                                     id: "listen",
@@ -2191,11 +2197,28 @@ mod tests {
                                     part: None,
                                 },
                             );
+                            assert_eq!(menu.set_data_slot(game, 0, 12), Ok(true));
                             assert_eq!(
-                                menu.set_data_slot(game, 0, 12),
-                                Err(MenuDataRefusal::WrongOwner)
+                                updates(sent(&rx)),
+                                [DataSlot {
+                                    window,
+                                    index: 0,
+                                    value: 12,
+                                }]
                             );
+                            assert_eq!(menu.set_data_slot(game, 0, 12), Ok(false));
+                            assert!(sent(&rx).is_empty());
                         }
+                        // Updating without an active native mod caller succeeds as well.
+                        assert_eq!(menu.set_data_slot(game, 0, -80_000), Ok(true));
+                        assert_eq!(
+                            updates(sent(&rx)),
+                            [DataSlot {
+                                window,
+                                index: 0,
+                                value: -80_000,
+                            }]
+                        );
                         // A full resend of this window has no hotbar slots, so a pending
                         // inventory update must remain pending.
                         let hub = &mut game.lan.as_mut().unwrap().hub;
@@ -2222,13 +2245,6 @@ mod tests {
                             },
                         ];
                         assert_eq!(updates(packets), snapshot);
-                        let _guard = mod_api::content::crash::enter_native_mod(
-                            mod_api::content::crash::ModCall {
-                                id: "status_package",
-                                hook: "test",
-                                part: None,
-                            },
-                        );
                         assert_eq!(
                             menu.set_data_slot(game, 2, 1),
                             Err(MenuDataRefusal::InvalidIndex)
@@ -2364,6 +2380,13 @@ mod tests {
                         );
                         assert!(player.container_menu(game).unwrap().close_container(game));
                         assert!(updates(sent(&rx)).is_empty());
+                        assert_eq!(
+                            player
+                                .container_menu(game)
+                                .unwrap()
+                                .set_data_slot(game, 0, 1),
+                            Err(MenuDataRefusal::Unsupported)
+                        );
 
                         let old = open(game, 3, "before disconnect", MenuReplace::CloseFirst);
                         sent(&rx);

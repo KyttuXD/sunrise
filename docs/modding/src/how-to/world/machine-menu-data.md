@@ -319,10 +319,10 @@ player.open_mod_menu(host, request)?;
 The negotiated blockless payload sends initial `i32` values after the window opens, at
 indices 0 through 65,535. Larger declared indices remain in server storage. A client
 without the required layout is refused with `OpenMenuError::PlayerUnavailable`. In the draw
-callback, read `frame.data.get(index)`; values are not available before they arrive. The owning mod
+callback, read `frame.data.get(index)`; values are not available before they arrive. Server code
 gets the live `MenuRef` from `player.container_menu(host)` or the open event and calls, for
 example, `menu.set_data_slot(host, 0, 120_000)?`. It returns `true` for a changed value,
-`false` for a repeat, and refuses unsupported, stale or foreign menus and undeclared indices.
+`false` for a repeat, and refuses unsupported or stale menus and undeclared indices.
 Updates go only to this player and this window. Within a transaction, another write sees the
 pending value, but a full resend only includes committed values. Commit sends the final changed
 values and abort discards pending writes. Closing or replacing the menu discards its data.

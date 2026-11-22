@@ -76,8 +76,8 @@ impl Game<'_> {
         true
     }
 
-    /// `DataSlot.set` of an owning mod's blockless menu, journaled by window generation.
-    /// The client reads the committed updates as live frame data, not opening bytes.
+    /// `AbstractContainerMenu.setData` of a live blockless mod menu, journaled by window
+    /// generation. The client reads the committed updates as live frame data, not opening bytes.
     pub(super) fn menu_set_data_slot(
         &mut self,
         menu: MenuRef,
@@ -92,12 +92,8 @@ impl Game<'_> {
         let open = guest
             .menu
             .as_ref()
-            .filter(|m| m.slots == Slots::Native)
+            .filter(|m| m.slots == Slots::Native && m.mod_type.is_some())
             .ok_or(Unsupported)?;
-        let kind = open.mod_type.ok_or(Unsupported)?;
-        if mod_api::content::crash::current_native_mod() != Some(kind.owner) {
-            return Err(WrongOwner);
-        }
         let &committed = open.blockless_data.get(index).ok_or(InvalidIndex)?;
         let conn = guest.conn;
         let key = (conn, guest.menu_generation, index);
@@ -879,6 +875,10 @@ mod tests {
             assert_eq!(
                 game.inventory_menu_slot_boxes(1, PANEL, &batch),
                 Some(vec![])
+            );
+            assert_eq!(
+                game.menu_set_data_slot(menu, 0, 1),
+                Err(mod_api::MenuDataRefusal::Unsupported)
             );
         });
     }
