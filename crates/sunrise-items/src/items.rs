@@ -1738,7 +1738,7 @@ impl Items {
         &self,
         table: &Value,
     ) -> std::io::Result<sunrise_world::loot::types::PreparedInlineTable> {
-        self.loot_bindings.prepare_inline_table(table)
+        self.loot_bindings.decode_inline_table(table)
     }
     /// Roll an already-prepared inline loot table; replacement keeps emitted empties.
     pub fn roll_prepared_inline_loot_table_for_command<R: RandomSource>(
@@ -1778,7 +1778,7 @@ impl Items {
         random: &mut R,
         keep_empty: bool,
     ) -> Vec<ItemStack> {
-        let prepared = match self.prepare_inline_loot_table(table) {
+        let prepared = match self.loot_bindings.prepare_inline_table(table) {
             Ok(prepared) => prepared,
             Err(error) => {
                 log::warn!("inline loot table refused: {error}");
@@ -1978,8 +1978,7 @@ impl Items {
         table: &Value,
         block: &str,
         properties: &sunrise_world::chunk::BlockProperties,
-        interacting: Option<EntityTarget<'_>>,
-        location: Option<&dyn Fn(&Value) -> Option<bool>>,
+        params: InteractionLootParams<'_>,
         random: &mut R,
     ) -> Vec<ItemStack> {
         let ctx = LootContext {
@@ -1989,7 +1988,7 @@ impl Items {
             local_bindings: None,
             block,
             properties,
-            held: None,
+            held: params.tool,
             killed_by_player: false,
             explosion_radius: None,
             this_entity: false,
@@ -1997,8 +1996,8 @@ impl Items {
             block_levels: None,
             target: None,
             target_entity: None,
-            interacting_entity: interacting,
-            location,
+            interacting_entity: params.interacting,
+            location: params.location,
             keep_empty: false,
         };
         ctx.roll_root(Some(id), table, random)
@@ -2229,6 +2228,15 @@ pub type LootLevels<'a, R> = dyn Fn(&mut R, &str, u32) -> u32 + 'a;
 /// enchantment and the tool's level in, the level to use out. A block's
 /// listeners make no draws, so the roll's random isn't theirs.
 pub type BlockLootLevels<'a> = dyn Fn(&str, u32) -> u32 + 'a;
+/// The optional tool and actor of `LootContextParamSets.BLOCK_INTERACT`,
+/// and the level's predicate reader for the interaction origin.
+#[derive(Clone, Copy, Default)]
+pub struct InteractionLootParams<'a> {
+    pub tool: Option<&'a ItemStack>,
+    pub interacting: Option<EntityTarget<'a>>,
+    pub location: Option<&'a dyn Fn(&Value) -> Option<bool>>,
+}
+
 /// What a block's table rolls with, beside the block (`LootParams` as
 /// `BlockState.getDrops` is given them).
 #[derive(Clone, Copy, Default)]

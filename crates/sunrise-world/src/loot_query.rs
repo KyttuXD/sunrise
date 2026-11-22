@@ -10,6 +10,8 @@ pub(super) fn roll_facts<'a>(
         queried_table_id: query.id(),
         queried_stack: query.queried_stack.as_ref(),
         entity: entity.map(|e| e.this),
+        interacting_entity: None,
+        enchantment_level: entity.and_then(|e| e.enchantment_level),
         damage: entity.and_then(|e| e.damage),
         player: entity.and_then(|e| e.player),
         tool: query

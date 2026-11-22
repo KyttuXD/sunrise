@@ -510,7 +510,7 @@ pub fn die(
             level_random,
         },
     );
-    let (mut out, skulls) = finish_death(m, d, rolled, None);
+    let (mut out, skulls) = finish_death(m, d, rolled, level_random, |random| random, None);
     if let Some(reward) = experience_reward(m, d.player_killed, d.mob_drops) {
         out.push(Drop::Experience(reward));
     }
@@ -577,14 +577,18 @@ pub fn roll_death(m: &mut Mob, d: &Death, rolls: &mut dyn DeathRolls) -> Rolled 
         table_rolled,
     }
 }
+pub type EquipmentChooser<'a, S> = dyn FnMut(&mut S, EquipmentChoice<'_>) -> f32 + 'a;
+
 /// The second half of `die`: `Mob.dropCustomDeathLoot` (each slot's chance,
 /// roll and clear, in order, with `choose` asked for a slot just before its
 /// roll) and the species' extra item drops. Experience is independent of loot.
-pub fn finish_death(
+pub fn finish_death<S>(
     m: &mut Mob,
     d: &Death,
     rolled: Rolled,
-    mut choose: Option<&mut dyn FnMut(EquipmentChoice<'_>) -> f32>,
+    scope: &mut S,
+    level_random: fn(&mut S) -> &mut LegacyRandom,
+    mut choose: Option<&mut EquipmentChooser<'_, S>>,
 ) -> (Vec<Drop>, bool) {
     let Rolled {
         mut out,
@@ -600,19 +604,24 @@ pub fn finish_death(
         let damage_params = damage_context(this.clone(), d);
         for (index, slot) in SLOTS.iter().enumerate() {
             let stack = slot_item(m, slot);
-            let Some((mut chance, preserve)) = slot_chance(m, d, &damage_params, slot) else {
+            let Some((mut chance, preserve)) =
+                slot_chance(m, d, &damage_params, slot, level_random(scope))
+            else {
                 continue;
             };
             let Some(mut stack) = stack else { continue };
             if let Some(choose) = choose.as_mut() {
                 let considered = slot_drop(m, slot, stack.clone());
-                chance = choose(EquipmentChoice {
-                    slot: index,
-                    stack: &considered,
-                    original: drop_chance(m, slot),
-                    preserved: preserve,
-                    chance,
-                });
+                chance = choose(
+                    scope,
+                    EquipmentChoice {
+                        slot: index,
+                        stack: &considered,
+                        original: drop_chance(m, slot),
+                        preserved: preserve,
+                        chance,
+                    },
+                );
             }
             if d.loot.prevents_equipment_drop(&stack) || !(killed_by_player || preserve) {
                 continue;
@@ -717,6 +726,7 @@ fn slot_chance(
     d: &Death,
     damage_params: &EntityLootParams,
     slot: &str,
+    random: &mut LegacyRandom,
 ) -> Option<(f32, bool)> {
     let chance = drop_chance(m, slot);
     if chance == 0.0 {
@@ -728,7 +738,7 @@ fn slot_chance(
         .and_then(|x| x.source.as_ref())
         .is_some_and(|a| a.living);
     let after = if living_attacker {
-        d.loot.equipment_drop_chance(damage_params, chance)
+        d.loot.equipment_drop_chance(damage_params, chance, random)
     } else {
         chance
     };
@@ -1025,7 +1035,7 @@ mod death_loot_table_tests {
                 },
             );
             let mut asked = Vec::new();
-            let mut ask = |c: EquipmentChoice<'_>| {
+            let mut ask = |_: &mut LegacyRandom, c: EquipmentChoice<'_>| {
                 let stack = match c.stack {
                     Drop::Item(s) => s.item.to_string(),
                     other => format!("{other:?}"),
@@ -1033,7 +1043,14 @@ mod death_loot_table_tests {
                 asked.push((c.slot, stack, c.original, c.preserved, c.chance));
                 chosen.unwrap_or(c.chance)
             };
-            let (out, _) = finish_death(&mut m, &death, rolled, Some(&mut ask));
+            let (out, _) = finish_death(
+                &mut m,
+                &death,
+                rolled,
+                &mut LegacyRandom::new(7),
+                |random| random,
+                Some(&mut ask),
+            );
             let dropped = |item: &str| {
                 out.iter()
                     .any(|d| matches!(d, Drop::Item(s) if s.item == item))

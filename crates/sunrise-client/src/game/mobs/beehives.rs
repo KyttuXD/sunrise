@@ -361,9 +361,12 @@ impl Game<'_> {
             .map(|p| [p.position.x, p.position.y, p.position.z]);
         if shears {
             // dropHoneycomb (harvest/beehive), the shear sound, hurtAndBreak.
-            for stack in self.sequence_loot(
+            let actor = self.interacting_loot_entity();
+            for stack in self.roll_block_interaction(
+                pos,
+                state,
                 "minecraft:harvest/beehive",
-                "minecraft:harvest/beehive",
+                Some(actor),
                 Some(held),
             ) {
                 self.pop_resource(pos, stack);

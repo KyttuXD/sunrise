@@ -137,6 +137,10 @@ pub struct LootContext<'a> {
     pub queried_stack: Option<&'a LootStack>,
     /// `THIS_ENTITY`, when supplied.
     pub entity: Option<&'a LootEntity>,
+    /// `INTERACTING_ENTITY`, when supplied.
+    pub interacting_entity: Option<&'a LootEntity>,
+    /// `ENCHANTMENT_LEVEL`, when supplied.
+    pub enchantment_level: Option<i32>,
     /// `DAMAGE_SOURCE`, when supplied.
     pub damage: Option<&'a LootDamage>,
     /// `LAST_DAMAGE_PLAYER`, when supplied.
@@ -1063,7 +1067,12 @@ impl LootData {
     }
     /// `EnchantmentHelper.processEquipmentDropChance`: the victim's and the
     /// attacker's `equipment_drops` effects (Looting) applied to `chance`.
-    pub fn equipment_drop_chance(&self, params: &EntityLootParams, chance: f32) -> f32 {
+    pub fn equipment_drop_chance(
+        &self,
+        params: &EntityLootParams,
+        chance: f32,
+        random: &mut LegacyRandom,
+    ) -> f32 {
         // Enchantment.damageContext: no luck and no killing player.
         let damage_params = EntityFacts {
             player: None,
@@ -1074,7 +1083,7 @@ impl LootData {
             place: current_native_loot_place(),
             data: self,
             local_bindings: None,
-            random: LegacyRandom::new(0),
+            random: random.clone(),
             biome: None,
             visited: Vec::new(),
             luck: 0.0,
@@ -1092,6 +1101,7 @@ impl LootData {
         {
             c.equipment_drops(attacker, "attacker", &mut chance);
         }
+        *random = c.random;
         chance
     }
     /// Tag members in tag order (nested tags expanded in place, duplicates
@@ -1335,6 +1345,7 @@ type Sink<'s, R> = dyn FnMut(&mut Context<'_, R>, LootStack) + 's;
 
 #[derive(Clone, Copy)]
 struct EntityFacts<'a> {
+    enchantment_level: Option<i32>,
     this: &'a LootEntity,
     damage: Option<&'a LootDamage>,
     player: Option<&'a LootEntity>,
@@ -1344,6 +1355,7 @@ struct EntityFacts<'a> {
 impl<'a> From<&'a EntityLootParams> for EntityFacts<'a> {
     fn from(params: &'a EntityLootParams) -> Self {
         Self {
+            enchantment_level: None,
             this: &params.this,
             damage: params.damage.as_ref(),
             player: params.player.as_ref(),
@@ -1408,9 +1420,13 @@ impl<R: RandomSource> Context<'_, R> {
                     {
                         continue;
                     }
-                    if !effect["requirements"].is_null() && !self.condition(&effect["requirements"])
-                    {
-                        continue;
+                    if !effect["requirements"].is_null() {
+                        if let Some(params) = &mut self.entity {
+                            params.enchantment_level = Some(*level);
+                        }
+                        if !self.condition(&effect["requirements"]) {
+                            continue;
+                        }
                     }
                     let value = level_value(&effect["effect"]["value"], *level);
                     *chance = match effect["effect"]["type"].as_str().unwrap_or("") {

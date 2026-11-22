@@ -58,7 +58,7 @@ impl GlobalLootModifierSerializer for OwnedSerializer {
         };
         Ok(Arc::new(OwnedModifier {
             owner: self.owner.clone(),
-            instance,
+            instance: Some(instance),
             priority,
             condition,
         }))
@@ -67,9 +67,18 @@ impl GlobalLootModifierSerializer for OwnedSerializer {
 
 struct OwnedModifier {
     owner: CallbackOwner,
-    instance: Arc<dyn GlobalLootModifier>,
+    instance: Option<Arc<dyn GlobalLootModifier>>,
     priority: i32,
     condition: Option<Value>,
+}
+impl Drop for OwnedModifier {
+    fn drop(&mut self) {
+        self.owner.dispose(
+            "loot modifier serializer",
+            "global_loot_modifier_drop",
+            self.instance.take(),
+        );
+    }
 }
 impl GlobalLootModifier for OwnedModifier {
     fn priority(&self) -> Result<i32, LootModifierError> {
@@ -85,7 +94,10 @@ impl GlobalLootModifier for OwnedModifier {
     ) -> Result<(), LootModifierError> {
         self.owner
             .call("loot modifier", "global_loot_modifier_apply", || {
-                self.instance.apply(context, generated)
+                self.instance
+                    .as_ref()
+                    .expect("retained modifier")
+                    .apply(context, generated)
             })
             .map_err(|reason| LootModifierError::new("apply", reason))?
     }

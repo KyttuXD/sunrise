@@ -115,6 +115,8 @@ impl<R: RandomSource> LootContext<'_, R> {
             queried_table_id: self.query.id(),
             queried_stack: self.query.queried_stack.as_ref(),
             entity: self.target.map(|(entity, _)| entity),
+            interacting_entity: self.interacting_entity.map(|(entity, _)| entity),
+            enchantment_level: None,
             damage: None,
             player: None,
             block: (!self.block.is_empty()).then_some(self.block),
@@ -221,8 +223,7 @@ impl Items {
         id: &str,
         registry: &BlockRegistry,
         state: BlockStateId,
-        interacting: Option<crate::items::EntityTarget<'_>>,
-        location: Option<&dyn Fn(&Value) -> Option<bool>>,
+        params: InteractionLootParams<'_>,
         random: &mut impl RandomSource,
         sequences: &mut crate::random_sequences::RandomSequences,
         seed: i64,
@@ -234,25 +235,11 @@ impl Items {
             match table.get("random_sequence").and_then(Value::as_str) {
                 Some(sequence) => {
                     let random = sequences.get(sequence, seed);
-                    self.interact_roll(
-                        id,
-                        table,
-                        &block.name,
-                        &block.properties,
-                        interacting,
-                        location,
-                        random,
-                    )
+                    self.interact_roll(id, table, &block.name, &block.properties, params, random)
                 }
-                None => self.interact_roll(
-                    id,
-                    table,
-                    &block.name,
-                    &block.properties,
-                    interacting,
-                    location,
-                    random,
-                ),
+                None => {
+                    self.interact_roll(id, table, &block.name, &block.properties, params, random)
+                }
             }
         })
     }

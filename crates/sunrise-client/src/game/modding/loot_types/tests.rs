@@ -48,6 +48,9 @@ impl ModLootFunction for ScaleRule {
         context: &mut dyn mod_api::LootTypeContext,
     ) -> Result<(), String> {
         assert!(context.params().origin().is_none());
+        if self.label == "enchant drop" {
+            assert_eq!(context.params().enchantment_level(), Some(1));
+        }
         let draw = context.random().next_int_bound(5);
         self.observations
             .lock()
@@ -259,10 +262,26 @@ fn registered_types_bind_once_and_preserve_both_evaluators_order_short_circuit_a
                 ..Default::default()
             };
             observations.lock().unwrap().clear();
-            let chance = data.equipment_drop_chance(&params, 0.5);
-            assert_eq!(chance, 0.75);
-            assert_eq!(observations.lock().unwrap().len(), 1);
-            assert_eq!(observations.lock().unwrap()[0].0, "enchant drop");
+            let mut random = LegacyRandom::new(7);
+            let mut expected = LegacyRandom::new(7);
+            for _ in 0..2 {
+                assert_eq!(data.equipment_drop_chance(&params, 0.5, &mut random), 0.75);
+            }
+            let expected_draws = [
+                (
+                    "enchant drop".to_owned(),
+                    RandomSource::next_int_bound(&mut expected, 5).unwrap(),
+                ),
+                (
+                    "enchant drop".to_owned(),
+                    RandomSource::next_int_bound(&mut expected, 5).unwrap(),
+                ),
+            ];
+            assert_eq!(*observations.lock().unwrap(), expected_draws);
+            assert_eq!(
+                RandomSource::next_long(&mut random),
+                RandomSource::next_long(&mut expected)
+            );
             assert_eq!(cond_decodes.load(Ordering::Relaxed), 10);
 
             // Inline table binds its own nodes once and reuses named predicates/modifiers without re-decoding.

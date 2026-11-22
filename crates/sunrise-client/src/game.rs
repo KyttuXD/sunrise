@@ -5046,6 +5046,7 @@ impl Game<'_> {
             self.world.shape.sky_light && !self.world.shape.has_ceiling && self.dim != Dim::End;
         sunrise_world::loot::LootPlace {
             origin: Some(origin),
+            block_state: None,
             block_entity,
             block_components,
             storage: Some(self.score.storage.snapshot()),

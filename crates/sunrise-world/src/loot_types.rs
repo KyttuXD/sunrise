@@ -400,9 +400,19 @@ impl Bindings {
         }
         entry
     }
-    /// Normalize and bind an inline loot table at the argument boundary before drawing,
-    /// reusing named generation bindings without re-decoding them.
+    /// Decode a command's inline loot table and resolve named rules before drawing.
+    pub fn decode_inline_table(&self, table: &Value) -> io::Result<PreparedInlineTable> {
+        super::validate_loot_table(table)
+            .map_err(|reason| invalid("inline loot_table $", "loot_table", reason))?;
+        self.bind_inline_table(table, true)
+    }
+
+    /// Prepare a programmatic loot table, which can use the evaluator's internal forms.
     pub fn prepare_inline_table(&self, table: &Value) -> io::Result<PreparedInlineTable> {
+        self.bind_inline_table(table, false)
+    }
+
+    fn bind_inline_table(&self, table: &Value, strict: bool) -> io::Result<PreparedInlineTable> {
         let mut boxed = Box::new(table.clone());
         let normalization = &self.inner.normalization;
         normalization.holder_sets.walk(
@@ -422,9 +432,7 @@ impl Bindings {
                 modifiers: &self.inner.modifiers,
                 visiting: HashSet::new(),
                 inherited: Some(&self.inner.rules),
-                // Programmatic roots keep their evaluator's stock-kind handling; bind
-                // custom nodes at the same schema-owned edges as resource files.
-                strict: false,
+                strict,
                 rules: RuleMap::default(),
                 allowed: None,
             };

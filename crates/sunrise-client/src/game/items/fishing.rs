@@ -704,32 +704,7 @@ impl Game<'_> {
                     &params,
                 )
             });
-            let mut caught: Vec<ItemStack> = items
-                .into_iter()
-                .map(|stack| {
-                    let mut item = ItemStack {
-                        item: Arc::from(stack.item.as_str()),
-                        count: stack.count.max(1) as u32,
-                        damage: stack.damage.max(0) as u32,
-                        extra: None,
-                    };
-                    for (id, level) in &stack.enchantments {
-                        if &*item.item == "minecraft:enchanted_book" {
-                            sunrise_client::item_data::set_level(
-                                &mut item.data_mut().stored_enchantments,
-                                id,
-                                (*level).max(0) as u32,
-                            );
-                        } else {
-                            item.enchant(id, (*level).max(0) as u32);
-                        }
-                    }
-                    if let Some(potion) = &stack.potion {
-                        item = item.with_potion(potion);
-                    }
-                    item
-                })
-                .collect();
+            let mut caught: Vec<ItemStack> = items.iter().map(ItemStack::from_loot).collect();
             // ItemFishedEvent may change the catch, rod damage, or cancel rewards.
             let mut rod_damage = if hook.on_ground { 2 } else { 1 };
             if let Some(player) = self.lan_acting_uuid
@@ -762,7 +737,11 @@ impl Game<'_> {
                 ..Default::default()
             };
             self.trigger_fishing_rod_hooked(rod, &bobber, &caught);
-            for item in caught.iter().cloned() {
+            for item in caught
+                .iter()
+                .filter(|item| item.count != 0 && &*item.item != "minecraft:air")
+                .cloned()
+            {
                 let fish = self
                     .res
                     .items()

@@ -1656,7 +1656,7 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
-        let sheared = self.shear_beehive(target)? || self.shear_entity(target)?;
+        let sheared = self.shear_beehive(target, &stack)? || self.shear_entity(target)?;
         if sheared {
             return Ok((self.hurt_and_break(stack, 1), CLICK));
         }
@@ -1672,7 +1672,7 @@ impl Game<'_> {
             sunrise_client::beehive::Release::BeeReleased,
         );
     }
-    fn shear_beehive(&mut self, target: Pos) -> Result<bool> {
+    fn shear_beehive(&mut self, target: Pos, tool: &ItemStack) -> Result<bool> {
         let state = self.block_at(target);
         let name = self.dispenser_block_name(target);
         let level = self
@@ -1690,11 +1690,9 @@ impl Game<'_> {
         // BeehiveBlock.dropHoneycomb (harvest/beehive), then
         // releaseBeesAndResetHoneyLevel and the shear event.
         let p = [target.0, target.1, target.2];
-        for stack in self.sequence_loot(
-            "minecraft:harvest/beehive",
-            "minecraft:harvest/beehive",
-            None,
-        ) {
+        for stack in
+            self.roll_block_interaction(p, state, "minecraft:harvest/beehive", None, Some(tool))
+        {
             self.pop_resource(p, stack);
         }
         if let Some(reset) = self.with_props(state, &[("honey_level", "0")]) {

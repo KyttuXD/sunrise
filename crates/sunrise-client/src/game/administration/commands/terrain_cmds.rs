@@ -624,8 +624,6 @@ impl Game<'_> {
                     let (tag, _) = sunrise_core::nbt::parse_snbt(&table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = sunrise_client::scoreboard::tag_to_json(&tag);
-                    sunrise_world::loot::validate_loot_table(&json)
-                        .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let prepared = world_items!(self)
                         .prepare_inline_loot_table(&json)
                         .map_err(|e| err("argument.nbt.invalid", &[&e.to_string()]))?;
@@ -637,7 +635,7 @@ impl Game<'_> {
                     } else {
                         None
                     };
-                    let drops = match json["random_sequence"].as_str() {
+                    let drops = match prepared.value()["random_sequence"].as_str() {
                         Some(sequence) => {
                             let random = self.rand_sequences.get(sequence, self.level.seed);
                             world_items!(self).roll_prepared_inline_loot_table_for_command(

@@ -68,6 +68,7 @@ impl LootData {
     ) -> Option<Vec<LootStack>> {
         let json = self.tables.get(table)?;
         let entity = context.entity.map(|this| EntityFacts {
+            enchantment_level: None,
             this,
             damage: None,
             player: None,

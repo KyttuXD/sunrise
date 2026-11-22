@@ -20,6 +20,8 @@ use sunrise_core::nbt::{Compound, Tag};
 pub struct LootPlace {
     /// `ORIGIN`: a broken block's centre, a dead mob's position.
     pub origin: Option<[f64; 3]>,
+    /// The state the interaction selected as `BLOCK_STATE`.
+    pub block_state: Option<mod_api::BlockState>,
     /// `BLOCK_ENTITY`: the broken block's entity as it was before the
     /// break, saved with its id and position (`saveWithFullMetadata`); a
     /// mod's block entity carries its own data and its `Items`.

@@ -18,10 +18,15 @@ pub(crate) fn loot_params(facts: engine::LootContext<'_>) -> mod_api::LootParams
                 )
             }),
             entity: facts.entity.map(|entity| entity as &dyn LootEntityAccess),
+            interacting_entity: facts
+                .interacting_entity
+                .map(|entity| entity as &dyn LootEntityAccess),
+            enchantment_level: facts.enchantment_level,
             last_damage_player: facts.player.map(|entity| entity as &dyn LootEntityAccess),
             damage: facts.damage.map(|damage| damage as &dyn LootDamageAccess),
             tool: facts.tool,
             block: facts.block,
+            block_state: facts.place.and_then(|place| place.block_state),
             biome: facts.biome,
             origin: facts.place.and_then(|place| place.origin),
             block_entity: facts.place.and_then(|place| place.block_entity.as_ref()),

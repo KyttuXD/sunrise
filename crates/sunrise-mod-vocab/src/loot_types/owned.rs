@@ -52,7 +52,7 @@ impl ModLootFunctionCodec for FunctionCodec {
         };
         Ok(Arc::new(OwnedFunction {
             owner: self.owner.clone(),
-            rule,
+            rule: Some(rule),
             params,
         }))
     }
@@ -63,8 +63,14 @@ impl ModLootFunctionCodec for FunctionCodec {
 
 struct OwnedFunction {
     owner: CallbackOwner,
-    rule: Arc<dyn ModLootFunction>,
+    rule: Option<Arc<dyn ModLootFunction>>,
     params: Vec<Identifier>,
+}
+impl Drop for OwnedFunction {
+    fn drop(&mut self) {
+        self.owner
+            .dispose("loot function type", "loot_function_drop", self.rule.take());
+    }
 }
 impl ModLootFunction for OwnedFunction {
     fn referenced_context_params(&self) -> Vec<Identifier> {
@@ -77,7 +83,10 @@ impl ModLootFunction for OwnedFunction {
     ) -> Result<(), String> {
         self.owner
             .call("loot function type", "loot_function_apply", || {
-                self.rule.apply(stack, context)
+                self.rule
+                    .as_ref()
+                    .expect("retained rule")
+                    .apply(stack, context)
             })?
             .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))
     }
@@ -109,7 +118,7 @@ impl ModLootConditionCodec for ConditionCodec {
         };
         Ok(Arc::new(OwnedCondition {
             owner: self.owner.clone(),
-            rule,
+            rule: Some(rule),
             params,
         }))
     }
@@ -117,8 +126,17 @@ impl ModLootConditionCodec for ConditionCodec {
 
 struct OwnedCondition {
     owner: CallbackOwner,
-    rule: Arc<dyn ModLootCondition>,
+    rule: Option<Arc<dyn ModLootCondition>>,
     params: Vec<Identifier>,
+}
+impl Drop for OwnedCondition {
+    fn drop(&mut self) {
+        self.owner.dispose(
+            "loot condition type",
+            "loot_condition_drop",
+            self.rule.take(),
+        );
+    }
 }
 impl ModLootCondition for OwnedCondition {
     fn referenced_context_params(&self) -> Vec<Identifier> {
@@ -127,7 +145,7 @@ impl ModLootCondition for OwnedCondition {
     fn test(&self, context: &mut dyn LootTypeContext) -> Result<bool, String> {
         self.owner
             .call("loot condition type", "loot_condition_test", || {
-                self.rule.test(context)
+                self.rule.as_ref().expect("retained rule").test(context)
             })?
             .map_err(|reason| format!("mod {}: {reason}", self.owner.id()))
     }

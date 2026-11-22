@@ -117,6 +117,8 @@ fn ordinary_callback_refusals_report_each_call_with_type_location_and_reason() {
         queried_table_id: None,
         queried_stack: None,
         entity: None,
+        interacting_entity: None,
+        enchantment_level: None,
         damage: None,
         player: None,
         tool: None,

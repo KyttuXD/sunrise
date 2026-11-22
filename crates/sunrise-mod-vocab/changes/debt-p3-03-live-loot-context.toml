@@ -43,8 +43,12 @@ ids = [
     "method:LootModifierContext::params",
     "method:LootModifierContext::roll_raw",
     "method:LootModifierContext::append_raw",
+    "method:LootModifierContext::append_split",
     # Borrowed loot parameter views, stack editors, and live generated list
     "type:LootParamsView",
+    "handle:LootParamsView::block_state",
+    "handle:LootParamsView::interacting_entity",
+    "handle:LootParamsView::enchantment_level",
     "type:LootToolView",
     "type:LootEntityView",
     "type:LootDamageView",
@@ -58,6 +62,7 @@ ids = [
     # Item ability hook: borrowed stack view and honest gameplay-vs-loot context
     "hook:can_perform_action",
     "hook:can_perform_action.stack",
+    "type:CanPerformActionEvent",
     "type:CanPerformActionEvent.stack",
     "method:ItemPart::can_perform_action",
     "type:ItemAbilityContext",
@@ -69,8 +74,11 @@ why = """
 Vanilla 26.3 (`net.minecraft.world.level.storage.loot.LootContext`, `LootParams`,
 `LootItemFunction`, `LootItemCondition`, `LootItemConditionalFunction`,
 `LootContextUser.getReferencedContextParams`, `LootTable.getRandomItems`,
-`NbtAccounter.MAX_STACK_DEPTH`) and NeoForge (`IGlobalLootModifier`,
-`CanItemPerformAbility`, `IItemExtension.canPerformAction`) decode custom loot
+`NbtAccounter.MAX_STACK_DEPTH`, `Block.dropFromBlockInteractLootTable`,
+`Enchantment.damageContext`, `FishingHook.retrieve`, `LootCommand`'s
+`ResourceOrIdArgument.lootTable`) and NeoForge (`IGlobalLootModifier`,
+`CanItemPerformAbility`, `IItemExtension.canPerformAction`,
+`CommonHooks.modifyLoot`, `AddTableLootModifier.doApply`) decode custom loot
 functions and conditions once when data loads into bound rule objects, lend
 read-only loot parameters instead of cloning snapshots per callback, edit live
 loot candidates and modifier output lists in place, and evaluate
@@ -117,7 +125,14 @@ migrate = """
      `params.last_damage_player()`, `params.damage()`, `params.tool()`,
      `params.block()`, `params.biome()`, `params.origin()`,
      `params.block_entity()`, `params.level()`, `params.luck()`,
-     `params.queried_table_id()`, `params.queried_stack()`).
+     `params.queried_table_id()`, `params.queried_stack()`). Read the full block
+     interaction state and actor with `params.block_state()` and
+     `params.interacting_entity()`; equipment requirements can read
+     `params.enchantment_level()` and draw from `context.random()`.
+   - Remove `LootContext::new(...)` and `LootTool::new(...)` calls. The
+     evaluator supplies `LootParamsView` and `LootToolView` during the callback;
+     for delayed work or test doubles, store only the facts you need as your
+     own data (for example, copy `params.tool().map(|tool| tool.item_id().to_owned())`).
    - Release any borrow from `context.params()` before calling `context.random()`,
      and use `context.random()` directly (the removed `seed` field had no seed).
    - `LootStack`, `ExplorationMap`, `LootModifierError` and `LootModifierSettings`
@@ -135,11 +150,25 @@ migrate = """
    - Replace `generated.extend(context.roll_raw(&table)?)` with
      `context.append_raw(&table, generated)?` to append raw sub-rolls without
      snapshot round-trips.
-   - When inspecting sub-roll entries before keeping them, pass a visitor to
-     `context.roll_raw(&table, &mut |stack| { ... })` and call `stack.to_owned()?`
-     only for stacks you retain.
+   - Use `context.append_split(&table, generated)?` for the stock add-table
+     behavior: split the subtable's output without running modifiers again.
+   - A raw visitor returns `()`. If it copies an entry or pushes onto the
+     list, store the result in the visitor and propagate it after the roll:
+
+     ```rust
+     let mut edits = Ok(());
+     context.roll_raw(&table, &mut |stack| {
+         if edits.is_ok() && stack.count() > 0 {
+             edits = stack.to_owned().and_then(|owned| generated.push(owned));
+         }
+     })?;
+     edits?;
+     ```
 
 4. Item abilities (`ItemPart::can_perform_action`, version 2):
+   - `CanPerformActionEvent` now borrows its item stack and ability name.
+     Use `CanPerformActionEvent<'_>` in signatures; do not retain the event
+     after the callback.
    - Change the signature from
      `fn can_perform_action(&self, host: &dyn Host, event: &mut CanPerformActionEvent)`
      to `fn can_perform_action(&self, context: &ItemAbilityContext<'_>, event: &mut CanPerformActionEvent<'_>)`.

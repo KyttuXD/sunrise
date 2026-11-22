@@ -11,7 +11,7 @@ use sunrise_client::{
     block_entity_item, block_entity_nbt,
     containers::BlockEntity,
     furnace::FurnaceCooking,
-    items::{BlockLootRoll, ItemStack, Items},
+    items::{BlockLootRoll, InteractionLootParams, ItemStack, Items},
 };
 use sunrise_core::position::BlockPos;
 use sunrise_core::random::{LevelRandom, RandomSource};
@@ -812,6 +812,28 @@ impl GameLevel<'_> {
         state: BlockStateId,
         table: &'static str,
     ) {
+        let drops = self.roll_interact_loot(pos, state, table, None);
+        let start = self.spill.spawns.len();
+        for stack in drops {
+            if &*stack.item != "minecraft:air" && stack.count > 0 {
+                self.pop_resource([pos.x, pos.y, pos.z], stack);
+            }
+        }
+        self.spill.used.push(UsedDrops {
+            start,
+            end: self.spill.spawns.len(),
+            pos: [pos.x, pos.y, pos.z],
+            state,
+            table,
+        });
+    }
+    pub(super) fn roll_interact_loot(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        table: &str,
+        tool: Option<&ItemStack>,
+    ) -> Vec<ItemStack> {
         let loot = self.loot.clone();
         let matcher = |predicate: &serde_json::Value, entity: &sunrise_world::loot::LootEntity| {
             loot.as_ref()
@@ -828,6 +850,33 @@ impl GameLevel<'_> {
         // The roll draws from a copy of the level random, which the location
         // reads of the world leave no hand on.
         let origin = [pos.x, pos.y, pos.z];
+        let centre = origin.map(|c| f64::from(c) + 0.5);
+        let key = (pos.x, pos.y, pos.z);
+        let saved = self.world.block_entities.get(&key).map_or_else(
+            || saved_entity(self.world, origin),
+            |entity| Some(self.encode_live_block_entity(key, entity, &self.facts.get(state).name)),
+        );
+        let (block_entity, block_components) = match saved {
+            Some(saved) => {
+                let source = source_snapshot(saved, None, None);
+                (Some(source.nbt), Some(source.components))
+            }
+            None => (None, None),
+        };
+        let place = sunrise_world::loot::LootPlace {
+            origin: Some(centre),
+            block_state: state.try_into_api().ok(),
+            block_entity,
+            block_components,
+            level: Some(sunrise_world::loot::LootLevel {
+                dimension: self.location.dimension.to_owned(),
+                game_time: self.world.game_time,
+                day_time: self.world.day_time,
+                raining: self.raining,
+                thundering: self.thundering,
+            }),
+            ..Default::default()
+        };
         let level = super::location_world::LevelLocation {
             world: &*self.world,
             registry: self.registry,
@@ -841,7 +890,6 @@ impl GameLevel<'_> {
             refs: self.location,
         };
         let location = |condition: &serde_json::Value| {
-            let centre = origin.map(|c| f64::from(c) + 0.5);
             let at = sunrise_client::advancements::location_check_position(
                 condition,
                 Some(origin),
@@ -856,30 +904,23 @@ impl GameLevel<'_> {
             )
         };
         let mut random = self.world.random.clone();
-        let drops = self.items.interact_loot(
-            table,
-            self.registry,
-            state,
-            interacting,
-            Some(&location),
-            &mut random,
-            self.rand_sequences,
-            self.seed,
-        );
-        self.world.random = random;
-        let start = self.spill.spawns.len();
-        for stack in drops {
-            if &*stack.item != "minecraft:air" && stack.count > 0 {
-                self.pop_resource([pos.x, pos.y, pos.z], stack);
-            }
-        }
-        self.spill.used.push(UsedDrops {
-            start,
-            end: self.spill.spawns.len(),
-            pos: [pos.x, pos.y, pos.z],
-            state,
-            table,
+        let drops = sunrise_world::loot::with_native_loot_place(place, || {
+            self.items.interact_loot(
+                table,
+                self.registry,
+                state,
+                InteractionLootParams {
+                    tool,
+                    interacting,
+                    location: Some(&location),
+                },
+                &mut random,
+                self.rand_sequences,
+                self.seed,
+            )
         });
+        self.world.random = random;
+        drops
     }
     /// `Block.dropResources(state, level, pos, blockEntity)`: the block's loot
     /// (from its random sequence, else the level random), with what its block
@@ -1434,6 +1475,20 @@ impl GameLevel<'_> {
 }
 
 impl Game<'_> {
+    pub(super) fn roll_block_interaction(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        table: &str,
+        actor: Option<sunrise_world::loot::LootEntity>,
+        tool: Option<&ItemStack>,
+    ) -> Vec<ItemStack> {
+        self.with_level(|_, level, _| {
+            level.interacting = actor;
+            level.roll_interact_loot(BlockPos::new(pos[0], pos[1], pos[2]), state, table, tool)
+        })
+    }
+
     /// [`GameLevel::roll_block_loot`] for a roll outside a level write:
     /// `entity` is `THIS_ENTITY`'s id. With no listener it builds no level.
     pub(in crate::game) fn roll_block_loot(

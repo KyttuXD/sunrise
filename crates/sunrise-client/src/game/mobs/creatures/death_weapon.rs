@@ -332,11 +332,18 @@ impl Game<'_> {
                 }
             };
             let Some(hurt) = &hurt else {
-                return drops::finish_death(m, &death, rolled, None);
+                return drops::finish_death(
+                    m,
+                    &death,
+                    rolled,
+                    &mut self.world.random,
+                    |random| random,
+                    None,
+                );
             };
             // GetEquipmentDropChanceEvent, asked for each slot just before its roll.
             let id = m.id;
-            let mut choose = |choice: drops::EquipmentChoice<'_>| {
+            let mut choose = |game: &mut Self, choice: drops::EquipmentChoice<'_>| {
                 let stack = match choice.stack {
                     drops::Drop::Item(stack) => to_stack(stack),
                     drops::Drop::Stack(stack) => stack.clone(),
@@ -346,7 +353,7 @@ impl Game<'_> {
                 let Ok(stack) = stack.try_into_api() else {
                     return chance;
                 };
-                self.native_get_equipment_drop_chance(
+                game.native_get_equipment_drop_chance(
                     mod_api::__private::GetEquipmentDropChanceCall {
                         entity: id,
                         kind: &kind,
@@ -361,7 +368,14 @@ impl Game<'_> {
                 );
                 chance
             };
-            drops::finish_death(m, &death, rolled, Some(&mut choose))
+            drops::finish_death(
+                m,
+                &death,
+                rolled,
+                self,
+                |game| &mut game.world.random,
+                Some(&mut choose),
+            )
         });
         if skulls && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker) {
             // Creeper.droppedSkulls: one head per charged explosion.

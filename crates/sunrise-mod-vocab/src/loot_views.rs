@@ -15,10 +15,13 @@ pub struct LootParamsParts<'a> {
     pub queried_table_id: Option<&'a str>,
     pub queried_stack: Option<QueriedStack<'a>>,
     pub entity: Option<&'a dyn LootEntityAccess>,
+    pub interacting_entity: Option<&'a dyn LootEntityAccess>,
+    pub enchantment_level: Option<i32>,
     pub last_damage_player: Option<&'a dyn LootEntityAccess>,
     pub damage: Option<&'a dyn LootDamageAccess>,
     pub tool: Option<&'a dyn LootToolAccess>,
     pub block: Option<&'a str>,
+    pub block_state: Option<crate::BlockState>,
     pub biome: Option<&'a str>,
     pub origin: Option<[f64; 3]>,
     pub block_entity: Option<&'a Tag>,
@@ -69,6 +72,16 @@ impl<'a> LootParamsView<'a> {
         Some(LootEntityView(self.0.entity?, self.1))
     }
 
+    /// The actor supplied as `INTERACTING_ENTITY` by a block interaction.
+    pub fn interacting_entity(&self) -> Option<LootEntityView<'a>> {
+        Some(LootEntityView(self.0.interacting_entity?, self.1))
+    }
+
+    /// The level of the enchantment whose requirement is being evaluated.
+    pub fn enchantment_level(&self) -> Option<i32> {
+        self.0.enchantment_level
+    }
+
     /// The player named by `LAST_DAMAGE_PLAYER`.
     pub fn last_damage_player(&self) -> Option<LootEntityView<'a>> {
         Some(LootEntityView(self.0.last_damage_player?, self.1))
@@ -87,6 +100,11 @@ impl<'a> LootParamsView<'a> {
     /// Block identifier in a block or block-interaction roll.
     pub fn block(&self) -> Option<&'a str> {
         self.0.block
+    }
+
+    /// The exact process-local block state supplied by a block interaction.
+    pub fn block_state(&self) -> Option<crate::BlockState> {
+        self.0.block_state
     }
 
     /// Biome identifier, when supplied.
