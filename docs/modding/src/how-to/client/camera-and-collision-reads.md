@@ -175,7 +175,8 @@ behind a targeted entity.
 `ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view
 across loaded chunks only: far terrain is never hit. `raycast` stops at `distance`
 (returning `None` for nonpositive or non-finite values), while `view_hit` traverses the
-full loaded-chunk extent. Both return `None` on a miss.
+full loaded-chunk extent. `view_hit` clips each candidate using that block's geometry,
+so loading an unrelated chunk does not move an inside-block hit. Both return `None` on a miss.
 
 To query the displayed level independently of the committed crosshair pick, use
 [`visit_entities_in`](../world/spawning.md#visiting-entities-in-a-box) for a box, or

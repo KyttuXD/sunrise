@@ -115,29 +115,37 @@ fn mod_raycasts_hit_loaded_blocks_only_with_far_terrain_on_or_off() {
         assert_eq!(game.raycast(bad), None);
     }
 
-    // Starting inside a block uses the caller's original `(from, to)` endpoints for
-    // `VoxelShape.clip` (nudge `(to - from) * 0.001` and sub-`1e-7`-squared sweep rejection),
-    // independent of unrelated far loaded chunks.
+    // Starting inside a block, neither query's shape clip depends on distant chunks.
+    let distant = game.world.chunks.remove(&(0, 100)).unwrap();
     assert!(game.run_command("setblock 0 101 0 stone"));
-    let inside_with_far = game.raycast(100.0).expect("inside stone with far chunk");
+    let inside_view = game.view_hit().expect("the stone containing the eye");
     assert_eq!(
         (
-            inside_with_far.block_x,
-            inside_with_far.block_y,
-            inside_with_far.block_z
+            inside_view.1.block_x,
+            inside_view.1.block_y,
+            inside_view.1.block_z
         ),
         (0, 101, 0)
     );
-    assert_eq!(inside_with_far.z, 0.6);
+    assert!(inside_view.1.z > 0.5 && inside_view.1.z < 1.0);
+    // The bounded query uses the caller's endpoints for VoxelShape.clip's nudge
+    // and short-sweep rejection, even though traversal stops with the loaded chunks.
+    let inside_raycast = game.raycast(100.0).expect("inside stone");
+    assert_eq!(
+        (
+            inside_raycast.block_x,
+            inside_raycast.block_y,
+            inside_raycast.block_z
+        ),
+        (0, 101, 0)
+    );
+    assert_eq!(inside_raycast.z, 0.6);
     assert_eq!(
         game.raycast(0.0001),
         None,
         "sub-1e-7 squared sweep inside a block misses as in VoxelShape.clip"
     );
-    game.world.chunks.remove(&(0, 100));
-    assert_eq!(
-        game.raycast(100.0),
-        Some(inside_with_far),
-        "unloading an unrelated far chunk must not change the inside-block clip point"
-    );
+    game.world.chunks.insert((0, 100), distant);
+    assert_eq!(game.view_hit(), Some(inside_view));
+    assert_eq!(game.raycast(100.0), Some(inside_raycast));
 }

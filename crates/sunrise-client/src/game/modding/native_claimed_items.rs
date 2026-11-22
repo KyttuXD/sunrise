@@ -33,7 +33,7 @@ impl Game<'_> {
     }
     fn cast_view_ray(&self, max_distance: Option<f64>) -> Option<(f32, mod_api::Hit)> {
         use sunrise_client::collisions::SceneCollisions;
-        use sunrise_core::geometry::{Vec3, traverse_blocks};
+        use sunrise_core::geometry::{Axis, Vec3, traverse_blocks};
         use sunrise_world::{
             collision_context::{
                 CollisionContext, CollisionEntity, CollisionItem, EntityContextKind,
@@ -53,29 +53,22 @@ impl Game<'_> {
             max_distance,
         )?;
         let clip_from = Vec3::new(eye[0], eye[1], eye[2]);
-        let clip_t = max_distance.unwrap_or(t_end);
-        let clip_to = Vec3::new(
-            eye[0] + dir[0] * clip_t,
-            eye[1] + dir[1] * clip_t,
-            eye[2] + dir[2] * clip_t,
-        );
-        if !clip_to.is_finite() {
-            return None;
-        }
+        let direction = Vec3::new(dir[0], dir[1], dir[2]);
+        let ray_at = |t| clip_from.add_vector(direction.scale(t));
+        let clip_to = max_distance.map(ray_at);
+        let axis = Axis::ALL.into_iter().fold(Axis::X, |best, next| {
+            if direction.component(next).abs() > direction.component(best).abs() {
+                next
+            } else {
+                best
+            }
+        });
         let walk_from = if t_start > 0.0 {
-            Vec3::new(
-                eye[0] + dir[0] * t_start,
-                eye[1] + dir[1] * t_start,
-                eye[2] + dir[2] * t_start,
-            )
+            ray_at(t_start)
         } else {
             clip_from
         };
-        let walk_to = Vec3::new(
-            eye[0] + dir[0] * t_end,
-            eye[1] + dir[1] * t_end,
-            eye[2] + dir[2] * t_end,
-        );
+        let walk_to = ray_at(t_end);
         let mut rays = super::explosion::ColliderRays {
             scene: SceneCollisions {
                 world: &self.world,
@@ -113,6 +106,26 @@ impl Game<'_> {
             match rays
                 .block_shape(state, p, RayBlockMode::Outline)
                 .and_then(|shape| {
+                    let clip_to = if let Some(to) = clip_to {
+                        to
+                    } else {
+                        let Some(bounds) = shape.bounds() else {
+                            return Ok(None);
+                        };
+                        // VoxelShape.clip derives its inside probe from the segment length.
+                        // With no caller endpoint, extend past the candidate's voxel and outline
+                        // along the dominant axis: AABB.clip excludes the segment endpoint.
+                        // This is a bound for the shape clip, not a cap on traversal.
+                        let d = direction.component(axis);
+                        let block = Vec3::from_block(p).component(axis);
+                        let face = if d > 0.0 {
+                            bounds.max(axis).max(1.0)
+                        } else {
+                            bounds.min(axis).min(0.0)
+                        };
+                        let axial_distance = (block + face - clip_from.component(axis)).abs();
+                        ray_at((axial_distance + 1.0) / d.abs())
+                    };
                     clip_with_interaction(&mut rays, clip_from, clip_to, p, &shape, state)
                 }) {
                 Ok(Some(hit)) => Some(Ok((state, hit))),

@@ -34,7 +34,7 @@ migrate = '''
 - Remove references to `StructureSearch::MAX_RADIUS`. `LevelRef::find_nearest_structure` accepts any nonnegative `radius` (vanilla `/locate structure` uses `100`) and still checks vanilla's `Level.isInWorldBoundsHorizontal` bound (`-30_000_000..30_000_000`) on `origin`.
 
 ### `ClientHost::raycast` and `ClientHost::view_hit`
-- `ClientHost::view_hit` now traverses the full extent of loaded chunks along the view rather than stopping at 1024 blocks, using the vanilla `traverse_blocks` + `clip_with_interaction` shape-clip path.
+- `ClientHost::view_hit()` traverses the full extent of loaded chunks along the view rather than stopping at 1024 blocks. It clips each candidate with a segment derived from the view and that candidate's geometry, so loading a distant chunk does not move an inside-block hit. Call `raycast(distance)` instead if you need a caller-defined clipping endpoint.
 - `ClientHost::raycast(distance)` no longer clamps `distance` to 1024 blocks; it returns `None` for nonpositive or non-finite distances and clips against loaded blocks using the caller's original `(eye, eye + dir * distance)` endpoints (matching `VoxelShape.clip`'s inside-block nudge and sub-`1e-7`-squared sweep rejection). Pass `1024.0` explicitly if you want the previous ceiling.
 
 ### Streaming column queries on `LevelRef`

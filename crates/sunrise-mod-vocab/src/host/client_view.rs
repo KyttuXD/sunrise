@@ -48,6 +48,7 @@ pub trait ClientViewClientHost {
     fn raycast(&self, distance: f32) -> Option<Hit>;
     /// Side: client.
     /// The first block along the view across loaded chunks only, and its distance; `None` on a miss.
+    /// The shape clip does not depend on how far away other chunks are loaded.
     fn view_hit(&self) -> Option<(f32, Hit)>;
     /// Side: client.
     /// The most recently extracted world frame's camera, if one exists.
