@@ -867,6 +867,13 @@ fn section_host_reads_entity_type_defaults_without_unwinding() {
 #[test]
 #[ignore = "daily"]
 fn section_host_and_game_read_the_same_entity_type_defaults() {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::entity_sections::tests::section_host_and_game_read_the_same_entity_type_defaults",
+        "SUNRISE_ENTITY_TYPE_DEFAULTS_CHILD",
+        &["host"],
+    ) {
+        return;
+    }
     with_game(|game| {
         let host = LiveSectionHost(None);
         let both = |game: &crate::game::Game<'_>, entity_type: &str, attribute: &str| {
