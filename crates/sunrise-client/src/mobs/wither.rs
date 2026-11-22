@@ -450,21 +450,49 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             ];
-            // Vanilla `WitherBoss.customServerAiStep` computes bounds with Java
-            // signed-int arithmetic before passing them to `BlockPos.betweenClosed`.
-            let min_x = b[0].wrapping_sub(width);
-            let max_x = b[0].wrapping_add(width);
-            let min_y = b[1];
-            let max_y = b[1].wrapping_add(height);
-            let min_z = b[2].wrapping_sub(width);
-            let max_z = b[2].wrapping_add(width);
+            // `WitherBoss.customServerAiStep` uses the six-int `BlockPos.betweenClosed`:
+            // both the inclusive extents and their product wrap. The counter runs
+            // from zero until it equals end, even when it must wrap through MIN.
+            let origin = [b[0].wrapping_sub(width), b[1], b[2].wrapping_sub(width)];
+            let stride_x = width.wrapping_mul(2).wrapping_add(1);
+            let stride_y = height.wrapping_add(1);
+            let end = stride_x.wrapping_mul(stride_y).wrapping_mul(stride_x) as u32;
             let mut destroyed = false;
-            if min_x <= max_x && min_y <= max_y && min_z <= max_z {
+            if end != 0 {
+                // Bound the resident scan by the largest possible signed remainders
+                // and quotient. The inverse index below is the exact membership test.
+                let last = end - 1;
+                let nonnegative = last <= i32::MAX as u32;
+                let index_radius = if nonnegative {
+                    last
+                } else {
+                    i32::MIN.unsigned_abs()
+                };
+                let slice_radius = index_radius / stride_x.unsigned_abs();
+                let bounds = |start: i32, radius: u32| {
+                    let start = i64::from(start);
+                    let radius = i64::from(radius);
+                    let lo = if nonnegative && stride_x > 0 && stride_y > 0 {
+                        start
+                    } else {
+                        start - radius
+                    };
+                    match (i32::try_from(lo), i32::try_from(start + radius)) {
+                        (Ok(lo), Ok(hi)) => (lo, hi),
+                        _ => (i32::MIN, i32::MAX), // the coordinate itself may wrap
+                    }
+                };
+                let (min_x, max_x) =
+                    bounds(origin[0], index_radius.min(stride_x.unsigned_abs() - 1));
+                let (min_y, max_y) =
+                    bounds(origin[1], slice_radius.min(stride_y.unsigned_abs() - 1));
+                let (min_z, max_z) = bounds(origin[2], slice_radius / stride_y.unsigned_abs());
                 let min_cx = min_x >> 4;
                 let max_cx = max_x >> 4;
                 let min_cz = min_z >> 4;
                 let max_cz = max_z >> 4;
                 let air = w.world.air;
+                let mut visited = Vec::new();
                 let mut sweep_chunk = |cx: i32, cz: i32, chunk: &crate::chunk::Chunk| {
                     let y_lo = min_y.max(chunk.min_y());
                     let y_hi = max_y.min(chunk.max_y() - 1);
@@ -495,26 +523,21 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                                     if state == air {
                                         continue;
                                     }
-                                    let facts = w.facts.get(state);
-                                    let name: &str = &facts.name;
-                                    let immune = w
-                                        .block_tags
-                                        .get("minecraft:wither_immune")
-                                        .is_some_and(|t| t.contains(name));
-                                    // WitherBoss.canDestroy, or what the block's parts answer.
-                                    if name != "minecraft:air"
-                                        && !name.ends_with("_air")
-                                        && w.can_entity_destroy(m.id, [x, y, z], !immune)
+                                    let dx = x.wrapping_sub(origin[0]);
+                                    let dy = y.wrapping_sub(origin[1]);
+                                    let dz = z.wrapping_sub(origin[2]);
+                                    let index = dz
+                                        .wrapping_mul(stride_y)
+                                        .wrapping_add(dy)
+                                        .wrapping_mul(stride_x)
+                                        .wrapping_add(dx);
+                                    let slice = index.wrapping_div(stride_x);
+                                    if (index as u32) < end
+                                        && index.wrapping_rem(stride_x) == dx
+                                        && slice.wrapping_rem(stride_y) == dy
+                                        && slice.wrapping_div(stride_y) == dz
                                     {
-                                        events.push(MobEvent::BreakBlock {
-                                            pos: [x, y, z],
-                                            drop: true,
-                                            by: Some(m.id),
-                                            breaker: None,
-                                        });
-                                        // destroyBlock is true when setBlock changed the
-                                        // cell: a liquid is already its fluid's block.
-                                        destroyed |= !facts.has_class("LiquidBlock");
+                                        visited.push((index as u32, [x, y, z], state));
                                     }
                                 }
                             }
@@ -532,20 +555,37 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
                         }
                     }
                 } else {
-                    let mut columns: Vec<(i32, i32)> = w
-                        .world
-                        .chunks
-                        .keys()
-                        .copied()
-                        .filter(|&(cx, cz)| {
-                            (min_cx..=max_cx).contains(&cx) && (min_cz..=max_cz).contains(&cz)
-                        })
-                        .collect();
-                    columns.sort_unstable();
-                    for (cx, cz) in columns {
-                        if let Some(chunk) = w.world.chunks.get(&(cx, cz)) {
+                    for (&(cx, cz), chunk) in &w.world.chunks {
+                        if (min_cx..=max_cx).contains(&cx) && (min_cz..=max_cz).contains(&cz) {
                             sweep_chunk(cx, cz, chunk);
                         }
+                    }
+                }
+                // Sorting by the unsigned counter restores Java's iteration order
+                // for callbacks and break events, across chunk boundaries as well.
+                visited.sort_unstable_by_key(|&(index, _, _)| index);
+                let immune = w.block_tags.get("minecraft:wither_immune");
+                for (_, pos, state) in visited {
+                    let facts = w.facts.get(state);
+                    let name: &str = &facts.name;
+                    // WitherBoss.canDestroy, or what the block's parts answer.
+                    if name != "minecraft:air"
+                        && !name.ends_with("_air")
+                        && w.can_entity_destroy(
+                            m.id,
+                            pos,
+                            !immune.is_some_and(|t| t.contains(name)),
+                        )
+                    {
+                        events.push(MobEvent::BreakBlock {
+                            pos,
+                            drop: true,
+                            by: Some(m.id),
+                            breaker: None,
+                        });
+                        // destroyBlock is true when setBlock changed the cell:
+                        // a liquid is already its fluid's block.
+                        destroyed |= !facts.has_class("LiquidBlock");
                     }
                 }
             }

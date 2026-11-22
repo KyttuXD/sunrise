@@ -883,41 +883,24 @@ mod tests {
                     let wither_id = game
                         .spawn_mob_spawned(
                             "wither",
-                            [2.5, 70.0, 2.5],
+                            [10.5, 70.0, 8.5],
                             crate::game::creatures::SpawnSite::Plain,
                         )
                         .unwrap();
                     let wi = game.mobs.iter().position(|m| m.id == wither_id).unwrap();
-
-                    // Positive Y with 1e30 height: Java signed-int `70 + i32::MAX` wraps below `70`,
-                    // so `BlockPos.betweenClosed` is empty and completes immediately.
-                    game.world.set(2, 71, 2, stone).unwrap();
                     *size.lock().unwrap() = [0.9, 1e30, 1.0];
                     game.mobs[wi].size_answer = None;
                     game.native_mob_sizes();
-                    {
-                        let mut wither = game.mobs[wi].clone();
-                        wither.extra.counter = 0;
-                        wither.extra.counter2 = 1;
-                        let world = game.mob_world_base(&[]);
-                        let mut events = Vec::new();
-                        wither::custom_server_ai_step(&mut wither, &world, &mut events);
-                        assert!(
-                            !events
-                                .iter()
-                                .any(|e| matches!(e, MobEvent::BreakBlock { .. })),
-                            "wrapped positive-Y sweep must match empty Java betweenClosed"
-                        );
-                    }
-                    game.world.set(2, 71, 2, air).unwrap();
 
-                    // Negative Y with 1e30 height: `-10 + i32::MAX` stays positive, sweeping loaded
-                    // non-air sections sparsely while keeping wither-immune bedrock.
-                    game.world.set(2, 120, 2, stone).unwrap();
-                    game.world.set(2, -10, 2, bedrock).unwrap();
-                    {
+                    // `BlockPos.betweenClosed` visits only the first z plane for these extents.
+                    // The result is the same whether the positive-Y endpoint wraps or not.
+                    game.world.set(10, 120, 8, stone).unwrap();
+                    game.world.set(10, 121, 7, bedrock).unwrap();
+                    for y in [70.0, -10.0] {
+                        game.world.set(9, 120, 7, stone).unwrap();
+                        game.world.set(11, 119, 7, stone).unwrap();
                         let mut wither = game.mobs[wi].clone();
-                        wither.position = Vec3::new(2.5, -10.0, 2.5);
+                        wither.position = Vec3::new(10.5, y, 8.5);
                         wither.extra.counter = 0;
                         wither.extra.counter2 = 1;
                         let world = game.mob_world_base(&[]);
@@ -930,17 +913,13 @@ mod tests {
                                 _ => None,
                             })
                             .collect();
-                        assert!(
-                            broken.contains(&[2, 120, 2]),
-                            "1e30-tall wither at y=-10 must break overhead stone"
-                        );
-                        assert!(
-                            !broken.contains(&[2, -10, 2]),
-                            "wither must not break wither_immune bedrock"
-                        );
+                        assert_eq!(broken, [[11, 119, 7], [9, 120, 7]], "wither at {y}");
+                        game.handle_mob_events(events).unwrap();
+                        assert_eq!(game.world.block(9, 120, 7), air);
+                        assert_eq!(game.world.block(11, 119, 7), air);
+                        assert_eq!(game.world.block(10, 120, 8), stone);
+                        assert_eq!(game.world.block(10, 121, 7), bedrock);
                     }
-                    game.world.set(2, 120, 2, air).unwrap();
-                    game.world.set(2, -10, 2, air).unwrap();
 
                     // 128x128x128 wither at positive Y destroys distant stone inside its box.
                     game.world.set(50, 120, 2, stone).unwrap();
