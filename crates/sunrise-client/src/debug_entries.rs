@@ -301,7 +301,7 @@ fn all<'a>(registered: &'a [RegisteredDebugEntry]) -> impl Iterator<Item = Entry
         .chain(registered.iter().map(as_entry))
 }
 
-/// `DebugScreenEntries.getEntry` by path.
+/// `DebugScreenEntries.getEntry` by path or namespaced identifier.
 fn entry<'a>(registered: &'a [RegisteredDebugEntry], path: &str) -> Option<Entry<'a>> {
     let bare = path.strip_prefix("minecraft:").unwrap_or(path);
     all(registered).find(|e| {
@@ -797,10 +797,15 @@ mod tests {
             ["mymod:tick_cost", "minecraft:custom_stat", "other:queue"]
         );
         assert_eq!(kept[0].owner.id(), "mymod");
+        assert_eq!(kept[1].owner.id(), "mymod");
         assert_eq!(
             kept[0].entry.text_lines().map(|(group, _)| group),
             Some(DebugGroup::Memory)
         );
+        let mut selection = DebugEntries::default();
+        selection.set_status("minecraft:custom_metric", Status::AlwaysOn);
+        assert!(selection.enabled(&kept, "minecraft:custom_metric", false, false));
+        assert!(selection.any_enabled(&kept, false, false));
     }
 
     #[test]

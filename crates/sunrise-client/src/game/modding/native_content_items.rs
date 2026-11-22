@@ -37,7 +37,10 @@ pub(super) fn owned_item_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sunrise_mod_package::{Content, content::Item};
+    use sunrise_mod_package::{
+        Content,
+        content::{Block, Item},
+    };
 
     #[test]
     fn file_remainders_can_name_code_items_in_any_owned_namespace() {
@@ -67,6 +70,16 @@ mod tests {
                 "porter",
                 DeclaredContent {
                     items: vec![item("porter:spoon"), item("legacy:wrench")],
+                    blocks: vec![
+                        Block {
+                            id: "shared:jarlid".into(),
+                            template: "minecraft:stone".into(),
+                            item: true,
+                            ..Block::default()
+                        }
+                        .validate_local()
+                        .unwrap(),
+                    ],
                     ..Default::default()
                 },
             ),
@@ -79,7 +92,7 @@ mod tests {
             ),
         ]);
         let declared = owned_item_ids(&manifest, &batches);
-        assert_eq!(declared, ["porter:spoon", "legacy:wrench"]);
+        assert_eq!(declared, ["porter:spoon", "legacy:wrench", "shared:jarlid"]);
         let root = std::env::temp_dir().join(format!(
             "sunrise-owned-code-items-{}-{}",
             std::process::id(),
@@ -91,17 +104,16 @@ mod tests {
         let folder = root.join("data/legacy/sunrise/item");
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("soup.json");
-        std::fs::write(
-            &file,
-            br#"{"template":"minecraft:mushroom_stew","crafting_remainder":"legacy:wrench"}"#,
-        )
-        .unwrap();
-        let content = Content::read_declaring(&root, &manifest, &declared).unwrap();
-        assert_eq!(content.items[0].id, "legacy:soup");
-        assert_eq!(
-            content.items[0].crafting_remainder.as_deref(),
-            Some("legacy:wrench")
-        );
+        for key in ["legacy:wrench", "shared:jarlid"] {
+            std::fs::write(
+                &file,
+                format!(r#"{{"template":"minecraft:mushroom_stew","crafting_remainder":"{key}"}}"#),
+            )
+            .unwrap();
+            let content = Content::read_declaring(&root, &manifest, &declared).unwrap();
+            assert_eq!(content.items[0].id, "legacy:soup");
+            assert_eq!(content.items[0].crafting_remainder.as_deref(), Some(key));
+        }
         std::fs::write(
             &file,
             br#"{"template":"minecraft:mushroom_stew","crafting_remainder":"foreign:tool"}"#,

@@ -32,30 +32,23 @@ impl AttachmentTypesRegistrar for PartRegistrar {
             }
             let identifier = crate::Identifier::parse_namespaced(id)
                 .ok_or("explicit lowercase namespaced id required")?;
-            if let Some(owner) = self
-                .attachment_owners
+            if let Some(previous) = self
+                .attachment_types
                 .get(identifier.namespace())
                 .and_then(|types| types.get(identifier.path()))
             {
-                return Err(format!("already declared by package {owner}"));
-            }
-            if identifier.namespace() == "minecraft"
-                || !owns_namespace(self.mod_id, identifier.namespace())
-            {
-                return Err(format!(
-                    "namespace belongs to package {}, not {}",
-                    identifier.namespace(),
-                    self.mod_id
-                ));
+                return Err(format!("already declared by package {}", previous.owner));
             }
             self.attachment_types
                 .entry(identifier.namespace().into())
                 .or_default()
-                .insert(identifier.path().into(), has_sync_codec);
-            self.attachment_owners
-                .entry(identifier.namespace().into())
-                .or_default()
-                .insert(identifier.path().into(), self.mod_id);
+                .insert(
+                    identifier.path().into(),
+                    AttachmentTypeDeclaration {
+                        owner: self.mod_id,
+                        sync: has_sync_codec,
+                    },
+                );
             Ok(())
         })();
         result.map_err(|reason| {
@@ -92,16 +85,11 @@ impl PartRegistrar {
         let packages = crate::load_state::current_packages();
         let mut synced = Vec::new();
         for (namespace, types) in &self.attachment_types {
-            for (name, &sync) in types {
-                if !sync {
+            for (name, decl) in types {
+                if !decl.sync {
                     continue;
                 }
-                let declarer = self
-                    .attachment_owners
-                    .get(namespace)
-                    .and_then(|owners| owners.get(name))
-                    .copied()
-                    .unwrap_or(namespace.as_str());
+                let declarer = decl.owner;
                 synced.push((declarer, namespace.as_str(), name.as_str()));
             }
         }
@@ -157,13 +145,49 @@ mod tests {
         }
     }
     #[test]
-    fn foreign_attachment_declaration_is_named_and_not_added() {
+    fn non_mod_namespace_attachment_declaration_records_declaring_owner() {
         let mut registrar = PartRegistrar::new("b");
+        assert_eq!(registrar.register_attachment_type("a:mana", false), Ok(()));
         assert_eq!(
-            registrar.register_attachment_type("a:mana", false),
-            Err("package b attachment a:mana: namespace belongs to package a, not b".into())
+            registrar.attachment_types["a"]["mana"],
+            AttachmentTypeDeclaration {
+                owner: "b",
+                sync: false,
+            }
         );
-        assert!(registrar.attachment_types.is_empty());
+        registrar.mod_id = "c";
+        assert_eq!(
+            registrar.register_attachment_type("a:mana", true),
+            Err("package c attachment a:mana: already declared by package b".into())
+        );
+    }
+    #[test]
+    fn server_synced_attachment_under_foreign_namespace_is_attributed_to_declarer() {
+        crate::load_state::with_test_package_inventory(
+            vec![
+                package("a", crate::Side::Both),
+                package("b", crate::Side::Server),
+            ],
+            || {
+                let mut bad = PartRegistrar::new("b");
+                bad.register_attachment_type("a:mana", true).unwrap();
+                assert_eq!(
+                    super::super::install_registrar(bad, &crate::parts::tests::rule_schema()),
+                    Err(vec![
+                        "package b attachment a:mana: a side = \"server\" package cannot declare a synced attachment"
+                            .into()
+                    ])
+                );
+            },
+        );
+        let mut registrar = PartRegistrar::new("b");
+        registrar.register_attachment_type("a:mana", true).unwrap();
+        super::super::install_registrar(registrar, &crate::parts::tests::rule_schema()).unwrap();
+        assert_eq!(
+            crate::__private::client_requirement("b"),
+            Some("declares the synced attachment a:mana".into())
+        );
+        assert_eq!(crate::__private::client_requirement("a"), None);
     }
     #[test]
     fn server_synced_attachment_refuses_all_registration_and_plain_is_admitted() {
@@ -372,8 +396,20 @@ mod tests {
                 conflict
                     .register_attachment_type("test_pkg:mana", true)
                     .unwrap();
-                assert_eq!(conflict.register_attachment_type("a:mana", false), Err("package test_pkg attachment a:mana: namespace belongs to package a, not test_pkg".into()));
-                assert_eq!(super::super::install_registrar(conflict, &crate::parts::tests::rule_schema()), Err(vec!["package test_pkg attachment a:mana: namespace belongs to package a, not test_pkg".into()]));
+                assert_eq!(
+                    conflict.register_attachment_type("test_pkg:mana", false),
+                    Err(
+                        "package test_pkg attachment test_pkg:mana: already declared by package test_pkg"
+                            .into()
+                    )
+                );
+                assert_eq!(
+                    super::super::install_registrar(conflict, &crate::parts::tests::rule_schema()),
+                    Err(vec![
+                        "package test_pkg attachment test_pkg:mana: already declared by package test_pkg"
+                            .into()
+                    ])
+                );
                 let mut missing = PartRegistrar::new("test_pkg");
                 missing
                     .register_attachment_type("test_pkg:mana", true)

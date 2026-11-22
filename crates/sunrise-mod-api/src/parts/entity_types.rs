@@ -28,7 +28,7 @@ impl GeneralTypesRegistrar for PartRegistrar {
             ));
             return Err(Error::Frozen);
         }
-        let id = match self.owned_declaration_id(path) {
+        let id = match self.declaration_id(path) {
             // The key travels in the spawn that introduces a row to a client, which carries
             // no longer one.
             Ok(id) if id.len() > sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY => {
@@ -54,6 +54,7 @@ impl GeneralTypesRegistrar for PartRegistrar {
                 .general_entity_types
                 .iter()
                 .any(|declared| declared.id == id)
+                || self.has_builtin_entry("minecraft:entity_type", &id)
             {
                 return Err(Error::Duplicate);
             }
@@ -139,59 +140,103 @@ mod tests {
         )
     }
 
-    /// The registration's checks: an id outside the mod's namespace (a
-    /// vanilla type's included), a duplicate, non-finite or non-positive
-    /// dimensions and a required feature
-    /// naming no loaded mod all refuse, naming the mod; the good declaration
-    /// stands beside them.
+    /// The registration's checks: explicit namespaces keep their key with
+    /// separate mod attribution, while malformed/overlong ids, duplicates
+    /// (including built-in entity types), non-finite dimensions and a required
+    /// feature naming no loaded mod all refuse, naming the mod; the good
+    /// declarations stand beside them.
     #[test]
     pub(crate) fn general_entity_type_declarations_validate() {
         crate::__private::initialize().unwrap();
-        let (_phase, mut registrar) = registrar();
-        declare(&mut registrar, "robot", 0.8, 1.9, 8, 3, &[]).unwrap();
-        // The path stays in the declaring mod's namespace.
-        assert_eq!(
-            declare(&mut registrar, "minecraft:creeper", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
+        let data = mod_vocab::__private::RegistrationData::new(
+            [(
+                "minecraft:entity_type".into(),
+                vec!["minecraft:creeper".into()],
+            )]
+            .into(),
+            Default::default(),
+            Default::default(),
+            crate::RuntimeEnvironment::new(
+                crate::Dist::Client,
+                "26.3".into(),
+                "test".into(),
+                false,
+            ),
         );
-        assert_eq!(
-            declare(&mut registrar, "foreign:robot", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        assert_eq!(
-            declare(&mut registrar, "Not An Id", 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        // A key the spawn that introduces a row could not carry; the longest it can stands.
-        let room = sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY - "mymod:".len();
-        assert_eq!(
-            declare(&mut registrar, &"l".repeat(room + 1), 0.6, 1.7, 8, 3, &[]),
-            Err(Error::InvalidId)
-        );
-        declare(&mut registrar, &"l".repeat(room), 0.6, 1.7, 8, 3, &[]).unwrap();
-        // The same type twice, whatever declared it, is a duplicate.
-        assert_eq!(
-            declare(&mut registrar, "robot", 0.5, 1.0, 4, 2, &[]),
-            Err(Error::Duplicate)
-        );
-        // Non-finite dimensions.
-        assert_eq!(
-            declare(&mut registrar, "wide", f64::NAN, 1.0, 8, 3, &[]),
-            Err(Error::NotFinite)
-        );
-        assert_eq!(
-            declare(&mut registrar, "wide", f64::INFINITY, 1.0, 8, 3, &[]),
-            Err(Error::NotFinite)
-        );
-        // A required feature naming no loaded mod.
-        assert_eq!(
-            declare(&mut registrar, "needy", 1.0, 1.0, 8, 3, &["missing:mod"]),
-            Err(Error::UnknownDependency)
-        );
-        // Every refusal was reported, and the good declaration stands.
-        assert_eq!(registrar.general_entity_types.len(), 2);
-        assert_eq!(registrar.general_entity_types[0].id, "mymod:robot");
-        assert_eq!(registrar.refused.len(), 8);
+        crate::load_state::with_test_registration_data(data, || {
+            let (_phase, mut registrar) = registrar();
+            declare(&mut registrar, "robot", 0.8, 1.9, 8, 3, &[]).unwrap();
+            // Built-in entity types refuse as duplicates; explicit unused namespaces succeed.
+            assert_eq!(
+                declare(&mut registrar, "minecraft:creeper", 0.6, 1.7, 8, 3, &[]),
+                Err(Error::Duplicate)
+            );
+            declare(&mut registrar, "foreign:robot", 0.6, 1.7, 8, 3, &[]).unwrap();
+            declare(
+                &mut registrar,
+                "minecraft:custom_robot",
+                0.6,
+                1.7,
+                8,
+                3,
+                &[],
+            )
+            .unwrap();
+            assert_eq!(
+                declare(&mut registrar, "Not An Id", 0.6, 1.7, 8, 3, &[]),
+                Err(Error::InvalidId)
+            );
+            // A key the spawn that introduces a row could not carry; the longest it can stands.
+            let room = sunrise_mod_runtime::MAX_GENERAL_ENTITY_KEY - "mymod:".len();
+            assert_eq!(
+                declare(&mut registrar, &"l".repeat(room + 1), 0.6, 1.7, 8, 3, &[]),
+                Err(Error::InvalidId)
+            );
+            declare(&mut registrar, &"l".repeat(room), 0.6, 1.7, 8, 3, &[]).unwrap();
+            // The same type twice, whatever declared it, is a duplicate.
+            assert_eq!(
+                declare(&mut registrar, "robot", 0.5, 1.0, 4, 2, &[]),
+                Err(Error::Duplicate)
+            );
+            // Non-finite dimensions.
+            assert_eq!(
+                declare(&mut registrar, "wide", f64::NAN, 1.0, 8, 3, &[]),
+                Err(Error::NotFinite)
+            );
+            assert_eq!(
+                declare(&mut registrar, "wide", f64::INFINITY, 1.0, 8, 3, &[]),
+                Err(Error::NotFinite)
+            );
+            // A required feature naming no loaded mod.
+            assert_eq!(
+                declare(&mut registrar, "needy", 1.0, 1.0, 8, 3, &["missing:mod"]),
+                Err(Error::UnknownDependency)
+            );
+            // Every refusal was reported, and the good declarations stand with owner attribution.
+            assert_eq!(registrar.general_entity_types.len(), 4);
+            assert_eq!(
+                (
+                    registrar.general_entity_types[0].mod_id.as_str(),
+                    registrar.general_entity_types[0].id.as_str()
+                ),
+                ("mymod", "mymod:robot")
+            );
+            assert_eq!(
+                (
+                    registrar.general_entity_types[1].mod_id.as_str(),
+                    registrar.general_entity_types[1].id.as_str()
+                ),
+                ("mymod", "foreign:robot")
+            );
+            assert_eq!(
+                (
+                    registrar.general_entity_types[2].mod_id.as_str(),
+                    registrar.general_entity_types[2].id.as_str()
+                ),
+                ("mymod", "minecraft:custom_robot")
+            );
+            assert_eq!(registrar.refused.len(), 7);
+        });
     }
 
     #[test]

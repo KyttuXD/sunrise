@@ -13,6 +13,7 @@ pub trait Hooks {
     /// `register` returns a typed `DeclarationError` for invalid IDs or fields.
     /// The game records the refusal and stops startup even if a returning listener ignores it.
     /// A panic discards this listener's declarations and diagnostics without rejecting startup.
+    /// Bare item IDs use the submitting mod ID; valid explicit names retain their namespace.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_items",
         receiver = "associated",
@@ -22,7 +23,7 @@ pub trait Hooks {
         out = "items",
         context = "registration",
         neoforge = "RegisterEvent",
-        version = 4
+        version = 5
     )]
     fn items(
         items: &mut dyn FnMut(

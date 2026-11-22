@@ -22,7 +22,13 @@ fn registration_context_reaches_collectors_in_order_without_a_game_host() {
     );
     let mut types = Vec::new();
     dispatch_component_types(&RegistrationContext("bootstrap"), &mut types);
-    assert_eq!(types, ["first:component", "second:component"]);
+    assert_eq!(
+        types
+            .iter()
+            .map(|row| (row.mod_id, row.answer.as_str()))
+            .collect::<Vec<_>>(),
+        [("first", "first:component"), ("second", "second:component")],
+    );
 }
 
 #[test]

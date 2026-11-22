@@ -267,10 +267,9 @@ impl DatapackField {
 pub enum DatapackRegistrationError {
     /// Only both-side packages may declare datapack registries.
     WrongSide,
-    /// The registry's key is malformed, empty or in a namespace the
-    /// declaring mod does not own (a vanilla registry's included).
+    /// The registry's key is malformed or empty.
     InvalidKey,
-    /// Another declaration already covers the registry key.
+    /// A built-in registry or another declaration already covers the registry key.
     Duplicate,
     /// A field name is empty or repeated.
     InvalidFieldName,

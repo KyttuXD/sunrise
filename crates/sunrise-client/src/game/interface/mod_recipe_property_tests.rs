@@ -11,7 +11,7 @@ mod tests {
         fn menu_slot_rules(&self, host: &dyn mod_api::Host, event: &mut MenuSlotRulesEvent<'_>) {
             if event.slot == 0 {
                 event.may_place &=
-                    host.mod_recipe_property_contains("pot:input", event.stack.item());
+                    host.mod_recipe_property_contains("minecraft:custom_input", event.stack.item());
             }
         }
     }
@@ -42,15 +42,27 @@ mod tests {
                     .unwrap()
                     .id("minecraft:emerald")
                     .unwrap();
-                game.recipe_ui.server_properties.replace(UpdateRecipes {
-                    properties: vec![("pot:input".into(), vec![id])],
+                use sunrise_protocol::buf::{Codec, Reader, Writer};
+                let packet = UpdateRecipes {
+                    properties: vec![
+                        ("minecraft:custom_input".into(), vec![id]),
+                        ("minecraft:furnace_input".into(), vec![id]),
+                    ],
                     stonecutter: vec![],
-                });
+                };
+                let mut wire = Writer::new();
+                UpdateRecipes::write(&packet, &mut wire);
+                game.recipe_ui
+                    .server_properties
+                    .replace(UpdateRecipes::read(&mut Reader::new(&wire.data)).unwrap());
                 game.refresh_recipe_property_context();
+                assert!(game.recipe_ui.server_properties.sets.as_ref().unwrap()
+                    ["minecraft:furnace_input"].contains(&id));
+                assert!(!game.mod_recipe_property_contains("minecraft:furnace_input", item));
                 assert!(
                     mod_api::prelude::RecipePropertiesHost::mod_recipe_property_contains(
                         game,
-                        "pot:input",
+                        "minecraft:custom_input",
                         item
                     )
                 );
@@ -77,7 +89,7 @@ mod tests {
                 assert!(
                     !mod_api::prelude::RecipePropertiesHost::mod_recipe_property_contains(
                         game,
-                        "pot:input",
+                        "minecraft:custom_input",
                         item
                     )
                 );

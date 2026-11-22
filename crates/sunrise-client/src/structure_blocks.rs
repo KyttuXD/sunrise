@@ -228,6 +228,7 @@ mod tests {
             ]
             .into(),
             vec!["test:machine".into()],
+            ["test:machine".into()],
         ))
         .unwrap();
         let Tag::Compound(nbt) = sunrise_core::nbt::parse_snbt(

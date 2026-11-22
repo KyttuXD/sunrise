@@ -214,6 +214,7 @@ mod tests {
                 r.register_dimension("pocket", DimensionSettings::default());
                 r.register_dimension("pocket", DimensionSettings::default());
                 r.register_dimension("other:pocket", DimensionSettings::default());
+                r.register_dimension("minecraft:overworld", DimensionSettings::default());
                 r.register_dimension("", DimensionSettings::default());
                 r.register_dimension(
                     "uneven",
@@ -251,7 +252,7 @@ mod tests {
         let errors = install_parts(&[ModEntry::new("test", Box::new(Invalid))]).unwrap_err();
         assert_eq!(errors.len(), 7, "{errors:?}");
         assert!(errors[0].contains("test registered dimension test:pocket twice"));
-        assert!(errors[1].contains("namespace"));
+        assert!(errors[1].contains("minecraft:overworld, which is a vanilla level"));
         assert!(errors[2].contains("test declares invalid identifier \"test:\""));
         assert!(errors[3].contains("test:uneven"));
         assert!(errors[4].contains("test:low_ceiling"));
@@ -298,13 +299,18 @@ mod tests {
                 r.register_chunk_generator("void", Void);
                 r.register_chunk_generator("void", Void);
                 r.register_chunk_generator("other:void", Void);
+                r.register_chunk_generator("minecraft:flat", Void);
                 r.register_chunk_generator("", Void);
             }
         }
         let errors = install_parts(&[ModEntry::new("test", Box::new(Invalid))]).unwrap_err();
         assert_eq!(errors.len(), 3, "{errors:?}");
         assert!(errors[0].contains("test registered chunk generator test:void twice"));
-        assert!(errors[1].contains("test declares \"other:void\" in unowned namespace \"other\""));
+        assert!(
+            errors[1].contains(
+                "test registered chunk generator minecraft:flat, which is the game's own"
+            )
+        );
         assert!(errors[2].contains("test declares invalid identifier \"test:\""));
     }
 

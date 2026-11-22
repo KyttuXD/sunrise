@@ -8,6 +8,8 @@ pub mod attachments;
 pub mod byte_channel;
 /// A level's capability generations, which kept capabilities compare (#3446).
 pub mod capability_generations;
+/// Authoritative list of engine-owned `sunrise:` custom-payload channels.
+pub mod engine_channels;
 /// Action-local ownership and ordered consumption of pending spawn outputs.
 pub mod pending_children;
 /// Load-owned registry names and numeric slots, without game or API key types.

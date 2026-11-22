@@ -6550,6 +6550,8 @@ fn a_file_item_whose_remainder_was_refused_takes_only_its_mod_out() {
             item: true,
             ..Default::default()
         });
+    let base = tempfile::tempdir().unwrap();
+    fs::write(base.path().join("items.json"), r#"{"minecraft:bowl":{}}"#).unwrap();
     let mut mods = vec![
         jar,
         make(
@@ -6561,16 +6563,22 @@ fn a_file_item_whose_remainder_was_refused_takes_only_its_mod_out() {
         ),
         make("bad", vec![item("bad:tool", Some("bad:wrench"))]),
         make(
+            "foreign",
+            vec![item("foreign:stew", Some("minecraft:spoon"))],
+        ),
+        make("maker", vec![item("minecraft:spoon", None)]),
+        make(
             "vanilla",
             vec![item("vanilla:soup", Some("minecraft:bowl"))],
         ),
     ];
-    let dropped = drop_dangling_remainders(&mut mods);
-    assert_eq!(dropped.len(), 1, "{dropped:?}");
-    assert!(dropped[0].contains("bad"), "{dropped:?}");
+    let dropped = drop_dangling_remainders(base.path(), &mut mods, &[]).unwrap();
+    assert_eq!(dropped.len(), 2, "{dropped:?}");
+    assert!(dropped[0].1.contains("bad:wrench"), "{dropped:?}");
+    assert!(dropped[1].1.contains("minecraft:spoon"), "{dropped:?}");
     let left: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
     // A remainder that is the mod's own block item is kept too (`jar`).
-    assert_eq!(left, ["jar", "good", "vanilla"]);
+    assert_eq!(left, ["jar", "good", "maker", "vanilla"]);
 }
 
 /// A sign's four forms come from its template, whatever the blocks are named,

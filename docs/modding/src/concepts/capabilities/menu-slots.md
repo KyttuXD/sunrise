@@ -22,15 +22,11 @@ quick-move items into a locally hidden slot, and the slot's acceptance rules sti
 ## Mod-created recipe input sets
 
 `Hooks::recipe_property_sets` runs once after recipes resolve for each load and again after
-`/reload`. Call `event.register(RecipePropertyAddition::new("mymod:cooking_pot_input", items))`:
-a key in the listener's manifest-owned namespaces, or in a namespace delegated to it through
-`served_by` (see [Declare content in code](../../how-to/content-mods.md#declare-content-in-code)),
-creates a set. A package owns its ID and the manifest's `namespaces`, so a package named
-`ported_farmersdelight` with `namespaces = ["farmersdelight"]` can create
-`farmersdelight:cooking_pot_input`. A later listener may extend an existing set without
-changing who created it, but cannot create a new foreign key. Warnings for invalid keys,
-new foreign keys, unknown vanilla keys and air name the submitting mod. Unregistered items
-do not participate in acceptance or network sync.
+`/reload`. Call `event.register(RecipePropertyAddition::new("mymod:cooking_pot_input", items))`.
+Any valid namespaced key can create or extend a custom set, including an unused `minecraft:`
+key. Bare names refer to built-in sets. Adding to a set does not change who created it. Invalid
+keys, unknown bare names and air are logged with the submitting mod; unknown items do not
+participate in acceptance or sync.
 
 Attach a `MenuPart` to the registered menu type and filter its input slot with the same set:
 

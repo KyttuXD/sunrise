@@ -10,8 +10,7 @@ use sunrise_core::profile::AccountProperty;
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum EntityAttributeError {
-    /// The entity type's id is invalid or empty, or, for a declared set, in a
-    /// namespace the declaring mod does not own.
+    /// The entity type's id is malformed or empty.
     InvalidId,
     /// The set names the same attribute twice.
     DuplicateAttribute,
@@ -29,10 +28,9 @@ pub enum EntityAttributeError {
 pub enum AttributeRegistrationError {
     /// Only both-side packages may change the attribute registry.
     WrongSide,
-    /// The attribute's id is malformed, empty or in a namespace the
-    /// declaring mod does not own (a vanilla attribute's included).
+    /// The attribute's id is malformed or empty.
     InvalidId,
-    /// Another declaration already covers the attribute.
+    /// Another declaration or built-in entry already covers the attribute.
     Duplicate,
     /// The default or a bound is not finite.
     NotFinite,

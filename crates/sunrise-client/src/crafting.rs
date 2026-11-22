@@ -1241,7 +1241,7 @@ pub fn recipe_result(v: &Value) -> Option<ItemStack> {
     template.item.is_some().then(|| template.create())
 }
 /// Recipe serializers registered by the engine for pinned vanilla and brewing data.
-const VANILLA_RECIPE_SERIALIZERS: [&str; 22] = [
+pub(crate) const VANILLA_RECIPE_SERIALIZERS: [&str; 22] = [
     "minecraft:blasting",
     "minecraft:brewing",
     "minecraft:campfire_cooking",
@@ -1276,12 +1276,6 @@ const VANILLA_RECIPE_SERIALIZERS: [&str; 22] = [
 pub fn registration_key(name: &str) -> (String, String) {
     let (namespace, path) = name.split_once(':').unwrap_or(("minecraft", name));
     (format!("{path}.json"), namespace.to_owned())
-}
-/// The type of a recipe the game doesn't craft itself: one outside `minecraft`.
-fn custom_type(v: &Value) -> Option<&str> {
-    v["type"]
-        .as_str()
-        .filter(|t| t.contains(':') && !t.starts_with("minecraft:"))
 }
 pub struct Recipes {
     /// The published entries shared with the station and network projections.
@@ -1688,8 +1682,8 @@ pub struct ResolvedSources {
     failures: Vec<(String, String)>,
 }
 /// Each recipe property set's additions and first contributing mod in one load,
-/// by set key without its `minecraft:` prefix (`furnace_input`). Cooking, station
-/// and brewing acceptance and the network copy all read this answer.
+/// keyed by the short id for built-in sets and the full id for custom sets.
+/// Cooking, station and brewing acceptance and the network copy all read this answer.
 #[derive(Clone, Debug, Default)]
 pub struct PropertyAdditions(HashMap<String, PropertySetAddition>);
 
@@ -1711,10 +1705,8 @@ impl PropertyAdditions {
         for entry in asked {
             let mod_id = entry.mod_id;
             let addition = entry.answer;
-            let key = addition
-                .set
-                .strip_prefix("minecraft:")
-                .unwrap_or(&addition.set);
+            let key =
+                crate::lan::recipes::vanilla_property_set(&addition.set).unwrap_or(&addition.set);
             if !key.contains(':')
                 && !crate::lan::recipes::PROPERTY_SETS
                     .iter()
@@ -1882,9 +1874,7 @@ impl ResolvedSources {
                 resolved.failures.push((name, failure));
                 continue;
             }
-            let decoded = if custom_type(&file).is_some() {
-                DecodedRecipe::Mod(OnceLock::new())
-            } else if VANILLA_RECIPE_SERIALIZERS.contains(&serializer) {
+            let decoded = if VANILLA_RECIPE_SERIALIZERS.contains(&serializer) {
                 match decode_vanilla_recipe(&name, serializer, &file, items, input) {
                     Ok(decoded) => decoded,
                     Err(failure) => {
@@ -1893,7 +1883,7 @@ impl ResolvedSources {
                     }
                 }
             } else {
-                DecodedRecipe::Ignored
+                DecodedRecipe::Mod(OnceLock::new())
             };
             resolved.recipes.push(Arc::new(ResolvedRecipe {
                 name,
@@ -3460,22 +3450,6 @@ mod tests {
             cook_index: Default::default(),
             property_additions: PropertyAdditions::default(),
         }
-    }
-    #[test]
-    fn only_types_outside_minecraft_are_custom() {
-        let kind = |json: &str| {
-            let v: Value = serde_json::from_str(json).unwrap();
-            custom_type(&v).map(str::to_owned)
-        };
-        assert_eq!(
-            kind(r#"{"type":"mymod:crusher"}"#).as_deref(),
-            Some("mymod:crusher")
-        );
-        assert_eq!(kind(r#"{"type":"minecraft:smelting"}"#), None);
-        assert_eq!(kind(r#"{"type":"minecraft:from_a_later_version"}"#), None);
-        assert_eq!(kind(r#"{"type":"no_namespace"}"#), None);
-        assert_eq!(kind(r#"{"type":7}"#), None);
-        assert_eq!(kind("{}"), None);
     }
     /// Recipes of every type land in `by_type`, in file order, with the id the
     /// file has; a data pack overrides by id and adds more; a recipe of a mod's

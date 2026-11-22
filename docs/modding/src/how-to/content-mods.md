@@ -98,26 +98,14 @@ Code mods declare content through `BlocksEvent` and `ItemsEvent`, using API-owne
 run before resources load. These are load-time declarations, not live registry entries. The game
 admits them with the content-file checks, atomically for each owner.
 A block's `item` defaults to true, in code as in a file: `Block::with_item(false)` gives it none.
-New identifiers from code across every namespace-owned registration—including
-blocks, items, block entity types, fluids, general entity types, attributes,
-custom stats, game rules, recipe types and serializers, recipe book types, menu
-recipe books, menu screen dispatch, mob-effect tick ownership (`MobEffectPart`),
-recipe property sets, render pipelines, armour models, arm poses, attachment
-types, biome modifiers, datapack registries, client dynamic textures, and
-runtime levels—may use any namespace owned by that mod's manifest, or any
-namespace of an installed content package that delegates to it via `served_by`
-(when the native host opts in with `[native] serves_content = true`; see
-[Manifest reference](../reference/manifest.md#sunrise-modtoml)). Only filesystem
-paths keyed strictly by package ID (such as `config/<mod_id>.toml`) stay scoped
-to the host's own ID. Bare names use the mod ID; an
-explicit owned namespace stays unchanged. An unowned namespace refuses
-registration with a diagnostic naming both the mod and namespace. A host cannot
-re-declare a block or item ID that its served content package already declares,
-and opting in with `serves_content = true` grants delegation to any installed
-content package that names the host—so a host runtime must inspect
-`context.mods()` and serve only packages it recognizes or generated. Attaching a
-Part to an existing vanilla or foreign block or item is a reference, not a new
-declaration, and remains allowed.
+Code registry declarations keep a valid explicit namespace, regardless of who supplies files
+in it. Bare names use the submitting mod ID. Exact duplicates and reserved built-in keys are
+still refused according to the registry, and diagnostics identify the submitting mod. A host
+cannot re-declare a key already declared by a content package it serves. Files and assets keep
+manifest namespace checks and `served_by` delegation requires `[native] serves_content = true`
+(see [Manifest reference](../reference/manifest.md#sunrise-modtoml)). A host runtime should use
+`context.mods()` to identify the delegating packages it recognizes. Attaching a Part to an
+existing vanilla or foreign block or item is a reference, not a new declaration.
 
 Code declarations carry component patches as `Vec<(String, Option<Tag>)>`:
 `Some(tag)` sets the named component and `None` removes it (without a `!` prefix).
@@ -239,7 +227,7 @@ items, block entity types and fluids its code declares), a listener on a client-
 a required payload the server sends to clients, or a synced attachment type it declares.
 For attachments, “carries” means **declares**: a server package may use another loaded package A's synced
 attachment, because clients compare A and decode the value through A. If A is itself a server package, A is the
-declarer refused by name. Attachment load checks declaration conflicts (including foreign namespaces) first,
+declarer refused by name. Attachment load checks declaration conflicts (duplicates and malformed ids) first,
 then undeclared uses naming the calling package and id, then server-package declarations; no content is admitted
 after a refusal. See [attachments](../concepts/attachments.md) for the declaration API.
 Assets, lang and data vanilla syncs itself (recipes, loot, tags) are allowed. Where a hook runs is still the hook's own side: the manifest says what a client must have, not where a
@@ -676,7 +664,9 @@ Code mods can also register a namespaced custom pose once in `Hooks::register` t
 `Registrar::register_arm_pose("mymod:flip", uses_both_arms, affects_offhand)`. Keep its
 `CustomArmPose` token and return `ArmPose::Custom(token)` from `get_arm_pose`. The two
 flags independently control the humanoid's two-arm ordering and whether the other
-hand's pose gives way. The token carries both flags. Duplicate, malformed and foreign-namespace ids refuse registration.
+hand's pose gives way. The token carries both flags. Any valid explicit `namespace:path` is
+accepted with ownership attributed to the registering mod; duplicate and malformed ids refuse
+registration.
 
 In `arm_pose_transform`, match `event.pose` to that token and set `event.angles.right`
 or `event.angles.left` to absolute `[pitch, yaw, roll]` in radians. `event.right_arm`
@@ -747,7 +737,8 @@ of the mod's own, or, across a `served_by` delegation (see
 [Declare content in code](#declare-content-in-code)), an item or item-bearing block the other
 side declares: a served package's file may name one its serving runtime declares in that
 package's namespaces, and the runtime may name one from a package it serves. Anything else
-is refused at load. It holds on the crafting
+is refused at load. An unused `minecraft:` name declared by an unrelated package is not a
+vanilla item. It holds on the crafting
 table, the inventory grid, the crafter and as furnace fuel (the last of the stack leaves it in
 the fuel slot, a stack with more left drops it), not in a brewing stand. What the item leaves once eaten
 or drunk is the `minecraft:use_remainder` component instead:
@@ -967,8 +958,9 @@ A code mod can also register an attribute type of its own with `Registrar::decla
 min, max, syncable, sentiment, tooltip)` (vanilla's `RangedAttribute` in the attribute registry). Only both-side
 packages may declare attributes; client-only packages refuse with `WrongSide` so extra
 client mods cannot shift packet IDs. `mod_api::Sentiment` is `Positive`, `Negative`, or `Neutral`.
-The id lands in the
-mod's namespace, the bounds and default follow `RangedAttribute`'s own checks, `syncable` decides whether the
+A bare `path` uses the
+mod's namespace while an explicit valid `namespace:path` keeps its namespace (built-in and duplicate keys refuse),
+the bounds and default follow `RangedAttribute`'s own checks, `syncable` decides whether the
 value syncs to clients, and `sentiment` (POSITIVE by default) colors the attribute's tooltip lines. The declared
 attributes append after the vanilla ones in the attribute catalog — sorted by declaring mod id, then attribute
 id, so the network ids are the same on every side running the same mods — before entity attribute rows resolve,
@@ -1007,9 +999,10 @@ check it already passes at join: a client without the mod cannot join. A save ke
 the mod is there; once it is gone, the load clamps the base into the bounds and logs it, once per attribute in each
 world load.
 
-A code mod can declare a datapack registry of its own with `Registrar::declare_datapack_registry(path, sync,
-fields)` (NeoForge's `DataPackRegistryEvent.NewRegistry`).
-`path` lands in a namespace the mod owns (`spell` of `example` is `example:spell`; explicit IDs may use extra manifest namespaces or a content package served via `served_by`), and `fields` is the
+A code mod can declare a datapack registry with `Registrar::declare_datapack_registry(path, sync,
+fields)` (NeoForge's `NewDatapackRegistryEvent`). A bare `path` uses the mod's namespace (`spell`
+of `example` is `example:spell`), while a valid explicit key keeps its namespace. Built-in and
+duplicate registry keys are refused. `fields` is the
 entry's record schema. Its scalar kinds are `Bool`, `Int { min, max }`, `Float { min, max }`, `Text { max_len }`,
 `Identifier` and `Reference { registry }`, and they nest, as vanilla's codecs do:
 
@@ -1266,10 +1259,10 @@ namespaces = ["kaisyn", "towns_and_towers"]
 
 A listed namespace is the mod's as its id is: its `assets/` and `data/` files load, and the game reads its tags,
 recipes, names and loot. Blocks, items, creative tabs, mob effects, entity types and menu types may be declared in
-`data/<owned_namespace>/sunrise/`. The same owned set governs code declarations.
-For example, a package with ID `ported_farmersdelight` and
-`namespaces = ["farmersdelight"]` can declare `farmersdelight:cooking_pot`
-and its `farmersdelight:` block entity type without changing saved-world IDs.
+`data/<owned_namespace>/sunrise/`. This file rule does not restrict the IDs used for code-declared
+blocks, items, and block entity types. For example, a package with ID `ported_farmersdelight` can
+register a code-declared `farmersdelight:cooking_pot` without changing its saved-world ID;
+its `farmersdelight:` asset and data files still require `namespaces = ["farmersdelight"]`.
 `minecraft`, `c` and `sunrise` cannot be listed. When two packages list the same extra namespace, the first
 admitted package owns it; the game leaves the later package's content out and logs the conflict. A package's
 primary namespace is its ID. Listing another package's ID as an extra namespace is a load error, regardless of
@@ -1336,7 +1329,9 @@ do on NeoForge and Fabric, and `sunrise-port-pack carry` writes the last two fro
 
 A mod's own configured and placed features (`data/<ns>/worldgen/feature/`, `placed_feature/`) generate in
 biomes it does not own (vanilla's) through NeoForge's biome modifiers, files in `data/<ns>/neoforge/biome_modifier/`
-(older Forge mods: `data/<ns>/forge/biome_modifier/`, `forge:` types). `add_features` appends its `features` to one
+(older Forge mods: `data/<ns>/forge/biome_modifier/`, `forge:` types). Pack precedence picks
+one effective file; a code declaration of its registry key is refused, not applied a second time.
+`add_features` appends its `features` to one
 generation `step` of every biome in `biomes`; `remove_features` takes them out of its `steps` (every step when it lists
 none); `none` does nothing. `biomes` and `features` are an id, a `#tag` or a list of ids; `biomes` may also be
 NeoForge's `any`, `or`, `and` or `not`. Every addition comes before every removal, each in mod and file order, and a
@@ -1447,19 +1442,21 @@ A code mod declares the same modifiers without a file: `Registrar::declare_biome
 `AddSpawnCosts`, `RemoveSpawnCosts`, `AddCarvers`, `RemoveCarvers` or `ModifyBiome`, whose `Option` fields are the
 values above). `BiomeModifier::json` renders it as the file above, so a declared modifier and
 a shipped one are applied by the same code, in the same order (additions first, then removals, then modifications, mods in dispatch
-order, declarations in registration order). An id outside the mod's owned namespaces (or `minecraft`) or that is not a file path, a repeated
-id, an empty list, a name that is not namespaced, an unknown generation step, a spawner of weight 0 or with its
-smallest group above its largest, a spawn cost that is not finite, a climate number that is not finite, a colour above
-0xFFFFFF and a temperature modifier other than `none` or `frozen` refuse the mods at startup, naming the mod.
+order, declarations in registration order). A bare path uses the declaring mod's namespace, while an explicit valid
+`namespace:path` keeps its namespace. A malformed id, a repeated id, an empty list, a name that is not namespaced, an
+unknown generation step, a spawner of weight 0 or with its smallest group above its largest, a spawn cost that is not
+finite, a climate number that is not finite, a colour above 0xFFFFFF and a temperature modifier other than `none` or
+`frozen` refuse the mods at startup, naming the mod.
 Declared modifiers apply when the world loads, through the same content loader as file modifiers, to both the
 generator and the game's biome table, including when no data pack is enabled.
 
 A modifier changes a biome that already generates. To add a mod's own biomes to the Overworld or the Nether, a code mod
 declares a **biome region** instead: `Registrar::declare_biome_region(path, region)` takes a `BiomeRegion` (its
-`dimension`, `minecraft:overworld` or `minecraft:nether`; a `weight` from 1 to 1000 against vanilla's 10; and its
-`points`, the same `BiomePoint`s as a mod dimension's). An area belongs to one region, and the region's own points
-choose the biome there. A malformed or repeated id, an id outside the mod's namespace, another dimension, a weight
-outside 1 to 1000, no points or an invalid point refuse the mods at startup, naming the mod. A new world records the
+`dimension`, `minecraft:overworld` or `minecraft:nether`; a `weight` from 1 to `i32::MAX` against vanilla's 10; and its
+`points`, the same `BiomePoint`s as a mod dimension's). A bare path uses the declaring mod's namespace, while an
+explicit valid `namespace:path` keeps its namespace. An area belongs to one region, and the region's own points
+choose the biome there. A malformed or repeated id, another dimension, a weight
+outside 1 to `i32::MAX`, no points or an invalid point refuse the mods at startup, naming the mod. A new world records the
 declared regions in `data/sunrise/biome_regions.dat`, and from then on that record decides: a changed or added region
 reaches an existing world only when its owner opts in, and a world whose region's mod is missing asks before it opens
 (a dedicated server reads `[biome_regions] missing = "refuse" | "vanilla"` in `server.toml`).

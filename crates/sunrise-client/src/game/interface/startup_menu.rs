@@ -2145,9 +2145,9 @@ mod tests {
             DeclarationRefusal::new(
                 "porter",
                 DeclarationKind::Item,
-                mod_api::DeclarationError::UnownedNamespace {
+                mod_api::DeclarationError::Rejected {
                     id: "foreign:wrench".into(),
-                    namespace: "foreign".into(),
+                    reason: "declared twice".into(),
                 },
             ),
         ]);

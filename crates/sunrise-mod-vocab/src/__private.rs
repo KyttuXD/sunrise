@@ -40,9 +40,24 @@ pub fn set_mod_enabled(id: &str, on: bool) -> bool {
     crate::set_mod_enabled(id, on)
 }
 
-/// Index the `(namespace, mod ID)` pairs admitted to the startup registries.
-pub fn install_content_owners<'a>(owners: impl IntoIterator<Item = (&'a str, &'a str)>) {
-    crate::runtime::install_content_owners(owners);
+/// Index the `(registry key, mod ID)` pairs admitted to each startup registry.
+pub fn install_content_owners<'a>(
+    blocks: impl IntoIterator<Item = (&'a str, &'a str)>,
+    items: impl IntoIterator<Item = &'a str>,
+    block_entities: impl IntoIterator<Item = (&'a str, &'a str)>,
+    menus: impl IntoIterator<Item = (&'a str, &'a str)>,
+) {
+    crate::runtime::install_content_owners(blocks, items, block_entities, menus);
+}
+
+/// Whether this block came from the admitted content declarations.
+pub fn is_content_block(id: &str) -> bool {
+    crate::runtime::content_block(id).is_some()
+}
+
+/// Whether this item came from the admitted content declarations.
+pub fn is_content_item(id: &str) -> bool {
+    crate::runtime::is_content_item(id)
 }
 
 /// Whether the engine has bound content ownership for the installed dispatch.
@@ -50,9 +65,9 @@ pub fn content_owners_published() -> bool {
     crate::runtime::content_owners_published()
 }
 
-/// Whether the declaring package of this content is switched off.
-pub fn content_owner_disabled(id: &str) -> bool {
-    crate::runtime::content_owner_disabled(id)
+/// Whether the declaring package of this block entity type is switched off.
+pub fn block_entity_owner_disabled(id: &str) -> bool {
+    crate::runtime::block_entity_owner_disabled(id)
 }
 
 /// Whether any installed mod is off; computed only at load/toggle time.

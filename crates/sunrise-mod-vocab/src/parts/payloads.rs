@@ -340,7 +340,8 @@ pub trait PayloadsRegistrar {
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken;
     /// Declare a raw play channel by exact id, with an optional server receiver.
-    /// Reserved namespaces, a second declaration by the same mod and an id a
-    /// typed payload uses refuse startup, naming the mods involved.
+    /// The `minecraft` namespace, built-in engine `sunrise:` channels, a second
+    /// declaration by the same mod and an id a typed payload uses refuse startup,
+    /// naming the mods involved.
     fn add_raw_payload(&mut self, id: PayloadId, server: Option<Arc<dyn IPayloadHandler>>);
 }

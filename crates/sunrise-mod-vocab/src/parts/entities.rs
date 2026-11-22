@@ -101,11 +101,11 @@ impl dyn Registrar + '_ {
     /// [`Self::entity_part`] for a Part with typed state (`EntityPartState`): each entity
     /// of type `entity` keeps one `P::Data`, under `P::DATA`. Refused, and reported as the
     /// mod's registration refusal, when `P::DATA` syncs, copies on death, holds a resource
-    /// handle, is outside the mod's namespaces, or names a key this mod already declared with
-    /// another type. The entity type is checked once every type is known, when the game
-    /// loads: only mob types (vanilla and mod) and mod general entity types keep Part state,
-    /// and `minecraft:player`, any other vanilla family and an unknown id refuse the load,
-    /// naming the type. `entity_part` itself checks no type.
+    /// handle, is undeclared, or names a key already declared with another type. The entity
+    /// type is checked once every type is known, when the game loads: only mob types (vanilla
+    /// and mod) and mod general entity types keep Part state, and `minecraft:player`, any
+    /// other vanilla family and an unknown id refuse the load, naming the type. `entity_part`
+    /// itself checks no type.
     pub fn entity_part_with_state<P: crate::EntityPartState>(
         &mut self,
         entity: &str,
@@ -162,9 +162,8 @@ pub trait EntitiesRegistrar {
     fn attach_entity_part(&mut self, entity: &str, kind: &'static str, part: Arc<dyn EntityPart>);
 
     /// Record the state declaration of entity Part `part` on entity type `entity`, or refuse
-    /// it (as the mod's registration refusal too): see `PartStateDeclaration::check`, a key
-    /// outside this mod's namespaces, or one it declared with another Rust type name. Mods reach
-    /// it through `entity_part_with_state`.
+    /// it (as the mod's registration refusal too): see `PartStateDeclaration::check` or a key
+    /// already declared with another Rust type name. Mods reach it through `entity_part_with_state`.
     fn declare_entity_part_state(
         &mut self,
         entity: &str,

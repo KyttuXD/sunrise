@@ -1141,6 +1141,21 @@ mod tests {
                         (Some(id.to_owned()), 1000)
                     );
                 }
+                assert!(mod_api::__private::intern_unresolved_fluid("minecraft:empty").is_none());
+                assert!(mod_api::__private::intern_unresolved_fluid("minecraft:water").is_none());
+                assert!(mod_api::__private::intern_unresolved_fluid("water").is_none());
+                let mc_handle =
+                    mod_api::__private::intern_unresolved_fluid("minecraft:unavailable_native")
+                        .unwrap();
+                for id in ["minecraft:unavailable_native", "unavailable_native"] {
+                    game.set_tank_state(from, &tanks(&[(Some(id), 1000), (None, 0)]));
+                    let mc_unresolved = source.resource(game, 0).unwrap();
+                    assert_eq!(
+                        *mc_unresolved.fluid(),
+                        mod_api::FluidIdentity::Unresolved(mc_handle)
+                    );
+                    assert_eq!(source.amount(game, 0), 1000);
+                }
                 let handle = mod_api::__private::intern_unresolved_fluid("othermod:fluid").unwrap();
                 game.set_tank_state(from, &tanks(&[(Some("othermod:fluid"), 1000), (None, 0)]));
                 let pipe_target = [4, 64, 0];

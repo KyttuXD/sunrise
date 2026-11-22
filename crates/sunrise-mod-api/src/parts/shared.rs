@@ -23,6 +23,51 @@ thread_local! {
     // A reference to the registrar's canonical requests while Hooks::register is in flight.
     // The table is moved, not copied, into Installed when registration finishes.
     pub(crate) static REGISTERING_KEYS: RefCell<Option<Rc<RefCell<sunrise_mod_runtime::registry_keys::Requests>>>> = const { RefCell::new(None) };
+    // The authoritative built-in game rule schema active for the synchronous registration call.
+    static ACTIVE_RULE_SCHEMA: std::cell::Cell<*const ()> = const { std::cell::Cell::new(std::ptr::null()) };
+}
+
+pub(crate) fn with_active_rule_schema<T>(
+    schema: &mod_vocab::__private::RuleSchema<'_>,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Restore(*const ());
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ACTIVE_RULE_SCHEMA.set(self.0);
+        }
+    }
+    let ptr: *const mod_vocab::__private::RuleSchema<'_> = schema;
+    let _guard = Restore(ACTIVE_RULE_SCHEMA.replace(ptr.cast()));
+    f()
+}
+
+pub(crate) fn active_rule_schema_has_category(id: &str) -> bool {
+    ACTIVE_RULE_SCHEMA.with(|cell| {
+        let ptr = cell.get();
+        if ptr.is_null() {
+            return false;
+        }
+        #[allow(unsafe_code)]
+        // SAFETY: `with_active_rule_schema` stores a live `&RuleSchema` pointer for the
+        // duration of its synchronous call frame and restores the prior pointer on drop.
+        let schema = unsafe { &*ptr.cast::<mod_vocab::__private::RuleSchema<'_>>() };
+        (schema.category)(id)
+    })
+}
+
+pub(crate) fn active_rule_schema_has_rule(id: &str) -> bool {
+    ACTIVE_RULE_SCHEMA.with(|cell| {
+        let ptr = cell.get();
+        if ptr.is_null() {
+            return false;
+        }
+        #[allow(unsafe_code)]
+        // SAFETY: `with_active_rule_schema` stores a live `&RuleSchema` pointer for the
+        // duration of its synchronous call frame and restores the prior pointer on drop.
+        let schema = unsafe { &*ptr.cast::<mod_vocab::__private::RuleSchema<'_>>() };
+        (schema.position)(id).is_some()
+    })
 }
 
 pub(crate) fn with_registering_keys<T>(
@@ -53,11 +98,10 @@ pub struct PartRegistrar {
     pub(crate) recipe_book_types: HashMap<String, String>,
     pub(crate) recipe_book_fields: HashMap<String, (String, String)>,
     pub(crate) recipe_book_filters: HashMap<String, crate::RecipeBookFilterLook>,
-    pub(crate) game_rule_categories: Vec<String>,
-    pub(crate) game_rules: Vec<crate::GameRuleDecl>,
+    pub(crate) game_rule_categories: Vec<(&'static str, String)>,
+    pub(crate) game_rules: Vec<(&'static str, crate::GameRuleDecl)>,
     pub(crate) attachment_uses: Vec<(String, String, String)>,
-    pub(crate) attachment_types: HashMap<String, HashMap<String, bool>>,
-    pub(crate) attachment_owners: HashMap<String, HashMap<String, &'static str>>,
+    pub(crate) attachment_types: HashMap<String, HashMap<String, AttachmentTypeDeclaration>>,
     pub(crate) custom_stats: Vec<String>,
     pub(crate) custom_stat_owners: Vec<&'static str>,
     /// The entity types each named to `entity_tick_each`, in order: `None` for every type.
@@ -121,7 +165,6 @@ impl PartRegistrar {
             game_rules: Vec::new(),
             attachment_uses: Vec::new(),
             attachment_types: HashMap::new(),
-            attachment_owners: HashMap::new(),
             custom_stats: Vec::new(),
             custom_stat_owners: Vec::new(),
             entity_tick_each: Vec::new(),
@@ -299,7 +342,8 @@ pub fn install_parts(
     schema: &mod_vocab::__private::RuleSchema<'_>,
     dimension_shape: fn(&crate::DimensionSettings) -> bool,
 ) -> Result<(), Vec<String>> {
-    install_registrar(register_all(mods, dimension_shape), schema)
+    let registrar = with_active_rule_schema(schema, || register_all(mods, dimension_shape));
+    install_registrar(registrar, schema)
 }
 
 pub(crate) fn install_registrar(
@@ -343,10 +387,17 @@ pub(crate) fn install_registrar(
         recipe_book_fields: registrar.recipe_book_fields,
         recipe_book_filters: registrar.recipe_book_filters,
         game_rule_slots,
-        game_rules: registrar.game_rules,
-        game_rule_categories: registrar.game_rule_categories,
+        game_rules: registrar
+            .game_rules
+            .into_iter()
+            .map(|(_, rule)| rule)
+            .collect(),
+        game_rule_categories: registrar
+            .game_rule_categories
+            .into_iter()
+            .map(|(_, category)| category)
+            .collect(),
         attachment_types: registrar.attachment_types,
-        attachment_owners: registrar.attachment_owners,
         custom_stats: registrar.custom_stats,
         custom_stat_owners: registrar.custom_stat_owners,
         entity_tick_each: mod_vocab::__private::EntityTickEach::of(&registrar.entity_tick_each),

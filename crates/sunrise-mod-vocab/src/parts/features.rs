@@ -17,9 +17,9 @@ impl dyn Registrar + '_ {
     /// loads and refuses one that doesn't fit, naming it. A `Reference` field is refused; name
     /// other entries with `Identifier`.
     ///
-    /// The type's ID must be in a namespace owned by the calling mod's manifest. An unowned
-    /// namespace (including vanilla's), an empty name, a duplicate ID or an invalid schema
-    /// refuses registration at startup and names the mod.
+    /// A bare name uses this mod's namespace; an explicit valid `namespace:path` keeps its
+    /// namespace. A malformed name, a duplicate ID, a built-in feature type ID or an invalid
+    /// schema refuses registration at startup and names the mod.
     pub fn register_feature_type<T: crate::FeatureType>(
         &mut self,
         name: &str,

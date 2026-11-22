@@ -14,16 +14,14 @@ pub struct UnresolvedFluid(pub(crate) u64);
 // exhaustive: its field is private, so only the game's table creates a key
 pub struct DimensionKey(pub(crate) u32);
 
-/// Why a game rule category declaration was refused.
+/// Why a game rule or category declaration was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum GameRuleError {
     /// The identifier is invalid.
     InvalidId,
-    /// The namespace does not belong to the declaring mod.
-    ForeignNamespace,
-    /// The category is already declared.
+    /// The category or rule is already declared.
     Duplicate,
     /// An integer rule's `min` is above its `max`, or its default is outside `min..=max`.
     InvalidRange,

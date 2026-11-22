@@ -844,20 +844,15 @@ impl VanillaTerrain {
 pub fn biome_modifiers_over_packs(
     dir: &Path,
     overrides: &WorldgenOverrides,
-) -> Option<WorldgenOverrides> {
-    let root = dir.parent()?;
-    // The modifiers code mods declared: they register after the content root is built.
+) -> crate::Result<Option<WorldgenOverrides>> {
+    let Some(root) = dir.parent() else {
+        return Ok(None);
+    };
     let declared: Vec<[String; 3]> = mod_api::__private::biome_modifier_declarations()
         .iter()
-        .filter_map(|d| {
-            let (mod_id, _) = d.id.split_once(':')?;
-            Some([mod_id.to_owned(), d.file(), d.modifier.json()])
-        })
+        .map(|d| [d.mod_id.clone(), d.file(), d.modifier.json()])
         .collect();
-    crate::mod_content::biome_modifiers_over_packs(root, overrides, &declared).unwrap_or_else(|e| {
-        log::warn!("Sunrise: biome modifiers over data packs: {e}");
-        None
-    })
+    crate::mod_content::biome_modifiers_over_packs(root, overrides, &declared)
 }
 /// A bundle directory, the data packs over it, and what loading them gave.
 type SharedEntry = (std::path::PathBuf, WorldgenOverrides, Arc<GeneratorData>);
@@ -932,7 +927,7 @@ pub fn shared_data_with(
         return Ok(data.clone());
     }
     let started = std::time::Instant::now();
-    let modified = biome_modifiers_over_packs(dir, overrides);
+    let modified = biome_modifiers_over_packs(dir, overrides)?;
     let data = GeneratorData::load_with(dir, registry, modified.as_ref().unwrap_or(overrides))?;
     log::info!("Sunrise: worldgen data loaded in {:?}", started.elapsed());
     for warning in data.warnings() {

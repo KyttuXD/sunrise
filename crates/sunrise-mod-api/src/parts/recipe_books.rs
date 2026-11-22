@@ -41,7 +41,7 @@ impl RecipeBooksRegistrar for PartRegistrar {
                 &look.enabled_highlighted,
                 &look.disabled_highlighted,
             ] {
-                resource_id(sprite).map_err(|reason| format!("sprite {sprite:?}: {reason}"))?;
+                validate_id(sprite).map_err(|reason| format!("sprite {sprite:?}: {reason}"))?;
             }
             if look.tooltip.is_empty() || look.tooltip.len() > 256 {
                 return Err("tooltip key must be nonempty and at most 256 bytes".into());
@@ -62,24 +62,26 @@ impl RecipeBooksRegistrar for PartRegistrar {
     }
 }
 
-/// Split a lowercase `namespace:path` id of at most 256 bytes.
-fn resource_id(id: &str) -> Result<(&str, &str), String> {
-    let (namespace, path) = id.split_once(':').ok_or("explicit namespace required")?;
+/// Vanilla 26.3 `RecipeBookType` enum values.
+const VANILLA_RECIPE_BOOK_TYPES: &[&str] = &[
+    "minecraft:crafting",
+    "minecraft:furnace",
+    "minecraft:blast_furnace",
+    "minecraft:smoker",
+];
+
+/// Validate an explicit `namespace:path` id of at most 256 bytes.
+fn validate_id(id: &str) -> Result<(), String> {
+    if !id.contains(':') {
+        return Err("explicit namespace required".into());
+    }
     if id.len() > 256 {
         return Err("id exceeds 256 bytes".into());
     }
-    if namespace.is_empty()
-        || path.is_empty()
-        || !namespace
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
-        || !path
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-/".contains(&b))
-    {
+    if crate::Identifier::parse_namespaced(id).is_none() {
         return Err("nonempty lowercase resource-id namespace and path required".into());
     }
-    Ok((namespace, path))
+    Ok(())
 }
 
 impl PartRegistrar {
@@ -92,15 +94,15 @@ impl PartRegistrar {
             if mod_vocab::__private::parts_installation::parts_installed() {
                 return Err("registry is frozen".to_owned());
             }
-            let (namespace, _) = resource_id(id)?;
+            validate_id(id)?;
+            if VANILLA_RECIPE_BOOK_TYPES.contains(&id) {
+                return Err(format!("built-in recipe book type {id}"));
+            }
             if let Some(owner) = self.recipe_book_types.get(id) {
                 return Err(format!(
                     "duplicate key declared by {owner} and {}",
                     self.mod_id
                 ));
-            }
-            if namespace == "minecraft" || !owns_namespace(self.mod_id, namespace) {
-                return Err("namespace must be owned by the registering mod, not minecraft".into());
             }
             if self.recipe_book_types.len() >= 1024 {
                 return Err("registry exceeds 1024 custom books".into());
@@ -216,10 +218,16 @@ mod tests {
     }
 
     #[test]
-    fn registration_rejects_invalid_and_duplicate_declarations() {
+    fn registration_rejects_invalid_builtin_and_duplicate_declarations() {
         let mut registrar = PartRegistrar::new("demo");
         let key = registrar.recipe_book_type("demo:cooking_pot").unwrap();
         assert_eq!(key.as_str(), "demo:cooking_pot");
+        let foreign = registrar.recipe_book_type("other:pot").unwrap();
+        assert_eq!(foreign.as_str(), "other:pot");
+        assert_eq!(registrar.recipe_book_types["other:pot"], "demo");
+        let custom_vanilla = registrar.recipe_book_type("minecraft:pot").unwrap();
+        assert_eq!(custom_vanilla.as_str(), "minecraft:pot");
+        assert_eq!(registrar.recipe_book_types["minecraft:pot"], "demo");
         assert!(
             registrar
                 .recipe_book_type("demo:cooking_pot")
@@ -231,9 +239,11 @@ mod tests {
             "demo:",
             ":pot",
             "demo:Pot",
-            "minecraft:pot",
-            "other:pot",
             "demo:a:b",
+            "minecraft:crafting",
+            "minecraft:furnace",
+            "minecraft:blast_furnace",
+            "minecraft:smoker",
         ] {
             assert!(registrar.recipe_book_type(id).is_err(), "{id}");
         }
@@ -242,8 +252,8 @@ mod tests {
                 .recipe_book_type(&format!("demo:{}", "a".repeat(252)))
                 .is_err()
         );
-        assert_eq!(registrar.recipe_book_types.len(), 1);
-        assert_eq!(registrar.refused.len(), 9);
+        assert_eq!(registrar.recipe_book_types.len(), 3);
+        assert_eq!(registrar.refused.len(), 11);
     }
 
     #[test]

@@ -14,7 +14,7 @@ its corner reservations do not affect the next listener.
 
 In `Hooks::register_gui_layers`, call `event.layers.register(id, placement, Box::new(draw))` on the
 `GuiLayerRegistrar`. Registration runs once at client startup.
-Use your own namespaced ID and a `GuiLayerPlacement`: below or above all layers, or immediately
+Use any unused namespaced ID and a `GuiLayerPlacement`: below or above all layers, or immediately
 below or above a vanilla anchor or a layer already registered. The client logs and refuses
 invalid IDs, duplicate IDs and unknown anchors; `register` returns whether it accepted the layer
 into the callback's pending order. Later calls in the same callback can anchor to that layer.

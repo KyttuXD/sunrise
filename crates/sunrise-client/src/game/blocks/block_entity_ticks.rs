@@ -392,7 +392,7 @@ impl Game<'_> {
             let Some((kind, mod_type)) = TickedKind::with_type(entity) else {
                 continue;
             };
-            if matches!(entity, BlockEntity::Mod(m) if mod_api::__private::content_owner_disabled(m.id()))
+            if matches!(entity, BlockEntity::Mod(m) if mod_api::__private::block_entity_owner_disabled(m.id()))
             {
                 continue;
             }
@@ -591,7 +591,7 @@ impl Game<'_> {
                         if record { Ticking::Yes } else { Ticking::Idle }
                     }
                     n if FurnaceKind::from_block(n).is_some() => Ticking::Yes,
-                    _ if !name.starts_with("minecraft:") && self.native_ticks(name) => Ticking::Yes,
+                    _ if mod_api::__private::is_content_block(name) && self.native_ticks(name) => Ticking::Yes,
                     _ => Ticking::No,
                 }
             })
@@ -1787,7 +1787,7 @@ mod own_block_entity_tests {
     use sunrise_client::containers::{BlockEntity, ModBlockEntity};
     use sunrise_core::geometry::Vec3;
 
-    const A: &str = "own_a:machine";
+    const A: &str = "minecraft:p3_machine";
     const B: &str = "own_b:machine";
     const DETECTOR: &str = "minecraft:daylight_detector";
 
@@ -1810,7 +1810,10 @@ mod own_block_entity_tests {
     #[mod_api::__subscriptions]
     impl Hooks for Machines {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            let kind = r.block_entity_type("machine").blocks(&[self.block]).build();
+            let kind = r
+                .block_entity_type(self.block)
+                .blocks(&[self.block])
+                .build();
             r.block_entity_part(&kind, Ticks(self.block)).unwrap();
             if let Some(other) = self.also_on {
                 let keys = (kind, r.block_key(other));
@@ -1958,6 +1961,22 @@ mod own_block_entity_tests {
         let (a, b, c) = ((1, 64, 1), (3, 64, 1), (5, 64, 1));
         let placed = [(a, A), (b, B), (c, A), ((7, 64, 1), "minecraft:hopper")];
         with_machines(mods, &placed, |game| {
+            // Both registered keys take the native save and NBT paths, independent of namespace.
+            for (pos, kind) in [(a, A), (b, B)] {
+                let entity = game.world.block_entities.get(&pos).unwrap();
+                let saved = sunrise_client::save::block_entity_encode::encode(
+                    pos,
+                    entity,
+                    kind,
+                    game.items(),
+                );
+                assert!(sunrise_client::block_entity_nbt::canonical(&saved).is_some());
+                let (at, decoded) =
+                    sunrise_client::save::decode_block_entity_for_block(&saved, kind).unwrap();
+                assert_eq!(at, pos);
+                assert!(matches!(decoded, BlockEntity::Mod(ref native) if native.id() == kind));
+                game.world.block_entities.insert(pos, decoded);
+            }
             // Mod B's entity on mod A's block.
             let d = (9, 64, 1);
             assert!(sunrise_client::block_entity_types::additional_valid(A, B));
@@ -1979,6 +1998,8 @@ mod own_block_entity_tests {
             assert_eq!(own_a.mine, [a, a, c, c]);
             assert_eq!(own_b.mine, [b, b, d, d]);
             assert_eq!(missing.mine, []);
+            assert_eq!(ticks_of(game, a), [1, 1]);
+            assert_eq!(ticks_of(game, b), [2, 2]);
         });
     }
 

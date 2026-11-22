@@ -357,57 +357,42 @@ mod tests {
     }
 
     #[test]
-    fn admitted_owners_protect_primary_ids_and_keep_first_alias_claims() {
+    fn admitted_keys_keep_distinct_owners_in_one_namespace() {
         crate::__private::initialize().unwrap();
         use mod_vocab::__private::{
-            content_owner_disabled, install_content_owners, set_mod_enabled,
+            block_entity_owner_disabled, install_content_owners, set_mod_enabled,
         };
 
         struct Quiet;
         #[crate::__subscriptions]
         impl crate::Hooks for Quiet {}
 
-        let packages = [
-            ("owner", vec!["owner", "shared"]),
-            ("claimant", vec!["claimant", "shared", "owner"]),
-        ]
-        .into_iter()
-        .map(|(id, namespaces)| {
-            PackageInfo::new(
-                id.into(),
-                "1".into(),
-                PackageKind::Code,
-                crate::Side::Both,
-                namespaces.into_iter().map(str::to_owned).collect(),
-                vec![],
-            )
-        })
-        .collect();
-        with_test_package_inventory(packages, || {
-            crate::testing::with_dispatch(
-                vec![
-                    crate::ModEntry::new("owner", Box::new(Quiet)),
-                    crate::ModEntry::new("claimant", Box::new(Quiet)),
-                ]
-                .into(),
-                || {
-                    assert!(set_mod_enabled("owner", false));
-                    assert!(content_owner_disabled("owner:machine"));
-                    assert!(!content_owner_disabled("shared:machine")); // raw metadata is not admission
-
-                    install_content_owners([
-                        ("owner", "claimant"),
-                        ("shared", "owner"),
-                        ("shared", "claimant"),
-                        ("assets_only", "content_only"),
-                        ("assets_only", "owner"),
-                    ]);
-                    assert!(content_owner_disabled("owner:machine"));
-                    assert!(content_owner_disabled("shared:machine"));
-                    assert!(!content_owner_disabled("assets_only:machine"));
-                },
-            );
-        });
+        crate::testing::with_dispatch(
+            vec![
+                crate::ModEntry::new("alpha", Box::new(Quiet)),
+                crate::ModEntry::new("beta", Box::new(Quiet)),
+            ]
+            .into(),
+            || {
+                assert!(set_mod_enabled("alpha", false));
+                install_content_owners(
+                    [("beta:alpha_block", "alpha"), ("beta:beta_block", "beta")],
+                    [],
+                    [
+                        ("beta:alpha_machine", "alpha"),
+                        ("beta:beta_machine", "beta"),
+                    ],
+                    [],
+                );
+                assert!(block_entity_owner_disabled("beta:alpha_machine"));
+                assert!(!block_entity_owner_disabled("beta:beta_machine"));
+                assert!(set_mod_enabled("alpha", true));
+                assert!(set_mod_enabled("beta", false));
+                assert!(!block_entity_owner_disabled("beta:alpha_machine"));
+                assert!(block_entity_owner_disabled("beta:beta_machine"));
+                assert!(!block_entity_owner_disabled("beta:unknown"));
+            },
+        );
     }
 
     #[test]
@@ -612,7 +597,17 @@ mod tests {
                 assert_eq!(*registered.lock().unwrap(), expected);
                 let mut types = Vec::new();
                 dispatch_component_types(&RegistrationContext::new(), &mut types);
-                assert_eq!(types, expected, "a later step reads the same snapshot");
+                assert_eq!(
+                    types
+                        .iter()
+                        .map(|entry| (entry.mod_id, entry.answer.as_str()))
+                        .collect::<Vec<_>>(),
+                    expected
+                        .iter()
+                        .map(|value| ("reader", value.as_str()))
+                        .collect::<Vec<_>>(),
+                    "a later step reads the same snapshot"
+                );
             });
             // No engine snapshot: every read returns None.
             crate::__private::install_parts(

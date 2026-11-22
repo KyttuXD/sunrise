@@ -4,10 +4,12 @@ use crate::item::recipe_book::RecipeBookTypeKey;
 
 /// Operations available during the existing shared mod registration phase.
 pub trait RecipeBooksRegistrar {
-    /// Register an explicit lowercase `namespace:path` in any manifest-owned namespace.
-    /// IDs are limited to 256 bytes and 1024 books in total. Invalid or duplicate
-    /// declarations refuse installation even if the caller ignores the error.
-    /// The registry freezes when registration ends, before player state is loaded.
+    /// Register an explicit lowercase `namespace:path` recipe book type.
+    /// IDs are limited to 256 bytes and 1024 books in total. Malformed, built-in
+    /// (`minecraft:crafting`, `minecraft:furnace`, `minecraft:blast_furnace`,
+    /// `minecraft:smoker`) or duplicate declarations refuse installation even if
+    /// the caller ignores the error. The registry freezes when registration ends,
+    /// before player state is loaded.
     fn recipe_book_type(&mut self, id: &str) -> Result<RecipeBookTypeKey, String>;
     /// Register a book whose flags use explicit, case-sensitive fields in the player's
     /// `recipeBook` compound, like vanilla's `RecipeBookSettings.TypeSettings` codec.

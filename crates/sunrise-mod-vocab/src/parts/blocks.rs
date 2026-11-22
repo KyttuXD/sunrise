@@ -197,7 +197,8 @@ pub(crate) struct BlockHookParts {
 
 impl BlockHookParts {
     pub(crate) fn new(id: &str, parts: &[Attached<dyn BlockPart>]) -> Self {
-        let owner_slot = crate::runtime::content_owner_index(id)
+        let owner_slot = crate::runtime::content_block(id)
+            .flatten()
             .and_then(|owner| parts.iter().position(|part| part.mod_index == owner));
         Self {
             parts: parts.to_vec(),
@@ -252,6 +253,16 @@ fn cached_slot_tracks_the_first_owner_in_dispatch_order_and_live_toggles() {
         ]
         .into(),
         || {
+            crate::runtime::install_content_owners(
+                [
+                    ("shared:first", "other"),
+                    ("shared:later", "owner"),
+                    ("shared:absent", "owner"),
+                ],
+                [],
+                [],
+                [],
+            );
             let attach = |mod_index, mod_id, order, type_name| Attached::<dyn BlockPart> {
                 mod_id,
                 mod_index,
@@ -262,9 +273,9 @@ fn cached_slot_tracks_the_first_owner_in_dispatch_order_and_live_toggles() {
             let other = attach(0, "other", 0, "Other");
             let owner = attach(1, "owner", 0, "Owner");
             let second = attach(1, "owner", 1, "Second");
-            let first = BlockHookParts::new("other:first", &[other.clone(), owner.clone()]);
-            let later = BlockHookParts::new("owner:later", &[other.clone(), owner, second]);
-            let absent = BlockHookParts::new("owner:absent", &[other]);
+            let first = BlockHookParts::new("shared:first", &[other.clone(), owner.clone()]);
+            let later = BlockHookParts::new("shared:later", &[other.clone(), owner, second]);
+            let absent = BlockHookParts::new("shared:absent", &[other]);
 
             assert_eq!(later.disabled_owner_slot(), None);
             assert!(crate::set_mod_enabled("owner", false));

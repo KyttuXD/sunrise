@@ -16,7 +16,6 @@ impl PartRegistrar {
         let parts = self.parts.clone();
         let part_states = self.part_states.clone();
         let attachment_types = self.attachment_types.clone();
-        let attachment_owners = self.attachment_owners.clone();
         let tags = self.tags.clone();
         let keys = self.registry_keys.borrow().clone();
         let menu_screen_factories = self.menu_screen_factories.clone();
@@ -47,7 +46,6 @@ impl PartRegistrar {
                     );
                     registrar.part_states = part_states;
                     registrar.attachment_types = attachment_types;
-                    registrar.attachment_owners = attachment_owners;
                     *registrar.registry_keys.borrow_mut() = keys;
                     registrar.menu_recipe_books = menu_recipe_books;
                     registrar.recipe_book_types = recipe_book_types;

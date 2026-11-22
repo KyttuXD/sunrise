@@ -8,7 +8,10 @@ use mod_api::{
     SkullModel,
 };
 use sunrise_assets::item_model::{SpecialKind, SpecialModel, is_skull_kind};
-use sunrise_client::{mobs::model_layers, skull_models};
+use sunrise_client::{
+    mobs::{EntityModelDocument, model_layers},
+    skull_models,
+};
 
 fn skull(kind: &str, layer: &str, texture: &str) -> SkullModel {
     SkullModel {
@@ -108,7 +111,7 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
                 "entity/zombie/zombie",
             ),
         ],
-        &vanilla_root,
+        &document,
     );
     assert_eq!(
         kept,
@@ -192,7 +195,7 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
         "skulltest:goblin_head#main",
         "skulltest:entity/late",
     );
-    assert!(skull_models::register(vec![late], std::path::Path::new(".")).is_empty());
+    assert!(skull_models::register(vec![late], &document).is_empty());
     assert!(skull_models::part("skulltest:late").is_none());
     assert!(!is_skull_kind("skulltest:late"));
 }

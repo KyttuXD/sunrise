@@ -9,8 +9,7 @@ mod recipe_property_validation;
 /// Items a mod adds to one of the recipe property sets: the items a furnace,
 /// blast furnace, smoker, campfire, smithing table slot or brewing stand slot
 /// accepts (`RecipeManager.RECIPE_PROPERTY_SETS`), or a mod-created menu input
-/// set. New keys must belong to a namespace owned by the listener's manifest;
-/// later listeners may extend sets created by earlier listeners.
+/// set. Any valid namespaced key creates or extends a custom set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]

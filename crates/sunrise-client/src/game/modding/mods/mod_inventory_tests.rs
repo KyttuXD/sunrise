@@ -337,3 +337,79 @@ fn capture_metadata_distinguishes_content_native_and_unknown_code() {
     );
     assert!(metadata.iter().all(|m| m.crate_name.is_empty()));
 }
+
+#[test]
+#[ignore = "daily"]
+fn content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_join_inventories() {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::mods::tests::inventory::content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_join_inventories",
+        "SUNRISE_DROPPED_REMAINDER_INVENTORY_CHILD",
+        &["valid"],
+    ) {
+        return;
+    }
+
+    struct NativeMinecraftItem;
+    #[mod_api::__subscriptions]
+    impl Hooks for NativeMinecraftItem {
+        fn items(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::ItemsEvent<'_>) {
+            event
+                .register(mod_api::Item::new(
+                    "minecraft:foreign_bucket",
+                    "minecraft:bucket",
+                ))
+                .unwrap();
+        }
+    }
+
+    let fixture = Fixture::new("dropped-remainder-inventory");
+    let consumer_manifest = "id='consumer'\nname='consumer'\nversion='1'\napi='0.2'\nside='both'\n";
+    let consumer_path = fixture.0.join("consumer.smod");
+    std::fs::write(
+        &consumer_path,
+        sunrise_mod_package::Package::write_files(
+            consumer_manifest,
+            &[(
+                "data/consumer/sunrise/items/filled.json",
+                br#"{"crafting_remainder":"minecraft:foreign_bucket"}"#,
+            )],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let survivor_manifest = "id='survivor'\nname='survivor'\nversion='1'\napi='0.2'\nside='both'\n";
+    let survivor_path = fixture.0.join("survivor.smod");
+    std::fs::write(
+        &survivor_path,
+        sunrise_mod_package::Package::write_files(survivor_manifest, &[]).unwrap(),
+    )
+    .unwrap();
+    let sources = ModsState {
+        selected: vec![
+            SelectedPackage {
+                package: sunrise_mod_package::Package::read(&consumer_path).unwrap(),
+                path: consumer_path,
+            },
+            SelectedPackage {
+                package: sunrise_mod_package::Package::read(&survivor_path).unwrap(),
+                path: survivor_path,
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    with_mods(
+        vec![ModEntry::new("owner_mod", Box::new(NativeMinecraftItem))].into(),
+        || {
+            let overlay = content_overlay(&base, &sources, &fixture.0.join("jars")).unwrap();
+            assert!(overlay.announce);
+            assert!(!overlay.mods.iter().any(|m| m.id == "consumer"));
+            assert!(!overlay.content_mods.iter().any(|m| m.id == "consumer"));
+            assert!(!overlay.announced.iter().any(|m| m.id == "consumer"));
+            assert!(overlay.mods.iter().any(|m| m.id == "survivor"));
+            assert!(overlay.content_mods.iter().any(|m| m.id == "survivor"));
+            assert!(overlay.announced.iter().any(|m| m.id == "survivor"));
+        },
+    );
+}

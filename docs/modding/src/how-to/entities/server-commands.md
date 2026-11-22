@@ -313,10 +313,10 @@ the type parse and complete the command: the server sends the argument as a Brig
 of that shape with `minecraft:ask_server`, and their chat asks the server for the
 suggestions.
 
-The namespaced id is in the registering mod's namespace; an id registered twice, a
-name in another namespace or an empty name refuses the mods at startup, naming the
-mod. A client mod registers client command argument types the same way; they are
-available to `register_client_commands`.
+A bare name uses the registering mod's namespace; an explicit valid `namespace:path` keeps
+its namespace. An empty or malformed name, a built-in command argument type ID, or an id
+registered twice refuses the mods at startup, naming the mod. A client mod registers client
+command argument types the same way; they are available to `register_client_commands`.
 
 ### Completing one token of a greedy text
 

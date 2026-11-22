@@ -21,7 +21,11 @@ pub fn intern(id: &str) -> Option<u64> {
     } else {
         format!("minecraft:{id}")
     };
-    if id.len() > MAX_ID_BYTES || !namespaced_id(&id) || id.starts_with("minecraft:") {
+    if id.len() > MAX_ID_BYTES
+        || !namespaced_id(&id)
+        || id == "minecraft:empty"
+        || crate::__private::fluid_key(&id).is_some()
+    {
         return None;
     }
     TABLE.write().unwrap().insert(id)
@@ -37,6 +41,9 @@ impl Table {
         }
         let slot = self.names.len() as u64;
         self.names.push(id.clone());
+        if let Some(bare) = id.strip_prefix("minecraft:") {
+            self.utf16_slots.insert(bare.encode_utf16().collect(), slot);
+        }
         self.utf16_slots.insert(id.encode_utf16().collect(), slot);
         self.slots.insert(id, slot);
         Some(slot)
@@ -45,7 +52,12 @@ impl Table {
 
 /// Look up an already-interned identity without creating one.
 pub fn lookup(id: &str) -> Option<u64> {
-    TABLE.read().unwrap().slots.get(id).copied()
+    let table = TABLE.read().unwrap();
+    if id.contains(':') {
+        table.slots.get(id).copied()
+    } else {
+        table.slots.get(&format!("minecraft:{id}")).copied()
+    }
 }
 
 /// Look up an already-interned NBT name without allocation.
@@ -111,8 +123,21 @@ mod tests {
 
     #[test]
     fn handles_refuse_unissued_slots_and_survive_other_worlds() {
-        assert_eq!(intern("mystery"), None);
-        assert_eq!(intern("minecraft:mystery"), None);
+        assert_eq!(intern("empty"), None);
+        assert_eq!(intern("minecraft:empty"), None);
+        let mc_native = intern("mystery").unwrap();
+        assert_eq!(Some(mc_native), intern("minecraft:mystery"));
+        assert_eq!(name(mc_native), "minecraft:mystery");
+        assert_eq!(lookup("mystery"), Some(mc_native));
+        assert_eq!(lookup("minecraft:mystery"), Some(mc_native));
+        assert_eq!(
+            lookup_utf16(&"mystery".encode_utf16().collect::<Vec<_>>()),
+            Some(mc_native)
+        );
+        assert_eq!(
+            lookup_utf16(&"minecraft:mystery".encode_utf16().collect::<Vec<_>>()),
+            Some(mc_native)
+        );
         let old = intern("absent:fluid").unwrap();
         assert_eq!(Some(old), intern("absent:fluid"));
         crate::__private::initialize().unwrap();
