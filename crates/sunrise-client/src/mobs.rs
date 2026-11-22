@@ -189,7 +189,12 @@ use crate::{
 };
 pub use data::MobData;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs,
+    path::Path,
+    sync::Arc,
+};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
@@ -412,7 +417,7 @@ impl MobTypes {
         let entity_type_tags =
             crate::items::load_tags(root, "entity_type", &sunrise_world::loot::PackOverlay::NONE)?;
         let burn_in_daylight = entity_type_tags.get("minecraft:burn_in_daylight");
-        let empty_model = Arc::new(Part::parse("root", &Value::Null));
+        let empty_model = Arc::new(Part::empty("root"));
         let item_tags =
             crate::items::load_tags(root, "item", &sunrise_world::loot::PackOverlay::NONE)
                 .unwrap_or_default();
@@ -488,20 +493,22 @@ impl MobTypes {
                 continue;
             }
             let model_key = format!("minecraft:{}", def.model);
-            let model = models
-                .as_ref()
-                .and_then(|models| models.value().get(&model_key));
+            let model = models.as_ref().and_then(|models| models.model(&model_key));
             if models_needed && model.is_none() {
                 continue;
             }
             let defaults = exact.get(&id).cloned().unwrap_or_default();
             let fields = MobType::catalog_fields(&defaults, attributes);
             let mut layers = crate::fast_hash::FxHashMap::default();
-            if let Some(all) = models.as_ref().and_then(|m| m.value().as_object()) {
+            if let Some(models) = &models {
                 for prefix in def.layer_prefixes() {
                     let start = format!("minecraft:{prefix}#");
-                    for (k, v) in all.iter().filter(|(k, _)| k.starts_with(&start)) {
-                        let mut part = Part::parse("root", v);
+                    for (k, part) in models
+                        .0
+                        .range(start.clone()..)
+                        .take_while(|(k, _)| k.starts_with(&start))
+                    {
+                        let mut part = part.clone();
                         if culls_back_faces(k) {
                             part.set_cull_back();
                         }
@@ -559,14 +566,11 @@ impl MobTypes {
                     flags,
                     model: model.map_or_else(
                         || empty_model.clone(),
-                        |model| {
-                            Arc::new({
-                                let mut part = Part::parse("root", model);
-                                if culls_back_faces(&model_key) {
-                                    part.set_cull_back();
-                                }
-                                part
-                            })
+                        |mut model| {
+                            if culls_back_faces(&model_key) {
+                                model.set_cull_back();
+                            }
+                            Arc::new(model)
                         },
                     ),
                     layers,
@@ -5148,31 +5152,40 @@ pub fn render(
 ) {
     render::render_single(mob, alpha, camera, uv, light, out);
 }
-/// A parsed `entity-models.json` document, shared while loading model batches.
-/// Each lookup still constructs an independent part tree for the caller.
+/// Validated vanilla model trees shared while loading model batches.
+/// Each lookup still returns an independent part tree for the caller.
 #[derive(Clone)]
-pub struct EntityModelDocument(Arc<Value>);
+pub struct EntityModelDocument(Arc<BTreeMap<String, Part>>);
 
 impl EntityModelDocument {
     pub fn load(root: &Path) -> crate::Result<Self> {
-        let layers = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
-        Ok(Self(Arc::new(Value::Object(layers))))
+        let path = root.join("entity-models.json");
+        let layers: Value = serde_json::from_slice(&fs::read(&path)?)?;
+        let Value::Object(layers) = layers else {
+            return Err(format!("{}: expected a top-level JSON object", path.display()).into());
+        };
+        // EntityModelSet.vanilla builds a populated set from LayerDefinitions.createRoots.
+        if layers.is_empty() {
+            return Err(format!("{}: no entity model definitions", path.display()).into());
+        }
+        let mut models = BTreeMap::new();
+        for (key, model) in layers {
+            if !model_layers::is_layer_key(&key) {
+                return Err(format!("{}: invalid model layer key {key:?}", path.display()).into());
+            }
+            let part = Part::decode("root", model)
+                .map_err(|error| format!("{}: layer {key}: {error}", path.display()))?;
+            models.insert(key, part);
+        }
+        Ok(Self(Arc::new(models)))
     }
 
     pub fn model(&self, key: &str) -> Option<Part> {
-        self.0.get(key).map(|m| Part::parse("root", m))
+        self.0.get(key).cloned()
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.0
-            .as_object()
-            .into_iter()
-            .flat_map(|all| all.keys().map(String::as_str))
-    }
-
-    /// The parsed document, for loaders that read several keys from it.
-    pub fn value(&self) -> &Value {
-        &self.0
+        self.0.keys().map(String::as_str)
     }
 }
 

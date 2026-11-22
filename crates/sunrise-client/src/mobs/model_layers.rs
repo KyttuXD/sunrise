@@ -46,21 +46,10 @@ pub fn register(
     register_into(&REGISTERED, layers, vanilla_root)
 }
 
-fn load_vanilla_models(vanilla_root: &Path) -> Result<super::EntityModelDocument, String> {
-    let path = vanilla_root.join("entity-models.json");
-    let doc = super::EntityModelDocument::load(vanilla_root).map_err(|error| {
-        format!(
-            "failed to load vanilla layer definitions from {}: {error}",
-            path.display()
-        )
-    })?;
-    if !doc.value().is_object() {
-        return Err(format!(
-            "invalid vanilla layer definitions in {}: expected a top-level JSON object",
-            path.display()
-        ));
-    }
-    Ok(doc)
+pub(super) fn is_layer_key(id: &str) -> bool {
+    id.split_once('#')
+        .and_then(|(location, _)| location.split_once(':'))
+        .is_some_and(|(namespace, path)| mod_api::Identifier::from_parts(namespace, path).is_ok())
 }
 
 fn register_into(
@@ -77,13 +66,7 @@ fn register_into(
     for (index, entry) in layers.iter().enumerate() {
         let id = entry.answer.id.as_str();
         let mod_id = entry.mod_id;
-        let valid = id
-            .split_once('#')
-            .and_then(|(location, _)| location.split_once(':'))
-            .is_some_and(|(namespace, path)| {
-                mod_api::Identifier::from_parts(namespace, path).is_ok()
-            });
-        if !valid {
+        if !is_layer_key(id) {
             log::warn!("Mod {mod_id}: model layer {id:?} is not <namespace>:<path>#<layer>");
             continue;
         }
@@ -94,9 +77,14 @@ fn register_into(
     let definitions = if order.is_empty() {
         HashMap::new()
     } else {
-        let vanilla = load_vanilla_models(vanilla_root)?;
+        let vanilla = super::EntityModelDocument::load(vanilla_root).map_err(|error| {
+            format!(
+                "failed to load vanilla layer definitions from {}: {error}",
+                vanilla_root.join("entity-models.json").display()
+            )
+        })?;
         for &id in &order {
-            if vanilla.value().get(id).is_some() {
+            if vanilla.0.contains_key(id) {
                 let mod_id = layers[by_id[id]].mod_id;
                 return Err(format!(
                     "Mod {mod_id}: model layer {id} collides with a vanilla layer definition"

@@ -2503,33 +2503,57 @@ mod tests {
             );
             assert_eq!(bytes(&surface.vertices), before);
 
-            // An unreadable vanilla definition set fails staging, not publication.
-            let leash = game.bake_layer("minecraft:leash_knot#main").unwrap();
+            // A bad definition set must not replace the live generations, even if it is
+            // valid JSON and fails only while decoding a nested model part.
+            let active_layers = [
+                "minecraft:leash_knot#main",
+                "minecraft:standing_banner#main",
+                "minecraft:standing_banner#flag",
+                "minecraft:chest#main",
+            ]
+            .map(|name| (name, game.bake_layer(name).unwrap()));
             let bad_root = tempfile::tempdir().unwrap();
-            std::fs::write(bad_root.path().join("entity-models.json"), "[]").unwrap();
-            let listeners = game.register_client_reload_listeners();
-            let error = super::super::packs::stage_pack(
-                bad_root.path(),
-                &[],
-                &[],
-                &game.mods,
-                listeners,
-                &[],
-                &game.pack.assets,
-                &game.res,
-                &game.pack.context,
-                false,
-                false,
-                &super::super::Progress::new(),
-            )
-            .err()
-            .expect("a malformed definition set must fail staging");
-            assert!(
-                error
-                    .to_string()
-                    .contains("loading vanilla entity model definitions")
-            );
-            assert_eq!(game.bake_layer("minecraft:leash_knot#main"), Some(leash));
+            let path = bad_root.path().join("entity-models.json");
+            for (document, reason) in [
+                ("[]", "top-level JSON object"),
+                ("{}", "no entity model definitions"),
+                (
+                    r#"{"minecraft:chest#main": {"children": {"lid": {
+                        "polygons": [[[0,0,0,0], [1,0,0,1,0], [1,1,0,1,1], [0,1,0,0,1]]]
+                    }}}}"#,
+                    "layer minecraft:chest#main: child lid: polygons",
+                ),
+            ] {
+                std::fs::write(&path, document).unwrap();
+                let listeners = game.register_client_reload_listeners();
+                let error = super::super::packs::stage_pack(
+                    bad_root.path(),
+                    &[],
+                    &[],
+                    &game.mods,
+                    listeners,
+                    &[],
+                    &game.pack.assets,
+                    &game.res,
+                    &game.pack.context,
+                    false,
+                    false,
+                    &super::super::Progress::new(),
+                )
+                .err()
+                .expect("a malformed definition set must fail staging");
+                let error = error.to_string();
+                assert!(
+                    error.contains("loading vanilla entity model definitions"),
+                    "{error}"
+                );
+                assert!(error.contains(reason), "{error}");
+                for (name, layer) in &active_layers {
+                    assert_eq!(game.bake_layer(name).as_ref(), Some(layer), "{name}");
+                }
+                assert!(game.entity_models.leash_knot.is_some());
+                assert!(game.entity_models.banner.is_some());
+            }
             assert_eq!(
                 game.native_draw_model(&mut surface, model, 0xFF12_3456),
                 Ok(())

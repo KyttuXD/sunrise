@@ -2069,7 +2069,13 @@ mod preview_tests {
             return;
         };
         let m = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
-        let armour = [(&*kind.model, [0.5, 0.5, 0.75, 0.75], u32::MAX, 0, false)];
+        let armour = [(
+            sunrise_client::mobs::render::WornModel::Vanilla(&kind.model),
+            [0.5, 0.5, 0.75, 0.75],
+            u32::MAX,
+            0,
+            false,
+        )];
         let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
         let data = sunrise_client::mobs::MobData {
             states: Vec::new(),
