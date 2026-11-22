@@ -60,6 +60,7 @@ impl Game<'_> {
             let names = sunrise_client::recipe_book::PacketNames {
                 item: &item,
                 category: &category,
+                component: &|_| None,
                 tag: &tag,
             };
             self.stations().recipes.with_stonecutting(

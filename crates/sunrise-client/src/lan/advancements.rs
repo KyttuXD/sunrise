@@ -2106,6 +2106,7 @@ mod tests {
             &PacketNames {
                 item: &item,
                 category: &category,
+                component: &|_| None,
                 tag: &tag,
             },
         );

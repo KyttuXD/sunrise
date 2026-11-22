@@ -426,6 +426,133 @@ fn panicking_recipe_book_place_discards_answer_disables_only_that_callback_and_k
     });
 }
 
+#[test]
+#[ignore = "daily"]
+fn committed_book_settings_are_coalesced_before_a_listener_rewrites_them() {
+    use mod_api::{RecipeBookIdentity, RecipeBookSettings};
+    use std::sync::{Arc, Mutex};
+    use sunrise_client::recipe_book::{
+        BookFlags, CustomBooks, settings_codec,
+        settings_sync::{CHANNEL, Message},
+    };
+    use sunrise_protocol::packets::play::Clientbound as C;
+
+    const COMMITTED: BookFlags = BookFlags {
+        open: true,
+        filtering: true,
+    };
+    const REWRITTEN: BookFlags = BookFlags {
+        open: false,
+        filtering: true,
+    };
+
+    struct RewritingMod(Arc<Mutex<Vec<BookFlags>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for RewritingMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.recipe_book_type("review:book").unwrap();
+        }
+        fn player_recipe_book_settings_change(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut mod_api::PlayerRecipeBookSettingsChangeEvent<'_>,
+        ) {
+            self.0.lock().unwrap().push(BookFlags {
+                open: event.open,
+                filtering: event.filtering,
+            });
+            if event.open
+                && let RecipeBookIdentity::Custom(book) = &event.book
+            {
+                let player = host.players().player(event.player).unwrap();
+                assert!(player.set_recipe_book_settings(
+                    host,
+                    book,
+                    RecipeBookSettings {
+                        open: REWRITTEN.open,
+                        filtering: REWRITTEN.filtering,
+                    }
+                ));
+            }
+        }
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "review",
+        Box::new(RewritingMod(seen.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            let (_, catalog, _) = open_mod_menu(game);
+            let (tx, rx) = std::sync::mpsc::channel();
+            game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                g.sender = sunrise_client::lan::PlayerSender::new(tx, Default::default());
+            });
+            let player = game.player(12).unwrap();
+            let book = mod_api::RecipeBookTypeKey::registered()
+                .into_iter()
+                .next()
+                .unwrap();
+            mod_api::run_transaction(game, |host, _| {
+                for filtering in [false, true] {
+                    assert!(player.set_recipe_book_settings(
+                        host,
+                        &book,
+                        RecipeBookSettings {
+                            open: true,
+                            filtering,
+                        }
+                    ));
+                }
+                assert!(seen.lock().unwrap().is_empty());
+                assert!(drain_clientbound(&rx).is_empty());
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+
+            assert_eq!(*seen.lock().unwrap(), [COMMITTED, REWRITTEN]);
+            let saved = game
+                .lan
+                .as_ref()
+                .unwrap()
+                .hub
+                .guest(12)
+                .unwrap()
+                .recipe_book
+                .write();
+            let flags = CustomBooks::read(Some(&saved)).get(book.as_str());
+            assert_eq!(flags, REWRITTEN);
+            let messages: Vec<_> = drain_clientbound(&rx)
+                .into_iter()
+                .filter_map(|packet| match packet {
+                    C::CustomPayload(payload) if payload.channel == CHANNEL => {
+                        settings_codec::decode(&payload.data)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                messages,
+                [
+                    Message::Update {
+                        epoch: 1,
+                        revision: 1,
+                        key: catalog.book.clone(),
+                        flags: COMMITTED
+                    },
+                    Message::Update {
+                        epoch: 1,
+                        revision: 2,
+                        key: catalog.book,
+                        flags
+                    },
+                ]
+            );
+        });
+    });
+}
+
 struct BackedPack;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for BackedPack {

@@ -559,13 +559,12 @@ impl Game<'_> {
     ) -> Option<R> {
         let r = self.remote.as_ref()?;
         let items = self.items();
-        let name_of = |registry: &str, id: i32| {
-            r.builtin
-                .get(registry)
-                .and_then(|ids| ids.name(id))
-                .or_else(|| r.registries.name(registry, id))
-                .map(str::to_owned)
+        use sunrise_protocol::{item::Names, registry::SyncedNames};
+        let names = SyncedNames {
+            builtin: &r.builtin,
+            dynamic: &r.registries,
         };
+        let name_of = |registry: &str, id: i32| names.name(registry, id);
         let item = |id: i32| name_of("minecraft:item", id);
         let category = |id: i32| {
             name_of("minecraft:recipe_book_category", id).or_else(|| {
@@ -576,6 +575,7 @@ impl Game<'_> {
         Some(f(&sunrise_client::recipe_book::PacketNames {
             item: &item,
             category: &category,
+            component: &|id| name_of("minecraft:data_component_type", id),
             tag: &tag,
         }))
     }

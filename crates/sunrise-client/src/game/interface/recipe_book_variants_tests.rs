@@ -301,6 +301,7 @@ fn clicked_multi_display_recipe_sends_exact_ghost_and_ordinary_placement_sends_n
         &PacketNames {
             item: &item,
             category: &category,
+            component: &|_| None,
             tag: &tag,
         },
         BookType::Crafting,

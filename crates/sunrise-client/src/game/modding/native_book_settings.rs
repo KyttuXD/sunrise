@@ -39,21 +39,17 @@ impl Game<'_> {
             filtering: settings.filtering,
         };
         let id = ResourceId::from_registered_book(book);
-        let mut changed = false;
+        let mut publish = false;
         if !self.native_as_player_handle(player, |game| {
             if game.level.recipe_book.custom.get(id.as_str()) != flags {
-                game.journal_player_book(player.uuid(), id.as_str());
-                changed = game.level.recipe_book.custom.set(&id, flags);
+                let deferred = game.journal_player_book(player, book);
+                publish = game.level.recipe_book.custom.set(&id, flags) && !deferred;
             }
         }) {
             return false;
         }
-        if changed {
-            self.after_commit(super::transactions::After::RecipeBookSettings(
-                player,
-                book.clone(),
-                flags,
-            ));
+        if publish {
+            self.publish_player_book_settings(player, book.clone(), flags);
         }
         true
     }

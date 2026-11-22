@@ -32,7 +32,9 @@
 //! An entity added inside one goes at an abort, one removed is only marked until the root
 //! commit, and mods hear of joins and leaves at the root commit (`transactions/entities.rs`).
 use super::{BlockEntity, BlockStateId, Dim, Game, machines::HopperState, maps::MapData};
-use mod_api::{LevelRef, Transaction, TransactionLifecycle, TransactionSeal};
+use mod_api::{
+    LevelRef, PlayerRef, RecipeBookTypeKey, Transaction, TransactionLifecycle, TransactionSeal,
+};
 use std::collections::{BTreeMap, HashMap};
 use sunrise_client::{
     block_entities::BlockEntityIdentity,
@@ -41,6 +43,7 @@ use sunrise_client::{
     items::ItemStack,
     living_attributes::ModifierChanges,
     mobs::{Mob, StoredEffect, finalize::EffectModifierUndo, gear::Gear},
+    recipe_book::BookFlags,
     world::{BlockEntityExtras, ModifiedChunks, World},
 };
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::LegacyRandom};
@@ -379,9 +382,9 @@ pub(super) struct Level {
     /// Saved player extra NBT (`level.player_extra` / `guest.saved`), shared by player and
     /// persistent-data writes, including dead players.
     player_extra: HashMap<JournaledPlayer, Option<sunrise_core::nbt::Tag>>,
-    /// Each affected custom book's saved flags (or absence) before its first write.
+    /// Each affected custom book's saved flags (or absence), in first-write order.
     player_books:
-        HashMap<(JournaledPlayer, String), Option<sunrise_client::recipe_book::BookFlags>>,
+        indexmap::IndexMap<(JournaledPlayer, RecipeBookTypeKey), (PlayerRef, Option<BookFlags>)>,
     /// Synced player health and its unpublished update events before set_health.
     player_health: HashMap<u128, KeptPlayerHealth>,
     /// Mob health and synchronization dirtiness before set_health.
@@ -668,11 +671,6 @@ pub(super) enum After {
         eye: [f64; 3],
     },
     PlayerEquip(u128, String, Option<ItemStack>),
-    RecipeBookSettings(
-        mod_api::PlayerRef,
-        mod_api::RecipeBookTypeKey,
-        sunrise_client::recipe_book::BookFlags,
-    ),
     /// An item split off an item entity, dropped where it is (`Block.popResource`'s delay).
     Spawn([f64; 3], ItemStack),
     /// The item entity with this id was emptied: removed, unless it holds items again.
@@ -1571,18 +1569,24 @@ impl Game<'_> {
             .entry(JournaledPlayer::Guest(guest.conn))
             .or_insert_with(|| guest.saved.clone());
     }
-    /// Keep the original setting of the acting player for this book.
-    pub(super) fn journal_player_book(&mut self, uuid: u128, id: &str) {
-        let Some(level) = self.transactions.last_mut() else {
-            return;
+    /// Keep the original setting of the acting player; return whether publication is deferred.
+    pub(super) fn journal_player_book(
+        &mut self,
+        player: PlayerRef,
+        book: &RecipeBookTypeKey,
+    ) -> bool {
+        let Some(level) = self.transactions.player_write() else {
+            return false;
         };
-        let owner = self
-            .lan_acting
-            .map_or(JournaledPlayer::Local(uuid), JournaledPlayer::Guest);
+        let owner = self.lan_acting.map_or(
+            JournaledPlayer::Local(player.uuid()),
+            JournaledPlayer::Guest,
+        );
         level
             .player_books
-            .entry((owner, id.to_owned()))
-            .or_insert_with(|| self.level.recipe_book.custom.stored(id));
+            .entry((owner, book.clone()))
+            .or_insert_with(|| (player, self.level.recipe_book.custom.stored(book.as_str())));
+        true
     }
     /// Called with the target player's body swapped in, before set_health changes it.
     pub(super) fn journal_player_health(&mut self) {
@@ -2046,9 +2050,6 @@ impl Game<'_> {
             After::Trade(effect) => self.commit_merchant_effect(*effect),
             After::Payload(payload) => payload.publish(),
             After::Packet(packet, body) => self.publish_mod_held(packet, body),
-            After::RecipeBookSettings(player, book, flags) => {
-                self.publish_player_book_settings(player, book, flags);
-            }
             After::Composter(effects) => self.commit_composter_effects(effects),
             After::FluidWrite(written) => self.commit_fluid_write(*written),
             After::FluidEffects(effects) => self.commit_fluid_effects(*effects),
@@ -2458,6 +2459,20 @@ impl Game<'_> {
                 log.remove(&(x, y, z));
             }
         }
+        for ((owner, book), (player, before)) in level.player_books {
+            let id = book.as_str();
+            let flags = match self.player_storage_home(owner) {
+                Some(PlayerStorageHome::Game) => self.level.recipe_book.custom.get(id),
+                Some(PlayerStorageHome::Guest(index)) => {
+                    let host = self.lan.as_ref().expect("resolved guest");
+                    host.hub.guests[index].recipe_book.custom.get(id)
+                }
+                None => continue,
+            };
+            if flags != before.unwrap_or_default() {
+                self.publish_player_book_settings(player, book, flags);
+            }
+        }
         // A crafting grid the transaction changed has its result made again, once for each
         // player however many writes it took (`InventoryMenu.slotsChanged`).
         for (conn, kept) in &level.menus {
@@ -2857,7 +2872,8 @@ impl Game<'_> {
                 None => {}
             }
         }
-        for ((owner, id), kept) in level.player_books {
+        for ((owner, book), (_, kept)) in level.player_books {
+            let id = book.as_str().to_owned();
             match self.player_storage_home(owner) {
                 Some(PlayerStorageHome::Game) => self.level.recipe_book.custom.restore(id, kept),
                 Some(PlayerStorageHome::Guest(index)) => {
