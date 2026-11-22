@@ -1867,7 +1867,7 @@ mod tests {
                 assert_eq!(event.drops.len(), 2);
                 assert!(event.drops.remove(0));
                 assert_eq!(event.drops.len(), 1);
-                event.drops.get_mut(0).unwrap().set_pickup_delay(25);
+                event.drops.get_mut(0).unwrap().set_pickup_delay(-25);
                 let diamond = mod_api::ItemStack::new(
                     mod_api::__private::item_key("minecraft:diamond").unwrap(),
                     1,
@@ -1921,7 +1921,7 @@ mod tests {
                     mod_api::__private::item_key_id(surviving.stack().unwrap().item()),
                     Some("minecraft:cobblestone")
                 );
-                assert_eq!(surviving.pickup_delay(), 25);
+                assert_eq!(surviving.pickup_delay(), -25);
                 self.0.store(true, Ordering::Relaxed);
                 Flow::Continue
             }
@@ -1985,7 +1985,7 @@ mod tests {
                 assert_eq!(heard.items.len(), 2);
                 assert_eq!(&*heard.items[0].stack.item, "minecraft:cobblestone");
                 assert_eq!(heard.items[0].stack.count, 1);
-                assert_eq!(heard.items[0].pickup_delay, 25);
+                assert_eq!(heard.items[0].pickup_delay, -25);
                 assert_eq!(heard.items[0].position, baseline.items[1].position);
                 assert_eq!(heard.items[0].velocity, baseline.items[1].velocity);
                 assert_eq!(heard.items[0].random, baseline.items[1].random);

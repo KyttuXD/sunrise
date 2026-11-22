@@ -207,3 +207,52 @@ fn a_dragon_sound_uses_live_movement_without_losing_mob_metadata() {
     assert_eq!(unrelated.position, stale.position);
     assert!(entity_sound_state(7, None, None, &tracked, Some((7, [99.0; 3]))).is_none());
 }
+
+/// A partial take does not untrack a ground item; an explicit empty DATA_ITEM
+/// clears it without a second take, and the next item tick discards it.
+#[test]
+#[ignore = "daily"]
+fn empty_item_metadata_clears_a_tracked_stack_after_a_partial_take() {
+    use crate::game::item_entities::thrown_items_tests::with_remote_game;
+    use sunrise_client::{entities::ItemEntity, items::ItemStack};
+    use sunrise_core::geometry::Vec3;
+    use sunrise_protocol::{
+        entity_data::{Value, serializer},
+        item::Stack,
+        packets::play::{self, Clientbound as C},
+    };
+
+    with_remote_game(|game| {
+        game.remote.as_mut().unwrap().entity_id = 1;
+        game.player =
+            Some(sunrise_client::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        game.dropped.push(ItemEntity::new(
+            43,
+            ItemStack::new("minecraft:apple", 8),
+            Vec3::new(2.5, 64.0, 2.5),
+            Vec3::ZERO,
+            0.0,
+        ));
+        game.handle_packet(C::TakeItemEntity(play::TakeItemEntity {
+            item: 43,
+            player: 1,
+            amount: 5,
+        }))
+        .unwrap();
+        assert_eq!(game.dropped[0].stack.count, 3);
+        let metadata = |stack| {
+            C::SetEntityData(play::SetEntityData {
+                id: 43,
+                values: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
+            })
+        };
+        game.handle_packet(metadata(Some(Stack::new(i32::MAX, 1))))
+            .unwrap();
+        assert_eq!(game.dropped[0].stack, ItemStack::new("minecraft:apple", 3));
+        game.handle_packet(metadata(None)).unwrap();
+        assert_eq!(game.dropped[0].stack.count, 0);
+        super::super::entity_section_steps::tick_items(game, &mut Vec::new());
+        assert!(game.dropped.is_empty());
+        assert_eq!(game.pickups.made().get("item"), Some(&1));
+    });
+}

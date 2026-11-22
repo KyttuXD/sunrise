@@ -78,6 +78,7 @@ impl Hooks for Probe {
 #[derive(Debug, PartialEq)]
 enum Sent {
     Add(u32),
+    ItemClear(u32),
     End,
     Remove(Vec<u32>),
     Said(String),
@@ -92,6 +93,19 @@ fn read(packets: Vec<Vec<u8>>) -> Vec<Sent> {
             match r.varint().unwrap() {
                 id::ADD_ENTITY => Sent::Add(r.varint().unwrap() as u32),
                 id::BUNDLE_DELIMITER => Sent::End,
+                id::SET_ENTITY_DATA => {
+                    use sunrise_protocol::{entity_data::Value, packets::play::Clientbound};
+                    match Clientbound::decode(id::SET_ENTITY_DATA, r.rest()).unwrap() {
+                        Clientbound::SetEntityData(p)
+                            if p.values.iter().any(|(slot, _, value)| {
+                                *slot == 8 && matches!(value, Value::Item(None))
+                            }) =>
+                        {
+                            Sent::ItemClear(p.id as u32)
+                        }
+                        _ => Sent::Other(id::SET_ENTITY_DATA),
+                    }
+                }
                 id::REMOVE_ENTITIES => {
                     let n = r.varint().unwrap();
                     Sent::Remove((0..n).map(|_| r.varint().unwrap() as u32).collect())
@@ -354,5 +368,31 @@ fn a_stop_waiting_for_a_sound_is_heard_after_its_removal() {
             let said = at(&sent, &Sent::Said(format!("stop {near}")));
             assert!(removed < said, "the word came before the removal: {sent:?}");
         }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn clearing_a_stationary_item_sends_empty_data_before_tick_removal() {
+    with_two_items(|game, heard, [first, second], [_, near]| {
+        assert!(tick_until_heard(game, heard).contains(&Heard::Start(near, true)));
+        let _ = (first(), second());
+        let item = game.item_entity(game.entity(near).unwrap()).unwrap();
+        assert_eq!(item.set_stack(game, None), Ok(true));
+        // Only the tracker runs: item physics has not discarded the empty stack.
+        game.tick_lan(true);
+        for sent in [first(), second()] {
+            assert!(sent.contains(&Sent::ItemClear(near)), "{sent:?}");
+            assert!(
+                !sent
+                    .iter()
+                    .any(|packet| matches!(packet, Sent::Remove(ids) if ids.contains(&near)))
+            );
+        }
+        assert!(
+            game.dropped
+                .iter()
+                .any(|d| d.id == near && d.stack.count == 0)
+        );
     });
 }

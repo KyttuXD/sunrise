@@ -5,11 +5,13 @@ pub trait Hooks {
     /// `item` (`ItemEntity.playerTouch`, right after `Inventory.add` took some
     /// of it), the entity `item_picked_up` named. `original` is a copy of the
     /// stack as it lay before the pickup: changing it does nothing.
-    /// `remaining` is what the item entity still holds: `None` (empty) after a
-    /// whole pickup, the part that did not fit after a partial one. Set a
-    /// stack there to leave the entity holding it, or `None` to empty it: the
-    /// pickup then counts `original`'s count less what is left. The amount
-    /// taken is `original`'s count less `remaining`'s. A mod that removes the
+    /// `remaining` starts as what did not fit from the captured stack (`None`
+    /// after a whole pickup). Set it to edit what stays on the ground, or `None`
+    /// to empty it. If the item was independently replaced with `item.set_stack`,
+    /// the handle reads the replacement, and the take counts what went in from
+    /// the captured stack. As in `ItemEntity.playerTouch`, the entity is
+    /// discarded if that captured stack was exhausted.
+    /// A mod that removes the
     /// item entity meanwhile keeps it removed: no take animation, the stat and
     /// criteria still run. Not called when `item_picked_up` refused the
     /// pickup or the inventory took nothing; a forced `True` from
@@ -21,7 +23,7 @@ pub trait Hooks {
         side = "server",
         contract = "listen",
         neoforge = "ItemEntityPickupEvent.Post",
-        version = 3
+        version = 4
     )]
     fn item_picked_up_post(
         player: u128,

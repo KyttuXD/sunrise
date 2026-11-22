@@ -1,0 +1,2 @@
+sunrise-client game::lan::tracking_hook_tests::clearing_a_stationary_item_sends_empty_data_before_tick_removal lib daily resources
+sunrise-client game::remote::tests::tracking_state_tests::empty_item_metadata_clears_a_tracked_stack_after_a_partial_take lib daily resources

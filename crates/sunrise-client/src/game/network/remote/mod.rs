@@ -1296,8 +1296,19 @@ impl Game<'_> {
     // remote_tab_players: remote/sync.rs
     // update_remote_skins: remote/status.rs
     fn remote_item_data(&mut self, id: i32, stack: &Option<Stack>) {
-        let Some(stack) = self.to_stack(stack) else {
-            return;
+        let stack = match stack {
+            // Explicit empty DATA_ITEM, unlike an invalid non-empty payload.
+            // ItemEntity.tick discards it on its next tick, just as on the server.
+            None => ItemStack::new("minecraft:air", 0),
+            Some(stack) => {
+                let Some(stack) = self.decode_remote_stack(stack) else {
+                    return;
+                };
+                if stack.count == 0 || &*stack.item == "minecraft:air" {
+                    return;
+                }
+                stack
+            }
         };
         let pending = self
             .remote

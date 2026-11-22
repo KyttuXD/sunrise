@@ -13,6 +13,8 @@ use sunrise_core::geometry::Vec3;
 struct State {
     /// `item_picked_up`'s answer.
     answer: TriState,
+    pre_clear: bool,
+    pre_delay: Option<i32>,
     /// A count the notice sets as the remainder.
     raise: Option<u32>,
     /// Whether the notice empties the remainder.
@@ -37,9 +39,18 @@ impl Hooks for Probe {
             .item
             .with_stack(host, |stack| stack.project())
             .flatten();
-        let mut state = self.0.lock().unwrap();
-        state.touched.push((event.item.entity().id(), read));
-        *event.can_pickup = state.answer;
+        let (answer, clear, delay) = {
+            let mut state = self.0.lock().unwrap();
+            state.touched.push((event.item.entity().id(), read));
+            (state.answer, state.pre_clear, state.pre_delay)
+        };
+        if clear {
+            assert_eq!(event.item.set_stack(host, None), Ok(true));
+        }
+        if let Some(delay) = delay {
+            assert!(event.item.set_pickup_delay(host, delay));
+        }
+        *event.can_pickup = answer;
     }
     fn item_picked_up_post(
         &self,
@@ -93,6 +104,8 @@ impl Probe {
 /// and the ground stack's count and pickup delay.
 struct Case {
     answer: TriState,
+    pre_clear: bool,
+    pre_delay: Option<i32>,
     raise: Option<u32>,
     empty: bool,
     kill: bool,
@@ -103,6 +116,8 @@ struct Case {
 
 const CASE: Case = Case {
     answer: TriState::Default,
+    pre_clear: false,
+    pre_delay: None,
     raise: None,
     empty: false,
     kill: false,
@@ -132,6 +147,8 @@ fn clear_ground(game: &mut Game<'_>) {
 fn arm(probe: &Probe, case: &Case) {
     let mut state = probe.0.lock().unwrap();
     state.answer = case.answer;
+    state.pre_clear = case.pre_clear;
+    state.pre_delay = case.pre_delay;
     state.raise = case.raise;
     state.empty = case.empty;
     state.kill = case.kill;
@@ -284,6 +301,30 @@ fn host_pickup_tells_whole_and_partial_pickups_and_keeps_listener_changes() {
                 ..CASE
             };
             assert_eq!(host_case(game, &probe, &refused), (vec![], Some(8), 56));
+
+            // Pre clears the resident stack but a partial attempt still takes the
+            // captured apples. The empty replacement stays until the item ticks.
+            let cleared = Case {
+                pre_clear: true,
+                room: 5,
+                ..CASE
+            };
+            assert_eq!(
+                host_case(game, &probe, &cleared),
+                (vec![(7, 8, Some(3))], Some(0), 64)
+            );
+
+            // Default checks the live delay, and a later veto never undoes an
+            // explicit cooldown or silently adds one of its own.
+            for answer in [TriState::Default, TriState::False] {
+                let delayed = Case {
+                    answer,
+                    pre_delay: Some(37),
+                    ..CASE
+                };
+                assert_eq!(host_case(game, &probe, &delayed), (vec![], Some(8), 56));
+                assert_eq!(game.dropped[0].pickup_delay, 37);
+            }
 
             // A full inventory takes nothing, even when `True` forces the pickup.
             let full = Case { room: 0, ..CASE };
@@ -438,6 +479,30 @@ fn guest_pickup_tells_whole_and_partial_pickups_and_keeps_listener_changes() {
                 ..CASE
             };
             assert_eq!(guest_case(game, &probe, &refused), (vec![], Some(8), 56));
+
+            // Pre clears the resident stack but a partial attempt still takes the
+            // captured apples. The empty replacement stays until the item ticks.
+            let cleared = Case {
+                pre_clear: true,
+                room: 5,
+                ..CASE
+            };
+            assert_eq!(
+                guest_case(game, &probe, &cleared),
+                (vec![(12, 8, Some(3))], Some(0), 64)
+            );
+
+            // Default checks the live delay, and a later veto never undoes an
+            // explicit cooldown or silently adds one of its own.
+            for answer in [TriState::Default, TriState::False] {
+                let delayed = Case {
+                    answer,
+                    pre_delay: Some(37),
+                    ..CASE
+                };
+                assert_eq!(guest_case(game, &probe, &delayed), (vec![], Some(8), 56));
+                assert_eq!(game.dropped[0].pickup_delay, 37);
+            }
 
             // A full inventory takes nothing, even when `True` forces the pickup.
             let full = Case { room: 0, ..CASE };

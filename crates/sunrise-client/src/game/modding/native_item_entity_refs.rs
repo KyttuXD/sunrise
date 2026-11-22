@@ -50,13 +50,11 @@ impl Game<'_> {
         item: ItemEntityRef,
         stack: Option<ItemStack>,
     ) -> bool {
-        if self.native_item_entity_index(item).is_none() {
+        let Some(index) = self.native_item_entity_index(item) else {
             return false;
-        }
-        let stack = stack
-            .filter(|s| s.count > 0 && &*s.item != "minecraft:air")
-            .unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
-        self.journal_set_item_entity_direct(item.entity().id(), stack)
+        };
+        self.journal_set_item_entity(index, stack);
+        true
     }
 
     /// The signed pickup delay (`ItemEntity.pickupDelay`). `32767` is vanilla's

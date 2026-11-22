@@ -135,12 +135,9 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
         use crate::game::api_values::TryIntoEngine;
         let stack = stack
             .map(|stack| stack.try_into_engine(self.game.res.items()))
-            .transpose()?
-            .filter(|s| s.count > 0 && &*s.item != "minecraft:air")
-            .unwrap_or_else(|| sunrise_client::items::ItemStack::new("minecraft:air", 0));
-        Ok(self
-            .game
-            .journal_set_item_entity_direct(self.subject.entity().id(), stack))
+            .transpose()?;
+        self.game.journal_set_item_entity(self.index, stack);
+        Ok(true)
     }
     fn set_pickup_delay(&mut self, ticks: i32) -> bool {
         self.game.dropped[self.index].pickup_delay = ticks;

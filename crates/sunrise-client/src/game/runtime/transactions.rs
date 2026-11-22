@@ -261,7 +261,7 @@ pub(super) struct Level {
     /// in this transaction.
     mob_lengths: HashMap<u32, usize>,
     /// Each item entity's stack before this transaction first wrote it.
-    item_entities: HashMap<u32, ItemStack>,
+    item_entities: HashMap<u32, (ItemStack, u64)>,
     /// The merge fields of resident experience orbs before the first award touched them.
     orbs: HashMap<crate::join_seq::JoinSeq, (i32, u32, i32)>,
     /// Each detached station before the first click wrote it, by connection and owner.
@@ -2015,7 +2015,7 @@ impl Game<'_> {
         }
         for (id, kept) in level.item_entities {
             if let Some(e) = self.dropped.iter_mut().find(|e| e.id == id) {
-                e.stack = kept;
+                (e.stack, e.stack_revision) = kept;
             }
         }
         for (join, kept) in level.orbs {

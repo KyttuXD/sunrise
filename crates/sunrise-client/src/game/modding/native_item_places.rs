@@ -633,14 +633,15 @@ impl Game<'_> {
             return stack.count - rest.count;
         }
         if let ItemPlace::ItemEntity { id } = place {
-            let Some(e) = self.dropped.iter().find(|e| e.id == *id) else {
+            let Some(index) = self.dropped.iter().position(|e| e.id == *id) else {
                 return 0;
             };
+            let e = &self.dropped[index];
             let at = [e.position.x, e.position.y, e.position.z];
             let mut held = Some(e.stack.clone());
             fill(&mut held, &mut rest);
             if let Some(held) = held.filter(|_| rest.count < stack.count) {
-                self.journal_set_item_entity(*id, held);
+                self.journal_set_item_entity(index, Some(held));
             }
             if rest.count > 0 {
                 self.after_commit(After::Spawn(at, rest));
@@ -769,13 +770,19 @@ impl Game<'_> {
             return took;
         }
         if let ItemPlace::ItemEntity { id } = place {
-            let Some(e) = self.dropped.iter().find(|e| e.id == *id) else {
+            let Some(index) = self.dropped.iter().position(|e| e.id == *id) else {
                 return 0;
             };
-            let took = taken(Some(&e.stack));
-            let kept = left(&e.stack, took);
+            let stack = &self.dropped[index].stack;
+            let took = taken(Some(stack));
             if took > 0 {
-                self.journal_set_item_entity(*id, kept);
+                let kept = left(stack, took);
+                let empties = kept.count == 0;
+                self.journal_set_item_entity(index, Some(kept));
+                if empties {
+                    // `HopperBlockEntity.addItem` discards separately from `setItem`.
+                    self.after_commit(After::Emptied(*id));
+                }
             }
             return took;
         }

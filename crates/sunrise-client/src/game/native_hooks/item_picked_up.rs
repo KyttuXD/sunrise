@@ -1,20 +1,12 @@
 use super::*;
+use crate::game::commands::Target;
 use sunrise_client::entities::ItemEntity;
-use sunrise_client::join_seq::JoinList;
+use sunrise_client::join_seq::{JoinList, JoinSeq};
 use sunrise_core::random::RandomSource;
 
 impl Game<'_> {
-    /// `player` touches the ground item entity `item`
-    /// (`ItemEntity.playerTouch`), before its pickup delay and target are
-    /// checked: it is asked on every tick the two touch, even while the item
-    /// can't be taken. Leave `can_pickup` at `Default` for vanilla's rule,
-    /// set `True` to take it despite its delay or another player's target
-    /// (a full inventory still leaves it), or `False` to veto this pickup
-    /// attempt without changing the item's pickup delay (matching NeoForge
-    /// `ItemEntityPickupEvent.Pre`). The last mod to set it decides. The
-    /// handle reads the whole stack on the ground; for the window's own player
-    /// of a world it ticks itself, whose pickup pass lifts the items out of
-    /// the level, it reads as unavailable. Server-side.
+    /// `ItemEntity.playerTouch` before the delay and target check. The resident item
+    /// is available to listeners; `False` vetoes this attempt without setting a delay.
     pub(in crate::game) fn native_item_picked_up(
         &mut self,
         player: u128,
@@ -24,20 +16,7 @@ impl Game<'_> {
         self.fire_item_picked_up(player, item, can_pickup);
     }
 
-    /// `player` picked up all or part of the stack of the ground item entity
-    /// `item` (`ItemEntity.playerTouch`, right after `Inventory.add` took some
-    /// of it), the entity `item_picked_up` named. `original` is a copy of the
-    /// stack as it lay before the pickup: changing it does nothing.
-    /// `remaining` is what the item entity still holds: `None` (empty) after a
-    /// whole pickup, the part that did not fit after a partial one. Set a
-    /// stack there to leave the entity holding it, or `None` to empty it: the
-    /// pickup then counts `original`'s count less what is left. The amount
-    /// taken is `original`'s count less `remaining`'s. A mod that removes the
-    /// item entity meanwhile keeps it removed: no take animation, the stat and
-    /// criteria still run. Not called when `item_picked_up` refused the
-    /// pickup or the inventory took nothing; a forced `True` from
-    /// `item_picked_up` changes none of this. A creative player always takes
-    /// the whole stack. Server-side.
+    /// `ItemEntity.playerTouch` after `Inventory.add` took all or part of the stack.
     pub(in crate::game) fn native_item_picked_up_post(
         &mut self,
         player: u128,
@@ -48,114 +27,188 @@ impl Game<'_> {
         self.fire_item_picked_up_post(player, item, original, remaining);
     }
 
-    /// `Inventory.add` of the ground `stack` the acting player picks up: what
-    /// did not fit. An empty stack inserts nothing (`Inventory.add(EMPTY) == false`).
-    /// A player with infinite materials (creative) takes all of a non-empty stack.
-    pub(in crate::game) fn native_pickup_insert(&mut self, stack: &ItemStack) -> Option<ItemStack> {
-        if stack.count == 0 || &*stack.item == "minecraft:air" {
-            return Some(stack.clone());
-        }
-        let rest = self.add_stack_to_inventory(stack.clone());
-        rest.filter(|_| !self.creative)
-    }
-
-    /// `item_picked_up_post` for the acting player, who took all or part of
-    /// `original` from the item entity `item`, leaving `remaining` (`None`
-    /// when all of it went in): the stack the entity then holds, `None` when
-    /// it is empty, `remaining` when no mod listens.
-    pub(in crate::game) fn native_pickup_post(
-        &mut self,
-        item: u32,
-        original: &ItemStack,
-        mut remaining: Option<ItemStack>,
-    ) -> Option<ItemStack> {
-        if mod_api::__private::listened(mod_api::HookId::ItemPickedUpPost)
-            && let Some(item) = self.native_item_handle(item)
-        {
-            let player = self.native_acting_id();
-            self.native_item_picked_up_post(player, item, original, &mut remaining);
-        }
-        remaining
-    }
-
-    /// `ItemEntity.playerTouch` for the host's player, at `feet`, and each of
-    /// the lifted `items` whose box meets `reach` (its low and high corners):
-    /// `item_picked_up`, `Inventory.add`, `item_picked_up_post`, then the
-    /// stat, the criterion and the take animation. An item whose notice a mod
-    /// hears is lent back to the level meanwhile, so the mod reaches it, and
-    /// one that removes it keeps it removed: no take animation, the stat and
-    /// criterion still run.
+    /// `ItemEntity.playerTouch` for the host's player. Restore the tick pass before
+    /// touching its items, so Pre and Post see the same residents as on the guest path.
     pub(in crate::game) fn native_player_pickups(
         &mut self,
-        items: &mut JoinList<ItemEntity>,
+        items: JoinList<ItemEntity>,
         (min, max): ([f64; 3], [f64; 3]),
         feet: [f64; 3],
         own: [i32; 4],
     ) {
-        let listened = mod_api::__private::listened;
+        // RestoreOrder::SurvivorsFirst keeps the ticks' spawn buffer out of this pass.
+        let end = self
+            .dropped
+            .first()
+            .map_or_else(JoinSeq::upcoming, |d| d.join);
+        self.put_back_dropped(items);
         let mut i = 0;
-        while i < items.len() {
-            let b = items[i].bounds();
+        while let Some(item) = self.dropped.get(i).filter(|item| item.join < end) {
+            let b = item.bounds();
             let touching = b.min_position().x < max[0]
                 && b.max_position().x > min[0]
                 && b.min_position().y < max[1]
                 && b.max_position().y > min[1]
                 && b.min_position().z < max[2]
                 && b.max_position().z > min[2];
-            // ItemEntity.playerTouch: `item_picked_up`, then vanilla's delay and target rule.
-            if !touching || !self.native_pickup_allowed(&items[i], own) {
+            if !touching {
                 i += 1;
                 continue;
             }
-            let before = items[i].stack.count;
-            let kind = items[i].stack.item.clone();
-            let thrower = items[i].thrower;
-            let rows = items.len();
-            // The entity holds the remainder while mods hear it, as on the guest path.
-            let (left, removed) = match self.native_pickup_insert(&items[i].stack) {
-                Some(rest) if rest.count >= before => (Some(rest), None),
-                rest if listened(mod_api::HookId::ItemPickedUpPost) => {
-                    let id = items[i].id;
-                    let during = rest.clone().unwrap_or_else(|| {
-                        let mut empty = items[i].stack.clone();
-                        empty.count = 0;
-                        empty
-                    });
-                    self.native_pickup_lent(items, i, during, |game, original| {
-                        game.native_pickup_post(id, original, rest)
-                    })
-                }
-                left => (left, None),
-            };
-            if let Some(original) = removed {
-                self.award_stat("picked_up", &kind, before as i32);
-                if let Some(thrower) = thrower {
-                    self.trigger_thrown_picked_up_by_player(&original, thrower);
-                }
-                // Still listed until the level's sweep of departed entities, or already gone.
-                i += usize::from(items.len() == rows);
-                continue;
+            let join = item.join;
+            let next = self.dropped.get(i + 1).map(|d| d.join);
+            let _ = self.native_player_touch_item(i, own, Some(feet));
+            if self.dropped.get(i).is_some_and(|d| d.join == join) {
+                i += 1;
+            } else if self.dropped.get(i).map(|d| d.join) != next {
+                // A hook moved more than the current row. Resume at the item's
+                // successor, as the item tick pass does when a row goes away.
+                i = self.dropped.locate(join).map_or_else(
+                    || {
+                        self.dropped
+                            .iter()
+                            .position(|d| d.join > join)
+                            .unwrap_or(self.dropped.len())
+                    },
+                    |at| at + 1,
+                );
             }
-            let Some(left) = left else {
-                self.award_stat("picked_up", &kind, before as i32);
-                if let Some(thrower) = thrower {
-                    self.trigger_thrown_picked_up_by_player(&items[i].stack, thrower);
-                }
-                let item = items.remove(i);
-                self.native_take_item(item, feet);
-                continue;
-            };
-            let taken = before.saturating_sub(left.count);
-            if taken > 0 {
-                self.award_stat("picked_up", &kind, taken as i32);
-                if let Some(thrower) = thrower {
-                    self.trigger_thrown_picked_up_by_player(&left, thrower);
-                }
-                self.native_take_item(items[i].clone(), feet);
-            }
-            items[i].stack = left;
-            i += 1;
         }
+    }
+
+    /// Shared player touch on a resident item. The host draws its take animation
+    /// locally; for a guest, return the count for `ClientboundTakeItemEntityPacket`.
+    pub(in crate::game) fn native_player_touch_item(
+        &mut self,
+        index: usize,
+        own: [i32; 4],
+        host_feet: Option<[f64; 3]>,
+    ) -> Option<u32> {
+        let listened = mod_api::__private::listened;
+        let item = &self.dropped[index];
+        let (id, join) = (item.id, item.join);
+        let live = |game: &Self, hint: usize| {
+            if game.persist.removals.contains(&Target::Item(id)) {
+                None
+            } else if game.dropped.get(hint).is_some_and(|d| d.join == join) {
+                Some(hint)
+            } else {
+                game.dropped.locate(join)
+            }
+        };
+        if self.persist.removals.contains(&Target::Item(id)) {
+            return None;
+        }
+        let pre = listened(mod_api::HookId::ItemPickedUp)
+            .then(|| self.native_item_handle(id))
+            .flatten();
+        if pre.is_none()
+            && !Self::pickup_decision(item.pickup_delay, item.target, own, TriState::Default)
+        {
+            return None;
+        }
+        // NeoForge captures getItem() before Pre, not after it. A setItem during
+        // Pre replaces the resident stack, not the stack Inventory.add is given.
+        let original = item.stack.clone();
+        let revision = item.stack_revision;
+        let mut can_pickup = TriState::Default;
+        let index = if let Some(handle) = pre {
+            let player = self.native_acting_id();
+            self.native_item_picked_up(player, handle, &mut can_pickup);
+            if can_pickup == TriState::False {
+                return None;
+            }
+            let index = live(self, index)?;
+            let item = &self.dropped[index];
+            if !Self::pickup_decision(item.pickup_delay, item.target, own, can_pickup) {
+                return None;
+            }
+            index
+        } else {
+            index
+        };
+        let before = original.count;
+        if before == 0 || &*original.item == "minecraft:air" {
+            return None;
+        }
+        let rest = self
+            .add_stack_to_inventory(original.clone())
+            .filter(|_| !self.creative);
+        let inserted = before.saturating_sub(rest.as_ref().map_or(0, |s| s.count));
+        if inserted == 0 {
+            return None;
+        }
+        let post = listened(mod_api::HookId::ItemPickedUpPost)
+            .then(|| self.native_item_handle(id))
+            .flatten();
+        let mut remaining = post.as_ref().and(rest.as_ref()).cloned();
+        let item = &mut self.dropped[index];
+        let thrower = item.thrower;
+        let mut replaced = revision != item.stack_revision;
+        let revision = item.stack_revision;
+        if !replaced {
+            match rest {
+                Some(rest) => item.stack = rest,
+                None => item.stack.count = 0,
+            }
+            item.needs_sync = true;
+        }
+        let mut after = Some(index);
+        if let Some(handle) = post {
+            let before_post = remaining.clone();
+            let player = self.native_acting_id();
+            self.native_item_picked_up_post(player, handle, &original, &mut remaining);
+            after = live(self, index);
+            if let Some(at) = after {
+                if self.dropped[at].stack_revision != revision {
+                    replaced = true;
+                } else if remaining != before_post {
+                    self.journal_set_item_entity(at, remaining);
+                }
+            }
+        }
+        // When DATA_ITEM was replaced, count the take from the captured stack,
+        // not from an independent stack a listener placed on the ground.
+        let left = after.map_or(0, |at| self.dropped[at].stack.count);
+        let count = if replaced {
+            inserted
+        } else {
+            before.saturating_sub(left)
+        };
+        if count == 0 {
+            return None;
+        }
+        let live_revision = after.map(|at| self.dropped[at].stack_revision);
+        // NeoForge discards when Inventory.add exhausted the captured stack,
+        // even when a listener replaced DATA_ITEM in the meantime.
+        let emptied = if replaced {
+            inserted == before
+        } else {
+            left == 0
+        };
+        self.award_stat("picked_up", &original.item, count as i32);
+        if let Some(thrower) = thrower {
+            let picked = match after {
+                Some(at) if !replaced && left > 0 => {
+                    let at = live(self, at);
+                    at.map(|at| self.dropped[at].stack.clone())
+                }
+                _ => None,
+            };
+            self.trigger_thrown_picked_up_by_player(picked.as_ref().unwrap_or(&original), thrower);
+        }
+        let at = live(self, after?)?;
+        let animation = if emptied && Some(self.dropped[at].stack_revision) == live_revision {
+            let item = self.remove_dropped(at);
+            host_feet.map(|_| item)
+        } else {
+            host_feet.map(|_| self.dropped[at].clone())
+        };
+        if let (Some(feet), Some(mut item)) = (host_feet, animation) {
+            item.stack = original;
+            self.native_take_item(item, feet);
+        }
+        Some(count)
     }
 
     /// The take animation of `item` toward the host's player, and its sound at `feet`.
@@ -164,88 +217,26 @@ impl Game<'_> {
             crate::game::pickups::Taken::Item(Box::new(item)),
             crate::game::pickups::Collector::Player,
         );
-        // handleTakeItemEntity: the random pitch of a full pickup.
-        // `ClientPacketListener.random`, the listener's own stream, never the level's.
+        // `ClientPacketListener.handleTakeItemEntity`: the listener's random, never the level's.
         let mut random = sunrise_client::random_source::create();
         let pitch = ((random.next_float() - random.next_float()) * 0.7 + 1.0) * 2.0;
         self.audio
             .play("minecraft:entity.item.pickup", Some(feet), 0.2, pitch);
     }
 
-    /// `notice` with the lifted `items[i]` lent back to the level, holding
-    /// `during`, where mods reach it: the notice's answer, and the stack the
-    /// item held before when a mod removed it meanwhile. An item that is still
-    /// there goes back to its place in `items` holding that stack.
-    fn native_pickup_lent(
-        &mut self,
-        items: &mut JoinList<ItemEntity>,
-        i: usize,
-        during: ItemStack,
-        notice: impl FnOnce(&mut Self, &ItemStack) -> Option<ItemStack>,
-    ) -> (Option<ItemStack>, Option<ItemStack>) {
-        use crate::game::commands::Target;
-        use sunrise_client::join_seq::Joined;
-        let join = items[i].join_seq();
-        let mut lent = items.extract(join).expect("in its pass");
-        let (id, original) = (lent.id, std::mem::replace(&mut lent.stack, during));
-        self.dropped.put_back(self.dropped.len(), lent);
-        let answer = notice(self, &original);
-        let removed = self.persist.removals.contains(&Target::Item(id));
-        if let Some(mut back) = self.dropped.extract(join) {
-            back.stack = original.clone();
-            items.put_back(i, back);
-            if !removed {
-                return (answer, None);
-            }
-        }
-        (answer, Some(original))
-    }
-
-    /// `item_picked_up` for the acting player touching the item entity
-    /// `item`: the mods' answer, `Default` when no mod listens.
-    pub(in crate::game) fn native_pickup_answer(&mut self, item: u32) -> TriState {
-        let mut can_pickup = TriState::Default;
-        if mod_api::__private::listened(mod_api::HookId::ItemPickedUp)
-            && let Some(item) = self.native_item_handle(item)
-        {
-            let player = self.native_acting_id();
-            self.native_item_picked_up(player, item, &mut can_pickup);
-        }
-        can_pickup
-    }
-
-    /// The item entity `id` as the hooks name it. It need not be in the
-    /// level: a canceled toss and the host player's pickup hand out one the
-    /// handle reads cannot find.
+    /// The item entity `id` as the hooks name it, even for a toss that has not joined.
     pub(in crate::game) fn native_item_handle(&self, id: u32) -> Option<ItemEntityRef> {
         let epoch = self.native_lifecycle.epoch()?;
         Some(ItemEntityRef::new(EntityRef::new(epoch, id)))
     }
 
-    /// Whether the acting player, `player`, takes the ground `item` they
-    /// touch (`ItemEntity.playerTouch`).
-    pub(in crate::game) fn native_pickup_allowed(
-        &mut self,
-        item: &ItemEntity,
-        player: [i32; 4],
-    ) -> bool {
-        let answer = self.native_pickup_answer(item.id);
-        Self::pickup_decision(item.pickup_delay, item.target, player, answer)
-    }
-
-    /// `ItemEntity.playerTouch`'s rule for `player`: no pickup delay, and no
-    /// target or `player` as the target, unless `answer` forces it either
-    /// way. `False` vetoes only this touch without modifying `pickup_delay`;
-    /// `True` overrides the delay and target.
+    /// Vanilla's delay and target rule unless Pre forces the decision either way.
     pub(in crate::game) fn pickup_decision(
         pickup_delay: i32,
         target: Option<[i32; 4]>,
         player: [i32; 4],
         answer: TriState,
     ) -> bool {
-        if answer == TriState::False {
-            return false;
-        }
         answer.or(pickup_delay == 0 && target.is_none_or(|t| t == player))
     }
 }

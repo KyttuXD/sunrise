@@ -64,6 +64,12 @@ pub(super) fn tick_items(
     let mut items = game.dropped.lift();
     let mut i = 0;
     while i < items.len() {
+        // ItemEntity.tick: an empty DATA_ITEM discards itself before physics.
+        if items[i].stack.count == 0 {
+            let item = items.remove(i);
+            game.remove_entity(item.id as i32);
+            continue;
+        }
         let (_, discarded) =
             game.tick_item_with_block_contacts(&mut items[i], None, &[], true, &mut |splash| {
                 entered.push(splash)

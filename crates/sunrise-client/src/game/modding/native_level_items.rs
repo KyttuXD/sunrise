@@ -197,14 +197,14 @@ mod tests {
             let _ = spill::pop_position(&mut random, [0; 3]);
             assert_eq!(random.next_long(), game.world.random.next_long());
 
-            // new ItemEntity(level, x, y, z, stack, delta...): the pickup delay
+            // new ItemEntity(level, x, y, z, stack, delta...): the signed pickup delay
             // is the caller's, as ItemEntity.setPickupDelay at construction.
             let spawned = game
-                .level_spawn_item_with_motion(level, 1.5, 70.0, 2.5, stone(), [0.0, 0.3, 0.0], 40)
+                .level_spawn_item_with_motion(level, 1.5, 70.0, 2.5, stone(), [0.0, 0.3, 0.0], -40)
                 .unwrap();
             assert_eq!(game.entity_position(spawned), Some([1.5, 70.0, 2.5]));
             let item = game.dropped.last().unwrap();
-            assert_eq!((item.pickup_delay, item.velocity.y), (40, 0.3));
+            assert_eq!((item.pickup_delay, item.velocity.y), (-40, 0.3));
             assert!(
                 game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 32767)
                     .is_some()

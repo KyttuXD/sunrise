@@ -17,9 +17,9 @@ change, make both edits in `event.subject.transaction`. Take the Host for the
 item write, then re-take the subject view. Return `Err` if the item operation
 fails or the subject is unavailable; do not continue on a replacement. Item
 stack writes and removals use the ordinary journal, and abort restores them
-along with the subject's storage. Commit delivers the dropped item's removal
-notice. With no transaction, these writes are immediate; there is no tick
-batch or final write-back.
+along with the subject's storage. Clearing the stack alone does not enqueue removal at
+commit. A transfer that extracts the last item schedules discard at commit, as a hopper
+discards after taking the last item. With no transaction, the stack write is immediate.
 
 Pickup delay and target changes, spawning, motion and non-item removals are
 not covered by the dropped-item journal. The transaction is not a whole-world

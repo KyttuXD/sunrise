@@ -216,7 +216,9 @@ pub struct ItemDrop {
     pub position: [f64; 3],
     /// Its motion in blocks per tick, as vanilla's constructor drew it.
     pub velocity: [f64; 3],
-    /// Ticks before a player may pick it up.
+    /// Signed ticks stored by `ItemEntity.setPickUpDelay`. Zero permits pickup;
+    /// positive ticks count down except for 32767 (`setNeverPickUp`), and
+    /// negative ticks stay unchanged and do not permit pickup.
     pub pickup_delay: i32,
     /// `ItemEntity.setThrower`: the UUID of the entity that threw it, none by default.
     pub thrower: Option<u128>,

@@ -434,8 +434,6 @@ mod draw_boundary;
 #[cfg(test)]
 #[path = "game/items/dropped_by_player_tests.rs"]
 mod dropped_by_player_tests;
-#[path = "game/modding/dropped_item_setter.rs"]
-mod dropped_item_setter;
 #[path = "game/items/durability.rs"]
 mod durability;
 #[path = "game/world/dynamic_light_emission.rs"]

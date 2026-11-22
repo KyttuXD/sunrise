@@ -230,6 +230,17 @@ impl Game<'_> {
                 collector,
             );
         }
+        // `ClientPacketListener.handleTakeItemEntity` shrinks a ground stack by the
+        // transferred amount. A partial take leaves it available for later DATA_ITEM updates.
+        if let Some(item) = self.dropped.iter_mut().find(|d| d.id == p.item as u32)
+            && item.stack.count > 0
+        {
+            // ItemStack.shrink uses Java int arithmetic; a nonpositive count is empty.
+            item.stack.count = (item.stack.count as i32).wrapping_sub(p.amount).max(0) as u32;
+            if item.stack.count != 0 {
+                return;
+            }
+        }
         // An orb stays: the server may still hold merged ones in it.
         if !orb {
             self.remove_entity(p.item);

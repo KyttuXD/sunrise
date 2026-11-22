@@ -9,10 +9,11 @@ pub trait Hooks {
     /// set `True` to take it despite its delay or another player's target
     /// (a full inventory still leaves it), or `False` to veto this pickup
     /// attempt without changing the item's pickup delay (matching NeoForge
-    /// `ItemEntityPickupEvent.Pre`). The last mod to set it decides. The
-    /// handle reads the whole stack on the ground; for the window's own player
-    /// of a world it ticks itself, whose pickup pass lifts the items out of
-    /// the level, it reads as unavailable. Server-side.
+    /// `ItemEntityPickupEvent.Pre`). The last mod to set it decides. The item
+    /// handle can read and edit the resident item. If allowed, this attempt
+    /// takes from the stack captured before the event, using the item's live
+    /// pickup delay and target. `set_stack` changes the stack on the ground,
+    /// not the captured stack. Server-side.
     #[hook(
         dispatch = "flat",
         side = "server",

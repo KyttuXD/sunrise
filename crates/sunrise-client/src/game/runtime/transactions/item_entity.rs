@@ -1,43 +1,20 @@
 impl Game<'_> {
-    /// Sets item entity `id`'s stack, keeping it as it was if a transaction is open and hasn't
-    /// yet. Emptied in one, it stays, empty, until the root commit removes it, so an abort can
-    /// put its stack back. False where no such item entity is.
-    pub(super) fn journal_set_item_entity(&mut self, id: u32, stack: ItemStack) -> bool {
-        let Some(level) = self.transactions.last_mut() else {
-            let dimension = self.dim.id();
-            return self.native_set_item_entity(dimension, id, stack);
-        };
-        let Some(e) = self.dropped.iter_mut().find(|e| e.id == id) else {
-            return false;
-        };
-        level
-            .item_entities
-            .entry(id)
-            .or_insert_with(|| e.stack.clone());
-        if stack.count == 0 {
-            level.after.push(After::Emptied(id));
-        }
-        e.stack = stack;
-        true
-    }
-
-    /// `ItemEntity.setItem`: replaces item entity `id`'s stack without immediately removing
-    /// an empty stack (`ItemEntity.tick` discards an empty item on its next tick). Journals the
-    /// previous stack under an open transaction so an abort restores it.
-    pub(super) fn journal_set_item_entity_direct(&mut self, id: u32, stack: ItemStack) -> bool {
-        if self.serving.is_none() && self.options.dedicated.is_none() {
-            return false;
-        }
-        let Some(e) = self.dropped.iter_mut().find(|e| e.id == id) else {
-            return false;
-        };
+    /// `ItemEntity.setItem` on a resident index. Keep the previous stack and its identity
+    /// for an open transaction. Only a consumer that takes the last item schedules discard;
+    /// otherwise `ItemEntity.tick` handles an empty stack.
+    pub(super) fn journal_set_item_entity(&mut self, index: usize, stack: Option<ItemStack>) {
+        let item = &mut self.dropped[index];
         if let Some(level) = self.transactions.last_mut() {
             level
                 .item_entities
-                .entry(id)
-                .or_insert_with(|| e.stack.clone());
+                .entry(item.id)
+                .or_insert_with(|| (item.stack.clone(), item.stack_revision));
         }
-        e.stack = stack;
-        true
+        item.stack = stack
+            .filter(|stack| stack.count > 0 && &*stack.item != "minecraft:air")
+            .unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
+        item.stack_revision = item.stack_revision.wrapping_add(1);
+        // Like dirty DATA_ITEM, this also reaches clients tracking a stationary item.
+        item.needs_sync = true;
     }
 }

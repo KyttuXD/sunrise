@@ -363,8 +363,7 @@ impl Game<'_> {
         );
         let feet = [p.position.x, p.position.y, p.position.z];
         let own = self.level.ensure_player_uuid();
-        self.native_player_pickups(&mut items, (min, max), feet, own);
-        self.put_back_dropped(items);
+        self.native_player_pickups(items, (min, max), feet, own);
         self.spawn_destroyed_contents(destroyed);
     }
     /// Gives the lifted items back to the level for a hook that reads them live (a named item's
