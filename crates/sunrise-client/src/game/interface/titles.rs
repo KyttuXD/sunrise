@@ -68,17 +68,7 @@ impl Game<'_> {
         let rarity = item_tooltip::rarity(stack, &default_rarity);
         Some(HeldName {
             item: stack.item.to_string(),
-            // `Item.getName` of a mod item whose Part names the stack, under a custom name.
-            // `styled_stack_name`'s order, with the hotbar's own default line.
-            hover_name: match (!sunrise_client::stations::names_itself(stack))
-                .then(|| self.mod_item_name(stack))
-                .flatten()
-            {
-                Some(name) => name,
-                None => item_tooltip::styled_name(stack, || {
-                    item_tooltip::name_line(stack, &|key| self.pack.names.display_get(key))
-                }),
-            },
+            hover_name: self.stack_hover_name_text(stack),
             rarity_color: match rarity {
                 "uncommon" => text::YELLOW,
                 "rare" => text::AQUA,

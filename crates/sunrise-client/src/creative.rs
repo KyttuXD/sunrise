@@ -816,7 +816,7 @@ impl Creative {
     pub fn search_generation(&self) -> u64 {
         self.search_generation
     }
-    /// The names mod items' parts give the search stacks (`Item.getName`), by index into
+    /// The search stacks' resolved name overrides, by index into
     /// [`Self::search_items`]: the search matches them as the stacks' name lines. Nothing but
     /// `None`s keeps the prepared index.
     pub fn set_search_names(&mut self, names: Vec<Option<crate::text::Text>>) {
@@ -863,7 +863,7 @@ impl Creative {
             match cache.as_ref().filter(|(built, _)| *built == generation) {
                 Some((_, lines)) => lines.clone(),
                 None => {
-                    let lines = self.localized_lines(&|k| names.display_get(k));
+                    let lines = self.localized_lines(names);
                     *cache = Some((generation, lines.clone()));
                     lines
                 }
@@ -873,7 +873,7 @@ impl Creative {
     }
     /// `SessionSearchTrees.getTooltipLines`: holder-dependent entries use only
     /// the active definitions and the selected language, never their prepared names.
-    fn localized_lines(&self, translate: &dyn Fn(&str) -> Option<String>) -> Arc<[Vec<String>]> {
+    fn localized_lines(&self, names: &Names) -> Arc<[Vec<String>]> {
         self.search_items
             .iter()
             .enumerate()
@@ -884,15 +884,16 @@ impl Creative {
                     &item_tooltip::NoAttributeListener,
                     item_tooltip::TooltipHolders::Live(&self.holders),
                     true,
-                    translate,
+                    &|key| names.display_get(key),
                     // The search cache has no attribute catalog.
                     &|_| None,
                 );
-                // A mod item's part names the stack: that is its name line.
-                if let Some(Some(name)) = self.search_names.get(i)
-                    && let Some(first) = lines.first_mut()
-                {
-                    *first = name.plain();
+                if let Some(first) = lines.first_mut() {
+                    let name = match self.search_names.get(i).and_then(Option::as_ref) {
+                        Some(name) => name.clone(),
+                        None => crate::stations::hover_name_text(names, stack),
+                    };
+                    *first = name.strip_legacy().plain();
                 }
                 lines
                     .iter()
@@ -1635,7 +1636,8 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let local = creative.localized_lines(&|key| names.get(key).map(str::to_owned));
+        let lang = lang::Language::of("en_us", names.map.clone());
+        let (local, _) = lang::scoped(lang, || creative.localized_lines(&names));
         let search = |term| creative.search_results_in(term, &names, &local, false);
         assert_eq!(search("+2 armor"), [0, 2]);
         assert_eq!(search("winter orchard"), [0, 1]);
@@ -2351,8 +2353,8 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let tr = |k: &str| names.get(k).map(str::to_owned);
-        let local = c.localized_lines(&tr);
+        let lang = lang::Language::of("zh_cn", names.map.clone());
+        let (local, _) = lang::scoped(lang, || c.localized_lines(&names));
         let q = |s: &str| c.search_results_in(s, &names, &local, false);
         assert_eq!(q("铁砧"), [0]);
         assert_eq!(q("木锄"), [2]);
@@ -2369,9 +2371,11 @@ mod tests {
         // tooltip lines; the export's English lines do not apply.
         let c = creative(0);
         let names = Names::default();
-        let ru: HashMap<&str, &str> = HashMap::from([("item.minecraft.anvil", "Наковальня")]);
-        let tr = |k: &str| ru.get(k).map(|v| (*v).to_owned());
-        let local = c.localized_lines(&tr);
+        let lang = lang::Language::of(
+            "ru_ru",
+            HashMap::from([("item.minecraft.anvil".into(), "Наковальня".into())]),
+        );
+        let (local, _) = lang::scoped(lang, || c.localized_lines(&names));
         let q = |s: &str, english| c.search_results_in(s, &names, &local, english);
         assert_eq!(q("наков", false), [0]);
         assert!(q("anvil", false).is_empty());
