@@ -155,6 +155,13 @@ fn events(heard: &Arc<Mutex<Heard>>) -> Vec<String> {
 #[test]
 #[ignore = "daily"]
 fn two_entities_are_asked_in_the_draw_queues_order() {
+    if super::native_entity_refs::tests::run_fresh_cases(
+        "game::native_render_pair_tests::two_entities_are_asked_in_the_draw_queues_order",
+        "SUNRISE_RENDER_PAIR_ORDER_CHILD",
+        &["draw-order"],
+    ) {
+        return;
+    }
     let heard = Arc::default();
     with_pair(&heard, |game| {
         game.pack_ids = Some(Default::default());
@@ -167,10 +174,10 @@ fn two_entities_are_asked_in_the_draw_queues_order() {
             [
                 "living_pre 91",
                 "living_post 91",
-                "player_pre true",
-                "living_pre 4321",
+                "player_pre true head Some(true)",
+                "living_pre 4321 head Some(false)",
                 "living_post 4321",
-                "player_post true",
+                "player_post true model true head Some(false)",
                 "living_pre 92",
                 "living_post 92"
             ]

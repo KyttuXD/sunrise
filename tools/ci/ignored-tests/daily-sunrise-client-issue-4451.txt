@@ -1904,7 +1904,7 @@ sunrise-client game::native_render_pair_tests::a_canceled_living_pre_skips_the_m
 sunrise-client game::native_render_pair_tests::a_culled_entity_is_asked_neither_hook lib daily resources
 sunrise-client game::native_render_pair_tests::a_spectator_draws_no_layers_but_gets_its_post_hooks lib daily resources
 sunrise-client game::native_render_pair_tests::the_player_pair_wraps_the_living_pair lib daily resources
-sunrise-client game::native_render_pair_tests::two_entities_are_asked_in_the_draw_queues_order lib daily resources
+sunrise-client game::native_render_pair_tests::two_entities_are_asked_in_the_draw_queues_order lib daily child-process
 sunrise-client game::native_resources::tests::client_assets_read_the_winning_pack_file lib daily resources
 sunrise-client game::native_resources::tests::server_data_reads_mod_content_and_lets_it_override_the_game lib daily resources
 sunrise-client game::native_resources::tests::server_data_reads_vanilla_files_and_refuses_missing_ones lib daily resources
