@@ -348,6 +348,40 @@ pub mod game {
     pub fn chunk_ref(level: LevelRef, pos: [i32; 2]) -> ChunkRef {
         ChunkRef { level, pos }
     }
+    /// A live watered-area handle issued by the level's runtime ticket index.
+    pub fn water_ticket(
+        level: LevelRef,
+        id: sunrise_mod_runtime::water_tickets::WaterTicketId,
+    ) -> WaterTicket {
+        WaterTicket { level, id }
+    }
+    /// The runtime-issued identity of a live watered-area handle.
+    pub fn water_ticket_id(
+        ticket: WaterTicket,
+    ) -> sunrise_mod_runtime::water_tickets::WaterTicketId {
+        ticket.id
+    }
+    /// Resolve an issued ticket controller handle against the active controller table.
+    pub fn ticket_controller_slot(controller: TicketController) -> Option<u32> {
+        controller.active_slot()
+    }
+    /// The namespaced id of a controller slot for world-save serialization.
+    pub fn ticket_controller_id(slot: u32) -> Option<&'static str> {
+        crate::world::ticket_controller::id_for_slot(slot)
+    }
+    /// The installed controller slot for a saved namespaced id during world-load deserialization.
+    pub fn ticket_controller_slot_by_id(id: &str) -> Option<u32> {
+        crate::world::ticket_controller::slot_for_id(id)
+    }
+    /// Run each registered controller's bound saved-ticket validator on its staged rows and
+    /// return the surviving tickets ready for activation.
+    pub fn validate_saved_tickets(
+        host: &mut dyn ServerHost,
+        level: LevelRef,
+        loaded: Vec<crate::world::mod_chunk_tickets::ModTicket>,
+    ) -> Vec<crate::world::mod_chunk_tickets::ModTicket> {
+        crate::world::ticket_controller::validate_saved_tickets(host, level, loaded)
+    }
     /// An open menu's handle the game names.
     pub fn menu_ref(player: PlayerRef, window: i32, generation: u64) -> MenuRef {
         MenuRef {

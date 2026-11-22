@@ -21,9 +21,10 @@ implement `Wire`.
 Hook events are native callback records, not binary messages. If you need to send data from
 an event, copy the fields you intend to send into your own `Wire` payload type. The same applies to
 [loader metadata](load-phases.md) such as `PackageInfo`, `DataLoadOrigin` and `LoopSide`: read it locally,
-then select the facts you need for your protocol. Keep issued packet-hold and chunk-ticket controller
-handles in the process that issued them; use a ticket controller's namespaced `id()` when you need to
-record its name.
+then select the facts you need for your protocol. Keep issued packet-hold, chunk-ticket controller,
+and watered-area (`WaterTicket`) handles in the process that issued them; use a ticket controller's
+namespaced `id()` when you need to record its name, and re-add transient watered areas when a level
+or block entity loads.
 Likewise, keep [attachment queries and write tokens](attachments/querying.md) in process; an
 attachment's own codec handles saving and syncing its value.
 

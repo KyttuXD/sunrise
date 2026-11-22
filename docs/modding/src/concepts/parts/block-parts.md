@@ -297,7 +297,8 @@ is not empty, passing the fluid (`FluidState`) and its position. The contract is
 
 Normally rain on the block above, session water tickets and dry-out work as usual. With no Part on the farmland the
 scan is vanilla's. When the content owner's subscribed rule is [switched off](../disabled-content.md), only earlier
-enabled Parts or an enabled mod's session water ticket can wet the block. Rain and dry-out are held, not trampling.
+enabled Parts or an active session water ticket (tickets attributed to a disabled mod are cleared on disable) can wet
+the block. Rain and dry-out are held, not trampling.
 Bookshelf slot-occupancy flags and the last-interacted slot are transactional storage bookkeeping,
 not notification effects. Aborting restores them with the items. Changed observers, comparator
 ticks and data-send requests already issued still survive that abort.

@@ -45,8 +45,8 @@ use mod_api::{
     InteractionAttempt, InteractionKey, ItemEntityRef, LifecycleContext, LivingRef, LoadConditions,
     NoteBlockChange, ParticleProviders, PathComputationType, Placement, PlayerRef,
     PoiTypeExtensions, RecipeBookCategory, ScreenId, ScreenOpening, ScreenTarget, ScreenshotImage,
-    ServerReloadListeners, ServerTickPhase, SpecialModelRenderers, TicketController, ToolUse,
-    VillagerProfessions, WorldPhase,
+    ServerReloadListeners, ServerTickPhase, SpecialModelRenderers, ToolUse, VillagerProfessions,
+    WorldPhase,
 };
 use mod_api::{
     ActiveEffect, AttachmentStore, BlockClick, BlockUpdateFlags, BonemealSource, ChunkRef,
@@ -536,7 +536,6 @@ mod translate;
 mod trident_family_tests;
 mod use_item_hand;
 mod use_item_on_block;
-mod validate_tickets;
 mod vanilla_game_event;
 mod viewed_level_sound;
 mod wind_burst;

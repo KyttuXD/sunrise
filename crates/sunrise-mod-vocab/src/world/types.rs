@@ -360,31 +360,23 @@ impl LevelRef {
     }
 }
 
-/// A mod-owned watered area in one server level. Created by [`LevelRef::add_water_ticket`].
-/// Explicit removal, owner disable and level unload invalidate it. Never saved.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A live watered area in one server level. Created by [`LevelRef::add_water_ticket`].
+/// Any holder with this handle can remove it via [`WaterTicket::remove`]; level unload and,
+/// when attributed to an enabled mod at creation, that mod's disable also invalidate it.
+/// Stays in-process (never serialized or saved): re-add in `level_load` or a block entity's
+/// load listener.
+// no wire: a live ticket identity can only be issued by its level
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct WaterTicket {
     pub(crate) level: LevelRef,
-    pub(crate) id: u64,
+    pub(crate) id: sunrise_mod_runtime::water_tickets::WaterTicketId,
 }
 
 impl WaterTicket {
-    /// Construct a handle at the game boundary.
-    // hidden: a game-side constructor; mods receive tickets from `add_water_ticket`
-    #[doc(hidden)]
-    pub fn new(level: LevelRef, id: u64) -> Self {
-        Self { level, id }
-    }
     /// The level this transient ticket belongs to.
     pub fn level(self) -> LevelRef {
         self.level
-    }
-    /// The session-only identity used by the game.
-    // hidden: a game-side helper; mods use the handle's methods
-    #[doc(hidden)]
-    pub fn id(self) -> u64 {
-        self.id
     }
 }
 

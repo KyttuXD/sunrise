@@ -690,12 +690,15 @@ handle, an entity the client doesn't track and a level it doesn't show:
   parked level. If streaming is paused, the add records the ticket to take effect when its level starts streaming.
   Adds after generation stops return false; repeated adds and removals do not load chunks.
 - Ticket controllers (NeoForge's `TicketController`, registered in `RegisterTicketControllersEvent`): a mod registers
-  each one once at startup, from `Hooks::register`, with `r.register_ticket_controller("quarry", validates)` and keeps the
+  each one once at startup, from `Hooks::register`, with `r.register_ticket_controller("quarry", validator)` and keeps the
   `TicketController` it returns (it is `Copy`; `Hooks` methods take `&self`, so a `OnceLock` holds it). The id is the
   calling mod's: `quarry` and `mymod:quarry` both become `mymod:quarry`, and another mod's namespace refuses the mods at
-  startup, as does an id registered twice (the error names the mod and the id). `validates` is whether the controller
-  validates its saved tickets (NeoForge's `LoadingValidationCallback`, below). The handle is only made by the registrar
-  and indexes the installed table, so a ticket call looks up no string. Another mod's controller does nothing.
+  startup, as does an id registered twice (the error names the mod and the id). Pass `Some(Arc::new(callback))` to bind
+  a `LoadingValidationCallback` to this controller, or `None` to restore its tickets without validation. The handle is
+  only made by the registrar with an opaque registration identity, so a name or slot alone cannot forge one and a
+  ticket call looks up no string. The registry-issued handle itself authorizes active chunk-ticket operations without
+  consulting the current caller; an invalid handle from a refused registration or another registration table does
+  nothing.
 - `chunk.set_mod_forced(host, controller, owner, forced, natural_spawning)` (NeoForge's `TicketController.forceChunk`)
   holds or releases a chunk through `controller` and returns whether its tickets changed. `owner` is a
   `TicketOwner`, `Block([x, y, z])` or `Entity(uuid)`. A ticket is scoped by controller, owner, chunk and
@@ -709,23 +712,26 @@ handle, an entity the client doesn't track and a level it doesn't show:
   `(owner, [x, z], natural_spawning)`. Tickets are saved in `data/sunrise/mod_chunk_tickets.dat`, never in vanilla's
   `chunk_tickets.dat`, under the controller's id. When a world loads, the tickets of an id no loaded mod registers are
   dropped with a warning in the log, as NeoForge documents for a controller nobody registers; so are tickets from a
-  file written before controllers, which are keyed by mod id. Outside a mod's hook, for another mod's controller, and for
-  a stale handle or a chunk past the world's bounds, the calls return `false` or `None`.
-- `validate_tickets` (NeoForge's `LoadingValidationCallback.validateTickets`, server) fires for each level that opens,
-  after `level_load` and before its first tick, once for each controller registered with `validates` that has saved
-  tickets in the level, and only to mods that implement it. `event.controller` is the controller; its owning mod's
-  `event.validation` shows that controller's tickets read from the save when the level loaded, before they take hold
-  (NeoForge's `TicketHelper` is per controller): a ticket a mod adds in `level_load` is not among them and is never
-  removed by it, and a ticket of another controller is not shown. Every mod that implements the hook is called, but
-  only the owner's view holds anything; a controller without a validator keeps all of its tickets. Removals take
-  effect in the callback's view immediately but only publish if the callback completes without panic or phase refusal.
-  The tickets that survive then force their chunks. `block_tickets()` gives each block position and `entity_tickets()` each entity UUID
-  with a `TicketSet`, the chunks it
-  holds apart by kind (`non_natural_spawning` and `natural_spawning`, as NeoForge's `TicketSet`). A plain and a
-  natural-spawning ticket on one chunk are two tickets. `remove_block_tickets(pos)` and `remove_entity_tickets(uuid)`
-  remove everything an owner holds, both kinds (and return how many); `remove_block_ticket(pos, chunk, natural_spawning)`
-  and `remove_entity_ticket(uuid, chunk, natural_spawning)` remove the one kind they name and leave the other. A removed ticket never
-  forces its chunk and is left out of the next save.
+  file written before controllers, which are keyed by mod id. For an invalid controller handle (such as one from a
+  refused registration or another registration table), a stale level handle, a client, or a chunk past the world's
+  bounds, the calls return `false` or `None`.
+- A controller's `LoadingValidationCallback` (NeoForge's `LoadingValidationCallback.validateTickets`) runs once after
+  `level_load` and before the level's first tick, only if that controller has saved tickets in the level. At startup all
+  built-in levels are available before validation begins. It receives
+  the server Host, the opened `LevelRef` (even if parked), and a `TicketValidation` containing only that controller's
+  saved tickets (NeoForge's `TicketHelper`). Tickets added in `level_load` are not staged for validation. A panic logs
+  and queues an error toast naming the mod, discards that callback's removals, and disables only that controller's
+  validator for the session. After all validators finish, surviving tickets force their chunks, including tickets
+  without an enabled validator.
+  `block_tickets()` and `entity_tickets()` lend read-only `BTreeMap` views of the controller's original saved tickets
+  (`&BTreeMap<[i32; 3], TicketSet>` and `&BTreeMap<u128, TicketSet>`), with each owner's chunks apart by kind
+  (`non_natural_spawning` and `natural_spawning`, as NeoForge's `TicketSet`). As in NeoForge's
+  `TicketHelper.getBlockTickets`/`getEntityTickets`, those maps stay unchanged after removals during the callback, while
+  subsequent removals skip rows already selected. A plain and a natural-spawning ticket on one chunk are two
+  tickets. `remove_block_tickets(pos)` and `remove_entity_tickets(uuid)` remove everything an owner holds, both kinds
+  (and return how many); `remove_block_ticket(pos, chunk, natural_spawning)` and
+  `remove_entity_ticket(uuid, chunk, natural_spawning)` remove the one kind they name and leave the other. A removed
+  ticket never forces its chunk and is left out of the next save.
 - `host.living(entity)` gives a `LivingRef` for a mob, a player, an armor stand or the dragon (vanilla's
   `LivingEntity`); `living.entity()` goes back. `living.with_equipment(host, EquipmentSlot::Head, read)` and
   `living.with_hand_item(host, Hand::Main, read)` lend a single stack. An empty or unavailable slot returns `None`

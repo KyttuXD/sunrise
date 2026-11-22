@@ -53,10 +53,8 @@ reopens what it keeps, and a player saved in a level that was not reopened keeps
 fallback. At server startup the Overworld, Nether and End are published in that order, each
 firing `level_load` before the next is available. The server then validates and activates their
 saved tickets and waits for the ticketed chunks before `server_started`, even if no player
-visits those levels. In `Hooks::validate_tickets`, a controller's owning mod can remove saved
-tickets through `event.validation`. The callback sees its removals immediately. As with
-[staged registration](../../concepts/load-phases.md#registration-and-setup), a panic or phase
-refusal discards those edits before the saved tickets take hold. Other controllers still validate.
+visits those levels. The [controller's validator](#validating-saved-chunk-tickets) can remove
+its own saved tickets before they take hold.
 
 Success means queue admission, not apply completion. Apply failures are logged with the
 requesting mod and level id. A failed open rolls back publication and frees the id for retry;
@@ -65,6 +63,23 @@ the queue runs rather than treating the returned result as completion.
 
 An explicitly opened runtime level fires `level_load` while parked: `event.dimension` names
 the opened level, whereas the Host still names the current level.
+
+## Validating saved chunk tickets
+
+In `Hooks::register`, pass `Some(Arc::new(|host, level, tickets| { /* prune stale tickets */ }))`
+to `registrar.register_ticket_controller("quarry", ...)` to validate that controller's saved
+chunk tickets. Pass `None` to restore them as saved. Retain the returned `TicketController` to
+hold chunks independently of validation.
+
+A validator runs only when its controller has saved tickets in the opening level. `level` is
+the actual opened `LevelRef`, including when the level is parked; `level.dimension().id(host)`
+returns its id. `tickets` shows only that controller's saved block and entity tickets, not live
+tickets added in `level_load`. `tickets.block_tickets()` and `tickets.entity_tickets()` borrow
+read-only `BTreeMap` views of the original saved tickets for the whole call and stay unchanged
+after removals. Later removal calls skip rows the validator has already selected. The server
+activates surviving tickets after all validators run.
+If a validator panics, the server reports the mod, discards that validator's removals, and skips
+only that validator for the rest of the session. Other controllers still validate their tickets.
 
 ## Closing
 

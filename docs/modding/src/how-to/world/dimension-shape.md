@@ -221,24 +221,97 @@ synchronous, `/locate`-cost search, not a cheap loaded-chunk lookup: cache resul
 per-tick use. The radius counts placement-cell rings (at most 100); stronghold rings are
 checked regardless of radius. It does not load or generate chunks.
 
+## Chunk tickets
+
+Register a named ticket controller once at startup in `Hooks::register` with
+`r.register_ticket_controller("quarry", validator)`. Keep the returned `TicketController`
+handle (for example in a `OnceLock`) and pass it to `chunk.set_mod_forced` and
+`level.mod_forced_chunks`. Active reads and writes authorize by the registry-issued handle
+itself rather than the current caller, so helpers or shared subsystems that hold the handle
+can manage that controller's tickets directly while separate controllers stay isolated.
+
+Pass `Some(Arc::new(...))` to bind a `LoadingValidationCallback` that prunes stale saved
+tickets when a level opens, or `None` to restore saved tickets without validation:
+
+```rust,ignore
+use std::sync::{Arc, OnceLock};
+use mod_api::{
+    Hooks, LevelRef, Registrar, RegistrationContext, ServerHost, TicketController,
+    TicketOwner, TicketValidation,
+};
+
+pub static QUARRY_TICKETS: OnceLock<TicketController> = OnceLock::new();
+
+#[mod_api::sunrise_mod]
+impl Hooks for MyMod {
+    fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+        let quarry_block = r.block_key("mymod:quarry");
+        let controller = r.register_ticket_controller(
+            "quarry",
+            Some(Arc::new(
+                move |host: &mut dyn ServerHost,
+                      level: LevelRef,
+                      tickets: &mut dyn TicketValidation| {
+                    let stale: Vec<[i32; 3]> = tickets
+                        .block_tickets()
+                        .keys()
+                        .copied()
+                        .filter(|&pos| level.block(host, pos) != Some(quarry_block))
+                        .collect();
+                    for pos in stale {
+                        tickets.remove_block_tickets(pos);
+                    }
+                },
+            )),
+        );
+        let _ = QUARRY_TICKETS.set(controller);
+    }
+}
+
+pub fn hold_quarry_chunk(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3]) -> bool {
+    let Some(&controller) = QUARRY_TICKETS.get() else {
+        return false;
+    };
+    let Some(chunk) = level.chunk_ref(host, [pos[0] >> 4, pos[2] >> 4]) else {
+        return false;
+    };
+    chunk.set_mod_forced(host, controller, TicketOwner::Block(pos), true, false)
+}
+```
+
+`tickets.block_tickets()` and `tickets.entity_tickets()` borrow read-only `BTreeMap` views
+of the controller's original saved tickets for the whole callback even after removals, while
+`remove_block_tickets`, `remove_block_ticket`, `remove_entity_tickets` and
+`remove_entity_ticket` stage removals that publish only when the validator completes successfully. Use `level.dimension().id(host)`
+when the validator needs the opening level's dimension name. See
+[Validating saved chunk tickets](runtime-levels.md#validating-saved-chunk-tickets) for
+startup and runtime-level validation timing and panic handling.
+
 ## Watered-area tickets
 
 On the server, `level.add_water_ticket(host, min, max)` returns an `Option<WaterTicket>`
 for a sprinkler's watered area. Bounds are integer and half-open on **all three axes**:
 `min` is included, `max` is excluded. For 5×1×5 farmland beginning at `[4, 64, 4]`,
 use `[4, 64, 4]` and `[9, 65, 9]`; `[8, 64, 8]` is inside, `[9, 64, 4]` is outside.
-Empty or reversed boxes and boxes covering more than 65,536 x/z chunks are refused.
+Empty or reversed boxes are refused; any nonempty box is accepted without a column cap.
 
-Keep the handle, then call `ticket.remove(host)` when the sprinkler stops or breaks.
-Removal returns whether that ticket was removed; overlapping tickets remain independent.
-Only the mod that added a ticket can remove it. `level.has_water_ticket(host, pos)` tests
-whether any ticket covers a block. Both calls reach active or parked server levels without
-loading chunks; unavailable/stale handles and clients answer `false` (adding answers `None`).
-Adding requires an enabled mod call.
+`WaterTicket` is an in-process handle and does not implement `Wire` — never serialize or
+persist it. Retain the handle in memory, then call `ticket.remove(host)` when the sprinkler
+stops or breaks. Removal returns whether that ticket was removed; overlapping tickets remain
+independent. Any holder with the `WaterTicket` handle can remove it without consulting the
+current caller. `level.has_water_ticket(host, pos)` tests whether any ticket covers a block.
+Both calls reach active or parked server levels without loading chunks; unavailable/stale
+handles and clients answer `false` (adding answers `None`).
 
-Tickets are chunk-indexed, in memory only, and never force chunks to load. They are removed
-on explicit removal, level unload, or their owner's disable; re-enabling does not restore
-them. A reopened world starts empty: re-add from `level_load` or a block entity's load
+Tickets are indexed by enclosing x/z chunk tile in memory only, never force chunks to load,
+and queries test matching tiles without calling mod predicates. Each ticket attaches to the
+covered chunk closest to its horizontal center (its master chunk, matching NeoForge's
+`FarmlandWaterManager.addAABBTicket`): unloading that chunk on the server invalidates the
+ticket (`FarmlandWaterManager.removeTickets`), while unloading other covered chunks leaves it
+active. Tickets are also removed on explicit removal or level unload; when added during an
+enabled mod call, the ticket is attributed to that mod and cleared if that mod is disabled
+(calling from a disabled installed mod is refused, and re-enabling does not restore old
+tickets). A reopened world starts empty: re-add from `level_load` or a block entity's load
 listener. Several boxes can describe a shape without a per-position mod predicate.
 Farmland checks the ticket before its vanilla water scan, so dry farmland inside moistens
 to 7. Removing the last covering ticket restores normal drying, while nearby water and

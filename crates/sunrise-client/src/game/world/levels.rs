@@ -1036,7 +1036,7 @@ impl Game<'_> {
         tickets.restore_portal(save.load_portal_tickets());
         streaming.load_forced(
             save.load_forced_chunks(),
-            save.load_mod_tickets(|id| mod_api::TicketController::from_id(id).map(|c| c.slot())),
+            save.load_mod_tickets(mod_api::__private::game::ticket_controller_slot_by_id),
         );
     }
 
@@ -2521,33 +2521,42 @@ mod tests {
     #[ignore = "daily"]
     fn built_in_levels_restore_saved_tickets_before_the_first_tick() {
         use mod_api::{
-            Hooks, ModEntry, Registrar, RegistrationContext, ServerHost, TicketController,
-            ValidateTicketsEvent,
+            Hooks, LevelRef, ModEntry, Registrar, RegistrationContext, ServerHost,
+            TicketController, TicketValidation,
         };
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{
+            OnceLock,
+            atomic::{AtomicBool, Ordering},
+        };
         use sunrise_client::mod_chunk_tickets::{ModTicket, ModTickets, TicketOwner};
         use sunrise_client::save::dimension_dir;
 
         const OWNER: [i32; 3] = [2, 64, 3];
-        struct Quarry(Arc<AtomicBool>);
+        struct Quarry {
+            saw_end: Arc<AtomicBool>,
+            controller: Arc<OnceLock<TicketController>>,
+        }
         #[mod_api::__subscriptions]
         impl Hooks for Quarry {
             fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
-                registrar.register_ticket_controller("quarry", true);
-            }
-
-            fn validate_tickets(
-                &self,
-                host: &mut dyn ServerHost,
-                e: &mut ValidateTicketsEvent<'_>,
-            ) {
-                if e.dimension == "minecraft:the_nether"
-                    && host.level("minecraft:the_end").is_some()
-                {
-                    self.0.store(true, Ordering::Relaxed);
-                } else {
-                    e.validation.remove_block_tickets(OWNER);
-                }
+                let saw_end = Arc::clone(&self.saw_end);
+                let controller = registrar.register_ticket_controller(
+                    "quarry",
+                    Some(Arc::new(
+                        move |host: &mut dyn ServerHost,
+                              level: LevelRef,
+                              validation: &mut dyn TicketValidation| {
+                            if level.dimension_id() == "minecraft:the_nether"
+                                && host.level("minecraft:the_end").is_some()
+                            {
+                                saw_end.store(true, Ordering::Relaxed);
+                            } else {
+                                validation.remove_block_tickets(OWNER);
+                            }
+                        },
+                    )),
+                );
+                let _ = self.controller.set(controller);
             }
         }
 
@@ -2555,9 +2564,13 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let world = home.path().join("world");
         let saw_end = Arc::new(AtomicBool::new(false));
+        let controller_cell = Arc::new(OnceLock::new());
         let mods = vec![ModEntry::new(
             "startup_tickets",
-            Box::new(Quarry(saw_end.clone())),
+            Box::new(Quarry {
+                saw_end: saw_end.clone(),
+                controller: controller_cell.clone(),
+            }),
         )]
         .into();
         mod_platform::testing::with_mods(mods, || {
@@ -2569,9 +2582,11 @@ mod tests {
             let nether = Dim::Nether;
             let end = Dim::End;
             let commanded_chunk = (4, -5);
-            let controller = TicketController::from_id("startup_tickets:quarry").unwrap();
+            let controller = *controller_cell.get().unwrap();
+            let controller_slot =
+                mod_api::__private::game::ticket_controller_slot(controller).unwrap();
             let ticket = ModTicket {
-                controller: controller.slot(),
+                controller: controller_slot,
                 owner: TicketOwner::Block(OWNER),
                 chunk: (12, -13),
                 natural_spawning: false,
@@ -2582,9 +2597,7 @@ mod tests {
             let mut tickets = ModTickets::default();
             tickets.insert(ticket.clone());
             SaveDir::new(dimension_dir(&world, nether.id()), nether.shape(), None)
-                .save_mod_tickets(&tickets, |slot| {
-                    TicketController::from_slot(slot).map(TicketController::id)
-                })
+                .save_mod_tickets(&tickets, mod_api::__private::game::ticket_controller_id)
                 .unwrap();
 
             let mut resources = None;
@@ -2605,7 +2618,7 @@ mod tests {
                 nether_level
                     .streaming
                     .mod_tickets()
-                    .of_controller(controller.slot())
+                    .of_controller(controller_slot)
                     .next(),
                 Some(&ticket)
             );

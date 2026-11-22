@@ -26,13 +26,6 @@ fn chunk_in_world(pos: [i32; 2]) -> bool {
     pos.iter().all(|c| (-LIMIT..LIMIT).contains(c))
 }
 
-/// Whether the mod running owns `controller`: a mod uses only the controllers it registered.
-fn calling_mod_owns(controller: TicketController) -> bool {
-    controller
-        .owner()
-        .is_some_and(|owner| mod_api::content::crash::current_native_mod() == Some(owner))
-}
-
 /// The stored light of `layer` at `pos` in `world`, as the game's own light query reads it.
 pub(super) fn world_brightness(world: &World, layer: LightLayer, pos: [i32; 3]) -> i32 {
     let light = world.light(pos[0], pos[1], pos[2]);
@@ -77,12 +70,9 @@ impl Game<'_> {
         min: [i32; 3],
         max: [i32; 3],
     ) -> Option<mod_api::WaterTicket> {
-        let owner = mod_api::content::crash::current_native_mod()?;
-        let owner_index = mod_api::__private::mod_index(owner)?;
-        if !mod_api::__private::mod_index_on(owner_index) {
-            return None;
-        }
         self.native_level_world(level)?;
+        let owner = mod_api::content::crash::current_native_mod()
+            .and_then(|id| mod_api::__private::mod_index(id).map(|index| (id, index)));
         let world = if level.dimension() == self.dim.key() {
             &mut self.world
         } else {
@@ -90,22 +80,16 @@ impl Game<'_> {
         };
         world
             .water_tickets
-            .add(owner, min, max, || {
-                mod_api::__private::mod_index_on(owner_index)
+            .add(min, max, || match owner {
+                None => Ok(None),
+                Some((id, index)) => mod_api::__private::mod_index_on(index)
+                    .then_some(Some(id))
+                    .ok_or(()),
             })
-            .map(|id| mod_api::WaterTicket::new(level, id))
+            .map(|id| mod_api::__private::game::water_ticket(level, id))
     }
 
     pub(super) fn water_ticket_remove(&mut self, ticket: mod_api::WaterTicket) -> bool {
-        let Some(owner) = mod_api::content::crash::current_native_mod() else {
-            return false;
-        };
-        let Some(owner_index) = mod_api::__private::mod_index(owner) else {
-            return false;
-        };
-        if !mod_api::__private::mod_index_on(owner_index) {
-            return false;
-        }
         let level = ticket.level();
         if self.native_level_world(level).is_none() {
             return false;
@@ -117,7 +101,25 @@ impl Game<'_> {
         } else {
             return false;
         };
-        world.water_tickets.remove(owner, ticket.id())
+        world
+            .water_tickets
+            .remove(mod_api::__private::game::water_ticket_id(ticket))
+    }
+
+    /// `FarmlandWaterManager.removeTickets`: invalidate watered-area tickets whose master chunk
+    /// is `chunk` when that chunk unloads on the server.
+    pub(in crate::game) fn unload_water_tickets_chunk(&mut self, level: LevelRef, chunk: [i32; 2]) {
+        if self.native_level_world(level).is_none() {
+            return;
+        }
+        let world = if level.dimension() == self.dim.key() {
+            &mut self.world
+        } else if let Some(world) = self.levels.parked_world_mut_of(level.dimension_id()) {
+            world
+        } else {
+            return;
+        };
+        world.water_tickets.unload_chunk(chunk);
     }
 
     pub(super) fn level_has_water_ticket(&self, level: LevelRef, pos: [i32; 3]) -> bool {
@@ -421,46 +423,28 @@ impl Game<'_> {
         }
     }
 
-    /// The mods validate the chunk tickets `dim`'s level loaded from its save,
-    /// controller by controller (`LoadingValidationCallback.validateTickets`),
-    /// and the survivors take hold. Tickets a mod added since the load (in
-    /// `level_load`, say) are not candidates, and a controller registered
-    /// without a validator keeps all of its tickets. Nothing is built while no
-    /// mod listens.
+    /// Let each registered validator prune its own staged save rows before
+    /// activating any of them (`ForcedChunkManager.activateAllDeactivatedTickets`).
+    /// Live tickets, including tickets added by `level_load`, are not staged.
     pub(super) fn validate_mod_chunk_tickets(&mut self, dim: super::Dim) {
+        let Some(level) = self.level(dim.id()) else {
+            return;
+        };
         let Some(streaming) = self.mod_ticket_streaming_mut(dim) else {
             return;
         };
-        let mut loaded = streaming.take_loaded_tickets();
-        if !loaded.is_empty() && mod_api::__private::listened(mod_api::HookId::ValidateTickets) {
-            let mut controllers: Vec<u32> = loaded.iter().map(|t| t.controller).collect();
-            controllers.sort_unstable();
-            controllers.dedup();
-            for slot in controllers {
-                let Some(controller) = TicketController::from_slot(slot) else {
-                    continue;
-                };
-                let Some(owner) = controller.owner().filter(|_| controller.validates()) else {
-                    continue;
-                };
-                let (own, rest): (Vec<_>, Vec<_>) =
-                    loaded.into_iter().partition(|t| t.controller == slot);
-                let mut validation =
-                    mod_api::world::mod_chunk_tickets::ControllerTickets::new(owner, own);
-                self.native_validate_tickets(dim.id(), controller, &mut validation);
-                loaded = rest;
-                loaded.extend(validation.into_loaded());
-            }
-        }
+        let loaded = streaming.take_loaded_tickets();
+        let ready = mod_api::__private::game::validate_saved_tickets(self, level, loaded);
         if let Some(streaming) = self.mod_ticket_streaming_mut(dim) {
-            for ticket in loaded {
+            for ticket in ready {
                 streaming.set_mod_forced(ticket, true);
             }
         }
     }
     /// The chunk ticket of `controller` for `owner` on `chunk`
     /// (`TicketController.forceChunk`): true when the controller's tickets
-    /// changed. The controller must be the calling mod's own.
+    /// changed. Authorized by the registry-issued `controller` handle itself,
+    /// without consulting the current caller.
     /// A chunk stays forced, entity ticking and saved, and its level keeps
     /// ticking, while any ticket or `/forceload` holds it. With
     /// `natural_spawning` the chunk joins the spawning chunks (inhabited
@@ -472,9 +456,9 @@ impl Game<'_> {
     /// two controllers, release separately. They are saved in
     /// `data/sunrise/mod_chunk_tickets.dat` under the controller's id; when
     /// the world loads, those of a controller no loaded mod registers are
-    /// discarded. False outside a mod's hook, for another mod's controller, on
-    /// a client, for a chunk outside the world and for a level the server has
-    /// not opened.
+    /// discarded. False for an invalid controller handle (such as one from a
+    /// refused registration or another registration table), on a client, for a
+    /// chunk outside the world and for a level the server has not opened.
     pub(super) fn chunk_set_mod_forced(
         &mut self,
         chunk: ChunkRef,
@@ -483,15 +467,15 @@ impl Game<'_> {
         forced: bool,
         natural_spawning: bool,
     ) -> bool {
-        if !calling_mod_owns(controller) {
+        let Some(slot) = mod_api::__private::game::ticket_controller_slot(controller) else {
             return false;
-        }
+        };
         if self.native_level_streaming(chunk.level()).is_none() || !chunk_in_world(chunk.pos()) {
             return false;
         }
         let [x, z] = chunk.pos();
         let ticket = ModTicket {
-            controller: controller.slot(),
+            controller: slot,
             owner,
             chunk: (x, z),
             natural_spawning,
@@ -507,20 +491,19 @@ impl Game<'_> {
         streaming.set_mod_forced(ticket, forced)
     }
     /// The chunk tickets `controller` holds in the level, as (owner, chunk
-    /// position, natural_spawning), in order. None for a stale handle, on a
-    /// client, outside a mod's hook and for another mod's controller.
+    /// position, natural_spawning), in order. None for an invalid controller
+    /// handle (such as one from a refused registration or another registration
+    /// table), a stale level handle, or on a client.
     pub(super) fn level_mod_forced_chunks(
         &self,
         level: LevelRef,
         controller: TicketController,
     ) -> Option<Vec<(mod_api::TicketOwner, [i32; 2], bool)>> {
-        if !calling_mod_owns(controller) {
-            return None;
-        }
+        let slot = mod_api::__private::game::ticket_controller_slot(controller)?;
         let tickets = self.native_level_streaming(level)?.mod_tickets();
         Some(
             tickets
-                .of_controller(controller.slot())
+                .of_controller(slot)
                 .map(|t| (t.owner, [t.chunk.0, t.chunk.1], t.natural_spawning))
                 .collect(),
         )
@@ -2227,9 +2210,9 @@ mod tests {
     }
 
     use mod_api::{
-        self, Hooks, ModEntry, Registrar, ServerHost, TicketController, ValidateTicketsEvent,
-        testing,
+        self, Hooks, ModEntry, Registrar, ServerHost, TicketController, TicketValidation,
     };
+    use std::sync::Arc;
     use sunrise_client::mod_chunk_tickets::{ModTicket, TicketOwner};
 
     /// Registers three controllers: `quarry` and `drill` validate, `plain` doesn't. `quarry`'s
@@ -2238,24 +2221,29 @@ mod tests {
     #[mod_api::__subscriptions]
     impl Hooks for Machines {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-            r.register_ticket_controller("quarry", true);
-            r.register_ticket_controller("machines:drill", true);
-            r.register_ticket_controller("plain", false);
-        }
-        fn validate_tickets(&self, _: &mut dyn ServerHost, e: &mut ValidateTicketsEvent<'_>) {
-            SEEN.with_borrow_mut(|seen| {
-                seen.push((
-                    e.controller.id(),
-                    e.validation
-                        .block_tickets()
-                        .into_iter()
-                        .map(|(pos, _)| pos)
-                        .collect(),
-                ))
+            let quarry = r.register_ticket_controller(
+                "quarry",
+                Some(Arc::new(
+                    |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                        record_validation("machines:quarry", validation);
+                        validation.remove_block_tickets([1, 64, 1]);
+                    },
+                )),
+            );
+            let drill = r.register_ticket_controller(
+                "machines:drill",
+                Some(Arc::new(
+                    |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                        record_validation("machines:drill", validation);
+                    },
+                )),
+            );
+            let plain = r.register_ticket_controller("plain", None);
+            ISSUED.with_borrow_mut(|issued| {
+                issued.insert("machines:quarry", quarry);
+                issued.insert("machines:drill", drill);
+                issued.insert("machines:plain", plain);
             });
-            if e.controller.id() == "machines:quarry" {
-                e.validation.remove_block_tickets([1, 64, 1]);
-            }
         }
     }
     /// Registers one validating controller, and prunes everything it is shown.
@@ -2263,26 +2251,33 @@ mod tests {
     #[mod_api::__subscriptions]
     impl Hooks for Other {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-            r.register_ticket_controller("vault", true);
-        }
-        fn validate_tickets(&self, _: &mut dyn ServerHost, e: &mut ValidateTicketsEvent<'_>) {
-            SEEN.with_borrow_mut(|seen| {
-                seen.push((
-                    e.controller.id(),
-                    e.validation
-                        .block_tickets()
-                        .into_iter()
-                        .map(|(pos, _)| pos)
-                        .collect(),
-                ))
+            let vault = r.register_ticket_controller(
+                "vault",
+                Some(Arc::new(
+                    |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                        record_validation("other:vault", validation);
+                        validation.remove_block_tickets([1, 64, 1]);
+                    },
+                )),
+            );
+            ISSUED.with_borrow_mut(|issued| {
+                issued.insert("other:vault", vault);
             });
-            e.validation.remove_block_tickets([1, 64, 1]);
         }
     }
+
+    fn record_validation(controller: &'static str, validation: &dyn TicketValidation) {
+        let blocks = validation.block_tickets().keys().copied().collect();
+        SEEN.with_borrow_mut(|seen| seen.push((controller, blocks)));
+    }
+
     thread_local! {
         /// What each validation was shown: its controller, then the block positions.
         static SEEN: std::cell::RefCell<Vec<(&'static str, Vec<[i32; 3]>)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+        /// Real registrar-issued handles captured during the most recent fixture registration.
+        static ISSUED: std::cell::RefCell<std::collections::HashMap<&'static str, TicketController>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
     }
 
     fn mods() -> mod_api::Mods {
@@ -2293,11 +2288,11 @@ mod tests {
         .into()
     }
     fn controller(id: &str) -> TicketController {
-        testing::ticket_controller(id).unwrap()
+        ISSUED.with_borrow(|issued| *issued.get(id).unwrap())
     }
-    /// The slot of a registered controller id.
+    /// The save-deserialization slot of a registered controller id.
     fn known_slot(id: &str) -> Option<u32> {
-        TicketController::from_id(id).map(TicketController::slot)
+        mod_api::__private::game::ticket_controller_slot_by_id(id)
     }
     fn quarry() -> TicketController {
         controller("machines:quarry")
@@ -2351,7 +2346,6 @@ mod tests {
             }
             game.world.set(9, 64, 4, dry).unwrap();
             game.world.set(9, 65, 4, wheat).unwrap();
-            let guard = in_mod("machines");
             let ticket = level
                 .add_water_ticket(game, [4, 64, 4], [9, 65, 9])
                 .unwrap();
@@ -2391,7 +2385,6 @@ mod tests {
             assert_eq!(level.is_raining_at(game, [4, 65, 4]), Some(false));
             assert!(level.block_random_tick(game, [4, 64, 4]));
             assert_eq!(moisture(game, [4, 64, 4]), 6);
-            drop(guard);
         });
     }
 
@@ -2400,15 +2393,11 @@ mod tests {
     fn water_ticket_handles_isolate_dimensions_owners_and_unload_lifetimes() {
         with_machines(|game| {
             let overworld = game.level(game.dim.id()).unwrap();
-            assert!(
-                overworld
-                    .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
-                    .is_none()
-            );
-            let guard = in_mod("machines");
-            let a = overworld
-                .add_water_ticket(game, [-17, 64, -1], [18, 65, 2])
+            // Unattributed addition is admitted without TLS caller context.
+            let anon = overworld
+                .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
                 .unwrap();
+            assert!(overworld.has_water_ticket(game, [0, 64, 0]));
             let stale = LevelRef::new(
                 WorldEpoch::new(overworld.epoch().get() + 1),
                 overworld.dimension(),
@@ -2419,6 +2408,11 @@ mod tests {
                     .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
                     .is_none()
             );
+            let guard = in_mod("machines");
+            let a = overworld
+                .add_water_ticket(game, [-17, 64, -1], [18, 65, 2])
+                .unwrap();
+            drop(guard);
             for pos in [[-17, 64, -1], [17, 64, 1]] {
                 assert!(overworld.has_water_ticket(game, pos));
             }
@@ -2432,36 +2426,97 @@ mod tests {
             ] {
                 assert!(!overworld.has_water_ticket(game, pos), "{pos:?}");
             }
+            // A handed-over handle can be removed from another mod without disturbing overlaps.
+            let guard = in_mod("other");
+            assert!(a.remove(game), "any holder with the handle can remove it");
+            drop(guard);
+            assert!(!a.remove(game));
+            assert!(!overworld.has_water_ticket(game, [-17, 64, -1]));
+            assert!(overworld.has_water_ticket(game, [0, 64, 0]));
             game.enter_level(Dim::Nether).unwrap();
             let nether = game.level(game.dim.id()).unwrap();
             assert!(!nether.has_water_ticket(game, [0, 64, 0]));
             assert!(overworld.has_water_ticket(game, [0, 64, 0]));
+            let guard = in_mod("machines");
             let b = nether
                 .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
                 .unwrap();
-            assert!(
-                overworld
-                    .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
-                    .is_some()
-            );
+            let parked_owned = overworld
+                .add_water_ticket(game, [10, 64, 0], [15, 65, 5])
+                .unwrap();
             drop(guard);
             let guard = in_mod("other");
-            assert!(!a.remove(game), "only its owner removes a ticket");
             let overlap = nether
                 .add_water_ticket(game, [3, 64, 3], [4, 65, 4])
                 .unwrap();
             drop(guard);
             assert!(mod_api::__private::set_mod_enabled("machines", false));
-            assert!(!overworld.has_water_ticket(game, [0, 64, 0]));
+            assert!(!overworld.has_water_ticket(game, [10, 64, 0]));
+            assert!(overworld.has_water_ticket(game, [0, 64, 0]));
             assert!(!nether.has_water_ticket(game, [0, 64, 0]));
             assert!(nether.has_water_ticket(game, [3, 64, 3]));
+            // A disabled installed mod is refused instead of leaking an unattributed ticket.
+            let guard = in_mod("machines");
+            assert!(
+                nether
+                    .add_water_ticket(game, [6, 64, 6], [7, 65, 7])
+                    .is_none()
+            );
+            drop(guard);
+            assert!(!nether.has_water_ticket(game, [6, 64, 6]));
+            // Unattributed callers still succeed without reviving old tickets.
+            let during_disable = nether
+                .add_water_ticket(game, [6, 64, 6], [7, 65, 7])
+                .unwrap();
+            assert!(nether.has_water_ticket(game, [6, 64, 6]));
+            assert!(!nether.has_water_ticket(game, [0, 64, 0]));
+            assert!(during_disable.remove(game));
+            assert!(!nether.has_water_ticket(game, [6, 64, 6]));
             assert!(mod_api::__private::set_mod_enabled("machines", true));
             assert!(
-                !overworld.has_water_ticket(game, [0, 64, 0]),
+                !overworld.has_water_ticket(game, [10, 64, 0]),
                 "re-enable never restores old tickets"
             );
-            let guard = in_mod("machines");
             assert!(!b.remove(game));
+            assert!(!parked_owned.remove(game));
+            // Server chunk unload invalidates only tickets mastered in that chunk
+            // (`FarmlandWaterManager.removeTickets`), leaving secondary chunks and overlaps intact.
+            let master_five = nether
+                .add_water_ticket(game, [76, 64, 2], [101, 65, 10])
+                .unwrap();
+            let master_six = nether
+                .add_water_ticket(game, [92, 64, 2], [114, 65, 10])
+                .unwrap();
+            // Secondary covered chunk (4, 0) leaves master_five active.
+            game.native_chunk_unload(nether.dimension_id(), [4, 0]);
+            assert!(nether.has_water_ticket(game, [76, 64, 2]));
+            assert!(nether.has_water_ticket(game, [100, 64, 2]));
+            // Master chunk (5, 0) invalidates master_five while preserving master_six's overlap.
+            game.native_chunk_unload(nether.dimension_id(), [5, 0]);
+            assert!(!master_five.remove(game));
+            assert!(!nether.has_water_ticket(game, [76, 64, 2]));
+            assert!(nether.has_water_ticket(game, [92, 64, 2]));
+            assert!(nether.has_water_ticket(game, [113, 64, 2]));
+            // Reissue after unload works independently of the invalidated handle.
+            let reissued = nether
+                .add_water_ticket(game, [76, 64, 2], [101, 65, 10])
+                .unwrap();
+            assert!(!master_five.remove(game));
+            assert!(nether.has_water_ticket(game, [76, 64, 2]));
+            assert!(reissued.remove(game));
+            assert!(master_six.remove(game));
+            // Chunk unload also reaches parked levels without disturbing the active level.
+            let parked_chunk_ticket = overworld
+                .add_water_ticket(game, [32, 64, 32], [40, 65, 40])
+                .unwrap();
+            assert!(overworld.has_water_ticket(game, [32, 64, 32]));
+            game.native_chunk_unload(overworld.dimension_id(), [2, 2]);
+            assert!(!overworld.has_water_ticket(game, [32, 64, 32]));
+            assert!(!parked_chunk_ticket.remove(game));
+            assert!(nether.has_water_ticket(game, [3, 64, 3]));
+            // Unattributed removal works on parked levels.
+            assert!(anon.remove(game));
+            assert!(!overworld.has_water_ticket(game, [0, 64, 0]));
             let fresh = overworld
                 .add_water_ticket(game, [0, 64, 0], [5, 65, 5])
                 .unwrap();
@@ -2469,13 +2524,9 @@ mod tests {
             assert!(!overworld.has_water_ticket(game, [0, 64, 0]));
             assert!(!nether.has_water_ticket(game, [3, 64, 3]));
             assert!(!fresh.remove(game));
-            drop(guard);
-            let guard = in_mod("other");
             assert!(!overlap.remove(game));
-            drop(guard);
             // The client cannot query or mutate the server's in-memory marks.
             game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
-            let guard = in_mod("machines");
             assert!(!nether.has_water_ticket(game, [0, 64, 0]));
             assert!(
                 nether
@@ -2483,7 +2534,6 @@ mod tests {
                     .is_none()
             );
             assert!(!b.remove(game));
-            drop(guard);
         });
     }
 
@@ -2504,7 +2554,6 @@ mod tests {
                 .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
                 .unwrap();
             game.world.set(4, 64, 4, dry).unwrap();
-            let guard = in_mod("machines");
             let old = level
                 .add_water_ticket(game, [4, 64, 4], [9, 65, 9])
                 .unwrap();
@@ -2549,7 +2598,6 @@ mod tests {
                     .as_deref(),
                 Some("6")
             );
-            drop(guard);
         });
     }
 
@@ -2557,13 +2605,19 @@ mod tests {
     #[ignore = "daily"]
     fn mod_tickets_are_scoped_by_owner_and_share_the_forceload_store() {
         use mod_api::TicketOwner::{Block, Entity};
+        // Capture a real handle from an earlier registration table with the same controller name
+        // and slot so we can prove it confers no authority in the active registration table.
+        let foreign_quarry = mod_platform::testing::with_mods(mods(), quarry);
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
             let chunk = game.level_chunk_ref(level, [5, 6]).unwrap();
             let (a, b) = (Block([80, 64, 96]), Entity(7));
-            // Outside a mod's hook there is no caller to own a ticket.
-            assert!(!game.chunk_set_mod_forced(chunk, quarry(), a, true, false));
-            let guard = in_mod("machines");
+            assert_ne!(foreign_quarry, quarry());
+            assert_eq!(foreign_quarry.id(), "");
+            assert_eq!(game.level_mod_forced_chunks(level, foreign_quarry), None);
+            assert!(!game.chunk_set_mod_forced(chunk, foreign_quarry, a, true, false));
+            assert!(!game.streaming.forced.contains(&(5, 6)));
+            // A registered controller works outside a mod callback without TLS attribution.
             assert!(game.chunk_set_mod_forced(chunk, quarry(), a, true, false));
             assert!(
                 !game.chunk_set_mod_forced(chunk, quarry(), a, true, false),
@@ -2580,19 +2634,35 @@ mod tests {
                 game.level_mod_forced_chunks(level, quarry()),
                 Some(vec![(b, [5, 6], false)])
             );
-            // Another mod cannot use our controller, however it asks; its own is empty.
-            drop(guard);
+            // Calling through a different mod's callback with the same controller works;
+            // another controller with the same owner/chunk cannot read or remove that ticket.
             let guard = in_mod("other");
-            assert_eq!(game.level_mod_forced_chunks(level, quarry()), None);
-            assert!(!game.chunk_set_mod_forced(chunk, quarry(), b, false, false));
-            assert!(!game.chunk_set_mod_forced(chunk, quarry(), b, true, false));
+            assert_eq!(
+                game.level_mod_forced_chunks(level, quarry()),
+                Some(vec![(b, [5, 6], false)])
+            );
+            assert!(game.chunk_set_mod_forced(chunk, quarry(), a, true, false));
+            assert_eq!(
+                game.level_mod_forced_chunks(level, quarry()),
+                Some(vec![(a, [5, 6], false), (b, [5, 6], false)])
+            );
+            assert!(game.chunk_set_mod_forced(chunk, quarry(), a, false, false));
+            assert_eq!(
+                game.level_mod_forced_chunks(level, quarry()),
+                Some(vec![(b, [5, 6], false)])
+            );
             let vault = controller("other:vault");
             assert_eq!(game.level_mod_forced_chunks(level, vault), Some(vec![]));
+            assert!(!game.chunk_set_mod_forced(chunk, vault, b, false, false));
             assert!(game.chunk_set_mod_forced(chunk, vault, b, true, false));
             assert!(game.chunk_set_mod_forced(chunk, vault, b, false, false));
+            assert_eq!(
+                game.level_mod_forced_chunks(level, quarry()),
+                Some(vec![(b, [5, 6], false)])
+            );
             drop(guard);
-            // Our other controller is apart from the first: it neither lists nor releases its tickets.
-            let guard = in_mod("machines");
+            // Another controller of the same mod is apart from the first: it neither lists nor
+            // releases its tickets.
             let drill = controller("machines:drill");
             assert_eq!(game.level_mod_forced_chunks(level, drill), Some(vec![]));
             assert!(!game.chunk_set_mod_forced(chunk, drill, b, false, false));
@@ -2602,7 +2672,27 @@ mod tests {
                 game.level_mod_forced_chunks(level, quarry()),
                 Some(vec![(b, [5, 6], false)])
             );
-            drop(guard);
+            // An invalid registered-slot sentinel (returned on refused registration) refuses
+            // without mutating existing or new tickets.
+            let invalid = mod_api::__private::parts_installation::refused_ticket_controller();
+            let untouched = game.level_chunk_ref(level, [6, 6]).unwrap();
+            assert_eq!(game.level_mod_forced_chunks(level, invalid), None);
+            assert!(!game.chunk_set_mod_forced(chunk, invalid, b, false, false));
+            assert!(!game.chunk_set_mod_forced(untouched, invalid, a, true, false));
+            // A handle from an earlier registration table with the same name and slot cannot
+            // read, add, or release the active controller's tickets.
+            assert_eq!(game.level_mod_forced_chunks(level, foreign_quarry), None);
+            assert!(!game.chunk_set_mod_forced(chunk, foreign_quarry, b, false, false));
+            assert!(!game.chunk_set_mod_forced(untouched, foreign_quarry, a, true, false));
+            assert!(!game.streaming.forced.contains(&(6, 6)));
+            assert_eq!(
+                game.streaming.mod_tickets().of_controller(u32::MAX).count(),
+                0
+            );
+            assert_eq!(
+                game.level_mod_forced_chunks(level, quarry()),
+                Some(vec![(b, [5, 6], false)])
+            );
             // /forceload and a ticket on one chunk: the chunk stays until both go.
             assert!(game.chunk_set_forced(chunk, true));
             assert!(game.chunk_set_forced(chunk, false));
@@ -2611,7 +2701,6 @@ mod tests {
                 "the ticket holds it"
             );
             assert!(game.chunk_set_forced(chunk, true));
-            let _guard = in_mod("machines");
             assert!(game.chunk_set_mod_forced(chunk, quarry(), b, false, false));
             assert!(
                 game.streaming.forced.contains(&(5, 6)),
@@ -2620,8 +2709,19 @@ mod tests {
             game.streaming.clear_forced();
             assert!(game.streaming.forced.is_empty());
             // The world's bounds, as /forceload checks them.
-            let outside = mod_api::ChunkRef::new(level, [1_875_000, 0]);
+            let outside = ChunkRef::new(level, [1_875_000, 0]);
             assert!(!game.chunk_set_mod_forced(outside, quarry(), a, true, false));
+            // Stale handles refuse without mutating.
+            let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
+            let stale_chunk = ChunkRef::new(stale, [5, 6]);
+            assert_eq!(game.level_mod_forced_chunks(stale, quarry()), None);
+            assert!(!game.chunk_set_mod_forced(stale_chunk, quarry(), a, true, false));
+            assert!(!game.streaming.forced.contains(&(5, 6)));
+            // Client side refuses without mutating.
+            game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+            assert_eq!(game.level_mod_forced_chunks(level, quarry()), None);
+            assert!(!game.chunk_set_mod_forced(chunk, quarry(), a, true, false));
+            assert!(!game.streaming.forced.contains(&(5, 6)));
         });
     }
 
@@ -2634,7 +2734,6 @@ mod tests {
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
             let chunk = game.level_chunk_ref(level, [-9, 4]).unwrap();
-            let _guard = in_mod("machines");
             let drill = controller("machines:drill");
             let (block, entity) = (Block([-140, 70, 70]), Entity(u128::MAX - 3));
             assert!(game.chunk_set_mod_forced(chunk, quarry(), block, true, false));
@@ -2700,7 +2799,6 @@ mod tests {
             game.enter_level(back).unwrap();
             let parked = mod_api::LevelRef::new(level.epoch(), other.key());
             let chunk = ChunkRef::new(parked, [2, 2]);
-            let _guard = in_mod("machines");
             let owner = mod_api::TicketOwner::Block([32, 64, 32]);
             assert!(!game.levels_to_tick().contains(&other));
             assert!(game.chunk_set_mod_forced(chunk, quarry(), owner, true, false));
@@ -2749,7 +2847,6 @@ mod tests {
             let level = game.level(game.dim.id()).unwrap();
             let chunk = game.level_chunk_ref(level, [3, 3]).unwrap();
             game.ui.registries.permission = 4;
-            let _guard = in_mod("machines");
             let owner = mod_api::TicketOwner::Block([48, 64, 48]);
             assert!(game.chunk_set_mod_forced(chunk, quarry(), owner, true, false));
             assert!(game.streaming.forced.contains(&(3, 3)));
@@ -2773,7 +2870,6 @@ mod tests {
             let level = game.level(game.dim.id()).unwrap();
             let plain = game.level_chunk_ref(level, [11, 12]).unwrap();
             let spawning = game.level_chunk_ref(level, [13, 12]).unwrap();
-            let _guard = in_mod("machines");
             let owner = Block([176, 64, 192]);
             assert!(game.chunk_set_mod_forced(plain, quarry(), owner, true, false));
             assert!(game.chunk_set_mod_forced(spawning, quarry(), owner, true, true));
@@ -2835,12 +2931,9 @@ mod tests {
             // Both chunks lie in the player's 8-chunk area and past 128 blocks of it.
             let flagged = game.level_chunk_ref(level, [8, 8]).unwrap();
             let plain = game.level_chunk_ref(level, [8, 7]).unwrap();
-            {
-                let _guard = in_mod("machines");
-                let owner = Block([128, 64, 128]);
-                assert!(game.chunk_set_mod_forced(flagged, quarry(), owner, true, true));
-                assert!(game.chunk_set_mod_forced(plain, quarry(), owner, true, false));
-            }
+            let owner = Block([128, 64, 128]);
+            assert!(game.chunk_set_mod_forced(flagged, quarry(), owner, true, true));
+            assert!(game.chunk_set_mod_forced(plain, quarry(), owner, true, false));
             game.spawn_natural();
             assert_eq!(game.world.inhabited.get(&(8, 8)), Some(&1));
             assert!(
@@ -2873,14 +2966,14 @@ mod tests {
         }
     }
     fn controller_slot(id: &str) -> u32 {
-        controller(id).slot()
+        known_slot(id).unwrap()
     }
 
     #[test]
     #[ignore = "daily"]
     fn validation_drops_a_removed_ticket_and_leaves_the_rest() {
         with_machines(|game| {
-            // `quarry` and `vault` validate; `plain` doesn't. All of them hold the pruned block.
+            // All hold the same block; `quarry` and `vault` prune it, `drill` keeps it.
             let tickets = vec![
                 saved("machines:quarry", [1, 64, 1], (7, 7)),
                 saved("machines:quarry", [9, 64, 9], (8, 8)),
@@ -2903,20 +2996,14 @@ mod tests {
             );
             assert!(forced.contains(&(10, 10)), "no validator, no validation");
             assert!(!forced.contains(&(11, 11)), "other's own controller");
-            // A validation is shown one controller's tickets, whichever mod hears it.
-            let seen = SEEN.take();
-            let quarry_seen = vec![[1, 64, 1], [9, 64, 9]];
-            assert!(seen.contains(&("machines:quarry", quarry_seen.clone())));
-            assert!(seen.contains(&("machines:drill", vec![[1, 64, 1]])));
-            assert!(seen.contains(&("other:vault", vec![[1, 64, 1]])));
-            assert!(
-                seen.iter().all(|(id, _)| *id != "machines:plain"),
-                "never asked"
-            );
-            // The mod that doesn't own the controller saw an empty view.
-            assert!(
-                seen.iter()
-                    .any(|(id, tickets)| *id == "machines:quarry" && tickets.is_empty())
+            assert_eq!(
+                SEEN.take(),
+                [
+                    ("machines:quarry", vec![[1, 64, 1], [9, 64, 9]]),
+                    ("machines:drill", vec![[1, 64, 1]]),
+                    ("other:vault", vec![[1, 64, 1]]),
+                ],
+                "only the registered callbacks for these groups ran, once each in slot order"
             );
             game.save_chunk_tickets().unwrap();
             let file = game.save.load_mod_tickets(known_slot);
@@ -2926,6 +3013,105 @@ mod tests {
                     .iter()
                     .any(|t| t.chunk == (7, 7) || t.chunk == (11, 11))
             );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn validation_panic_disables_only_its_controller_for_the_session() {
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use sunrise_client::{
+            mod_chunk_tickets::ModTickets,
+            save::{SaveDir, dimension_dir},
+        };
+
+        const STALE: [i32; 3] = [1, 64, 1];
+        const LIVE: [i32; 3] = [9, 64, 9];
+        #[derive(Default)]
+        struct Calls {
+            panicking: AtomicUsize,
+            healthy: AtomicUsize,
+        }
+        struct Paired(Arc<Calls>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Paired {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                let calls = Arc::clone(&self.0);
+                r.register_ticket_controller(
+                    "panicking",
+                    Some(Arc::new(
+                        move |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                            calls.panicking.fetch_add(1, Ordering::Relaxed);
+                            validation.remove_block_tickets(STALE);
+                            panic!("chunk ticket validator fixture panic");
+                        },
+                    )),
+                );
+                let calls = Arc::clone(&self.0);
+                r.register_ticket_controller(
+                    "healthy",
+                    Some(Arc::new(
+                        move |_: &mut dyn ServerHost, _, validation: &mut dyn TicketValidation| {
+                            calls.healthy.fetch_add(1, Ordering::Relaxed);
+                            validation.remove_block_tickets(STALE);
+                        },
+                    )),
+                );
+            }
+        }
+
+        let calls = Arc::new(Calls::default());
+        let world = tempfile::tempdir().unwrap();
+        let mods = vec![ModEntry::new(
+            "paired",
+            Box::new(Paired(Arc::clone(&calls))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_chunk_streaming(|game| {
+                let tickets = [
+                    saved("paired:panicking", STALE, (7, 7)),
+                    saved("paired:panicking", LIVE, (8, 8)),
+                    saved("paired:healthy", STALE, (9, 9)),
+                    saved("paired:healthy", LIVE, (10, 10)),
+                ];
+                game.streaming
+                    .load_forced(Default::default(), tickets.to_vec());
+                let first = game.dim;
+                game.validate_mod_chunk_tickets(first);
+                assert_eq!(calls.panicking.load(Ordering::Relaxed), 1);
+                assert_eq!(calls.healthy.load(Ordering::Relaxed), 1);
+                assert_eq!(
+                    game.streaming.forced,
+                    HashSet::from([(7, 7), (8, 8), (10, 10)])
+                );
+
+                let second = if first == Dim::Nether {
+                    Dim::End
+                } else {
+                    Dim::Nether
+                };
+                game.world_root = world.path().to_path_buf();
+                let save = SaveDir::new(
+                    dimension_dir(world.path(), second.id()),
+                    second.shape(),
+                    Some(Default::default()),
+                );
+                let mut saved_rows = ModTickets::default();
+                for ticket in tickets {
+                    saved_rows.insert(ticket);
+                }
+                save.save_mod_tickets(&saved_rows, mod_api::__private::game::ticket_controller_id)
+                    .unwrap();
+                game.enter_level(second).unwrap();
+                assert_eq!(calls.panicking.load(Ordering::Relaxed), 1);
+                assert_eq!(calls.healthy.load(Ordering::Relaxed), 2);
+                assert_eq!(
+                    game.streaming.forced,
+                    HashSet::from([(7, 7), (8, 8), (10, 10)])
+                );
+            });
         });
     }
 
@@ -2951,10 +3137,8 @@ mod tests {
                 let mut tickets = sunrise_client::mod_chunk_tickets::ModTickets::default();
                 tickets.insert(saved("machines:quarry", [1, 64, 1], (7, 7)));
                 tickets.insert(saved("machines:quarry", [9, 64, 9], (8, 8)));
-                save.save_mod_tickets(&tickets, |slot| {
-                    TicketController::from_slot(slot).map(TicketController::id)
-                })
-                .unwrap();
+                save.save_mod_tickets(&tickets, mod_api::__private::game::ticket_controller_id)
+                    .unwrap();
                 let back = game.dim;
                 game.enter_level(other).unwrap();
                 game.enter_level(back).unwrap();
@@ -2965,12 +3149,12 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&world);
             });
         });
-        // No mod listens: the tickets stay as loaded.
+        // No validator is registered: the tickets stay as loaded.
         struct Idle;
         #[mod_api::__subscriptions]
         impl Hooks for Idle {
             fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
-                r.register_ticket_controller("quarry", true);
+                r.register_ticket_controller("quarry", None);
             }
         }
         let mods: mod_api::Mods = vec![ModEntry::new("idle", Box::new(Idle))].into();
@@ -2991,18 +3175,12 @@ mod tests {
             let level = game.level(game.dim.id()).unwrap();
             let owner = mod_api::TicketOwner::Block([1, 64, 1]);
             let live = game.level_chunk_ref(level, [5, 5]).unwrap();
-            {
-                let _guard = in_mod("machines");
-                assert!(game.chunk_set_mod_forced(live, quarry(), owner, true, false));
-            }
+            assert!(game.chunk_set_mod_forced(live, quarry(), owner, true, false));
             let tickets = vec![saved("machines:quarry", [1, 64, 1], (7, 7))];
             game.streaming.load_forced(Default::default(), tickets);
             // `level_load` runs after the load: its hold is the same owner's.
             let fresh = game.level_chunk_ref(level, [6, 6]).unwrap();
-            {
-                let _guard = in_mod("machines");
-                assert!(game.chunk_set_mod_forced(fresh, quarry(), owner, true, false));
-            }
+            assert!(game.chunk_set_mod_forced(fresh, quarry(), owner, true, false));
             game.validate_mod_chunk_tickets(game.dim);
             assert!(!game.streaming.forced.contains(&(7, 7)), "saved one pruned");
             assert!(game.streaming.forced.contains(&(5, 5)), "live one kept");

@@ -40,10 +40,10 @@ impl Game<'_> {
         }
         self.save
             .save_chunk_tickets(self.streaming.commanded(), self.tickets.portal_tickets())?;
-        self.save
-            .save_mod_tickets(self.streaming.mod_tickets(), |slot| {
-                mod_api::TicketController::from_slot(slot).map(|c| c.id())
-            })
+        self.save.save_mod_tickets(
+            self.streaming.mod_tickets(),
+            mod_api::__private::game::ticket_controller_id,
+        )
     }
     pub(super) fn begin_closing_save(&mut self, quit: bool) -> Result<()> {
         if quit {

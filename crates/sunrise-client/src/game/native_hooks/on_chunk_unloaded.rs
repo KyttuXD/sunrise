@@ -22,6 +22,7 @@ impl Game<'_> {
         self.fire_chunk_unload(dimension, chunk);
         if let Some(level) = self.level(dimension) {
             self.forget_composter_chunk(level.dimension(), chunk);
+            self.unload_water_tickets_chunk(level, chunk);
         }
     }
     /// Chunk `chunk` of this server level `dimension` left it, after its last save: the

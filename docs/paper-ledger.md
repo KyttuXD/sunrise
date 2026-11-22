@@ -876,8 +876,10 @@ Scope = the 20 hooks below; each status applies the moment, side, information an
 [paper-PlayerExpChangeEvent]: https://jd.papermc.io/paper/26.3/org/bukkit/event/player/PlayerExpChangeEvent.html
 ## Event counterparts: miscellaneous portal, brewing, recipe and server hooks (#1015)
 
-Paper API 26.3 (`26.3.build.244-stable`), public Javadoc; Sunrise cited by function name; scope = the 21 hooks below.
+Paper API 26.3 (`26.3.build.244-stable`), public Javadoc; Sunrise cited by function name.
 A key is added only where moment, server side, information and result all agree; otherwise the row records the boundary.
+
+Saved chunk-ticket validation is a registry-bound controller validator (`Registrar::register_ticket_controller` with a `LoadingValidationCallback`), not a catalog hook. No Paper event exposes a level's saved chunk tickets to the controller that owns them.
 
 | Sunrise hook | Paper event / status | Evidence and porting boundary |
 |---|---|---|
@@ -900,7 +902,6 @@ A key is added only where moment, server side, information and result all agree;
 | `tags_updated` | **Gap:** none | No dossier event reports rebuilt tags or their data-load cause; Paper has no candidate for rebinding tag-derived caches. No key. |
 | `teleport_command` | **Partial:** [`PlayerTeleportEvent`][paper-PlayerTeleportEvent] | The event matches player teleports with a mutable destination and cancel, and `TeleportCause.COMMAND` identifies a player executing a command. That cause does not distinguish `/tp` from other commands, and the event cannot cover the non-player entities of `teleport_command`. No key. |
 | `use_item_on_block` | **Partial:** [`PlayerInteractEvent`][paper-PlayerInteractEvent] | `Action.RIGHT_CLICK_BLOCK` gives the block, face, hand, item and player and is cancellable, but the hook's chosen phase and cancellation result are not exposed, and the generic event also fires outside that moment. No key. |
-| `validate_tickets` | **Gap:** none | No Paper event exposes a level's saved chunk tickets for a controller to validate; login and item-transport target validation are different systems. No key. |
 | `vanilla_game_event` | **Partial:** [`GenericGameEvent`][paper-GenericGameEvent] | It is the generic cancellable game-event event with event id, location and causing entity, but it exposes no `affected_state` (the block state the event touched), which `vanilla_game_event` passes to mods. No key. |
 | `wind_burst` | **Partial:** [`EntityExplodeEvent`][paper-EntityExplodeEvent] | The server event describes explosion block interaction, exposes its location and block list, and omits interaction when mob griefing disables it. Its Javadoc does not establish the wind-burst-specific shuffled candidate moment; it also exposes source entity, explosion result, cancellation and drop yield absent from `wind_burst`. No key. |
 
