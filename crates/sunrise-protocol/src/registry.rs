@@ -123,9 +123,44 @@ fn names(text: &str, id: &Identifier) -> bool {
     text.split_once(':') == Some((id.namespace(), id.path()))
 }
 
-#[derive(Deserialize)]
 struct ReportRegistry {
     entries: Option<ReportEntries>,
+}
+
+impl<'de> Deserialize<'de> for ReportRegistry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = ReportRegistry;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a registry report object")
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut entries: Option<Option<ReportEntries>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "entries" {
+                        if entries.is_some() {
+                            return Err(de::Error::duplicate_field("entries"));
+                        }
+                        entries = Some(map.next_value()?);
+                    } else {
+                        map.next_value::<de::IgnoredAny>()?;
+                    }
+                }
+                Ok(ReportRegistry {
+                    entries: entries.flatten(),
+                })
+            }
+        }
+
+        deserializer.deserialize_map(Visitor)
+    }
 }
 
 /// Read keys directly from the JSON object, before a map can overwrite a duplicate.
@@ -675,6 +710,12 @@ mod tests {
         assert_eq!(items.name(1), Some("minecraft:stone"));
         assert_eq!(items.id("minecraft:air"), Some(0));
         assert_eq!(items.name(2), None);
+    }
+
+    #[test]
+    fn rejects_positional_registry_report_records() {
+        let report = r#"{"minecraft:item":[{"minecraft:stick":{"protocol_id":0}}]}"#;
+        assert!(Builtin::parse(report).is_err());
     }
 
     /// A crafted huge protocol_id must error instead of allocating a
