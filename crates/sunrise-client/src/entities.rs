@@ -1453,7 +1453,7 @@ impl Experience {
     /// bar and the total, and the levels they cross follow one at a time.
     pub fn add_points(&mut self, points: i32) {
         self.progress += points as f32 / Self::needed(self.level) as f32;
-        self.total = self.total.saturating_add(points).max(0);
+        self.total = self.total.wrapping_add(points).max(0);
     }
     /// The change `Player.giveExperienceLevels` makes: below level 0 the level,
     /// the progress and the total are 0.

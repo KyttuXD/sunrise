@@ -3,12 +3,8 @@ use super::*;
 /// Server-level helpers for native mods.
 impl GameLevel<'_> {
     /// Play a sound event for nearby players in this server level. The return
-    /// value means queued, not heard. A `minecraft:` event must be registered:
-    /// an unknown one is dropped at dispatch. Another namespace's event (a
-    /// mod's, `mymod:machine_hum`) is sent by name, as vanilla sends a sound
-    /// that isn't in its registry (`Holder.direct`, a variable range): players
-    /// hear it if their resources define it (`assets/mymod/sounds.json`, a
-    /// content mod's).
+    /// value means queued, not heard. The server sends registered sounds by ID and other valid
+    /// keys by name (`Holder.direct`). The receiving client resolves the sound resources.
     pub(in crate::game) fn native_play_sound(
         &mut self,
         sound: &str,
@@ -17,7 +13,7 @@ impl GameLevel<'_> {
         volume: f32,
         pitch: f32,
     ) -> bool {
-        if !self.native_authoritative || !mod_sound_ok(sound, at, source, volume, pitch) {
+        if !self.native_authoritative || !mod_sound_ok(sound, source) {
             return false;
         }
         // `Level.playSound` draws `soundSeedGenerator.nextLong` at the call;

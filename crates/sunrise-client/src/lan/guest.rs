@@ -18,6 +18,7 @@ use std::{
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_protocol::{
     attachment_sync,
+    entity_data::{Value, serializer},
     item::Stack,
     packets::{
         configuration::{ClientInformation, CustomPayload},
@@ -260,7 +261,7 @@ pub struct Guest {
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
     pub woke_from: Option<[i32; 3]>,
-    pub sleep_timer: u32,
+    pub sleep_timer: i32,
     pub sent_bed: Option<[i32; 3]>,
     /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
     /// None for the world spawn.
@@ -425,6 +426,8 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// `Player.DATA_SCORE_ID`, independent of total experience.
+    pub score: i32,
     /// `Player.enchantmentSeed` (the enchanting table's offers).
     pub xp_seed: i32,
     /// Active status effects (`LivingEntity.activeEffects`).
@@ -448,6 +451,7 @@ pub struct Guest {
     /// Whether the entity tracker has sent the initial health metadata to this player.
     pub(super) sent_health_data: bool,
     pub sent_xp: Option<(f32, i32, i32)>,
+    pub(super) sent_score: i32,
     /// The air supply and absorption the player's client was last sent
     /// (Entity.DATA_AIR_SUPPLY_ID, Player.DATA_PLAYER_ABSORPTION_ID); their
     /// defaults until either changes.
@@ -883,6 +887,7 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            score: 0,
             xp_seed: 0,
             effects: Default::default(),
             modified_effect_particles: None,
@@ -894,6 +899,7 @@ impl Guest {
             sent_health: None,
             sent_health_data: false,
             sent_xp: None,
+            sent_score: 0,
             sent_air: (300, 0.0),
             sent_frozen: 0,
             sent_shared: 0,
@@ -959,6 +965,16 @@ impl Guest {
         match packet.try_encode() {
             Ok(body) => self.sender.send(body),
             Err(error) => eprintln!("[lan] send refused: {error}"),
+        }
+    }
+    /// Send `Player.DATA_SCORE_ID` when its synced value changes, including before a death screen.
+    pub fn sync_score(&mut self) {
+        if self.score != self.sent_score {
+            self.sent_score = self.score;
+            self.send(&play::Clientbound::SetEntityData(play::SetEntityData {
+                id: self.entity_id,
+                values: vec![(18, serializer::INT, Value::Int(self.score))],
+            }));
         }
     }
     /// Send the committed data that fits the negotiated blockless packet's index.

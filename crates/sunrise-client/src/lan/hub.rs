@@ -3700,6 +3700,7 @@ impl Hub {
                     }));
                 }
             }
+            g.sync_score();
             // ServerEntity.sendDirtyEntityData: the shared flags go to the player
             // too, so the sprint a hit stops (Player.causeExtraKnockback) stops
             // on its client.
@@ -5039,6 +5040,7 @@ impl Hub {
                 spawn: info,
                 keep: i8::from(keep_attributes),
             }));
+            g.sent_score = 0; // The replacement LocalPlayer starts with default entity data.
             // The client's new body needs the full replacement effect state.
             g.sent_effects.clear();
             g.center = None;

@@ -784,7 +784,9 @@ impl Game<'_> {
                     host.hub.send_to(conn, &packet);
                 }
             }
-            None => self.audio.play_on(source, sound, Some(at), volume, pitch),
+            None => self
+                .audio
+                .play_on_seeded(source, sound, Some(at), volume, pitch, seed),
         }
     }
     /// `StopSoundCommand`: each target's connection gets the packet; the

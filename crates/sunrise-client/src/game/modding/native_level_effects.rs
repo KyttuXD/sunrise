@@ -3,8 +3,10 @@
 //! Every player in range hears or sees them, as `ServerLevel.playSound` and
 //! `sendParticles` send them. They return false on a client, for a handle of
 //! an earlier open, or for arguments the network can't carry.
-use super::native_hooks::{mod_particles_ok, mod_sound_ok};
-use super::{Game, creatures::NativeSound, lan_particles::QueuedParticle};
+use super::native_hooks::{mod_particles_ok, sound_id};
+use super::{
+    Game, creatures::NativeSound, lan_particles::QueuedParticle, level_sounds::LevelSound,
+};
 use mod_api::{LevelRef, PlayerRef, PlayerWorldRefusal, SoundSource};
 use sunrise_client::particles::ParticleOptions;
 use sunrise_world::registry::BlockStateId;
@@ -19,9 +21,8 @@ impl Game<'_> {
     /// within range (16 blocks, times the volume above 1), as
     /// `ServerLevel.playSound(except, ...)` does, under `source`'s volume
     /// slider, leaving out `except`'s client (a fake player has none, so it
-    /// leaves out no one; a stale one queues nothing). A `minecraft:` event
-    /// must be registered; a mod's goes by name and is heard where its
-    /// resources define it. True means queued, not heard.
+    /// leaves out no one; a stale one queues nothing). Registry entries are sent by ID, and
+    /// other valid keys by name. True means queued, not heard.
     pub(super) fn level_play_sound(
         &mut self,
         level: LevelRef,
@@ -58,22 +59,35 @@ impl Game<'_> {
         except: Option<u32>,
     ) -> Option<&mut NativeSound> {
         let dimension = self.native_level_dimension(level)?;
-        if !mod_sound_ok(sound, at, source.index(), volume, pitch) {
+        if !sound_id(sound) {
             return None;
         }
-        // `Level.playSound` draws `soundSeedGenerator.nextLong` at the call;
-        // without a host nothing can be sent, as the flush already did.
+        self.queue_level_sound(
+            dimension,
+            LevelSound::new(sound, at, volume, pitch).in_source(source),
+            except,
+        )
+    }
+
+    /// Queues a sound in its own dimension, even when another level is in place.
+    pub(in crate::game) fn queue_level_sound(
+        &mut self,
+        dimension: &'static str,
+        sound: LevelSound<'_>,
+        except: Option<u32>,
+    ) -> Option<&mut NativeSound> {
+        // `Level.playSound` draws `soundSeedGenerator.nextLong` at the call.
         let seed = self.lan.as_ref()?.hub.next_sound_seed();
         self.creatures.lan_sounds.push(NativeSound {
             dimension,
-            sound: sound.to_owned(),
-            at,
-            source: source.index() as i32,
-            volume,
-            pitch,
+            sound: sound.name.to_owned(),
+            at: sound.at,
+            source: sound.source.index() as i32,
+            volume: sound.volume,
+            pitch: sound.pitch,
             seed,
             except,
-            entity: None,
+            entity: sound.emitter.map(|id| id as i32),
         });
         self.creatures.lan_sounds.last_mut()
     }

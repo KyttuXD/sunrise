@@ -3687,6 +3687,8 @@ struct Game<'a> {
     ticks_until_autosave: i64,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
+    /// `Player.DATA_SCORE_ID`, independent of `totalExperience`.
+    player_score: i32,
     orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
     xp_delay: u32,
     ordered: ordered_tick::OrderedTicks,
@@ -3733,7 +3735,7 @@ struct Game<'a> {
     lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
     sleeping: Option<[i32; 3]>,
-    sleep_timer: u32,
+    sleep_timer: i32,
     /// The beds players sleep in that this game marked `occupied`, by level
     /// (game/blocks/beds.rs).
     player_beds: Vec<(Dim, [i32; 3])>,
@@ -7661,7 +7663,7 @@ impl Game<'_> {
                 VanillaGuiLayer::SleepOverlay,
                 &mut batch,
                 &mut |g, batch| {
-                    let draws = hud_overlays::sleep_overlay(wi, hi, g.sleep_timer as i32);
+                    let draws = hud_overlays::sleep_overlay(wi, hi, g.sleep_timer);
                     hud_layout::paint(batch, &g.gui.atlas, &draws);
                 },
             );
@@ -9213,6 +9215,7 @@ impl Game<'_> {
             progress: self.level.xp_progress,
             total: self.level.xp_total,
         };
+        self.player_score = self.level.player_score;
         self.restore_effects();
         self.mining = None;
         self.container = None;
@@ -10031,12 +10034,17 @@ impl Game<'_> {
         }
         self.tracked_special_box(id as i32)
     }
-    /// `Player.giveExperiencePoints`: `add_experience_levels` runs once for each
-    /// level gained or lost, and the mods hear of the level change once.
+    /// `Player.giveExperiencePoints`: the signed grant changes the score before the XP bar.
+    /// `add_experience_levels` runs once for each level gained or lost, and the mods hear
+    /// of the level change once.
     pub(super) fn give_experience_points(&mut self, points: i32) {
+        if points == 0 {
+            return;
+        }
         let Some(points) = self.xp_change(points) else {
             return;
         };
+        self.player_score = self.player_score.wrapping_add(points);
         let old_level = self.experience.level;
         self.experience.add_points(points);
         while self.experience.progress < 0.0 {
@@ -10520,6 +10528,7 @@ impl Game<'_> {
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
         level.xp_total = self.experience.total;
+        level.player_score = self.player_score;
         level.root_vehicle = vehicle.as_ref().map(|v| v.2).or(self.pending_vehicle);
         // The ride's tree, or none once the file's own came back.
         match vehicle {
@@ -13736,6 +13745,7 @@ impl<'a> Game<'a> {
             ticks_until_autosave: 6000,
             applied_modifiers: Vec::new(),
             experience: Experience::default(),
+            player_score: 0,
             orbs: Default::default(),
             xp_delay: 0,
             ordered: Default::default(),
@@ -14368,18 +14378,15 @@ fn player_arms(
     })
 }
 
-/// The most `Player.sleepCounter` reaches: 100 asleep, then up to here over the
-/// waking fade.
-const MAX_SLEEP_TIMER: u32 = 109;
-
 // Player.tick: cap the sleeping fade at 100, then fade out over 10 waking ticks.
-fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
+fn tick_sleep_timer(timer: i32, sleeping: bool) -> i32 {
     if sleeping {
-        (timer + 1).min(100)
-    } else if (1..MAX_SLEEP_TIMER).contains(&timer) {
-        timer + 1
+        timer.wrapping_add(1).min(100)
+    } else if timer > 0 {
+        let next = timer.wrapping_add(1);
+        if next >= 110 { 0 } else { next }
     } else {
-        0
+        timer
     }
 }
 

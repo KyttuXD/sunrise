@@ -183,6 +183,7 @@ pub(super) struct GuestSwap {
     /// The host's command permission, swapped for the guest's for its turn.
     permission: u8,
     xp: Experience,
+    player_score: i32,
     level_up_sound: sunrise_client::entities::LevelUpSound,
     host_keys: sunrise_client::held::HeldKeys,
     saved_mappings: sunrise_client::keymapping::VanillaMappings,
@@ -212,7 +213,7 @@ pub(super) struct GuestSwap {
     riding: Option<u32>,
     host_station: Option<super::stations::Station>,
     sleeping: Option<[i32; 3]>,
-    sleep_timer: u32,
+    sleep_timer: i32,
     spawn: Option<Vec3>,
     respawn: (
         Option<super::respawn_anchor::RespawnConfig>,

@@ -955,25 +955,30 @@ fn sleep_fade_lasts_ten_ticks_after_waking() {
         _ => panic!("sleep overlay must be a full-screen fill"),
     };
     assert_eq!(tick_sleep_timer(0, false), 0);
+    assert_eq!(tick_sleep_timer(-2, false), -2);
+    assert_eq!(tick_sleep_timer(-2, true), -1);
+    assert_eq!(tick_sleep_timer(110, false), 0);
+    assert_eq!(tick_sleep_timer(110, true), 100);
+    assert_eq!(tick_sleep_timer(i32::MAX, true), i32::MIN);
     let mut timer = 0;
     for _ in 0..50 {
         timer = tick_sleep_timer(timer, true);
     }
-    assert_eq!(alpha(timer as i32), 110);
+    assert_eq!(alpha(timer), 110);
     for _ in 0..100 {
         timer = tick_sleep_timer(timer, true);
     }
     assert_eq!(timer, 100);
-    assert_eq!(alpha(timer as i32), 220);
+    assert_eq!(alpha(timer), 220);
     for _ in 0..5 {
         timer = tick_sleep_timer(timer, false);
     }
-    assert_eq!(alpha(timer as i32), 110);
+    assert_eq!(alpha(timer), 110);
     for _ in 0..5 {
         timer = tick_sleep_timer(timer, false);
     }
     assert_eq!(timer, 0);
-    assert!(hud_overlays::sleep_overlay(320, 240, timer as i32).is_empty());
+    assert!(hud_overlays::sleep_overlay(320, 240, timer).is_empty());
 }
 
 #[test]

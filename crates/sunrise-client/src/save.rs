@@ -3798,6 +3798,8 @@ pub struct Level {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// `Player.getScore`, stored as `Score` independently of the experience fields.
+    pub player_score: i32,
     pub weather: crate::world::Weather,
     /// Player.Dimension (minecraft:overworld / minecraft:the_nether).
     pub dimension: String,
@@ -4156,6 +4158,7 @@ impl Level {
         self.xp_level = n("XpLevel").unwrap_or(0) as i32;
         self.xp_progress = f("XpP").unwrap_or(0.0) as f32;
         self.xp_total = n("XpTotal").unwrap_or(0) as i32;
+        self.player_score = n("Score").unwrap_or(0) as i32;
         self.selected_slot = n("SelectedItemSlot").unwrap_or(0) as i32;
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
@@ -4406,6 +4409,7 @@ impl Level {
             ("XpLevel", Tag::Int(self.xp_level)),
             ("XpP", Tag::Float(self.xp_progress.to_bits())),
             ("XpTotal", Tag::Int(self.xp_total)),
+            ("Score", Tag::Int(self.player_score)),
             ("SelectedItemSlot", Tag::Int(self.selected_slot)),
             ("XpSeed", Tag::Int(self.xp_seed)),
             (
@@ -4505,7 +4509,6 @@ impl Level {
                 ("Fire", Tag::Short(-20)),
                 ("Invulnerable", Tag::Byte(0)),
                 ("PortalCooldown", Tag::Int(0)),
-                ("Score", Tag::Int(0)),
                 ("SleepTimer", Tag::Short(0)),
                 ("XpSeed", Tag::Int(0)),
                 ("seenCredits", Tag::Byte(0)),
@@ -8970,6 +8973,7 @@ mod tests {
             xp_level: 3,
             xp_progress: 0.5,
             xp_total: 30,
+            player_score: -14,
             dimension: "minecraft:the_nether".into(),
             world_spawn: Some([8, 64, 8]),
             world_spawn_angle: [45.0, -10.0],
@@ -9017,6 +9021,7 @@ mod tests {
             (back.xp_level, back.xp_progress, back.xp_total),
             (3, 0.5, 30)
         );
+        assert_eq!(back.player_score, -14);
         assert_eq!(back.dimension, "minecraft:the_nether");
         assert_eq!(back.world_spawn, Some([8, 64, 8]));
         assert_eq!(back.world_spawn_angle, [45.0, -10.0]);

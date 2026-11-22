@@ -197,7 +197,10 @@ total, past 2,147,483,647 is refused.
 | `UnknownDamageType` | A damage type that isn't registered |
 | `UnknownBlockTag` | An `immune_blocks` that names no block tag |
 | `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |
-| `UnknownSound` | A sound that isn't a sound event id, or a `minecraft:` one the server doesn't have |
+| `UnknownSound` | A malformed namespaced sound event key |
+
+A valid sound key need not be registered on the server, in any namespace. It
+is sent by name when not registered; a client without that sound does not play it.
 
 ## Reading explosion resistance
 

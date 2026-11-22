@@ -321,6 +321,7 @@ impl Game<'_> {
                 total: g.xp_total,
             },
         );
+        let player_score = std::mem::replace(&mut self.player_score, g.score);
         let level_up_sound = std::mem::replace(&mut self.level_up_sound, play.level_up_sound);
         // The host's held keys stay theirs: the guest holds only sneak, and a
         // screen the guest opens (`keys.clear()`) leaves the host walking.
@@ -489,6 +490,7 @@ impl Game<'_> {
             block_reach,
             permission,
             xp,
+            player_score,
             level_up_sound,
             host_keys,
             saved_mappings,
@@ -620,6 +622,7 @@ impl Game<'_> {
             block_reach,
             permission,
             xp,
+            player_score,
             level_up_sound,
             host_keys,
             saved_mappings,
@@ -909,6 +912,7 @@ impl Game<'_> {
             g.xp_level = new_xp.level;
             g.xp_progress = new_xp.progress;
             g.xp_total = new_xp.total;
+            g.score = std::mem::replace(&mut self.player_score, player_score);
             self.mode = mode;
             self.creative = creative;
             self.entity_reach = entity_reach;

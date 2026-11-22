@@ -1024,7 +1024,7 @@ pub(in crate::game) mod tests {
         sleeping: bool,
         jumping: Option<bool>,
         bed: Option<[i32; 3]>,
-        timer: u32,
+        timer: i32,
         spawn: Option<Vec3>,
         woke_from: Option<[i32; 3]>,
         awaiting_teleport: Option<(i32, [f64; 3])>,

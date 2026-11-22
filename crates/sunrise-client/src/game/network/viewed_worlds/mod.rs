@@ -549,7 +549,7 @@ pub(in crate::game) mod tests {
         i64,
     );
 
-    /// Plays the anvil at (1.5, 70, -2.5) with volume 0.25 and pitch 1.5, leaves the bell
+    /// Places the anvil at (1.5, 70, -2.5) and attenuates it without changing pitch, leaves the bell
     /// unplayed and puts the harp at a position that is not finite; logs what it was asked.
     struct Portal(Arc<Mutex<Vec<Asked>>>);
     #[mod_api::__subscriptions]
@@ -572,7 +572,7 @@ pub(in crate::game) mod tests {
             match sound.as_str() {
                 "minecraft:block.anvil.land" => {
                     *e.play_at = Some([1.5, 70.0, -2.5]);
-                    (e.volume, e.pitch) = (0.25, 1.5);
+                    e.volume *= 0.125;
                 }
                 "minecraft:block.note_block.harp" => *e.play_at = Some([f64::NAN, 70.0, 0.0]),
                 _ => {}
@@ -599,14 +599,14 @@ pub(in crate::game) mod tests {
             let mut game = client(&mut resources);
             game.handle_packet(open(1, "minecraft:the_nether")).unwrap();
             game.audio.capture = Some(Vec::new());
-            let anvil = sound("minecraft:block.anvil.land", [452, 512, 66], 2.0, 0.5, 42);
+            let anvil = sound("minecraft:block.anvil.land", [452, 512, 66], 2.0, -2.0, 42);
             game.handle_packet(run(1, std::slice::from_ref(&anvil)))
                 .unwrap();
             let played = game.audio.capture.replace(Vec::new()).unwrap();
             assert_eq!(played.len(), 1);
             assert_eq!(played[0].event, "minecraft:block.anvil.land");
             assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
-            assert_eq!((played[0].volume, played[0].pitch), (0.25, 1.5));
+            assert_eq!((played[0].volume, played[0].pitch), (0.25, -2.0));
             assert_eq!(played[0].source, SoundSource::Blocks.index());
             let C::Sound(p) = &anvil else { unreachable!() };
             assert_eq!(
@@ -616,7 +616,7 @@ pub(in crate::game) mod tests {
                     source: SoundSource::Blocks,
                     at: [1.5, 70.0, -2.5],
                     volume: 0.25,
-                    pitch: 1.5,
+                    pitch: -2.0,
                     seed: 42,
                 }),
                 "the server's seed"
@@ -644,8 +644,8 @@ pub(in crate::game) mod tests {
                     sound: (-1, Some(("minecraft:block.anvil.land".into(), None))),
                     source: SoundSource::Blocks.index() as i32,
                     id,
-                    volume: 1.0,
-                    pitch: 1.0,
+                    volume: -2.0,
+                    pitch: -2.0,
                     seed: 9,
                 })
             };
@@ -654,6 +654,7 @@ pub(in crate::game) mod tests {
             let played = game.audio.capture.replace(Vec::new()).unwrap();
             assert_eq!(played.len(), 1);
             assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
+            assert_eq!((played[0].volume, played[0].pitch), (-0.25, -2.0));
             // The player's own level: played where it is, without asking.
             game.handle_packet(sound(
                 "minecraft:block.anvil.land",
@@ -675,7 +676,7 @@ pub(in crate::game) mod tests {
                     blocks,
                     [56.5, 64.0, 8.25],
                     volume,
-                    0.5,
+                    -2.0,
                     42,
                 )
             };
@@ -707,8 +708,8 @@ pub(in crate::game) mod tests {
                         "minecraft:block.anvil.land".into(),
                         blocks,
                         [12.5, 70.0, -3.25],
-                        1.0,
-                        1.0,
+                        -2.0,
+                        -2.0,
                         9
                     ),
                 ]

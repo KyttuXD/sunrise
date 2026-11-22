@@ -1856,8 +1856,6 @@ sunrise-client game::native_player_disconnect_tests::disconnect_refuses_the_owne
 sunrise-client game::native_player_disconnect_tests::disconnect_sends_the_reason_to_that_guest_only lib daily resources
 sunrise-client game::native_player_food::tests::a_stale_handle_gives_nothing lib daily resources
 sunrise-client game::native_player_food::tests::levels_are_added_taken_and_clamped_at_zero lib daily resources
-sunrise-client game::native_player_food::tests::more_points_than_an_int_are_refused_untouched lib daily resources
-sunrise-client game::native_player_food::tests::points_repair_a_damaged_mending_item_before_experience lib daily resources
 sunrise-client game::native_player_modes::tests::item_use_follows_the_mode_the_stack_and_the_clicked_block lib daily resources
 sunrise-client game::native_player_modes::tests::one_player_may_harm_another_by_the_pvp_rule_and_their_teams lib daily resources
 sunrise-client game::native_player_move_tests::a_veto_corrects_the_player_and_a_pass_commits_the_report lib daily resources
@@ -2645,6 +2643,5 @@ sunrise-client game::world_test_def_tests::a_world_keeps_the_test_instances_it_o
 sunrise-client game::xp_orb_targeting::tests::a_mod_chooses_whom_each_orb_follows lib daily resources
 sunrise-client game::xp_repair_ratio_tests::a_data_packs_mending_arrives_as_the_ratio lib daily resources
 sunrise-client game::xp_repair_ratio_tests::bad_ratios_never_break_the_repair lib daily resources
-sunrise-client game::xp_repair_ratio_tests::give_experience_points_repairs_through_the_part lib daily resources
 sunrise-client game::xp_repair_ratio_tests::the_ratio_a_part_answers_scales_the_repair lib daily resources
 sunrise-client game::zombie_villagers::tests::conversions_preserve_body_equipment lib daily resources

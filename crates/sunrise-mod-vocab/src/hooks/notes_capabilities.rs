@@ -176,11 +176,10 @@ pub trait Notes {
   `Level.setBlock`. It accepts vanilla's neighbour and shape flags and returns whether a block changed; a block with a
   block entity gets one. `UPDATE_CLIENTS` sends the update; `UPDATE_INVISIBLE` suppresses notification only on the client, as in `Level.setBlock`. Hooks holding only `GameLevel` cannot call it yet.
 
-- `GameLevel::play_sound` for registered vanilla sound events on an authoritative server.
-  It queues the sound for nearby players in the level's dimension, including during a guest's turn.
-  Pass a `SOUND_SOURCES` index, position, volume and pitch. The return value says whether the call
-  was queued, not whether a player heard it. The server discards unknown sound events when it dispatches
-  the queue.
+- `LevelWriteHost::play_sound` queues a sound for nearby players in the level's dimension, including during a
+  guest's turn. Pass a valid namespaced event key, a `SOUND_SOURCES` index, position, volume and pitch.
+  Registered events are sent by ID and other valid keys by name, regardless of namespace. A malformed key
+  is refused. A queued sound does not guarantee playback; the client must have the event's resources.
 
 - `Host::config_files()` retains the calling mod's `config/<mod id>/`, `<mod id>.<ext>` and `<mod id>-<rest>` ownership spelling and 4 MiB `CONFIG_FILE_MAX`; a world's `serverconfig/` copy is read through `config_loading`.
   `Host::data_files()` on both sides instead owns `<game directory>/sunrise-mod-data/<mod id>/`; server-only `ServerHost::world_data_files()` owns `<world>/sunrise-mod-data/<mod id>/`, copied, deleted and backed up with the save (`NoWorld` without a world).

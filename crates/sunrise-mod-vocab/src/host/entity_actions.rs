@@ -65,8 +65,7 @@ pub trait EntityActionsBackendMut {
     /// the entity under its sound source, for the players within range. A
     /// silent mob plays nothing, as vanilla's check is `isSilent`; a player
     /// (`Player.playSound`) doesn't hear it themself, their own client plays
-    /// it. True means queued, not heard; false for an unknown `minecraft:`
-    /// event or a volume or pitch that isn't a finite non-negative number.
+    /// it. Registered events go by ID and other valid keys by name. True means queued, not heard.
     fn entity_play_sound(
         &mut self,
         entity: EntityRef,
@@ -94,7 +93,8 @@ pub trait EntityActionsBackendMut {
     /// sound event `sound` bound to the entity, so that it follows it, for
     /// the players within range (16 blocks, times the volume above 1) of
     /// where it is now, the entity's own player too. True means queued, not
-    /// heard; false for an entity outside the level in place.
+    /// heard; false for an unavailable entity or malformed sound key. Registered events go by ID
+    /// and other valid keys by name, with volume and pitch as supplied.
     fn entity_play_bound_sound(
         &mut self,
         entity: EntityRef,

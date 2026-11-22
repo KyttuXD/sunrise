@@ -124,6 +124,8 @@ impl Game<'_> {
                     g.offhand = None;
                     g.equipment = Default::default();
                     g.selected = 0;
+                    // ServerPlayer.restoreFrom copies Score with the inventory and XP.
+                    g.score = 0;
                 }
                 xp.respawn(keep_inventory);
                 g.effects = Default::default();
@@ -477,9 +479,10 @@ impl Game<'_> {
             } else {
                 literal("")
             };
-            let Some(host) = self.lan.as_ref() else {
+            let Some(host) = self.lan.as_mut() else {
                 return;
             };
+            host.hub.guests.update(gi, |guest| guest.sync_score());
             host.hub.send_to(
                 conn,
                 &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),

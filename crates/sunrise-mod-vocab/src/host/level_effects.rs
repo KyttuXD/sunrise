@@ -13,9 +13,8 @@ pub trait LevelEffectsBackendMut {
     /// slider. `except` leaves that player out (a client that already played the sound itself
     /// for its own action); None plays it to everyone, as `playSound(null, ...)`. A fake player
     /// has no client to leave out, so it excludes no one; a stale or client-side `except` queues
-    /// nothing. A `minecraft:` event must be registered; a mod's goes by name
-    /// and is heard where its resources define it. True means queued, not
-    /// heard.
+    /// nothing. The server sends registered events by ID and other valid keys by name, with
+    /// volume and pitch as supplied. True means queued, not heard.
     fn level_play_sound(
         &mut self,
         level: LevelRef,

@@ -209,7 +209,8 @@ A part does not get the wearing entity;
 
 `ItemPart::xp_repair_ratio` is `IItemExtension.getXpRepairRatio`: the durability points Mending restores to a
 stack of the part's item per point of experience (`ExperienceOrb.repairPlayerItems`), asked on the server once for
-each item it repairs, from an orb or from `PlayerRef::give_experience_points`. `event.ratio` arrives as vanilla's:
+each item it repairs at orb pickup. `PlayerRef::give_experience_points` never invokes Mending.
+`event.ratio` arrives as vanilla's:
 the item's `minecraft:repair_with_xp` repair divided by `event.experience`, 2.0 for vanilla Mending. The repair
 becomes `floor(experience × ratio)`, capped at the item's damage, and the experience it doesn't use goes on to the
 next damaged Mending item, then to the player. A ratio left as it arrived keeps vanilla's repair exactly. One that

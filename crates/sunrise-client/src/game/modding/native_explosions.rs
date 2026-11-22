@@ -194,7 +194,7 @@ impl Game<'_> {
                     .collect::<Result<_, _>>()?;
             }
             if let Some(sound) = settings.sound {
-                if !sound_id(&sound) || !self.native_sound_known(&sound) {
+                if !sound_id(&sound) {
                     return Err(ExplodeError::UnknownSound);
                 }
                 effects.sound = sound;

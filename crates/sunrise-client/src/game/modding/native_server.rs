@@ -1141,18 +1141,13 @@ impl Game<'_> {
     /// Stores a server player's `Abilities` and tells their client
     /// (`ServerPlayer.onUpdateAbilities`). They stay as written until the
     /// player's game mode changes (`GameType.updatePlayerAbilities`), and are
-    /// saved with the player. A speed that is not finite refuses the write
-    /// (vanilla's setters take any float). Returns false for a
-    /// stale or unavailable player, a displaced outer player, and a speed
-    /// that is not finite.
+    /// saved with the player. As in the `Abilities` setters, both speed values are
+    /// stored as supplied. Returns false for a stale, unavailable or displaced outer player.
     pub(super) fn player_set_abilities(
         &mut self,
         player: PlayerRef,
         abilities: mod_api::PlayerAbilities,
     ) -> bool {
-        if !abilities.fly_speed.is_finite() || !abilities.walk_speed.is_finite() {
-            return false;
-        }
         let stored = PlayerAbilities {
             invulnerable: abilities.invulnerable,
             flying: abilities.flying,
@@ -1644,26 +1639,35 @@ impl Game<'_> {
     /// `Player.getSleepTimer`: the ticks in bed (`sleepCounter`), in the
     /// record of a guest or in place for the acting player. None for a
     /// stale or unavailable player.
-    pub(super) fn player_sleep_timer(&self, player: PlayerRef) -> Option<u32> {
+    pub(super) fn player_sleep_timer(&self, player: PlayerRef) -> Option<i32> {
         Some(match self.player_handle_read(player)? {
             PlayerRead::Acting { .. } => self.sleep_timer,
             PlayerRead::Guest(guest) => guest.sleep_timer,
         })
     }
-    /// Sets `Player.sleepCounter` to `ticks`, 0 to 109 (what `tick_sleep_timer`
-    /// reaches), through the sleep writes' guard: false for a fake player,
-    /// a guest in another level and a stale player.
-    pub(super) fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: u32) -> bool {
-        if ticks > super::MAX_SLEEP_TIMER || self.player_handle_read(player).is_none() {
+    /// Writes `Player.sleepCounter` without entering or leaving a bed. `Player.tick` still
+    /// handles the sleep and wake thresholds.
+    pub(super) fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: i32) -> bool {
+        if !self.is_logical_server() {
             return false;
         }
-        let Some(target) = self.native_entity_target(player.entity()) else {
-            return false;
-        };
-        self.native_player_sleep_write(target, |game| {
-            game.sleep_timer = ticks;
-            true
-        })
+        match self.player_handle_read(player) {
+            Some(PlayerRead::Acting { .. }) => {
+                self.sleep_timer = ticks;
+                true
+            }
+            Some(PlayerRead::Guest(guest)) => {
+                let conn = guest.conn;
+                self.lan
+                    .as_mut()
+                    .and_then(|host| {
+                        host.hub
+                            .update_guest(conn, |guest| guest.sleep_timer = ticks)
+                    })
+                    .is_some()
+            }
+            None => false,
+        }
     }
     /// `ServerPlayer.isTextFilteringEnabled`: what the client's
     /// `ClientInformation` said, false for the player running the server and
@@ -6531,10 +6535,11 @@ mod player_rule_tests {
             assert_eq!(a.sleep_timer(&*game), Some(100));
             assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].sleep_timer, 100);
             assert_eq!(game.sleep_counts(), (active, sleeping + 1, deep + 1));
-            // The wake-up fade's last value is allowed; one past it is not, and changes nothing.
-            assert!(a.set_sleep_timer(game, 109));
-            assert!(!a.set_sleep_timer(game, 110));
-            assert_eq!(a.sleep_timer(&*game), Some(109));
+            assert!(a.set_sleep_timer(game, -1));
+            assert_eq!(a.sleep_timer(&*game), Some(-1));
+            assert_eq!(game.sleep_counts(), (active, sleeping + 1, deep));
+            assert!(a.set_sleep_timer(game, 110));
+            assert_eq!(a.sleep_timer(&*game), Some(110));
 
             // Ignoring leaves an out-of-bed player out of the count, and an in-bed one in.
             assert!(b.set_sleep_ignored(game, true));
@@ -6566,7 +6571,7 @@ mod player_rule_tests {
                     (a.sleep_timer(&*game), a.counts_for_sleep(&*game))
                 })
                 .unwrap();
-            assert_eq!(seen, (Some(109), Some(true)));
+            assert_eq!(seen, (Some(110), Some(true)));
         });
     }
 }

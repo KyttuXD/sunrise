@@ -346,8 +346,8 @@ impl Game<'_> {
         }
     }
 
-    /// `AbstractArrow.setBaseDamage`. False for a stale handle, a projectile
-    /// that is not an arrow, or a value that is not finite.
+    /// `AbstractArrow.setBaseDamage`: stores `damage` as supplied. False for a stale
+    /// handle or a projectile without an arrow's base damage.
     pub(super) fn projectile_set_base_damage(
         &mut self,
         projectile: ProjectileRef,
@@ -360,9 +360,6 @@ impl Game<'_> {
             let ProjectileKind::Arrow { base_damage, .. } = &mut p.kind else {
                 return false;
             };
-            if !damage.is_finite() {
-                return false;
-            }
             *base_damage = damage;
             true
         })
@@ -581,8 +578,9 @@ mod tests {
             );
             assert_eq!(handle.base_damage(game), Some(2.0));
             assert!(handle.set_base_damage(game, 7.5));
-            assert!(!handle.set_base_damage(game, f64::NAN));
             assert_eq!(handle.base_damage(game), Some(7.5));
+            assert!(handle.set_base_damage(game, f64::NAN));
+            assert!(handle.base_damage(game).unwrap().is_nan());
             assert_eq!(handle.critical(game), Some(false));
             assert!(handle.set_critical(game, true));
             assert!(game.creatures.projectiles[0].critical());

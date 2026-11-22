@@ -53,8 +53,8 @@ pub trait PlayerMessagesBackendMut {
     /// Side: server.
     /// `PlaySoundCommand` for one player: plays sound event `sound` at the
     /// player, for them only, under `source`'s volume slider. The seed is the
-    /// level random's `nextLong`, drawn once per call. True means sent, not
-    /// heard.
+    /// level random's `nextLong`, drawn once per call. Registered events go by ID; other valid
+    /// keys go by name, with volume and pitch as supplied. True means sent, not heard.
     fn player_play_sound(
         &mut self,
         player: PlayerRef,

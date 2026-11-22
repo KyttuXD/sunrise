@@ -137,6 +137,8 @@ impl Game<'_> {
         if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
             for (index, _, value) in &p.values {
                 match (index, value) {
+                    // Player.DATA_SCORE_ID: DeathScreen reads this, not the XP packet.
+                    (18, Value::Int(score)) => self.player_score = *score,
                     (14, Value::OptPos(bed)) => {
                         if bed.is_some() && self.sleeping.is_none() {
                             self.sleep_timer = 0;
