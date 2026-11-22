@@ -788,6 +788,34 @@ fn open_live_depot(game: &mut crate::game::Game<'_>) -> i32 {
     menu.window
 }
 
+#[test]
+#[ignore = "daily"]
+fn a_replaced_block_entity_makes_an_admitted_quick_move_stale() {
+    use super::native_quick_move::Admitted;
+    with_guests(|game| {
+        let window = open_depot(game);
+        let admitted = Admitted::of(game, 12, POS, 9, window).expect("the menu is open");
+        assert!(admitted.holds(game));
+        // The same values written again keep the block entity's identity: still fresh.
+        let same = game.world.block_entities.get(&POS).unwrap().clone();
+        game.world.block_entities.insert(POS, same.clone());
+        assert!(admitted.holds(game));
+        // Another instance with equal values, which a listener's command could have placed: stale.
+        game.world.block_entities.replace(POS, same);
+        assert!(!admitted.holds(game));
+        // A fresh admission on the replacement holds, and a closed window does not.
+        let admitted = Admitted::of(game, 12, POS, 9, window).unwrap();
+        assert!(admitted.holds(game));
+        game.lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .guests
+            .update(0, |guest| guest.menu = None);
+        assert!(!admitted.holds(game));
+    });
+}
+
 const SECOND: (i32, i32, i32) = (2, 64, 1);
 
 /// A second mod container with the same state/layout as the depot, empty, that a listener
