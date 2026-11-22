@@ -59,20 +59,35 @@ impl Game<'_> {
 
     /// `ServerPlayer.closeContainer` of a guest's menu: queue the client's close before
     /// running normal server teardown. Refuses clients, stale menus, a guest with a pending
-    /// disconnect or an active turn, and the inventory menu (window 0). While a click action
-    /// is active, true accepts a close at commit.
+    /// disconnect or an active turn, and the inventory menu (window 0). In a transaction,
+    /// true accepts a close at commit.
     pub(super) fn menu_close_container(&mut self, menu: MenuRef) -> bool {
         let window = menu.fields().window;
         if !self.is_logical_server() || window == 0 {
             return false;
         }
+        if let Some((guest, staged)) = self.staged_native_menu(menu) {
+            if guest.disconnect_pending || self.lan_acting == Some(guest.conn) {
+                return false;
+            }
+            let (conn, generation) = (guest.conn, staged.generation);
+            self.reply_menu_click_for(
+                conn,
+                generation,
+                super::lan_menus::ClickReply::Close(window),
+            );
+            return true;
+        }
         let Some(guest) = self.native_menu_guest(menu) else {
             return false;
         };
-        if guest.disconnect_pending || self.lan_acting == Some(guest.conn) {
+        if guest.disconnect_pending
+            || self.lan_acting == Some(guest.conn)
+            || guest.menu.as_ref().is_some_and(|m| m.removed)
+        {
             return false;
         }
-        self.request_menu_close(guest.conn, window, guest.menu_generation);
+        self.reply_menu_click(guest.conn, super::lan_menus::ClickReply::Close(window));
         true
     }
 
@@ -87,6 +102,19 @@ impl Game<'_> {
         use mod_api::MenuDataRefusal::*;
         if !self.is_logical_server() {
             return Err(Unsupported);
+        }
+        if let Some((guest, staged)) = self.staged_native_menu(menu) {
+            let kind = staged.mod_type.ok_or(Unsupported)?;
+            if mod_api::content::crash::current_native_mod() != Some(kind.owner) {
+                return Err(WrongOwner);
+            }
+            let &committed = staged.blockless_data.get(index).ok_or(InvalidIndex)?;
+            let key = (guest.conn, staged.generation, index);
+            if self.pending_menu_data(key).unwrap_or(committed) == value {
+                return Ok(false);
+            }
+            self.journal_menu_data(key, value);
+            return Ok(true);
         }
         let guest = self.native_menu_guest(menu).ok_or(Stale)?;
         let open = guest
@@ -223,8 +251,27 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn staged_native_menu(
+        &self,
+        menu: MenuRef,
+    ) -> Option<(&Guest, &super::transactions::StagedNativeMenu)> {
+        let guest = self.native_menu_player(menu.fields().player)?;
+        let host = self.lan.as_ref()?;
+        (host.hub.holder_guest(guest.uuid, self.dim.id())?.conn == guest.conn).then_some(())?;
+        let super::transactions::StagedMenu::Native(staged) =
+            self.latest_staged_menu(guest.conn)?
+        else {
+            return None;
+        };
+        (staged.window == menu.fields().window && staged.generation == menu.fields().generation)
+            .then_some((guest, staged))
+    }
+
     pub(super) fn native_menu_guest(&self, menu: MenuRef) -> Option<&Guest> {
         let guest = self.native_menu_player(menu.fields().player)?;
+        if self.latest_staged_menu(guest.conn).is_some() {
+            return None;
+        }
         let host = self.lan.as_ref()?;
         (host.hub.holder_guest(guest.uuid, self.dim.id())?.conn == guest.conn).then_some(())?;
         (guest.menu_generation == menu.fields().generation).then_some(())?;
@@ -234,7 +281,9 @@ impl Game<'_> {
             let play = host.play.get(&guest.conn);
             let menus = host.menus.get(&guest.conn);
             if menu.fields().window != 0
-                || menus.is_some_and(|m| m.crafting.table.is_some() || m.station.is_some())
+                || menus.is_some_and(|m| {
+                    m.closing.is_some() || m.crafting.table.is_some() || m.station.is_some()
+                })
                 || play.is_some_and(|p| {
                     p.merchant.is_some() || p.lectern.is_some() || p.mount_window.is_some()
                 })
@@ -269,6 +318,18 @@ impl Game<'_> {
             ));
         }
         let guest = self.native_menu_player(player)?;
+        if let Some(staged) = self.latest_staged_menu(guest.conn) {
+            let super::transactions::StagedMenu::Native(staged) = staged else {
+                return None;
+            };
+            let host = self.lan.as_ref()?;
+            (host.hub.holder_guest(guest.uuid, self.dim.id())?.conn == guest.conn).then_some(())?;
+            return Some(mod_api::__private::game::menu_ref(
+                player,
+                staged.window,
+                staged.generation,
+            ));
+        }
         let menu = mod_api::__private::game::menu_ref(
             player,
             guest.menu.as_ref().map_or(0, |m| m.window),
@@ -280,6 +341,9 @@ impl Game<'_> {
 
     /// Container id (0 for the player's inventory menu).
     pub(super) fn menu_container_id(&self, menu: MenuRef) -> Option<i32> {
+        if self.staged_native_menu(menu).is_some() {
+            return Some(menu.fields().window);
+        }
         self.native_menu_guest(menu)?;
         Some(menu.fields().window)
     }
@@ -287,6 +351,9 @@ impl Game<'_> {
     /// Registry menu type; the inventory menu has no MenuType in vanilla.
     /// The outer None means an unavailable menu.
     pub(super) fn menu_kind(&self, menu: MenuRef) -> Option<Option<String>> {
+        if let Some((_, staged)) = self.staged_native_menu(menu) {
+            return Some(Some(staged.registry_id.to_string()));
+        }
         let guest = self.native_menu_guest(menu)?;
         match &guest.menu {
             Some(m) => Some(Some(
@@ -312,6 +379,9 @@ impl Game<'_> {
                 .count();
             return (count != 0).then_some(count);
         }
+        if let Some((_, staged)) = self.staged_native_menu(menu) {
+            return Some(staged.slot_count());
+        }
         let guest = self.native_menu_guest(menu)?;
         Some(
             guest
@@ -326,6 +396,23 @@ impl Game<'_> {
     /// to feet), a block entity's or an entity's slot, the ender chest's, the crafting grid's
     /// or a mod's chest menu's.
     pub(super) fn menu_slot_backing(&self, menu: MenuRef, slot: usize) -> Option<MenuSlotBacking> {
+        if let Some((_, staged)) = self.staged_native_menu(menu) {
+            if slot >= staged.slot_count() {
+                return None;
+            }
+            if slot >= staged.size {
+                return match slot - staged.size {
+                    n @ 0..=26 => Some(MenuSlotBacking::Player(n + 9)),
+                    n @ 27..=35 => Some(MenuSlotBacking::Player(n - 27)),
+                    _ => None,
+                };
+            }
+            return Some(if staged.owned_slots().is_some() {
+                MenuSlotBacking::Owned(slot)
+            } else {
+                MenuSlotBacking::Native(slot)
+            });
+        }
         let guest = self.native_menu_guest(menu)?;
         let Some(open) = &guest.menu else {
             return match slot {
@@ -389,6 +476,36 @@ impl Game<'_> {
             return Some(self.slot_view(index));
         }
         let backing = self.menu_slot_backing(menu, slot)?;
+        if let Some((guest, staged)) = self.staged_native_menu(menu) {
+            let acting = self.lan_acting == Some(guest.conn);
+            return Some(match backing {
+                MenuSlotBacking::Player(n @ 0..36) => {
+                    if acting {
+                        self.inventory.get(n)?.clone()
+                    } else {
+                        guest.inventory.get(n)?.clone()
+                    }
+                }
+                MenuSlotBacking::Player(n @ 36..40) => {
+                    if acting {
+                        self.armor[39 - n].clone()
+                    } else {
+                        guest.armor[39 - n].clone()
+                    }
+                }
+                MenuSlotBacking::Player(_) => {
+                    if acting {
+                        self.offhand.clone()
+                    } else {
+                        guest.offhand.clone()
+                    }
+                }
+                MenuSlotBacking::Native(n) | MenuSlotBacking::Owned(n) => {
+                    staged.items.get(n)?.clone()
+                }
+                _ => return None,
+            });
+        }
         let guest = self.native_menu_guest(menu)?;
         let acting = self.lan_acting == Some(guest.conn);
         Some(match backing {
@@ -467,6 +584,10 @@ impl Game<'_> {
     }
 
     pub(super) fn menu_owned_slot_limit(&self, menu: MenuRef, slot: usize) -> Option<u32> {
+        if let Some((_, staged)) = self.staged_native_menu(menu) {
+            let limit = *staged.owned_slots()?.get(slot)?;
+            return Some(u32::from(limit));
+        }
         let open = self.native_menu_guest(menu)?.menu.as_ref()?;
         let limit = *open.owned_slots()?.get(slot)?;
         Some(u32::from(limit))
@@ -478,40 +599,58 @@ impl Game<'_> {
     /// with no backing (`menu_slot_backing`), and for one the model hasn't.
     fn native_menu_rules(&self, menu: MenuRef, slot: usize) -> Option<(Box<Menu>, Env<'_>)> {
         self.menu_slot_backing(menu, slot)?;
-        let guest = self.native_menu_guest(menu)?;
-        let (kind, disabled, menu_id) = match &guest.menu {
-            None => (Kind::Inventory, None, None),
-            Some(open) => {
-                let world = self.native_level_world(self.level(&guest.dimension)?)?;
-                let name = self
-                    .lan
-                    .as_ref()?
-                    .hub
-                    .registry_name("minecraft:menu", open.kind);
-                let entity = match open.slots {
-                    Slots::Block(pos) => world.block_entities.get(&pos),
-                    _ => None,
+        let (guest, staged, kind, disabled, menu_id) =
+            if let Some((guest, staged)) = self.staged_native_menu(menu) {
+                let kind = match staged.mod_type {
+                    Some(layout) => Kind::Mod(layout),
+                    None if staged.size == 5 => Kind::Hopper,
+                    None if staged.size == 9 => Kind::Dispenser,
+                    None => Kind::Chest(staged.size / 9),
                 };
-                let kind = match entity.and_then(|e| machine_menu(e, open.mod_type)) {
-                    Some((kind, _)) => kind,
-                    None if open.slots == Slots::Native
-                        && let Some(layout) = open.mod_type =>
-                    {
-                        Kind::Mod(layout)
+                (
+                    guest,
+                    Some(staged),
+                    kind,
+                    None,
+                    Some(staged.registry_id.as_ref()),
+                )
+            } else {
+                let guest = self.native_menu_guest(menu)?;
+                let (kind, disabled, menu_id) = match &guest.menu {
+                    None => (Kind::Inventory, None, None),
+                    Some(open) => {
+                        let world = self.native_level_world(self.level(&guest.dimension)?)?;
+                        let name = self
+                            .lan
+                            .as_ref()?
+                            .hub
+                            .registry_name("minecraft:menu", open.kind);
+                        let entity = match open.slots {
+                            Slots::Block(pos) => world.block_entities.get(&pos),
+                            _ => None,
+                        };
+                        let kind = match entity.and_then(|e| machine_menu(e, open.mod_type)) {
+                            Some((kind, _)) => kind,
+                            None if let Some(layout) =
+                                open.mod_type.filter(|_| open.slots == Slots::Native) =>
+                            {
+                                Kind::Mod(layout)
+                            }
+                            None if name == Some("minecraft:shulker_box") => Kind::Shulker,
+                            None if open.size == 5 => Kind::Hopper,
+                            None if open.size == 9 => Kind::Dispenser,
+                            None => Kind::Chest(open.size / 9),
+                        };
+                        // `CrafterSlot.mayPlace`: a disabled slot takes nothing.
+                        let disabled = match entity {
+                            Some(BlockEntity::Crafter(c)) => Some(c.disabled),
+                            _ => None,
+                        };
+                        (kind, disabled, name)
                     }
-                    None if name == Some("minecraft:shulker_box") => Kind::Shulker,
-                    None if open.size == 5 => Kind::Hopper,
-                    None if open.size == 9 => Kind::Dispenser,
-                    None => Kind::Chest(open.size / 9),
                 };
-                // `CrafterSlot.mayPlace`: a disabled slot takes nothing.
-                let disabled = match entity {
-                    Some(BlockEntity::Crafter(c)) => Some(c.disabled),
-                    _ => None,
-                };
-                (kind, disabled, name)
-            }
-        };
+                (guest, None, kind, disabled, menu_id)
+            };
         let env = Env {
             player: Some(guest.uuid),
             player_entity_id: Some(guest.entity_id),
@@ -519,7 +658,16 @@ impl Game<'_> {
         };
         let mut rules = Box::new(Menu::new(kind));
         rules.set_registry_id(menu_id);
-        if let Some(open) = guest.menu.as_ref() {
+        if let Some(staged) = staged {
+            rules.set_block_pos(staged.pos.map(|(x, y, z)| [x, y, z]));
+            if staged.owned_slots().is_some() {
+                rules.load_container(&env, &staged.items, None);
+            } else if staged.mod_type.is_some() {
+                for (i, stack) in staged.items.iter().enumerate() {
+                    rules.load_slot(i, stack.clone());
+                }
+            }
+        } else if let Some(open) = guest.menu.as_ref() {
             let world = self.native_level_world(self.level(&guest.dimension)?)?;
             let limits = open.slots.stack_limits(world, open.size);
             rules.set_container_limits(limits);
@@ -562,6 +710,18 @@ impl Game<'_> {
         slot: usize,
     ) -> Option<&mut Option<ItemStack>> {
         let backing = self.menu_slot_backing(menu, slot)?;
+        if let Some((conn, generation)) = self
+            .staged_native_menu(menu)
+            .map(|(guest, staged)| (guest.conn, staged.generation))
+        {
+            return match backing {
+                MenuSlotBacking::Native(n) | MenuSlotBacking::Owned(n) => self
+                    .staged_native_menu_mut(conn, generation)?
+                    .items
+                    .get_mut(n),
+                _ => None,
+            };
+        }
         if let MenuSlotBacking::Ender(n) = backing
             && self.lan_acting_uuid == Some(menu.fields().player.uuid())
         {
@@ -576,9 +736,12 @@ impl Game<'_> {
         match backing {
             MenuSlotBacking::Ender(n) => guests.ender_items_mut(index)?.get_mut(n),
             MenuSlotBacking::CraftGrid(n) => guests.craft_grid_mut(index)?.get_mut(n),
-            MenuSlotBacking::Native(n) | MenuSlotBacking::Owned(n) => {
-                guests.native_menu_mut(index)?.get_mut(n)
-            }
+            MenuSlotBacking::Native(n) | MenuSlotBacking::Owned(n) => guests[index]
+                .menu
+                .as_ref()
+                .is_some_and(|m| !m.removed)
+                .then(|| guests.native_menu_mut(index)?.get_mut(n))
+                .flatten(),
             _ => None,
         }
     }

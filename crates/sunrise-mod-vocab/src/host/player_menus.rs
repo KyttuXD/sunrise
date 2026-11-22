@@ -25,8 +25,8 @@ pub trait PlayerMenusBackendMut {
     /// Side: server.
     /// Opens a block entity's menu for a connected player (`ServerPlayer.openMenu`).
     /// Returns Stale for an invalidated entity; Ok(false) for a wrong-level player,
-    /// non-provider, cancelled open, active menu click, an out-of-range slot exclusion, or an
-    /// unconnected player such as a fake player.
+    /// non-provider, cancelled open, active menu click, or an unconnected player such as a fake player. In an ordinary transaction or a closing-menu
+    /// callback, Ok(true) queues the open for commit or after Close, respectively.
     fn player_open_menu(
         &mut self,
         player: PlayerRef,
@@ -56,7 +56,10 @@ pub trait PlayerMenusBackendMut {
     /// `PlayerUnavailable` (including a client that does not support the blockless layout, a
     /// disconnect in progress or a turn unavailable for the veto), `TooLarge`,
     /// `DataCountMismatch`, `Title` or `TitleNotEncodable`. A cancelled or refused open
-    /// does not close the old menu.
+    /// does not close the old menu. In an ordinary transaction, the returned id is staged
+    /// for transaction-scoped reads and slot/data writes while owner teardown, wire open and
+    /// Close/Open events publish at the root commit (an abort drops the staged menu without
+    /// advancing window ids). In a closing-menu callback, publication waits until Close returns.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,
@@ -101,7 +104,8 @@ pub trait PlayerMenusBackendMut {
     /// cancel). Inside a hook of the player's own action (`use_item`, `right_click_item`,
     /// `right_click_block`, their command), the menu opens when that action ends, as a block's
     /// menu the same action opens does. Ok(true) inside an action means queued: the menu is
-    /// still subject to cancellation when the queue runs; outside one it opened. Ok(false) is an
+    /// still subject to cancellation when the queue runs. An ordinary transaction or a
+    /// closing-menu callback likewise queues the open for commit or after Close. Ok(false) is an
     /// immediate cancellation by a mod. Errors:
     /// `PlayerUnavailable` (stale, dead, fake, or on a client), or `Title` for a title that
     /// could not cross; nothing opens then.

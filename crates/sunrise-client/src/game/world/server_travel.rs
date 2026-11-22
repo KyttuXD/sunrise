@@ -917,12 +917,12 @@ impl Game<'_> {
             .or_else(|| self.end_destination(entering, target))
             .unwrap_or(Vec3::new(from.x * scale, from.y, from.z * scale));
         self.end_portal_travel = false;
-        let retired_window = if source != target {
+        let (retired_window, mut pending_opens) = if source != target {
             self.guest_close_menus_for_travel(conn)
         } else {
-            None
+            (None, Vec::new())
         };
-        if !self.enter_travel_destination(conn, target, retired_window) {
+        if !self.enter_travel_destination(conn, target, retired_window, &mut pending_opens) {
             return;
         }
         let Some(i) = self.guest_index(conn) else {
@@ -945,6 +945,9 @@ impl Game<'_> {
                 .change_level(i, at, yaw, None, true, PLAYER_DELAY, &ctx);
         }
         self.bind_player_attachments(conn, false);
+        for open in pending_opens {
+            open(self);
+        }
         self.as_guest(conn, |g| {
             g.trigger_dimension(source, target, [from.x, from.y, from.z]);
             // ServerPlayer.teleport: stopUsingItem after the dimension change triggers.
@@ -977,18 +980,23 @@ impl Game<'_> {
     }
 
     /// Menu removal is silent on a successful trip: the respawn closes the
-    /// old screen. On failure, close it explicitly unless a listener opened
-    /// a replacement during removal.
+    /// old screen, and any reentrant opens queued by close listeners run in the
+    /// destination after `Hub::change_level`. On failure, run those opens in the
+    /// source level and close the retired window explicitly unless one replaced it.
     fn enter_travel_destination(
         &mut self,
         conn: u32,
         dim: Dim,
         retired_window: Option<i32>,
+        pending_opens: &mut Vec<super::lan_menus::MenuOpen>,
     ) -> bool {
         let Err(e) = self.enter_level(dim) else {
             return true;
         };
         log::error!("could not open {}: {e}", dim.id());
+        for open in pending_opens.drain(..) {
+            open(self);
+        }
         if let Some(container) = retired_window
             && let Some(host) = self.lan.as_mut()
             && super::native_menus::open_menu_of(host, conn).is_none()
@@ -1530,20 +1538,21 @@ impl Game<'_> {
             }
             self.eject_player_riders(Some(id));
         }
-        let retired_window = if t.dim != source {
+        let (retired_window, mut pending_opens) = if t.dim != source {
             let window = self.guest_close_menus_for_travel(t.conn);
             if let Some(host) = self.lan.as_mut() {
                 drop_hook(host, t.conn);
             }
             window
         } else {
-            None
+            (None, Vec::new())
         };
-        let index = if self.enter_travel_destination(t.conn, t.dim, retired_window) {
-            self.guest_index(t.conn)
-        } else {
-            None
-        };
+        let index =
+            if self.enter_travel_destination(t.conn, t.dim, retired_window, &mut pending_opens) {
+                self.guest_index(t.conn)
+            } else {
+                None
+            };
         let Some(i) = index else {
             if let Err(e) = self.enter_level(back) {
                 log::error!("could not reopen {}: {e}", back.id());
@@ -1580,6 +1589,9 @@ impl Game<'_> {
             });
         }
         self.bind_player_attachments(t.conn, false);
+        for open in pending_opens {
+            open(self);
+        }
         match kind {
             LevelTeleportKind::EndExit { .. } => {
                 self.as_guest(t.conn, |g| {

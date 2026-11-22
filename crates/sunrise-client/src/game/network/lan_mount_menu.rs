@@ -11,7 +11,7 @@ use sunrise_client::{
     items::ItemStack,
     menu::{Kind, Menu},
 };
-use sunrise_protocol::packets::play::{self, Clientbound as C};
+use sunrise_protocol::packets::play;
 
 /// A guest's open mount menu.
 pub(super) struct GuestMount {
@@ -34,23 +34,23 @@ impl Game<'_> {
         if self.guest_may_open(conn, "minecraft:horse_inventory", None) != Some(true) {
             return;
         }
-        // ServerPlayer.openMenu closes the menu that was open.
-        self.guest_close_all(conn);
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        let Some(window) = host.hub.open_mount_window(conn, columns as i32, mob as i32) else {
-            return;
-        };
-        host.play.entry(conn).or_default().mount_window = Some(GuestMount {
-            window,
-            mob,
-            columns,
-            state: 0,
-            sent: None,
-        });
-        self.lan_send_mount(conn);
-        self.player_menu_opening(conn);
+        self.guest_replace_menu(conn, false, |game| {
+            let Some(host) = game.lan.as_mut() else {
+                return;
+            };
+            let Some(window) = host.hub.open_mount_window(conn, columns as i32, mob as i32) else {
+                return;
+            };
+            host.play.entry(conn).or_default().mount_window = Some(GuestMount {
+                window,
+                mob,
+                columns,
+                state: 0,
+                sent: None,
+            });
+            game.lan_send_mount(conn);
+            game.player_menu_opening(conn);
+        })
     }
 
     /// `HorseInventoryMenu` over mount `index`, with the player's inventory
@@ -167,7 +167,7 @@ impl Game<'_> {
     /// `AbstractContainerMenu.removed` of the guest's mount menu (`window`;
     /// None closes it whichever it is): the carried stack goes back to the
     /// inventory. False when no such window is open.
-    pub(super) fn lan_mount_closed(&mut self, conn: u32, window: Option<i32>) -> bool {
+    pub(super) fn lan_mount_removed(&mut self, conn: u32, window: Option<i32>) -> bool {
         let Some(host) = self.lan.as_mut() else {
             return false;
         };
@@ -181,9 +181,6 @@ impl Game<'_> {
             && let Some(carried) = self.close_guest_menu_cursor(gi, mount.window)
         {
             self.lan_place_back(gi, vec![carried]);
-        }
-        if window.is_some() {
-            self.player_menu_closing(conn);
         }
         true
     }
@@ -226,13 +223,7 @@ impl Game<'_> {
             if self.lan_mount_valid(g, mob) {
                 self.lan_send_mount(conn);
             } else {
-                self.lan_mount_closed(conn, Some(window));
-                if let Some(host) = self.lan.as_mut() {
-                    host.hub.send_to(
-                        conn,
-                        &C::ContainerClose(play::ContainerClose { container: window }),
-                    );
-                }
+                self.reply_menu_click(conn, super::lan_menus::ClickReply::Close(window));
             }
         }
     }

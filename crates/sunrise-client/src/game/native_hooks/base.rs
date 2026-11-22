@@ -2994,17 +2994,6 @@ impl Game<'_> {
     ) {
         self.fire_menu_clicked(call);
     }
-    /// A menu a mod opened closed: the player closed it, the server or a mod
-    /// opened another, or the player left.
-    pub(in crate::game) fn native_menu_closed(
-        &mut self,
-        uuid: u128,
-        window: i32,
-        opening_hand: Option<mod_api::Hand>,
-        owned_slots: &[Option<mod_api::ItemStack>],
-    ) {
-        self.fire_menu_closed(uuid, window, opening_hand, owned_slots);
-    }
     /// `Item.appendHoverText`: an item's own lines in its tooltip, after its
     /// name and before its components' (enchantments, lore, attributes). Add
     /// lines to `lines`, which arrives empty, each with a colour as `rgba` packs
@@ -3553,25 +3542,25 @@ impl Game<'_> {
     ) {
         self.fire_player_container_open(player, name, dimension, menu_type, pos, menu);
     }
-    /// `player` (`name`) closed the menu `native_player_container_open` told
+    /// `player` closed the menu `native_player_container_open` told
     /// of (NeoForge's `PlayerContainerEvent.Close`, posted in
-    /// `ServerPlayer.doCloseContainer` after the menu's `removed`): they
+    /// `ServerPlayer.doCloseContainer` after the menu's `removed` and before
+    /// `containerMenu` resets to the player's inventory menu): they
     /// closed it, walked out of reach, died, changed level, or another menu
-    /// opened. A player who leaves closes it before `native_player_logged_out`
-    /// (vanilla posts nothing for a disconnect; Sunrise does, so each open has
-    /// its close). Once for each open; not told when the server stops. The
-    /// menu's items are where it left them: the block's, and the cursor stack
-    /// back in the inventory. State swapped in, when the player has a body.
-    /// Server-side.
+    /// opened. On disconnect, `PlayerList.remove` posts `native_player_logged_out`
+    /// before `Player.remove` closes the menu. Once for each open; not told
+    /// when the server stops. `menu`
+    /// is the closing menu handle, live during this call and stale after. The
+    /// menu's `removed` cleanup has already run. State swapped in, when the
+    /// player has a body. Server-side.
     pub(in crate::game) fn native_player_container_close(
         &mut self,
-        player: u128,
-        name: &str,
-        dimension: &str,
+        player: PlayerRef,
         menu_type: &str,
         pos: Option<[i32; 3]>,
+        menu: Option<mod_api::MenuRef>,
     ) {
-        self.fire_player_container_close(player, name, dimension, menu_type, pos);
+        self.fire_player_container_close(player, menu_type, pos, menu);
     }
     /// A client started tracking an entity (NeoForge's
     /// `PlayerEvent.StartTracking`, posted at the end of

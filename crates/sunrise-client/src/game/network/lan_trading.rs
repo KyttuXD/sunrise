@@ -113,32 +113,32 @@ impl Game<'_> {
             self.merchant_closed(&mut state);
             return;
         }
-        // ServerPlayer.openMenu closes the menu that was open.
-        self.guest_close_all(conn);
-        let Some(window) = self
-            .lan
-            .as_mut()
-            .and_then(|host| host.hub.open_merchant_window(conn, title))
-        else {
-            self.merchant_closed(&mut state);
-            return;
-        };
-        let mut gm = GuestMerchant {
-            window,
-            state: 0,
-            slots: [None, None, None],
-            merchant: Box::new(state),
-            sent: Vec::new(),
-            sent_level: 0,
-            sent_xp: 0,
-        };
-        self.lan_send_offers(conn, &mut gm, true);
-        self.lan_send_merchant_content(conn, &mut gm);
-        if let Some(host) = self.lan.as_mut() {
-            host.menus.entry(conn).or_default().merchant.restore(());
-            host.play.entry(conn).or_default().merchant = Some(gm);
-        }
-        self.player_menu_opening(conn);
+        self.guest_replace_menu(conn, false, |game| {
+            let Some(window) = game
+                .lan
+                .as_mut()
+                .and_then(|host| host.hub.open_merchant_window(conn, title))
+            else {
+                game.merchant_closed(&mut state);
+                return;
+            };
+            let mut gm = GuestMerchant {
+                window,
+                state: 0,
+                slots: [None, None, None],
+                merchant: Box::new(state),
+                sent: Vec::new(),
+                sent_level: 0,
+                sent_xp: 0,
+            };
+            game.lan_send_offers(conn, &mut gm, true);
+            game.lan_send_merchant_content(conn, &mut gm);
+            if let Some(host) = game.lan.as_mut() {
+                host.menus.entry(conn).or_default().merchant.restore(());
+                host.play.entry(conn).or_default().merchant = Some(gm);
+            }
+            game.player_menu_opening(conn);
+        })
     }
     /// `Entity.getDisplayName` of the merchant, the screen's title: its name
     /// (custom, else the profession's) with the show_entity hover event and
@@ -467,14 +467,8 @@ impl Game<'_> {
                 .and_then(|h| h.play.get(&conn))
                 .and_then(|p| p.merchant.as_ref())
                 .map(|m| m.window);
-            if let Some(window) = window
-                && self.lan_merchant_closed(conn, Some(window))
-                && let Some(host) = self.lan.as_mut()
-            {
-                host.hub.send_to(
-                    conn,
-                    &C::ContainerClose(play::ContainerClose { container: window }),
-                );
+            if let Some(window) = window {
+                self.reply_menu_click(conn, super::lan_menus::ClickReply::Close(window));
             }
         }
     }
@@ -572,10 +566,6 @@ impl Game<'_> {
     }
     /// The guest closed the trading window (or it is closed for them):
     /// MerchantMenu.removed, then the villager gets its state back.
-    pub(super) fn lan_merchant_closed(&mut self, conn: u32, window: Option<i32>) -> bool {
-        self.lan_merchant_removed(conn, window, super::lan_crafting::MenuRemoval::Live)
-    }
-
     pub(super) fn lan_merchant_removed(
         &mut self,
         conn: u32,
@@ -599,9 +589,6 @@ impl Game<'_> {
             self.lan_place_back(gi, vec![carried]);
         }
         self.merchant_closed(&mut gm.merchant);
-        if window.is_some() {
-            self.player_menu_closing(conn);
-        }
         true
     }
     /// `Merchant.stillValid` for a trader: it is alive and the guest is within
@@ -646,14 +633,7 @@ impl Game<'_> {
             })
             .unwrap_or_default();
         for (conn, window) in far {
-            if self.lan_merchant_closed(conn, Some(window))
-                && let Some(host) = self.lan.as_mut()
-            {
-                host.hub.send_to(
-                    conn,
-                    &C::ContainerClose(play::ContainerClose { container: window }),
-                );
-            }
+            self.reply_menu_click(conn, super::lan_menus::ClickReply::Close(window));
         }
     }
     /// Refresh open guest prices after the actual villager reputation event.

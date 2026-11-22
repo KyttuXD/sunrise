@@ -31,7 +31,7 @@ use sunrise_world::component_value::consume_effects::Admitted;
 /// the protocol's container id wraps back to the same number.
 static NEXT_MENU_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-fn menu_generation() -> u64 {
+pub fn menu_generation() -> u64 {
     let mut generation = NEXT_MENU_GENERATION.load(Ordering::Relaxed);
     loop {
         let next = generation
@@ -593,11 +593,16 @@ impl Guest {
 
     /// Allocate the next protocol window and a non-reusable menu identity.
     pub fn next_menu_window(&mut self) -> i32 {
-        self.next_window = self.next_window % 100 + 1;
-        self.menu_generation = menu_generation();
+        let window = self.next_window % 100 + 1;
+        self.activate_menu_window(window, menu_generation());
+        window
+    }
+
+    pub(super) fn activate_menu_window(&mut self, window: i32, generation: u64) {
+        self.next_window = window;
+        self.menu_generation = generation;
         self.inactive_inventory_carried = self.carried.take();
-        self.open_carried_sent = Some((self.next_window, None));
-        self.next_window
+        self.open_carried_sent = Some((window, None));
     }
 
     /// Retire an open menu, returning its carried stack for `AbstractContainerMenu.removed`.

@@ -16,7 +16,10 @@ pub trait MenusServerHost {
     /// centring the mouse again. Packets for the old window are ignored. The
     /// items of an open menu change through its slots (`menu`), not by
     /// opening it again. An active speculative menu click refuses the open with `Ok(None)`.
-
+    /// In an ordinary transaction, the returned id is staged for transaction-scoped reads
+    /// and slot/data writes while owner teardown, wire open and Close/Open events publish at
+    /// the root commit (and an abort drops the staged menu without advancing window ids).
+    /// In a closing-menu callback, publication waits until the old menu's Close returns.
     #[serialize_text]
     fn open_menu(
         &mut self,
@@ -28,7 +31,7 @@ pub trait MenusServerHost {
     ) -> Result<Option<i32>, StackWriteError>;
     /// Side: server.
     /// The menu `open_menu` opened that the player has open as window
-    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_closed`
+    /// `window` (the window id `open_menu`, `menu_clicked` and `menu_removed`
     /// give). Its slots are written as `ItemPlace::MenuSlot` in a
     /// transaction, and the client is sent each changed slot with the next
     /// tick's container sync (`AbstractContainerMenu.broadcastChanges`), as
@@ -36,8 +39,9 @@ pub trait MenusServerHost {
     /// a player who isn't here.
     fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef>;
     /// Side: server.
-    /// Closes the player's native menu (a `menu_closed` follows). During an active menu click,
-    /// the close waits for the transaction to commit; an abort leaves the window open.
+    /// Closes the player's native menu (`MenuPart::menu_removed` and `player_container_close`
+    /// follow). Inside a transaction the complete close waits for the root commit;
+    /// an abort leaves the window open.
 
     fn close_menu(&mut self, uuid: u128);
     /// Side: server.
@@ -201,8 +205,8 @@ pub trait MenusBackendMut {
     /// `ContainerClose`, then removes the menu, returns the carried stack to the inventory,
     /// and fires `player_container_close`. Refuses stale menus, clients, a player whose state
     /// is swapped in for a turn, a pending disconnect, and the player's own inventory menu.
-    /// During a click action, true accepts a request to close that same window at commit; an
-    /// aborted action leaves it open. A client closes its own screen with `close`.
+    /// In a transaction, true accepts a request to close that same window at root commit;
+    /// an abort leaves it open. A client closes its own screen with `close`.
 
     fn menu_close_container(&mut self, menu: MenuRef) -> bool;
     /// Side: server.
