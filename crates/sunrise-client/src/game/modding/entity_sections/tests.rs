@@ -27,6 +27,7 @@ fn section_read_backend_refuses_reads_outside_its_snapshot() {
     let menu = mod_api::__private::game::menu_ref(player, 1, 1);
 
     assert_eq!(entity.bounding_box(&host), None);
+    assert_eq!(entity.residency(&host), EntityResidency::Gone);
     assert_eq!(
         player.supporting_block(&host),
         Err(mod_api::LevelReadError::Unavailable)
@@ -39,6 +40,81 @@ fn section_read_backend_refuses_reads_outside_its_snapshot() {
         menu.merchant_offers(&host),
         Err(mod_api::LevelReadError::Unavailable)
     ));
+}
+
+#[test]
+fn live_section_host_reports_moved_entity_residency_in_callback() {
+    type Observed = Arc<Mutex<Vec<(bool, EntityResidency, EntityResidency)>>>;
+    struct ResidencyListener(Observed, EntityRef);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for ResidencyListener {
+        fn entity_entering_section(
+            &self,
+            host: HostSide<'_>,
+            event: &mut EntityEnteringSectionEvent,
+        ) {
+            let (client, moved, other) = match host {
+                HostSide::Server(host) => {
+                    (false, event.entity.residency(host), self.1.residency(host))
+                }
+                HostSide::Client(host) => {
+                    (true, event.entity.residency(host), self.1.residency(host))
+                }
+            };
+            self.0.lock().unwrap().push((client, moved, other));
+        }
+    }
+
+    let observed = Observed::default();
+    let other = EntityRef::new(WorldEpoch::new(1), 99);
+    let mods = vec![mod_api::ModEntry::new(
+        "section-residency",
+        Box::new(ResidencyListener(observed.clone(), other)),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        let sections = std::cell::RefCell::new(EntitySections::default());
+        let w = scope(Overworld);
+
+        let player = EntityRef::new(w.epoch, 7);
+        sections
+            .borrow_mut()
+            .moved(w, 7, Some([8.0, 64.0, 8.0]), [24.0, 64.0, 8.0]);
+        tell_live(
+            &sections,
+            SectionWriter {
+                entity: player,
+                residency: EntityResidency::InPlace,
+                position: [24.0, 64.0, 8.0],
+                player: None,
+            },
+            false,
+        );
+
+        let mob = EntityRef::new(w.epoch, 12);
+        sections
+            .borrow_mut()
+            .moved(w, 12, Some([8.0, 64.0, 8.0]), [24.0, 64.0, 8.0]);
+        tell_live(
+            &sections,
+            SectionWriter {
+                entity: mob,
+                residency: EntityResidency::Busy,
+                position: [24.0, 64.0, 8.0],
+                player: None,
+            },
+            true,
+        );
+    });
+
+    assert_eq!(
+        *observed.lock().unwrap(),
+        vec![
+            (true, EntityResidency::InPlace, EntityResidency::Gone),
+            (false, EntityResidency::Busy, EntityResidency::Gone),
+        ]
+    );
 }
 
 /// What each told crossing carried: client side, entity id, old, new, chunk changed.
@@ -59,18 +135,18 @@ impl Hooks for Listener {
     }
 }
 
-type Positions = Arc<Mutex<Vec<Option<[f64; 3]>>>>;
+type Positions = Arc<Mutex<Vec<(Option<[f64; 3]>, EntityResidency)>>>;
 
 struct PositionListener(Positions);
 
 #[mod_api::__subscriptions]
 impl Hooks for PositionListener {
     fn entity_entering_section(&self, host: HostSide<'_>, event: &mut EntityEnteringSectionEvent) {
-        let position = match host {
-            HostSide::Server(host) => event.entity.position(host),
-            HostSide::Client(host) => event.entity.position(host),
+        let (position, residency) = match host {
+            HostSide::Server(host) => (event.entity.position(host), event.entity.residency(host)),
+            HostSide::Client(host) => (event.entity.position(host), event.entity.residency(host)),
         };
-        self.0.lock().unwrap().push(position);
+        self.0.lock().unwrap().push((position, residency));
     }
 }
 
@@ -420,12 +496,13 @@ fn a_real_mob_tick_exposes_each_intermediate_position_to_the_listener() {
             let id = floating_cow(game, [8.5, 100.0, 8.5]);
             teleport_then_walk(game, id, &[[8.5, 127.75, 8.5]], [0.0, 0.6, 0.0]);
             let positions = positions.lock().unwrap();
-            assert_eq!(
-                positions.first().copied().flatten(),
-                Some([8.5, 127.75, 8.5])
-            );
             assert_eq!(positions.len(), 2);
-            assert!(positions[1].is_some_and(|at| at[1] >= 128.0));
+            assert_eq!(
+                positions[0],
+                (Some([8.5, 127.75, 8.5]), EntityResidency::Busy)
+            );
+            assert!(positions[1].0.is_some_and(|at| at[1] >= 128.0));
+            assert_eq!(positions[1].1, EntityResidency::Busy);
         })
     });
 }

@@ -64,7 +64,6 @@ pub struct WorldGeometry {
     /// `PipelineFrame.time` for this view.
     time: f32,
     copies: Vec<ModelCopy>,
-    groups: std::collections::HashSet<mod_api::InstanceGroupRef>,
     accepted_models: u32,
     model_cut: u32,
     /// The stage lines and quads go to now (`RenderLevelStage::ALL`'s index).
@@ -87,7 +86,6 @@ impl Default for WorldGeometry {
             label_scratch: Vec::with_capacity(CAPACITY as usize * 4),
             time: 0.0,
             copies: Vec::with_capacity(INSTANCE_CAPACITY as usize),
-            groups: std::collections::HashSet::with_capacity(INSTANCE_CAPACITY as usize),
             accepted_models: 0,
             model_cut: 0,
             stage: 0,
@@ -109,7 +107,6 @@ impl WorldGeometry {
         self.label_runs.clear();
         self.clear_copies();
         self.model_cut = 0;
-        self.groups.clear();
         self.stage = 0;
         self.stage_ends = [[0; 4]; STAGES - 1];
     }
@@ -222,15 +219,6 @@ impl WorldGeometry {
             self.accepted_models += 1;
         }
         Ok(())
-    }
-    pub fn group_room(&self) -> bool {
-        self.groups.len() < INSTANCE_CAPACITY as usize
-    }
-    pub fn has_group(&self, group: mod_api::InstanceGroupRef) -> bool {
-        self.groups.contains(&group)
-    }
-    pub fn mark_group(&mut self, group: mod_api::InstanceGroupRef) {
-        self.groups.insert(group);
     }
     pub fn copy_count(&self) -> usize {
         self.copies.len()
@@ -999,5 +987,30 @@ mod tests {
         draw.reset([0.0; 3], Mat4::IDENTITY, [0.5, 0.5]);
         draw.sort_labels();
         assert!(draw.labels()[0].is_empty());
+    }
+
+    #[test]
+    fn repeated_empty_or_culled_submissions_do_not_block_visible_draws() {
+        let mut draw = WorldGeometry::default();
+        draw.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+        let batch = ModelBatch {
+            slot: 3,
+            generation: 9,
+            bounds: [[0.0; 3], [1.0; 3]],
+        };
+        let near = ModelInstance::at([1.0, 2.0, 3.0], 0xFF80_C040);
+        let far = ModelInstance::at([40.0, 0.0, 0.0], 0xFF80_C040);
+        for _ in 0..=INSTANCE_CAPACITY {
+            draw.submit_validated_model(batch, &[], Some(&NearX), |_, _| false)
+                .unwrap();
+            draw.submit_validated_model(batch, &[far], Some(&NearX), |_, _| false)
+                .unwrap();
+        }
+        assert_eq!(draw.copy_count(), 0);
+        assert_eq!(draw.usage().instances_used, 0);
+        draw.submit_validated_model(batch, &[near], Some(&NearX), |_, _| false)
+            .unwrap();
+        assert_eq!(draw.copy_count(), 1);
+        assert_eq!(draw.usage().instances_used, 1);
     }
 }

@@ -371,6 +371,10 @@ mod tests {
                     && player.entity() == event.entity
                 {
                     assert_eq!(
+                        event.entity.residency(host),
+                        mod_api::EntityResidency::InPlace
+                    );
+                    assert_eq!(
                         player.reset_fall_distance(host),
                         Err(mod_api::LevelWriteError::Unavailable),
                     );

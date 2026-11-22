@@ -87,9 +87,7 @@ impl InstanceGroupStorage {
             .get_mut(fields.slot as usize)
             .and_then(Option::as_mut)
             .filter(|g| {
-                g.owner == mod_api::content::crash::current_native_mod()
-                    && g.generation == fields.generation
-                    && g.model.fields().generation == model_generation
+                g.generation == fields.generation && g.model.fields().generation == model_generation
             })
             .ok_or(GroupError::Stale)
     }
@@ -223,19 +221,12 @@ impl Game<'_> {
     ) -> Result<(), GroupError> {
         let mut storage = self.instance_groups.borrow_mut();
         let group = storage.get(handle, self.standalone_geometry.generation())?;
-        if draw.has_group(handle) {
-            return Ok(());
-        }
-        if !draw.group_room() {
-            return Err(GroupError::CapacityExceeded);
-        }
         self.draw_cached_model_instances(
             draw,
             group.model,
             &group.composed[..group.len],
             Some(&group.records[..group.len]),
         )?;
-        draw.mark_group(handle);
         Ok(())
     }
 }
@@ -311,21 +302,48 @@ mod tests {
             ]
         );
         let handle = mod_api::__private::built::instance_group_ref(1, 0);
+        let owned_handle = mod_api::__private::built::instance_group_ref(2, 1);
+        let owned = Group {
+            generation: 2,
+            owner: Some("group-owner"),
+            model: mod_api::__private::built::model_ref(1, 0),
+            copies: vec![copy],
+            len: 1,
+            transform: Mat4::IDENTITY,
+            composed: vec![copy],
+            records: vec![PreparedModelInstance::new(
+                Mat4::IDENTITY,
+                DVec3::ZERO,
+                DVec3::ZERO,
+                [1.0; 4],
+                0,
+            )],
+            converted_bytes: 0,
+        };
         let mut storage = InstanceGroupStorage {
-            next: 1,
-            groups: vec![Some(group)],
+            next: 2,
+            groups: vec![Some(group), Some(owned)],
         };
         assert!(storage.get(handle, 1).is_ok());
-        // Disabling a mod must not retire unmarked engine-owned groups.
+        assert!(storage.get(owned_handle, 1).is_ok());
+        // Access checks generation and model lifetime, not the TLS caller mod name.
+        {
+            let _other =
+                mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                    id: "other",
+                    hook: "test",
+                    part: None,
+                });
+            assert!(storage.get(handle, 1).is_ok());
+            assert!(storage.get(owned_handle, 1).is_ok());
+            assert!(matches!(storage.get(handle, 2), Err(GroupError::Stale)));
+        }
+        // Disabling the owner still retires its groups without touching engine-owned ones.
         storage.retire_disabled(&std::collections::BTreeSet::from(["group-owner".into()]));
         assert!(storage.get(handle, 1).is_ok());
-        assert!(matches!(storage.get(handle, 2), Err(GroupError::Stale)));
-        let _owner =
-            mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
-                id: "other",
-                hook: "test",
-                part: None,
-            });
-        assert!(matches!(storage.get(handle, 1), Err(GroupError::Stale)));
+        assert!(matches!(
+            storage.get(owned_handle, 1),
+            Err(GroupError::Stale)
+        ));
     }
 }

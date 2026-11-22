@@ -12,13 +12,6 @@ pub trait EntitiesHost {
     /// this window's own player included. API 373.
     fn entity(&self, id: u32) -> Option<EntityRef>;
     /// Side: both.
-    /// Where the entity `entity` names is now, as its Part state (`EntityPartState`) checks it:
-    /// resident in the level this host is in, out of its lists for its own tick, resident in
-    /// another level, or gone (removed or its removal pending, unloaded, moved under a new
-    /// id, or a handle of another world open). On a client, in place for an entity the
-    /// client has in the level it shows.
-    fn entity_residency(&self, entity: EntityRef) -> EntityResidency;
-    /// Side: both.
     /// The level `dimension` (`minecraft:the_nether`) as a handle: on a client,
     /// the level it shows, whatever the server calls it, and each level the
     /// server opened for viewing (`sunrise:levels`) while that view is open. A
@@ -102,6 +95,19 @@ pub trait EntitiesServerHost {
         velocity: [f64; 3],
         falling: Falling,
     ) -> bool;
+}
+/// The handles' reads of the `entities` area, implemented by the game and reached through [`Backend`].
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntitiesBackend {
+    /// Side: both.
+    /// Where this entity is now, as its Part state ([`EntityPartState`]) checks it:
+    /// resident in the level this host is in, out of its lists for its own tick, resident in
+    /// another level, or gone (removed or its removal pending, unloaded, moved under a new
+    /// id, or a handle of another world open). On a client, in place for an entity the
+    /// client has in the level it shows.
+    fn entity_residency(&self, entity: EntityRef) -> EntityResidency;
 }
 /// The handles' client writes of the `entities` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

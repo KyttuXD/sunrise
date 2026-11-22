@@ -885,6 +885,7 @@ fn refusal(sig: &syn::Signature, name: &str) -> Result<&'static str, String> {
     match last.as_deref() {
         Some("Option") => Ok("None"),
         Some("bool") => Ok("false"),
+        Some("EntityResidency") => Ok("EntityResidency::Gone"),
         Some("Result") => Ok("Err(NoBackend::no_backend())"),
         Some("u64" | "u32" | "i32" | "u16" | "u8" | "usize") => Ok("0"),
         _ => Err(format!("{name}: cannot refuse its backend return type")),
@@ -974,8 +975,8 @@ fn handle_method(
         format!("{backend}(host)?.{call}")
     } else if returns("bool") {
         format!("{backend}(host).map(|backend| backend.{call}).unwrap_or(false)")
-    } else if returns("CommandResult") {
-        // An unresolved command source has neither a successful run nor feedback.
+    } else if returns("CommandResult") || returns("EntityResidency") {
+        // Without a backend, a command fails with no feedback and an entity is gone.
         format!("{backend}(host).map(|backend| backend.{call}).unwrap_or_default()")
     } else if returns("Result") {
         format!(
@@ -983,7 +984,7 @@ fn handle_method(
         )
     } else {
         return Err(format!(
-            "{name}: a {receiver} helper returns Option, bool, CommandResult or Result, the value a host without a backend refuses"
+            "{name}: a {receiver} helper returns Option, bool, CommandResult, EntityResidency or Result, the value a host without a backend refuses"
         ));
     };
     Ok(Some((
@@ -1120,18 +1121,19 @@ fn goal_view(
         let refusal = refusal(&entry.sig, name)?;
         let mut sig = entry.sig.clone();
         sig.ident = syn::parse_str(name).map_err(|e| format!("{name}: {e}"))?;
-        // Entity data answers the tick's view; everything else forwards to the real backend the
-        // view carries.
-        let entity_data = matches!(
-            entry.sig.inputs.iter().skip(1).find_map(|arg| match arg {
-                FnArg::Typed(arg) => Some(&*arg.ty),
-                FnArg::Receiver(_) => None,
-            }),
-            Some(syn::Type::Path(ty))
-                if ty.path.segments.len() == 1
-                    && GOAL_VIEW_ENTITY_ARGS
-                        .contains(&ty.path.segments[0].ident.to_string().as_str())
-        );
+        // Entity data answers the tick's view; residency and non-entity reads forward to the real
+        // backend the view carries (a lent mob is `EntityResidency::Busy`, not `Gone`).
+        let entity_data = name != "entity_residency"
+            && matches!(
+                entry.sig.inputs.iter().skip(1).find_map(|arg| match arg {
+                    FnArg::Typed(arg) => Some(&*arg.ty),
+                    FnArg::Receiver(_) => None,
+                }),
+                Some(syn::Type::Path(ty))
+                    if ty.path.segments.len() == 1
+                        && GOAL_VIEW_ENTITY_ARGS
+                            .contains(&ty.path.segments[0].ident.to_string().as_str())
+            );
         // How a forwarded read answers a host without a backend: its typed refusal.
         let forwarded = match refusal {
             "None" => ".flatten()".to_string(),
@@ -1368,6 +1370,16 @@ mod tests {
         assert!(code.contains(
             "backend_mut_of(host).map(|backend| backend.entity_run_command_with_output(self, line, level)).unwrap_or_default()"
         ));
+        // A residency read defaults to `EntityResidency::Gone` without a backend.
+        let residency = entry("fn entity_residency(&self, entity: EntityRef) -> EntityResidency;");
+        let (handle, code) = handle_method(&residency, Tier::Backend, &handles)
+            .unwrap()
+            .unwrap();
+        assert_eq!(handle, "EntityRef");
+        assert!(code.contains("pub fn residency (self , host : & dyn Host) -> EntityResidency"));
+        assert!(code.contains(
+            "backend_of(host).map(|backend| backend.entity_residency(self)).unwrap_or_default()"
+        ));
         // A `Result` method refuses with its error's `NoBackend` value on a host without a game.
         let tried = entry("fn level_attempt(&mut self, level: LevelRef) -> Result<u8, Refused>;");
         let (_, code) = handle_method(&tried, Tier::BackendMut, &handles)
@@ -1431,7 +1443,7 @@ mod tests {
             (
                 "fn entity_x(&self, entity: EntityRef);",
                 Tier::Backend,
-                "returns Option, bool, CommandResult or Result",
+                "returns Option, bool, CommandResult, EntityResidency or Result",
             ),
             (
                 "fn entity_x(&mut self, entity: EntityRef) -> bool;",
@@ -1639,6 +1651,22 @@ mod tests {
             assert!(area_tiers(area, file.clone()).unwrap().is_empty());
             assert!(area_tiers("Items", file).is_err());
         }
+    }
+
+    #[test]
+    fn goal_view_forwards_entity_residency_to_the_host_backend() {
+        let method = entry("fn entity_residency(&self, entity: EntityRef) -> EntityResidency;");
+        let area = Area {
+            stem: "entities".into(),
+            camel: "Entities".into(),
+            tiers: BTreeMap::new(),
+            tables: BTreeMap::new(),
+        };
+        let code = goal_view(&[], &[(&area, Tier::Backend, &method)], &[]).unwrap();
+        assert!(code.contains(
+            "mod_api::__private::backend_read(self.host, |backend| backend.entity_residency(entity)).unwrap_or(EntityResidency::Gone)"
+        ));
+        assert!(!code.contains("is_game_entity"));
     }
 
     #[test]

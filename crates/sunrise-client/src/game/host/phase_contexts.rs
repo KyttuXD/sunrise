@@ -134,31 +134,6 @@ impl ClientReloadHost for Game<'_> {
     fn instance_groups(&self) -> &dyn InstanceGroups {
         <Self as prelude::ServicesClientHost>::instance_groups(self)
     }
-    fn instance_group_write(
-        &self,
-        group: InstanceGroupRef,
-        first: u32,
-        instances: &[ModelInstance],
-    ) -> Result<(), GroupError> {
-        <Self as prelude::ClientRenderClientHost>::instance_group_write(
-            self, group, first, instances,
-        )
-    }
-    fn instance_group_set_len(&self, group: InstanceGroupRef, len: u32) -> Result<(), GroupError> {
-        <Self as prelude::ClientRenderClientHost>::instance_group_set_len(self, group, len)
-    }
-    fn instance_group_set_transform(
-        &self,
-        group: InstanceGroupRef,
-        transform: [f32; 12],
-    ) -> Result<(), GroupError> {
-        <Self as prelude::ClientRenderClientHost>::instance_group_set_transform(
-            self, group, transform,
-        )
-    }
-    fn instance_group_destroy(&self, group: InstanceGroupRef) -> Result<(), GroupError> {
-        <Self as prelude::ClientRenderClientHost>::instance_group_destroy(self, group)
-    }
     fn item_uses_block_light(&self, stack: &ItemStack, context: ItemDisplayContext) -> bool {
         <Self as prelude::ClientRenderClientHost>::item_uses_block_light(self, stack, context)
     }

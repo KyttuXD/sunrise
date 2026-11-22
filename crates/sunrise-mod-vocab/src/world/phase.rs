@@ -283,7 +283,9 @@ const EMPTY_CLIENT_RELOAD_SERVICES: EmptyClientReloadServices = EmptyClientReloa
 ///
 /// Named `ClientReloadHost` rather than `ClientReloadContext` because [`crate::ClientReloadContext`]
 /// is the per-listener asset file reader passed to `ClientReloadListener::prepare`.
-pub trait ClientReloadHost: ReloadContext + crate::prelude::ItemParticlesClientHost {
+pub trait ClientReloadHost:
+    ReloadContext + crate::prelude::ItemParticlesClientHost + crate::InstanceGroupContext
+{
     /// Published client render assets: standalone models, render pipelines, animations,
     /// and baked block-state models.
     fn render_assets(&self) -> &dyn crate::RenderAssets {
@@ -292,38 +294,6 @@ pub trait ClientReloadHost: ReloadContext + crate::prelude::ItemParticlesClientH
     /// Persistent model instance groups.
     fn instance_groups(&self) -> &dyn crate::InstanceGroups {
         &EMPTY_CLIENT_RELOAD_SERVICES
-    }
-    /// Atomically overwrite retained model copies in `group`.
-    fn instance_group_write(
-        &self,
-        _group: crate::InstanceGroupRef,
-        _first: u32,
-        _instances: &[crate::ModelInstance],
-    ) -> Result<(), crate::GroupError> {
-        Err(crate::GroupError::Stale)
-    }
-    /// Set the drawn length of `group`.
-    fn instance_group_set_len(
-        &self,
-        _group: crate::InstanceGroupRef,
-        _len: u32,
-    ) -> Result<(), crate::GroupError> {
-        Err(crate::GroupError::Stale)
-    }
-    /// Replace the transform of `group`.
-    fn instance_group_set_transform(
-        &self,
-        _group: crate::InstanceGroupRef,
-        _transform: [f32; 12],
-    ) -> Result<(), crate::GroupError> {
-        Err(crate::GroupError::Stale)
-    }
-    /// Retire retained model copies in `group`.
-    fn instance_group_destroy(
-        &self,
-        _group: crate::InstanceGroupRef,
-    ) -> Result<(), crate::GroupError> {
-        Err(crate::GroupError::Stale)
     }
     /// Whether `stack`'s resolved model uses block lighting in `context`.
     fn item_uses_block_light(

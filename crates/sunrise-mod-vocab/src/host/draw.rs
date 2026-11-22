@@ -557,11 +557,12 @@ pub trait CameraDrawContext {
 }
 /// Per-view untextured geometry, cleared even without listeners; `usage` reports fixed setup-time limits shared across listeners and depth modes.
 pub trait WorldDrawContext {
-    /// Draw a retained group once per view, with per-view culling and the batch route rules.
-    /// Repeated submissions in one view are ignored. Only visible copies consume its budget.
-    /// The shared limit is 16,384 visible copies and 16,384 groups per view. Refusal is atomic.
+    /// Submit a retained group's live copies for this view, with per-view culling and the batch
+    /// route rules. Each call submits explicitly; repeated submissions of the same group in one
+    /// view each draw again. Only visible copies consume the shared per-view budget of 16,384
+    /// visible copies. Refusal is atomic.
     /// Shader packs and overlays use the same CPU path as transient model batches.
-    /// Retired or foreign groups return [`GroupError::Stale`], even if drawn earlier this view.
+    /// Retired groups return [`GroupError::Stale`], even if drawn earlier this view.
     fn draw_instance_group(&mut self, group: InstanceGroupRef) -> Result<(), GroupError> {
         unimplemented!("WorldDrawContext::draw_instance_group")
     }
