@@ -1328,7 +1328,7 @@ pub struct ProfileProperty<'a> {
 }
 
 // no wire: An in-process result of a native menu open, not a transported payload.
-/// Why [`PlayerRef::open_mod_menu`] opened nothing.
+/// Why [`PlayerRef::open_mod_menu`] or [`PlayerRef::open_chest_menu`] opened nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OpenMenuError {
@@ -1351,11 +1351,19 @@ pub enum OpenMenuError {
     DataCountMismatch,
     /// The title cannot be encoded as vanilla network NBT.
     TitleNotEncodable,
+    /// One of the stacks passed to [`PlayerRef::open_chest_menu`] was refused at the game's item conversion boundary.
+    Stack(StackWriteError),
 }
 
 impl From<crate::text::TextFormError> for OpenMenuError {
     fn from(error: crate::text::TextFormError) -> Self {
         Self::Title(error)
+    }
+}
+
+impl From<StackWriteError> for OpenMenuError {
+    fn from(error: StackWriteError) -> Self {
+        Self::Stack(error)
     }
 }
 
@@ -1393,17 +1401,18 @@ impl NoBackend for RespawnRefusal {
     }
 }
 
-/// Why `menu_set_items` replaced nothing. Nothing is sent when one comes back.
+/// Why [`MenuRef::set_items`] replaced nothing. Nothing is sent when one comes back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum MenuItemsRefusal {
     /// The call was made on a client; menus are the server's.
     Client,
-    /// No player of that UUID is online and placed.
+    /// The menu's player is not online and placed.
     NoPlayer,
-    /// The window is not the player's open `open_menu` menu: another window, a menu the game
-    /// opened (a chest, a trade), or none open.
+    /// The handle does not name the player's open [`PlayerRef::open_chest_menu`] or
+    /// [`PlayerRef::open_mod_menu`] window: a stale handle, a menu the game opened (a chest, a
+    /// trade), or the inventory menu.
     NotOpen,
     /// One of the stacks was refused at the game's item conversion boundary: an item the world
     /// lacks, a count or damage the item does not allow.

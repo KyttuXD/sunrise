@@ -490,40 +490,6 @@ impl Hub {
         )
     }
 
-    /// Replaces what the guest's open native menu `window` shows with `items` (padded to its
-    /// slots, extra ones dropped) and sends them at once, as
-    /// `AbstractContainerMenu.sendAllDataToRemote`: the screen stays open.
-    pub fn set_native_menu_items(
-        &mut self,
-        conn: u32,
-        window: i32,
-        mut items: Vec<Option<ItemStack>>,
-        send: bool,
-    ) -> Result<(), mod_api::MenuItemsRefusal> {
-        use mod_api::MenuItemsRefusal;
-        let i = self
-            .guests
-            .iter()
-            .position(|g| g.conn == conn)
-            .ok_or(MenuItemsRefusal::NoPlayer)?;
-        let menu = self.guests[i]
-            .menu
-            .as_ref()
-            .filter(|m| m.slots == Slots::Native && m.window == window)
-            .ok_or(MenuItemsRefusal::NotOpen)?;
-        if menu.owned_slots().is_some() {
-            return Err(MenuItemsRefusal::OwnedSlots);
-        }
-        items.resize(menu.size, None);
-        if send {
-            self.guests.update(i, |g| g.native_menu = items.clone());
-            self.send_menu_content(i, items);
-        } else {
-            self.guests.update(i, |g| g.native_menu = items);
-        }
-        Ok(())
-    }
-
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
     /// its id, or None when the menu type is unknown.
     pub fn open_merchant_window(&mut self, conn: u32, title: Tag) -> Option<i32> {
@@ -568,7 +534,8 @@ impl Hub {
         }))
     }
 
-    fn send_menu_content(&mut self, i: usize, mut items: Vec<Option<ItemStack>>) {
+    /// Send the resolved guest's container slots, inventory and cursor without reopening.
+    pub fn send_menu_content(&mut self, i: usize, mut items: Vec<Option<ItemStack>>) {
         let Some(menu) = &self.guests[i].menu else {
             return;
         };

@@ -43,10 +43,11 @@ pub enum SwapWith {
     Offhand,
 }
 
-/// Whether `open_menu` or `PlayerRef::open_mod_menu` first sends the client a close for the menu
-/// it replaces, as a Java `MenuProvider` chooses (`shouldTriggerClientSideContainerClosingOnOpen`).
-/// Either way the old menu closes on the server, its cursor stack going back to the player's
-/// inventory and `player_container_close` firing once.
+/// Whether [`PlayerRef::open_chest_menu`] or [`PlayerRef::open_mod_menu`] first sends the client a
+/// close for the menu it replaces, as a Java `MenuProvider` chooses
+/// (`shouldTriggerClientSideContainerClosingOnOpen`). Either way the old menu closes on the
+/// server, its cursor stack going back to the player's inventory and `player_container_close`
+/// firing once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // exhaustive: vanilla's choice is a boolean
 #[derive(sunrise_mod_api_macros::Wire)]

@@ -128,7 +128,7 @@ impl Game<'_> {
             .and_then(|t| t.links)
             .is_some_and(|link| link.slots().contains(&slot))
         {
-            let (pos, slot) = menu.slots.held_block_slot(&self.world, g, slot)?;
+            let (pos, slot) = menu.linked_slots(&self.world)?.backing(slot)??;
             Source::Linked {
                 pos,
                 slot,

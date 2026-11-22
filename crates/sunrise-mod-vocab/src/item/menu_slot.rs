@@ -98,7 +98,7 @@ pub enum MenuSlotBacking {
     /// Slot `.0` of a mod's display menu with no declared transient or handler backing.
     Native(usize),
     /// A container slot of a mod menu type opened with no block, backed by storage that is not a
-    /// block entity ([`PlayerRef::back_mod_menu_slots`](crate::PlayerRef::back_mod_menu_slots)):
+    /// block entity ([`MenuRef::back_slots`](crate::MenuRef::back_slots)):
     /// a held item's contents or an entity's item handler. Only such a slot has this backing.
     Place(MenuSlotPlace),
     /// Slot `.0` of this window's own transient container. It is never backed by another

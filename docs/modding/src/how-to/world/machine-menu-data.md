@@ -302,16 +302,18 @@ It is an empty slice when no payload matched this opening. Reusing a window id d
 its previous context. Keep owned decoded values if the screen needs them later; the bytes are
 borrowed only during construction. `pos` is an optional hint offered to the factory and later
 returned by `screen_pos()`. Neither is live data or block backing.
-The menu's declared container slots, if any, start empty. Opening returns the window id or
-`Ok(None)` when vetoed. Invalid type,
+Pass `Some(hand)` from an item's use to let `menu_still_valid` compare that hand's current
+stack with the one at open. Other openers pass `None`. The menu's declared container slots,
+if any, start empty; [`owned_slots`](../../concepts/capabilities/menu-slots.md#menu-owned-slots)
+declares a temporary container that belongs to the window. Opening returns `Ok(Some(MenuRef))`
+(call `menu.container_id(host)` for its window id) or `Ok(None)` when vetoed. Invalid type,
 connection or client support, opening bytes, data count or
 title returns `OpenMenuError`. Neither a refused nor a cancelled open closes the old menu.
-In a transaction `Ok(Some(staged))` returns a negative staged-open identity (`< 0`), separate
-from live protocol window ids (`0..=100`), and defers `container_opened` and installation until
+In a transaction `Ok(Some(staged))` returns a `MenuRef` for the staged request, not a live
+window. It cannot read or change any live menu. `container_opened` and installation wait until
 block changes have replayed at outermost commit. The veto runs in the player's level outside
-the transaction. Read the allocated vanilla window id after commit from
-`player.container_menu(host)` or in `player_container_open`; an abort leaves the old menu and
-its window counter untouched.
+the transaction. Obtain the live handle after commit from `player.container_menu(host)` or in
+`player_container_open`; an abort leaves the old menu and its window counter untouched.
 
 For a slotless status screen, declare `data/mymod/sunrise/menu/status.json` as
 `{ "slots": 0, "player_inventory": false, "data_slots": 2 }`. Register a screen factory
@@ -320,7 +322,7 @@ for `mymod:status` with an empty slot layout. Add a draw callback to the screen 
 ```rust,ignore
 let mut request = ModMenuOpen::new(status, Text::translate("mymod.status", vec![]));
 request.data = vec![-80_000, 7];
-player.open_mod_menu(host, request)?;
+let _menu = player.open_mod_menu(host, request)?; // Option<MenuRef>
 ```
 
 The negotiated blockless payload sends initial `i32` values after the window opens, at
@@ -343,7 +345,7 @@ tells of it synchronously. Version 2 names the type string `menu_type` (also on
 as `PlayerRef::container_menu` does. It is `None` for crafting tables, merchants, workstations,
 lecterns and mount inventories. `replace` is the Java `MenuProvider`'s choice
 (`shouldTriggerClientSideContainerClosingOnOpen`), as for
-[`open_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
+[`PlayerRef::open_chest_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
 `MenuReplace::CloseFirst`, vanilla's default, first sends the client a close for the old
 window, which centres the mouse again; `MenuReplace::InPlace` sends none, so the client keeps
 its screen and its mouse where they are until the new screen replaces it, as when one

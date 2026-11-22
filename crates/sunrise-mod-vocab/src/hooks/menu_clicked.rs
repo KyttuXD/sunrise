@@ -11,8 +11,8 @@ pub trait Hooks {
     /// example, copy an item into a filter slot without consuming the cursor.
     /// A display-only menu has no default moves. Other menus keep their ordinary slot rules
     /// when unhandled. The client predicts the ordinary click and the server corrects it.
-    /// No player's state is swapped in. Use their current `PlayerRef::container_menu` or the
-    /// native menu's UUID and window to reach its slots and cursor.
+    /// No player's state is swapped in. Use their current `PlayerRef::container_menu` to reach
+    /// its slots and cursor, or [`MenuRef::set_items`] to replace a display menu's contents.
     /// Runs directly on the receiving menu without a synthetic decided-action wrapper or
     /// whole-inventory rollback: open a transaction explicitly with [`ServerHost::transaction`]
     /// when a callback wants atomic multi-step edits, and prior unrelated writes stand even if

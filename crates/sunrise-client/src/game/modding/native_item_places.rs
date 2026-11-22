@@ -1791,22 +1791,16 @@ pub(super) mod tests {
             );
 
             // Stale or closed menu handles refuse with NotHeld before calling the editor.
-            let window = {
-                let host: &mut dyn ServerHost = game;
-                host.open_menu(
-                    123,
+            let player = game.player(123).unwrap();
+            let open_menu = player
+                .open_chest_menu(
+                    game,
                     1,
                     mod_api::Text::literal("box"),
                     Vec::new(),
                     MenuReplace::CloseFirst,
                 )
-                .unwrap()
-                .unwrap()
-            };
-            let open_menu = {
-                let host: &mut dyn ServerHost = game;
-                host.menu(123, window).unwrap()
-            };
+                .unwrap();
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 2));
             });
@@ -1816,10 +1810,7 @@ pub(super) mod tests {
                 }),
                 Err(ItemPlaceEditError::NotHeld)
             );
-            {
-                let host: &mut dyn ServerHost = game;
-                host.close_menu(123);
-            }
+            assert!(open_menu.close_container(game));
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 2));
             });
@@ -2010,18 +2001,17 @@ pub(super) mod tests {
             assert!(cursor_packets(&rx).is_empty());
 
             // Open a container menu, populate and snapshot its cursor, then edit while acting.
-            let window = {
-                let host: &mut dyn ServerHost = game;
-                host.open_menu(
-                    123,
+            let player = game.player(123).unwrap();
+            let open_menu = player
+                .open_chest_menu(
+                    game,
                     1,
                     mod_api::Text::literal("box"),
                     Vec::new(),
                     MenuReplace::CloseFirst,
                 )
-                .unwrap()
-                .unwrap()
-            };
+                .unwrap();
+            let window = open_menu.container_id(game).unwrap();
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 4));
             });
@@ -2034,10 +2024,6 @@ pub(super) mod tests {
             game.lan.as_mut().unwrap().hub.sync_containers(&game.world);
             assert!(cursor_packets(&rx).is_empty());
 
-            let open_menu = {
-                let host: &mut dyn ServerHost = game;
-                host.menu(123, window).unwrap()
-            };
             let acting_name = Tag::String("synced acting cursor".into());
             let mut acting_expected = ItemStack::new("minecraft:paper", 4);
             acting_expected.data_mut().custom_name = Some(acting_name.clone());
@@ -3461,24 +3447,19 @@ pub(super) mod tests {
                         vec![Some((ItemResource::of(&map), 1))],
                     )
                     .unwrap();
+                let player = game.player(12).unwrap();
                 let host: &mut dyn ServerHost = game;
-                let window = host
-                    .open_menu(
-                        12,
+                let menu = player
+                    .open_chest_menu(
+                        host,
                         3,
                         mod_api::Text::literal("map fixture"),
                         Vec::new(),
                         MenuReplace::CloseFirst,
                     )
-                    .unwrap()
                     .unwrap();
-                let menu = host.menu(12, window).unwrap();
-                game.player_back_mod_menu_slots(
-                    menu.fields().player,
-                    window,
-                    vec![MenuSlotPlace::EntityItems { entity, slot: 0 }],
-                )
-                .unwrap();
+                menu.back_slots(host, vec![MenuSlotPlace::EntityItems { entity, slot: 0 }])
+                    .unwrap();
                 let place = ItemPlace::MenuSlot { menu, slot: 0 };
                 assert_eq!(
                     place.with_stack(game, |stack| stack.project()).flatten(),

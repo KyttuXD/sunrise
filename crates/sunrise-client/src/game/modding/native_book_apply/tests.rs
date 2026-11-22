@@ -287,17 +287,14 @@ fn a_listening_part_places_the_recipe_through_the_real_stage() {
                 ));
             });
             game.player_menu_opening(opened.conn);
-            let menu = game.menu(opened.uuid, opened.window).unwrap();
+            let menu = game.native_menu_ref(opened.uuid, opened.window).unwrap();
             let places = (0..3)
                 .map(|slot| MenuSlotPlace::HeldItem {
                     hand: Hand::Main,
                     slot,
                 })
                 .collect();
-            assert_eq!(
-                game.player_back_mod_menu_slots(menu.fields().player, 1, places),
-                Ok(())
-            );
+            assert_eq!(menu.back_slots(game, places), Ok(()));
             let before = game.mod_book_menu_snapshot(12, 1, "review:menu").unwrap();
             let plan = MenuPlacement::for_mod(
                 "review:menu".into(),
@@ -381,10 +378,7 @@ fn a_listening_part_places_the_recipe_through_the_real_stage() {
                     slot,
                 })
                 .collect();
-            assert_eq!(
-                game.player_back_mod_menu_slots(menu.fields().player, 1, places),
-                Ok(())
-            );
+            assert_eq!(menu.back_slots(game, places), Ok(()));
             let root = game.transaction_open();
             assert_eq!(
                 game.stage_mod_book_place(&stale_identity, &selection, &plan, false),

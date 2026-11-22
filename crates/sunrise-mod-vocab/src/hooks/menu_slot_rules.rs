@@ -31,7 +31,8 @@ pub trait Hooks {
     /// `context.slot(container, index)`, covering both the menu's backing
     /// containers (`Main`, `Grid`, `Result`) and the player's inventory
     /// (`Player`: `0..36` inventory, `36..40` armor feet-to-head, `40` offhand,
-    /// matching vanilla `Inventory`).
+    /// matching vanilla `Inventory`). Bound linked slots read their actual storage; a
+    /// prepared crafting result belongs to the grid that was shown with it.
     /// A client without this mod predicts vanilla here; the server corrects it.
     ///
     /// `may_pickup` is `Slot.mayPickup`, answered only for a registered mod

@@ -23,9 +23,10 @@ impl Menu {
             return;
         };
         self.touch();
+        let layout = self.state.kind;
         for (index, slot) in self.state.slots[..kind.slots].iter_mut().enumerate() {
             if slot.role == Role::Hidden {
-                slot.role = Slot::mod_menu(kind, index).role;
+                slot.role = layout.slot(index).unwrap().role;
             }
         }
         for slot in unlinked {
