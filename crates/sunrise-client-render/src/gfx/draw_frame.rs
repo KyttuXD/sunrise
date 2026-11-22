@@ -1380,6 +1380,33 @@ impl Renderer {
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
             && self.native.is_none()
             && oit::supported(&self.device);
+        // The posed models' vertices come first: the ordinary entities' draw takes them in.
+        let posed = if pack_skin {
+            0
+        } else {
+            skin.map_or(0, |s| s.vertices)
+        };
+        let outlined = skin.map_or(0, |s| s.outline_vertices);
+        let entity_quad_capacity = self.entity_quad_capacity();
+        let reserved_skin_quads = (posed / 4) as usize + (outlined / 4) as usize;
+        let combined_quad_budget = entity_quad_capacity
+            .max_quads()
+            .saturating_sub(reserved_skin_quads);
+        let reserved_halfway_hand_quads = if fg {
+            (frame.hand.len() / 4).min(combined_quad_budget)
+        } else {
+            0
+        };
+        let batch_quad_budget = combined_quad_budget.saturating_sub(reserved_halfway_hand_quads);
+        let batch_counts = self.entity_batch.update_within(
+            entities,
+            frame.additive,
+            frame.hand,
+            frame.see_through,
+            frame.shadow_only,
+            oit_on,
+            batch_quad_budget,
+        );
         let [
             entity_quads,
             text_quads,
@@ -1398,20 +1425,12 @@ impl Renderer {
             native_cutout_quads,
             native_cutout_mipped_quads,
             native_translucent_quads,
-        ] = self.entity_batch.update(
-            entities,
-            frame.additive,
-            frame.hand,
-            frame.see_through,
-            oit_on,
-        );
-        self.entity_batch.append_shadow_only(frame.shadow_only);
-        // The posed models' vertices come first: the ordinary entities' draw takes them in.
-        let posed = if pack_skin {
-            0
-        } else {
-            skin.map_or(0, |s| s.vertices)
-        };
+        ] = batch_counts.materials;
+        let entities = &entities[..batch_counts.admitted_entity_vertices];
+        let additive_quads = batch_counts.additive;
+        let hand_quads = batch_counts.hand;
+        let see_through_quads = batch_counts.see_through;
+        let shadow_only_quads = batch_counts.shadow_only;
         let entity_quads = entity_quads + posed / 4;
         let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads = entity_quads
@@ -1534,8 +1553,9 @@ impl Renderer {
         // Frame generation's made frame draws its own hand, halfway, after the others.
         let made_hand_vertex = (posed as usize + self.entity_batch.combined.len()) as i32;
         if fg {
+            let halfway_hand = &frame.hand[..hand_quads as usize * 4];
             self.frame_gen
-                .halfway_hand(frame.hand, hand_view, &mut self.entity_batch.combined);
+                .halfway_hand(halfway_hand, hand_view, &mut self.entity_batch.combined);
             self.frame_gen.track_entities(
                 &self.device,
                 &self.entity_atlas,
@@ -1545,18 +1565,13 @@ impl Renderer {
             );
         }
         let all_entities = &self.entity_batch.combined;
-        let hand_quads = (frame.hand.len() / 4) as u32;
-        let additive_quads = (frame.additive.len() / 4) as u32 - self.entity_batch.moved_additive;
-        let see_through_quads = (frame.see_through.len() / 4) as u32;
-        let shadow_only_quads = (frame.shadow_only.len() / 4) as u32;
         // Glowing entities' silhouettes posed on the GPU go last, past every
         // material (the outline pass draws them from there).
         let outline_base = posed + all_entities.len() as u32;
-        let outlined = skin.map_or(0, |s| s.outline_vertices);
         let entity_vertices = u64::from(outline_base) + u64::from(outlined);
         if entity_vertices > self.entity_capacity {
             self.entity_capacity =
-                entity_buffer_vertices(entity_vertices, self.device.limits().max_buffer_size);
+                entity_buffer_vertices(entity_vertices, entity_quad_capacity.vertex_bytes);
             self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Entity vertices"),
                 size: self.entity_capacity * std::mem::size_of::<Vertex>() as u64,
@@ -1843,8 +1858,9 @@ impl Renderer {
                 .max(outlined / 4)
                 .max(opaque_draw)
                 .max(translucent_draw);
-        if max_quads > self.index_quads {
-            self.index_quads = max_quads.next_power_of_two();
+        let needed_index_quads = max_quads.min(entity_quad_capacity.max_index_quads());
+        if needed_index_quads > self.index_quads {
+            self.index_quads = entity_quad_capacity.index_buffer_quads(needed_index_quads);
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         if let Some(b) = &frame.border {

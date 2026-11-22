@@ -391,6 +391,10 @@ impl Game<'_> {
             diffuse_lights(self.nether_lighting()),
             std::mem::take(out),
         )
+        .with_quad_budget(
+            self.entity_quad_capacity(),
+            self.entity_batch_reserved_quads(),
+        )
         .animated(self.animation_time());
         if world_origin.is_some() {
             surface.track_entity_local_light_pose();

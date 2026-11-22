@@ -454,7 +454,9 @@ impl RenderAssets {
             parsed.into_item_library()
         };
         // Fluids are drawn by the fluid renderer, not block models; breaking
-        // progress uses the destroy-stage overlays.
+        // progress uses the destroy-stage overlays. Ensure the missing texture
+        // sprite is always present in the blocks atlas for missing-sprite fallbacks.
+        sprites.insert_in_blocks("minecraft:missingno")?;
         for name in [
             "water_still",
             "water_flow",

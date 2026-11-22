@@ -49,7 +49,6 @@
   "crate::block::types::FakeEffect",
   "crate::item::recipe_rule::FireworkShape",
   "crate::runtime::Flow",
-  "crate::client::fluid_draw::FluidBoxError",
   "crate::client::fog::FogType",
   "crate::world::types::GameRuleError",
   "crate::client::first_person::Hand",

@@ -402,7 +402,7 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         &mut self,
         model: ModelRef,
         options: TerrainModelOptions<'_>,
-    ) -> Result<(), TerrainModelError> {
+    ) -> Result<(), ModelError> {
         self.game
             .native_draw_terrain_model(&mut *self.surface, model, options)
     }
@@ -414,12 +414,7 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         self.game
             .native_draw_model_part(&mut *self.surface, part, sprite, tint)
     }
-    fn fluid_box(
-        &mut self,
-        stack: &FluidStack,
-        bounds: [f32; 6],
-        options: FluidBoxOptions,
-    ) -> Result<(), FluidBoxError> {
+    fn fluid_box(&mut self, stack: &FluidStack, bounds: [f32; 6], options: FluidBoxOptions) {
         self.game
             .native_draw_fluid_box(&mut *self.surface, stack, bounds, options)
     }

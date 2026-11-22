@@ -461,12 +461,15 @@ pub trait BlockEntityDrawContext {
     /// under alpha 0.1, cutout-mipped under 0.5), the directional
     /// shading (independent of light), one sprite drawn as another with moved UVs, a UV
     /// shrink, and a `0xRRGGBB` tint on quads with a tint index. What a machine's belts,
-    /// shafts and casings draw with. A refusal draws nothing.
+    /// shafts and casings draw with. A stale generation or absent slot returns [`ModelError`]
+    /// without appending geometry; otherwise quads are submitted individually (missing sprites
+    /// fall back to `minecraft:missingno`, an unmatched `uv_shift` is a no-op, and invalid
+    /// primitives are skipped individually).
     fn terrain_model(
         &mut self,
         model: ModelRef,
         options: TerrainModelOptions<'_>,
-    ) -> Result<(), TerrainModelError> {
+    ) -> Result<(), ModelError> {
         unimplemented!("BlockEntityDrawContext::draw_terrain_model")
     }
     /// Draws `text` under `draw`'s pose as vanilla's `Font.drawInBatch` draws a component in
@@ -516,7 +519,8 @@ pub trait BlockEntityDrawContext {
     }
     /// Draws `stack` as a still fluid filling `bounds` (`[x0, y0, z0, x1, y1, z1]` in blocks
     /// under `draw`'s pose), as a tank's contents: `minecraft:water`, `minecraft:lava` or any
-    /// fluid with a look (`data/<mod>/sunrise/fluid/<name>.json`). A stack's components change
+    /// fluid with a look (`data/<mod>/sunrise/fluid/<name>.json`; a registered fluid without a
+    /// look or sprite falls back to `minecraft:missingno`). A stack's components change
     /// nothing: pass `options.argb` to colour a potion-like stack. Each face tiles the fluid's
     /// animated still sprite (`block/water_still`, a look's `sprite`; a look with no sprite draws
     /// its tint flat), one tile per block, cut at whole-block lines and keeping each part's
@@ -525,14 +529,10 @@ pub trait BlockEntityDrawContext {
     /// colour, unless `options.argb` replaces it. Sky light stays as `draw.light`; block light
     /// rises to the fluid's `light_level` (15 for lava). No face is shaded by direction. Faces are sorted far to
     /// near, alpha blended, culled from behind and write depth, drawn with the block entities
-    /// before the level's translucent terrain. A stack of 0 draws nothing and is `Ok` without
-    /// checking `bounds`; a refusal draws nothing.
-    fn fluid_box(
-        &mut self,
-        stack: &FluidStack,
-        bounds: [f32; 6],
-        options: FluidBoxOptions,
-    ) -> Result<(), FluidBoxError> {
+    /// before the level's translucent terrain. An empty or unresolved stack, or reversed or
+    /// non-finite bounds, draws nothing; valid quads are submitted individually up to the
+    /// device's vertex and index buffer capacity for the combined entity batch.
+    fn fluid_box(&mut self, stack: &FluidStack, bounds: [f32; 6], options: FluidBoxOptions) {
         unimplemented!("BlockEntityDrawContext::draw_fluid_box")
     }
 }

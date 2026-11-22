@@ -174,6 +174,7 @@ impl Game<'_> {
                     diffuse_lights(false),
                     Vec::new(),
                 )
+                .with_quad_budget(self.entity_quad_capacity(), 0)
                 .animated(self.animation_time());
                 self.native_block_entity_submit(block.pos, name, block.state, &entity, &mut draw);
                 // Its text's new glyphs upload with this screen's batch.

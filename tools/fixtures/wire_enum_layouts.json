@@ -308,12 +308,6 @@
       "canonical_path": "crate::runtime::Flow"
     },
     {
-      "name": "FluidBoxError",
-      "path": "crate::client::fluid_draw::FluidBoxError",
-      "hash": "d9936318eaa8eaba",
-      "canonical_path": "crate::client::fluid_draw::FluidBoxError"
-    },
-    {
       "name": "FogType",
       "path": "crate::client::fog::FogType",
       "hash": "031dbdacfa581d56",

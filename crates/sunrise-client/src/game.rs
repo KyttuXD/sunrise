@@ -434,8 +434,6 @@ mod dragon_boss_bar_name_tests;
 #[cfg(test)]
 #[path = "game/mobs/dragon_fireball_motion_tests.rs"]
 mod dragon_fireball_motion_tests;
-#[path = "game/modding/draw_boundary.rs"]
-mod draw_boundary;
 #[cfg(test)]
 #[path = "game/items/dropped_by_player_tests.rs"]
 mod dropped_by_player_tests;
@@ -3433,6 +3431,9 @@ struct Game<'a> {
     see_through_vertices: Vec<Vertex>,
     /// The first-person player's model, which only a native pack's shadow pass draws.
     shadow_only_vertices: std::cell::RefCell<Vec<Vertex>>,
+    /// Complete quads already committed to other streams in the active frame's combined entity
+    /// batch (additive, hand, and entity vertices outside the current target buffer).
+    frame_batch_reserved_quads: std::cell::Cell<usize>,
     /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
     /// while `pack_ids` is set (game/interface/shader_packs.rs).
     entity_spans: std::cell::RefCell<Vec<sunrise_client::gfx::pack_draw::EntitySpan>>,
@@ -11304,6 +11305,7 @@ impl Game<'_> {
         // the eyes and rays to it without changing their material routing.
         let mut additive = self.particles.take_additive();
         if !title {
+            self.frame_batch_reserved_quads.set(additive.len() / 4);
             let (built, static_sections, visible_static_sections, static_stats) =
                 spans::time("entity_geometry", || {
                     self.entity_geometry(camera, alpha, billboard_frustum, entities, &mut additive)
@@ -11313,6 +11315,7 @@ impl Game<'_> {
             visible_static_block_entity_sections = visible_static_sections;
             static_block_entity_stats = static_stats;
         } else {
+            self.frame_batch_reserved_quads.set(0);
             // No level behind the panorama, so no entity either: the GPU path's
             // draws are started by `begin_skinning`, which only `entity_geometry`
             // runs, and would otherwise stay those of the last world frame and
@@ -11348,6 +11351,8 @@ impl Game<'_> {
         let (mut hand, hand_items) = if title || self.scoping() {
             Default::default()
         } else {
+            self.frame_batch_reserved_quads
+                .set((additive.len() / 4).saturating_add(entities.len() / 4));
             self.hand_geometry(camera_alpha)
         };
         // GameRenderer.render3dHud: the screen effects after the hand, in
@@ -11430,6 +11435,17 @@ impl Game<'_> {
             self.polytone_gpu_particles(camera, alpha);
         }
         let mut world_geometry = self.world_geometry.take().expect("view storage");
+        let hand_copies = if self
+            .renderer
+            .as_ref()
+            .is_some_and(Renderer::frame_generation_on)
+        {
+            2
+        } else {
+            1
+        };
+        self.frame_batch_reserved_quads
+            .set((additive.len() / 4).saturating_add((hand.len() / 4).saturating_mul(hand_copies)));
         self.fill_world_geometry(
             title,
             camera.to_array(),
@@ -11438,6 +11454,7 @@ impl Game<'_> {
             &mut world_geometry,
             &mut entities,
         );
+        self.frame_batch_reserved_quads.set(0);
         if let Some((skin, slim)) = vanilla_skin
             && let Some(avatar) = self.player_model.as_mut()
         {
@@ -13599,6 +13616,7 @@ impl<'a> Game<'a> {
             luminance: Default::default(),
             see_through_vertices: Vec::new(),
             shadow_only_vertices: Default::default(),
+            frame_batch_reserved_quads: Default::default(),
             entity_spans: Default::default(),
             entity_runs: Vec::new(),
             entity_motion: Default::default(),

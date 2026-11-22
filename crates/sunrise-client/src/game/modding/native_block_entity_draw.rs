@@ -35,9 +35,7 @@ pub(super) struct StandaloneGeometry {
     bounds: Vec<[[f32; 3]; 2]>,
     /// What each fluid draws as in a `fluid_box`, by fluid slot, resolved on its first box of
     /// this generation (the table is rebuilt with the resources, so a reload resolves anew).
-    fluid_looks: std::cell::RefCell<
-        Vec<Option<Result<super::native_fluid_render::FluidBoxLook, mod_api::FluidBoxError>>>,
-    >,
+    fluid_looks: std::cell::RefCell<Vec<Option<Option<super::native_fluid_render::FluidBoxLook>>>>,
     /// The first slot past the baked store's: block state `n` is slot `states_from + n`.
     states_from: u32,
     /// Block states resolved by `block_state_model`, each once per generation.
@@ -187,9 +185,8 @@ impl StandaloneGeometry {
     pub(super) fn fluid_look(
         &self,
         slot: u32,
-        resolve: impl FnOnce()
-            -> Result<super::native_fluid_render::FluidBoxLook, mod_api::FluidBoxError>,
-    ) -> Result<super::native_fluid_render::FluidBoxLook, mod_api::FluidBoxError> {
+        resolve: impl FnOnce() -> Option<super::native_fluid_render::FluidBoxLook>,
+    ) -> Option<super::native_fluid_render::FluidBoxLook> {
         let mut looks = self.fluid_looks.borrow_mut();
         let at = slot as usize;
         if looks.len() <= at {
@@ -331,6 +328,10 @@ pub struct BlockEntityDraw {
     /// in the vertex stream those paths and their spans already cover.
     prepared: bool,
     records: Vec<PreparedRecord>,
+    /// Device-derived vertex and index capacity for the combined entity batch.
+    quad_capacity: sunrise_client::gfx::EntityQuadCapacity,
+    /// Complete quads already reserved by other draw sources in the same combined batch.
+    reserved_quads: usize,
 }
 
 /// One element (`block`, `model`, `terrain_model`, `cube` or `quad`) drawn under
@@ -401,15 +402,23 @@ impl PlacementLight<'_> {
         }
         let light_turn = turn.map(|m| m.as_dmat4());
         for e in elements {
+            let lo = e.start - start;
+            let hi = (e.end - start).min(vertices.len());
+            if lo >= hi {
+                continue;
+            }
             let centre = light_turn.map_or(e.centre, |m| m.transform_point3(e.centre));
             let ambient = self.level.sample(centre).unwrap_or(e.ambient);
-            let span = &mut vertices[e.start - start..e.end - start];
+            let span = &mut vertices[lo..hi];
             LitElement::apply_light(span, ambient);
             if turn.is_none()
                 && let LightPass::Fresh(Some(kept)) = &mut self.pass
             {
-                for (kept, drawn) in kept[e.start..e.end].iter_mut().zip(span) {
-                    kept.light = drawn.light;
+                let kept_end = e.end.min(kept.len());
+                if e.start < kept_end {
+                    for (kept, drawn) in kept[e.start..kept_end].iter_mut().zip(span) {
+                        kept.light = drawn.light;
+                    }
                 }
             }
         }
@@ -499,6 +508,10 @@ fn place_geometry(
     let mut start = 0;
     let mut spin: Option<Spin> = None;
     for (end, next_spin) in spins.iter().copied().chain([(vertices.len(), None)]) {
+        if start >= vertices.len() {
+            break;
+        }
+        let end = end.min(vertices.len());
         let span = &mut vertices[start..end];
         if !span.is_empty() {
             let turn = spin.map(|s| s.turn(time));
@@ -563,7 +576,35 @@ impl BlockEntityDraw {
             lit: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            quad_capacity: sunrise_client::gfx::EntityQuadCapacity::default_device(),
+            reserved_quads: 0,
         }
+    }
+
+    /// Sets the renderer-owned combined entity quad capacity and quads already reserved by other
+    /// draw sources in the same batch.
+    pub(super) fn with_quad_budget(
+        mut self,
+        quad_capacity: sunrise_client::gfx::EntityQuadCapacity,
+        reserved_quads: usize,
+    ) -> Self {
+        self.quad_capacity = quad_capacity;
+        self.reserved_quads = reserved_quads;
+        self
+    }
+
+    /// Opens the renderer-owned scoped quad submission sink for this draw.
+    pub(super) fn quad_scope(&mut self) -> sunrise_client::gfx::EntityQuadScope<'_> {
+        sunrise_client::gfx::EntityQuadScope::new(
+            &mut self.vertices,
+            self.quad_capacity,
+            self.reserved_quads,
+        )
+    }
+
+    /// Number of vertices currently recorded in this draw.
+    pub(super) fn vertices_len(&self) -> usize {
+        self.vertices.len()
     }
 
     /// This frame on the client's animation clock (`Game::animation_time`),
@@ -678,7 +719,7 @@ impl BlockEntityDraw {
     }
 
     fn finish_light(&mut self, level: Option<&LevelLight<'_>>) {
-        super::draw_boundary::truncate(&mut self.vertices, super::draw_boundary::MAX_DRAW_VERTICES);
+        self.quad_scope().truncate_to_budget();
         for e in &self.lit {
             let end = e.end.min(self.vertices.len());
             if e.start >= end {
@@ -866,14 +907,6 @@ impl BlockEntityDraw {
     ) {
         let pose = self.pose();
         let at = corners.map(|c| pose.transform_point3(Vec3::from_array(c)));
-        if !super::draw_boundary::quad_allowed(
-            at.map(|p| p.to_array()),
-            uv,
-            self.vertices.len(),
-            super::draw_boundary::MAX_DRAW_VERTICES,
-        ) {
-            return;
-        }
         let normal = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
         let normal = if normal == Vec3::ZERO {
             (at[2] - at[1]).cross(at[3] - at[1]).normalize_or(Vec3::Y)
@@ -890,33 +923,38 @@ impl BlockEntityDraw {
         } else {
             (shaded(tint, diffuse(normal, self.lights)), [0; 4])
         };
-        for (p, uv) in at.into_iter().zip(uv) {
-            self.vertices.push(Vertex {
-                pos: p.to_array(),
-                uv: [
-                    sprite.u0 + (sprite.u1 - sprite.u0) * uv[0],
-                    sprite.v0 + (sprite.v1 - sprite.v0) * uv[1],
-                ],
-                layer: 0,
-                color,
-                light,
-                normal,
-                glint_uv: [0.0, 0.0],
-            });
-        }
+        let quad = std::array::from_fn(|i| Vertex {
+            pos: at[i].to_array(),
+            uv: [
+                sprite.u0 + (sprite.u1 - sprite.u0) * uv[i][0],
+                sprite.v0 + (sprite.v1 - sprite.v0) * uv[i][1],
+            ],
+            layer: 0,
+            color,
+            light,
+            normal,
+            glint_uv: [0.0, 0.0],
+        });
+        let _ = self.quad_scope().submit_quad(quad);
     }
 
     fn model(&mut self, faces: &[super::minecarts::PreparedModelFace], tint: u32) {
         let ambient = self.element_ambient();
         let start = self.vertices.len();
+        let room = self.quad_scope().remaining_quads();
         super::minecarts::emit_model_faces(
-            faces.iter().copied().map(|face| (face, ambient)),
+            faces.iter().take(room).copied().map(|face| (face, ambient)),
             self.pose(),
             true,
             |index| (index >= 0).then_some(tint & 0xFF_FFFF),
             &mut self.vertices,
         );
-        super::minecarts::scale_tint_alpha(&mut self.vertices[start..], faces, tint);
+        super::minecarts::scale_tint_alpha(
+            &mut self.vertices[start..],
+            &faces[..faces.len().min(room)],
+            tint,
+        );
+        self.quad_scope().retain_valid_since(start);
         self.lit_since(start, Self::cell_centre, self.light & 0xffff);
     }
 }
@@ -1044,13 +1082,21 @@ impl KeptGeometry {
         let start = draw.vertices.len();
         if let Some(entry) = self.get(pos, key, revision, draw.game_time) {
             if visible(entry.bounds, start) {
+                let take = entry
+                    .vertices
+                    .len()
+                    .min(draw.quad_scope().remaining_quads().saturating_mul(4))
+                    / 4
+                    * 4;
                 if entry.spins.is_empty() {
-                    draw.vertices.extend(entry.vertices.iter().map(|v| Vertex {
-                        pos: (Vec3::from_array(v.pos) + origin).to_array(),
-                        ..*v
-                    }));
+                    draw.vertices
+                        .extend(entry.vertices[..take].iter().map(|v| Vertex {
+                            pos: (Vec3::from_array(v.pos) + origin).to_array(),
+                            ..*v
+                        }));
+                    draw.quad_scope().retain_valid_since(start);
                 } else {
-                    draw.vertices.extend_from_slice(&entry.vertices);
+                    draw.vertices.extend_from_slice(&entry.vertices[..take]);
                     place_geometry(
                         &mut draw.vertices[start..],
                         &entry.spins,
@@ -1062,6 +1108,7 @@ impl KeptGeometry {
                             pass: LightPass::Retained,
                         }),
                     );
+                    draw.quad_scope().retain_valid_since(start);
                 }
             }
             return;
@@ -1168,6 +1215,35 @@ impl Game<'_> {
             })
         })
     }
+    /// Device-derived combined entity quad capacity for this frame's renderer.
+    pub(super) fn entity_quad_capacity(&self) -> sunrise_client::gfx::EntityQuadCapacity {
+        self.renderer.as_ref().map_or_else(
+            sunrise_client::gfx::EntityQuadCapacity::default_device,
+            sunrise_client::gfx::Renderer::entity_quad_capacity,
+        )
+    }
+
+    /// Complete quads already occupied by other draw sources in the same combined entity batch
+    /// (GPU-posed entities and outlines, see-through text, shadow-only player geometry, and the
+    /// active frame's additive, hand, or entity streams outside the current target buffer).
+    pub(super) fn entity_batch_reserved_quads(&self) -> usize {
+        let (posed, outlined) = {
+            let skin = self.skin_frame.borrow();
+            (
+                (skin.vertices / 4) as usize,
+                (skin.outline_vertices / 4) as usize,
+            )
+        };
+        let see_through = self.see_through_vertices.len() / 4;
+        let shadow_only = self.shadow_only_vertices.borrow().len() / 4;
+        self.frame_batch_reserved_quads
+            .get()
+            .saturating_add(posed)
+            .saturating_add(outlined)
+            .saturating_add(see_through)
+            .saturating_add(shadow_only)
+    }
+
     /// `native_block_entity_submit` for each of `blocks` (in drawn sections,
     /// drawn by no vanilla renderer) whose block entity is a mod's, closer than
     /// `BlockEntityRenderer.getViewDistance` to the camera (`shouldRender`)
@@ -1206,6 +1282,8 @@ impl Game<'_> {
                 self.standalone_geometry.generation(),
             ),
             records: Vec::new(),
+            quad_capacity: self.entity_quad_capacity(),
+            reserved_quads: self.entity_batch_reserved_quads(),
         };
         let now = self.world.game_time;
         let mut kept = self.kept_block_entities.borrow_mut();
@@ -1470,6 +1548,7 @@ impl Game<'_> {
         self.text_patches.borrow_mut().append(&mut batch.patches);
         let light = if glowing { 240 | 240 << 8 } else { draw.light };
         let pose = draw.pose();
+        let mut scope = draw.quad_scope();
         for (i, quad) in batch.vertices.as_chunks::<6>().0.iter().enumerate() {
             // The text sits a hair in front of its outline, as a sign's does
             // (`TEXT_OVER_OUTLINE`): one mesh, so no polygon offset.
@@ -1479,28 +1558,19 @@ impl Game<'_> {
                 0.0
             };
             let corners = sunrise_client::text_display::CORNERS.map(|c| quad[c]);
-            let at = corners.map(|v| {
-                pose.transform_point3(Vec3::new(v.pos[0], v.pos[1], v.depth + lift))
-                    .to_array()
+            let submitted = corners.map(|v| Vertex {
+                pos: pose
+                    .transform_point3(Vec3::new(v.pos[0], v.pos[1], v.depth + lift))
+                    .to_array(),
+                uv: v.uv,
+                layer: 0,
+                color: v.color,
+                light,
+                normal: [0; 4],
+                glint_uv: [0.0, 0.0],
             });
-            if !super::draw_boundary::quad_allowed(
-                at,
-                corners.map(|v| v.uv),
-                draw.vertices.len(),
-                super::draw_boundary::MAX_DRAW_VERTICES,
-            ) {
-                continue;
-            }
-            for (pos, v) in at.into_iter().zip(corners) {
-                draw.vertices.push(Vertex {
-                    pos,
-                    uv: v.uv,
-                    layer: 0,
-                    color: v.color,
-                    light,
-                    normal: [0; 4],
-                    glint_uv: [0.0, 0.0],
-                });
+            if !scope.submit_quad(submitted) {
+                break;
             }
         }
         width.ceil()
@@ -1854,6 +1924,8 @@ mod tests {
             lit: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            quad_capacity: sunrise_client::gfx::EntityQuadCapacity::default_device(),
+            reserved_quads: 0,
         }
     }
 

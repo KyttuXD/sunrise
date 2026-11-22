@@ -278,9 +278,10 @@ draw.terrain_model(self.belt, options)?;
 - `shade`: `Model` follows each quad's `shade` flag, `Off` turns directional shading off, and
   `Entity` shades every quad by the level's entity light directions. Full-bright light never
   turns shading off.
-- `uv_shift` draws faces of exactly one sprite with another, their UVs scaled then moved.
-  `uv_shrink_ratio` (`0.0..=1.0`, default `0.0`) pulls UVs towards each face's centre first,
-  for a model baked with an older `FaceBakery`'s atlas shrink. The engine never guesses it.
+- `uv_shift` draws faces of exactly one sprite with another, their UVs scaled then moved; if no
+  face uses `source_sprite`, the shift is a no-op. `uv_shrink_ratio` (default `0.0`) pulls UVs
+  towards each face's centre first, for a model baked with an older `FaceBakery`'s atlas shrink.
+  The engine never guesses it.
 - `tint` (`0xRRGGBB`) multiplies only quads with a tint index.
 - `color` (`0xAARRGGBB`, default white) multiplies every quad's colour after its own and the
   tint, alpha included; white skips the multiply. An alpha below `0xFF` puts every quad in the
@@ -290,10 +291,11 @@ draw.terrain_model(self.belt, options)?;
   fragments under alpha 0.1 discarded, the quad's directional shade baked into its colour. The
   renderer sorts the quads of all translucent models far to near each frame, as vanilla's
   `sortOnUpload` does, so submission order does not matter.
-- A stale handle returns `TerrainModelError::Model(ModelError)`. If any quad can't be drawn, the result is
-  `TerrainModelError::Refused` and nothing is drawn. That covers an unknown render type, a
-  missing sprite, a pose that flattens the model, a ratio out of range, and a shift
-  whose numbers aren't finite, whose sprites are unknown or whose source sprite no face uses.
+- A stale or unknown handle returns `ModelError` without appending geometry. Otherwise quads are
+  submitted individually up to the device's vertex and index buffer capacity for the combined
+  entity batch: missing sprites (including a missing
+  shift target) fall back to `minecraft:missingno`, and quads with an unsupported render type or
+  non-finite positions or UVs are skipped individually rather than refusing the whole model.
 
 ## Extra models in a block's mesh
 
@@ -396,19 +398,19 @@ A block entity, mob or player submit hook draws a tank's contents with
 
 ```rust,ignore
 let options = FluidBoxOptions::new(false, 4.0 / 1024.0);
-draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options)?;
+draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options);
 ```
 
 - The stack's fluid is `minecraft:water`, `minecraft:lava` or any fluid with a look
   (`data/<mod>/sunrise/fluid/<name>.json`: `sprite`, `tint`; [fluid looks](../content-mods/fluid-container-models.md)
   holds the format). A stack with components is drawn like one without: they change neither the
   sprite nor the tint, so a mod colours a potion-like stack with `with_argb` from its own
-  components. A registered fluid with no look is `FluidBoxError::MissingSprite`; an unresolved
-  fluid and the empty fluid are `FluidBoxError::UnsupportedFluid`.
+  components. A registered fluid with no look or a missing sprite falls back to
+  `minecraft:missingno`; an empty or unresolved fluid draws nothing.
 - Each face tiles the fluid's animated still sprite (a look's `sprite`; a look with no sprite
   draws its tint as a flat colour) once per block, cut at whole-block lines.
   Each tile keeps its place in the sprite. The box is not inset. `uv_shrink_ratio` is the
-  sprite's `TextureAtlasSprite.uvShrinkRatio` (`0.0..=1.0`), and `render_bottom` adds the bottom face.
+  sprite's `TextureAtlasSprite.uvShrinkRatio`, and `render_bottom` adds the bottom face.
 - The colour is the fluid's tint (water `0xFF3F76E4`, lava white, a mod fluid's look `tint`, grey
   `0xFF9A9A9A` when it has none, as `DrawContext::fluid` draws it), never the biome's water colour. `with_argb` replaces it, alpha
   included. Faces have no directional shading. Sky light is the draw's own, and block light
@@ -417,10 +419,9 @@ draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options
 - The faces use a material of their own: sorted far to near, alpha blended, culled from behind,
   and depth-writing. They draw with the block entities, before the level's translucent terrain,
   under shader packs too.
-- A stack of 0 draws nothing and returns `Ok` without checking `bounds`. Non-finite or reversed
-  bounds, bounds beyond 1,048,576 blocks, a box of more than 65,536 tiled quads and a ratio out of range are
-  `FluidBoxError::InvalidBox`. Missing fluid sprites return
-  `FluidBoxError::MissingSprite`. A refusal draws nothing.
+- A stack of 0, an empty or unresolved fluid, or reversed or non-finite bounds draws nothing.
+  Valid quads are submitted individually up to the device's vertex and index buffer capacity for
+  the combined entity batch without artificial coordinate or quad caps.
 
 ## Before and after a living entity draws
 

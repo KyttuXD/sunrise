@@ -346,6 +346,8 @@ impl Game<'_> {
         camera: DVec3,
         entities: &mut Vec<Vertex>,
     ) {
+        let capacity = self.entity_quad_capacity();
+        let reserved_quads = self.entity_batch_reserved_quads();
         let mut run_overlay = None;
         let mut materials = std::mem::take(&mut self.model_copy_order);
         materials.clear();
@@ -361,40 +363,40 @@ impl Game<'_> {
             let Some(faces) = self.standalone_geometry.faces(copy.slot) else {
                 continue;
             };
+            let room =
+                sunrise_client::gfx::EntityQuadScope::new(entities, capacity, reserved_quads)
+                    .remaining_quads();
+            if room == 0 {
+                break;
+            }
             let start = entities.len();
             if run_overlay != Some(copy.overlay) {
                 run_overlay = Some(copy.overlay);
                 self.mark_model_copies(start);
             }
-            let shown = || {
-                faces
-                    .iter()
-                    .filter(|face| !face.hidden_by(copy.hidden_faces))
-            };
-            super::minecarts::emit_model_faces(
-                shown().copied().map(|face| (face, copy.light)),
-                world_geometry::row_major_3x4(copy.transform),
-                true,
-                |index| (index >= 0).then_some(copy.tint & 0xFF_FFFF),
+            submit_opaque_model_copy(
                 entities,
+                capacity,
+                reserved_quads,
+                faces,
+                copy.transform,
+                (DVec3::from(copy.origin) - camera).as_vec3(),
+                copy.light,
+                copy.tint,
+                copy.color,
+                copy.overlay,
+                copy.hidden_faces,
             );
-            let shift = (DVec3::from(copy.origin) - camera).as_vec3();
-            let (quads, _) = entities[start..].as_chunks_mut::<4>();
-            for quad in quads {
-                for vertex in quad.iter_mut() {
-                    vertex.pos = (Vec3::from(vertex.pos) + shift).to_array();
-                    vertex.layer = copy.overlay;
-                    if copy.color != u32::MAX {
-                        vertex.color = terrain_model::multiply_draw_color(vertex.color, copy.color);
-                    }
-                }
-            }
-            super::minecarts::scale_tint_alpha(&mut entities[start..], shown(), copy.tint);
         }
         if !materials.is_empty() {
             self.mark_model_copies(entities.len());
             let layers = &self.pack.render.sprite_layers;
+            let mut scope =
+                sunrise_client::gfx::EntityQuadScope::new(entities, capacity, reserved_quads);
             for &index in &materials {
+                if !scope.has_room() {
+                    break;
+                }
                 let copy = draw.copy(index as usize);
                 let Some(faces) = self.model_faces(copy.slot) else {
                     continue;
@@ -418,24 +420,78 @@ impl Game<'_> {
                     hidden_faces: copy.hidden_faces,
                     ..Default::default()
                 };
-                terrain_model::draw_model(
-                    faces,
-                    pose,
-                    copy.light,
-                    options,
-                    |name| {
-                        layers
-                            .get(name)
-                            .or_else(|| layers.get(name.strip_prefix("minecraft:")?))
-                            .copied()
-                    },
-                    |vertex| entities.push(vertex),
-                );
+                submit_material_model_copy(&mut scope, faces, pose, copy.light, options, |name| {
+                    layers
+                        .get(name)
+                        .or_else(|| layers.get(name.strip_prefix("minecraft:")?))
+                        .copied()
+                });
             }
         }
         self.model_copy_order = materials;
         draw.clear_copies();
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_opaque_model_copy(
+    entities: &mut Vec<Vertex>,
+    capacity: sunrise_client::gfx::EntityQuadCapacity,
+    reserved_quads: usize,
+    faces: &[super::minecarts::PreparedModelFace],
+    transform: [f32; 12],
+    shift: Vec3,
+    light: u32,
+    tint: u32,
+    color: u32,
+    overlay: u32,
+    hidden_faces: u8,
+) {
+    let room = sunrise_client::gfx::EntityQuadScope::new(entities, capacity, reserved_quads)
+        .remaining_quads();
+    if room == 0 {
+        return;
+    }
+    let start = entities.len();
+    let shown = || {
+        faces
+            .iter()
+            .filter(|face| !face.hidden_by(hidden_faces))
+            .take(room)
+    };
+    super::minecarts::emit_model_faces(
+        shown().copied().map(|face| (face, light)),
+        world_geometry::row_major_3x4(transform),
+        true,
+        |index| (index >= 0).then_some(tint & 0xFF_FFFF),
+        entities,
+    );
+    let (quads, _) = entities[start..].as_chunks_mut::<4>();
+    for quad in quads {
+        for vertex in quad.iter_mut() {
+            vertex.pos = (Vec3::from(vertex.pos) + shift).to_array();
+            vertex.layer = overlay;
+            if color != u32::MAX {
+                vertex.color = terrain_model::multiply_draw_color(vertex.color, color);
+            }
+        }
+    }
+    super::minecarts::scale_tint_alpha(&mut entities[start..], shown(), tint);
+    sunrise_client::gfx::EntityQuadScope::new(entities, capacity, reserved_quads)
+        .retain_valid_since(start);
+}
+
+fn submit_material_model_copy(
+    scope: &mut sunrise_client::gfx::EntityQuadScope<'_>,
+    faces: &[sunrise_client::models::catalog::BakedFace],
+    pose: Mat4,
+    light: u32,
+    options: terrain_model::NativeModelRenderOptions<'_>,
+    sprite_layer: impl Fn(&str) -> Option<u32>,
+) {
+    terrain_model::draw_model(faces, pose, light, options, sprite_layer, |quad| {
+        scope.submit_quad(quad)
+    });
 }
 #[cfg(test)]
 mod tests {
@@ -1591,5 +1647,166 @@ mod tests {
             assert_eq!(entities.len(), 4);
             assert_eq!(game.prepared_model_draws.borrow()[0].cpu_vertices, 4);
         });
+    }
+
+    #[test]
+    fn shared_device_quad_capacity_bounds_fluid_terrain_models_and_cpu_model_copies() {
+        use mod_api::{FluidBoxOptions, FluidStack, TerrainModelOptions};
+        use sunrise_assets::{
+            bake::{RenderType, bake_flat_face},
+            model::{Direction, Material},
+        };
+        use sunrise_client::{
+            block_entity_render::diffuse_lights,
+            gfx::{EntityQuadCapacity, EntityQuadScope},
+            models::catalog::BakedFace,
+        };
+
+        let make_baked = || {
+            let mut quad = bake_flat_face(
+                [0.0; 3],
+                [16.0; 3],
+                [0.0, 0.0, 16.0, 16.0],
+                Direction::South,
+                Material {
+                    sprite: "test:casing".into(),
+                    force_translucent: false,
+                },
+                -1,
+            )
+            .unwrap();
+            quad.render_type = Some(RenderType::Cutout);
+            BakedFace::new(quad, 7, true, false, None)
+        };
+        let sample = make_baked();
+        let prepared_face = super::super::minecarts::PreparedModelFace::new(
+            &sample.quad,
+            sunrise_client::hud::Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 16,
+                h: 16,
+            },
+        );
+
+        // Small device-derived capacity: 7 total quads, with 2 already reserved by other streams
+        // in the same combined batch => 5 quads of budget shared across all draw paths.
+        let capacity =
+            EntityQuadCapacity::from_max_buffer_size(EntityQuadCapacity::VERTEX_QUAD_BYTES * 7);
+        let reserved = 2usize;
+
+        // 1) Terrain model submits 1 quad into `entities`.
+        let mut draw = super::super::native_block_entity_draw::BlockEntityDraw::posed(
+            0.0,
+            0,
+            0xF0F0,
+            [0; 3],
+            Mat4::IDENTITY,
+            diffuse_lights(false),
+            Vec::new(),
+        )
+        .with_quad_budget(capacity, reserved);
+        super::super::native_terrain_model::draw_terrain_model(
+            &mut draw,
+            &[make_baked()],
+            |_| Some(7),
+            TerrainModelOptions::default(),
+        );
+        let mut entities = draw.into_vertices();
+        assert_eq!(entities.len(), 4, "1 terrain model quad admitted");
+
+        // 2) Opaque CPU model copy adds 1 quad through the same device-derived capacity.
+        submit_opaque_model_copy(
+            &mut entities,
+            capacity,
+            reserved,
+            &[prepared_face],
+            rows(Mat4::IDENTITY),
+            Vec3::ZERO,
+            0xF0F0,
+            0xFFFF_FFFF,
+            u32::MAX,
+            0,
+            0,
+        );
+        assert_eq!(entities.len(), 8, "1 opaque CPU model copy quad admitted");
+
+        // 3) Material CPU model copy adds 2 quads through EntityQuadScope.
+        {
+            let mut scope = EntityQuadScope::new(&mut entities, capacity, reserved);
+            submit_material_model_copy(
+                &mut scope,
+                &[make_baked(), make_baked()],
+                Mat4::IDENTITY,
+                0xF0F0,
+                terrain_model::NativeModelRenderOptions::default(),
+                |_| Some(7),
+            );
+        }
+        assert_eq!(
+            entities.len(),
+            16,
+            "2 material CPU model copy quads admitted"
+        );
+
+        // 4) Fluid box receives the final 1 quad of remaining budget and stops at whole quads.
+        let water = FluidStack::new(mod_api::__private::parts_installation::fluid_key(0), 1000);
+        let look =
+            super::super::native_fluid_render::fluid_box_look("minecraft:water", None, 0, |_| {
+                Some(7)
+            })
+            .unwrap();
+        let mut draw = super::super::native_block_entity_draw::BlockEntityDraw::posed(
+            0.0,
+            0,
+            0xF0F0,
+            [0; 3],
+            Mat4::IDENTITY,
+            diffuse_lights(false),
+            entities,
+        )
+        .with_quad_budget(capacity, reserved);
+        super::super::native_fluid_render::draw_fluid_box(
+            &mut draw,
+            look,
+            &water,
+            [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            FluidBoxOptions::new(true, 0.0),
+        );
+        let mut entities = draw.into_vertices();
+        assert_eq!(
+            entities.len(),
+            20,
+            "fluid fills the 5th and final quad of budget (7 max - 2 reserved)"
+        );
+
+        // 5) Once at capacity, additional opaque/material CPU model copies add zero vertices.
+        submit_opaque_model_copy(
+            &mut entities,
+            capacity,
+            reserved,
+            &[prepared_face],
+            rows(Mat4::IDENTITY),
+            Vec3::ZERO,
+            0xF0F0,
+            0xFFFF_FFFF,
+            u32::MAX,
+            0,
+            0,
+        );
+        {
+            let mut scope = EntityQuadScope::new(&mut entities, capacity, reserved);
+            submit_material_model_copy(
+                &mut scope,
+                &[make_baked()],
+                Mat4::IDENTITY,
+                0xF0F0,
+                terrain_model::NativeModelRenderOptions::default(),
+                |_| Some(7),
+            );
+        }
+        assert_eq!(entities.len(), 20);
     }
 }
