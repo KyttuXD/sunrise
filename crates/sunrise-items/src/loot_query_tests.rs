@@ -1,3 +1,4 @@
+use sunrise_world::loot::global_modifiers::LootListAccess;
 thread_local! {
     static OBSERVED_CONTEXT: std::cell::RefCell<Option<(String, Option<sunrise_world::loot::LootStack>)>> = const { std::cell::RefCell::new(None) };
     static OBSERVED_ABILITY: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
@@ -536,14 +537,14 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> std::result::Result<(), String> {
             match self.0 {
                 0 => {
                     assert_eq!(
-                        generated
-                            .iter()
-                            .map(|stack| stack.count)
+                        (0..generated.len())
+                            .map(|i| generated.get(i).unwrap())
+                            .map(|stack| stack.count())
                             .collect::<Vec<_>>(),
                         [64, 64, 2]
                     );
@@ -555,24 +556,24 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
                     ));
                     assert_eq!(roll.next_long(), LegacyRandom::new(31).next_long());
                     let mut inspected = Vec::new();
-                    roll.roll_raw("test:raw", &mut |stack| inspected.push(stack.count))?;
+                    roll.roll_raw("test:raw", &mut |stack| inspected.push(stack.count()))?;
                     assert_eq!(inspected, [200]);
-                    generated[0].count = -3;
+                    generated.get_mut(0).unwrap().set_count(-3);
                     generated.truncate(1);
                     roll.append_raw("test:raw", generated)?;
                     Ok(())
                 }
                 1 => {
-                    generated[1].count = 205;
+                    generated.get_mut(1).unwrap().set_count(205);
                     generated.swap(0, 1);
                     roll.next_long();
                     roll.append_raw("test:missing", generated)
                 }
                 _ => {
                     assert_eq!(
-                        generated
-                            .iter()
-                            .map(|stack| stack.count)
+                        (0..generated.len())
+                            .map(|i| generated.get(i).unwrap())
+                            .map(|stack| stack.count())
                             .collect::<Vec<_>>(),
                         [205, -3, 200]
                     );
@@ -684,12 +685,12 @@ fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unspl
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> std::result::Result<(), String> {
             assert_eq!(
-                generated
-                    .iter()
-                    .map(|stack| (stack.item.as_str(), stack.count))
+                (0..generated.len())
+                    .map(|i| generated.get(i).unwrap())
+                    .map(|stack| (stack.item_id(), stack.count()))
                     .collect::<Vec<_>>(),
                 [
                     ("minecraft:diamond", 64),
@@ -699,7 +700,7 @@ fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unspl
             );
             let mut inspected = Vec::new();
             roll.roll_raw("test:dynamic", &mut |stack| {
-                inspected.push((stack.item.clone(), stack.count));
+                inspected.push((stack.item_id().to_owned(), stack.count()));
             })?;
             assert_eq!(inspected, [("minecraft:diamond".to_owned(), 130)]);
             roll.append_raw("test:dynamic", generated)
@@ -778,7 +779,7 @@ fn roll_as_caller(
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            _: &mut Vec<LootStack>,
+            _: &mut dyn LootListAccess,
         ) -> std::result::Result<(), String> {
             let facts = roll.facts();
             *self.0.lock().unwrap() = Some((

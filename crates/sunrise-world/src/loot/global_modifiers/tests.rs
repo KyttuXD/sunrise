@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 struct Identity;
 impl ModifierApply for Identity {
-    fn apply(&self, _: &mut dyn ModifierRoll, _: &mut Vec<LootStack>) -> Result<(), String> {
+    fn apply(&self, _: &mut dyn ModifierRoll, _: &mut dyn LootListAccess) -> Result<(), String> {
         Ok(())
     }
 }

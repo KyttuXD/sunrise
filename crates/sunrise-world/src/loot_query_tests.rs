@@ -1,4 +1,5 @@
 use super::*;
+use mod_api::__private::LootListAccess;
 use serde_json::json;
 use std::rc::Rc;
 fn data(tables: Vec<(&str, Value)>) -> LootData {
@@ -281,12 +282,12 @@ fn modifiers_run_once_after_split_and_raw_subrolls_share_random_and_guards() {
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> Result<(), String> {
             assert_eq!(
-                generated
-                    .iter()
-                    .map(|stack| stack.count)
+                (0..generated.len())
+                    .map(|i| generated.get(i).unwrap())
+                    .map(|stack| stack.count())
                     .collect::<Vec<_>>(),
                 [64, 64, 2]
             );
@@ -296,12 +297,13 @@ fn modifiers_run_once_after_split_and_raw_subrolls_share_random_and_guards() {
             ));
             assert_eq!(roll.next_long(), LegacyRandom::new(31).next_long());
             let mut inspected = Vec::new();
-            roll.roll_raw("test:raw", &mut |stack| inspected.push(stack.count))?;
+            roll.roll_raw("test:raw", &mut |stack| inspected.push(stack.count()))?;
             assert_eq!(inspected, [200]); // raw never runs this pass or the splitter
-            generated[0].count = -3;
-            generated[0]
-                .components
-                .push(("minecraft:custom_data".into(), Some(Tag::Int(42))));
+            generated.get_mut(0).unwrap().set_count(-3);
+            generated
+                .get_mut(0)
+                .unwrap()
+                .push_component("minecraft:custom_data".into(), Some(Tag::Int(42)));
             generated.truncate(1);
             roll.append_raw("test:raw", generated)?;
             generated.swap(0, 1);
@@ -313,9 +315,9 @@ fn modifiers_run_once_after_split_and_raw_subrolls_share_random_and_guards() {
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> Result<(), String> {
-            generated[0].count = 205;
+            generated.get_mut(0).unwrap().set_count(205);
             roll.next_long();
             roll.append_raw("test:missing", generated)
         }
@@ -325,17 +327,17 @@ fn modifiers_run_once_after_split_and_raw_subrolls_share_random_and_guards() {
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> Result<(), String> {
             assert_eq!(
-                generated
-                    .iter()
-                    .map(|stack| stack.count)
+                (0..generated.len())
+                    .map(|i| generated.get(i).unwrap())
+                    .map(|stack| stack.count())
                     .collect::<Vec<_>>(),
                 [205, -3]
             );
             assert_eq!(
-                generated[1].components,
+                generated.get(1).unwrap().components(),
                 [("minecraft:custom_data".into(), Some(Tag::Int(42)))]
             );
             let mut expected = LegacyRandom::new(31);
@@ -347,7 +349,11 @@ fn modifiers_run_once_after_split_and_raw_subrolls_share_random_and_guards() {
     }
     struct Skipped;
     impl ModifierApply for Skipped {
-        fn apply(&self, _: &mut dyn ModifierRoll, _: &mut Vec<LootStack>) -> Result<(), String> {
+        fn apply(
+            &self,
+            _: &mut dyn ModifierRoll,
+            _: &mut dyn LootListAccess,
+        ) -> Result<(), String> {
             panic!("a false base condition must skip application")
         }
     }
@@ -444,7 +450,7 @@ fn watched(table: Value, raw: Option<Value>) -> (LootData, Arc<std::sync::Mutex<
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &mut Vec<LootStack>,
+            generated: &mut dyn LootListAccess,
         ) -> Result<(), String> {
             let facts = roll.facts();
             *self.0.lock().unwrap() = Some((

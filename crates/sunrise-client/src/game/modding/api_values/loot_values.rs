@@ -47,7 +47,7 @@ fn encode_loot_name(
 }
 
 /// Borrow one raw loot candidate without converting it to an owned API stack.
-pub(crate) fn loot_stack_view(stack: &engine::LootStack) -> mod_api::LootStackView<'_> {
+pub(crate) fn loot_stack_view(stack: &dyn LootStackAccess) -> mod_api::LootStackView<'_> {
     mod_api::LootStackView::new(stack, sunrise_client_lib::api_text::captured_text)
 }
 
@@ -61,7 +61,9 @@ pub(crate) fn loot_stack_editor(stack: &mut engine::LootStack) -> mod_api::LootS
 }
 
 /// Borrow the evaluator's live generated loot list for one global modifier invocation.
-pub(crate) fn loot_list(stacks: &mut Vec<engine::LootStack>) -> mod_api::LootList<'_> {
+pub(crate) fn loot_list(
+    stacks: &mut dyn mod_api::__private::LootListAccess,
+) -> mod_api::LootList<'_> {
     mod_api::LootList::new(
         stacks,
         sunrise_client_lib::api_text::captured_text,

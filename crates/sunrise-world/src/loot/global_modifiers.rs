@@ -1,8 +1,9 @@
 //! Prepared, data-enabled modifiers and their one-pass roll capability.
 #[cfg(test)]
 mod tests;
-use super::{LootContext, LootStack};
+use super::LootContext;
 use crate::conditions::LoadConditions;
+use mod_api::__private::{LootListAccess, LootStackAccess};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use sunrise_core::identifier::Identifier;
@@ -19,8 +20,13 @@ pub trait ModifierRoll {
     fn next_boolean(&mut self) -> bool;
     fn next_gaussian(&mut self) -> f64;
     fn condition(&mut self, condition: &crate::loot::types::PreparedCondition) -> bool;
-    fn roll_raw(&mut self, table: &str, visit: &mut dyn FnMut(&LootStack)) -> Result<(), String>;
-    fn append_raw(&mut self, table: &str, generated: &mut Vec<LootStack>) -> Result<(), String>;
+    fn roll_raw(
+        &mut self,
+        table: &str,
+        visit: &mut dyn FnMut(&dyn LootStackAccess),
+    ) -> Result<(), String>;
+    fn append_raw(&mut self, table: &str, generated: &mut dyn LootListAccess)
+    -> Result<(), String>;
 }
 
 /// Mutate the generated loot list in place; earlier valid edits and random draws
@@ -30,7 +36,7 @@ pub trait ModifierApply: Send + Sync {
     fn apply(
         &self,
         context: &mut dyn ModifierRoll,
-        generated: &mut Vec<LootStack>,
+        generated: &mut dyn LootListAccess,
     ) -> Result<(), String>;
 }
 
@@ -155,7 +161,7 @@ impl GlobalLootModifiers {
     /// Run once after the root splitter, before consumption or container shuffle.
     /// Conditions and callbacks share the selected random. Earlier valid edits
     /// and draws are never rolled back, even when a modifier later returns an error.
-    pub fn apply(&self, context: &mut dyn ModifierRoll, generated: &mut Vec<LootStack>) {
+    pub fn apply(&self, context: &mut dyn ModifierRoll, generated: &mut dyn LootListAccess) {
         for instance in &self.instances {
             if instance
                 .decoded
@@ -187,7 +193,7 @@ impl ModifierApply for AddTableModifier {
     fn apply(
         &self,
         context: &mut dyn ModifierRoll,
-        generated: &mut Vec<LootStack>,
+        generated: &mut dyn LootListAccess,
     ) -> Result<(), String> {
         context.append_raw(&self.table, generated)
     }

@@ -142,7 +142,7 @@ impl ModifierApply for Adapter {
     fn apply(
         &self,
         roll: &mut dyn ModifierRoll,
-        generated: &mut Vec<loot::LootStack>,
+        generated: &mut dyn mod_api::__private::LootListAccess,
     ) -> Result<(), String> {
         let mut context = RollAdapter { roll };
         let mut list = super::api_values::loot_values::loot_list(generated);
