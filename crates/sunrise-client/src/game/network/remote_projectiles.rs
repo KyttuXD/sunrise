@@ -6,7 +6,7 @@ use super::{FallingBlock, Game, fireworks::fireworks_of};
 use crate::game::native_ticks::{TickRound, places_of, slot_place};
 use sunrise_client::items::ItemStack;
 use sunrise_client::join_seq::{JoinList, RestoreOrder};
-use sunrise_client::particles::{ParticleOptions, ParticleType};
+use sunrise_client::particles::{ParticleLevel, ParticleOptions, ParticleType};
 use sunrise_client::projectiles::{Projectile, ProjectileKind};
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use sunrise_protocol::entity_data::Value;
@@ -749,10 +749,11 @@ impl Game<'_> {
 
     /// `AreaEffectCloud.clientTick` for each cloud a server tracks.
     fn tick_remote_clouds(&mut self) {
+        let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
         for c in &mut self.potions.clouds {
             cloud_client_tick(
                 &mut self.particles,
-                &self.world,
+                &level,
                 c.at,
                 c.radius,
                 c.waiting,

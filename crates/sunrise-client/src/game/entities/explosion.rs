@@ -1814,12 +1814,18 @@ impl Game<'_> {
         let block_count = targets.len();
         let small = radius < 2.0 || interaction == BlockInteraction::Keep;
         let emitter = effects.emitter(small);
+        let level = sunrise_client::particles::ParticleLevel::new(
+            &self.world,
+            self.res.facts(),
+            self.collision,
+        );
         self.particles.explosion(
             center,
             emitter,
             block_count,
             radius,
             &effects.block_particles,
+            &level,
         );
         self.lan_explode(center, small, radius, block_count, pushed, effects);
         Ok(())

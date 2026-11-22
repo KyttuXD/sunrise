@@ -1158,7 +1158,7 @@ impl Game<'_> {
         swap(&mut self.spawn_scratch, &mut p.spawn_scratch);
         swap(&mut self.border, &mut p.border);
         // What only the client draws starts over.
-        self.clear_client_particles();
+        self.clear_client_level_particles();
     }
 
     /// Swap the level in place without publishing the one just left.

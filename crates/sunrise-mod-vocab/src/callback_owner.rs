@@ -285,6 +285,11 @@ impl CallbackOwner {
         self.binding.enabled(&self.poisoned)
     }
 
+    /// Whether this callback panicked, independently of mod enablement.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Acquire)
+    }
+
     /// Invoke retained code with its owner's enablement, attribution and panic policy.
     pub fn call<T>(
         &self,
@@ -402,6 +407,11 @@ impl<T> CallbackValue<T> {
     /// Borrow the value, which is present until this wrapper is dropped.
     pub fn value(&self) -> &T {
         self.value.as_ref().expect("live callback value")
+    }
+
+    /// Mutably borrow the retained value for a callback on its owning thread.
+    pub fn value_mut(&mut self) -> &mut T {
+        self.value.as_mut().expect("live callback value")
     }
 }
 

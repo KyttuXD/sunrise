@@ -403,6 +403,7 @@ impl Game<'_> {
                     [0.1, 0.0, 0.1],
                     0.2,
                     (actual * 0.5) as u32,
+                    None,
                 );
                 // The players a server serves are sent them too.
                 self.lan_send_particles(lan_particles::QueuedParticle {

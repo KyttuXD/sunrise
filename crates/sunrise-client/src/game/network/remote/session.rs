@@ -190,7 +190,7 @@ impl Game<'_> {
         self.clear_remote_projectiles();
         self.creatures.projectiles.clear();
         self.dropped.clear();
-        self.clear_client_particles();
+        self.clear_client_level_particles();
         self.falling.clear();
         self.mining = None;
         self.container = None;
@@ -476,8 +476,7 @@ impl Game<'_> {
         self.clear_remote_projectiles();
         self.creatures.projectiles.clear();
         self.dropped.clear();
-        self.particles.clear();
-        self.pickups.clear();
+        self.clear_client_level_particles();
         self.orbs.clear();
         self.falling.clear();
         self.mining = None;
@@ -938,7 +937,7 @@ impl Game<'_> {
             self.clear_remote_objects();
             self.clear_remote_projectiles();
             self.dropped.clear();
-            self.clear_client_particles();
+            self.clear_client_level_particles();
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.passenger_vehicles.clear();

@@ -166,7 +166,7 @@ impl Game<'_> {
         if let Some(ty) = sunrise_client::particles::ParticleType::from_name("crit") {
             let options = sunrise_client::particles::ParticleOptions::simple(ty);
             self.particles
-                .send_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15);
+                .send_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15, None);
             self.lan_level_particles(&options, at, [0.2, 0.2, 0.2], 0.0, 15, None);
         }
     }

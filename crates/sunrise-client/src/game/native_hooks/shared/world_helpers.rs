@@ -89,11 +89,16 @@ impl Game<'_> {
     }
     /// `ParticleEngine.clearParticles` over every group Sunrise keeps apart: the engine's
     /// particles, starters, queue and emitters, the item pickups and the elder guardian
-    /// apparition. Leaving a level and switching levels clear through it too.
+    /// apparition.
     pub(in crate::game) fn clear_client_particles(&mut self) {
         self.mod_clear_particles.set(false);
         self.particles.clear();
         self.pickups.clear();
+    }
+    /// Replacing or closing the client level also discards its `ClientExplosionTracker` work.
+    pub(in crate::game) fn clear_client_level_particles(&mut self) {
+        self.particles.discard_level_explosions();
+        self.clear_client_particles();
     }
     /// Applies a client mod's `clear_particles` if one is waiting. Called at the start of
     /// each particle tick, after `RenderFrameEvent.Pre`, and at particle extraction, after

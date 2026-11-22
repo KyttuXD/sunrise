@@ -588,7 +588,7 @@ fn add(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
 }
 /// `Level.addAlwaysVisibleParticle`: still shown under the Minimal option now and then.
 fn add_visible(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
-    engine.add_with(&ParticleOptions::simple(ty), p, v, false, true);
+    engine.add_with(None, &ParticleOptions::simple(ty), p, v, false, true);
 }
 fn sound(engine: &mut ParticleEngine, name: &'static str, p: [f64; 3], volume: f32, pitch: f32) {
     engine.sounds.push((name, p, volume, pitch, false));
@@ -2170,6 +2170,7 @@ pub fn make_campfire_smoke(
         T::CampfireCosySmoke
     };
     engine.add_with(
+        None,
         &ParticleOptions::simple(ty),
         [x, y, z],
         [0.0, 0.07, 0.0],

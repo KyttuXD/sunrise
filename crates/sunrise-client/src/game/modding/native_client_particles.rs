@@ -1,7 +1,7 @@
 //! Local particle and firework requests from native client hooks.
 use super::Game;
 use mod_api::{FireworksRequest, client::particles::PositionSource};
-use sunrise_client::particles::ParticleOptions;
+use sunrise_client::particles::{ParticleLevel, ParticleOptions};
 
 fn finite_options(options: &ParticleOptions) -> bool {
     options.color.into_iter().all(f32::is_finite)
@@ -55,8 +55,9 @@ impl Game<'_> {
         // The limiter's roll draws the level random: inside a part's `animate_tick`, the one
         // the part holds as `event.random`.
         self.with_lent_level_random(|game| {
+            let level = ParticleLevel::new(&game.world, game.res.facts(), game.collision);
             game.particles
-                .add_with_world(Some(&game.world), options, at, velocity, false, false);
+                .add_with(Some(&level), options, at, velocity, false, false);
         });
         true
     }
@@ -101,7 +102,7 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use mod_api::{ClientHost, FireworkExplosion, FireworkShape};
-    use sunrise_client::particles::{ParticleLevel, ParticleType};
+    use sunrise_client::particles::ParticleType;
 
     #[test]
     fn nonfinite_nested_particle_parameters_are_rejected() {

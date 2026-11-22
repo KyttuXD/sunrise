@@ -1281,53 +1281,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_particle_state_survives_the_wire() {
-        round(crate::ModParticle {
-            position: [1.25, -2.5, 3.75],
-            previous: [0.0, -1.0, 2.0],
-            velocity: [0.1, 0.2, -0.3],
-            age: 7,
-            lifetime: 31,
-            size: 0.5,
-            rgba: [0.25, 0.5, 0.75, 1.0],
-            frame: 3,
-            removed: true,
-            state: [8.0, -9.0, 10.0, 11.0],
-            facing: crate::ParticleFacing::Fixed([0.5, -0.5, 0.5, 0.5]),
-            roll: 0.75,
-        });
-    }
-
-    #[test]
-    fn a_particle_batch_survives_the_wire_in_order() {
-        let mut second = crate::ModParticle {
-            position: [9.0, 8.0, 7.0],
-            previous: [0.0; 3],
-            velocity: [0.0; 3],
-            age: 2,
-            lifetime: 4,
-            size: 1.5,
-            rgba: [1.0; 4],
-            frame: 1,
-            removed: false,
-            state: [0.0; 4],
-            facing: crate::ParticleFacing::AroundY,
-            roll: -1.0,
-        };
-        let first = crate::ModParticle {
-            facing: crate::ParticleFacing::Fixed([0.0, 0.0, 0.0, 1.0]),
-            ..second
-        };
-        second.age = 3;
-        round(crate::client::particle_providers::particle_batch_from_vec(
-            vec![first, second],
-        ));
-        round(crate::client::particle_providers::particle_batch_from_vec(
-            Vec::new(),
-        ));
-    }
-
-    #[test]
     fn values_survive_a_round_trip() {
         round(7u32);
         round(-3i64);

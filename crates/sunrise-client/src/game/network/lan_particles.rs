@@ -5,6 +5,7 @@ use super::{Game, explosion_settings::BlastEffects, lan::LanHost, level_sounds::
 use mod_api::{SoundSource, client::particles::PositionSource};
 use sunrise_client::lan::containers::within_range;
 use sunrise_client::lan::hub::Hub;
+use sunrise_client::particles::ParticleLevel;
 use sunrise_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
@@ -276,6 +277,7 @@ impl Game<'_> {
                     [0.0; 3],
                     speed,
                     count as u32,
+                    None,
                 );
             }
         }
@@ -490,9 +492,10 @@ impl Game<'_> {
         let Some(remote) = &mut self.remote else {
             return;
         };
+        let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
         self.particles.handle_level_particles(
             &mut remote.particle_packet_random,
-            &self.world,
+            Some(&level),
             p,
             &options,
         );
@@ -515,8 +518,9 @@ impl Game<'_> {
             self.audio.play(&sound, Some(p.center), 4.0, pitch);
         }
         if let Some(options) = self.received_particle(&p.particle, p.center) {
-            self.particles.add_with_world(
-                Some(&self.world),
+            let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
+            self.particles.add_with(
+                Some(&level),
                 &options,
                 p.center,
                 [1.0, 0.0, 0.0],
@@ -1115,7 +1119,6 @@ pub(in crate::game) mod tests {
         assert!(decode_mod_particle(name, &[1, 1, 0, 0, 0]).is_none());
         let decoded = decode_mod_particle(name, bytes).unwrap();
         assert_eq!(decoded.typed_particle, options.typed_particle);
-        let world = sunrise_client::world::World::new(BlockStateId(0), 1);
         let mut engine = sunrise_client::particles::ParticleEngine::new(
             &Default::default(),
             &Default::default(),
@@ -1123,7 +1126,7 @@ pub(in crate::game) mod tests {
         );
         engine.created_requests = Some(Vec::new());
         let mut random = LegacyRandom::new(23);
-        engine.handle_level_particles(&mut random, &world, &packet, &decoded);
+        engine.handle_level_particles(&mut random, None, &packet, &decoded);
         let created = engine.created_requests.as_mut().unwrap();
         assert_eq!(created.len(), 2);
         for request in created.drain(..) {
@@ -1132,7 +1135,7 @@ pub(in crate::game) mod tests {
         packet.count = 0;
         packet.dist = [0.1, -0.2, 0.7];
         packet.max_speed = [0.3, 0.4, 0.9];
-        engine.handle_level_particles(&mut random, &world, &packet, &decoded);
+        engine.handle_level_particles(&mut random, None, &packet, &decoded);
         let created = engine.created_requests.take().unwrap();
         assert_eq!(created.len(), 1);
         assert_eq!(created[0].1, at);

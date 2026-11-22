@@ -72,6 +72,7 @@ fn a_client_mod_counts_and_clears_particles() {
                 width: 1.0,
                 height: 1.0,
             },
+            None,
         );
         assert!(host_clear(game));
         let host: &dyn ClientHost = game;

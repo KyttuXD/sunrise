@@ -1001,7 +1001,7 @@ impl Game<'_> {
     ) {
         let options = ParticleOptions::simple(kind);
         self.particles
-            .send_particles(&options, at, spread, speed, count);
+            .send_particles(&options, at, spread, speed, count, None);
         // The players a server serves are sent them too.
         self.lan_send_particles(super::lan_particles::QueuedParticle {
             dimension: self.dim.id(),

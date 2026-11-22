@@ -5986,6 +5986,7 @@ impl Game<'_> {
                         f64::from(pos.z) + 0.5,
                     ];
                     self.particles.add_with(
+                        None,
                         &sunrise_client::particles::ParticleOptions::simple(
                             sunrise_client::particles::ParticleType::ExplosionEmitter,
                         ),
@@ -13488,12 +13489,21 @@ impl<'a> Game<'a> {
         let slow_frame_ms = options
             .spikes
             .unwrap_or(sunrise_client::client_perf::SLOW_FRAME_MS);
-        let mut particles = sunrise_client::particles::ParticleEngine::new(
-            &pack.source,
-            &gui.atlas.sprites,
-            &gui.atlas.translucent,
-        );
-        particles.set_block_state_source(Game::particle_block_states);
+        let particles = if options.execution_role.is_client() {
+            let mut engine = sunrise_client::particles::ParticleEngine::new(
+                &pack.source,
+                &gui.atlas.sprites,
+                &gui.atlas.translucent,
+            );
+            engine.set_block_state_source(Game::particle_block_states);
+            engine
+        } else {
+            sunrise_client::particles::ParticleEngine::new_server(
+                &pack.source,
+                &gui.atlas.sprites,
+                &gui.atlas.translucent,
+            )
+        };
         let resource_source = pack.source.clone();
         let (pack, gui) = if let Some(initial) = initial {
             let mut unpublished = pack.clone();

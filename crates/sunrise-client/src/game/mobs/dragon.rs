@@ -3238,6 +3238,7 @@ impl Game<'_> {
                     c.at[2] + f64::from(a.sin() * d),
                 ];
                 self.particles.add_with(
+                    None,
                     &ParticleOptions::simple(ParticleType::DragonBreath),
                     at,
                     [0.0, 0.0, 0.0],

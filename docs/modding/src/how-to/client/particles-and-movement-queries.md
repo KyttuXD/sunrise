@@ -46,7 +46,8 @@ velocity and the level's light.
 
 A code-defined particle has a common `ParticleType<T>` and a client sprite-set provider.
 Register the type in `Hooks::register`; neither the client atlas nor its JSON is needed on a
-server. Register the provider in `Hooks::register_particle_providers` on the client. Its sprite
+server. Register its factory in `Hooks::register_particle_providers` on the client. It binds on every
+resource load, after the sprite list is resolved. Its sprite
 list is `assets/<namespace>/particles/<path>.json`. Missing providers or sprite sets draw nothing.
 The last successful registration for a type wins;
 [a failed registration callback](../../concepts/load-phases.md#registration-and-setup) leaves the earlier provider in place.
@@ -56,9 +57,9 @@ SNBT fields for structured data and `/particle example:riser{lift:5}`, and a der
 for play packets. The `type` field is written by the structured dispatcher, not by the map codec.
 
 ```rust,ignore
-use mod_api::{Compound, ModParticle, ParticleBatch, ParticleLevelView, ParticleMapCodec,
-    ParticleProvider, ParticleStreamCodec, ParticleType, RandomSource, Registrar, Tag, Wire};
-use std::sync::Arc;
+use mod_api::{Compound, CustomParticle, ParticleLevelView, ParticleMapCodec,
+    ParticleProvider, ParticleSpawn, ParticleStreamCodec, ParticleTickView, ParticleType,
+    Registrar, Tag, Wire};
 
 #[derive(PartialEq, Wire)]
 struct Rise { lift: i32 }
@@ -82,26 +83,29 @@ fn register_riser(registrar: &mut dyn Registrar) -> ParticleType<Rise> {
     )
 }
 
+struct RiserProvider;
 struct Riser;
-impl ParticleProvider<Rise> for Riser {
-    fn create_particle(&self, options: &Rise, _level: &dyn ParticleLevelView,
-        _at: [f64; 3], aux: [f64; 3], _random: &mut dyn RandomSource,
-        particle: &mut ModParticle) -> Option<()> {
-        particle.velocity = [aux[0], f64::from(options.lift) * 0.01, aux[2]];
-        Some(())
-    }
 
-    fn tick(&self, particles: &mut ParticleBatch, _level: &dyn ParticleLevelView) {
-        for particle in particles {
-            for axis in 0..3 {
-                particle.position[axis] += particle.velocity[axis];
-            }
+impl ParticleProvider<Rise> for RiserProvider {
+    fn create_particle(&self, spawn: &mut ParticleSpawn<'_, Rise>,
+        particle: &mut dyn ParticleTickView) -> Option<Box<dyn CustomParticle>> {
+        let [x, _, z] = spawn.velocity;
+        particle.set_velocity([x, f64::from(spawn.options.lift) * 0.01, z]);
+        Some(Box::new(Riser))
+    }
+}
+
+impl CustomParticle for Riser {
+    fn tick(&mut self, particle: &mut dyn ParticleTickView, _level: &dyn ParticleLevelView) {
+        if particle.advance_age() {
+            let velocity = particle.velocity();
+            particle.move_by(velocity);
         }
     }
 }
 
 // In Hooks::register_particle_providers, using the retained `riser` type:
-event.providers.register_sprite_set(riser, Arc::new(Riser));
+event.providers.register_sprite_set(riser, |_sprites| RiserProvider);
 // From a client hook:
 host.add_particle(&riser.options(Rise { lift: 5 }), at, [0.0; 3]);
 ```
@@ -117,19 +121,16 @@ The position and three auxiliary values are exactly what the spawn supplied; the
 interpret the auxiliary values as something other than velocity. The RNG is the particle
 engine's provider RNG, not the one used to thin spawns.
 
-The game calls `ParticleProvider::tick(&self, particles: &mut ParticleBatch, level: &dyn ParticleLevelView)`
-once per type per tick, after it has aged the particles, with every live particle of the type; it is not called
-when none is alive, and a registered provider with no particle alive is not visited. Batch iteration
-(`for particle in particles`) preserves length and order. Set `removed` to expire a particle. If a callback
-returns a different length, the engine expires the batch's particles.
+Each `CustomParticle` owns its own state; put temporary counters or progression in its fields.
+Its `tick` receives a live `ParticleTickView`, not a copy. The default runs `tick_base`, which
+records the old pose, advances age, checks lifetime and applies vanilla motion. To replace the
+motion, use `advance_age()` and `move_by(delta)`, or control explicit removal with `remove()`.
+Invalid setter inputs leave that field unchanged. The level and particle views cannot be retained.
 
-Each `ModParticle` carries the particle's pose and look: `position`, `previous`, `velocity`, `size`, `rgba`, `frame`,
-`state` (four numbers kept from tick to tick), a `facing` and a `roll`. `facing` is `Camera` (vanilla's
-`LOOKAT_XYZ`), `AroundY` (`LOOKAT_Y`, which uses the camera's rotation about Y alone) or `Fixed([x, y, z, w])`, a
-world-fixed unit quaternion that turns the quad's default plane (corners in XY, facing +Z); a quad lying flat facing up is
-`[-sin(pi/4), 0, 0, cos(pi/4)]`. `roll` turns the quad about its own normal in radians, interpolated from the previous
-tick's value, and nothing is drawn rotated while it is zero. A number that is not finite, a position past the world's limit,
-a quaternion of no length and a roll beyond half of `f32::MAX` expire the particle.
+`ParticleFacing` can be `Camera`, `AroundY` or `Fixed` with a world-space XYZW quaternion.
+A nonzero roll is interpolated from the previous roll. Omitting a frame's geometry does not
+alter the pose or end the particle's lifetime. Resource reload drops native instances from the
+old sprite generation, then binds the factories again.
 
 `ParticleLevelView` reads the loaded level around the particles, read-only: `block_state(pos)` and
 `brightness(layer, pos)`. A missing chunk reads as air. Light follows the render world's stored light; a dimension
@@ -137,11 +138,9 @@ without skylight always reads zero on the sky layer. Currently, an absent chunk 
 reads full sky where present and no block light; below a loaded column both layers read zero. The client light storage
 for padding sections and unloaded borders is tracked in [#2761](https://github.com/sunrise-org/sunrise/issues/2761).
 
-Dispatch reuses its batch storage once it has enough capacity.
-
 ### Extracting your own quads
 
-`ParticleProvider::extract` runs for each live particle whose current center is in the world
+`CustomParticle::extract` runs for each live particle whose current center is in the world
 camera's culling frustum, even when optional particle culling is off. The culling lens uses the wider
 of the configured and effective FOV, not the bobbed or narrowed render projection. Live GUI scenes
 use the ordinary quad and do not call `extract`. This is a draw call, separate from
@@ -153,13 +152,13 @@ The usual stock-quad geometry checks apply only to `add_default`.
 For example, a provider's `extract` can draw two overlapping opaque shapes at different angles:
 
 ```rust,ignore
-use mod_api::{ModParticle, ParticleBlend, ParticleExtractView, ParticleQuad, QuadParticleRenderState};
+use mod_api::{ParticleView, ParticleBlend, ParticleExtractView, ParticleQuad, QuadParticleRenderState};
 
-fn extract(&self, particle: &ModParticle, view: &ParticleExtractView,
+fn extract(&self, particle: &dyn ParticleView, view: &ParticleExtractView,
     output: &mut dyn QuadParticleRenderState) {
     let t = f64::from(view.partial_tick);
     let center: [f32; 3] = std::array::from_fn(|i| {
-        let world = particle.previous[i] + t * (particle.position[i] - particle.previous[i]);
+        let world = particle.previous_position()[i] + t * (particle.position()[i] - particle.previous_position()[i]);
         (world - view.camera[i]) as f32
     });
     for (offset, rotation) in [
@@ -170,8 +169,8 @@ fn extract(&self, particle: &ModParticle, view: &ParticleExtractView,
         quad.layer = ParticleBlend::Opaque;
         quad.center = [center[0] + offset, center[1], center[2]];
         quad.rotation = rotation;
-        quad.half_size = particle.size;
-        quad.frame = particle.frame;
+        quad.half_size = particle.size();
+        quad.frame = particle.sprite_index() as u32;
         quad.color = 0xffcceeff;
         quad.light_coords = view.light_coords;
         output.add(quad);

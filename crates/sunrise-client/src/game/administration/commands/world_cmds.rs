@@ -849,7 +849,7 @@ impl Game<'_> {
     // ---- /particle ----------------------------------------------------------------------
 
     pub(super) fn cmd_particle(&mut self, ctx: &Context) -> R<i32> {
-        use sunrise_client::particles::{ParticleOptions, ParticleType};
+        use sunrise_client::particles::{ParticleLevel, ParticleOptions, ParticleType};
         let (name, options, block_state) = match ctx.get("name") {
             Some(Arg::Particle(opts)) => {
                 use crate::game::api_values::TryIntoEngine;
@@ -1070,11 +1070,12 @@ impl Game<'_> {
         if sent == 0 {
             return Err(err("commands.particle.failed", &[]));
         }
+        let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
         if local && count <= 0 {
             // handleParticleEvent, count 0: one particle, the speed times
             // the delta as velocity (both sent as floats, multiplied as floats).
-            self.particles.create_with_world(
-                Some(&self.world),
+            self.particles.create_with_level(
+                Some(&level),
                 &options,
                 pos,
                 delta.map(|d| f64::from(speed * d as f32)),
@@ -1094,7 +1095,7 @@ impl Game<'_> {
                 ];
                 if !self
                     .particles
-                    .create_with_world(Some(&self.world), &options, p, v)
+                    .create_with_level(Some(&level), &options, p, v)
                 {
                     break;
                 }

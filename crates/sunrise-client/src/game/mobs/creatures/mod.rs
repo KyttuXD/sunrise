@@ -2376,7 +2376,7 @@ impl Game<'_> {
         let at = [at[0], at[1] + 0.5 * height, at[2]];
         let options = ParticleOptions::simple(ParticleType::Explosion);
         self.particles
-            .send_particles(&options, at, [0.0; 3], 0.0, 1);
+            .send_particles(&options, at, [0.0; 3], 0.0, 1, None);
         self.lan_level_particles(&options, at, [0.0; 3], 0.0, 1, None);
     }
     /// `Entity.sendBubbleColumnParticles` at the top of the column block `pos`: two
@@ -2397,11 +2397,11 @@ impl Game<'_> {
             ];
             let splash_options = ParticleOptions::simple(ParticleType::Splash);
             self.particles
-                .send_particles(&splash_options, splash, [0.0; 3], 1.0, 1);
+                .send_particles(&splash_options, splash, [0.0; 3], 1.0, 1, None);
             self.lan_level_particles(&splash_options, splash, [0.0; 3], 1.0, 1, None);
             let bubble_options = ParticleOptions::simple(ParticleType::Bubble);
             self.particles
-                .send_particles(&bubble_options, bubble, [0.0, 0.01, 0.0], 0.2, 1);
+                .send_particles(&bubble_options, bubble, [0.0, 0.01, 0.0], 0.2, 1, None);
             self.lan_level_particles(&bubble_options, bubble, [0.0, 0.01, 0.0], 0.2, 1, None);
         }
     }
@@ -2540,7 +2540,7 @@ impl Game<'_> {
                     if let Some(ty) = sunrise_client::particles::ParticleType::from_name(kind) {
                         let options = sunrise_client::particles::ParticleOptions::simple(ty);
                         self.particles
-                            .send_particles(&options, at, spread, speed, count);
+                            .send_particles(&options, at, spread, speed, count, None);
                         self.lan_level_particles(&options, at, spread, speed, count, None);
                     }
                 }
@@ -2555,7 +2555,7 @@ impl Game<'_> {
                     let options =
                         self.item_particle(&sunrise_client::items::ItemStack::new(item, 1));
                     self.particles
-                        .send_particles(&options, at, spread, speed, count);
+                        .send_particles(&options, at, spread, speed, count, None);
                 }
                 MobEvent::Sound(name, at, volume, pitch) => {
                     self.audio.play(&full_id(name), Some(at), volume, pitch)
@@ -7647,7 +7647,7 @@ impl Game<'_> {
             // shortcut: scalar speed models DEFAULT randomization; 26.3 sends
             // ALTERNATIVE_WITH_SPEED with a per-axis maximum speed.
             self.particles
-                .send_particles(&options, at, spread, 0.2, count);
+                .send_particles(&options, at, spread, 0.2, count, None);
             self.lan_send_particles(super::lan_particles::QueuedParticle {
                 dimension: self.dim.id(),
                 options,
