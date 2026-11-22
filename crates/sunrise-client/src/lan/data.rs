@@ -144,6 +144,7 @@ fn mod_entries(resources: &Path, dir: &str, entries: &mut Vec<((String, String),
         let mut found = BTreeMap::new();
         walk(
             &resources.join("data").join(&ns).join(dir),
+            &ns,
             &mut found,
             dir == "enchantment",
         );
@@ -216,11 +217,14 @@ pub struct SyncData {
 /// Every `*.json` under `dir`, as (path without extension relative to dir, value), sorted;
 /// a file that can't be read or doesn't parse is left out. Through `json_folder`: from the
 /// prepared data file, and read once for the tables a load builds from the same folder.
-fn walk(dir: &Path, out: &mut BTreeMap<String, Value>, enchantment: bool) {
+fn walk(dir: &Path, namespace: &str, out: &mut BTreeMap<String, Value>, enchantment: bool) {
     let Ok(folder) = sunrise_world::json_folder::read(dir) else {
         return;
     };
     for file in &folder.files {
+        if !sunrise_world::json_folder::valid_resource_path(namespace, &file.name) {
+            continue;
+        }
         let bytes = file.bytes().unwrap_or_default();
         let value = if enchantment {
             sunrise_world::json_folder::enchantment_definition(
@@ -245,7 +249,7 @@ fn synchronized_entries(
     let path = key.trim_start_matches("minecraft:");
     let enchantments = key == "minecraft:enchantment";
     let mut found = BTreeMap::new();
-    walk(&root.join(path), &mut found, enchantments);
+    walk(&root.join(path), "minecraft", &mut found, enchantments);
     let mut entries: Vec<_> = found
         .into_iter()
         .map(|(id, value)| (("minecraft".to_owned(), id), value, false))

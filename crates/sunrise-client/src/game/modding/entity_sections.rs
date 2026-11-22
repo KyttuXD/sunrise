@@ -206,8 +206,15 @@ mod_api::impl_host_areas!(LiveSectionHost);
 mod_api::impl_server_host_areas!(LiveSectionHost);
 mod_api::impl_client_host_areas!(
     LiveSectionHost,
-    except(client_render, menus, network, services)
+    except(client_render, menus, network, scoreboard, services)
 );
+impl mod_api::prelude::ScoreboardClientHost for LiveSectionHost {
+    fn client_scoreboard(
+        &self,
+    ) -> Result<Option<&dyn mod_api::ClientScoreboard>, mod_api::ClientSessionReadError> {
+        Err(mod_api::NoBackend::no_backend())
+    }
+}
 mod_api::impl_backend_areas!(
     LiveSectionHost,
     partial(

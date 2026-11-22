@@ -482,10 +482,15 @@ mod tests {
             let replacement_data = replacement.persistent_data(host).unwrap();
             assert_eq!(replacement_data.get(&outside), None);
             assert_eq!(replacement_data.get(&persisted), Some(&persisted_value));
-            let replacement_effects = mod_api::LivingRef::new(replacement.entity())
-                .effects(host)
-                .unwrap();
-            assert_eq!(replacement_effects.len(), usize::from(!self.death));
+            let mut replacement_count = 0;
+            assert_eq!(
+                mod_api::LivingRef::new(replacement.entity()).visit_effects(host, &mut |_| {
+                    replacement_count += 1;
+                    std::ops::ControlFlow::Continue(())
+                }),
+                Ok(std::ops::ControlFlow::Continue(()))
+            );
+            assert_eq!(replacement_count, usize::from(!self.death));
 
             const MISSING: AttachmentType<i32> = AttachmentType {
                 name: "missing",

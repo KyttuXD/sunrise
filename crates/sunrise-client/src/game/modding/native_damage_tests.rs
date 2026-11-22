@@ -1000,13 +1000,17 @@ struct PufferfishProbe {
 
 fn active_poison(host: &dyn mod_api::ServerHost, victim: mod_api::LivingRef) -> Vec<(i32, i32)> {
     let poison = host.effect_key("minecraft:poison").unwrap();
-    victim
-        .effects(host)
-        .unwrap()
-        .into_iter()
-        .filter(|effect| effect.id == poison)
-        .map(|effect| (effect.duration, effect.amplifier))
-        .collect()
+    let mut effects = Vec::new();
+    assert_eq!(
+        victim.visit_effects(host, &mut |effect| {
+            if effect.id == poison {
+                effects.push((effect.duration, effect.amplifier));
+            }
+            core::ops::ControlFlow::Continue(())
+        }),
+        Ok(core::ops::ControlFlow::Continue(()))
+    );
+    effects
 }
 
 #[mod_api::__subscriptions]

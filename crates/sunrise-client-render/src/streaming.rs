@@ -14,10 +14,10 @@ use crate::{
     world::{ChunkResend, World},
 };
 use std::{
-    collections::{BinaryHeap, HashSet, VecDeque},
+    collections::{BTreeSet, BinaryHeap, HashSet, VecDeque},
     sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError, atomic::Ordering},
 };
-use sunrise_core::biome::BiomeZoom;
+use sunrise_core::{biome::BiomeZoom, position::ChunkPos};
 use sunrise_threads::jobs::{Class, PerWorker, Rank, Registration, Source};
 use sunrise_world::worldgen::decoration_order::DecorationOrder;
 
@@ -637,6 +637,8 @@ pub struct Streaming {
     pub forced: HashSet<(i32, i32)>,
     /// The `/forceload`ed chunks, the ones saved in `chunk_tickets.dat`.
     commanded: HashSet<(i32, i32)>,
+    /// The same membership in `ForceLoadCommand.listForceLoad`'s signed packed order.
+    ordered_commanded: BTreeSet<i64>,
     mod_tickets: ModTickets,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
@@ -1284,6 +1286,7 @@ impl Streaming {
             radius: 8,
             forced: HashSet::new(),
             commanded: HashSet::new(),
+            ordered_commanded: BTreeSet::new(),
             mod_tickets: ModTickets::default(),
             paused: false,
             upload_backlog: 0,
@@ -3264,6 +3267,7 @@ impl Streaming {
     /// Release every `/forceload`ed chunk (`/forceload remove all`, a game-test
     /// batch's end). Chunks a mod holds a ticket for stay forced.
     pub fn clear_forced(&mut self) {
+        self.ordered_commanded.clear();
         let cleared: Vec<_> = self.commanded.drain().collect();
         for chunk in cleared {
             self.settle(chunk);
@@ -3274,7 +3278,7 @@ impl Streaming {
     pub fn load_forced(&mut self, commanded: HashSet<(i32, i32)>, tickets: Vec<ModTicket>) {
         self.mod_tickets.stage_saved(tickets);
         for chunk in commanded {
-            if self.commanded.insert(chunk) {
+            if self.set_commanded(chunk, true) {
                 self.settle(chunk);
             }
         }
@@ -3288,6 +3292,13 @@ impl Streaming {
     /// The `/forceload`ed chunks.
     pub fn commanded(&self) -> &HashSet<(i32, i32)> {
         &self.commanded
+    }
+    /// The `/forceload`ed chunks in the command's signed packed order.
+    pub fn commanded_in_order(&self) -> impl ExactSizeIterator<Item = (i32, i32)> + '_ {
+        self.ordered_commanded.iter().map(|&pos| {
+            let pos = ChunkPos::unpack(pos);
+            (pos.x, pos.z)
+        })
     }
     /// The chunk tickets of mods.
     pub fn mod_tickets(&self) -> &ModTickets {
@@ -3305,6 +3316,23 @@ impl Streaming {
         };
         if self.settle(chunk) {
             self.rank_forced(chunk.0, chunk.1, chunk.0, chunk.1);
+        }
+        changed
+    }
+    /// Change commanded membership and its ordered projection together.
+    fn set_commanded(&mut self, chunk: (i32, i32), forced: bool) -> bool {
+        let changed = if forced {
+            self.commanded.insert(chunk)
+        } else {
+            self.commanded.remove(&chunk)
+        };
+        if changed {
+            let packed = ChunkPos::new(chunk.0, chunk.1).pack();
+            if forced {
+                self.ordered_commanded.insert(packed);
+            } else {
+                self.ordered_commanded.remove(&packed);
+            }
         }
         changed
     }
@@ -3330,11 +3358,7 @@ impl Streaming {
     ) {
         for x in x0..=x1 {
             for z in z0..=z1 {
-                let changed = if forced {
-                    self.commanded.insert((x, z))
-                } else {
-                    self.commanded.remove(&(x, z))
-                };
+                let changed = self.set_commanded((x, z), forced);
                 self.settle((x, z));
                 each(x, z, changed);
             }

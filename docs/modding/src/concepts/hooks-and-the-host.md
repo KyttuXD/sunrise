@@ -475,6 +475,17 @@ Raw GPU access is native-only, unstable and outside that API, in
 `render_needs` collects requests; `world_drawn` runs before the hand and HUD, and
 `hand_drawn` runs after the hand, on the render thread. Use API draw contexts for API-typed drawing.
 
+## Reading resident collections
+
+A `visit_*` read lends resident entries to a callback instead of building a list.
+Return `ControlFlow::Continue(())` to keep reading or `ControlFlow::Break(())` to stop.
+A completed visit may have had no entries; a typed refusal means the read could not
+run at all. Copy a borrowed name or row field only if it needs to outlive the callback.
+You can make other shared reads inside the visitor. To write through the same host,
+retain only the handles or values you need, then write after the visit returns.
+Single-value reads such as `level.block_property(host, pos, key)` lend the result
+directly: the property value borrows the host, not the lookup key.
+
 ## After a hook that can change the world
 
 A listener of a hook that gets a mutable host may remove, move or change objects. After such a hook

@@ -205,14 +205,14 @@ entity coverage is data, handles and global hooks. On the server a mod can act o
 | `revive()` | Missing | — | No entity revive API. |
 | `isMultipartEntity()` | Missing | — | The dragon's parts are internal to the engine. |
 | `getParts()` | Missing | — | Same; `EntityRef` names dragon parts in some reads but does not expose the array. |
-| `getFluidTypeHeight(type)` | Partial | `host.entity_fluid_heights` | Each fluid the entity touched with its height, from its last fluid update. Both sides: predicted for the local player, the last client fluid update for tracked entities. Mod fluids still need the entity update to track them (#3341). |
-| `getMaxHeightFluidType()` | Partial | `host.entity_fluid_heights` | The first entry: the list is highest first. Both sides. |
-| `isInFluidType(state)` | Partial | `host.entity_fluid_heights` | Whether the state's fluid is in the list. Entities track water and lava; mod fluids join once the entity update tracks them. Both sides. |
-| `isInFluidType(type)` | Partial | `host.entity_fluid_heights` | Same. |
-| `isInFluidType(predicate)` | Partial | `host.entity_fluid_heights` | The mod applies its predicate to the list. Both sides. |
-| `isInFluidType()` | Partial | `host.entity_fluid_heights` | A non-empty list. Both sides. |
-| `getFirstEyeInFluidType()` | Partial | `host.entity_eye_fluid` | Water or lava at the eyes from the last fluid update; mobs now track lava there too. Both sides: predicted for the local player, the last client fluid update for tracked entities. Mod fluids still need the entity update to track them (#3341). |
-| `isEyeInFluidType(type)` | Partial | `host.entity_eye_fluid` | Compare its answer. Both sides. |
+| `getFluidTypeHeight(type)` | Partial | `EntityRef::visit_fluid_heights` | Visits each touched fluid and its depth, from the last fluid update. Both sides: predicted for the local player, the last client fluid update for tracked entities. Mod fluids still need the entity update to track them (#3341). |
+| `getMaxHeightFluidType()` | Partial | `EntityRef::visit_fluid_heights` | Break on the first entry: highest first. Both sides. |
+| `isInFluidType(state)` | Partial | `EntityRef::visit_fluid_heights` | Break when the state's fluid is visited. Entities track water and lava; mod fluids join once the entity update tracks them. Both sides. |
+| `isInFluidType(type)` | Partial | `EntityRef::visit_fluid_heights` | Same. |
+| `isInFluidType(predicate)` | Partial | `EntityRef::visit_fluid_heights` | Break when the predicate matches. Both sides. |
+| `isInFluidType()` | Partial | `EntityRef::visit_fluid_heights` | Break on any visit. Both sides. |
+| `getFirstEyeInFluidType()` | Partial | `EntityRef::eye_fluid` | Borrows the name of the water or lava at the eyes from the last fluid update. Both sides: predicted for the local player, the last client fluid update for tracked entities. Mod fluids still need the entity update to track them (#3341). |
+| `isEyeInFluidType(type)` | Partial | `EntityRef::eye_fluid` | Compare its answer. Both sides. |
 | `canStartSwimming()` | Missing | — | Swimming start is engine-owned. |
 | `getFluidMotionScale(type)` | Missing | — | No per-entity fluid scale. |
 | `isPushedByFluid(type)` | Partial | `FluidTypeProperties.can_push_entity` | Per-fluid data, not a per-entity answer. |

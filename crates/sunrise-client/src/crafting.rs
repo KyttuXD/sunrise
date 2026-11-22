@@ -36,7 +36,7 @@ pub use ingredient::{Ingredient, Shape};
 use serde_json::Value;
 use shapeless_matching::matches_all;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
     sync::{Arc, OnceLock},
 };
@@ -1292,6 +1292,8 @@ pub struct Recipes {
     /// Every effective recipe's file, by recipe type (`minecraft:smelting`,
     /// `mymod:crusher`), in priority order: data packs merged, load conditions held.
     pub by_type: HashMap<String, std::sync::Arc<[crate::crafting::RecipeSnapshot]>>,
+    // The unique IDs of this publication, even if an ID occurs in several types.
+    registry_ids: BTreeSet<String>,
     /// `category` and `group` of each crafting recipe, by file name.
     pub meta: HashMap<String, (String, String)>,
     facts: HashMap<Arc<str>, Facts>,
@@ -2318,6 +2320,7 @@ impl Recipes {
             crafting: Vec::new(),
             cooking: Vec::new(),
             by_type: HashMap::new(),
+            registry_ids: BTreeSet::new(),
             meta: HashMap::new(),
             facts: HashMap::new(),
             curses: HashSet::new(),
@@ -2502,6 +2505,11 @@ impl Recipes {
                 .is_empty(),
             crafting,
             cooking,
+            registry_ids: by_type
+                .values()
+                .flatten()
+                .map(|entry| entry.id.clone())
+                .collect(),
             by_type: by_type
                 .into_iter()
                 .map(|(kind, files)| (kind, files.into()))
@@ -2512,6 +2520,13 @@ impl Recipes {
             cook_index: Default::default(),
             property_additions: sources.property_additions.clone(),
         }
+    }
+    /// The published recipe IDs across all types, once each, in lexical order.
+    pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
+        self.registry_ids.iter().map(String::as_str)
+    }
+    pub fn registry_contains(&self, id: &str) -> bool {
+        self.registry_ids.contains(id)
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
     pub fn craft(
@@ -3454,6 +3469,7 @@ mod tests {
             crafting: Vec::new(),
             cooking,
             by_type: HashMap::new(),
+            registry_ids: BTreeSet::new(),
             meta: HashMap::new(),
             facts: HashMap::new(),
             curses: HashSet::new(),
@@ -3605,6 +3621,18 @@ mod tests {
                 );
                 assert_eq!(crusher[1].json["tag"], "pack-b");
                 assert_eq!(recipes.by_type["pack:press"][0].id, "minecraft:p");
+                assert_eq!(
+                    recipes.registry_ids().collect::<Vec<_>>(),
+                    [
+                        "minecraft:iron_ingot",
+                        "minecraft:p",
+                        "mymod:a",
+                        "mymod:b",
+                        "mymod:c",
+                        "mymod:deep/er/d",
+                        "pack:d"
+                    ]
+                );
                 assert_eq!(
                     recipes.by_type["minecraft:stonecutting"][0].json["tag"],
                     "pack-iron"
@@ -3902,6 +3930,7 @@ mod tests {
             crafting: Vec::new(),
             cooking: Vec::new(),
             by_type: HashMap::new(),
+            registry_ids: BTreeSet::new(),
             meta: HashMap::new(),
             facts: HashMap::new(),
             curses: HashSet::new(),

@@ -1629,10 +1629,14 @@ mod native_scene_live;
 #[cfg(test)]
 #[path = "game/modding/native_scene_live_tests.rs"]
 mod native_scene_live_tests;
+
+#[path = "game/modding/native_client_scoreboard.rs"]
+mod native_client_scoreboard;
 #[path = "game/modding/native_scoreboard.rs"]
 mod native_scoreboard;
 #[path = "game/modding/native_scoreboard_teams.rs"]
 mod native_scoreboard_teams;
+
 #[path = "game/modding/native_section_visibility.rs"]
 mod native_section_visibility;
 #[path = "game/modding/native_server.rs"]

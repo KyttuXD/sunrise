@@ -209,11 +209,17 @@ impl Hooks for ObservePotion {
     fn consume_effect(&self, host: &mut dyn ServerHost, event: &mut ConsumeEffectEvent<'_>) {
         let living = host.living(event.user).unwrap();
         let breathing = host.effect_key("minecraft:water_breathing").unwrap();
+        use std::ops::ControlFlow;
         let has_effect = living
-            .effects(host)
+            .visit_effects(host, &mut |effect| {
+                if effect.id == breathing {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
             .unwrap()
-            .iter()
-            .any(|effect| effect.id == breathing);
+            .is_break();
         assert_eq!(event.stack.count(), 1);
         self.0
             .lock()

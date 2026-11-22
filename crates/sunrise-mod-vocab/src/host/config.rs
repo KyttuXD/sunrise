@@ -80,9 +80,13 @@ pub trait ConfigServerHost {
     /// Side: server.
     /// The last 100 server ticks' durations in nanoseconds, as
     /// `MinecraftServer.getTickTimesNanos` lays them out: the tick numbered `n` at index
-    /// `n % 100`, 0 where none was recorded yet. Sort a copy for percentiles; `tick_stats`
-    /// has the average.
-    fn tick_times(&self) -> Vec<u64>;
+    /// `n % 100`, 0 where none was recorded yet. The visit is in slot order; return `Break(())`
+    /// to stop, or collect the values to sort them for percentiles. `tick_stats` has the average.
+    /// A host without a server clock returns `Unavailable`.
+    fn visit_tick_times(
+        &self,
+        visit: &mut dyn FnMut(u64) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, ServerReadError>;
     /// Side: server.
     /// The server's view distance in chunks (`PlayerList.getViewDistance`, `view-distance`):
     /// how far players are sent chunks at most. None off a server open to players.
@@ -131,10 +135,14 @@ pub trait ConfigServerHost {
     /// save is open; this service never outlives its borrowed world host.
     fn world_data_files(&self) -> &dyn ConfigFiles;
     /// Side: server.
-    /// Every current rule in the one server-wide store, by namespaced id.
-    /// Readable from `server_about_to_start`, before any level exists.
-    /// Level game-rule reads use this same store once their level exists.
-    fn game_rules(&self) -> Vec<(String, GameRuleValue)>;
+    /// Visit the available rules in the server-wide store, with their borrowed namespaced IDs
+    /// and typed values. Readable from `server_about_to_start`, before any level exists; level
+    /// visits use the same store. Return `Break(())` to stop. An unavailable rule store returns
+    /// `Unavailable`.
+    fn visit_game_rules(
+        &self,
+        visit: &mut dyn FnMut(&str, GameRuleValue) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, ServerReadError>;
     /// Side: server.
     /// Read the server-wide rule from the first server hook onward.
     /// Returns `UnknownRule` for an unknown id; level reads use the same store.

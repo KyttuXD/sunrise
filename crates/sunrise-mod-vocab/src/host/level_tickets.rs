@@ -17,20 +17,27 @@ pub trait LevelTicketsBackend {
     /// loaded or not; a mod's own ticket on it does not count. None for a stale handle or on a client.
     fn chunk_forced(&self, chunk: ChunkRef) -> Option<bool>;
     /// Side: server.
-    /// The level's force-loaded chunks (`/forceload query`), sorted as
-    /// the command lists them. None for a stale handle or on a client.
-    fn level_forced_chunks(&self, level: LevelRef) -> Option<Vec<[i32; 2]>>;
+    /// Visit the level's force-loaded chunk positions in `/forceload query` order (signed
+    /// packed chunk position). An empty set completes without a call. Return `Break(())` to
+    /// stop. A stale level returns `Stale`; an unreadable side or backend returns `Unavailable`.
+    fn level_visit_forced_chunks(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut([i32; 2]) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
     /// Side: server.
-    /// The chunk tickets `controller` holds in the level, as (owner, chunk
-    /// position, natural_spawning), in order. Uses `controller`'s registered
-    /// identity rather than the current caller. None for an invalid controller
-    /// handle (such as one from a refused registration or another registration
-    /// table), a stale level handle, or on a client.
-    fn level_mod_forced_chunks(
+    /// Visit the chunk tickets `controller` holds in the level, in ticket order, with their
+    /// owner, chunk position and natural-spawning flag. Return `Break(())` to stop. The
+    /// registry-issued handle authorizes this read regardless of the current callback owner.
+    /// A stale level returns `Stale`; an unreadable side or backend, or an invalid handle
+    /// (including one from another registration table), returns `Unavailable`. An empty
+    /// set completes without a call.
+    fn level_visit_mod_forced_chunks(
         &self,
         level: LevelRef,
         controller: TicketController,
-    ) -> Option<Vec<(TicketOwner, [i32; 2], bool)>>;
+        visit: &mut dyn FnMut(TicketOwner, [i32; 2], bool) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
 }
 /// The handles' writes of the `level_tickets` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

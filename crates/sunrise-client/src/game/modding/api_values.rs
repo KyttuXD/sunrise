@@ -2733,14 +2733,21 @@ mod placement_snapshot_tests {
     }
 }
 
+pub(super) fn api_game_rule_value(
+    value: sunrise_client_core::gamerules::Value,
+) -> mod_api::GameRuleValue {
+    use sunrise_client_core::gamerules::Value;
+    match value {
+        Value::Bool(value) => mod_api::GameRuleValue::Bool(value),
+        Value::Int(value) => mod_api::GameRuleValue::Int(value),
+    }
+}
+
 impl TryIntoApi for sunrise_client_core::gamerules::Value {
     type Api = mod_api::GameRuleValue;
     type Error = StackReadError;
     fn try_into_api(&self) -> Result<Self::Api, Self::Error> {
-        Ok(match *self {
-            Self::Bool(value) => mod_api::GameRuleValue::Bool(value),
-            Self::Int(value) => mod_api::GameRuleValue::Int(value),
-        })
+        Ok(api_game_rule_value(*self))
     }
 }
 

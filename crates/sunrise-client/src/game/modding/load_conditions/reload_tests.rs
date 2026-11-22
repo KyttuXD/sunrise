@@ -153,12 +153,19 @@ fn reload_conditions_read_candidate_registries_and_bound_tags() {
                     br#"{"values":["minecraft:stick","minecraft:flint"]}"#,
                 );
                 assert!(game.run_command("reload"));
+                let mut ids = Vec::new();
                 assert_eq!(
-                    game.level(game.dim.id())
-                        .unwrap()
-                        .datapack_entries(game, "reload_conditions:spell"),
-                    Some(vec!["reload_conditions:fire".into()])
+                    game.level(game.dim.id()).unwrap().visit_datapack_entries(
+                        game,
+                        "reload_conditions:spell",
+                        &mut |id| {
+                            ids.push(id.to_owned());
+                            std::ops::ControlFlow::Continue(())
+                        },
+                    ),
+                    Ok(std::ops::ControlFlow::Continue(()))
                 );
+                assert_eq!(ids, ["reload_conditions:fire"]);
                 assert_eq!(answers(game), [true, false, true]);
                 assert_eq!(
                     item_tags(game, flag),

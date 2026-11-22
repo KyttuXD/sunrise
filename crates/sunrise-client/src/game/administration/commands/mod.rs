@@ -844,19 +844,6 @@ impl Game<'_> {
         candidates.retain(|t| !self.target_removed(t));
         candidates
     }
-    /// The loaded levels, in the order the server holds them: the
-    /// overworld, the nether, the end (MinecraftServer.getAllLevels).
-    pub(super) fn loaded_dims(&self) -> Vec<Dim> {
-        let mut dims = vec![self.dim];
-        dims.extend(self.levels.parked_dims());
-        dims.sort_by_key(|d| match d {
-            Dim::Overworld => 0,
-            Dim::Nether => 1,
-            Dim::End => 2,
-            Dim::Extra(_) => 3,
-        });
-        dims
-    }
     /// `Level.getEntity`: the entity of the level in place with a network
     /// id, players aside.
     pub(in crate::game) fn level_entity(&self, id: i32) -> Option<Target> {

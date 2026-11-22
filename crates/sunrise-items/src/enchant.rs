@@ -194,7 +194,7 @@ pub struct ItemProps {
 #[derive(Clone, Default)]
 pub struct Enchantments {
     pub list: Vec<Enchantment>,
-    index: HashMap<Arc<str>, usize>,
+    index: BTreeMap<Arc<str>, usize>,
     custom_damage: HashMap<Arc<str>, Vec<DamageValueEffect>>,
     /// Enchantment tags in vanilla `HolderSet` order (nested tags expanded in place).
     pub tags: HashMap<String, Vec<Arc<str>>>,
@@ -598,6 +598,10 @@ impl Enchantments {
     }
     pub fn get(&self, id: &str) -> Option<&Enchantment> {
         self.index.get(id).map(|&i| &self.list[i])
+    }
+    /// The accepted registry IDs in lexical order, independent of gameplay's slot order.
+    pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
+        self.index.keys().map(AsRef::as_ref)
     }
     /// The table a client plays a server with: this one and the server's
     /// entries it lacks (a data pack's), from the definitions the registry

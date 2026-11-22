@@ -12,6 +12,7 @@ use super::{
 };
 use mod_api::{Collider, ColliderError, EntityRef};
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use sunrise_client::{
     colliders::{ColliderState, valid_rotation},
     fast_hash::FxHashMap,
@@ -303,12 +304,10 @@ impl Game<'_> {
             let entity = EntityRef::new(epoch, id);
             let root = self.entity_root_vehicle(entity).unwrap_or(entity);
             let mut stack = vec![root.id()];
-            stack.extend(
-                self.entity_indirect_passengers(root)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|rider| rider.id()),
-            );
+            let _ = self.entity_visit_indirect_passengers(root, &mut |rider| {
+                stack.push(rider.id());
+                ControlFlow::Continue(())
+            });
             if !stack.contains(&id) {
                 stack.push(id);
             }

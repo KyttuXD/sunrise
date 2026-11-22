@@ -330,6 +330,19 @@ impl LevelRef {
         crate::content::registry_keys::dimension_id(self.dimension)
             .expect("the game's table made the key")
     }
+    /// Side: both.
+    /// Property `key` of the block state at `pos` (`StateHolder.getValue`):
+    /// `east` for `facing`. None for a block without it, or as for
+    /// `block_state`. API 381.
+    /// The value borrows `host`, not `key`.
+    pub fn block_property<'h>(
+        self,
+        host: &'h dyn Host,
+        pos: [i32; 3],
+        key: &str,
+    ) -> Option<&'h str> {
+        crate::backend::backend_of(host)?.level_block_property(self, pos, key)
+    }
     /// Borrow the named server level's live random stream (`Level.getRandom`) for `draw`
     /// only: `level.with_random(host, |rng| rng.next_int_bound(bound))`. The closure cannot
     /// keep or reseed the stream. Draws advance that level's live stream directly in
@@ -375,11 +388,12 @@ impl WaterTicket {
 }
 
 /// A raid of a level (`Raid`), by the id `Raids` keeps it under, which the
-/// raids file saves. `level.raid_at(host, pos)`, `level.raids(host)`,
-/// `level.raid(host, id)` and `mob.raid(host)` make one. A handle resolves
-/// again on each call: it reads as `None` or `false` once the raid is gone,
-/// for a handle of an earlier open, for a closed level, and on a client.
-/// Reads and writes reach parked server levels without moving them into place.
+/// raids file saves. `level.raid_at(host, pos)`, `level.visit_raids(host, visit)`,
+/// `level.raid(host, id)` and `mob.raid(host)` supply handles. Each call resolves the handle
+/// again. Collection visits distinguish a gone raid or a stale level ([`RaidReadError::Stale`])
+/// from a phase or side that cannot read it ([`RaidReadError::Unavailable`]). Other calls
+/// return `None` or `false` on refusal. Reads and writes reach parked server levels without
+/// moving them into place.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct RaidRef {
@@ -1136,17 +1150,18 @@ pub struct RespawnData {
 }
 
 /// A map's saved data (`MapItemSavedData`) as it stands: where it is, how far it reaches and
-/// its pixels. The markers (players, banners, frames) are not part of it.
+/// its pixels. The markers (players, banners, frames) are not part of it. The dimension and
+/// colors are borrowed for the duration of [`LevelRef::visit_map_data`]'s visitor.
+// no wire: borrows the map for a scoped visit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct MapState {
+pub struct MapState<'a> {
     /// The centre block `[x, z]`.
     pub center: [i32; 2],
     /// A map pixel is `1 << scale` blocks, 0 to 4.
     pub scale: u8,
     /// The dimension it shows, `minecraft:overworld`.
-    pub dimension: String,
+    pub dimension: &'a str,
     /// A locked map (a cartography table's glass pane) no longer reveals the world.
     pub locked: bool,
     /// Whether it shows its holders' markers.
@@ -1154,7 +1169,7 @@ pub struct MapState {
     /// Whether it shows them however far away they are.
     pub unlimited: bool,
     /// 128 by 128 map colour ids, row by row (`x + z * 128`).
-    pub colors: Vec<u8>,
+    pub colors: &'a [u8],
 }
 
 /// One entity a level ray passes through, as tested by `ProjectileUtil.getEntityHitResult`.
@@ -1937,8 +1952,8 @@ pub enum GameRuleReadError {
 /// One of the scoreboard's objectives of an open server world (vanilla's `Objective`). It holds
 /// the world's epoch and an identity the board gave the objective when it was added, so an
 /// objective that was removed (even if its name was added again) or a handle from an earlier
-/// open reads as stale: reads answer `None` or [`ObjectiveError::Stale`] and writes change
-/// nothing.
+/// open reads as stale: reads answer `None`, [`ObjectiveError::Stale`] or
+/// [`ObjectiveReadError::Stale`], and writes change nothing.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ObjectiveRef {

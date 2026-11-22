@@ -610,6 +610,7 @@ handle, an entity the client doesn't track and a level it doesn't show:
 - `entity.position(host)`, `rotation(host)` and `velocity(host)`: the client's copy, interpolated as it draws it.
 - `entity.name(host)`: the synced custom name or type name, and a player's profile name, from either side's host.
 - `level.block_state(host, pos)`, `block`, `block_property` and `is_loaded`: blocks of the chunks the client holds.
+  `block_property` borrows the property value from the host.
   A chunk it doesn't hold reads as unloaded; no read loads one.
 - `level.day_time(host)`: the synchronized Overworld clock in ticks (counting past 24000), advanced at the
   server-supplied rate while the client level runs. This remains the Overworld clock in the End, even though
@@ -663,8 +664,8 @@ handle, an entity the client doesn't track and a level it doesn't show:
   weather. A server can read any open level, including parked levels; a client reads only its current synchronized
   level after login. Stale handles and unavailable levels return `None`; the read never loads a level.
 - `level.seed(host)`, `difficulty` (`"normal"`, as `/difficulty` names it), `game_rule(host, "keep_inventory")` (a
-  `GameRuleValue`, `Bool` or `Int`; None for an unknown rule), `game_rules` (every rule as a `minecraft:` id and its
-  value), `is_raining` and `is_thundering` read its server settings.
+  `GameRuleValue`, `Bool` or `Int`; `Ok(None)` for an unknown rule), `visit_game_rules` (every available rule as
+  a borrowed namespaced id and its value), `is_raining` and `is_thundering` read its server settings.
   `level.is_raining_at(host, pos)` (`Level.isRainingAt`) asks about one position of any open level: it rains there, the
   position has full sky light with nothing motion-blocking or fluid above it, and its biome's precipitation at that
   height is rain (not snow or none). It is `None` where the block read is, an unloaded chunk or a `y` outside the
@@ -672,8 +673,8 @@ handle, an entity the client doesn't track and a level it doesn't show:
   `contains("minecraft:redstone_experiments")`, `iter()`); every level of a world shares them. If the save
   omits its flag list, the world enables `minecraft:vanilla`.
 - `level.chunk_ref(host, [x, z])` makes a `ChunkRef` for any chunk of an open level (None past 30 million blocks).
-  `chunk.forced(host)` and `level.forced_chunks(host)` query `/forceload` tickets. `chunk.set_forced(host, bool)` adds
-  or removes one and returns whether the saved set changed. A successful add waits for the chunk to load, even in a
+  `chunk.forced(host)` and `level.visit_forced_chunks(host, &mut visit)` query `/forceload` tickets.
+  `chunk.set_forced(host, bool)` adds or removes one and returns whether the saved set changed. A successful add waits for the chunk to load, even in a
   parked level. If streaming is paused, the add records the ticket to take effect when its level starts streaming.
   Adds after generation stops return false; repeated adds and removals do not load chunks.
 - Ticket controllers (NeoForge's `TicketController`, registered in `RegisterTicketControllersEvent`): a mod registers
@@ -695,13 +696,14 @@ handle, an entity the client doesn't track and a level it doesn't show:
   chunk joins the spawning chunks (`ChunkMap.collectSpawningChunks`, within 8 chunks of
   a player): it gets inhabited time, thunder and a spawn attempt. The local mob cap then lets mobs spawn there only
   while a non-spectator player is within 128 blocks of the chunk's centre, as vanilla's
-  `LocalMobCapCalculator` decides. `level.mod_forced_chunks(host, controller)` lists the controller's tickets as
-  `(owner, [x, z], natural_spawning)`. Tickets are saved in `data/sunrise/mod_chunk_tickets.dat`, never in vanilla's
+  `LocalMobCapCalculator` decides. `level.visit_mod_forced_chunks(host, controller, &mut visit)` visits the controller's tickets,
+  passing `owner`, `[x, z]` and `natural_spawning` to the visitor. Tickets are saved in `data/sunrise/mod_chunk_tickets.dat`, never in vanilla's
   `chunk_tickets.dat`, under the controller's id. When a world loads, the tickets of an id no loaded mod registers are
   dropped with a warning in the log, as NeoForge documents for a controller nobody registers; so are tickets from a
   file written before controllers, which are keyed by mod id. For an invalid controller handle (such as one from a
   refused registration or another registration table), a stale level handle, a client, or a chunk past the world's
-  bounds, the calls return `false` or `None`.
+  bounds, a write returns `false`. A visit returns `LevelReadError::Stale` for a stale level or
+  `LevelReadError::Unavailable` for an invalid controller, unavailable side or backend.
 - A controller's `LoadingValidationCallback` (NeoForge's `LoadingValidationCallback.validateTickets`) runs once after
   `level_load` and before the level's first tick, only if that controller has saved tickets in the level. At startup all
   built-in levels are available before validation begins. It receives
@@ -770,7 +772,7 @@ handle, an entity the client doesn't track and a level it doesn't show:
   counter: it shows and its goals see it, but it never runs out, so only a release or a goal ends it, and vanilla's bow and
   trident have no release for a mob. A piglin with something in its off hand and a drinking witch refuse a start and have no
   use to read or release: the counter is their own timer.
-- `living.effects(host)` lists a living entity's active effects (vanilla's `activeEffects`) as `ActiveEffect`s — the
+- `living.visit_effects(host, &mut visit)` visits a living entity's active effects (vanilla's `activeEffects`) as `ActiveEffect`s — the
   load-owned `EffectKey` (borrow its canonical name, if available, with `key.id(host)`), the ticks left (-1 infinite),
   the amplifier, and the `ambient`, `visible` and `show_icon` flags (`show_icon` is vanilla's `showIcon`, apart from the particles). `living.effect(host, key)` reads one (`getEffect`) and `living.potion_affected(host,
   key)` answers `hasEffect`; request the key once through `Registrar::effect_key`. `living.add_effect(host, &effect)` is
@@ -782,7 +784,8 @@ handle, an entity the client doesn't track and a level it doesn't show:
   the way their running out does: the attribute modifiers they gave recompute and absorption's hearts go with theirs. The
   added-effect hooks hear a player's add without an entity id, so a guest's reaches them as the acting player (`None`) — a
   limitation of the hooks themselves, unchanged here. Armor stands and the dragon keep no effects, as `/effect` skips them:
-  `effects` and `effect` read `None` for them and their writes return false. On a client,
+  `visit_effects` returns `Err(EntityReadError::Unavailable)`, `effect` returns `None`, and their writes return false.
+  The visitor may stop early by returning `ControlFlow::Break(())`. On a client,
   `living.effect_blend_factor(host, key, partial)` (`getEffectBlendFactor`) reads how far the local player's effect has
   faded in at the partial tick: darkness fades over 22 ticks and nausea in over 150 and out over 20. Other effects start
   at 0 after a blended addition and interpolate to their post-countdown target each client tick (1 while active, 0 once
@@ -822,8 +825,9 @@ handle, an entity the client doesn't track and a level it doesn't show:
   else the block under its feet. `pick(host, distance)` clips `Entity.pick`'s ray from the eyes along the view
   against block outlines, no fluids, and returns the `ClipHit` (its `miss` set for a miss); entities are
   clipped by `LevelRef::ray_trace_nearest_entity` or `ray_trace_entities`, not `pick`.
-  `is_multipart(host)` and `parts(host)` are `Entity.isMultipartEntity` and `getParts`:
-  the ender dragon's eight `EnderDragonPart`s (not the Parts of this API), head, neck, body, three tail segments and
+  `is_multipart(host)` and `visit_parts(host, &mut visitor)` follow NeoForge's `IEntityExtension.isMultipartEntity`
+  and `getParts`. The visitor can break early. It visits the ender dragon's eight `EnderDragonPart`s (not the Parts
+  of this API), head, neck, body, three tail segments and
   two wings, each an `EntityRef` of its own entity id, resolved as any handle is. A part's `kind` is the dragon's, its position, rotation (none: zero), velocity (zero)
   and `bounding_box` are its own, `level` is the dragon's, and it is no living entity, mob or dragon handle; it
   stops resolving when its dragon does, and removing one is refused.
@@ -870,12 +874,12 @@ handle, an entity the client doesn't track and a level it doesn't show:
   instances (`ClientboundUpdateAttributes`, the type's defaults before the server sends any); every other entity
   reads `None` there, the client keeping no attribute map of another entity's, only the few fields it draws
   (`handleUpdateAttributes` for a mob extracts its maximum health and scale for the renderer).
-- `living.attributes(host)` lists the ids of the attributes the entity's type has (the holder's attribute set the
-  value and base reads answer from), in registry order. `living.attribute_modifiers(host, id)` is
-  `AttributeInstance.getModifiers`: the attribute's modifiers in the order they were added — a mod's transient and
-  permanent ones, the saved list's, and what the worn and held items grant. An attribute no modifier is on answers
-  an empty list; `None` for an attribute the entity type lacks, a stale handle, or on a client for any entity but
-  the local player. Diverges from upstream: new helpers.
+- `living.visit_attributes(host, &mut visit)` lends ids from the holder's attribute set, in registry order.
+  `living.visit_attribute_modifiers(host, id, &mut visit)` is `AttributeInstance.getModifiers`: it lends an
+  `AttributeModifierView` for each modifier in addition order, including saved, transient, permanent and equipment
+  modifiers. Return `ControlFlow::Break(())` to stop a visit; copy an id in the visitor if it must outlive the call.
+  An attribute with no modifiers completes without any calls. Unknown or unsupported attributes are unavailable,
+  as are reads of other entities on a client; stale handles return `EntityReadError::Stale`.
 - The writes take players, guests (in their own turn), mobs and armor stands, and answer false for an attribute the
   type lacks, the dragon (`/attribute` refuses it, and nothing reads its attributes yet), a stale handle, or on a
   client. `living.add_attribute_modifier(host, id, modifier, lifetime)` is `AttributeInstance.addTransientModifier`

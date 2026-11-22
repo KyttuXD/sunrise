@@ -6,7 +6,7 @@
 //! and `varint_size` from [`sunrise_core::vanilla_bytes`].
 use crate::{Error, Result};
 use std::marker::PhantomData;
-use sunrise_core::{nbt, nbt::Tag, vanilla_bytes::Writer};
+use sunrise_core::{identifier, nbt, nbt::Tag, vanilla_bytes::Writer};
 
 /// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota).
 pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
@@ -376,16 +376,7 @@ impl Ident {
         // All valid identifiers are ASCII, so byte and UTF-16 unit counts agree.
         let value =
             std::str::from_utf8(value).map_err(|_| Error::new("invalid resource identifier"))?;
-        let (namespace, path) = value.split_once(':').unwrap_or(("", value));
-        if !namespace
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-".contains(&c))
-            || !path
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"/_.-".contains(&c))
-        {
-            return Err(Error::new("invalid resource identifier"));
-        }
+        identifier::validate(value).map_err(|_| Error::new("invalid resource identifier"))?;
         if value.len() > MAX {
             return Err(Error::new(format!("string longer than {MAX} chars")));
         }

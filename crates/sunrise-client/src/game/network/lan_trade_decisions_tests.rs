@@ -384,12 +384,14 @@ fn speed_modifier_ids(game: &Game<'_>) -> [Vec<String>; 2] {
         .map(|row| row.id.to_string())
         .collect();
     let other = game.living(game.entity(41).unwrap()).unwrap();
-    let live = other
-        .attribute_modifiers(game, SPEED)
-        .unwrap()
-        .into_iter()
-        .map(|row| row.id.to_string())
-        .collect();
+    let mut live = Vec::new();
+    assert_eq!(
+        other.visit_attribute_modifiers(game, SPEED, &mut |row| {
+            live.push(row.id.to_owned());
+            std::ops::ControlFlow::Continue(())
+        }),
+        Ok(std::ops::ControlFlow::Continue(()))
+    );
     [legacy, live]
 }
 

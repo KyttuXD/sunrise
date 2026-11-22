@@ -25,7 +25,18 @@ gameplay attributes) as a `LevelDimensionType`: the build range, `coordinate_sca
 level on a vanilla type returns that type's values, a registered dimension returns what its
 `DimensionSettings` set, and a data pack's dimension type counts the same way. It returns `None` for
 a stale handle. On a client, it reads the displayed level's received dimension type,
-including custom types sent by another server.
+including custom types sent by another server. Text fields and the timeline slice borrow
+the type while scalar settings are values. Copy a string or use `timelines.to_vec()`
+only if you need the data after the host borrow ends.
+
+## Reading saved maps
+
+`level.visit_map_data(host, id, &mut visit)` reads a world map through any current server
+level, including a parked one. On `Ok(Some(()))` the callback ran once with a
+`MapState<'_>`; its dimension ID and colour bytes are borrowed for that call. Read them
+in place, or use `map.dimension.to_owned()` and `map.colors.to_vec()` if retaining them.
+A missing map returns `Ok(None)`. A stale handle or unavailable side, phase or backend
+returns `LevelReadError`. Neither a missing map nor a refusal calls the visitor.
 
 ## Registering a dimension
 
@@ -213,8 +224,19 @@ for player in recipients {
 For typed payloads, `ToClient::send_in_level` and `ToClient::send_near` already handle
 collecting recipients before sending.
 
-Obtain a chunk with `host.chunk(level, pos)`, then call `chunk.watchers(host)` to ask which
-players were sent it and have it inside their view distance; fake players watch nothing.
+Obtain a chunk with `level.chunk_ref(host, pos)`, then call
+`chunk.visit_watchers(host, &mut visit)` to visit the players it was sent to and whose view
+still contains it, in server order. Fake players watch nothing. A valid parked level uses
+its own tracking rows; a valid unwatched chunk completes without calling the visitor.
+
+`level.visit_loaded_chunks(host, &mut visit)` visits resident chunks in x-then-z order,
+without loading anything. `level.visit_forced_chunks(host, &mut visit)` visits commanded
+chunk positions in `/forceload query` order. `level.visit_mod_forced_chunks(host, controller,
+&mut visit)` visits the issued controller's tickets in ticket order, passing the owner,
+position and natural-spawning flag separately. These visits use the same `ControlFlow` and
+`LevelReadError` convention as the online-player visit. The handle authorizes the read
+regardless of the calling mod; an invalid handle or one from another registration table
+returns `Unavailable`.
 
 `level.find_nearest_structure(host, structure, StructureSearch::new(origin, radius))` searches
 for a structure id or `#tag` and returns its structure and locate position. This is a

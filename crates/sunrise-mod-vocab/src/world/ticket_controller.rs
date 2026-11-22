@@ -89,7 +89,7 @@ pub(crate) struct ControllerInfo {
 
 /// A ticket controller a mod registered with
 /// [`Registrar::register_ticket_controller`](crate::TicketsRegistrar::register_ticket_controller): the
-/// handle `chunk.set_mod_forced` and `level.mod_forced_chunks` take. Only the registrar makes
+/// handle `chunk.set_mod_forced` and `level.visit_mod_forced_chunks` take. Only the registrar makes
 /// one, bound to an opaque registration identity, and it is `Copy`: keep it from `register`, for
 /// example in a `OnceLock`. Active chunk-ticket reads and writes authorize by this registry-issued
 /// handle rather than the current caller; separate controllers cannot read or release each other's

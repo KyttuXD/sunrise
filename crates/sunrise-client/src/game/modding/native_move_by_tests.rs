@@ -55,7 +55,7 @@ fn with_scene(test: impl FnOnce(&mut super::Game<'_>)) {
 #[ignore = "daily"]
 fn an_area_query_lists_the_frames_and_paintings_in_the_box() {
     with_scene(|game| {
-        let level = game.native_list_levels()[0];
+        let level = game.level("minecraft:overworld").unwrap();
         let frame = game.entity(FRAME).unwrap();
         let painting = game.entity(PAINTING).unwrap();
         let around =

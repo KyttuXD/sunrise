@@ -1,10 +1,18 @@
 //! Read-only projections of the connected client's existing state.
 
-use super::{Game, remote::Remote};
+use super::{Game, api_values::TryIntoApi, remote::Remote};
+use core::ops::ControlFlow;
 #[cfg(test)]
 use mod_api::prelude::*;
-use mod_api::{BlockBreakingState, BlockPos, ClientFrameStats, ClientServer, PlayerRef};
+use mod_api::{
+    BlockBreakingState, BlockPos, ClientFrameStats, ClientServer, ClientTabList,
+    ClientTabListEntry, GameMode, PlayerRef, Text, TextFormError,
+};
 use std::sync::Arc;
+use sunrise_client::{
+    scoreboard::Scoreboard,
+    tab_list::{TabPlayer, name_for_display, sorted_players},
+};
 
 impl Game<'_> {
     pub(super) fn native_session(&self) -> Option<&Remote> {
@@ -40,18 +48,6 @@ impl Game<'_> {
         self.native_session()?;
         let latency = self.own_latency()?;
         Some(u32::try_from(latency).unwrap_or(0))
-    }
-
-    /// The player list as the Tab overlay draws it ([`tab_list`]); None outside a logged-in
-    /// client world.
-    pub(super) fn native_client_tab_list(&self) -> Option<mod_api::ClientTabList> {
-        let remote = self.native_session()?;
-        Some(tab_list(
-            &remote.listed_tab_players(),
-            &self.score.board,
-            self.tab_list.header.as_ref(),
-            self.tab_list.footer.as_ref(),
-        ))
     }
 
     /// The local player's item use (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`,
@@ -144,35 +140,70 @@ impl Game<'_> {
     }
 }
 
-/// `PlayerTabOverlay`'s list: the overlay's own order and cap (`tab_list::sorted_players`) and
-/// names (`tab_list::name_for_display`), so the read cannot drift from what is drawn.
-fn tab_list(
-    players: &[sunrise_client::tab_list::TabPlayer],
-    board: &sunrise_client::scoreboard::Scoreboard,
-    header: Option<&sunrise_client::text::Text>,
-    footer: Option<&sunrise_client::text::Text>,
-) -> mod_api::ClientTabList {
-    use super::api_values::TryIntoApi;
-    use sunrise_client::tab_list::{name_for_display, sorted_players};
-    // A text too deep for the API reads as its plain words rather than dropping the entry.
-    let text = |text: &sunrise_client::text::Text| {
-        text.try_into_api()
-            .unwrap_or_else(|_| mod_api::Text::literal(text.plain()))
-    };
-    let entries = sorted_players(players, board)
-        .into_iter()
-        .map(|p| {
-            mod_api::ClientTabListEntry::new(
-                p.name.clone(),
-                p.uuid,
-                // `GameType.byId`: an id it lacks is survival.
-                mod_api::GameMode::from_id(p.game_mode).unwrap_or(mod_api::GameMode::Survival),
-                p.latency,
-                text(&name_for_display(p, board)),
-            )
-        })
-        .collect();
-    mod_api::ClientTabList::new(entries, header.map(text), footer.map(text))
+impl ClientTabList for Game<'_> {
+    fn visit_entries(
+        &self,
+        visit: &mut dyn FnMut(&dyn ClientTabListEntry) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
+        visit_tab_entries(
+            self.remote.iter().flat_map(Remote::listed_tab_player_refs),
+            &self.score.board,
+            visit,
+        )
+    }
+
+    fn copy_header(&self) -> Result<Option<Text>, TextFormError> {
+        self.tab_list
+            .header
+            .as_ref()
+            .map(TryIntoApi::try_into_api)
+            .transpose()
+    }
+
+    fn copy_footer(&self) -> Result<Option<Text>, TextFormError> {
+        self.tab_list
+            .footer
+            .as_ref()
+            .map(TryIntoApi::try_into_api)
+            .transpose()
+    }
+}
+
+// Keep the overlay's ordering and cap, lending one stack-scoped row at a time.
+fn visit_tab_entries<'a>(
+    players: impl IntoIterator<Item = &'a TabPlayer>,
+    board: &'a Scoreboard,
+    visit: &mut dyn FnMut(&dyn ClientTabListEntry) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    sorted_players(players, board).try_for_each(|player| visit(&TabEntryView { player, board }))
+}
+
+struct TabEntryView<'a> {
+    player: &'a TabPlayer,
+    board: &'a Scoreboard,
+}
+
+impl ClientTabListEntry for TabEntryView<'_> {
+    fn name(&self) -> &str {
+        &self.player.name
+    }
+
+    fn uuid(&self) -> u128 {
+        self.player.uuid
+    }
+
+    fn game_mode(&self) -> GameMode {
+        // `GameType.byId` returns survival for an unknown id.
+        GameMode::from_id(self.player.game_mode).unwrap_or(GameMode::Survival)
+    }
+
+    fn latency(&self) -> i32 {
+        self.player.latency
+    }
+
+    fn copy_display(&self) -> Result<Text, TextFormError> {
+        name_for_display(self.player, self.board).try_into_api()
+    }
 }
 
 #[cfg(test)]
@@ -180,12 +211,9 @@ pub(super) mod tests {
     use super::super::native_entity_refs::tests::with_client_game;
     use super::*;
 
-    /// The Tab overlay's names, order, cap, header and footer, as `client_tab_list` reads them.
+    /// The Tab overlay's borrowed rows, order, cap and rich names.
     #[test]
     fn the_tab_list_reads_as_the_overlay_draws_it() {
-        use sunrise_client::{
-            scoreboard::Scoreboard, tab_list::TabPlayer, text::Text as EngineText,
-        };
         let mut board = Scoreboard::default();
         let team = board.add_team("red");
         team.prefix = serde_json::json!("[R] ");
@@ -199,20 +227,10 @@ pub(super) mod tests {
         watcher.game_mode = 3;
         let mut first = TabPlayer::new(4, "Zed");
         first.list_order = 5;
-        let header = EngineText::literal("Welcome");
-        let list = tab_list(
-            &[watcher, named, teamed, first],
-            &board,
-            Some(&header),
-            None,
-        );
-        let names: Vec<_> = list.entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["Zed", "Steve", "Alex", "Bob"],
-            "list order, then spectators last"
-        );
-        fn plain(text: &mod_api::Text) -> String {
+        let mut wrapping = TabPlayer::new(5, "Wrap");
+        wrapping.list_order = i32::MIN;
+        let players = [watcher, named, teamed, first, wrapping];
+        fn plain(text: &Text) -> String {
             let own = match &text.content {
                 mod_api::text::TextContent::Literal(words) => words.as_str(),
                 _ => "",
@@ -222,42 +240,99 @@ pub(super) mod tests {
                 .map(plain)
                 .fold(own.to_owned(), |all, c| all + &c)
         }
-        assert_eq!(plain(&list.entries[1].display), "Captain");
-        assert_eq!(list.entries[1].latency, 42);
-        assert_eq!(list.entries[1].uuid, 1);
-        assert_eq!(plain(&list.entries[2].display), "[R] Alex *");
-        assert_eq!(list.entries[3].game_mode, mod_api::GameMode::Spectator);
-        assert_eq!(list.entries[0].game_mode, mod_api::GameMode::Survival);
-        assert_eq!(list.header.as_ref().map(plain).as_deref(), Some("Welcome"));
-        assert_eq!(list.footer, None);
+        let mut names = Vec::new();
+        assert_eq!(
+            visit_tab_entries(&players, &board, &mut |row| {
+                names.push(row.name().to_owned());
+                match row.uuid() {
+                    1 => {
+                        assert_eq!(row.latency(), 42);
+                        assert_eq!(plain(&row.copy_display().unwrap()), "Captain");
+                    }
+                    2 => assert_eq!(plain(&row.copy_display().unwrap()), "[R] Alex *"),
+                    3 => {
+                        assert_eq!(row.game_mode(), GameMode::Spectator);
+                        assert_eq!(row.copy_display().unwrap().style.italic, Some(true));
+                    }
+                    4 => assert_eq!(row.game_mode(), GameMode::Survival),
+                    _ => {}
+                }
+                ControlFlow::Continue(())
+            }),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(names, ["Wrap", "Zed", "Steve", "Alex", "Bob"]);
+
         let crowd: Vec<_> = (0..100)
+            .rev()
             .map(|i| TabPlayer::new(i, format!("p{i:03}")))
             .collect();
-        let list = tab_list(&crowd, &board, None, None);
-        assert_eq!(list.entries.len(), 80, "the overlay draws 80");
-        assert_eq!(list.entries[0].name, "p000");
-        assert_eq!(list.entries[79].name, "p079");
-        assert_eq!(list.header, None);
-        let mut overlay = sunrise_client::tab_list::TabList::default();
-        overlay.header = Some(EngineText::literal("Header"));
-        overlay.footer = Some(EngineText::literal("Footer"));
-        let set = tab_list(
-            &[],
-            &board,
-            overlay.header.as_ref(),
-            overlay.footer.as_ref(),
+        let mut ids = Vec::new();
+        assert_eq!(
+            visit_tab_entries(&crowd, &board, &mut |row| {
+                ids.push(row.uuid());
+                ControlFlow::Continue(())
+            }),
+            ControlFlow::Continue(())
         );
-        assert_eq!(set.header.as_ref().map(plain).as_deref(), Some("Header"));
-        assert_eq!(set.footer.as_ref().map(plain).as_deref(), Some("Footer"));
-        overlay.reset();
-        let cleared = tab_list(
-            &[],
-            &board,
-            overlay.header.as_ref(),
-            overlay.footer.as_ref(),
+        assert!(
+            ids.into_iter().eq(0_u128..80),
+            "only the first 80 in drawn order"
         );
-        assert_eq!(cleared.header, None);
-        assert_eq!(cleared.footer, None);
+
+        let ties: Vec<_> = (0..81)
+            .rev()
+            .map(|i| TabPlayer::new(i, if i % 2 == 0 { "Alex" } else { "alex" }))
+            .collect();
+        let no_teams = Scoreboard::default();
+        let mut ids = Vec::new();
+        assert_eq!(
+            visit_tab_entries(&ties, &no_teams, &mut |row| {
+                ids.push(row.uuid());
+                ControlFlow::Continue(())
+            }),
+            ControlFlow::Continue(())
+        );
+        assert!(
+            ids.into_iter().eq((1_u128..81).rev()),
+            "even the cutoff preserves ties"
+        );
+
+        let mut uncopyable = TabPlayer::new(42, "A");
+        let mut deep = serde_json::json!("deep");
+        for _ in 0..mod_api::text::MAX_TEXT_DEPTH {
+            deep = serde_json::Value::Object(
+                [
+                    ("text".into(), serde_json::json!("")),
+                    ("extra".into(), serde_json::Value::Array(vec![deep])),
+                ]
+                .into_iter()
+                .collect(),
+            );
+        }
+        uncopyable.display_name = Some(deep);
+        let mut seen = Vec::new();
+        assert_eq!(
+            visit_tab_entries([&uncopyable, &players[2]], &board, &mut |row| {
+                seen.push(row.uuid());
+                if row.uuid() == 42 {
+                    assert_eq!(row.name(), "A");
+                    assert_eq!(row.copy_display(), Err(TextFormError::TooDeep));
+                    return ControlFlow::Continue(());
+                }
+                assert_eq!(plain(&row.copy_display().unwrap()), "[R] Alex *");
+                ControlFlow::Break(())
+            }),
+            ControlFlow::Break(())
+        );
+        assert_eq!(seen, [42, 2], "a text refusal does not stop the visit");
+        assert_eq!(
+            visit_tab_entries(&players, &board, &mut |row| {
+                assert_eq!(row.name(), "Wrap", "no calls after Break");
+                ControlFlow::Break(())
+            }),
+            ControlFlow::Break(())
+        );
     }
 
     pub(in crate::game) fn logged_client(
@@ -307,13 +382,101 @@ pub(super) mod tests {
     #[test]
     #[ignore = "daily"]
     fn client_session_reads_follow_connection_language_and_frame_state() {
+        use core::ops::ControlFlow;
         use sunrise_client::lang::{self, Language};
+        use sunrise_core::nbt::Tag;
+        use sunrise_protocol::packets::play::{
+            Clientbound, PlayerInfo, PlayerInfoUpdate, SetObjective, TabList,
+        };
 
         with_client_game(|game| {
+            assert!(matches!(game.client_session().client_tab_list(), Ok(None)));
             assert_eq!(game.client_session().client_server(), None);
             assert_eq!(game.client_session().client_language(), None);
             assert_eq!(game.client_session().client_frame_stats(), None);
+            assert!(matches!(
+                ScoreboardClientHost::client_scoreboard(game),
+                Ok(None)
+            ));
             let _server = logged_client(game);
+            let empty_list = game.client_session().client_tab_list().unwrap().unwrap();
+            assert_eq!(
+                empty_list.visit_entries(&mut |_| panic!("new session's tab list is empty")),
+                ControlFlow::Continue(())
+            );
+            assert_eq!(empty_list.copy_header(), Ok(None));
+            assert_eq!(empty_list.copy_footer(), Ok(None));
+            game.apply_packet(Clientbound::PlayerInfoUpdate(PlayerInfoUpdate {
+                actions: 1 | 8,
+                entries: vec![
+                    PlayerInfo {
+                        uuid: 1,
+                        name: Some("Hidden".to_owned()),
+                        listed: Some(false),
+                        ..PlayerInfo::default()
+                    },
+                    PlayerInfo {
+                        uuid: 2,
+                        name: Some("Listed".to_owned()),
+                        listed: Some(true),
+                        ..PlayerInfo::default()
+                    },
+                ],
+            }))
+            .unwrap();
+            let list = game.client_session().client_tab_list().unwrap().unwrap();
+            let mut listed = Vec::new();
+            assert_eq!(
+                list.visit_entries(&mut |entry| {
+                    listed.push(entry.uuid());
+                    ControlFlow::Continue(())
+                }),
+                ControlFlow::Continue(())
+            );
+            assert_eq!(
+                listed,
+                [2],
+                "only players the server marked listed are exposed"
+            );
+            game.apply_packet(Clientbound::TabList(TabList {
+                header: Tag::String("Header".into()),
+                footer: Tag::String("Footer".into()),
+            }))
+            .unwrap();
+            let list = game.client_session().client_tab_list().unwrap().unwrap();
+            assert_eq!(list.copy_header(), Ok(Some(Text::literal("Header"))));
+            assert_eq!(list.copy_footer(), Ok(Some(Text::literal("Footer"))));
+            game.apply_packet(Clientbound::TabList(TabList {
+                header: Tag::String(String::new()),
+                footer: Tag::String(String::new()),
+            }))
+            .unwrap();
+            let list = game.client_session().client_tab_list().unwrap().unwrap();
+            assert_eq!(list.copy_header(), Ok(None));
+            assert_eq!(list.copy_footer(), Ok(None));
+
+            let empty_board = ScoreboardClientHost::client_scoreboard(game)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                empty_board.visit_objectives(&mut |_| panic!("new session's board is empty")),
+                ControlFlow::Continue(())
+            );
+            game.remote_objective(SetObjective {
+                name: "received".into(),
+                method: 0,
+                display: Some((Tag::String("Received".into()), 0, None)),
+            });
+            let live_board = ScoreboardClientHost::client_scoreboard(game)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                live_board.visit_objectives(&mut |objective| {
+                    assert_eq!(objective.name(), "received");
+                    ControlFlow::Break(())
+                }),
+                ControlFlow::Break(())
+            );
             let memory = game.client_session().client_server().unwrap();
             assert_eq!(memory.name, None);
             assert_eq!(memory.address, None);
@@ -411,13 +574,22 @@ pub(super) mod tests {
                 "the existing applied pause read remains canonical"
             );
             game.remote.as_mut().unwrap().logged_in = false;
+            assert!(matches!(game.client_session().client_tab_list(), Ok(None)));
             assert_eq!(game.client_session().client_server(), None);
             assert_eq!(game.client_session().client_language(), None);
             assert_eq!(game.client_session().client_frame_stats(), None);
+            assert!(matches!(
+                ScoreboardClientHost::client_scoreboard(game),
+                Ok(None)
+            ));
             game.remote = None;
             // A reconnect target must not be mistaken for the current session.
             game.connection_starts("stale.example:25565", "OldPlayer", false);
             assert_eq!(game.client_session().client_server(), None);
+            assert!(matches!(
+                ScoreboardClientHost::client_scoreboard(game),
+                Ok(None)
+            ));
         });
     }
 

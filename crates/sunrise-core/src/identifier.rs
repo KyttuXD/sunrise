@@ -35,14 +35,51 @@ fn hash(s: &str) -> i32 {
     s.bytes()
         .fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(i32::from(c)))
 }
+fn validate_parts(namespace: &str, path: &str) -> Result<(), IdentifierError> {
+    if namespace == ".." || !namespace.bytes().all(valid) {
+        return Err(IdentifierError::Namespace);
+    }
+    if !path.bytes().all(|c| valid(c) || c == b'/') {
+        return Err(IdentifierError::Path);
+    }
+    Ok(())
+}
+
+const DEFAULT_NAMESPACE: &str = "minecraft";
+
+fn split_identifier(text: &str) -> (Option<&str>, &str) {
+    match text.split_once(':') {
+        Some(("", path)) => (None, path),
+        Some((namespace, path)) => (Some(namespace), path),
+        None => (None, text),
+    }
+}
+
+fn validated_parts(text: &str) -> Result<(Option<&str>, &str), IdentifierError> {
+    let (namespace, path) = split_identifier(text);
+    validate_parts(namespace.unwrap_or(DEFAULT_NAMESPACE), path)?;
+    Ok((namespace, path))
+}
+
+/// Validate a borrowed identifier without allocating its name.
+pub fn validate(text: &str) -> Result<(), IdentifierError> {
+    validated_parts(text).map(|_| ())
+}
+
+/// Validate identifier text and supply the default namespace when omitted.
+/// Already qualified text keeps its original allocation.
+pub fn canonicalize(text: String) -> Result<String, IdentifierError> {
+    let (namespace, path) = validated_parts(&text)?;
+    if namespace.is_some() {
+        Ok(text)
+    } else {
+        Ok(format!("{DEFAULT_NAMESPACE}:{path}"))
+    }
+}
+
 impl Identifier {
     pub fn from_parts(namespace: &str, path: &str) -> Result<Self, IdentifierError> {
-        if namespace == ".." || !namespace.bytes().all(valid) {
-            return Err(IdentifierError::Namespace);
-        }
-        if !path.bytes().all(|c| valid(c) || c == b'/') {
-            return Err(IdentifierError::Path);
-        }
+        validate_parts(namespace, path)?;
         Ok(Self(Arc::new(Data {
             text: format!("{namespace}:{path}").into_boxed_str(),
             colon: namespace.len(),
@@ -58,15 +95,8 @@ impl Identifier {
         Self::from_parts(namespace, path).ok()
     }
     pub fn parse(text: &str) -> Result<Self, IdentifierError> {
-        let (namespace, path) = text.split_once(':').unwrap_or(("minecraft", text));
-        Self::from_parts(
-            if namespace.is_empty() {
-                "minecraft"
-            } else {
-                namespace
-            },
-            path,
-        )
+        let (namespace, path) = split_identifier(text);
+        Self::from_parts(namespace.unwrap_or(DEFAULT_NAMESPACE), path)
     }
     /// Borrow this identifier's fully qualified `namespace:path` spelling.
     pub fn as_str(&self) -> &str {

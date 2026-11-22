@@ -4,8 +4,9 @@
 //! is tamed. Reads return `None`, writes false, for a stale handle or on a
 //! client; the exception is the reads marked side `both` (`living`, `with_equipment`,
 //! `with_hand_item`, `health`, `max_health`, `attribute_value`, `attribute_base`,
-//! `attributes` and `attribute_modifiers`), which on a client answer for the
-//! local player from the client's own copy; and `effect`/`effects`.
+//! `visit_attributes` and `visit_attribute_modifiers`), which on a client answer for the
+//! local player from the client's own copy; and `effect`/`visit_effects`. Visitor reads
+//! refuse with a typed error rather than returning `None`.
 use super::Game;
 use super::api_values::{StackReadMetadata, project_stack, stack_read_metadata};
 use super::commands::{Target, items::Owner};
@@ -13,15 +14,16 @@ use super::living_attributes::AttributeWrite;
 use crate::mobs::Who;
 use mod_api::client::first_person::Hand;
 use mod_api::{
-    AttributeModifier, AttributeOperation, Direction, EntityRef, EquipmentSlot, Identifier,
-    ItemStackView, LivingRef, ModifierLifetime,
+    AttributeModifier, AttributeModifierView, AttributeOperation, Direction, EntityReadError,
+    EntityRef, EquipmentSlot, Identifier, ItemStackView, LivingRef, ModifierLifetime,
 };
+use std::{ops::ControlFlow, sync::Arc};
 use sunrise_client::items::ItemStack;
 use sunrise_client::mobs::{
     Mob,
     finalize::{self, EquipmentRead},
 };
-use sunrise_world::attributes::{Modifier, Operation};
+use sunrise_world::attributes::{Modifier, Operation, entity::Catalog};
 
 /// A player's armour slots (`armor`, head first) by equipment slot.
 fn armor_index(slot: EquipmentSlot) -> Option<usize> {
@@ -117,23 +119,36 @@ fn equipment_stack(stack: Option<ItemStack>) -> Option<ItemStack> {
     stack.filter(|s| s.count > 0 && &*s.item != "minecraft:air")
 }
 
-/// The map's modifiers as the API's, in their order. Their ids are canonical
-/// (`Modifier` normalizes them), so none is dropped.
-fn attribute_modifiers(list: Vec<Modifier>) -> Vec<AttributeModifier> {
-    list.iter().filter_map(api_modifier).collect()
+/// Project each modifier without copying its canonical id out of the live map.
+pub(super) fn visit_attribute_modifiers(
+    modifiers: &[Modifier],
+    visit: &mut dyn FnMut(AttributeModifierView<'_>) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    modifiers.iter().try_for_each(|m| {
+        visit(AttributeModifierView {
+            id: m.id(),
+            amount: m.amount(),
+            operation: match m.operation() {
+                Operation::AddValue => AttributeOperation::AddValue,
+                Operation::AddMultipliedBase => AttributeOperation::AddMultipliedBase,
+                Operation::AddMultipliedTotal => AttributeOperation::AddMultipliedTotal,
+            },
+        })
+    })
 }
 
-/// One map modifier as the API's.
-fn api_modifier(m: &Modifier) -> Option<AttributeModifier> {
-    Some(AttributeModifier::new(
-        Identifier::parse(m.id()).ok()?,
-        m.amount(),
-        match m.operation() {
-            Operation::AddValue => AttributeOperation::AddValue,
-            Operation::AddMultipliedBase => AttributeOperation::AddMultipliedBase,
-            Operation::AddMultipliedTotal => AttributeOperation::AddMultipliedTotal,
-        },
-    ))
+/// Use the mob's saved-attribute seed if its map has not been built yet.
+pub(super) fn mob_attribute_modifiers<'a>(
+    mob: &'a Mob,
+    catalog: &Arc<Catalog>,
+    name: &str,
+) -> Option<&'a [Modifier]> {
+    mob.extra.live.modifiers(catalog, &mob.kind.id, name, || {
+        sunrise_client::entity_nbt::attribute_entries(mob)
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect()
+    })
 }
 
 impl Game<'_> {
@@ -191,38 +206,92 @@ impl Game<'_> {
         self.native_living_attribute(living, id, sunrise_world::attribute_map::ValueKind::Base)
     }
 
-    /// The ids of the attributes the entity's type has
-    /// (`AttributeMap`'s holder's attribute set), in registry order: the same
-    /// set the value and base reads answer for. None for a stale handle or an
-    /// unavailable entity; on a client, for any entity but the local player
-    /// (the client keeps no attribute map of another entity's, only the few
-    /// fields it draws).
-    pub(super) fn living_attributes(&self, living: LivingRef) -> Option<Vec<Identifier>> {
-        let catalog = &self.motion.attributes;
-        let entity = self.native_living_attribute_entity(living)?;
-        Some(
-            catalog
-                .attributes()
-                .filter(|(id, _)| catalog.default_base(entity, *id).is_some())
-                // The catalog's names are canonical, so none is dropped.
-                .filter_map(|(_, a)| Identifier::parse(&a.name).ok())
-                .collect(),
-        )
+    /// Resolve the visitor's target. Only the local player has these reads on the client.
+    pub(super) fn native_living_visit_target(
+        &self,
+        living: LivingRef,
+    ) -> Result<Target, EntityReadError> {
+        let target = self.native_entity_visit_target(living.entity())?;
+        if !matches!(target, Target::Player) && !self.is_logical_server() {
+            return Err(EntityReadError::Unavailable);
+        }
+        Ok(target)
     }
 
-    /// The modifiers on the entity's attribute `id`
-    /// (`AttributeInstance.getModifiers`), in the order they were added: a
-    /// mod's transient and permanent ones, the saved list's, and what the
-    /// worn and held items grant. An attribute no modifier is on answers an
-    /// empty list; None for an attribute the entity type does not have, a
-    /// stale handle, or on a client for any entity but the local player,
-    /// whose copy of the synced instances it reads.
-    pub(super) fn living_attribute_modifiers(
+    /// Lend the entity type's attribute ids in registry order.
+    pub(super) fn living_visit_attributes(
+        &self,
+        living: LivingRef,
+        visit: &mut dyn FnMut(&str) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        let entity = match self.native_living_visit_target(living)? {
+            Target::Player | Target::Guest(_) => "minecraft:player",
+            Target::Mob(id) => self
+                .mobs
+                .iter()
+                .find(|m| m.id == id && !m.removed)
+                .ok_or(EntityReadError::Stale)?
+                .kind
+                .id
+                .as_str(),
+            Target::Stand(_) => "minecraft:armor_stand",
+            Target::Dragon(_) => "minecraft:ender_dragon",
+            _ => return Err(EntityReadError::Unavailable),
+        };
+        Ok(self
+            .motion
+            .attributes
+            .attribute_names_for(entity)
+            .try_for_each(visit))
+    }
+
+    /// Lend resident modifiers from the same attribute instances the value reads use.
+    pub(super) fn living_visit_attribute_modifiers(
         &self,
         living: LivingRef,
         id: &str,
-    ) -> Option<Vec<AttributeModifier>> {
-        self.native_target_attribute_modifiers(self.native_living_read_target(living)?, id)
+        visit: &mut dyn FnMut(AttributeModifierView<'_>) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        let catalog = &self.motion.attributes;
+        let modifiers = match self.native_living_visit_target(living)? {
+            Target::Player => self
+                .player
+                .as_ref()
+                .ok_or(EntityReadError::Unavailable)?
+                .attributes
+                .modifiers(id),
+            Target::Guest(conn) => self
+                .command_guest(conn)
+                .and_then(|guest| guest.motion.as_deref())
+                .ok_or(EntityReadError::Unavailable)?
+                .attributes
+                .modifiers(id),
+            Target::Mob(mob) => {
+                let m = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == mob && !m.removed)
+                    .ok_or(EntityReadError::Stale)?;
+                mob_attribute_modifiers(m, catalog, id)
+            }
+            Target::Stand(stand) => self
+                .armor_stands
+                .iter()
+                .find(|a| a.id == stand)
+                .ok_or(EntityReadError::Stale)?
+                .live
+                .modifiers(catalog, "minecraft:armor_stand", id, Vec::new),
+            Target::Dragon(dragon) => self
+                .dragon
+                .as_ref()
+                .filter(|d| d.id == dragon)
+                .ok_or(EntityReadError::Stale)?
+                .live
+                .modifiers(catalog, "minecraft:ender_dragon", id, Vec::new),
+            _ => None,
+        }
+        .ok_or(EntityReadError::Unavailable)?;
+        Ok(visit_attribute_modifiers(modifiers, visit))
     }
 
     /// Adds an attribute modifier (`AttributeInstance.addTransientModifier`
@@ -331,85 +400,6 @@ impl Game<'_> {
         kind: sunrise_world::attribute_map::ValueKind,
     ) -> Option<f64> {
         self.native_target_attribute(self.native_living_read_target(living)?, name, kind)
-    }
-
-    /// The entity's type key, for the catalog's attribute defaults: the same
-    /// set the value and base reads answer for. On a client only the local
-    /// player resolves (`native_living_read_target`).
-    fn native_living_attribute_entity(&self, living: LivingRef) -> Option<&str> {
-        match self.native_living_read_target(living)? {
-            Target::Player | Target::Guest(_) => Some("minecraft:player"),
-            Target::Mob(id) => self
-                .mobs
-                .iter()
-                .find(|m| m.id == id && !m.removed)
-                .map(|m| m.kind.id.as_str()),
-            Target::Stand(_) => Some("minecraft:armor_stand"),
-            Target::Dragon(_) => Some("minecraft:ender_dragon"),
-            _ => None,
-        }
-    }
-
-    /// The modifiers of `name` on `target`'s attribute map, as
-    /// `native_target_attribute` reads its value.
-    fn native_target_attribute_modifiers(
-        &self,
-        target: Target,
-        name: &str,
-    ) -> Option<Vec<AttributeModifier>> {
-        let catalog = &self.motion.attributes;
-        let player = match target {
-            Target::Player => self.player.as_ref()?,
-            Target::Guest(conn) => self.command_guest(conn)?.motion.as_deref()?,
-            Target::Mob(id) => {
-                let m = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
-                return m
-                    .extra
-                    .live
-                    .modifiers(catalog, &m.kind.id, name, || {
-                        sunrise_client::entity_nbt::attribute_entries(m)
-                            .into_iter()
-                            .map(|(_, entry)| entry)
-                            .collect()
-                    })
-                    .map(attribute_modifiers);
-            }
-            Target::Stand(id) => {
-                let a = self.armor_stands.iter().find(|a| a.id == id)?;
-                return a
-                    .live
-                    .modifiers(catalog, "minecraft:armor_stand", name, Vec::new)
-                    .map(attribute_modifiers);
-            }
-            Target::Dragon(id) => {
-                let d = self.dragon.as_ref().filter(|d| d.id == id)?;
-                return d
-                    .live
-                    .modifiers(catalog, "minecraft:ender_dragon", name, Vec::new)
-                    .map(attribute_modifiers);
-            }
-            _ => return None,
-        };
-        // The base read's own None: an attribute the type does not have.
-        let key = player.attributes.key(name)?;
-        player
-            .attributes
-            .value(
-                Some(key.clone()),
-                sunrise_world::attribute_map::ValueKind::Base,
-            )
-            .ok()?;
-        Some(
-            player
-                .attributes
-                .lookup(Some(&key))
-                .and_then(|handle| player.attributes.instance(&handle).ok())
-                .map(|instance| instance.modifiers())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(api_modifier)
-                .collect(),
-        )
     }
 
     pub(super) fn native_target_attribute(
@@ -1597,31 +1587,72 @@ pub(in crate::game) mod tests {
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let stand = game.living(game.entity(13).unwrap()).unwrap();
 
-            // The zombie's type has these attributes, and the stand's lacks
-            // attack damage.
-            let listed = |living: mod_api::LivingRef| living.attributes(game).unwrap();
-            for name in [
+            let read_names = |game: &dyn mod_api::Host, living: LivingRef| {
+                let mut names = Vec::new();
+                let result = living.visit_attributes(game, &mut |name| {
+                    names.push(name.to_owned());
+                    ControlFlow::Continue(())
+                });
+                assert_eq!(result, Ok(ControlFlow::Continue(())));
+                names
+            };
+            let read_modifiers = |game: &dyn mod_api::Host,
+                                  living: LivingRef,
+                                  name: &str|
+             -> Result<Vec<_>, EntityReadError> {
+                let mut modifiers = Vec::new();
+                assert_eq!(
+                    living.visit_attribute_modifiers(game, name, &mut |m| {
+                        modifiers.push((m.id.to_owned(), m.amount, m.operation));
+                        ControlFlow::Continue(())
+                    })?,
+                    ControlFlow::Continue(())
+                );
+                Ok(modifiers)
+            };
+            // Zombie.createAttributes supports these; Attributes registers them in this order.
+            let known = [
+                "minecraft:armor",
+                "minecraft:attack_damage",
                 "minecraft:max_health",
                 "minecraft:movement_speed",
-                "minecraft:attack_damage",
-            ] {
-                assert!(
-                    listed(zombie).contains(&Identifier::parse(name).unwrap()),
-                    "{name}"
-                );
-            }
+            ];
+            let names = read_names(game, zombie);
+            let matching: Vec<_> = names
+                .iter()
+                .map(String::as_str)
+                .filter(|id| known.contains(id))
+                .collect();
+            assert_eq!(matching, known);
+            let mut first_name = Vec::new();
+            assert_eq!(
+                zombie.visit_attributes(game, &mut |id| {
+                    first_name.push(id.to_owned());
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(first_name, ["minecraft:air_drag_modifier".to_owned()]);
             assert!(
-                !listed(stand).contains(&Identifier::parse("minecraft:attack_damage").unwrap())
+                !read_names(game, stand)
+                    .iter()
+                    .any(|id| id == "minecraft:attack_damage")
             );
 
-            // An attribute with no modifier answers an empty list, one the
-            // type lacks None.
+            // A known attribute with no modifiers completes; an unknown or unsupported one refuses.
             let speed = "minecraft:movement_speed";
-            assert_eq!(zombie.attribute_modifiers(game, speed), Some(Vec::new()));
-            assert_eq!(zombie.attribute_modifiers(game, "missing:attribute"), None);
+            assert_eq!(read_modifiers(game, zombie, speed), Ok(Vec::new()));
             assert_eq!(
-                stand.attribute_modifiers(game, "minecraft:attack_damage"),
-                None
+                zombie.visit_attribute_modifiers(game, "missing:attribute", &mut |_| panic!(
+                    "unknown attribute visited"
+                )),
+                Err(EntityReadError::Unavailable)
+            );
+            assert_eq!(
+                stand.visit_attribute_modifiers(game, "minecraft:attack_damage", &mut |_| panic!(
+                    "unsupported attribute visited"
+                )),
+                Err(EntityReadError::Unavailable)
             );
 
             // The add, replace and remove writes the reads follow.
@@ -1638,12 +1669,25 @@ pub(in crate::game) mod tests {
                 Transient
             ));
             assert_eq!(
-                zombie.attribute_modifiers(game, speed),
-                Some(vec![
-                    modifier("test:fast", 1.0, AddMultipliedBase),
-                    modifier("test:boost", 0.5, AddMultipliedTotal)
+                read_modifiers(game, zombie, speed),
+                Ok(vec![
+                    ("test:fast".to_owned(), 1.0, AddMultipliedBase),
+                    ("test:boost".to_owned(), 0.5, AddMultipliedTotal),
                 ])
             );
+            let mut first_modifier = Vec::new();
+            assert_eq!(
+                zombie.visit_attribute_modifiers(game, speed, &mut |m| {
+                    first_modifier.push((m.id.to_owned(), m.amount, m.operation));
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(
+                first_modifier,
+                [("test:fast".to_owned(), 1.0, AddMultipliedBase)]
+            );
+
             // Replacing puts the new one at the end, its lifetime changed.
             assert!(zombie.replace_attribute_modifier(
                 game,
@@ -1654,8 +1698,8 @@ pub(in crate::game) mod tests {
             let boost = Identifier::parse("test:boost").unwrap();
             assert!(zombie.remove_attribute_modifier(game, speed, &boost));
             assert_eq!(
-                zombie.attribute_modifiers(game, speed),
-                Some(vec![modifier("test:fast", 2.0, AddValue)])
+                read_modifiers(game, zombie, speed),
+                Ok(vec![("test:fast".to_owned(), 2.0, AddValue)])
             );
 
             // A worn helmet's modifier is read off the stand's live map.
@@ -1663,18 +1707,15 @@ pub(in crate::game) mod tests {
                 .equipment
                 .set(HEAD, Some(ItemStack::new("minecraft:diamond_helmet", 1)));
             game.tick_equipment_attributes();
-            let armor = stand.attribute_modifiers(game, "minecraft:armor").unwrap();
-            assert!(
-                armor.iter().any(|m| (m.amount - 3.0).abs() < 1e-9),
-                "{armor:?}"
-            );
+            let armor = read_modifiers(game, stand, "minecraft:armor").unwrap();
+            assert!(armor.iter().any(|m| m.1 == 3.0), "{armor:?}");
 
             // A player's own map answers the same read.
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
             crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.living(game.entity(20).unwrap()).unwrap();
             let health = "minecraft:max_health";
-            assert_eq!(player.attribute_modifiers(game, health), Some(Vec::new()));
+            assert_eq!(read_modifiers(game, player, health), Ok(Vec::new()));
             assert!(player.add_attribute_modifier(
                 game,
                 health,
@@ -1682,16 +1723,29 @@ pub(in crate::game) mod tests {
                 Permanent
             ));
             assert_eq!(
-                player.attribute_modifiers(game, health),
-                Some(vec![modifier("test:hearty", 0.5, AddMultipliedBase)])
+                read_modifiers(game, player, health),
+                Ok(vec![("test:hearty".to_owned(), 0.5, AddMultipliedBase)])
             );
 
-            // A stale handle reads None.
+            // A stale handle refuses before calling either visitor.
             game.mobs.clear();
             game.armor_stands.clear();
-            assert_eq!(zombie.attributes(game), None);
-            assert_eq!(zombie.attribute_modifiers(game, speed), None);
-            assert_eq!(stand.attribute_modifiers(game, "minecraft:armor"), None);
+            assert_eq!(
+                zombie.visit_attributes(game, &mut |_| panic!("stale attributes visited")),
+                Err(EntityReadError::Stale)
+            );
+            assert_eq!(
+                zombie.visit_attribute_modifiers(game, speed, &mut |_| panic!(
+                    "stale modifier visited"
+                )),
+                Err(EntityReadError::Stale)
+            );
+            assert_eq!(
+                stand.visit_attribute_modifiers(game, "minecraft:armor", &mut |_| panic!(
+                    "stale modifier visited"
+                )),
+                Err(EntityReadError::Stale)
+            );
         });
     }
 

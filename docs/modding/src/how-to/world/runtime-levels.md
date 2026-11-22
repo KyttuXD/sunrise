@@ -77,7 +77,9 @@ a failed unload leaves the level open for another unload request. Observe `is_op
 the queue runs rather than treating the returned result as completion.
 
 An explicitly opened runtime level fires `level_load` while parked: `event.dimension` names
-the opened level, whereas the Host still names the current level.
+the opened level, whereas the Host still names the current level. Use
+`host.levels().visit_levels(&mut visit)` to walk resident levels, including parked
+runtime levels; a level that is open but idle-unloaded is not resident.
 
 ## Validating saved chunk tickets
 

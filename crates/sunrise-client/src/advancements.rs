@@ -200,7 +200,7 @@ pub struct Advancement {
 #[derive(Default)]
 pub struct Tree {
     pub list: Vec<Advancement>,
-    pub by_id: HashMap<String, usize>,
+    pub by_id: BTreeMap<String, usize>,
     /// trigger id -> (advancement index, criterion index).
     pub by_trigger: HashMap<String, Vec<(usize, usize)>>,
     /// `recipe_unlocked` criteria by the recipe they name (`index_recipes`);
@@ -389,7 +389,9 @@ impl Tree {
             };
             let ns = ns.file_name().to_string_lossy().into_owned();
             for file in &folder.files {
-                if let Ok(v) = serde_json::from_slice::<Value>(file.bytes().unwrap_or_default()) {
+                if sunrise_world::json_folder::valid_resource_path(&ns, &file.name)
+                    && let Ok(v) = serde_json::from_slice::<Value>(file.bytes().unwrap_or_default())
+                {
                     json.insert(format!("{ns}:{}", file.name), v);
                 }
             }

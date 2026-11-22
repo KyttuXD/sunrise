@@ -243,8 +243,9 @@ pub enum AttributeOperation {
     AddMultipliedTotal,
 }
 
-/// An attribute modifier (vanilla's `AttributeModifier`): its id, which is
-/// unique on one attribute of one entity, the amount and the operation.
+/// An owned attribute modifier (vanilla's `AttributeModifier`) used for writes: its id,
+/// which is unique on one attribute of one entity, the amount and the operation.
+/// Read modifiers through [`LivingRef::visit_attribute_modifiers`].
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
 pub struct AttributeModifier {
@@ -267,6 +268,18 @@ impl AttributeModifier {
     }
 }
 
+/// A modifier lent by [`LivingRef::visit_attribute_modifiers`].
+// no wire: the id is borrowed from an in-process attribute map
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AttributeModifierView<'a> {
+    /// The canonical modifier id (`mymod:sprint_boost`), borrowed for this visit.
+    pub id: &'a str,
+    /// The amount the operation applies.
+    pub amount: f64,
+    /// How it applies.
+    pub operation: AttributeOperation,
+}
+
 /// Whether an attribute modifier is saved with its entity
 /// (`AttributeInstance.addPermanentModifier`) or lasts until the entity
 /// unloads (`addTransientModifier`), as the modifiers of worn items and
@@ -281,9 +294,8 @@ pub enum ModifierLifetime {
 }
 
 /// A living entity's active effect (vanilla's `MobEffectInstance`), as
-/// [`LivingRef`] reads its effects and as `add_effect` gives one: the
-/// effect's id, an [`Identifier`] namespaced as the registry has it
-/// (`minecraft:speed`, a content mod's `mod:custom`),
+/// [`LivingRef::visit_effects`] reads each effect and as `add_effect` gives one: the
+/// effect's load-owned [`EffectKey`],
 /// the ticks left (-1 is infinite), the amplifier from 0, and the flags a
 /// beacon-style effect carries: `ambient` (an ambient one gives no
 /// particles), `visible` (whether its particles show) and `show_icon`

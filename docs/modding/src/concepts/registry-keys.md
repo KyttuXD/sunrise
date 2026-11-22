@@ -129,7 +129,14 @@ not a lost handle or a guessed replacement state. Update flags retain their vani
 
 ## Registry lookup and enumeration
 
-Walking a whole registry uses the typed keys, never names: `host.block_keys()` and
+Use `host.visit_registry_entries(registry, &mut visit)` to read canonical names for a
+registry named at runtime. The callback borrows each ID in the registry's existing
+order: numeric for protocol tables, lexical for name-keyed tables. Return
+`ControlFlow::Break(())` to stop. Parse a borrowed name with `Identifier::parse` only
+if you need to retain a typed identifier. See [load phases](load-phases.md#ordinary-host-reads)
+for which registry generation is visible and how refusals are reported.
+
+When you need typed keys for a whole registry, `host.block_keys()` and
 `host.item_keys()` return every entry in the registry's registration order (vanilla's
 entries first, then mods' in the order they registered); `host.entity_type_keys()`,
 `host.menu_keys()` do the same for the built-in entity-type and menu registries.
@@ -261,16 +268,21 @@ Use API-owned values rather than importing engine or package-loader types.
 `ServerHost::game_rule(id)` reads the one server-wide rule store without a
 `LevelRef`, including in `server_about_to_start` and `server_starting`.
 It returns `Result<GameRuleValue, GameRuleReadError>`; an unknown identifier gives
-`GameRuleReadError::UnknownRule`. `ServerHost::game_rules()` lists every available
-rule and its current value by namespaced id. Saved values and a new world's create-screen choices are installed
+`GameRuleReadError::UnknownRule`. `host.visit_game_rules(&mut visit)` visits every available
+rule as a borrowed namespaced ID and a typed value. Return `ControlFlow::Break(())` to
+stop or `Continue(())` to visit the rest. An unreadable phase returns
+`Err(ServerReadError::Unavailable)` without calling the visitor. Saved values and a new
+world's create-screen choices are installed
 before the first server hook, without firing `game_rule_changed` for loading.
 Level reads use the same store once the requested level exists.
 
 `mod_api::GameRuleValue` owns the `Bool(bool)` and `Int(i32)` cases, in that order.
 `level.game_rule(host, id)` returns `Result<Option<GameRuleValue>, LevelReadError>`:
 `Ok(None)` means unknown rule, `Stale` means a gone/reopened level, and `Unavailable`
-means the side or phase cannot read it. `level.game_rules(host)` returns the typed
-result containing every available rule, not an optional list. Use the boolean-key getter for a retained `BoolGameRuleKey`.
+means the side or phase cannot read it. `level.visit_game_rules(host, &mut visit)` lends
+the same IDs and values, with the same `LevelReadError` refusals. Feature-gated rules
+are shown only when enabled. Call `id.to_owned()` inside the visitor if you retain an ID.
+Use the boolean-key getter for a retained `BoolGameRuleKey`.
 
 `GameRuleDecl` records a mod's rule name, category and `GameRuleDefault`: either `Bool(value)`
 or `Int { default, min, max }`. Category references

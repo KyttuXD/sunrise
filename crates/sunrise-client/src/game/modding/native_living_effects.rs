@@ -1,16 +1,17 @@
 //! A living entity's active effects for native server mods, through a
 //! `LivingRef` (docs/modding/src/how-to/native-mods.md, "Entity and level handles"): vanilla's
-//! `activeEffects` read whole, and `addEffect`, `removeEffect`,
+//! `activeEffects` visited in place, and `addEffect`, `removeEffect`,
 //! `removeAllEffects` and `hasEffect` by the game's own paths, so an effect
 //! a mod gives lands as a potion's or `/effect`'s does, through
 //! `canBeAffected` and the added-effect hooks. Reads return `None`, writes
 //! false, for a stale handle or on a client; armor stands and the dragon
-//! keep no effects, as `/effect` skips them. `effect` and `effects` also read
+//! keep no effects, as `/effect` skips them. `effect` and `visit_effects` also read
 //! on a client, for the local player, from the effects the server sent it, and
 //! `effect_blend_factor` reads only there, from the fades the client ticks.
 use super::Game;
 use super::commands::Target;
-use mod_api::{ActiveEffect, EffectKey, LivingRef};
+use mod_api::{ActiveEffect, EffectKey, EntityReadError, LivingRef};
+use std::ops::ControlFlow;
 use sunrise_client::effects::{EffectInstance, PlayerEffects};
 use sunrise_client::mobs::Mob;
 use sunrise_items::items::ItemStack;
@@ -43,6 +44,18 @@ pub(super) fn mob_effect(m: &Mob, e: &sunrise_client::mobs::StoredEffect) -> Act
         visible: !m.extra.hidden_effects.contains(&e.id),
         show_icon: e.show_icon,
     })
+}
+
+/// Project mob effects in store order, stopping before projecting the next on a break.
+pub(super) fn visit_mob_effects(
+    mob: &Mob,
+    visit: &mut dyn FnMut(ActiveEffect) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    mob.extra
+        .effects
+        .iter()
+        .map(|e| mob_effect(mob, e))
+        .try_for_each(visit)
 }
 
 impl Game<'_> {
@@ -146,21 +159,31 @@ impl Game<'_> {
         }
     }
 
-    /// The entity's active effects (`LivingEntity.getActiveEffects`), in the
-    /// order their store keeps them, in `Some` even when it has none. None
-    /// for an armor stand, the dragon, a stale handle or a client.
-    pub(super) fn living_effects(&self, living: LivingRef) -> Option<Vec<ActiveEffect>> {
-        match self.native_living_read_target(living)? {
+    /// Visit `LivingEntity.getActiveEffects` over the resident player, guest or mob store.
+    pub(super) fn living_visit_effects(
+        &self,
+        living: LivingRef,
+        visit: &mut dyn FnMut(ActiveEffect) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        let result = match self.native_living_visit_target(living)? {
             t @ (Target::Player | Target::Guest(_)) => self
                 .native_living_player_effects(t)
-                .map(|effects| effects.list.iter().map(active_effect).collect()),
-            Target::Mob(id) => self
-                .mobs
+                .ok_or(EntityReadError::Unavailable)?
+                .list
                 .iter()
-                .find(|m| m.id == id && !m.removed)
-                .map(|m| m.extra.effects.iter().map(|e| mob_effect(m, e)).collect()),
-            _ => None,
-        }
+                .map(active_effect)
+                .try_for_each(visit),
+            Target::Mob(id) => {
+                let mob = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
+                    .ok_or(EntityReadError::Stale)?;
+                visit_mob_effects(mob, visit)
+            }
+            _ => return Err(EntityReadError::Unavailable),
+        };
+        Ok(result)
     }
 
     /// Whether the entity has `effect` (`LivingEntity.hasEffect`), using its resolved key.
@@ -337,9 +360,25 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
-    use mod_api::{ActiveEffect, EntityRef, LivingRef, WorldEpoch};
+    use mod_api::{ActiveEffect, EntityReadError, EntityRef, Host, LivingRef, WorldEpoch};
+    use std::ops::ControlFlow;
     use sunrise_client::mobs::Mob;
     use sunrise_core::geometry::Vec3;
+
+    fn collect_effects(
+        host: &dyn Host,
+        living: LivingRef,
+    ) -> Result<Vec<ActiveEffect>, EntityReadError> {
+        let mut effects = Vec::new();
+        assert_eq!(
+            living.visit_effects(host, &mut |effect| {
+                effects.push(effect);
+                ControlFlow::Continue(())
+            })?,
+            ControlFlow::Continue(())
+        );
+        Ok(effects)
+    }
 
     fn effect(id: &'static str, duration: i32, amplifier: i32) -> ActiveEffect {
         ActiveEffect::from(mod_api::__private::built::ActiveEffect {
@@ -355,6 +394,8 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn active_effect_ids_are_load_owned_slots() {
+        use sunrise_client::entities::ArmorStand;
+
         with_game(|game| {
             let kind = game
                 .res
@@ -373,13 +414,40 @@ mod tests {
                 true,
                 true,
             );
+            let slowness = ActiveEffect::new(
+                mod_platform::__private::part_tests::effect_key("minecraft:slowness"),
+                90,
+                2,
+                true,
+                false,
+                true,
+            );
             assert!(game.living_add_effect(zombie, &speed));
-            let listed = game.living_effects(zombie).unwrap();
+            assert!(game.living_add_effect(zombie, &slowness));
+            let listed = collect_effects(game, zombie).unwrap();
+            assert_eq!(listed, [speed.clone(), slowness]);
             assert_eq!(
                 listed[0].id,
                 mod_platform::__private::part_tests::effect_key("speed")
             );
             assert_eq!(listed[0].id.id(game), Some("minecraft:speed"));
+
+            let mut first = Vec::new();
+            assert_eq!(
+                zombie.visit_effects(game, &mut |effect| {
+                    first.push(effect);
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(first, [speed]);
+
+            game.armor_stands.push(ArmorStand::new(22, Vec3::ZERO, 0.0));
+            let stand = game.living(game.entity(22).unwrap()).unwrap();
+            assert_eq!(
+                stand.visit_effects(game, &mut |_| panic!("unavailable effects visited")),
+                Err(EntityReadError::Unavailable)
+            );
         });
     }
 
@@ -403,7 +471,7 @@ mod tests {
                     assert!(game.living_add_effect(living, &given), "{id} {show_icon}");
                     let read = game.living_effect(living, key).unwrap();
                     assert_eq!((read.show_icon, read.visible), (show_icon, true), "{id}");
-                    assert_eq!(game.living_effects(living).unwrap(), vec![read]);
+                    assert_eq!(collect_effects(game, living).unwrap(), vec![read]);
                 }
             }
         });
@@ -562,7 +630,7 @@ mod tests {
             let darkness = mod_platform::__private::part_tests::effect_key("minecraft:darkness");
             assert!(me.potion_affected(game, darkness));
             assert_eq!(me.effect(game, darkness).map(|e| e.duration), Some(200));
-            assert_eq!(me.effects(game).map(|list| list.len()), Some(1));
+            assert_eq!(collect_effects(game, me).map(|list| list.len()), Ok(1));
             assert!(!me.potion_affected(
                 game,
                 mod_platform::__private::part_tests::effect_key("minecraft:nausea")
@@ -697,8 +765,8 @@ mod tests {
                 Some(effect("minecraft:speed", 200, 0))
             );
             assert_eq!(
-                game.living_effects(zombie),
-                Some(vec![effect("minecraft:speed", 200, 0)])
+                collect_effects(game, zombie),
+                Ok(vec![effect("minecraft:speed", 200, 0)])
             );
 
             // A re-add is `MobEffectInstance.update`: a weaker or shorter
@@ -724,7 +792,7 @@ mod tests {
             // canBeAffected: a spider shrugs off poison and an undead one
             // with it, a cow takes it.
             assert!(!game.living_add_effect(spider, &effect("minecraft:poison", 100, 0)));
-            assert_eq!(game.living_effects(spider), Some(Vec::new()));
+            assert_eq!(collect_effects(game, spider), Ok(Vec::new()));
             assert!(!game.living_add_effect(zombie, &effect("minecraft:poison", 100, 0)));
             assert!(game.living_add_effect(cow, &effect("minecraft:poison", 100, 0)));
 
@@ -752,7 +820,7 @@ mod tests {
 
             // remove_all_effects takes the rest, and says when there was none.
             assert!(game.living_remove_all_effects(zombie));
-            assert_eq!(game.living_effects(zombie), Some(Vec::new()));
+            assert_eq!(collect_effects(game, zombie), Ok(Vec::new()));
             assert!(!game.living_potion_affected(
                 zombie,
                 mod_platform::__private::part_tests::effect_key("minecraft:speed")
@@ -770,7 +838,10 @@ mod tests {
                 ),
                 None
             );
-            assert_eq!(game.living_effects(stale), None);
+            assert_eq!(
+                stale.visit_effects(game, &mut |_| panic!("stale effects visited")),
+                Err(EntityReadError::Stale)
+            );
             assert!(!game.living_potion_affected(
                 stale,
                 mod_platform::__private::part_tests::effect_key("minecraft:speed")

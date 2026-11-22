@@ -1842,7 +1842,7 @@ impl Items {
         self.loot.contains_key(id)
     }
     /// Every loot table's id: the root's (vanilla's and the content mods')
-    /// and the packs' over them, in no order.
+    /// and the packs' over them, in lexical order.
     pub fn loot_table_ids(&self) -> impl Iterator<Item = &str> {
         self.loot.ids()
     }

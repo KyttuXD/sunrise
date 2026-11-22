@@ -37,7 +37,7 @@ mod loot_tags;
 pub use loot_tags::LootTags;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs, io,
     path::Path,
     sync::{Arc, Mutex, Weak},
@@ -587,7 +587,7 @@ pub use predicates::load_predicates;
 /// few, and as `Value`s they took ~7 MB for 0.6 MB of JSON. Every table was
 /// read whole when it loaded, so reading it again cannot fail.
 #[derive(Debug, Default)]
-pub struct LootTables(HashMap<String, LazyJson>);
+pub struct LootTables(BTreeMap<String, LazyJson>);
 impl LootTables {
     /// The table `id`.
     pub fn get(&self, id: &str) -> Option<&Value> {
@@ -596,7 +596,7 @@ impl LootTables {
     pub fn contains_key(&self, id: &str) -> bool {
         self.0.contains_key(id)
     }
-    /// The tables' ids, in no order.
+    /// The tables' IDs in lexical order.
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
     }
