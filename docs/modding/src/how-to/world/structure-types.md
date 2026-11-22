@@ -75,27 +75,29 @@ Use `PieceContext` to work directly within the chunk:
 | `random` | Draw from the piece's `RandomSource`. |
 | `metadata` | Borrow block metadata; `metadata().name(state.block())` returns the canonical name. |
 | `solid_render` | Check whether a state renders as a solid block. |
-| `entity` | Queue saved entity NBT, including its `id`, `Pos` and other fields; a world write failure logs the position (when present) and cause without failing the piece. |
-| `block_entity` | Place block entity NBT at a position; a world write failure logs the position and cause without failing the piece. |
+| `entity` | Queue saved entity NBT with its `id`, `Pos` and other fields in the resident destination chunk. |
+| `block_entity` | Place block entity NBT in the resident chunk containing its position. |
 
 ## Errors and panics
 
 - **No start.** Returning `None` from `find_generation_point` simply skips that chunk.
 - **Per-operation refusals.** Clipping outside `chunk_box` and unchanged states return `false`
   quietly on `set_block`; an invalid state or world failure on `set_block`, `entity` or
-  `block_entity` logs the position and cause without failing the piece.
+  `block_entity` logs the cause without failing the piece. Already completed work stays intact.
+  Read-only full chunks are left untouched.
 - **Callback errors (`Err(StructureError)`).** Returning `Err` from `post_process` or
   `after_place` logs your mod, the structure type, the chunk and the full native cause chain each
   time and ends only that invocation without undoing completed writes or random draws: later
   intersecting pieces, `after_place` and later chunks still run. Returning `Err` from `load_piece`
   logs the same cause chain and omits only that saved piece without disabling later loads.
 - **Panics.** Each operation (`find_generation_point`, `load_piece`, `bounding_box`,
-  `beardifier`, `add_additional_save_data`, `post_process`, `after_place`) is isolated under its
+  `beardifier`, `post_process`, `after_place`) is isolated under its
   own callback owner for that registration. A panic is logged and queued for an error toast naming
   your mod, keeps completed writes and draws, and disables only that operation for that
   registration for the session — other operations on the same type and other structure types stay
   active. A panic in `bounding_box` or `beardifier` skips only that piece; a panic in
-  `add_additional_save_data` discards the partial saved tag.
+  `add_additional_save_data` disables only that piece's save callback, discards its partial tag,
+  and preserves any previous complete tag and healthy siblings.
 
 Entities remain in the generating chunk until it joins the world. Keep the `"sunrise:finalize"`
 byte carried by structure-template entities to request `Mob.finalizeSpawn` with the `STRUCTURE`

@@ -236,6 +236,11 @@ pub fn install_mod_feature_types(types: ModFeatureTypes) -> Result<(), ModFeatur
     offered.map_or(Ok(()), Err)
 }
 
+/// Whether the executable installed any native feature types at startup.
+pub fn has_mod_feature_types() -> bool {
+    MOD_TYPES.get().is_some_and(|types| !types.is_empty())
+}
+
 /// The installed feature type `id`: none until the executable installs the mods', and a test's
 /// own while one is installed.
 pub fn mod_feature_type(id: &str) -> Option<&'static Arc<ModFeatureEntry>> {

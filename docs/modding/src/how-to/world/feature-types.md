@@ -59,7 +59,9 @@ twice is placed twice.
   `FeatureError` is not a `Wire` value.
 
 Writes go straight to the world. Block, tag and height reads in this invocation see the work
-already done, as do later placements. An ordinary per-operation refusal (`false` from
+already done, as do later placements. In `FEATURES`, resident read dependencies can extend past
+the one-chunk block-write radius. In a live level, immediate block side effects and your callback
+consume the same random stream in call order. An ordinary per-operation refusal (`false` from
 `ensure_can_write`, `set_block` or `block_entity`, or `None` from a read) only answers that call;
 your callback can return `Ok(false)`, report an `Err` or continue. Neither `Err` nor a refusal
 disables a callback, and no outcome undoes completed writes or random draws.

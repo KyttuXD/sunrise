@@ -1115,17 +1115,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn saved_jigsaw_round_trip_and_whole_start_fallback() {
-        use crate::{
-            registry::BlockRegistry,
-            worldgen::structure::{
-                Rotation, StateTransforms,
-                jigsaw::{Junction, PoolElement, Projection},
-                start::StructureKind,
-            },
-        };
-        use sunrise_core::{bounding_box::BoundingBox, density::TerrainAdjustment, nbt::Tag};
+    fn saved_piece_test_resources() -> (StructureResources, FeatureBlockBindings<'static>) {
+        use crate::{registry::BlockRegistry, worldgen::structure::StateTransforms};
+        use sunrise_core::nbt::Tag;
         let names = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
         let registry = Box::leak(Box::new(
             BlockRegistry::from_nbt(&Tag::compound([
@@ -1161,6 +1153,207 @@ mod tests {
             &BTreeMap::new(),
         );
         let bindings = FeatureBlockBindings::new(registry, BTreeSet::new()).unwrap();
+        (resources, bindings)
+    }
+
+    #[test]
+    fn both_saved_start_sources_keep_a_native_sibling_after_a_refusal() {
+        use crate::{
+            heightmap::HeightmapType,
+            registry::BlockRegistry,
+            worldgen::{
+                anchor::WorldGenerationContext,
+                blending::SavedStart,
+                structure::{
+                    jigsaw::JigsawContext,
+                    legacy::{LegacyPiece, PieceContext},
+                    mod_types::{ModStructureType, ModStructureTypes, with_test_types},
+                    start::NoiseColumnTarget,
+                },
+            },
+        };
+        use sunrise_core::{
+            bounding_box::BoundingBox,
+            nbt::{Compound, Tag},
+            random::{LegacyRandom, WorldgenRandom},
+        };
+        #[derive(Debug)]
+        struct Loaded;
+        impl LegacyPiece for Loaded {
+            fn bounding_box(&self) -> BoundingBox {
+                BoundingBox::new([2, 64, 3], [4, 65, 6])
+            }
+            fn type_name(&self) -> &'static str {
+                "test:loader"
+            }
+            fn post_process(
+                &self,
+                _: &mut PieceContext<'_>,
+            ) -> crate::worldgen::structure::legacy::Result<()> {
+                Ok(())
+            }
+        }
+        struct Loader(Arc<AtomicUsize>);
+        impl ModStructureType for Loader {
+            fn prepare_config(&self, _: &Value) -> Result<Arc<Tag>, String> {
+                Ok(Arc::new(Tag::Compound(Compound::new())))
+            }
+            fn find_generation_point(
+                &self,
+                _: &mut dyn StartContext,
+                _: &StructureResources,
+                _: ChunkPos,
+                _: &Arc<Tag>,
+                _: &mut WorldgenRandom<LegacyRandom>,
+            ) -> Option<([i32; 3], Vec<Box<dyn LegacyPiece>>)> {
+                panic!("a saved native start must not regenerate")
+            }
+            fn load_piece(
+                &self,
+                _: &BlockRegistry,
+                tag: &Compound,
+            ) -> Option<Box<dyn LegacyPiece>> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                matches!(tag.get(&"valid".into()), Some(Tag::Byte(1)))
+                    .then(|| Box::new(Loaded) as Box<dyn LegacyPiece>)
+            }
+        }
+        struct Old(Vec<Tag>);
+        impl JigsawContext for Old {
+            fn min_y(&self) -> i32 {
+                -64
+            }
+            fn max_y(&self) -> i32 {
+                319
+            }
+            fn base_height(&mut self, _: i32, _: i32, _: HeightmapType) -> i32 {
+                unreachable!()
+            }
+            fn column_has_valid_biome(&mut self, _: i32, _: i32, _: i32, _: i32) -> bool {
+                unreachable!()
+            }
+        }
+        impl StartContext for Old {
+            fn saved_starts(&self, _: ChunkPos) -> Vec<SavedStart> {
+                vec![SavedStart {
+                    name: "test:structure".into(),
+                    bounds: None,
+                    pieces: self.0.clone(),
+                }]
+            }
+            fn seed(&self) -> i64 {
+                0
+            }
+            fn sea_level(&self) -> i32 {
+                63
+            }
+            fn base_column(&mut self, _: i32, _: i32, _: HeightmapType) -> Vec<bool> {
+                unreachable!()
+            }
+            fn base_columns_by(
+                &mut self,
+                _: i32,
+                _: i32,
+                _: usize,
+                _: &dyn Fn(usize) -> HeightmapType,
+            ) -> Vec<Vec<bool>> {
+                unreachable!()
+            }
+            fn noise_column_into(&mut self, _: i32, _: i32, _: &mut dyn NoiseColumnTarget) {
+                unreachable!()
+            }
+            fn cold_enough_to_snow(&mut self, _: BiomeId, _: [i32; 3]) -> bool {
+                unreachable!()
+            }
+            fn generation(&self) -> WorldGenerationContext {
+                unreachable!()
+            }
+            fn noise_biome(&mut self, _: [i32; 3]) -> BiomeId {
+                unreachable!()
+            }
+            fn noise_biomes(&mut self, _: &[[i32; 3]]) -> Vec<BiomeId> {
+                unreachable!()
+            }
+            fn set_valid_biomes(&mut self, _: Option<&BTreeSet<BiomeId>>) {
+                unreachable!()
+            }
+        }
+        let visits = Arc::new(AtomicUsize::new(0));
+        let types = ModStructureTypes::from([(
+            "test:loader".into(),
+            Arc::new(Loader(visits.clone())) as Arc<dyn ModStructureType>,
+        )]);
+        let (resources, bindings) = saved_piece_test_resources();
+        let registry = StructureRegistry::new(
+            &BTreeMap::from([(
+                "test:structure".into(),
+                r#"{"type":"test:loader","step":"surface_structures","biomes":[]}"#.into(),
+            )]),
+            &BTreeMap::new(),
+            BTreeMap::new(),
+            &|_| Ok(BTreeSet::new()),
+            &types,
+        )
+        .unwrap();
+        let state = StructureState {
+            registry,
+            resources: Arc::new(resources),
+            bindings,
+            possible_sets: Vec::new(),
+            by_step: Vec::new(),
+            starts: StartCache::new(),
+            saved: OnceLock::new(),
+            start_work: ChunkWork::new(),
+            rings: Arc::new(OnceLock::new()),
+            ring_work: OnceLock::new(),
+            ring_seed: None,
+            fixed_biome: false,
+            zone_reach: 0,
+        };
+        let chunk = ChunkPos::new(0, 0);
+        let children = [0, 1]
+            .map(|valid| {
+                Tag::compound([
+                    ("id", Tag::String("test:loader".into())),
+                    ("valid", Tag::Byte(valid)),
+                ])
+            })
+            .to_vec();
+        let tag = Tag::compound([
+            ("id", Tag::String("test:structure".into())),
+            ("ChunkX", Tag::Int(0)),
+            ("ChunkZ", Tag::Int(0)),
+            ("Children", Tag::List(children.clone())),
+        ]);
+        with_test_types(&types, || {
+            let saved = read_saved_start(
+                0,
+                &state.registry.structures[0],
+                chunk,
+                &tag,
+                0,
+                &state.resources,
+                &state.bindings,
+            )
+            .unwrap();
+            let old = state.saved_starts_at(&mut Old(children), chunk);
+            for start in [&saved, old[0].as_ref()] {
+                assert_eq!(start.pieces.len(), 1);
+                assert_eq!(start.bounding_box.min, [2, 64, 3]);
+            }
+        });
+        assert_eq!(visits.load(Ordering::Relaxed), 4);
+    }
+
+    #[test]
+    fn saved_jigsaw_round_trip_and_whole_start_fallback() {
+        use crate::worldgen::structure::{
+            Rotation,
+            jigsaw::{Junction, PoolElement, Projection},
+            start::StructureKind,
+        };
+        use sunrise_core::{bounding_box::BoundingBox, density::TerrainAdjustment, nbt::Tag};
+        let (resources, bindings) = saved_piece_test_resources();
         let def = StructureDef {
             name: "test:jigsaw".into(),
             kind: StructureKind::Unsupported("test".into()),

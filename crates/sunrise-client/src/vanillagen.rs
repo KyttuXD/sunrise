@@ -21,7 +21,8 @@ use {
         worldgen::{
             biome_source::regions::RegionLayout,
             generator::{
-                GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
+                DecorationFullChunk, FEATURES_READ_RADIUS, GeneratorData, GeneratorWorker,
+                OverworldGenerator, ProtoChunk, SurfaceSample,
             },
             overrides::WorldgenOverrides,
             structure::legacy::PieceRandom,
@@ -1089,7 +1090,20 @@ impl ChunkGenerator for VanillaTerrain {
             })
             .collect()
     }
-    fn decorate(&self, worker: &mut GeneratorWorker, region: &mut [Proto; 9]) {
+    fn decoration_read_radius(&self) -> i32 {
+        use sunrise_world::worldgen::{mod_features, structure::mod_types};
+        if mod_features::has_mod_feature_types() || !mod_types::mod_structure_types().is_empty() {
+            FEATURES_READ_RADIUS
+        } else {
+            1
+        }
+    }
+    fn decorate(
+        &self,
+        worker: &mut GeneratorWorker,
+        region: &mut [Proto; 9],
+        dependencies: crate::streaming::DecorationDependencies<'_>,
+    ) {
         let taken: Vec<Box<VanillaProto>> = region
             .iter_mut()
             .map(|p| {
@@ -1111,7 +1125,24 @@ impl ChunkGenerator for VanillaTerrain {
                 Ok(a) => a,
                 Err(_) => unreachable!(),
             };
-            if let Err(e) = worker.decorate(&mut array) {
+            let mut protos: Vec<_> = dependencies
+                .protos
+                .iter_mut()
+                .filter_map(|saved| match saved.proto.downcast_mut::<VanillaProto>()? {
+                    VanillaProto::Ready(chunk) => Some(&mut chunk.terrain_chunk),
+                    VanillaProto::Failed(..) => None,
+                })
+                .collect();
+            let full: Vec<&dyn DecorationFullChunk> = dependencies
+                .full
+                .iter()
+                .map(|chunk| &**chunk as &dyn DecorationFullChunk)
+                .collect();
+            let inputs = sunrise_world::worldgen::generator::DecorationDependencies {
+                protos: &mut protos,
+                full: &full,
+            };
+            if let Err(e) = worker.decorate(&mut array, inputs) {
                 log::warn!("Sunrise: decorating chunk failed: {e}");
             }
             for ((slot, chunk), saved_biomes) in region.iter_mut().zip(array).zip(saved_biomes) {

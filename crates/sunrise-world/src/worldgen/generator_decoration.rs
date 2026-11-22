@@ -20,7 +20,8 @@ use super::{
     feature_region::{RegionError, TerrainRegion},
     feature_sort::FeatureIdentity,
     generator::{
-        DecorateStats, GenBlockStates, GeneratorData, GeneratorError, ProtoChunk, WorkerState,
+        DecorateStats, DecorationDependencies, DecorationFullChunk, GenBlockStates, GeneratorData,
+        GeneratorError, ProtoChunk, WorkerState,
     },
     placement::{LayerBlock, PlacementContext, PlacementQueryError},
     tags::TagDefinitions,
@@ -363,6 +364,7 @@ impl Decoration {
         generation: WorldGenerationContext,
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
+        dependencies: DecorationDependencies<'_, '_>,
         level_random: &mut dyn super::structure::legacy::PieceRandom,
         structures: Option<&super::generator_structures::StructureState>,
     ) -> Result<DecorateStats, GeneratorError> {
@@ -385,13 +387,25 @@ impl Decoration {
         // The full chunks of the region, before their terrain moves into it.
         let full: Vec<ChunkPos> = region
             .iter()
+            .chain(dependencies.protos.iter().map(|chunk| &**chunk))
             .filter(|chunk| chunk.is_full())
             .map(|chunk| chunk.position())
             .collect();
-        let mut chunks = Vec::with_capacity(9);
+        let read_full = dependencies
+            .full
+            .iter()
+            .map(|&chunk| {
+                let pos = chunk.position();
+                ((pos.x, pos.z), chunk)
+            })
+            .collect();
+        let mut chunks = Vec::with_capacity(9 + dependencies.protos.len());
         let mut biomes = Vec::with_capacity(9);
         let (min_y, height) = (region[4].terrain.min_y(), region[4].terrain.height());
-        for chunk in region.iter_mut() {
+        for chunk in region
+            .iter_mut()
+            .chain(dependencies.protos.iter_mut().map(|chunk| &mut **chunk))
+        {
             // A one-section stand-in while the region holds the terrain: it
             // is swapped back below, and allocating the full height for nine
             // stand-ins per region cost more than some features.
@@ -416,8 +430,16 @@ impl Decoration {
         let structures_only = worker.structures_only;
         let references = region[4].structure_starts.clone();
         let mut block_entities = Vec::new();
-        for chunk in region.iter_mut() {
-            block_entities.append(&mut chunk.block_entities);
+        for chunk in region
+            .iter_mut()
+            .chain(dependencies.protos.iter_mut().map(|chunk| &mut **chunk))
+        {
+            let p = chunk.position();
+            block_entities.extend(
+                chunk
+                    .block_entities
+                    .extract_if(.., |(pos, _)| (pos[0] >> 4, pos[2] >> 4) == (p.x, p.z)),
+            );
         }
         let mut world = World {
             block_entities,
@@ -447,6 +469,8 @@ impl Decoration {
             floor_bounds: [None; 9],
             shape_capture: std::cell::RefCell::new(Vec::new()),
             full,
+            read_full,
+            block_properties: data.block_states(),
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
@@ -524,7 +548,13 @@ impl Decoration {
                     id,
                     |world, random, p| feature.feature.place(world, random, p, blocks),
                 );
-                if placed.is_err() {
+                if let Err(error) = &placed {
+                    log::error!(
+                        "placed feature {} failed in chunk ({}, {}): {error}",
+                        self.names[id.0 as usize],
+                        center.x,
+                        center.z
+                    );
                     stats.failed += 1;
                     stats.skipped.insert(self.names[id.0 as usize].clone());
                 }
@@ -549,19 +579,34 @@ impl Decoration {
                 }
             }
         }
+        let mut return_chunks: HashMap<_, _> = region
+            .iter_mut()
+            .chain(dependencies.protos.iter_mut().map(|chunk| &mut **chunk))
+            .map(|chunk| {
+                let p = chunk.position();
+                ((p.x, p.z), chunk)
+            })
+            .collect();
         for (pos, nbt) in std::mem::take(&mut world.block_entities) {
-            if let Some(index) = nearby_slot(center, ChunkPos::new(pos[0] >> 4, pos[2] >> 4)) {
-                region[index].block_entities.push((pos, nbt));
-            }
+            return_chunks
+                .get_mut(&(pos[0] >> 4, pos[2] >> 4))
+                .expect("block entity belongs to a resident proto")
+                .block_entities
+                .push((pos, nbt));
         }
-        // Destination and writability were checked before entity finalization.
-        for (index, nbt) in std::mem::take(&mut world.entities) {
-            region[index].entities.push(nbt);
+        for (chunk, nbt) in std::mem::take(&mut world.entities) {
+            return_chunks
+                .get_mut(&chunk)
+                .expect("entity belongs to a resident proto")
+                .entities
+                .push(nbt);
         }
         for terrain in world.region.into_chunks() {
             let p = terrain.position();
-            let index = (p.z.wrapping_sub(center.z) + 1) * 3 + p.x.wrapping_sub(center.x) + 1;
-            region[index as usize].terrain = terrain;
+            return_chunks
+                .get_mut(&(p.x, p.z))
+                .expect("terrain belongs to a resident proto")
+                .terrain = terrain;
         }
         result.map_err(|e| GeneratorError::Stage("features", e.to_string()))?;
         stats.failed += structure_errors;
@@ -675,12 +720,14 @@ impl World<'_> {
         Some(found)
     }
 }
-/// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
-/// the FEATURES step's write radius, biome lookups through the biome zoom.
+/// WorldGenRegion-style view: read resident dependencies, keep block writes within
+/// the FEATURES step's write radius, and look up biomes through the biome zoom.
 struct World<'a> {
     full: Vec<ChunkPos>,
     block_entities: Vec<([i32; 3], sunrise_core::nbt::Compound)>,
-    entities: Vec<(usize, sunrise_core::nbt::Compound)>,
+    entities: Vec<((i32, i32), sunrise_core::nbt::Compound)>,
+    read_full: HashMap<(i32, i32), &'a dyn DecorationFullChunk>,
+    block_properties: &'a GenBlockStates,
     level_random: &'a mut dyn super::structure::legacy::PieceRandom,
     structure_mobs: Option<Arc<dyn super::generator::StructureMobs>>,
     starts: Vec<Arc<super::structure::start::StructureStart>>,
@@ -889,13 +936,18 @@ impl World<'_> {
 
     /// Whether `position` is in one of the region's full chunks.
     fn is_full_chunk(&self, [x, _, z]: [i32; 3]) -> bool {
-        self.full.iter().any(|p| p.x == x >> 4 && p.z == z >> 4)
+        self.read_full.contains_key(&(x >> 4, z >> 4))
+            || self.full.iter().any(|p| p.x == x >> 4 && p.z == z >> 4)
     }
 }
 impl FeatureWorld for World<'_> {
     type Error = RegionError;
     #[inline]
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, RegionError> {
+        let [x, y, z] = position;
+        if let Some(chunk) = self.read_full.get(&(x >> 4, z >> 4)) {
+            return Ok(chunk.block(x, y, z));
+        }
         self.region.block(position)
     }
     fn scan_column(
@@ -1232,14 +1284,12 @@ impl PlacementContext for World<'_> {
         mut nbt: sunrise_core::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
         let at = block_of(&nbt).ok_or_else(|| query("entity is missing a valid Pos"))?;
-        let chunk = ChunkPos::new(at[0] >> 4, at[2] >> 4);
-        let index =
-            nearby_slot(self.center, chunk).ok_or(RegionError::MissingChunk([chunk.x, chunk.z]))?;
-        self.region.chunk(chunk.x, chunk.z)?;
         // ImposterProtoChunk.addEntity is a no-op when !allowWrites.
         if self.is_full_chunk(at) {
             return Ok(());
         }
+        let chunk = (at[0] >> 4, at[2] >> 4);
+        self.region.chunk(chunk.0, chunk.1)?;
         if let Some(mobs) = self.structure_mobs.clone()
             && nbt.contains_key(&"sunrise:finalize".into())
         {
@@ -1259,7 +1309,7 @@ impl PlacementContext for World<'_> {
                 nbt.remove(&"sunrise:finalize".into());
             }
         }
-        self.entities.push((index, nbt));
+        self.entities.push((chunk, nbt));
         Ok(())
     }
     /// SpikeFeature.placeSpike: the crystal is a fresh entity of the region,
@@ -1294,11 +1344,11 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         nbt: sunrise_core::nbt::Compound,
     ) -> Result<(), PlacementQueryError> {
-        self.region.chunk(position[0] >> 4, position[2] >> 4)?;
         // ImposterProtoChunk.setBlockEntity is a no-op when !allowWrites.
         if self.is_full_chunk(position) {
             return Ok(());
         }
+        self.region.chunk(position[0] >> 4, position[2] >> 4)?;
         self.block_entities.retain(|(p, _)| *p != position);
         self.block_entities.push((position, nbt));
         Ok(())
@@ -1558,7 +1608,7 @@ impl PlacementContext for World<'_> {
             .is_some_and(|w| w >> (feature.0 % 64) & 1 != 0))
     }
     fn block_state(&mut self, position: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
-        self.region.block_state(position)
+        self.block(position).map_err(Into::into)
     }
     /// TerrainRegion::block_matches_tag (the region holds the same tag
     /// table), with the last tag's states kept: predicates ask one tag for
@@ -1568,7 +1618,7 @@ impl PlacementContext for World<'_> {
         position: [i32; 3],
         tag: &str,
     ) -> Result<bool, PlacementQueryError> {
-        let state = self.region.block(position)?;
+        let state = self.block(position)?;
         self.state_matches_tag(state, tag)
     }
     fn state_matches_tag(
@@ -1603,6 +1653,12 @@ impl PlacementContext for World<'_> {
         self.region.min_y()
     }
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError> {
+        if let Some(chunk) = self.read_full.get(&(x >> 4, z >> 4)) {
+            return Ok((self.build.0..self.build.1)
+                .rev()
+                .find(|&y| kind.is_opaque(self.block_properties.get(chunk.block(x, y, z))))
+                .map_or(self.build.0, |y| y + 1));
+        }
         self.region.height(kind, x, z)
     }
     /// OreFeature's search for a column under its blob, without a trait call
@@ -1656,13 +1712,6 @@ impl PlacementContext for World<'_> {
         }
         Ok(Some(false))
     }
-}
-
-/// Row-major slot in the decoration write neighborhood, checking each axis before flattening.
-fn nearby_slot(center: ChunkPos, chunk: ChunkPos) -> Option<usize> {
-    let dx = i64::from(chunk.x) - i64::from(center.x) + 1;
-    let dz = i64::from(chunk.z) - i64::from(center.z) + 1;
-    ((0..3).contains(&dx) && (0..3).contains(&dz)).then_some((dz * 3 + dx) as usize)
 }
 
 /// The block an entity's `Pos` is in.
@@ -1789,11 +1838,22 @@ mod tests {
                 biomes.push(BiomeChunk::new(pos, -64, 128, BiomeId(0)).unwrap());
             }
         }
+        let dependency = ChunkPos::new(0, 2);
+        let mut outer =
+            TerrainChunk::new(dependency, -64, 128, registry, properties.clone()).unwrap();
+        outer.set_generation_stage(PreLightChunkStage::StructureStarts);
+        let readable = [0, -5, 32];
+        outer
+            .set_block_worldgen(readable[0], readable[1], readable[2], blocks.stone)
+            .unwrap();
+        chunks.push(outer);
         let center = ChunkPos::new(0, 0);
         let biome_quarts = biomes[4].quart_range();
         let mut random = LegacyRandom::new(0);
         let mut world = World {
             full: vec![ChunkPos::new(-1, 0)],
+            read_full: HashMap::new(),
+            block_properties: &properties,
             block_entities: Vec::new(),
             entities: Vec::new(),
             level_random: &mut random,
@@ -1823,6 +1883,13 @@ mod tests {
                 Tag::List(pos.map(|n| Tag::Double(f64::from(n).to_bits())).to_vec()),
             )])
         };
+        assert_eq!(world.block(readable).unwrap(), blocks.stone);
+        assert_eq!(
+            world.height(HeightmapType::WorldSurfaceWg, 0, 32).unwrap(),
+            -4
+        );
+        assert!(!world.set_block(readable, blocks.air, 2).unwrap());
+        assert_eq!(world.block(readable).unwrap(), blocks.stone);
         let missing = [32, 0, 0]; // the old flattened index aliased a valid southwest slot
         for result in [
             world.add_entity(entity_at(missing)),

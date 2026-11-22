@@ -81,7 +81,8 @@ pub trait FeatureType: Send + Sync + 'static {
 /// caller's random. Reads see the world's current state, including completed writes from this
 /// call. A read the level can't answer is `None`. An individual refused write returns `false`
 /// without failing the invocation, undoing earlier writes or disabling the callback. These
-/// operations do not load chunks. A feature can't place another feature.
+/// operations do not load chunks. In `FEATURES`, the readable resident dependencies can extend
+/// past the one-chunk block-write radius. A feature can't place another feature.
 ///
 /// Features run on a worldgen worker for decoration and on the tick thread for growth, commands
 /// and `LevelRef::place_feature`; the context holds no `Host`, so a worker never reaches mod
@@ -93,7 +94,7 @@ pub trait FeatureContext {
     /// definition loaded: one value per declared field, defaults filled in.
     fn config(&self) -> &DatapackEntry;
     /// The caller's random: the same stream the placement modifiers before this feature drew
-    /// from, so draws stay in vanilla's order.
+    /// from. During live placement, immediate world side effects draw from the same stream.
     fn random(&mut self) -> &mut dyn RandomSource;
     /// The level's minimum block Y.
     fn min_y(&mut self) -> Option<i32>;

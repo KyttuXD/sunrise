@@ -174,8 +174,8 @@ pub trait StructurePiece: std::fmt::Debug + Send + Sync {
     fn post_process(&self, context: &mut dyn PieceContext) -> Result<(), StructureError>;
     /// `StructurePiece.addAdditionalSaveData`: the piece's own fields, saved
     /// beside `BB`/`O`/`GD` and read back by the type's `load_piece`. A panic discards the
-    /// partial tag for that piece and disables only `add_additional_save_data` for this
-    /// registration for the session with a log and error toast.
+    /// partial tag and disables this piece's save callback for the session with a log and
+    /// error toast. Its previous complete tag (if any) and healthy siblings still save.
     fn add_additional_save_data(&self, tag: &mut Compound);
 }
 
@@ -319,9 +319,9 @@ pub trait PieceContext {
     /// The block at `pos`, or `None` outside the region.
     fn block(&mut self, pos: [i32; 3]) -> Option<BlockState>;
     /// `StructurePiece.placeBlock`: write `state` at `pos`, answering whether
-    /// it was written. A position outside `chunk_box` returns `false` silently, as
-    /// vanilla's `placeBlock` skips it; an unregistered state or world write failure logs the
-    /// position and cause and returns `false` without failing the piece.
+    /// the owning world accepted the write. Clipping outside `chunk_box` and an unchanged
+    /// state on the live level return `false` silently. An unregistered state or a world write
+    /// error logs the position and cause and returns `false` without failing the piece.
     fn set_block(&mut self, pos: [i32; 3], state: BlockState) -> bool;
     /// `WorldGenLevel.getHeight` of the heightmap kind at (x, z).
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Option<i32>;
@@ -329,16 +329,16 @@ pub trait PieceContext {
     /// solid block, the way `StructurePiece.reorient` asks of its neighbours.
     fn solid_render(&self, state: BlockState) -> bool;
     /// `WorldGenLevel.addFreshEntity`: an entity from its saved NBT — its
-    /// `id`, `Pos` and fields — which the generating chunk holds and the game
+    /// `id`, `Pos` and fields — which the resident chunk at `Pos` holds and the game
     /// finishes as it does a structure mob's when the chunk joins the world
     /// (`Mob.finalizeSpawn` with `STRUCTURE`; keep the
     /// `"sunrise:finalize"` byte a structure template's entities carry to ask
-    /// for it). A world write failure logs the position (when present) and cause without failing
-    /// the piece.
+    /// for it). Missing destinations are logged without failing the piece, and read-only
+    /// full chunks are left untouched.
     fn entity(&mut self, nbt: Compound);
     /// `WorldGenLevel.setBlockEntity` at `pos`: the block entity's saved NBT
-    /// (its `id` and fields). A world write failure logs the position and cause without failing
-    /// the piece.
+    /// (its `id` and fields). Missing destinations are logged without failing the piece,
+    /// and read-only full chunks are left untouched.
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound);
 }
 

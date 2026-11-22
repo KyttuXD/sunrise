@@ -17,7 +17,7 @@ use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
     sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, TryLockError, atomic::Ordering},
 };
-use sunrise_core::biome::BiomeZoom;
+use sunrise_core::{biome::BiomeZoom, position::ChunkPos};
 use sunrise_threads::jobs::{Class, PerWorker, Rank, Registration, Source};
 use sunrise_world::worldgen::decoration_order::DecorationOrder;
 
@@ -52,6 +52,22 @@ impl ProtoSnapshot<'_> {
         self.access.block(self.proto, pos)
     }
 }
+/// Resident dependencies loaned to the FEATURES worker, in addition to its write zone.
+#[derive(Default)]
+pub struct DecorationDependencies<'a> {
+    pub protos: &'a mut [ProtoSave],
+    pub full: &'a [Arc<Chunk>],
+}
+
+impl sunrise_world::worldgen::generator::DecorationFullChunk for Chunk {
+    fn position(&self) -> ChunkPos {
+        ChunkPos::new(self.x, self.z)
+    }
+    fn block(&self, x: i32, y: i32, z: i32) -> sunrise_world::registry::BlockStateId {
+        sunrise_world::registry::BlockStateId(self.get(x & 15, y, z & 15))
+    }
+}
+
 /// Chunk generation in vanilla's stages: a neighbour-independent proto chunk
 /// (biomes, noise, surface, carvers), decoration of a 3x3 neighbourhood
 /// (FEATURES, which may write into neighbours), then conversion of a chunk
@@ -105,7 +121,18 @@ pub trait ChunkGenerator: Send + Sync + 'static {
         false
     }
     /// Decorate `region[4]`; the region is row-major (dz, dx) around it.
-    fn decorate(&self, _worker: &mut Self::Worker, _region: &mut [Proto; 9]) {}
+    fn decorate(
+        &self,
+        _worker: &mut Self::Worker,
+        _region: &mut [Proto; 9],
+        _dependencies: DecorationDependencies<'_>,
+    ) {
+    }
+    /// The status step's read radius. Simple generators do not need neighbors
+    /// beyond the normal terrain region.
+    fn decoration_read_radius(&self) -> i32 {
+        1
+    }
     /// Whether a chunk next to final ones (loaded from the save, as the
     /// chunks of a world an older version made) is decorated, its features
     /// spilling into them (`proto_beside_final`, `final_writes`), as vanilla's
@@ -296,7 +323,14 @@ enum Job {
     /// A region to decorate, with the final chunks in it (region index and
     /// the chunk as it is): their slots hold nothing until the worker makes
     /// their proto chunks.
-    Decorate(i32, i32, Box<[Proto; 9]>, Vec<(usize, Chunk)>),
+    Decorate(
+        i32,
+        i32,
+        Box<[Proto; 9]>,
+        Vec<(usize, Chunk)>,
+        Vec<ProtoSave>,
+        Vec<Arc<Chunk>>,
+    ),
     Finish(Proto),
     Light(i32, i32, Box<Region>, u64, bool),
     Mesh(i32, i32, i32, Arc<Region>, u64, MeshSettings),
@@ -321,7 +355,14 @@ pub enum Done {
     Proto(i32, i32, Proto, bool),
     /// A decorated region, the region indices of its final chunks and what
     /// decoration wrote into them.
-    Decorated(i32, i32, Box<[Proto; 9]>, Vec<usize>, FinalWrites),
+    Decorated(
+        i32,
+        i32,
+        Box<[Proto; 9]>,
+        Vec<usize>,
+        FinalWrites,
+        Vec<ProtoSave>,
+    ),
     Lit(i32, i32, Vec<crate::chunk::Light>, u64),
     Meshed(MeshUpload),
     Saved(Vec<((i32, i32), Proto)>),
@@ -587,6 +628,7 @@ pub struct Streaming {
     decorates: bool,
     /// `ChunkGenerator::decorates_beside_final`.
     saves_beside_final: bool,
+    decoration_read_radius: i32,
     lighting: FxHashMap<(i32, i32), u64>,
     meshing: FxHashMap<(i32, i32, i32), u64>,
     /// Mesh jobs actually in flight. `meshing` can hide more than one job for a
@@ -1062,7 +1104,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     Done::Proto(x, z, proto, decorated)
                 }
             },
-            Job::Decorate(x, z, mut region, finals) => {
+            Job::Decorate(x, z, mut region, finals, mut protos, full) => {
                 // The final chunks' proto chunks, made here: a
                 // generated proto chunk holding their blocks.
                 for (i, snapshot) in &finals {
@@ -1070,7 +1112,14 @@ impl<G: ChunkGenerator> Jobs<G> {
                         region[*i] = proto;
                     }
                 }
-                generator.decorate(&mut *worker, &mut region);
+                generator.decorate(
+                    &mut *worker,
+                    &mut region,
+                    DecorationDependencies {
+                        protos: &mut protos,
+                        full: &full,
+                    },
+                );
                 let mut writes = FinalWrites::default();
                 let blocks: [Vec<_>; 9] = std::array::from_fn(|n| {
                     finals.get(n).map_or_else(Vec::new, |(i, snapshot)| {
@@ -1088,7 +1137,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     region[*i] = Box::new(());
                 }
                 let finals = finals.into_iter().map(|(i, _)| i).collect();
-                Done::Decorated(x, z, region, finals, writes)
+                Done::Decorated(x, z, region, finals, writes, protos)
             }
             Job::Finish(proto) => {
                 let mut chunk = generator.finish(proto);
@@ -1238,6 +1287,7 @@ impl Streaming {
             finishing: Default::default(),
             decorates: generator.decorates(),
             saves_beside_final: generator.decorates_beside_final(),
+            decoration_read_radius: generator.decoration_read_radius(),
             lighting: Default::default(),
             meshing: Default::default(),
             mesh_jobs: 0,
@@ -1468,6 +1518,12 @@ impl Streaming {
         }
         let mut queue = self.shared.queue.lock().unwrap();
         rank_again(&mut queue, |x, z| self.distance(x, z));
+    }
+    fn receive_decoration_dependencies(&mut self, protos: Vec<ProtoSave>) {
+        for ProtoSave { pos, proto } in protos {
+            self.protos.insert(pos, Some(proto));
+            self.written.insert(pos);
+        }
     }
     fn receive_decorated(
         &mut self,
@@ -1939,7 +1995,8 @@ impl Streaming {
                         }
                     }
                 }
-                Done::Decorated(x, z, region, finals, writes) => {
+                Done::Decorated(x, z, region, finals, writes, protos) => {
+                    self.receive_decoration_dependencies(protos);
                     self.receive_decorated(x, z, *region, finals, writes, world)
                 }
                 Done::Generated(chunk) => {
@@ -2221,7 +2278,7 @@ impl Streaming {
             // took most of the thread that runs it while the world loaded.
             let waiting: std::cell::RefCell<FxHashMap<(i32, i32), bool>> = Default::default();
             let mut initialized = Vec::new();
-            while let Some(std::cmp::Reverse((_, x, z))) = wanted.pop() {
+            'wanted: while let Some(std::cmp::Reverse((_, x, z))) = wanted.pop() {
                 if self.decorating >= workers * 2 {
                     break;
                 }
@@ -2257,6 +2314,38 @@ impl Streaming {
                 }) {
                     continue;
                 }
+                let mut read_protos = Vec::new();
+                let mut read_full = Vec::new();
+                let radius = self.decoration_read_radius;
+                if radius > 1 {
+                    for dz in -radius..=radius {
+                        for dx in -radius..=radius {
+                            if dx.abs().max(dz.abs()) <= 1 {
+                                continue;
+                            }
+                            let key = (x + dx, z + dz);
+                            if let Some(full) = world.chunks.get(&key) {
+                                read_full.push(full.clone());
+                            } else if let Some(proto) = self.protos.get(&key) {
+                                if proto.is_none() {
+                                    continue 'wanted;
+                                }
+                                read_protos.push(key);
+                            }
+                        }
+                    }
+                }
+                let read_protos = read_protos
+                    .into_iter()
+                    .map(|pos| ProtoSave {
+                        pos,
+                        proto: self
+                            .protos
+                            .get_mut(&pos)
+                            .and_then(Option::take)
+                            .expect("resident dependency"),
+                    })
+                    .collect();
                 let finals: Vec<(usize, Chunk)> = keys
                     .iter()
                     .enumerate()
@@ -2276,7 +2365,11 @@ impl Streaming {
                 self.decorating += 1;
                 self.decorating_finals
                     .extend(finals.iter().map(|(i, _)| keys[*i]));
-                self.submit(Some((x, z)), 1, Job::Decorate(x, z, region, finals));
+                self.submit(
+                    Some((x, z)),
+                    1,
+                    Job::Decorate(x, z, region, finals, read_protos, read_full),
+                );
             }
             for key in initialized {
                 self.publish_proto_light_support(world, key);
@@ -2728,7 +2821,8 @@ impl Streaming {
         {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.shared.done.recv_timeout(left) {
-                Some(Done::Decorated(x, z, region, finals, writes)) => {
+                Some(Done::Decorated(x, z, region, finals, writes, protos)) => {
+                    self.receive_decoration_dependencies(protos);
                     self.receive_decorated(x, z, *region, finals, writes, world)
                 }
                 Some(Done::Generated(chunk)) => {
@@ -2788,7 +2882,8 @@ impl Streaming {
                 break;
             };
             match done {
-                Done::Decorated(x, z, region, finals, writes) => {
+                Done::Decorated(x, z, region, finals, writes, protos) => {
+                    self.receive_decoration_dependencies(protos);
                     self.receive_decorated(x, z, *region, finals, writes, world)
                 }
                 Done::Generated(chunk) => {

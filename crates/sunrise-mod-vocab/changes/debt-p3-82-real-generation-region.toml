@@ -21,7 +21,9 @@ Following vanilla `Feature.place`, `WorldGenRegion.ensureCanWrite`, `WorldGenReg
 (`ChunkPyramid.GENERATION_PYRAMID`), `ProtoChunk.getHeightAccessorForGeneration`,
 `BelowZeroRetrogen.UPGRADE_HEIGHT_ACCESSOR`, `ImposterProtoChunk`, `BlockEntity.loadWithComponents`
 and `Level.setBlock`, registered feature types borrow the caller's world and random directly.
-`FEATURES` admits the center chunk and its eight neighbors, restricted throughout by the center's
+`FEATURES` reads its resident dependencies through the `STRUCTURE_STARTS` radius of eight,
+without advancing their stage or loading chunks. Its block writes admit the center chunk and its
+eight neighbors, restricted throughout by the center's
 generation height when upgrading; `ensure_can_write` exposes that admission check, `set_block`
 returns the owning world's result immediately, reads (`block`, `block_in_tag`, `height`) observe
 completed writes, and `block_entity` validates against the current block without requiring this
@@ -29,6 +31,9 @@ call to have placed it (while keeping read-only full chunks immutable). Returned
 preserve their native cause chain, log the registering mod, feature type and origin each time,
 and end only that invocation without undoing writes or draws or disabling later invocations. Only
 a callback panic disables that registered callback for the session with a log and error toast.
+`PlaceCommand.placeFeature` and `FrogspawnBlock.onPlace` share the live level's random in call
+order. `CountOnEveryLayerPlacement.modify` and `NoiseThresholdCountPlacement.count` use their
+codec and world bounds, not an execution quota.
 
 Following vanilla `Structure.generate`, `Structure.findValidGenerationPoint`,
 `StructureStart.placeInChunk`, `StructurePiece.placeBlock`, `StructurePiece.getBoundingBox`,

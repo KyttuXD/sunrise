@@ -1831,6 +1831,23 @@ pub trait StructureMobs: Send + Sync {
     ) -> bool;
 }
 
+/// The read neighborhood of the vanilla FEATURES step (`ChunkPyramid.GENERATION_PYRAMID`).
+pub const FEATURES_READ_RADIUS: i32 = 8;
+
+/// Read-only block storage of a resident full chunk (`ImposterProtoChunk`).
+pub trait DecorationFullChunk {
+    fn position(&self) -> ChunkPos;
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId;
+}
+
+/// Already resident dependencies outside the 3×3 TERRAIN neighborhood. Decoration
+/// never loads these chunks or advances them to a later stage.
+#[derive(Default)]
+pub struct DecorationDependencies<'a, 'chunk> {
+    pub protos: &'a mut [&'chunk mut ProtoChunk],
+    pub full: &'a [&'a dyn DecorationFullChunk],
+}
+
 /// A start chunk's saved `structures.starts`, including pending writes.
 pub type SavedStructureStarts =
     dyn Fn(ChunkPos) -> Option<sunrise_core::nbt::Compound> + Send + Sync;
@@ -1846,6 +1863,7 @@ trait SeededPipeline: Send + Sync {
         &self,
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
+        dependencies: DecorationDependencies<'_, '_>,
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     /// What the shared caches hold, for `sunrise-ctl memory`.
@@ -1951,6 +1969,7 @@ where
         &self,
         worker: &mut WorkerState,
         region: &mut [ProtoChunk; 9],
+        dependencies: DecorationDependencies<'_, '_>,
     ) -> Result<DecorateStats, GeneratorError> {
         match &self.decoration {
             Some(decoration) => {
@@ -1961,6 +1980,7 @@ where
                     self.generation(),
                     worker,
                     region,
+                    dependencies,
                     &mut random,
                     self.structures.as_ref(),
                 )
@@ -3077,8 +3097,10 @@ impl GeneratorWorker {
     pub fn decorate(
         &mut self,
         region: &mut [ProtoChunk; 9],
+        dependencies: DecorationDependencies<'_, '_>,
     ) -> Result<DecorateStats, GeneratorError> {
-        self.pipeline.decorate(&mut self.state, region)
+        self.pipeline
+            .decorate(&mut self.state, region, dependencies)
     }
     /// Skip placed features when decorating and keep structure pieces only
     /// (for structure placement parity checks).

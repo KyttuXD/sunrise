@@ -1193,6 +1193,7 @@ fn start_panic_skips_only_that_callback_without_disabling_independent_type() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn piece_metadata_and_save_panics_stay_local_and_debug_skips_mod_fmt() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1279,13 +1280,50 @@ fn piece_metadata_and_save_panics_stay_local_and_debug_skips_mod_fmt() {
     assert_eq!(pieces.len(), 2);
     let debug = format!("{:?}", pieces[0]);
     assert!(debug.contains("ModPiece") && debug.contains("testmod:hostile"));
-    assert!(pieces[0].save().is_err());
-    assert!(pieces[1].save().is_ok());
-    assert_eq!(save_calls.load(Ordering::SeqCst), 2);
+    use sunrise_world::worldgen::structure::start::{
+        Piece, StructureDef, StructureKind, StructureStart,
+    };
+    let root =
+        std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").expect("resources"));
+    let biomes = sunrise_client::biome::Biomes::load_for_server(
+        &sunrise_assets::resource_source::ResourceRoot::directory(root),
+    )
+    .unwrap();
+    let def = StructureDef {
+        name: "testmod:hostile".into(),
+        kind: StructureKind::Unsupported("fixture".into()),
+        biomes: Default::default(),
+        step: 0,
+        terrain: sunrise_core::density::TerrainAdjustment::None,
+        enhanced_terrain: None,
+    };
+    let piece_box = BoundingBox::new([1, 64, 2], [3, 66, 4]);
+    assert_eq!(pieces[0].bounding_box(), piece_box);
+    let mut chunk = sunrise_client::chunk::Chunk::empty(0, 0);
+    chunk.structure_starts.push(Arc::new(StructureStart::new(
+        0,
+        &def,
+        ChunkPos::new(0, 0),
+        pieces.into_iter().map(Piece::Legacy).collect(),
+    )));
+    let encoded =
+        sunrise_client::save::encode(&chunk, resources.registry, &biomes, &Default::default());
+    let loaded = sunrise_client::save::decode(&encoded, resources.registry, &biomes).unwrap();
+    let Some(Tag::List(children)) = loaded
+        .saved_structure_starts()
+        .unwrap()
+        .get(&"testmod:hostile".into())
+        .unwrap()
+        .get("Children")
+    else {
+        panic!("missing children")
+    };
+    assert_eq!(children.len(), 1, "only the complete sibling is published");
     assert_eq!(
-        pieces[0].bounding_box(),
-        BoundingBox::new([1, 64, 2], [3, 66, 4])
+        children[0].get("BB"),
+        Some(&Tag::IntArray(vec![1, 64, 2, 3, 66, 4]))
     );
+    assert_eq!(save_calls.load(Ordering::SeqCst), 2);
     let other = Adapter::new("testmod:boxes", "testmod", Arc::new(Boxes));
     let (_, other_pieces) = other
         .find_generation_point(
