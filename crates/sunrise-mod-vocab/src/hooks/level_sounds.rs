@@ -6,10 +6,9 @@ pub trait Hooks {
     /// every server sound not bound to an entity, mobs' own sounds included
     /// (`Entity.playSound` plays at the entity's position). A mod may change
     /// `sound`, `source`, `volume` and `pitch`, or set `cancel` and no player
-    /// hears it; `original_volume` and `original_pitch` are as asked. A sound
-    /// left unplayable (a volume or pitch that isn't finite and at least 0)
-    /// is dropped. Sounds the server's level plays during
-    /// the tick are asked as they go out, at the end of the tick, with the state
+    /// hears it; `original_volume` and `original_pitch` are as asked. The sound
+    /// engine interprets volume and pitch after the hook. Sounds the server's
+    /// level plays during the tick are asked as they go out, with the state
     /// then. `/playsound` sends its packet directly and isn't asked, as in
     /// vanilla on the server. On the client, incoming sound packets ask before
     /// playback, including `/playsound`; client-predicted and game-event level
@@ -23,7 +22,8 @@ pub trait Hooks {
         contract = "cancel",
         out = "cancel",
         neoforge = "PlayLevelSoundEvent.AtPosition",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
     fn play_level_sound_at_position(
         level: LevelRef,
@@ -56,7 +56,8 @@ pub trait Hooks {
         contract = "cancel",
         out = "cancel",
         neoforge = "PlayLevelSoundEvent.AtEntity",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
     fn play_level_sound_at_entity(
         entity: EntityRef,

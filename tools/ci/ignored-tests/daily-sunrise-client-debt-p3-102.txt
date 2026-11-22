@@ -1,0 +1,1 @@
+sunrise-client game::remote::interaction_event_tests::powder_snow_placement_uses_the_bucket_event_and_contextual_levels lib daily resources

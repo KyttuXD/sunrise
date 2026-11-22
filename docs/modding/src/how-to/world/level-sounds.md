@@ -5,7 +5,9 @@ or cancel a level sound before it is broadcast (server) or played (client).
 Match the hook's `HostSide` to distinguish the requests; the event's sound,
 source, volume and pitch describe that side's request, and original volume and
 pitch remain available after edits. Returning `Flow::Cancel` suppresses that
-request. A server cancellation sends no packet, so there is no client request.
+request. A server cancellation sends no packet, so there is no client request. With no
+cancellation, the sound engine interprets the supplied volume and pitch; the level hooks do not
+apply a separate volume or pitch check.
 
 Incoming sound packets, including `/playsound`, ask the client level hooks.
 An entity-sound packet stays bound to its emitter. UI clicks, engine-local

@@ -398,18 +398,19 @@ impl Game<'_> {
             self.apply_predicted_item(at, stack);
         }
         self.predict_blocks(rest, seq);
-        let state = primary.1;
+        let state = placed.sound_state;
         if !self.res.facts().is_air(state) {
-            let sound = self.own_sound_type(at, state, mod_api::BlockSoundCause::Place);
-            self.play_client_local_sound(
-                LevelSound::new(
-                    &sound.place,
-                    at.map(|n| f64::from(n) + 0.5),
-                    (sound.volume + 1.0) / 2.0,
-                    sound.pitch * 0.8,
-                )
-                .in_source(mod_api::SoundSource::Blocks),
-            );
+            let sound = self
+                .own_block_sound(at, state, mod_api::BlockSoundCause::Place)
+                .for_placement(&stack.item);
+            self.play_client_local_sound(LevelSound {
+                name: sound.event.as_str(),
+                at: at.map(|n| f64::from(n) + 0.5),
+                volume: sound.volume,
+                pitch: sound.pitch,
+                source: mod_api::SoundSource::Blocks,
+                emitter: None,
+            });
         }
     }
     /// Whether `held`'s `Item.use` needs a target this client sees none of

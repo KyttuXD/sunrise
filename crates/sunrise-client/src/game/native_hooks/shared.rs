@@ -2516,7 +2516,8 @@ impl Game<'_> {
                 self.trigger_block("minecraft:placed_block", target, stack);
             }
         }
-        self.with_level(|b, level, ticks| b.report_placement(level, ticks, &placed));
+        let placer = by_player.then(|| self.native_clicker().1.cast_unsigned());
+        self.with_level(|b, level, ticks| b.report_placement(level, ticks, &placed, placer));
         Ok(Some(placed))
     }
     /// `MobEvent::PlaceBlock`: a mob sets `state` at `pos` unless a mod

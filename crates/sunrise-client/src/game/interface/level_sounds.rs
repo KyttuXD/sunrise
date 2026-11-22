@@ -6,7 +6,6 @@ use std::borrow::Cow;
 use mod_api::{HookId, Identifier, SoundSource};
 
 use super::Game;
-use super::native_hooks::level_sound_playable;
 
 /// A sound the server's level is about to play, as vanilla asked for it.
 pub(super) struct LevelSound<'a> {
@@ -212,9 +211,8 @@ impl Game<'_> {
     /// `ServerLevel.playSeededSound`'s `EventHooks.onPlaySoundAtEntity` or
     /// `onPlaySoundAtPosition`: `play_level_sound_at_entity` when the sound's
     /// emitter is an entity a mod can name, `play_level_sound_at_position`
-    /// otherwise. None when a mod cancels it or leaves it unplayable (a volume
-    /// or pitch that isn't finite and at least 0). With no listener, the sound
-    /// as asked, borrowed.
+    /// otherwise. The hook can cancel playback; the sound engine interprets the
+    /// returned volume and pitch. With no listener, the sound as asked, borrowed.
     pub(super) fn ask_level_sound<'a>(
         &mut self,
         dimension: &str,
@@ -278,7 +276,7 @@ impl Game<'_> {
                 );
             }
         }
-        if cancel || !level_sound_playable(at, volume_now, pitch_now) {
+        if cancel {
             return None;
         }
         Some(HeardSound {

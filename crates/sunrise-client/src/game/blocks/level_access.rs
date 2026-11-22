@@ -21,13 +21,24 @@ impl LevelAccess for GameLevel<'_> {
     fn redstone_experiments(&self) -> bool {
         self.redstone_experiments
     }
-    fn place_sound_type(
+    fn override_place_sound(
         &self,
         pos: BlockPos,
         state: BlockStateId,
-        sounds: Arc<sunrise_world::level::data::Sounds>,
-    ) -> Arc<sunrise_world::level::data::Sounds> {
-        self.part_place_sound_type(pos, state, sounds)
+        placer: Option<u32>,
+    ) -> Option<sunrise_world::level::data::BlockSound> {
+        let cause = mod_api::BlockSoundCause::Place;
+        let sound = sunrise_client::block_sounds::native_sound_type(
+            self.loop_context,
+            pos,
+            state,
+            placer.map(|id| (id, "minecraft:player")),
+            cause,
+            &self.facts.get(state).sounds,
+        )?;
+        Some(sunrise_world::level::data::BlockSound::from_type(
+            &sound, cause,
+        ))
     }
     fn allow_hopper_pickup_item(&self, pos: BlockPos, item: &str, count: u32) -> bool {
         let mut cancel = false;

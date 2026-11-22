@@ -1567,8 +1567,8 @@ fn content_root_loads_with_every_table() {
             independent_behaviours.facts(state).flags
         );
         assert_eq!(
-            deferred_behaviours.data(state).sounds.place,
-            independent_behaviours.data(state).sounds.place
+            deferred_behaviours.facts(state).placement_sound,
+            independent_behaviours.facts(state).placement_sound
         );
         assert_eq!(shared_facts.get(state).emission, facts.get(state).emission);
         assert_eq!(shared_facts.get(state).classes, facts.get(state).classes);
@@ -1577,8 +1577,8 @@ fn content_root_loads_with_every_table() {
             independent_behaviours.facts(state).flags,
         );
         assert_eq!(
-            shared_behaviours.data(state).sounds.place,
-            independent_behaviours.data(state).sounds.place,
+            shared_behaviours.facts(state).placement_sound,
+            independent_behaviours.facts(state).placement_sound,
         );
     }
 
@@ -1979,8 +1979,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
         assert_eq!(a.emission, b.emission);
         assert_eq!(a.dampening, b.dampening);
         assert_eq!(a.hardness, b.hardness);
-        assert_eq!(a.sounds.volume, b.sounds.volume);
-        assert_eq!(a.sounds.pitch, b.sounds.pitch);
+        assert_eq!(a.sounds, b.sounds);
     }
     let a = sunrise_world::level::Behaviours::load(assets.registry, &root).unwrap();
     for id in 0..assets.registry.len() {
@@ -2003,12 +2002,8 @@ fn shared_behaviour_document_matches_independent_loaders() {
         assert_eq!(a_state.push, b_state.push);
         assert_eq!(a_state.instrument, b_state.instrument);
         assert_eq!(a_state.shape, b_state.shape);
-        let (a_sound, b_sound) = (&a.data(state).sounds, &b.data(state).sounds);
-        assert_eq!(a_sound.volume, b_sound.volume);
-        assert_eq!(a_sound.pitch, b_sound.pitch);
-        assert_eq!(a_sound.place, b_sound.place);
-        assert_eq!(a_sound.break_, b_sound.break_);
-        assert_eq!(a_sound.fall, b_sound.fall);
+        assert_eq!(a_state.placement_sound, b_state.placement_sound);
+        assert_eq!(b_state.placement_sound, deferred_state.placement_sound);
     }
 }
 

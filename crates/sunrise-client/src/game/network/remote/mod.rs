@@ -1905,6 +1905,9 @@ pub(super) type DryUse = (DryChanges, Vec<DrySound>);
 /// Where `BlockItem.place` on the dry level placed, and the blocks it set.
 pub(super) struct DryPlace {
     pub(super) pos: sunrise_core::position::BlockPos,
+    /// The state's sound type is read from BlockItem.place's `placedState`,
+    /// before any further writes from `Block.setPlacedBy`.
+    sound_state: BlockStateId,
     matches_candidate: bool,
     pub(super) changes: DryChanges,
 }

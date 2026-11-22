@@ -656,18 +656,6 @@ impl Game<'_> {
         let target = [pos.x, pos.y, pos.z];
         // BlockItem.place's SUCCESS: the client swings with its own prediction.
         self.swing_arm_predicted();
-        // BlockItem.place's sound is among the level events;
-        // SolidBucketItem.getPlaceSound replaces it with the bucket's own.
-        let solid_bucket = &*stack.item == "minecraft:powder_snow_bucket";
-        if solid_bucket {
-            for event in &mut self.level_events {
-                if let LevelEvent::Sound { pos: at, sound, .. } = event
-                    && *at == pos
-                {
-                    *sound = "minecraft:item.bucket.empty_powder_snow".into();
-                }
-            }
-        }
         self.process_level_events()?;
         self.award_stat("used", &stack.item, 1);
         self.check_golem_spawn(target)?;

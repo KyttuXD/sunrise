@@ -1289,26 +1289,105 @@ pub enum ProgressType {
     Revoke,
 }
 
+// no wire: a validated event name for native playback; the sound's own protocol carries its name.
+/// A validated sound event identifier, independent of what resource packs are loaded.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SoundEventKey(pub(crate) Arc<str>);
+
+impl SoundEventKey {
+    /// Parse a sound event name as vanilla's `Identifier.parse` does. With no namespace, or an
+    /// empty namespace before `:`, the namespace is `minecraft`. Returns `None` for invalid
+    /// identifier syntax, not for an event missing from the current packs. Parse a part's keys
+    /// during loading and keep them on the part.
+    pub fn parse(name: &str) -> Option<Self> {
+        let id = Identifier::parse(name).ok()?;
+        Some(Self(id.to_string().into()))
+    }
+
+    /// The fully qualified event name (`namespace:path`).
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+// no wire: an in-process sound-type identity; it is not a sound event on the wire.
+/// The vanilla `SoundType` identities that affect sound selection independently
+/// of their event keys (see `AbstractHorse.isWoodSoundType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlockSoundTypeIdentity {
+    /// An ordinary or custom sound type without one of the identities below.
+    #[default]
+    Other,
+    /// `SoundType.WOOD`.
+    Wood,
+    /// `SoundType.NETHER_WOOD`.
+    NetherWood,
+    /// `SoundType.STEM`.
+    Stem,
+    /// `SoundType.CHERRY_WOOD`.
+    CherryWood,
+    /// `SoundType.BAMBOO_WOOD`.
+    BambooWood,
+}
+
+// no wire: native block facts and a native callback edit; playback sends the selected event only.
 /// A block state's sounds (`BlockState.getSoundType()`, vanilla's `SoundType`): the sound
-/// events, as `LevelRef::play_sound` names them, and the volume and pitch they play at.
+/// event keys and the base volume and pitch. Playback uses only the event requested by the
+/// current action and applies that action's volume and pitch factors.
 #[derive(Clone, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// exhaustive: the game and mods build it with a literal
 pub struct BlockSoundType {
+    /// Identity independent of event keys and levels. In-place event edits keep it;
+    /// use [`BlockSoundTypeIdentity::Other`] when constructing a custom sound type.
+    pub identity: BlockSoundTypeIdentity,
     /// `SoundType.getVolume`.
     pub volume: f32,
     /// `SoundType.getPitch`.
     pub pitch: f32,
     /// `getBreakSound`: the block broken.
-    pub break_sound: std::sync::Arc<str>,
+    pub break_sound: SoundEventKey,
     /// `getStepSound`: walked on.
-    pub step: std::sync::Arc<str>,
+    pub step: SoundEventKey,
     /// `getPlaceSound`: placed.
-    pub place: std::sync::Arc<str>,
-    /// `getHitSound`: hit while being mined.
-    pub hit: std::sync::Arc<str>,
+    pub place: SoundEventKey,
+    /// `getHitSound`: hit while being mined, or used by a sniffer digging.
+    pub hit: SoundEventKey,
     /// `getFallSound`: landed on.
-    pub fall: std::sync::Arc<str>,
+    pub fall: SoundEventKey,
+}
+
+impl BlockSoundType {
+    /// The event read for this action. A sniffer digging reads the hit event.
+    pub fn event(&self, cause: BlockSoundCause) -> &SoundEventKey {
+        match cause {
+            BlockSoundCause::Step => &self.step,
+            BlockSoundCause::Fall => &self.fall,
+            BlockSoundCause::Place => &self.place,
+            BlockSoundCause::Break => &self.break_sound,
+            BlockSoundCause::Dig => &self.hit,
+        }
+    }
+}
+
+#[cfg(test)]
+mod block_sound_tests {
+    use super::SoundEventKey;
+
+    #[test]
+    fn event_keys_apply_vanilla_identifier_defaults_without_a_sound_registry() {
+        for (input, expected) in [
+            ("block.stone.step", "minecraft:block.stone.step"),
+            (":block.stone.step", "minecraft:block.stone.step"),
+            ("test:missing/path", "test:missing/path"),
+            ("", "minecraft:"),
+        ] {
+            assert_eq!(SoundEventKey::parse(input).unwrap().as_str(), expected);
+        }
+        for invalid in ["x:bad path", "Upper:step", "..:step", "x:y:z"] {
+            assert_eq!(SoundEventKey::parse(invalid), None, "{invalid}");
+        }
+    }
 }
 
 /// Why a block's sound type is read (`BlockPart::sound_type`): which of its sounds the game is

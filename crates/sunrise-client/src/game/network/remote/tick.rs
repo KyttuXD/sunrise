@@ -1061,14 +1061,14 @@ impl Game<'_> {
                     muffled,
                 } => {
                     let at = [position.x, position.y, position.z];
-                    let sounds = self.own_sound_type(at, state, mod_api::BlockSoundCause::Step);
+                    let sounds = self.own_block_sound(at, state, mod_api::BlockSoundCause::Step);
                     // Player.playStepSound: muffled under the swim sound in water.
                     let (volume, pitch) = if muffled {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
                         (sounds.volume * 0.15, sounds.pitch)
                     };
-                    self.play_client_player_sound(&sounds.step, volume, pitch);
+                    self.play_client_player_sound(sounds.event.as_str(), volume, pitch);
                 }
                 sunrise_client::motion::MotionEvent::Swim { volume, pitch } => {
                     self.play_client_player_sound("minecraft:entity.player.swim", volume, pitch);

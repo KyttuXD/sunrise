@@ -6147,20 +6147,38 @@ impl Game<'_> {
                         f64::from(pos.y) + 0.5,
                         f64::from(pos.z) + 0.5,
                     ];
-                    let name = if sound.contains(':') {
-                        sound.to_string()
+                    use sunrise_world::level::LevelSoundSource;
+                    // Block placement carries a canonical key from its resolved sound type.
+                    let qualified;
+                    let name = if matches!(source, Some(LevelSoundSource::BlockPlacement { .. }))
+                        || sound.contains(':')
+                    {
+                        &*sound
                     } else {
-                        format!("minecraft:{sound}")
+                        qualified = format!("minecraft:{sound}");
+                        &qualified
                     };
-                    match source {
-                        Some(sunrise_world::level::LevelSoundSource::Blocks) => self.audio.play_on(
+                    if source.is_some() {
+                        self.audio.play_on(
                             mod_api::SoundSource::Blocks.index(),
-                            &name,
+                            name,
                             Some(c),
                             volume,
                             pitch,
-                        ),
-                        None => self.audio.play(&name, Some(c), volume, pitch),
+                        );
+                        if let Some(LevelSoundSource::BlockPlacement {
+                            except: Some(placer),
+                        }) = source
+                            && let Some(captured) = self
+                                .audio
+                                .capture
+                                .as_mut()
+                                .and_then(|sounds| sounds.last_mut())
+                        {
+                            captured.except_entity = Some(placer);
+                        }
+                    } else {
+                        self.audio.play(name, Some(c), volume, pitch);
                     }
                 }
                 // Handled as the behaviour emits it (GameLevel::emit).

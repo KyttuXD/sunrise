@@ -4676,26 +4676,28 @@ pub(crate) mod tests {
         assert_eq!(movement(&before), (false, 0.25));
         assert_eq!(movement(&after), (true, 1.25));
         // A block's sound type reads it too, with the entity and the cause it was asked for.
-        let stone = crate::blocks::Sounds {
+        let key = |name| mod_api::SoundEventKey::parse(name).unwrap();
+        let stone = mod_api::BlockSoundType {
+            identity: mod_api::BlockSoundTypeIdentity::Other,
             volume: 1.0,
             pitch: 1.0,
-            break_sound: "minecraft:block.stone.break".into(),
-            step: "minecraft:block.stone.step".into(),
-            place: "minecraft:block.stone.place".into(),
-            hit: "minecraft:block.stone.hit".into(),
-            fall: "minecraft:block.stone.fall".into(),
+            break_sound: key("block.stone.break"),
+            step: key("block.stone.step"),
+            place: key("block.stone.place"),
+            hit: key("block.stone.hit"),
+            fall: key("block.stone.fall"),
         };
         let step = |context: &LoopContext, kind: &str, cause| {
-            let mut sound = crate::block_sounds::own(&stone);
-            crate::block_sounds::native_sound_type(
+            let answer = crate::block_sounds::native_sound_type(
                 context,
                 sunrise_core::position::BlockPos::new(0, 0, 0),
                 sunrise_world::registry::BlockStateId(0),
                 Some((1, kind)),
                 cause,
-                &mut sound,
+                &stone,
             );
-            (sound.step.to_string(), sound.volume)
+            let sound = answer.as_ref().unwrap_or(&stone);
+            (sound.step.as_str().to_owned(), sound.volume)
         };
         let (own, answered) = (
             ("minecraft:block.stone.step".to_owned(), 1.0),

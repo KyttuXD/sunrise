@@ -222,14 +222,15 @@ pub(crate) fn install() {
             fluid_flow: |context, _, _, flow| {
                 flow[0] += context.setting("rules_mod", "stack").map_or(0.0, |_| 1.0);
             },
-            sound_type: |context, _, _, entity, cause, sound| {
-                if context.setting("rules_mod", "stack").is_some()
+            sound_type: |context, _, _, entity, cause, own| {
+                (context.setting("rules_mod", "stack").is_some()
                     && entity.is_some_and(|(_, kind)| kind == "minecraft:player")
-                    && cause == mod_api::BlockSoundCause::Step
-                {
-                    sound.step = "rules_mod:block.rules.step".into();
-                    sound.volume = 2.0;
-                }
+                    && cause == mod_api::BlockSoundCause::Step)
+                    .then(|| mod_api::BlockSoundType {
+                        step: mod_api::SoundEventKey::parse("rules_mod:block.rules.step").unwrap(),
+                        volume: 2.0,
+                        ..own.clone()
+                    })
             },
             can_grindstone_repair: |context, stack, can_repair| {
                 item_part(context, "can_grindstone_repair", stack, can_repair);

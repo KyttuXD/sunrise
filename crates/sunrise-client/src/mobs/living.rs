@@ -1922,7 +1922,7 @@ impl Mob {
                 let sounds = w.block_sound_type(self, pos, state, mod_api::BlockSoundCause::Fall);
                 let at = [self.position.x, self.position.y, self.position.z];
                 events.push(MobEvent::SoundId(
-                    sounds.fall.to_string(),
+                    sounds.fall.as_str().to_owned(),
                     at,
                     sounds.volume * 0.5,
                     sounds.pitch * 0.75,

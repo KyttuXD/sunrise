@@ -397,7 +397,10 @@ impl BlockStates<'_> {
     pub fn explosion_resistance(&self, state: BlockState) -> Option<f32> {
         self.backend.block_state_explosion_resistance(state)
     }
-    /// `state`'s sounds (`BlockState.getSoundType()`). None as for `replaceable`.
+    /// `state`'s base sound type (`BlockState.getSoundType()`), with its identity and
+    /// validated event keys.
+    /// This does not run a part or look up events in the sound resources. None as for
+    /// `replaceable`.
     pub fn sound(&self, state: BlockState) -> Option<BlockSoundType> {
         self.backend.block_state_sound(state)
     }
