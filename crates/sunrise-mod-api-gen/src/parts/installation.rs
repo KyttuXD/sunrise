@@ -22,7 +22,12 @@ fn derived(record: &str, field: &str) -> bool {
         ("Parts", "hooks")
             | (
                 "Installed",
-                "epoch" | "namespace_authority" | "hook_bits" | "tag_hook_bits" | "resolved_menus"
+                "epoch"
+                    | "namespace_authority"
+                    | "hook_bits"
+                    | "tag_hook_bits"
+                    | "resolved_menus"
+                    | "entity_type_defaults"
             )
     )
 }

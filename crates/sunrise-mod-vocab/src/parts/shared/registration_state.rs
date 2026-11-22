@@ -46,6 +46,9 @@ pub(crate) struct Installed {
     pub(crate) resolved_items: OnceLock<sunrise_mod_runtime::registry_keys::Names>,
     pub(crate) resolved_game_events: OnceLock<sunrise_mod_runtime::registry_keys::Names>,
     pub(crate) resolved_entity_types: OnceLock<sunrise_mod_runtime::registry_keys::Names>,
+    /// Attribute suppliers from the accepted core tables, paired with this installation's keys.
+    pub(crate) entity_type_defaults:
+        std::sync::RwLock<Option<Arc<crate::entity::entity_type_defaults::Suppliers>>>,
     // Re-resolution retains slots within one installation, never across fixture epochs.
     pub(crate) resolved_menus: std::sync::RwLock<Option<sunrise_mod_runtime::registry_keys::Names>>,
     pub(crate) resolved_blocks: OnceLock<Arc<sunrise_mod_runtime::block_definitions::Blocks>>,

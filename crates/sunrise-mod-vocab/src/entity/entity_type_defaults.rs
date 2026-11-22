@@ -3,14 +3,11 @@
 //! never needs a game behind the host (`ItemsHost::entity_type_default_attribute`).
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Each entity type's attribute supplier: its attributes' values, by namespaced name, as the
 /// supplier gives them (`AttributeSupplier.getValue`: the base inside the attribute's range).
-type Suppliers = HashMap<String, HashMap<String, f64>>;
-
-/// The published suppliers; none before the game's first catalog.
-static PUBLISHED: RwLock<Option<Arc<Suppliers>>> = RwLock::new(None);
+pub(crate) type Suppliers = HashMap<String, HashMap<String, f64>>;
 
 /// The game's entity types' attribute suppliers (`DefaultAttributes.SUPPLIERS`, mods' declared
 /// rows and additions included), replacing the last: published whenever the attribute catalog is
@@ -18,8 +15,11 @@ static PUBLISHED: RwLock<Option<Arc<Suppliers>>> = RwLock::new(None);
 pub fn publish_entity_type_defaults(
     rows: impl IntoIterator<Item = (String, HashMap<String, f64>)>,
 ) {
+    let Some(installed) = crate::parts::installed() else {
+        return;
+    };
     let rows = Arc::new(rows.into_iter().collect::<Suppliers>());
-    if let Ok(mut published) = PUBLISHED.write() {
+    if let Ok(mut published) = installed.entity_type_defaults.write() {
         *published = Some(rows);
     }
 }
@@ -28,9 +28,11 @@ pub fn publish_entity_type_defaults(
 /// `ItemsHost::entity_type_default_attribute` and the typed reload/setup contexts. None before
 /// a catalog is published, or where the type or attribute has no value; never unwinds.
 pub fn entity_type_default_attribute(entity_type: &str, attribute: &str) -> Option<f64> {
-    let suppliers = PUBLISHED.read().ok()?.clone()?;
+    let installed = crate::parts::installed()?;
+    let suppliers = installed.entity_type_defaults.read().ok()?.clone()?;
+    let keys = installed.resolved_entity_types.get()?;
     lookup(&suppliers, entity_type, attribute, |id| {
-        crate::content::registry_keys::resolved_entity_type_key(id).is_some()
+        keys.slots.contains_key(id)
     })
 }
 

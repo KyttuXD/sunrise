@@ -415,8 +415,6 @@ pub(super) fn gameplay_tables(
                     modifications,
                 )?);
             }
-            // #3944: the finished suppliers, for `entity_type_default_attribute` on every host.
-            publish_entity_type_defaults(&motion.attributes);
             Ok::<_, Box<dyn std::error::Error>>(motion)
         })
         .map_err(|e| e.to_string());
@@ -816,6 +814,8 @@ pub(super) fn load_resources_for_mods(
         environment,
         collision,
     } = core;
+    // The accepted suppliers and resolved entity keys belong to the same Parts installation.
+    publish_entity_type_defaults(&motion.attributes);
     let assets = Arc::new(assets);
     let render = Arc::new(render);
     // The namespaces of the mod block states registered now: what every level.dat saved from

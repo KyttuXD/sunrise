@@ -94,11 +94,6 @@
     "category": "set-once socket",
     "reason": "Set-once platform callback registration; mutable platform storage lives above the engine."
   },
-  "entity/entity_type_defaults.rs::PUBLISHED": {
-    "type": "RwLock<Option<Arc<Suppliers>>>",
-    "category": "Parts lookup table",
-    "reason": "The game's entity types' attribute supplier values, published when its attribute catalog is built and replaced on each build; every host's metadata read of #3944 answers from it, never a mod's authoring state."
-  },
   "parts/block_entities.rs::resolved_block_entity_types::EMPTY": {
     "type": "OnceLock<sunrise_mod_runtime::registry_keys::Names>",
     "category": "immutable cache",
