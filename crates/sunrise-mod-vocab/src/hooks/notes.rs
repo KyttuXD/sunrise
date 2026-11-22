@@ -2131,18 +2131,22 @@ directories, or filesystem paths. Files resolve like vanilla resource packs: eve
 except `lang/*.json` is delivered as the exact bytes of the winning pack's file, while
 language files arrive key-wise merged across the packs, as vanilla loads them.
 
-Prepare and apply semantics, error handling, crash attribution and dependency ordering match
-those of [server listeners](#server-data-reload-listeners). Client registry reads return owned IDs.
+Prepare and apply semantics, error handling, crash attribution, dependency ordering and the
+borrowed registry views match those of [server listeners](#server-data-reload-listeners):
+`event.listeners.get_registry().iter()` borrows registered names in registration order,
+starting with the vanilla anchor. `event.listeners.get_graph().iter()` borrows explicit
+`(first, second)` edges in insertion order, and `event.listeners.get_last_vanilla_listener()`
+borrows the vanilla anchor (`VanillaClientListeners::model_manager()`). Copy only the IDs you need
+after the borrow ends.
 `ClientReloadListener::prepare` parses without changing live state and returns a boxed
 `FnOnce() + Send + 'static` action. All prepares finish before any apply; a prepare error or
 dependency cycle aborts the reload and drops pending actions without running them, while a
 handled registration error leaves the registry unmutated and does not poison the reload.
 A panic follows the same named log, toast, and session-disablement path as on the server.
 `VanillaClientListeners::model_manager()` names Sunrise's single modeled vanilla client
-reload anchor; `first()` and `last()` alias `model_manager()` (the Sunrise counterparts of
-NeoForge's `VanillaClientListeners.FIRST`/`LAST`), with no synthetic boundary nodes or automatic
-edges. Only dangling non-`minecraft` listeners are linked after the anchor during topological
-sorting (matching NeoForge's `ReloadListenerSort`). Dependencies on that anchor run mod
+reload anchor, with no synthetic boundary nodes or automatic boundary edges. Only dangling
+non-`minecraft` listeners are linked after the anchor during topological sorting (matching
+NeoForge's `ReloadListenerSort`). Dependencies on that anchor run mod
 prepares before or after the actual build, and applies on the corresponding side of
 model publication on the game thread. First, the atlas uploads fire `texture_atlas_stitched`
 with the previous model store (none on startup). `model_baking_completed` fires in the model

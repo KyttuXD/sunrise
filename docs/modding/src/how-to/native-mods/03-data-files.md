@@ -45,11 +45,15 @@ running them. This work does not run on the tick. Server world tables, including
 Contributions share a list, so a failed contributed file cannot be attributed to a particular mod.
 The original pack trees remain separate from the launcher's code-only horizon-mixins input.
 
-Client-side asset reads use [client asset reload listeners](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/client/client_reload.rs); server
-listeners cannot read `assets/`. Client listeners return the same once-only action, which runs on
-the game thread, on the declared side of model publication. With no dependency linking
-it to the vanilla anchor, a mod listener runs after model publication by default.
-Packaged assets also participate in the game's normal resource packs.
+Client-side asset reads use [client asset reload listeners](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/client/client_reload.rs)
+through `Hooks::add_client_reload_listeners`; server listeners cannot read `assets/`. During
+registration, `event.listeners.get_registry().iter()`, `event.listeners.get_graph().iter()` and
+`event.listeners.get_last_vanilla_listener()` borrow the live names, explicit dependency edges and
+client vanilla anchor (`VanillaClientListeners::model_manager()`) in the same way as the server
+registry. Client listeners return the same once-only action, which runs on the game thread, on the
+declared side of model publication. With no dependency linking it to the vanilla anchor, a mod
+listener runs after model publication by default. Packaged assets also participate in the game's
+normal resource packs.
 
 When registering a listener on either side, construct its converter with
 `FileToIdConverter::json("machines")` for JSON or `FileToIdConverter::new("machines", ".bin")`
