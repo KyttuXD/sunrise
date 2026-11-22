@@ -154,6 +154,88 @@ pub(super) fn build_tags(
     }
     Ok(built.tags)
 }
+
+/// Seed-independent biome, biome-tag and preset tables for binding biome sources
+/// without loading terrain-stage resources (`settings.json`, `noises.json`, `block_flags.json`, ...).
+pub struct BiomeSourceData {
+    source_catalog: BiomeSourceCatalog,
+    presets: BTreeMap<String, String>,
+    warnings: Vec<String>,
+}
+
+/// Shared biome, biome-tag and preset loader used by both [`BiomeSourceData`] and [`GeneratorData`].
+fn load_biome_sources(
+    dir: &Path,
+    ov: &WorldgenOverrides,
+    require_biome_tags: bool,
+    warnings: &mut Vec<String>,
+) -> Result<
+    (
+        Bundle,
+        BTreeMap<String, Vec<String>>,
+        BTreeMap<String, String>,
+        BiomeSourceCatalog,
+    ),
+    GeneratorError,
+> {
+    let biomes = read_bundle(dir, ov, "biomes")?;
+    let raw_biome_tags = if require_biome_tags {
+        read_bundle(dir, ov, "biome_tags")?
+    } else {
+        read_optional_bundle(dir, ov, "biome_tags")?.unwrap_or_default()
+    };
+    let biome_tags = build_tags(&raw_biome_tags, ov, "biome_tags", warnings, |id| {
+        biomes.contains_key(id)
+    })?;
+    let biome_set = biomes.keys().cloned().collect::<BTreeSet<_>>();
+    let mut presets = read_optional_bundle(dir, ov, "presets")?.unwrap_or_default();
+    let reports = dir.join("biome_parameters");
+    if reports.is_dir() {
+        for entry in fs::read_dir(&reports)? {
+            let path = entry?.path();
+            let Some(stem) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|_| path.extension().is_some_and(|e| e == "json"))
+            else {
+                continue;
+            };
+            presets
+                .entry(format!("minecraft:{stem}"))
+                .or_insert(quantize_parameter_report(&fs::read_to_string(&path)?)?);
+        }
+    }
+    let source_catalog =
+        BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
+    Ok((biomes, biome_tags, presets, source_catalog))
+}
+
+impl BiomeSourceData {
+    /// Load only the biome, biome-tag and multi-noise preset tables needed to bind biome sources.
+    pub fn load_with(dir: &Path, ov: &WorldgenOverrides) -> Result<Arc<Self>, GeneratorError> {
+        let mut warnings = Vec::new();
+        let (_, _, presets, source_catalog) = load_biome_sources(dir, ov, false, &mut warnings)?;
+        Ok(Arc::new(Self {
+            source_catalog,
+            presets,
+            warnings,
+        }))
+    }
+    /// Bind a custom stem's source to this world's biome, tag and preset registries.
+    pub fn resolve_mod_biome_source(
+        &self,
+        json: &str,
+        seed: i64,
+    ) -> Result<ResolvedBiomeSource, crate::worldgen::biome_source::BiomeSourceError> {
+        self.source_catalog
+            .bind_custom_source(json, &self.presets, seed)
+    }
+    /// What loading the data packs' biome-tag entries left out, for the log.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+}
+
 impl GeneratorData {
     /// Load a worldgen bundle directory. Required files are JSON objects mapping
     /// resource identifiers to the resource's JSON text: `noises`, `densities`,
@@ -260,39 +342,14 @@ impl GeneratorData {
             })
             .collect::<Vec<_>>();
         let integers = super::super::block_feature::integer_properties(registry);
-        let biomes = read_bundle(dir, ov, "biomes")?;
-        let biome_tags = build_tags(
-            &read_bundle(dir, ov, "biome_tags")?,
-            ov,
-            "biome_tags",
-            &mut warnings,
-            |id| biomes.contains_key(id),
-        )?;
+        let (biomes, biome_tags, presets, source_catalog) =
+            load_biome_sources(dir, ov, true, &mut warnings)?;
         let biome_set = biomes.keys().cloned().collect::<BTreeSet<_>>();
         let conditions = MaterialConditionRegistry::from_json_with_biome_tags(
             &read_bundle(dir, ov, "conditions")?,
             &biome_set,
             &biome_tags,
         )?;
-        let mut presets = read_optional_bundle(dir, ov, "presets")?.unwrap_or_default();
-        let reports = dir.join("biome_parameters");
-        if reports.is_dir() {
-            for entry in fs::read_dir(&reports)? {
-                let path = entry?.path();
-                let Some(stem) = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .filter(|_| path.extension().is_some_and(|e| e == "json"))
-                else {
-                    continue;
-                };
-                presets
-                    .entry(format!("minecraft:{stem}"))
-                    .or_insert(quantize_parameter_report(&fs::read_to_string(&path)?)?);
-            }
-        }
-        let source_catalog =
-            BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
         let carvers = CarverCatalog::from_json(&read_bundle(dir, ov, "carvers")?)?;
         let mut biome_names = Vec::new();
         let mut biome_ids = BTreeMap::new();
@@ -453,6 +510,15 @@ impl GeneratorData {
             .resolve(&self.presets, 0)
             .map_err(|e| resource(format!("biome source: {e}")))?;
         self.decoration_for(&source_json, &source).map(drop)
+    }
+    /// Bind a custom stem's source to this world's biome, tag and preset registries.
+    pub fn resolve_mod_biome_source(
+        &self,
+        json: &str,
+        seed: i64,
+    ) -> Result<ResolvedBiomeSource, crate::worldgen::biome_source::BiomeSourceError> {
+        self.source_catalog
+            .bind_custom_source(json, &self.presets, seed)
     }
     pub fn registry(&self) -> &'static BlockRegistry {
         self.registry

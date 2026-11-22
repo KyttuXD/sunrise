@@ -2354,7 +2354,7 @@ sunrise-client game::runtime_levels_tests::a_delete_keeps_references_when_shared
 sunrise-client game::runtime_levels_tests::a_delete_of_a_level_still_waiting_to_open_is_refused lib daily resources
 sunrise-client game::runtime_levels_tests::a_delete_of_a_level_that_is_not_open_removes_its_leftovers lib daily resources
 sunrise-client game::runtime_levels_tests::a_delete_of_a_level_with_a_level_below_it_is_refused lib daily resources
-sunrise-client game::runtime_levels_tests::a_delete_outside_the_mods_namespace_is_refused_and_removes_nothing lib daily resources
+sunrise-client game::runtime_levels_tests::a_delete_of_reserved_or_invalid_ids_is_refused_and_removes_nothing lib daily resources
 sunrise-client game::runtime_levels_tests::a_delete_refuses_unreadable_data_and_removes_nothing lib daily resources
 sunrise-client game::runtime_levels_tests::a_delete_stops_at_a_folder_that_holds_a_level lib daily resources
 sunrise-client game::runtime_levels_tests::a_failed_removal_leaves_the_level_closed_and_its_id_closed_to_open lib daily resources
@@ -2363,7 +2363,7 @@ sunrise-client game::runtime_levels_tests::a_handle_from_before_an_unload_never_
 sunrise-client game::runtime_levels_tests::a_level_opened_again_after_a_delete_starts_empty lib daily resources
 sunrise-client game::runtime_levels_tests::a_level_with_a_player_in_it_is_not_deleted lib daily resources
 sunrise-client game::runtime_levels_tests::a_level_with_a_player_in_it_is_not_unloaded lib daily resources
-sunrise-client game::runtime_levels_tests::a_mod_opens_only_ids_in_its_own_namespace lib daily resources
+sunrise-client game::runtime_levels_tests::a_mod_can_open_other_namespaces_but_not_reserved_or_invalid_ids lib daily resources
 sunrise-client game::runtime_levels_tests::a_removal_does_not_follow_links_out_of_the_world lib daily child-process
 sunrise-client game::runtime_levels_tests::a_removal_that_fails_part_way_is_finished_by_a_second_delete lib daily resources
 sunrise-client game::runtime_levels_tests::a_reopened_level_comes_back_from_its_folder_with_its_block lib daily resources

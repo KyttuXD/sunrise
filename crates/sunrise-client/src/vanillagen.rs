@@ -21,7 +21,8 @@ use {
         worldgen::{
             biome_source::regions::RegionLayout,
             generator::{
-                GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
+                BiomeSourceData, GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk,
+                SurfaceSample,
             },
             overrides::WorldgenOverrides,
             structure::legacy::PieceRandom,
@@ -302,16 +303,17 @@ impl VanillaTerrain {
     /// the save gives it). `structures` is the world's `generate_structures`.
     pub fn for_mod(
         resources: TerrainResources<'_>,
-        overrides: &WorldgenOverrides,
+        data: Arc<GeneratorData>,
         seed: i64,
         dimension: &str,
         stem: &serde_json::Value,
         generator: Arc<dyn sunrise_world::worldgen::mod_generators::ModChunkGenerator>,
+        source: Arc<sunrise_world::worldgen::biome_source::ResolvedBiomeSource>,
         structures: bool,
     ) -> crate::Result<Self> {
-        let data: Arc<GeneratorData> = shared_resource_data(resources, overrides)?;
-        let generator =
-            OverworldGenerator::for_mod(data, seed, dimension, stem, generator, structures)?;
+        let generator = OverworldGenerator::for_mod(
+            data, seed, dimension, stem, generator, source, structures,
+        )?;
         let mut terrain =
             Self::assemble(resources, generator, seed, "minecraft:normal", dimension)?;
         terrain.mod_terrain = true;
@@ -867,6 +869,9 @@ pub fn biome_modifiers_over_packs(
 /// A bundle directory, the data packs over it, and what loading them gave.
 type SharedEntry = (std::path::PathBuf, WorldgenOverrides, Arc<GeneratorData>);
 static SHARED_DATA: std::sync::Mutex<Vec<SharedEntry>> = std::sync::Mutex::new(Vec::new());
+type SharedBiomeEntry = (std::path::PathBuf, WorldgenOverrides, Arc<BiomeSourceData>);
+static SHARED_BIOME_DATA: std::sync::Mutex<Vec<SharedBiomeEntry>> =
+    std::sync::Mutex::new(Vec::new());
 /// Bundles with data packs kept besides the plain ones: a world's dimensions
 /// share one, and returning to a world finds it.
 const SHARED_WITH_PACKS: usize = 2;
@@ -877,8 +882,38 @@ pub fn forget_shared_data() {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+    SHARED_BIOME_DATA
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
 }
-fn shared_resource_data(
+/// The biome, biome-tag and preset tables at `dir` with `overrides`, loaded once without
+/// terrain-stage inputs (`settings.json`, `noises.json`, `block_flags.json`, ...).
+pub fn shared_biome_source_data(
+    dir: &Path,
+    overrides: &WorldgenOverrides,
+) -> crate::Result<Arc<BiomeSourceData>> {
+    let mut cache = SHARED_BIOME_DATA.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, _, data)) = cache
+        .iter()
+        .find(|(path, o, _)| path == dir && o == overrides)
+    {
+        return Ok(data.clone());
+    }
+    let data = BiomeSourceData::load_with(dir, overrides)?;
+    for warning in data.warnings() {
+        log::warn!("Sunrise: data pack worldgen: {warning}");
+    }
+    if !overrides.is_empty()
+        && cache.iter().filter(|e| !e.1.is_empty()).count() >= SHARED_WITH_PACKS
+    {
+        let oldest = cache.iter().position(|e| !e.1.is_empty());
+        cache.remove(oldest.expect("counted"));
+    }
+    cache.push((dir.to_owned(), overrides.clone(), data.clone()));
+    Ok(data)
+}
+pub fn shared_resource_data(
     resources: TerrainResources<'_>,
     overrides: &WorldgenOverrides,
 ) -> crate::Result<Arc<GeneratorData>> {

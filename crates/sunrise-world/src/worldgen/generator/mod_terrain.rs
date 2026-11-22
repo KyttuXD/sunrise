@@ -148,16 +148,16 @@ where
 }
 
 impl OverworldGenerator {
-    /// A level whose stem names `generator`, a mod's that asks for vanilla stages: its terrain,
-    /// then those stages, over the stem's noise settings and biome source. `structures` is the
-    /// world's `generate_structures`. A level whose stem names no noise settings, or ones the
-    /// world lacks, is refused naming the generator and the settings.
+    /// A mod generator's terrain and the vanilla stages it requested, over the stem's noise
+    /// settings and bound biome source. `structures` is the world's `generate_structures`.
+    /// Missing noise settings refuse the level, naming the generator and the settings.
     pub fn for_mod(
         data: Arc<GeneratorData>,
         seed: i64,
         level: &str,
         stem: &Value,
         generator: Arc<dyn ModChunkGenerator>,
+        source: Arc<ResolvedBiomeSource>,
         structures: bool,
     ) -> Result<Self, GeneratorError> {
         let id = stem["generator"]["type"].as_str().unwrap_or_default();
@@ -182,7 +182,14 @@ impl OverworldGenerator {
             generator,
             stages,
         };
-        Self::from_stem(data, seed, stem, stages.structures, None, Some(terrain))
+        Self::from_stem(
+            data,
+            seed,
+            stem,
+            stages.structures,
+            None,
+            Some((terrain, source)),
+        )
     }
 }
 
@@ -221,11 +228,33 @@ mod tests {
         .clone()
     }
 
+    fn for_mod(
+        data: Arc<GeneratorData>,
+        seed: i64,
+        level: &str,
+        stem: &Value,
+        generator: Arc<dyn ModChunkGenerator>,
+        structures: bool,
+    ) -> Result<OverworldGenerator, GeneratorError> {
+        let source = data
+            .resolve_mod_biome_source(&stem["generator"]["biome_source"].to_string(), seed)
+            .map_err(|error| resource(error.to_string()))?;
+        OverworldGenerator::for_mod(
+            data,
+            seed,
+            level,
+            stem,
+            generator,
+            Arc::new(source),
+            structures,
+        )
+    }
+
     /// An Overworld-shaped level of plains whose terrain is the slab, over the Overworld's noise
     /// settings, at seed 12345.
     fn level(stages: VanillaStages) -> OverworldGenerator {
         let stem = stem(Value::from("minecraft:overworld"));
-        OverworldGenerator::for_mod(
+        for_mod(
             data(),
             12345,
             "minecraft:overworld",
@@ -473,7 +502,7 @@ mod tests {
             };
             // The block entities queued over a region of chunks around 0 0, `existing` first.
             let queued = |full: bool, existing: Option<([i32; 3], Compound)>| {
-                let level = OverworldGenerator::for_mod(
+                let level = for_mod(
                     data.clone(),
                     12345,
                     "minecraft:overworld",
@@ -522,7 +551,7 @@ mod tests {
                 surface: true,
                 ..Default::default()
             }));
-            match OverworldGenerator::for_mod(
+            match for_mod(
                 data(),
                 0,
                 "minecraft:overworld",
@@ -570,25 +599,31 @@ mod tests {
             }
         }
         let stem = stem(Value::from("minecraft:nether"));
-        let level = OverworldGenerator::for_mod(
-            data(),
-            0,
-            "minecraft:overworld",
-            &stem,
-            Arc::new(Column),
-            true,
-        )
-        .unwrap();
-        let chunk = level.worker().generate_proto(ChunkPos::new(0, 0)).unwrap();
-        assert_eq!(chunk.terrain.min_y(), -64);
-        for (y, block) in [
-            (-64, "minecraft:air"),
-            (-1, "minecraft:air"),
-            (0, "minecraft:stone"),
-            (127, "minecraft:stone"),
-            (128, "minecraft:air"),
-        ] {
-            assert_eq!(chunk.block_name(0, y, 0), block, "y {y}");
+        for structures in [true, false] {
+            let level = for_mod(
+                data(),
+                0,
+                "minecraft:overworld",
+                &stem,
+                Arc::new(Column),
+                structures,
+            )
+            .unwrap();
+            let chunk = level.worker().generate_proto(ChunkPos::new(0, 0)).unwrap();
+            assert_eq!(chunk.terrain.min_y(), -64);
+            for (y, block) in [
+                (-64, "minecraft:air"),
+                (-1, "minecraft:air"),
+                (0, "minecraft:stone"),
+                (127, "minecraft:stone"),
+                (128, "minecraft:air"),
+            ] {
+                assert_eq!(
+                    chunk.block_name(0, y, 0),
+                    block,
+                    "y {y}, structures {structures}"
+                );
+            }
         }
     }
 
@@ -604,15 +639,19 @@ mod tests {
                     assert!(chunk.set_block([pos.x * 16, 64, pos.z * 16], stone));
                 }
             }
+            fn vanilla_stages(&self) -> VanillaStages {
+                VanillaStages {
+                    structures: true,
+                    ..Default::default()
+                }
+            }
         }
         let stem = stem(Value::from("minecraft:overworld"));
         for (id, expected) in [
             ("test:pocket", "minecraft:stone"),
             ("test:other", "minecraft:air"),
         ] {
-            let level =
-                OverworldGenerator::for_mod(data(), 12345, id, &stem, Arc::new(Pocket), true)
-                    .unwrap();
+            let level = for_mod(data(), 12345, id, &stem, Arc::new(Pocket), false).unwrap();
             let chunk = level.worker().generate_proto(ChunkPos::new(0, 0)).unwrap();
             assert_eq!(chunk.block_name(0, 64, 0), expected, "level {id}");
         }
@@ -635,7 +674,7 @@ mod tests {
         fields.structure_resources = None;
         let open = |stages| {
             let stem = stem(Value::from("minecraft:overworld"));
-            OverworldGenerator::for_mod(
+            for_mod(
                 bare.clone(),
                 12345,
                 "minecraft:overworld",
@@ -815,7 +854,7 @@ mod tests {
         stem["generator"]["biome_source"] =
             serde_json::json!({"type": "minecraft:multi_noise", "preset": "minecraft:overworld"});
         let open = || {
-            OverworldGenerator::for_mod(
+            for_mod(
                 data(),
                 12345,
                 "minecraft:overworld",

@@ -86,9 +86,10 @@ The level's biomes are the one `biome` everywhere unless `biome_source` says oth
 erosion, depth and weirdness, and an `offset` from 0 to 1. The biome whose point is nearest to the level's
 climate at a position wins, as in a data pack's `minecraft:multi_noise` source with an inline `biomes` list;
 the biomes can be the mod's own or vanilla's. A mod's points shape its own level only: placing a mod's biomes
-among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md). Only `Fixed` suits a chunk
-generator of the mod's own. `mod_biome_source` names a [biome source](#biome-sources) a
-mod registered instead, for either generator.
+among vanilla's in the Overworld or the Nether is a [biome region](../content-mods/biome-regions.md).
+Any valid `biome_source` (`Fixed`, `Checkerboard`, `MultiNoise`, `End`, `Points`) or a registered
+`mod_biome_source` ([biome sources](#biome-sources)) composes with either `minecraft:noise` or a
+chunk generator of a mod's own.
 
 A dimension in an unowned namespace, an empty name, a name that is not a folder of the world
 (lowercase letters, digits and `_ . -` only, with `/` between segments that are not empty, `.` or
@@ -281,8 +282,9 @@ placed block. `set_block` skips a position outside the chunk or build height and
 it wrote. The chunk starts as air; invalid state ordinals are refused rather than written.
 
 By default the generator gives terrain only: the level has no surface, carvers, structures or
-features, every chunk has the stem's one biome, unless its stem names a
-[biome source](#biome-sources) a mod registered, and `noise_settings` means nothing to it.
+features, and its biomes come from the level stem's biome source. It does not need
+`noise_settings`. As in vanilla's `ChunkMap` for non-noise generators, any climate or erosion
+that the source samples is zero (`NoiseRouterData.none()`).
 
 `vanilla_stages` asks for vanilla's stages around the terrain, as `VanillaStages` with the fields
 `surface`, `carvers`, `structures` and `features`; it is asked once, at registration. They run in
@@ -292,8 +294,8 @@ carvers, as vanilla's noise generator runs them after its noise fill, then the s
 and the biomes' placed features. The material rule, the carvers' aquifer and the height a structure
 starts at come from the level's `noise_settings`, not from the generator's terrain, and so does its
 sea level. With any stage, `ChunkAccess`'s `min_y` and `height` are the noise settings' range and
-`set_block` writes only inside it, as vanilla's noise fill does. A world with its structures turned
-off gets none. A level whose stem names no noise settings or ones the world lacks, one that asks for
+`set_block` writes only inside it, as vanilla's noise fill does. Turning off structures for the
+world skips structure generation without changing those terrain bounds. A level whose stem names no noise settings or ones the world lacks, one that asks for
 structures in a world with no structure sets or for structures or features in one with no placed
 features, and one that asks for features the game cannot place yet, refuses to open with a message
 naming the generator and what is missing; the surface and the carvers alone need neither. A level that asks for none of them costs

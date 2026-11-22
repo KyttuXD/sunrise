@@ -110,8 +110,8 @@ pub struct DimensionSettings {
     pub noise_settings: String,
     /// The one biome the level has, with the `Fixed` biome source.
     pub biome: String,
-    /// How the level chooses its biomes. Only `Fixed` suits a mod's own chunk generator. Not read
-    /// when `mod_biome_source` is set.
+    /// How the level chooses its biomes. Any valid source can pair with `minecraft:noise`
+    /// or a registered chunk generator. Not read when `mod_biome_source` is set.
     pub biome_source: BiomeSourceKind,
     /// A biome source a mod registered with `register_biome_source` (`mymod:chaos`), which then
     /// chooses the level's biomes in place of `biome_source` and the fields it reads. It suits the
@@ -354,9 +354,6 @@ impl DimensionSettings {
                 ) =>
             {
                 "biome_preset must be minecraft:overworld or minecraft:nether"
-            }
-            _ if self.generator != NOISE_GENERATOR => {
-                "only the fixed biome source suits a chunk generator of a mod's own"
             }
             _ => return None,
         };

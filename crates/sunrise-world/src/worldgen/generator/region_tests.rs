@@ -55,7 +55,7 @@ fn structure_biome_checks_read_the_region_at_their_own_quart() {
             &settings,
             true,
             Some((-64, 384)),
-            Some(&layout),
+            Some(BiomeOverride::Regions(&layout)),
         )
         .expect("pipeline"),
     );

@@ -881,7 +881,7 @@ impl Game<'_> {
                 .as_ref()
                 .unwrap_or_else(|| self.res.biomes())
                 .clone(),
-            generate.as_ref(),
+            generate,
             self.save.chunk_reports().clone(),
             self.save.save_failure_reporter().clone(),
         )?;

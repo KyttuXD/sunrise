@@ -1,4 +1,5 @@
 //! Registry-bound biome-source definitions. Inline full biome objects are separate.
+use super::{BiomeSourceError, CheckerboardError, ResolvedBiomeSource};
 use crate::worldgen::{
     DecodeError, Object, RawValue,
     climate::{ParameterPoint, decode_parameter_point, unquantize},
@@ -158,10 +159,13 @@ impl BiomeSourceCatalog {
             }
             "minecraft:multi_noise" => {
                 // mapEither prefers a successful inline list, then tries preset.
-                if let Some(raw) = optional(&object, "biomes")
-                    && let Ok(value) = self.inline(raw)
-                {
-                    return Ok(value);
+                let preset = optional(&object, "preset");
+                if let Some(raw) = optional(&object, "biomes") {
+                    match self.inline(raw) {
+                        Ok(value) => return Ok(value),
+                        Err(error) if preset.is_none() => return Err(error),
+                        Err(_) => {}
+                    }
                 }
                 let raw = required(&object, "preset")?;
                 if raw.get().starts_with('"') {
@@ -194,6 +198,22 @@ impl BiomeSourceCatalog {
                 BiomeSourceDefinition::Registered(kind)
             }
         })
+    }
+    /// Bind a custom stem's source before admitting the level. An empty checkerboard holder set
+    /// cannot be sampled (`CheckerboardColumnBiomeSource.getNoiseBiome`).
+    pub fn bind_custom_source(
+        &self,
+        json: &str,
+        presets: &BTreeMap<String, String>,
+        seed: i64,
+    ) -> Result<ResolvedBiomeSource, BiomeSourceError> {
+        let definition = self.decode(json)?;
+        if let BiomeSourceDefinition::Checkerboard { biomes, .. } = &definition
+            && biomes.members().is_empty()
+        {
+            return Err(CheckerboardError::EmptyBiomes.into());
+        }
+        definition.resolve(presets, seed)
     }
     /// Encode definitions in the vanilla canonical shape; decoding the result
     /// validates registry references and bounds before publishing JSON.

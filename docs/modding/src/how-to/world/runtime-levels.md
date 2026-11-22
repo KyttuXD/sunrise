@@ -18,23 +18,36 @@ event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
 
 ## What a level is made of
 
-- **The id** is `namespace:path` in a namespace the mod owns (its own id, or one its manifest
-  lists). The folder is `dimensions/<namespace>/<path>/` of the world, derived from the id and
-  nothing else, so an id that is not a folder name (`mymod:../x`, an empty segment) is refused
-  with `InvalidId`, and one in another mod's namespace with `OutsideNamespace`. A vanilla level, a
-  level a mod registered at startup and a level a data pack gave are `ReservedId`.
+- **The id** is `namespace:path` with a folder-safe namespace and path. The folder is
+  `dimensions/<namespace>/<path>/` of the world, derived from the id and nothing else, so an id
+  that is not a folder name (`mymod:../x`, an empty segment, a Windows device name) is refused
+  with `InvalidId`. Requests are not restricted to the calling mod's namespace. `open` and
+  `delete` refuse a vanilla, startup or data-pack level with `ReservedId`.
 - **`dimension_type`** is a type known since startup: a vanilla type (`minecraft:overworld`) or the
   type of a level a mod registered with [`register_dimension`](dimension-shape.md#registering-a-dimension)
   (`mymod:pocket`). Nothing new crosses the network, so every client already has it. Any other
   name is `UnknownDimensionType`; a data pack's own dimension types are not offered yet.
 - **`generator`** is `RuntimeGenerator::Flat` (bedrock, two dirt, a grass block, over plains),
   `Void` (air), or `Mod(name)`, a chunk generator a native mod registered
-  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). An unregistered generator returns `UnknownGenerator`. A noise
-  generator is `NoiseUnsupported` for now.
-- **`seed`** is the level's own. It reaches the mod generator (`ChunkAccess::seed`), the level's block-tick
-  and level randoms and the hashed seed clients are sent. It does not change structures or
-  biomes. `ChunkAccess::level` tells a generator which level it fills, so one generator serves
-  every instance and looks its plan up by id.
+  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). An unregistered generator
+  returns `UnknownGenerator`.
+- **`biome_source`** (`RuntimeLevel::with_biome_source`) pairs a [`RuntimeBiomeSource`] with
+  `generator`, matching how vanilla's `LevelStem` pairs a `ChunkGenerator` and `BiomeSource`:
+  `Fixed`, `Checkerboard`, `MultiNoise`, `End`, `Points`, or `Registered(id)` (a biome source
+  registered with `register_biome_source`). `Flat` and `Void` follow vanilla's `FlatLevelSource`
+  and accept only `Fixed` (or `None` for `minecraft:plains` / `minecraft:the_void`), refusing
+  non-fixed sources with `IncompatibleBiomeSource`. `Mod(name)` accepts any valid biome source.
+  `None` takes the dimension type's registered stem source, or plains if there is no registered
+  stem. A custom generator without vanilla stages uses the non-noise sampling context, not
+  the Overworld's climate router. A checkerboard takes either a single `#namespace:tag` reference
+  or a list of biome ids, matching vanilla `HolderSetCodec`; mixing `#tag` references with other
+  entries is refused as `InvalidBiomeSource`. A missing biome, tag, preset or registered source
+  returns `UnknownBiomeSource`; an empty checkerboard holder set, mixed list, invalid identifier
+  or invalid scale returns `InvalidBiomeSource`.
+- **`seed`** is the level's own. It reaches the mod generator (`ChunkAccess::seed`), the level's
+  block-tick and level randoms and the hashed seed clients are sent. `ChunkAccess::level` tells a
+  generator which level it fills, so one generator serves every instance and looks its plan up by
+  id.
 
 ## When it happens
 
@@ -59,7 +72,9 @@ tickets through `event.validation`. The callback sees its removals immediately. 
 refusal discards those edits before the saved tickets take hold. Other controllers still validate.
 
 Success means queue admission, not apply completion. Apply failures are logged with the
-requesting mod and level id. A failed open rolls back publication and frees the id for retry;
+requesting mod and level id. `Unavailable` means there is no open logical server world or its
+worldgen registries could not be loaded for a registered generator; it does not require a mod
+callback to be active. A failed open rolls back publication and frees the id for retry;
 a failed unload leaves the level open for another unload request. Observe `is_open` after
 the queue runs rather than treating the returned result as completion.
 
@@ -82,9 +97,9 @@ it stays open: `is_open` still says true, and the level opens again from its fol
 `delete(id)` removes a level for good: its folder `dimensions/<namespace>/<path>/` and the
 structure references the game keeps beside the world for it
 (`data/sunrise_structure_references_<namespace>_<path>.json`, kept if another id would share that
-file and its level exists: `a_b:c` and `a:b_c` do), then the folders those leave empty. It works for the levels of the calling mod's namespace only, with the same refusals as
-`unload` (`InvalidId`, `OutsideNamespace`, `ReservedId`), and the folder it removes comes from
-the validated id and nothing else.
+file and its level exists: `a_b:c` and `a:b_c` do), then the folders those leave empty. It refuses
+invalid or reserved ids (`InvalidId`, `ReservedId`), and the folder it removes comes from the
+validated id and nothing else.
 
 - A level that is **open** is unloaded first, as by `unload` (saved, `level_unload` fires), and
   its files are removed in the same pass. It refuses with `PlayersInside` while a player or an
@@ -139,12 +154,5 @@ levels it views by their place in the list it got at login, where such a level i
 there are kept, but nothing of the level is sent to it, and it sees the level only by going in.
 When a runtime level closes, by `unload` or `delete`, every client that viewed it drops its world
 of it; the areas stay, and show the level again once it is open again.
-
-## The cap
-
-A server keeps at most 64 runtime levels open or waiting, whichever mods opened them: the
-65th `open` is `CapReached`. A server sets another number with `sunrise-max-runtime-levels` in
-`server.properties`; a server run by `sunrise-server` sets it under `[properties]` in `server.toml`
-([hosting](https://github.com/sunrise-org/sunrise/blob/main/docs/hosting.md)). An unloaded or deleted level frees its place when the request is applied; the idle close does not free it.
 
 Every refusal is also logged with the name of the mod that asked.

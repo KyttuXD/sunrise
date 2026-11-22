@@ -146,7 +146,7 @@ impl TerrainBlockStates for GenBlockStates {
 
 /// The seed-independent resources, at the path the internals list names.
 pub mod data;
-pub use data::GeneratorData;
+pub use data::{BiomeSourceData, GeneratorData};
 #[cfg(test)]
 use data::{RING_CACHE_LIMIT, build_tags};
 mod noise_settings;
@@ -358,7 +358,7 @@ struct Pipeline<R: RandomSource> {
     aquifer: Option<[Arc<dyn DensitySampler>; 6]>,
     rule: MaterialRule,
     preliminary: Arc<dyn DensitySampler>,
-    source: ResolvedBiomeSource,
+    source: Arc<ResolvedBiomeSource>,
     surface: MaterialSurface<R::Positional>,
     noises: BTreeMap<String, Arc<dyn Noise>>,
     extensions: MaterialExtensions<R::Positional>,
@@ -447,6 +447,11 @@ fn state(
         .map_err(|e| resource(format!("block state {raw}: {e}")))
 }
 
+enum BiomeOverride<'a> {
+    Regions(&'a RegionLayout),
+    Bound(Arc<ResolvedBiomeSource>),
+}
+
 impl<R: RandomSource + 'static> Pipeline<R>
 where
     R::Positional: Clone + Send + Sync,
@@ -459,7 +464,7 @@ where
         settings_json: &Value,
         with_structures: bool,
         level: Option<(i32, i32)>,
-        regions: Option<&RegionLayout>,
+        biome_override: Option<BiomeOverride<'_>>,
     ) -> Result<Self, GeneratorError> {
         let registry = data.registry;
         let root = random.fork_positional();
@@ -473,20 +478,26 @@ where
         } = data.decode_noise_settings(settings_json, seed, level)?;
         let preliminary = router.get(RouterField::ChunkSurfaceLevel).clone();
         let mut source_json = generator["biome_source"].to_string();
-        let definition = data.source_catalog.decode(&source_json)?;
-        let source = definition
-            .resolve(&data.presets, seed)
-            .map_err(|e| resource(format!("biome source: {e}")))?;
-        // Only the multi-noise presets (Overworld, Nether) take regions, not inline point lists.
-        let source = if matches!(definition, BiomeSourceDefinition::Preset { .. }) {
-            source
-                .with_regions(regions, &root)
-                .map_err(|e| resource(format!("biome regions: {e}")))?
-        } else {
-            source
+        let source = match biome_override {
+            Some(BiomeOverride::Bound(source)) => source,
+            other => {
+                let definition = data.source_catalog.decode(&source_json)?;
+                let mut source = definition
+                    .resolve(&data.presets, seed)
+                    .map_err(|e| resource(format!("biome source: {e}")))?;
+                // Only the multi-noise presets (Overworld, Nether) take regions.
+                if let Some(BiomeOverride::Regions(regions)) = other
+                    && matches!(definition, BiomeSourceDefinition::Preset { .. })
+                {
+                    source = source
+                        .with_regions(Some(regions), &root)
+                        .map_err(|e| resource(format!("biome regions: {e}")))?;
+                }
+                Arc::new(source)
+            }
         };
         // Regions add biomes, so their decoration is cached apart from the bare preset's.
-        if let ResolvedBiomeSource::Regions(layered) = &source {
+        if let ResolvedBiomeSource::Regions(layered) = source.as_ref() {
             for biome in layered.biomes() {
                 source_json.push(' ');
                 source_json.push_str(biome);
@@ -829,7 +840,7 @@ where
     fn identity_end_surface(&self, pos: ChunkPos) -> bool {
         // A mod's terrain is not the noise's default block.
         if self.mod_terrain.is_some()
-            || !matches!(self.source, ResolvedBiomeSource::End(_))
+            || !matches!(self.source.as_ref(), ResolvedBiomeSource::End(_))
             // At wrapped block coordinates the ordinary biome-region lookup
             // can fail; retain that lookup and its error outside this range.
             || ![pos.x, pos.z].into_iter().all(|c| {
@@ -1079,6 +1090,7 @@ where
                 .collect()
         };
         context.set_lattice(lattice);
+        // Masking off structures in WorldOptions does not change the terrain's range.
         let filled = match &self.mod_terrain {
             Some(terrain) => terrain.fill(&mut chunk, data.registry, self.seed, [min, height]),
             None => fill_noise(
@@ -2779,8 +2791,12 @@ impl OverworldGenerator {
         stem: &Value,
         with_structures: bool,
         regions: Option<Arc<RegionLayout>>,
-        terrain: Option<mod_terrain::ModTerrain>,
+        custom: Option<(mod_terrain::ModTerrain, Arc<ResolvedBiomeSource>)>,
     ) -> Result<Self, GeneratorError> {
+        let (terrain, biome_override) = match custom {
+            Some((terrain, source)) => (Some(terrain), Some(BiomeOverride::Bound(source))),
+            None => (None, regions.as_deref().map(BiomeOverride::Regions)),
+        };
         let generator = &stem["generator"];
         // The level's build range: its dimension type's, a data pack's
         // over the vanilla one.
@@ -2825,7 +2841,7 @@ impl OverworldGenerator {
                     &settings_json,
                     with_structures,
                     level,
-                    regions.as_deref(),
+                    biome_override,
                 )?
                 .with_mod_terrain(terrain)?,
             )
@@ -2839,7 +2855,7 @@ impl OverworldGenerator {
                     &settings_json,
                     with_structures,
                     level,
-                    regions.as_deref(),
+                    biome_override,
                 )?
                 .with_mod_terrain(terrain)?,
             )
@@ -3349,9 +3365,11 @@ mod tests {
         pipeline.settings.default_fluid = old_fluid;
         let old_source = std::mem::replace(
             &mut pipeline.source,
-            ResolvedBiomeSource::Fixed(super::super::biome_source::FixedBiomeSource {
-                biome: "minecraft:the_end".into(),
-            }),
+            Arc::new(ResolvedBiomeSource::Fixed(
+                super::super::biome_source::FixedBiomeSource {
+                    biome: "minecraft:the_end".into(),
+                },
+            )),
         );
         assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
         pipeline.source = old_source;

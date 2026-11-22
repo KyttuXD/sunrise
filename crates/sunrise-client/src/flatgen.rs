@@ -164,14 +164,14 @@ impl FlatTerrain {
         }
         Some(surface)
     }
-    /// The generator of a level a mod opens with the default superflat layers (`Some(layers)`:
-    /// bedrock, two dirt, grass block, over plains) or with air alone (`None`: the void).
-    /// `None` when the registry lacks one of the blocks.
+    /// The generator of a level a mod opens with the default superflat layers (`flat = true`:
+    /// bedrock, two dirt, grass block) or with air alone (`flat = false`: the void), over
+    /// the world's resolved biome id. `None` when the registry lacks one of the blocks.
     pub fn of_layers(
         registry: &BlockRegistry,
-        biomes: &crate::biome::Biomes,
         shape: LevelShape,
         flat: bool,
+        biome: u16,
     ) -> Option<Self> {
         let names: &[&str] = if flat {
             &[
@@ -187,11 +187,6 @@ impl FlatTerrain {
             .iter()
             .map(|name| Some(registry.default_state(name)?.0))
             .collect::<Option<Vec<_>>>()?;
-        let biome = biomes.id(if flat {
-            "minecraft:plains"
-        } else {
-            "minecraft:the_void"
-        });
         let surface = Self::surface(&layers, registry, shape, biome)?;
         Some(Self {
             shape,

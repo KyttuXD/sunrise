@@ -807,12 +807,27 @@ mod biome_source_tests {
             })
             .contains("biome_preset")
         );
-        assert!(
+        assert_eq!(
             refused(|s| {
                 s.biome_source = BiomeSourceKind::End;
                 s.generator = "mymod:void".into();
-            })
-            .contains("fixed biome source")
+            }),
+            ""
+        );
+        assert_eq!(
+            refused(|s| {
+                s.biome_source = BiomeSourceKind::Checkerboard;
+                s.biomes = vec!["minecraft:plains".into(), "minecraft:desert".into()];
+                s.generator = "mymod:void".into();
+            }),
+            ""
+        );
+        assert_eq!(
+            refused(|s| {
+                s.biome_source = BiomeSourceKind::MultiNoise;
+                s.generator = "mymod:void".into();
+            }),
+            ""
         );
         assert_eq!(
             refused(|s| {
@@ -851,17 +866,16 @@ mod biome_source_tests {
         assert!(points(|p| p.offset = 1.5).contains("biome point"));
         assert!(points(|p| p.offset = -0.1).contains("biome point"));
         assert!(points(|p| p.biome.clear()).contains("biome point"));
-        // A valid points source still refuses a chunk generator of the mod's own.
-        assert!(
+        // A valid points source composes with a mod's own chunk generator as well as noise.
+        assert_eq!(
             DimensionSettings {
                 biome_source: BiomeSourceKind::Points,
                 biome_points: vec![point()],
                 generator: "mymod:void".into(),
                 ..Default::default()
             }
-            .invalid_biome_source()
-            .unwrap_or_default()
-            .contains("fixed biome source")
+            .invalid_biome_source(),
+            None
         );
     }
 }
