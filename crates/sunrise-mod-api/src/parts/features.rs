@@ -48,9 +48,9 @@ pub mod tests {
         assert_eq!(
             types
                 .iter()
-                .map(|(id, schema, _)| (id.as_str(), schema.len()))
+                .map(|(mod_id, id, schema, _)| (*mod_id, id.as_str(), schema.len()))
                 .collect::<Vec<_>>(),
-            [("test:tree", 1)]
+            [("test", "test:tree", 1)]
         );
 
         struct Invalid(Vec<DatapackField>);
@@ -145,6 +145,7 @@ impl FeaturesRegistrar for PartRegistrar {
             return;
         }
         self.feature_types.push(FeatureTypeInfo {
+            mod_id: self.mod_id,
             id: id.into(),
             config,
             ty,

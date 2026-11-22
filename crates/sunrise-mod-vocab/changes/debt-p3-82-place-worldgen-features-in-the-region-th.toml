@@ -6,7 +6,12 @@ ids = [
   "type:StructureError.0",
   "handle:StructureError::new",
   "type:BlockStateError",
+  "trait:FeatureType",
+  "trait:FeatureContext",
+  "method:FeatureContext::ensure_can_write",
   "method:FeatureContext::set_block",
+  "method:FeatureContext::height",
+  "method:FeatureContext::block_entity",
 ]
 why = """
 `Feature.place`, `StructureStart.placeInChunk`, and `PiecesContainer.load` call generation and
@@ -21,6 +26,18 @@ The FEATURES writer now uses `WorldGenRegion.ensureCanWrite` for both checks and
 `ProtoChunk.getHeightAccessorForGeneration` supplies the vertical restriction during upgrades.
 Each far-chunk refusal logs the position and stage. `WorldGenRegion.setBlock` keeps its result even
 for admitted no-ops in proto or imposter storage; live writes keep `Level.setBlock`'s result.
+
+Mod feature placement now lends the supplied `WorldGenRegion` or live `ServerLevel` directly,
+matching vanilla `Feature.place` and `WorldGenRegion.ensureCanWrite` rather than staging writes,
+enforcing an invented 65,536-operation work quota, rolling back calls, or permanently disabling a
+feature type after an `Err` or refused write. `FeatureContext::ensure_can_write` exposes the
+world's write admissibility check directly; `set_block`, `block`, `block_in_tag`, `height`, and
+`block_entity` operate immediately against the world (with `block_entity` validating NBT against
+the current block once and honoring write admissibility and read-only full-chunk imposter policy).
+`Err(FeatureError)` logs the registering mod id, feature type key, origin and full error cause
+chain on each occurrence before returning `false`; only a panic disables that registered callback
+for the session via `CallbackOwner` (logging and queuing an error toast attributed to the
+registering mod id while leaving delegated engine panics unblamed).
 """
 migrate = """
 Replace `FeatureError(message)` with `FeatureError::new(std::io::Error::other(message))` and
@@ -36,8 +53,15 @@ Replace `.0` or tuple destructuring with `error.to_string()` for diagnostics or
 `std::error::Error::source(&error)` to inspect or downcast the cause. Return the native error
 from the callback; neither wrapper supports `Wire` encoding or decoding anymore.
 
-The `FeatureContext::set_block` call is unchanged. During FEATURES, keep writes within one
-chunk of the center in X and Z. For a below-zero upgrade, write only at Y=-64 through -1
-throughout that region, as set by `BelowZeroRetrogen.UPGRADE_HEIGHT_ACCESSOR`; the target chunk's
-own upgrade state does not determine which writes are allowed.
+Writes through `FeatureContext::set_block` and `FeatureContext::block_entity` now reach the world
+immediately with no staging buffer, rollback or 65,536-unit custom work budget. Use
+`context.ensure_can_write(pos)` to check write admissibility before writing when needed. During
+FEATURES, keep writes within one chunk of the center in X and Z; for a below-zero upgrade, write
+only at Y=-64 through -1 throughout that region, as set by
+`BelowZeroRetrogen.UPGRADE_HEIGHT_ACCESSOR`, regardless of the target chunk. Do not rely on
+returning `Err` to undo blocks or block entities already written earlier in `place`: check
+preconditions before mutating the world, as vanilla `Feature.place` does. `context.height` and
+`context.block_in_tag` immediately reflect blocks written earlier in the same call, and
+`context.block_entity` can attach validated NBT to any admissible current block rather than only a
+block written by the same call.
 """

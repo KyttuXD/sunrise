@@ -179,9 +179,6 @@ struct Run {
     blocks: FeatureBlocks,
     depth: Cell<usize>,
     remaining: Cell<usize>,
-    /// The root's mod-feature work units (`mod_features::CUSTOM_WORK_BUDGET`), apart from
-    /// `remaining` so built-in capacity is unchanged.
-    custom: Cell<u32>,
 }
 fn visit(depth: usize, remaining: &mut usize) -> Result<(), DecodeError> {
     if depth > 128 || *remaining == 0 {
@@ -263,7 +260,6 @@ impl PlacedFeatureDefinition {
                 blocks,
                 depth: Cell::new(0),
                 remaining: Cell::new(65536),
-                custom: Cell::new(super::mod_features::CUSTOM_WORK_BUDGET),
             },
         )
     }
@@ -846,7 +842,6 @@ impl FeatureDefinition {
                 blocks,
                 depth: Cell::new(0),
                 remaining: Cell::new(65536),
-                custom: Cell::new(super::mod_features::CUSTOM_WORK_BUDGET),
             },
         )
     }
@@ -879,7 +874,7 @@ impl FeatureDefinition {
                 .place(world, random, origin, run.blocks)
                 .map_err(FeatureExecutionError::Basic),
             Self::NoOp => Ok(true),
-            Self::Mod(feature) => Ok(feature.place(world, random, origin, &run.custom)),
+            Self::Mod(feature) => Ok(feature.place(world, random, origin)),
             Self::Template(feature) => feature
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Query),

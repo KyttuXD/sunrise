@@ -52,24 +52,23 @@ twice is placed twice.
 - `Ok(true)` when the feature placed.
 - `Ok(false)` when it didn't, for example a tree with no room. Blocks written before that are
   kept, as vanilla keeps them.
-- `Err(FeatureError::new(cause))` for a failure: a fault, below. Pass the original error
-  with `.map_err(FeatureError::new)?`, or use `std::io::Error::other(message)` for a plain
-  message. `std::error::Error::source` exposes the original cause; `FeatureError` is not a
-  `Wire` value.
+- `Err(FeatureError::new(cause))` for a failure. Pass the original error with
+  `.map_err(FeatureError::new)?`, or use `std::io::Error::other(message)` for a plain message.
+  `std::error::Error::source` exposes the original cause; `FeatureError` is not a `Wire` value.
+  The game logs the registering mod, feature type, origin and cause chain on every `Err` and
+  treats that invocation as `false`, without rolling back earlier writes or RNG draws and
+  without disabling the type.
 
-Your writes are staged: `context.block` reads them back, and when `place` answers `Ok(true)` or
-`Ok(false)` they reach the level at once, in order, so the steps after you (the game's own
-features or other mods') see them. `Ok(false)` publishes what you wrote, as vanilla keeps the
-blocks of a partly placed tree.
+Writes go directly to the bounded generation region or live level with no staging buffer, work
+quota or rollback. `context.block`, `context.block_in_tag` and `context.height` immediately see
+blocks written earlier in the same call, and subsequent steps (built-in or modded) see them too.
+`Ok(false)` keeps what you wrote, as vanilla keeps the blocks of a partly placed tree.
 
-A **fault** discards that call's writes and nothing else: the calls of the same root before it
-stay. A fault is a panic, an `Err`, a write the level refuses (outside the region decoration may
-write, or outside the build height), or running out of work. A fault also **disables your type
-for the session**: in memory only, never saved, and a new load of the mod set enables it again.
-Later placements of a disabled type answer `Ok(false)` without calling it and their roots carry
-on, so chunks generated after the fault differ from those before. The game logs the fault once,
-with your mod, the feature type, the position and the reason. Vanilla has no rollback of a whole
-placement either; the unit that is atomic is your call.
+A **panic** in `place` disables only that registered callback for the session (in memory only,
+never saved; a new load of the mod set enables it again), logs the registering mod loudly and
+queues an error toast, without rolling back earlier writes or RNG draws. Later placements of a
+disabled callback answer `false` without calling it again, while other registrations keep
+running.
 
 There is no `Host` in a feature, and a feature can't place another feature. Your code runs on the
 thread its placement does: a worldgen worker for decoration (chunks generate on several at once),
@@ -82,28 +81,23 @@ the modifiers before you drew from.
 |---|---|
 | `config` | The configured feature's decoded settings |
 | `random` | The caller's `RandomSource`: `next_int`, `next_int_bound`, `next_long`, `next_float`, `next_double`, `next_boolean`, `next_gaussian` |
-| `block`, `block_in_tag` | Read blocks and block tags, your own staged writes included |
-| `height` | Heightmap heights, as the level has them before this call's writes |
-| `set_block` | Write a `BlockState` with `BlockUpdateFlags`; `Feature.setBlock` uses `NEIGHBORS \| CLIENTS` |
-| `block_entity` | Give a block you placed in this call its block entity's saved NBT |
+| `block`, `block_in_tag` | Read current blocks and block tags directly from the world |
+| `height` | Heightmap heights, seeing writes already made |
+| `ensure_can_write` | Check `WorldGenRegion.ensureCanWrite` / live level write admissibility at a position |
+| `set_block` | Write a `BlockState` directly with `BlockUpdateFlags`; `Feature.setBlock` uses `NEIGHBORS \| CLIENTS` |
+| `block_entity` | Give the current block at a position its validated block-entity saved NBT |
 | `state`, `state_with`, `is_air`, `metadata` | Resolve a registered `BlockKey` to a `BlockState`, and test states |
 | `min_y`, `max_y` | The level's height bounds |
 
-`set_block` answers `false` for the state already there, as `Level.setBlock` answers. A write
-outside the writable region or build height also answers `false`, and is a fault. During
+`set_block` delegates directly to the owning world and returns its actual result. During
 FEATURES decoration, `WorldGenRegion.ensureCanWrite` allows the center chunk and its eight
-neighbors. If the center is upgrading, its generation height also restricts writes anywhere in
-that region, regardless of the target chunk. A read the level can't answer is `None`. Neither
-ever loads a chunk. `block_entity` is `false` for a position you didn't place a block at in this
-call, in a full chunk that decoration only reads (the block is never placed there), and for data
-whose `id` isn't that block's block entity.
-
-Each world query, block write or block-entity operation is one unit of work; random draws and
-the config, metadata and state helpers are not charged. One root placement (a decoration
-position, a command, a sapling) lends its mod features 65,536 units together, apart from the
-game's own feature budget. Past them, calls answer `None` or `false` and the call that ran out
-faults; the next placement starts with the whole budget again. The budget counts work, never
-time, so the same seed gives the same result on a slow machine and a fast one.
+neighbors; if the center is upgrading, its generation height also restricts writes anywhere in
+that region, regardless of the target chunk. A write outside the admissible region returns
+`false` as an ordinary operation result and does not roll back earlier writes or disable the
+type. A read the level can't answer is `None`. Neither reads nor writes ever load a chunk.
+`block_entity` validates the decoded NBT against the current block at `pos` once (reporting bad
+data if it does not fit) and writes immediately when `pos` is admissible, inside build height
+and not in a read-only full chunk.
 
 Resolve block states once per placement, or keep the `BlockKey`s from registration, rather than
 resolving names for every block.

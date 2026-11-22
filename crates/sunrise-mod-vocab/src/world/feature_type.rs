@@ -24,9 +24,10 @@ use crate::{BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, RandomSource}
 use std::sync::Arc;
 use sunrise_core::nbt::Compound;
 
-/// A feature's placement failed: a fault. The game discards that call's writes, logs it with
-/// the feature's id and disables the type for the session. A feature that merely did not place
-/// (a tree with no room) answers `Ok(false)` instead.
+/// A feature's placement failed. The game logs the registering mod, feature type, origin and
+/// error cause chain on every `Err` and treats this invocation as `false`, without rolling back
+/// earlier writes or RNG draws and without disabling the feature type. A feature that merely did
+/// not place (a tree with no room) answers `Ok(false)` instead.
 // no wire: retains the native source chain for this in-process callback.
 #[derive(Debug)]
 // exhaustive: its field is private, so mods cannot build or destructure it
@@ -57,9 +58,10 @@ impl std::error::Error for FeatureError {
 /// `"type": "modid:tree"`. Implemented once, kept by the game; deterministic and stateless.
 pub trait FeatureType: Send + Sync + 'static {
     /// `Feature.place(level, generator, random, origin)`: place the feature at `origin`,
-    /// answering whether it placed. Its writes reach the level when it answers `Ok`, the ones
-    /// before an `Ok(false)` included, as vanilla keeps them; draws are never given back. The
-    /// configured feature's settings are [`context.config()`](FeatureContext::config).
+    /// answering whether it placed. Writes reach the bounded generation region or live level
+    /// immediately; blocks already written and draws already made stay on `Ok(false)`, `Err`, or a
+    /// panic, as vanilla has no rollback. The configured feature's settings are
+    /// [`context.config()`](FeatureContext::config).
     fn place(
         &self,
         context: &mut dyn FeatureContext,
@@ -68,21 +70,20 @@ pub trait FeatureType: Send + Sync + 'static {
 }
 
 /// What a feature's [`place`](FeatureType::place) sees: vanilla's `WorldGenLevel` around the
-/// origin (a decoration region on a worker, or the live level for growth and commands) and the
-/// caller's random. Writes are staged: the context reads them back, and the level sees them, in
-/// order, as soon as `place` answers `Ok(true)` or `Ok(false)`, so the steps after it see them
-/// too. A read the level can't answer is `None`; a write onto the state already there is
-/// `false`. Neither loads a chunk.
+/// origin (the real bounded decoration region on a worker, or the live level for growth and
+/// commands) and the caller's random. Writes go directly to that world with no staging buffer or
+/// custom work quota: subsequent reads, block-tag checks and heightmap queries immediately see
+/// blocks already written. A read the level can't answer is `None`. Neither reads nor writes load
+/// a chunk.
 ///
-/// A fault discards the call's writes, logs it, and disables the feature type for the session
-/// (in memory, never saved; a new load of the mod set enables it again): a later placement of it
-/// answers `Ok(false)` and its root carries on, so chunks generated after the fault differ from
-/// those before. A fault is a panic, an `Err`, a write the level refuses (outside the region
-/// decoration may write, or outside the build height) and a work budget that ran out. Each world
-/// query, block write or block-entity operation is one unit of the budget (65,536 for one root
-/// placement); the budget counts work, never time. Random draws and the config, metadata and
-/// state helpers are not charged. `height` reads the level as it was before the call; every
-/// other read sees the call's own writes. A feature can't place another feature.
+/// Write refusals from the region (outside the writable region or upgrade height) return `false`
+/// from [`ensure_can_write`](Self::ensure_can_write) and [`set_block`](Self::set_block); they are
+/// ordinary operation results and do not roll back earlier writes or disable the feature type. An
+/// `Err` from [`FeatureType::place`] logs the registering mod, type key, origin and cause chain
+/// and treats this invocation as `false`, leaving earlier writes, RNG draws and future
+/// invocations intact. A panic in the callback disables that registered callback for the session
+/// and reports loudly (log plus error toast) without rolling back earlier writes or draws. A
+/// feature can't place another feature.
 ///
 /// Features run on a worldgen worker for decoration and on the tick thread for growth, commands
 /// and `LevelRef::place_feature`; the context holds no `Host`, so a worker never reaches mod
@@ -106,42 +107,59 @@ pub trait FeatureContext {
     fn state_with(&self, block: BlockKey, properties: &[(&str, &str)]) -> BlockState;
     /// `BlockState.isAir`.
     fn is_air(&self, state: BlockState) -> bool;
-    /// The block at `pos` (this call's own write, if any), or `None` where the level can't be
-    /// read.
+    /// The current block at `pos`, or `None` where the level can't be read.
     fn block(&mut self, pos: [i32; 3]) -> Option<BlockState>;
-    /// `BlockState.is(tag)` of the block at `pos`: whether it is in block tag `tag`
+    /// `BlockState.is(tag)` of the current block at `pos`: whether it is in block tag `tag`
     /// (`minecraft:leaves`), or `None` where the level can't be read.
     fn block_in_tag(&mut self, pos: [i32; 3], tag: &str) -> Option<bool>;
+    /// `WorldGenRegion.ensureCanWrite(pos)` during generation (the center chunk and its eight
+    /// neighbors during FEATURES, plus the center's upgrade generation height while upgrading), or
+    /// the live level's write admissibility.
+    fn ensure_can_write(&mut self, pos: [i32; 3]) -> bool;
     /// `LevelWriter.setBlock(pos, state, flags)`, as `Feature.setBlock` (flags
     /// `BlockUpdateFlags::NEIGHBORS | CLIENTS`) and the tree features (`| KNOWN_SHAPE`) call it:
-    /// whether it will be written. During FEATURES, `WorldGenRegion.ensureCanWrite` allows
-    /// the center chunk and its eight neighbors. If the center is upgrading, its generation
-    /// height also restricts writes throughout the region, regardless of the target chunk.
+    /// delegates directly to the world and returns its result. During FEATURES,
+    /// `WorldGenRegion.ensureCanWrite` allows the center chunk and its eight neighbors; if the
+    /// center is upgrading, its generation height also restricts writes throughout the region,
+    /// regardless of the target chunk. A refusal returns `false` without disabling the type.
     fn set_block(&mut self, pos: [i32; 3], state: BlockState, flags: BlockUpdateFlags) -> bool;
-    /// `WorldGenLevel.getHeight` of the heightmap kind at (x, z), as the level has it before
-    /// this call's writes.
+    /// `WorldGenLevel.getHeight` of the heightmap kind at (x, z), seeing writes already made.
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Option<i32>;
-    /// The block entity's saved NBT (its `id` and fields) for the block this call placed at
-    /// `pos`, as `BlockEntity.loadWithComponents`: false for a position this call did not place
-    /// a block at, and for data whose `id` is not that block's block entity.
+    /// Set block-entity saved NBT (its `id` and fields) for the current block at `pos`, validated
+    /// against that block as `BlockEntity.loadWithComponents`. Writes immediately when `pos` is
+    /// admissible and not in a read-only full chunk; returns `false` if the data does not fit the
+    /// current block or the position cannot take a block entity.
     fn block_entity(&mut self, pos: [i32; 3], nbt: Compound) -> bool;
 }
 
 /// A registered API behaviour; the game builds its engine adapter at startup.
 pub(crate) struct FeatureTypeInfo {
+    pub(crate) mod_id: &'static str,
     pub(crate) id: Box<str>,
     pub(crate) config: Vec<DatapackField>,
     pub(crate) ty: Arc<dyn FeatureType>,
 }
 
-/// Registered feature behaviours with their config schemas, for the hidden game integration
-/// boundary.
+/// Registered feature behaviours with their registering mod id and config schemas, for the hidden
+/// game integration boundary.
 // hidden: the game's startup adapter reads the registered behaviours; mods declare them through the registrar.
 #[doc(hidden)]
-pub fn feature_type_declarations() -> Vec<(String, Vec<DatapackField>, Arc<dyn FeatureType>)> {
+pub fn feature_type_declarations() -> Vec<(
+    &'static str,
+    String,
+    Vec<DatapackField>,
+    Arc<dyn FeatureType>,
+)> {
     crate::parts::installed_feature_type_list()
         .iter()
-        .map(|info| (info.id.to_string(), info.config.clone(), info.ty.clone()))
+        .map(|info| {
+            (
+                info.mod_id,
+                info.id.to_string(),
+                info.config.clone(),
+                info.ty.clone(),
+            )
+        })
         .collect()
 }
 
