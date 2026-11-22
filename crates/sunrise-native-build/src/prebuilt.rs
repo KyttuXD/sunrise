@@ -200,10 +200,9 @@ pub struct Identity {
     /// The game crate's features the SDK was built with: a patched function copied out of its
     /// source is compiled under the same `cfg`s.
     game_features: Vec<String>,
-    /// The cfg atoms of the lower libraries in this target and side's build. Older identities
-    /// are still readable for the API route; lower mirrors require their original cfgs.
-    #[serde(default)]
-    lower_crate_cfg: std::collections::BTreeMap<String, Vec<String>>,
+    /// The cfg atoms of the lower libraries in this target and side's build. Absent on SDKs
+    /// whose tool could build a lower mirror without these records.
+    lower_crate_cfg: Option<BTreeMap<String, Vec<String>>>,
     slices: Slices,
 }
 
@@ -360,8 +359,8 @@ impl Identity {
         &self.game_features
     }
 
-    pub(crate) fn lower_crate_cfg(&self) -> &std::collections::BTreeMap<String, Vec<String>> {
-        &self.lower_crate_cfg
+    pub(crate) fn lower_crate_cfg(&self) -> Option<&BTreeMap<String, Vec<String>>> {
+        self.lower_crate_cfg.as_ref()
     }
 
     /// Which package files the `runtime` and `api` slices hold.
@@ -429,6 +428,24 @@ pub fn check_identity(
                 ("rustc", found.rustc.lines().next().unwrap_or_default()),
             ],
         ))
+    }
+}
+
+/// Does this plan need the SDK's own tool because it copies a lower-crate function from a
+/// build that predates lower-crate cfg records? A present map belongs to the new tool, even
+/// if an individual target's record is missing and the generator must refuse it.
+pub fn needs_pinned_patch_tool(package: &Package, bundle: &crate::Bundle) -> Result<bool, String> {
+    use sunrise_platform::mod_build::api_gen::functions;
+
+    let copies_lower_crate = bundle.native().mixin.iter().any(|row| {
+        functions::key(&row.target)
+            .split_once("::")
+            .is_some_and(|(krate, _)| krate != "sunrise_client")
+    });
+    if copies_lower_crate {
+        Ok(identity(&package.runtime)?.lower_crate_cfg().is_none())
+    } else {
+        Ok(false)
     }
 }
 

@@ -6,6 +6,8 @@ launcher. Both commands use the same compiler (`crates/sunrise-native-build`). E
 for each host it is built for, as `tool-<target>.tar.xz` holding `cargo-sunrise-mod` (`.exe` on Windows), so a caller
 that already checked the SDK's signed `sdk.json` gets a tool made from that build's own source.
 Use that SDK's tool for the JSON commands: its horizon-mixins revision and patch match the SDK by construction.
+For standalone `cargo sunrise-mod build` and `run`, the mod tool selects the verified SDK tool when a
+lower-crate mixin is pinned to a build that does not record lower-crate compiler cfgs.
 
 Native mod authors keep the same code and `sunrise-mod.toml`. On Windows the SDK sets the main-thread stack
 reservation when it links the fixed game executable, not when it links native mod libraries. If your tooling
