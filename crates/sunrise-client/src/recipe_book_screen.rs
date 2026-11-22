@@ -829,17 +829,18 @@ mod tab_column_tests {
             column(&[tab(true, 0.0), tab(false, 0.0), tab(false, 0.0)]),
             Some([22.0, 40.0, 37.0, 81.0])
         );
-        // 7.5 ticks in: the pose scales the tab by 1 + 0.1 * sin(pi / 2) = 1.1 about y + 12,
-        // so it spans 52 - 12 * 1.1 to 52 + 15 * 1.1, exactly as the painter transforms it.
-        let pose_scale = 1.0 + 0.1 * f64::from(7.5f32 / 15.0 * std::f32::consts::PI).sin() as f32;
-        let (cy, top, bottom) = (52.0f32, 40.0f32, 67.0f32);
-        let want = [
-            24.0,
-            cy + (top - cy) * pose_scale,
-            35.0,
-            (cy + (bottom - cy) * pose_scale) - (cy + (top - cy) * pose_scale),
-        ];
-        assert_eq!(column(&[tab(false, 7.5)]), Some(want));
+        // At y = 48, RecipeBookTabButton.extractContents' affine pose rounds the edges
+        // differently from a center-relative calculation.
+        let calls = draw_tabs_for_test((54, 45), &[tab(false, 7.5)]);
+        assert_eq!(
+            sprite_bounds(&calls, |_, id| is_tab_sprite(id)),
+            Some([
+                24.0,
+                f32::from_bits(0x423b_3334),
+                35.0,
+                f32::from_bits(0x41ed_9998)
+            ])
+        );
         // A sprite drawn with no pose is its own rectangle.
         let lone = [Drawn {
             call: super::Call::Sprite {
